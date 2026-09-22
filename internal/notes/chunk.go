@@ -15,6 +15,8 @@ package notes
 import (
 	"math"
 	"strings"
+
+	"github.com/waynehoover/telimus/internal/paths"
 )
 
 // Window is the rolling hash window in bytes: how much of the preceding content
@@ -305,29 +307,18 @@ func ChunkBytes(data []byte, sizes ChunkSizes, isUTF8 bool) []Chunk {
 	return chunks
 }
 
-// textExtensions are the extensions IsTextPath treats as text: chunk.ts
-// TEXT_EXTENSIONS, in its order. chunk-fixtures.json lists them as well, and
-// both languages check their own list against that one, so an extension added
-// on one side only fails a test.
-var textExtensions = map[string]bool{
-	"md":     true,
-	"txt":    true,
-	"canvas": true,
-	"json":   true,
-	"csv":    true,
-	"yml":    true,
-	"yaml":   true,
-	// Obsidian's Bases (R083-12 in chunk.ts).
-	"base": true,
-	"xml":  true,
-	"html": true,
-	"css":  true,
-	"js":   true,
-	"ts":   true,
-	"svg":  true,
-	"bib":  true,
-	"tex":  true,
-}
+// textExtensions are the extensions IsTextPath treats as text. The list lives
+// once, in internal/paths (TextExtensions, pinned by protocol-fixtures.json),
+// and chunk-fixtures.json lists it again, so a change on one side only fails a
+// test. Built from that list rather than written out here, so there is no
+// second copy to drift.
+var textExtensions = func() map[string]bool {
+	m := make(map[string]bool, len(paths.TextExtensions))
+	for _, e := range paths.TextExtensions {
+		m[e] = true
+	}
+	return m
+}()
 
 // IsTextPath guesses whether a path holds text, for choosing chunk sizes and
 // whether cuts keep UTF-8 characters whole. chunk.ts looksLikeText.
