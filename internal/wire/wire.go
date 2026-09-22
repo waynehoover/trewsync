@@ -69,6 +69,11 @@ const (
 	// code for twelve rules and the rule is what the person whose file will
 	// not sync needs to know (PLAN.md section 4.9).
 	CodeBadPath = "badpath"
+	// CodeCollision is a create, or the destination of a move, whose folded
+	// key is another live path's: two notes a case-folding disk would hold as
+	// one (PLAN.md section 4.1). It rejects the entry and the session
+	// continues. The message names the live path it collides with.
+	CodeCollision = "collision"
 	// CodeBadChunk is an uploaded body that does not hash to the name it was
 	// asked for, or a chunk name that is not a hex SHA-256.
 	CodeBadChunk = "badchunk"

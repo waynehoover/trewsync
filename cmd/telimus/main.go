@@ -339,6 +339,18 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	}
 	defer st.Close()
 
+	// The live set the collision rule reads is derived from the entries, and
+	// is rebuilt here if it has drifted from them, which is the remedy for a
+	// `livekeys` fault in verify. Said in the log, because drift is a bug
+	// somewhere and somebody should hear about it.
+	repaired, err := st.RepairLive()
+	if err != nil {
+		return err
+	}
+	for vault, why := range repaired {
+		log.Warn("rebuilt the live set from the entries", "vault", vault, "why", why)
+	}
+
 	token, fresh, err := loadOrCreateToken(filepath.Join(*dataDir, tokenFileName))
 	if err != nil {
 		return err

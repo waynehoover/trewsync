@@ -437,7 +437,7 @@ CREATE INDEX IF NOT EXISTS entry_chunks_by_name ON entry_chunks(vault_id, name);
 -- 112 ms against 5.6 ms with this, and the write it costs is 5 us against a
 -- chunk fsync of 7.8 ms.
 CREATE INDEX IF NOT EXISTS entries_by_prev ON entries(vault_id, prev_path, uid);
-`
+` + liveSchema
 
 // Store is the server's whole persistent state: entries in SQLite, bodies in a
 // chunk store.
@@ -871,7 +871,8 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 		// A refusal this entry earned, rolled back on its own. Anything else is
 		// the database itself, and a batch that cannot talk to its database has
 		// no per-entry answer to give.
-		if !errors.Is(err, ErrStale) && !errors.Is(err, ErrBadEntry) && !errors.Is(err, ErrUnknownVault) {
+		if !errors.Is(err, ErrStale) && !errors.Is(err, ErrBadEntry) && !errors.Is(err, ErrUnknownVault) &&
+			!errors.Is(err, ErrCollision) {
 			return nil, err
 		}
 		if _, rerr := tx.Exec("ROLLBACK TO SAVEPOINT " + name); rerr != nil {
@@ -968,6 +969,13 @@ func writeEntry(tx *sql.Tx, vaultID string, e Entry, base *int64, prevBase int64
 		}
 	}
 
+	// The collision rule, after the preconditions so a stale write is told it
+	// is stale first, and before a uid is taken so a refused entry gives its
+	// uid back with its savepoint.
+	if err := checkCollision(tx, vaultID, e); err != nil {
+		return 0, err
+	}
+
 	var uid int64
 	err := tx.QueryRow(
 		`UPDATE vaults SET next_uid = next_uid + 1 WHERE vault_id = ?
@@ -994,6 +1002,11 @@ func writeEntry(tx *sql.Tx, vaultID string, e Entry, base *int64, prevBase int64
 			vaultID, uid, i, n); err != nil {
 			return 0, err
 		}
+	}
+	// The live set moves with the entry, in the same transaction or savepoint,
+	// so the next entry of a batch is checked against the state this one left.
+	if err := moveLive(tx, vaultID, e); err != nil {
+		return 0, err
 	}
 	return uid, nil
 }
@@ -2029,7 +2042,8 @@ type Fault struct {
 	Row string
 	// Reason is one of a fixed vocabulary, because things match on it:
 	// "missing", "corrupt", "nochunks", "straychunks", "shortchunks",
-	// "chunkorder", "nomac", "badparent", "baddevice", "badinvite", "novault".
+	// "chunkorder", "nomac", "badparent", "baddevice", "badinvite", "novault",
+	// "livekeys".
 	//
 	// Kept complete on purpose. It was written as though it were the whole
 	// list and then fell behind the code twice, so anything reading it to
@@ -2101,6 +2115,11 @@ func (s *Store) Verify(deep bool) (Verification, error) {
 	entryFaults, entries, err := s.verifyEntries()
 	v.Faults = append(v.Faults, entryFaults...)
 	v.Entries = entries
+	if err != nil {
+		return v, err
+	}
+	liveFaults, err := s.verifyLive()
+	v.Faults = append(v.Faults, liveFaults...)
 	if err != nil || !deep {
 		return v, err
 	}
@@ -2327,6 +2346,34 @@ func (s *Store) verifyRegistry() ([]Fault, int, error) {
 		}
 	}
 	return faults, checked, rows.Err()
+}
+
+// verifyLive recomputes each vault's live set from its entries and reports a
+// `livekeys` fault where the tables the collision rule reads say otherwise.
+//
+// The tables are derived, written in the same transaction as every entry, and
+// rebuilt from the entries if a write finds them disagreeing; see liveSchema.
+// A fault here is drift that nothing has healed yet: the collision rule is
+// answering from a live set that is not the vault's, so it may refuse a path
+// it should accept or accept one it should refuse. Nothing is lost either
+// way, and the next write that meets the disagreement rebuilds them.
+func (s *Store) verifyLive() ([]Fault, error) {
+	vaults, err := s.Vaults()
+	if err != nil {
+		return nil, err
+	}
+	var faults []Fault
+	for _, v := range vaults {
+		diff, err := liveDifference(s.db, v)
+		if err != nil {
+			return faults, err
+		}
+		if diff != "" {
+			faults = append(faults, Fault{VaultID: v, Row: "live set", Reason: "livekeys",
+				Detail: "the live set the collision rule reads disagrees with the entries: " + diff})
+		}
+	}
+	return faults, nil
 }
 
 // declaredChunks is the recorded chunk count, or a literal -1 where the column

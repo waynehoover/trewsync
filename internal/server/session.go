@@ -1764,6 +1764,13 @@ func (s *Session) prepare(e store.Entry, base, prevBase int64) (missing []string
 	if r := s.checkEntry(e); r != nil {
 		return nil, 0, r
 	}
+	// The collision rule, asked before any body is: an entry that collides
+	// now is refused before its bytes are sent. The commit asks again under
+	// the lock, and that answer is the one that stands.
+	if err := s.srv.st.Collides(s.vaultID, e); errors.Is(err, store.ErrCollision) {
+		r := wire.Error(wire.CodeCollision, err.Error())
+		return nil, 0, &r
+	}
 
 	missing, sizes, err := s.srv.st.Chunks().Missing(s.vaultID, e.Chunks)
 	if err != nil {
@@ -1941,6 +1948,8 @@ func commitCode(err error) string {
 	switch {
 	case errors.Is(err, store.ErrBadPath):
 		return wire.CodeBadPath
+	case errors.Is(err, store.ErrCollision):
+		return wire.CodeCollision
 	case errors.Is(err, store.ErrBadEntry):
 		return wire.CodeBadEntry
 	case errors.Is(err, store.ErrChunkMissing):
