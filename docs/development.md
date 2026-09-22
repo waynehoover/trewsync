@@ -446,6 +446,31 @@ server was measured and rejected: it pulls `golang.org/x/oauth2`,
 `uritemplate` and `x/time/rate` into the binary, beside a 12,000-line
 streamable transport. Test-only imports are not linked into `telimus`.
 
+### Latent issues in the chunker
+
+Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,
+2026-09-22). None is reachable through `sizesFor` with today's tables, so both
+ports keep the behaviour, but each is a trap for whoever changes the sizes:
+
+- `chunkStream` and `chunkBytes` disagree for minimums of 1 or 2: after a UTF-8
+  trim the streaming splitter re-hashes the carried bytes without testing them
+  for a boundary (`chunk.ts:436-451`) while the in-memory one re-tests them
+  (`:341`). The engine uses both on the same files, so a table with a tiny
+  minimum would rename chunks.
+- The 192-byte floor (`WINDOW * 4`, `chunk.ts:219`) can exceed a server's
+  advertised `chunkMax`, producing chunks that server refuses for ever, against
+  the promise at `:193-196`. This server advertises a fixed 1 MiB. The client
+  should refuse a `chunkMax` below the floor at the handshake rather than
+  strand every file (an M2 item).
+- With a minimum under 4, a chunk of valid UTF-8 can be invalid on its own
+  (`:256`), and chunks other than the last can come out up to 3 bytes below
+  the minimum.
+- `EngineOptions.mergeable` also decides chunking (`engine.ts:437`, `:2332`):
+  it picks the size table and the UTF-8 flag, so a custom merge predicate
+  would silently change chunk names. Nothing in production sets it.
+- Dead code: `TEXT_AVG_MAX` (`:132`) cannot apply through `sizesFor`, and
+  `if (lead < start)` (`:250`) is never true.
+
 ### The strip ledger
 
 Before M1 or M2 deletes a test file, each of its assertions is classified as
