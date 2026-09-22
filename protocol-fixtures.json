@@ -1473,5 +1473,162 @@
         "mcpEditable": false
       }
     ]
+  },
+  "windows": {
+    "note": [
+      "Windows only, applied by the client to inbound paths (PLAN section 4.12); the server does not.",
+      "reason: character (one of <>:\"|?* in a segment), trailing (a segment ends with a dot or space),",
+      "reserved (a segment whose part before its first dot, trailing spaces removed, is a reserved device",
+      "name in ASCII case-insensitive comparison), checked per segment in that order. null: writable."
+    ],
+    "reserved": [
+      "CON",
+      "PRN",
+      "AUX",
+      "NUL",
+      "COM0",
+      "COM1",
+      "COM2",
+      "COM3",
+      "COM4",
+      "COM5",
+      "COM6",
+      "COM7",
+      "COM8",
+      "COM9",
+      "COM\u00b9",
+      "COM\u00b2",
+      "COM\u00b3",
+      "LPT0",
+      "LPT1",
+      "LPT2",
+      "LPT3",
+      "LPT4",
+      "LPT5",
+      "LPT6",
+      "LPT7",
+      "LPT8",
+      "LPT9",
+      "LPT\u00b9",
+      "LPT\u00b2",
+      "LPT\u00b3"
+    ],
+    "cases": [
+      {
+        "name": "an ordinary note",
+        "path": "Folder/Note.md",
+        "reason": null
+      },
+      {
+        "name": "a colon",
+        "path": "a:b.md",
+        "reason": "character"
+      },
+      {
+        "name": "a question mark in a folder",
+        "path": "Why?/x.md",
+        "reason": "character"
+      },
+      {
+        "name": "an asterisk",
+        "path": "a*b.md",
+        "reason": "character"
+      },
+      {
+        "name": "angle brackets",
+        "path": "<draft>.md",
+        "reason": "character"
+      },
+      {
+        "name": "a double quote",
+        "path": "say \"hi\".md",
+        "reason": "character"
+      },
+      {
+        "name": "a pipe",
+        "path": "a|b.md",
+        "reason": "character"
+      },
+      {
+        "name": "a trailing dot on a folder",
+        "path": "trailing./x.md",
+        "reason": "trailing"
+      },
+      {
+        "name": "a trailing space on a file",
+        "path": "x.md ",
+        "reason": "trailing"
+      },
+      {
+        "name": "CON",
+        "path": "CON",
+        "reason": "reserved"
+      },
+      {
+        "name": "con in lower case, with an extension",
+        "path": "con.md",
+        "reason": "reserved"
+      },
+      {
+        "name": "NUL with two extensions",
+        "path": "notes/NUL.tar.gz",
+        "reason": "reserved"
+      },
+      {
+        "name": "COM1",
+        "path": "COM1.txt",
+        "reason": "reserved"
+      },
+      {
+        "name": "COM0",
+        "path": "Com0.md",
+        "reason": "reserved"
+      },
+      {
+        "name": "LPT9",
+        "path": "lpt9",
+        "reason": "reserved"
+      },
+      {
+        "name": "a superscript COM",
+        "path": "COM\u00b9.md",
+        "reason": "reserved"
+      },
+      {
+        "name": "a superscript LPT",
+        "path": "LPT\u00b3",
+        "reason": "reserved"
+      },
+      {
+        "name": "a reserved name with spaces before its dot",
+        "path": "AUX .md",
+        "reason": "reserved"
+      },
+      {
+        "name": "a reserved name as a folder",
+        "path": "PRN/x.md",
+        "reason": "reserved"
+      },
+      {
+        "name": "a name that only starts like one",
+        "path": "CONSOLE.md",
+        "reason": null
+      },
+      {
+        "name": "COM10 is not reserved",
+        "path": "COM10.md",
+        "reason": null
+      },
+      {
+        "name": "a reserved word inside a longer name",
+        "path": "my NUL notes.md",
+        "reason": null
+      },
+      {
+        "name": "a superscript digit elsewhere",
+        "path": "E=mc\u00b2.md",
+        "reason": null
+      }
+    ]
   }
 }

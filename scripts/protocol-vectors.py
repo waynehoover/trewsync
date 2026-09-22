@@ -52,7 +52,7 @@ MAX_PATH_BYTES = 1024
 MAX_NAME_BYTES = 64
 CHUNK_MAX = 1 << 20
 
-SECTIONS = ("constants", "invite", "frames", "fold", "paths", "collisions", "formats")
+SECTIONS = ("constants", "invite", "frames", "fold", "paths", "collisions", "formats", "windows")
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +594,78 @@ def formats(table: dict[int, str]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Windows
+# ---------------------------------------------------------------------------
+
+# Microsoft's list of names a file may not have, with or without an extension:
+# https://learn.microsoft.com/windows/win32/fileio/naming-a-file. COM0, LPT0
+# and the superscript digits are on it too, which is easy to miss.
+WINDOWS_RESERVED = (
+    ["CON", "PRN", "AUX", "NUL"]
+    + [f"COM{d}" for d in "0123456789" + "\u00b9\u00b2\u00b3"]
+    + [f"LPT{d}" for d in "0123456789" + "\u00b9\u00b2\u00b3"]
+)
+WINDOWS_CHARACTERS = '<>:"|?*'
+
+
+def windows_reason(path: str) -> str | None:
+    """Why a path the server accepted cannot be written on Windows (PLAN 4.12).
+
+    The client applies this to inbound paths on Windows only, and a refusal
+    becomes a stranded path with its reason, never a write error retried for
+    ever. The server does not apply it: the paths are valid everywhere else.
+    """
+    for segment in path.split("/"):
+        if any(c in WINDOWS_CHARACTERS for c in segment):
+            return "character"
+        if segment.endswith(".") or segment.endswith(" "):
+            return "trailing"
+        stem = segment.split(".", 1)[0].rstrip(" ")
+        if ascii_upper(stem) in WINDOWS_RESERVED:
+            return "reserved"
+    return None
+
+
+def ascii_upper(s: str) -> str:
+    return "".join(chr(ord(c) - 32) if "a" <= c <= "z" else c for c in s)
+
+
+def windows_vectors() -> dict:
+    cases = [
+        ("an ordinary note", "Folder/Note.md"),
+        ("a colon", "a:b.md"),
+        ("a question mark in a folder", "Why?/x.md"),
+        ("an asterisk", "a*b.md"),
+        ("angle brackets", "<draft>.md"),
+        ("a double quote", 'say "hi".md'),
+        ("a pipe", "a|b.md"),
+        ("a trailing dot on a folder", "trailing./x.md"),
+        ("a trailing space on a file", "x.md "),
+        ("CON", "CON"),
+        ("con in lower case, with an extension", "con.md"),
+        ("NUL with two extensions", "notes/NUL.tar.gz"),
+        ("COM1", "COM1.txt"),
+        ("COM0", "Com0.md"),
+        ("LPT9", "lpt9"),
+        ("a superscript COM", "COM\u00b9.md"),
+        ("a superscript LPT", "LPT\u00b3"),
+        ("a reserved name with spaces before its dot", "AUX .md"),
+        ("a reserved name as a folder", "PRN/x.md"),
+        ("a name that only starts like one", "CONSOLE.md"),
+        ("COM10 is not reserved", "COM10.md"),
+        ("a reserved word inside a longer name", "my NUL notes.md"),
+        ("a superscript digit elsewhere", "E=mc\u00b2.md"),
+    ]
+    return {
+        "note": [
+            "Windows only, applied by the client to inbound paths (PLAN section 4.12); the server does not.",
+            "reason: character (one of <>:\"|?* in a segment), trailing (a segment ends with a dot or space),",
+            "reserved (a segment whose part before its first dot, trailing spaces removed, is a reserved device",
+            "name in ASCII case-insensitive comparison), checked per segment in that order. null: writable.",
+        ],
+        "reserved": WINDOWS_RESERVED,
+        "cases": [{"name": n, "path": p, "reason": windows_reason(p)} for n, p in cases],
+    }
 
 
 def fold_vectors(table: dict[int, str], digest: str) -> dict:
@@ -660,6 +732,7 @@ def main() -> None:
         "scenarios": collision_vectors(table),
     }
     fixtures["formats"] = formats(table)
+    fixtures["windows"] = windows_vectors()
     fixtures_path.write_text(json.dumps(fixtures, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     print(f"fold table: {len(table)} code points, Unicode {UNICODE_VERSION}, digest {digest[:16]}")
     for key in SECTIONS:
