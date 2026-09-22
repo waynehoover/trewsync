@@ -1,0 +1,9 @@
+{
+	"id": "telimus-sync",
+	"name": "Telimus Sync",
+	"version": "0.10.0",
+	"minAppVersion": "1.7.2",
+	"description": "Self-hosted vault sync with full version history, on a server you run.",
+	"author": "Wayne Hoover",
+	"isDesktopOnly": false
+}

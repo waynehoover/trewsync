@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node", "vitest/globals"]
+  },
+  // The benchmarks are in here on purpose. They import the same public API the
+  // client does, and while they sat outside it a change to that API broke them
+  // with every gate still green: `Client.requestsSent` went, and nothing said
+  // so. The vitest configs are still out, because they fail today on
+  // `minWorkers`, which the installed vitest types do not declare and its
+  // runtime accepts; that is a separate decision about working config.
+  "include": [
+    "src",
+    "bench.ts",
+    "bench-sync.ts",
+    "bench-pass.ts",
+    "bench-corpus.ts",
+    "bench-android.ts"
+  ]
+}

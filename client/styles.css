@@ -1,0 +1,581 @@
+/*
+ * Telimus Sync.
+ *
+ * Obsidian loads this beside main.js. Everything here is either layout the
+ * markup cannot express on its own, or a colour taken from Obsidian's own
+ * variables so the plugin follows the reader's theme rather than fighting it.
+ */
+
+/* A version row is two lines, and was relying on the timestamp being long
+ * enough to wrap. Shortening the timestamp put both on one line with no space
+ * between them, which is the sort of thing that only shows up on a screenshot. */
+.mod-telimus-history .modal-sidebar-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.mod-telimus-history .modal-sidebar-list-item-header {
+  font-weight: var(--font-medium);
+}
+
+.mod-telimus-history .modal-sidebar-list-item-details {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mod-telimus-history .modal-sidebar-list-item.is-active .modal-sidebar-list-item-details {
+  color: inherit;
+}
+
+.mod-telimus-history .telimus-history-content-container {
+  display: flex;
+  flex-direction: column;
+  /* Fill what the sidebar leaves, rather than shrinking to whatever the
+     * chosen version happens to contain. Without it a short pane collapses:
+     * "No difference from the note on disk." rendered 314px wide inside 1080px
+     * of modal, dragging the title and the Restore button in with it. */
+  flex: 1;
+  min-width: 0;
+  padding: 0 16px 16px;
+  overflow: auto;
+}
+
+.mod-telimus-history .telimus-history-text,
+.mod-telimus-history .telimus-history-diff {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--font-ui-small);
+  margin: 0;
+}
+
+.mod-telimus-history .telimus-history-content-empty,
+.mod-telimus-history .telimus-history-empty {
+  color: var(--text-muted);
+}
+
+.mod-telimus-history .modal-setting-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  /* Clear of Obsidian's close button, which floats over the modal's top right
+     * corner and is not in the layout. Once the pane filled the modal the
+     * Restore button ran under it by 16px. */
+  padding: 12px 40px 12px 0;
+}
+
+/* Which note this is the history of. The modal calls setTitle, but
+ * mod-sidebar-layout collapses the header to 0x0, so that title has never been
+ * visible: the modal named no note at all. */
+.mod-telimus-history .telimus-history-heading {
+  padding: 12px 12px 8px;
+  font-weight: var(--font-medium);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+
+.mod-telimus-history .modal-setting-titlebar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.mod-telimus-history .telimus-history-button {
+  margin: 8px 12px;
+}
+
+/* A diff is unreadable in one colour, and these are Obsidian's own, so it
+ * follows whatever theme the reader has. */
+.mod-telimus-history .telimus-history-diff .telimus-added {
+  color: var(--color-green);
+}
+
+.mod-telimus-history .telimus-history-diff .telimus-removed {
+  color: var(--color-red);
+}
+
+/* One icon wide; the tooltip identifies Telimus and describes its status. */
+.status-bar-item.plugin-telimus-sync {
+  display: flex;
+  align-items: center;
+}
+
+.status-bar-item.plugin-telimus-sync .telimus-status-icon {
+  display: flex;
+  align-items: center;
+}
+
+.status-bar-item.plugin-telimus-sync.telimus-attention,
+.telimus-sync-ribbon.telimus-attention {
+  color: var(--text-error);
+}
+
+.status-bar-item.plugin-telimus-sync.telimus-working .telimus-status-icon {
+  animation: telimus-spin 1.6s linear infinite;
+}
+
+@keyframes telimus-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A recovery key or an invite: shown precisely so it can be taken off this
+ * device, which means it has to be selectable, and it was not.
+ *
+ * Obsidian turns selection off across its own UI, so this inherited it: on a
+ * phone a long press on the key did nothing, and there was no second screen to
+ * read it from and no keyboard worth transcribing sixty characters on. The Copy
+ * button beside it is the first answer and this is the second, because a
+ * clipboard is not always there and `copyToClipboard`'s fallback tells somebody
+ * to copy it by hand.
+ *
+ * Monospace and boxed because these are strings to be compared character by
+ * character, and `overflow-wrap: anywhere` because a key is one long word that
+ * would otherwise push the modal sideways on a narrow screen. */
+.telimus-pairing {
+  display: block;
+  user-select: text;
+  -webkit-user-select: text;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-secondary);
+}
+
+/* Rows and groups use Obsidian's own settings layout in both hosts. */
+.telimus-panel {
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+}
+
+.mod-telimus-panel {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.telimus-panel .setting-item-control {
+  flex-wrap: wrap;
+}
+
+.telimus-panel .telimus-advice {
+  margin: var(--size-4-2) 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.telimus-panel .setting-items > .telimus-advice,
+.telimus-panel .setting-items > .telimus-pairing {
+  margin-inline: var(--size-4-5);
+}
+
+.telimus-invite-qr {
+  display: block;
+  width: 288px;
+  max-width: calc(100% - 2 * var(--size-4-5));
+  height: auto;
+  margin: var(--size-4-3) var(--size-4-5);
+  background: white;
+}
+
+.telimus-invite-code {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--size-4-2);
+}
+
+.telimus-invite-code .setting-item-info {
+  margin-inline-end: 0;
+}
+
+.telimus-invite-code .setting-item-control input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  font-family: var(--font-monospace);
+}
+
+.telimus-server > .setting-group {
+  margin-top: var(--size-4-3);
+}
+
+.telimus-add-device,
+.telimus-server,
+.telimus-manage {
+  margin-top: var(--size-4-4);
+}
+
+.telimus-add-device > summary,
+.telimus-server > summary,
+.telimus-manage > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-medium);
+  padding: var(--size-4-2) 0;
+}
+
+.telimus-server > p {
+  margin: var(--size-4-2) 0 0;
+}
+
+.telimus-choice {
+  align-items: center;
+}
+
+@media (max-width: 600px) {
+  /* History needs a bounded version list above the preview on a phone. */
+  .mod-telimus-history.mod-sidebar-layout .modal-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .mod-telimus-history.modal.mod-sidebar-layout .modal-content > * {
+    position: static;
+    height: auto;
+  }
+
+  .mod-telimus-history.mod-sidebar-layout .modal-header {
+    height: auto;
+    flex: 0 0 auto;
+    padding: var(--size-4-4) var(--size-4-12) var(--size-4-4) var(--size-4-4);
+  }
+
+  .mod-telimus-history .modal-title {
+    font-size: var(--font-ui-medium);
+    overflow-wrap: anywhere;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .mod-telimus-history .modal-sidebar.mod-history {
+    flex: 0 0 auto;
+    width: 100%;
+    max-height: 220px;
+    overflow: hidden;
+    border-bottom: 1px solid var(--background-modifier-border);
+  }
+
+  .mod-telimus-history .modal-sidebar-inner {
+    display: block;
+    flex: none;
+    height: auto;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  .mod-telimus-history .modal-sidebar-list {
+    display: block;
+    flex: none;
+    overflow: visible;
+  }
+
+  .mod-telimus-history .telimus-history-heading {
+    display: none;
+  }
+
+  .mod-telimus-history .modal-sidebar-list-item {
+    align-items: flex-start;
+    min-height: 44px;
+  }
+
+  .mod-telimus-history .modal-sidebar-list-item-details {
+    padding: 0;
+  }
+
+  .mod-telimus-history .telimus-history-content-container {
+    flex: 1 1 auto;
+    min-height: 160px;
+  }
+
+  .mod-telimus-history .modal-setting-titlebar {
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    padding: var(--size-4-3) 0;
+  }
+
+  .mod-telimus-history .modal-setting-titlebar-actions button {
+    min-height: 44px;
+    font-size: var(--font-ui-small);
+  }
+
+  .telimus-panel {
+    --setting-items-padding-x: var(--size-4-4);
+    --setting-items-padding-y: var(--size-4-3);
+    --setting-items-radius: var(--radius-l);
+  }
+
+  /* Obsidian stacks generic controls on phones. Single actions fit beside
+   * their labels; only rows with fields need a second line. */
+  .telimus-panel .setting-item:not(.setting-item-heading):not(.mod-toggle) {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--size-4-3);
+  }
+
+  .telimus-panel .setting-item:not(.setting-item-heading):not(.mod-toggle) .setting-item-info {
+    align-self: center;
+    margin-inline-end: 0;
+  }
+
+  .telimus-panel .setting-item:not(.setting-item-heading):not(.mod-toggle) .setting-item-control {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: 100%;
+    gap: var(--size-4-2);
+  }
+
+  .telimus-panel
+    .setting-item:not(.setting-item-heading):not(.mod-toggle)
+    .setting-item-control
+    button:not(.clickable-icon) {
+    width: auto;
+    min-height: 44px;
+    padding-inline: var(--size-4-3);
+    font-size: var(--font-ui-small);
+    font-weight: var(--font-medium);
+    background-color: var(--interactive-normal);
+    border-radius: var(--input-radius);
+  }
+
+  .telimus-panel
+    .setting-item:not(.setting-item-heading):not(.mod-toggle)
+    .setting-item-control
+    button.mod-warning {
+    background-color: var(--background-modifier-error);
+  }
+
+  .telimus-panel
+    .setting-item:not(.setting-item-heading):not(.mod-toggle)
+    .setting-item-control
+    button.mod-cta {
+    background-color: var(--interactive-accent);
+    color: var(--text-on-accent);
+  }
+
+  .telimus-panel
+    .setting-item:not(.setting-item-heading):not(.mod-toggle):has(input, textarea, select) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .telimus-panel
+    .setting-item:not(.setting-item-heading):not(.mod-toggle):has(input, textarea, select)
+    .setting-item-info {
+    align-self: stretch;
+  }
+
+  .telimus-panel
+    .setting-item:not(.setting-item-heading):not(.mod-toggle):has(input, textarea, select)
+    .setting-item-control {
+    width: 100%;
+    flex-wrap: nowrap;
+  }
+
+  .telimus-panel
+    .setting-item:not(.setting-item-heading):not(.mod-toggle)
+    .setting-item-control
+    input {
+    flex: 1;
+    width: 0;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 44px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--input-radius);
+    background: var(--background-modifier-form-field);
+  }
+
+  .telimus-panel .setting-item-description {
+    overflow-wrap: anywhere;
+  }
+
+  .telimus-panel .setting-item-control select {
+    width: 100%;
+    max-width: 100%;
+    min-height: 44px;
+  }
+
+  .telimus-add-device,
+  .telimus-server,
+  .telimus-manage {
+    margin-top: var(--size-4-2);
+  }
+
+  .telimus-panel details > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 44px;
+    padding: var(--size-4-2) 0;
+    list-style: none;
+    color: var(--text-normal);
+  }
+
+  .telimus-panel details > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .telimus-panel details > summary::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    margin-inline: var(--size-4-3) var(--size-4-1);
+    border-right: 1.5px solid var(--text-muted);
+    border-bottom: 1.5px solid var(--text-muted);
+    transform: rotate(-45deg);
+    flex-shrink: 0;
+  }
+
+  .telimus-panel details[open] > summary::after {
+    transform: rotate(45deg);
+  }
+
+  .telimus-invite-qr {
+    width: 240px;
+    margin-inline: auto;
+  }
+}
+
+.telimus-panel .telimus-delivery {
+  margin: var(--size-2-1) 0 0;
+}
+
+/* Long attachment paths stay inside the status row on narrow screens. */
+.telimus-panel .telimus-sync-status {
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-bar-item.plugin-telimus-sync.telimus-working .telimus-status-icon {
+    animation: none;
+  }
+}
+
+/* Native buttons keep history usable with a keyboard and screen reader. */
+.mod-telimus-history button.modal-sidebar-list-item {
+  width: 100%;
+  height: auto;
+  min-height: 44px;
+  text-align: start;
+  align-items: stretch;
+  white-space: normal;
+  box-shadow: none;
+  border: 0;
+  background: transparent;
+}
+.mod-telimus-history button.modal-sidebar-list-item.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+.mod-telimus-history button.modal-sidebar-list-item:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+.mod-telimus-activity .setting-item,
+.mod-telimus-conflicts .setting-item {
+  gap: var(--size-4-3);
+}
+.mod-telimus-activity .setting-item-info,
+.mod-telimus-conflicts .setting-item-info {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.telimus-activity-list {
+  max-height: 55vh;
+  overflow-y: auto;
+}
+.telimus-conflict-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 35vh;
+  overflow: auto;
+  font-size: var(--font-ui-small);
+}
+.telimus-conflict-editor {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+}
+.is-mobile .mod-telimus-activity .setting-item,
+.is-mobile .mod-telimus-conflicts .setting-item {
+  flex-wrap: wrap;
+}
+.is-mobile .mod-telimus-activity .setting-item-control,
+.is-mobile .mod-telimus-conflicts .setting-item-control {
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+}
+.is-mobile .mod-telimus-conflicts button,
+.is-mobile .mod-telimus-activity button {
+  min-height: 44px;
+}
+
+.is-mobile .mod-telimus-conflicts .setting-item:not(.telimus-conflict-actions) {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+.is-mobile .mod-telimus-conflicts .setting-item:not(.telimus-conflict-actions) .setting-item-control {
+  width: auto;
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+.is-mobile .mod-telimus-conflicts .setting-item:not(.telimus-conflict-actions) button {
+  width: auto;
+}
+
+.is-mobile .mod-telimus-activity .telimus-activity-list .setting-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: nowrap;
+  padding: var(--size-4-3) 0;
+}
+.is-mobile .mod-telimus-activity .telimus-activity-list .setting-item-control {
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+.is-mobile .mod-telimus-activity .telimus-activity-list .setting-item-info {
+  margin-inline-end: 0;
+  align-self: center;
+}
+.is-mobile .mod-telimus-activity .clickable-icon {
+  min-width: 44px;
+  min-height: 44px;
+}
+.is-mobile .mod-telimus-activity .telimus-activity-filter .setting-item-control,
+.is-mobile .mod-telimus-activity .search-input-container,
+.is-mobile .mod-telimus-activity .search-input-container input {
+  width: 100%;
+}
+
+.mod-telimus-conflicts details > summary,
+.mod-telimus-preview details > summary {
+  cursor: pointer;
+  min-height: 44px;
+  align-content: center;
+}
+.mod-telimus-preview .setting-item-info {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.is-mobile .mod-telimus-preview button {
+  min-height: 44px;
+}

@@ -1,0 +1,5118 @@
+import { SyncPreviewModal } from "./preview.ts";
+import type { SyncPreview } from "../core/preview.ts";
+import { ActivityLog, ActivityModal } from "./activity.ts";
+import { ConflictsModal } from "./conflicts.ts";
+import { conflictOriginal, reviewConflict, type ConflictPair } from "../core/conflicts.ts";
+/** Obsidian plugin: lifecycle, platform adapter, and sync/recovery interfaces. */
+
+import {
+  Modal,
+  Menu,
+  Notice,
+  Platform,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  SettingGroup,
+  setIcon,
+  type ButtonComponent,
+  type MarkdownView,
+  type TAbstractFile,
+  type TextComponent,
+} from "obsidian";
+
+import {
+  HistoryModal,
+  describeRestore,
+  when,
+  type HistorySource,
+  type Restored,
+} from "./history.ts";
+
+import {
+  Client,
+  SYNC_EVENT_DELAY_MS,
+  adviseAfterRegistering,
+  attentionLines,
+  needsAttention,
+  rebaseCursors,
+  redeemInvite,
+  refuseUnlessAhead,
+  registerAsDevice,
+  whatTheDiskHolds,
+  runForever,
+  summarise,
+  credentialsFor,
+  proveDeviceConnects,
+  type ClientOptions,
+  type DeletedList,
+  type Deletion,
+  type DeviceRow,
+  type InviteRow,
+  type Version,
+} from "../core/client.ts";
+import { watchResume } from "./resume.ts";
+import { watchDelivery } from "./delivery.ts";
+import type { TransferActivity } from "../core/transfer.ts";
+import { describeTransfer } from "./transfer.ts";
+import { describeDelivery } from "../core/delivery.ts";
+import { generateSecret } from "../core/crypto.ts";
+import { REJOIN_ADVICE, type RepairReport, type SyncReport } from "../core/engine.ts";
+import {
+  DEFAULT_VAULT,
+  INVITE_PREFIX,
+  PAIRING_PREFIX,
+  decodeConfig,
+  deviceCredential,
+  encodeConfig,
+  formatPairing,
+  isIgnorableName,
+  isInvite,
+  joinDestination,
+  normaliseUrl,
+  parseInvite,
+  parseSetup,
+  parsePairing,
+  type DeviceConfig,
+  type Invite,
+} from "../core/pairing.ts";
+import { rotateVault } from "../core/rotation.ts";
+import { ProtocolError } from "../core/transport.ts";
+import { DISPLACED_LOG, type Displaced, type Inventory } from "../core/displaced.ts";
+import { firstFreeName } from "../core/paths.ts";
+import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
+import { timedVault } from "../core/vault.ts";
+import type { JournalSaveCost, JournalStoreOptions } from "../core/index-journal-store.ts";
+import { INVITE_ACTION, inviteQrImage } from "./invite-qr.ts";
+import { checkFirstSync, MergeConfirmationRequired } from "./first-sync.ts";
+
+/** What the status bar is saying, which is also what the modal shows. */
+export type State =
+  | { kind: "unpaired" }
+  | { kind: "connecting" }
+  | { kind: "loading"; local: number; server: number }
+  /**
+   * Settled, with what the last pass found.
+   *
+   * `refused` is how many files the vault holds that will not sync until a
+   * person does something: written off for good, or blocked by a name that
+   * is a file here and a folder elsewhere. A vault with one such file used to
+   * show the same glyph as a clean one, which is rule 7 with the two
+   * conditions that matter most collapsed.
+   */
+  | {
+      kind: "synced";
+      summary: string;
+      at: number;
+      refused: number;
+      /**
+       * How many versions this client took off a note and could not put back.
+       *
+       * Different from `refused` and reported apart from it: a refused file is
+       * one that is not syncing and is still where its author left it, and one
+       * of these is a note that exists only under a name Obsidian does not
+       * show. Nothing in this plugin used to say so at all (R46).
+       */
+      waiting: number;
+      /**
+       * Files this device has not synced yet and expects to, with a deadline.
+       *
+       * Its own number, not folded into `refused` and not left out (rule 7,
+       * Codex-03). `needsAttention` counts what a person has to act on, and a
+       * file backing off after a failed upload is not that; but it is not
+       * finished either, and the glyph said it was. A vault with a note
+       * retrying showed the same tick as a vault with nothing left to do.
+       */
+      pending?: number | undefined;
+      /**
+       * When the next attempt at `pending` is due, if anything is.
+       *
+       * Because "3 files are waiting" and "3 files are waiting, next try in
+       * four minutes" are different amounts of help, and the second is what
+       * stops somebody power-cycling their phone.
+       */
+      pendingAt?: number | undefined;
+      /**
+       * What is written off and why, and what is being retried, by name.
+       *
+       * Kept on the state rather than only in a notice. A refusal used to be a
+       * sentence on screen for twenty seconds and a number afterwards, and the
+       * guide told people to look in the panel for a reason the panel did not
+       * have (Codex-03).
+       */
+      issues?: readonly { path: string; why: string }[] | undefined;
+      retryingPaths?: readonly string[] | undefined;
+      /**
+       * Set when this device cannot say what is waiting (RR2).
+       *
+       * Different from `waiting: 0`, and the difference is the whole reason
+       * the field exists: the plugin's only record of a note it hid is a log
+       * in its own folder, and a log it cannot read produces an empty list
+       * that reads exactly like a clean vault.
+       */
+      recoveryUnknown?: string | undefined;
+    }
+  /** Preparation or transfer activity; saving still has to finish. */
+  | { kind: "syncing"; path?: string; transfer?: TransferActivity; since: number }
+  /**
+   * The last pass did not finish, and this is why.
+   *
+   * Not `synced`, whose glyph says the vault is as the server has it, and
+   * not `stopped`, which says waiting will not help. The next pass may well
+   * succeed; this one did not, and saying so is the honest state.
+   */
+  | { kind: "failed"; why: string; at: number }
+  /**
+   * `refused` is whether the failure was a handshake that never completed
+   * with a server this plugin has never reached, which is when the origin
+   * advice in the panel applies. A connection that was up and went is
+   * ordinary network loss and the origin is known to be fine.
+   */
+  | { kind: "offline"; why: string; retryAt: number; refused: boolean }
+  /**
+   * Stopped, and whether there is a recovery to offer for it.
+   *
+   * `rejoin` is set for the one refusal that has a button behind it: the
+   * server is behind this device, which is what a restore from an older
+   * backup looks like. The panel showed the reason and nothing else, and the
+   * reason pointed at docs/server.md, which is not somewhere a phone goes at
+   * the moment its notes have stopped syncing. See `recoveryFor`.
+   */
+  | { kind: "paused" }
+  | { kind: "stopped"; why: string; recovery?: "rejoin" };
+
+export default class TelimusPlugin extends Plugin {
+  private config: DeviceConfig | undefined;
+  /** The connected client, or undefined between connections. */
+  private client: Client | undefined;
+  /**
+   * The client of the current run from the moment it exists, connected or
+   * not. `client` is set only once the handshake has succeeded, and a vault
+   * unlinked during a slow handshake had no handle on the connection being
+   * made with its old secret. This is that handle.
+   */
+  private live: Client | undefined;
+  /**
+   * When the first file event of the current batch arrived, while a run is
+   * being measured. Undefined between passes. See `timingLog`.
+   */
+  measuringFrom: number | undefined;
+  /**
+   * The vault adapter the running client is using, or none.
+   *
+   * The displaced-version ledger lives on it, and getting a stranded note back
+   * has to go through the same adapter that put it there: it is the only thing
+   * that knows the hidden name and the only thing that writes through Obsidian.
+   */
+  private liveVault: ObsidianVault | undefined;
+  private state: State = { kind: "unpaired" };
+  private statusEl: HTMLElement | undefined;
+  private ribbonEl: HTMLElement | undefined;
+  private running = false;
+  private paused = false;
+  private pausing: Promise<void> | undefined;
+  private activityLog: ActivityLog | undefined;
+  private readonly syncPrompts = new Set<() => void>();
+
+  /**
+   * Which run is the current one. Bumped by every start, by unlink and by
+   * unload, so a run that has been superseded can tell, and says nothing
+   * when it has.
+   */
+  private generation = 0;
+  private editingConnection = false;
+  private unlinking: Promise<void> | undefined;
+  private nudgeTimer: ReturnType<typeof setTimeout> | undefined;
+  private workingTimer: ReturnType<typeof setTimeout> | undefined;
+  private workingPath: string | undefined;
+  private workingTransfer: TransferActivity | undefined;
+  private workingSince: number | undefined;
+  private manualSync: Promise<void> | undefined;
+  private previewing: Promise<void> | undefined;
+  private previewModal: SyncPreviewModal | undefined;
+
+  /**
+   * Why the saved settings could not be read, while that is the case.
+   *
+   * Rule 2: an unreadable config is not an unpaired vault. The panel used to
+   * branch on `paired` alone and offer the pairing form over a file it could
+   * not read, and pairing writes new credentials over the old ones, after
+   * which the device row this vault already has is stranded and, if the string
+   * belonged to another vault, nothing on the server can be decrypted here.
+   */
+  private unreadable: string | undefined;
+  /** Whether this pairing has ever completed a handshake since the plugin loaded. */
+  private everConnected = false;
+  /** The pairing in progress, so a second press cannot start another. */
+  private pairing: Promise<unknown> | undefined;
+  /** What the notices have already said, so they say it once. */
+  private announced = { attention: "", waiting: "", unknown: "" };
+  /** What `onunload` started and could not wait for, for anything that can. */
+  closing: Promise<void> | undefined;
+  /**
+   * Every config save or index reset in flight, so `unlink` cannot be overtaken by one.
+   *
+   * All of them, not the newest. Two reconnects inside one unlink window
+   * start two saves, and holding only the second left the first free to land
+   * its pairing on top of the null that unlink had just written (R10).
+   */
+  private readonly settling = new Set<Promise<void>>();
+
+  /** Ends the reconnect loop's backoff wait, when there is one to end (I05). */
+  private wakeLoop: (() => void) | undefined;
+  private stopResume: (() => void) | undefined;
+  private resuming: Promise<void> | undefined;
+  private readonly panelClosers = new Set<() => void>();
+
+  watchUnload(close: () => void): () => void {
+    this.panelClosers.add(close);
+    return () => {
+      this.panelClosers.delete(close);
+    };
+  }
+
+  override async onload(): Promise<void> {
+    this.stopResume = watchResume(() => this.resume());
+    // Obsidian mobile has no status bar, and the declaration says so:
+    // addStatusBarItem is "not available on mobile". The ribbon is on both,
+    // so the state goes there too: its tooltip is the same sentence, and it
+    // is the thing somebody taps when they want to know.
+    if (!Platform.isMobileApp) {
+      this.statusEl = this.addStatusBarItem();
+      this.statusEl.setAttribute("role", "button");
+      this.statusEl.setAttribute("tabindex", "0");
+      this.registerDomEvent(this.statusEl, "click", (event) => this.showMenu(event));
+      this.registerDomEvent(this.statusEl, "keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          this.showMenu();
+        }
+      });
+    }
+    this.ribbonEl = this.addRibbonIcon("refresh-cw", "Telimus Sync", (event) =>
+      this.showMenu(event),
+    );
+    this.ribbonEl.addClass("telimus-sync-ribbon");
+    // Settings is where somebody looks for a plugin's interface, and Obsidian
+    // draws the gear there only for a plugin that registers a tab. Without
+    // this the panel existed on the ribbon, the status bar and the command
+    // palette, and Settings said Telimus had no interface at all.
+    this.addSettingTab(new TelimusSettingTab(this));
+
+    this.addCommand({
+      id: "preview-sync",
+      name: "Preview sync",
+      callback: () => void this.openPreview(),
+    });
+    this.addCommand({
+      id: "activity",
+      name: "Show sync activity",
+      callback: () => this.openActivity(),
+    });
+    this.addCommand({
+      id: "review-conflicts",
+      name: "Review conflicts",
+      callback: () => this.openConflicts(),
+    });
+    this.addCommand({
+      id: "pause-resume",
+      name: "Pause or resume sync",
+      callback: () => void this.togglePause(),
+    });
+    this.addCommand({
+      id: "sync-now",
+      name: "Sync now",
+      callback: () => void this.syncNow(),
+    });
+    this.addCommand({
+      id: "verify-contents",
+      name: "Verify vault contents",
+      callback: () => void this.syncNow(true),
+    });
+    this.addCommand({
+      id: "show-status",
+      name: "Show status",
+      callback: () => new TelimusModal(this).open(),
+    });
+    this.addCommand({
+      id: "recover-deleted",
+      name: "Recover a deleted note",
+      callback: () => new RecoverModal(this).open(),
+    });
+    this.addCommand({
+      id: "version-history",
+      name: "Show version history",
+      // Checking rather than callback, so the command does not appear in
+      // the palette while nothing is open for it to act on.
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        if (!checking) this.openHistory(file.path);
+        return true;
+      },
+    });
+
+    // Where somebody already looks for this: Obsidian Sync puts version
+    // history on the file menu, so this goes in the same place.
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (!("extension" in file)) return;
+        menu.addItem((item) =>
+          item
+            .setTitle("Telimus: version history")
+            .setIcon("history")
+            .onClick(() => this.openHistory(file.path)),
+        );
+      }),
+    );
+
+    // The same two operations without the UI, registered the way Obsidian
+    // registers its own `sync:history` and `history:restore`.
+    //
+    // Guarded because this arrived in Obsidian 1.12.2 and the rest of what
+    // this plugin needs is older. Calling a method that is not there throws
+    // inside onload, which stops registration where it stands: everything
+    // after it never happens and the plugin half exists, with nothing saying
+    // why. Seen exactly that on a phone running a stale build.
+    //
+    // A block rather than an early return, because returning would skip the
+    // vault event registration below and leave an older Obsidian syncing
+    // only on the timer. The first version of this guard did exactly that.
+    if (typeof this.registerCliHandler === "function") {
+      this.registerCliHandler(
+        "telimus:history",
+        "List Telimus version history for a note",
+        { path: { value: "<path>", description: "Vault path" } },
+        async (flags) => this.cliHistory(String(flags["path"] ?? "")),
+      );
+      this.registerCliHandler(
+        "telimus:restore",
+        "Restore a Telimus version",
+        {
+          path: { value: "<path>", description: "Vault path" },
+          uid: { value: "<n>", description: "Version uid", required: true },
+        },
+        async (flags) => this.cliRestore(String(flags["path"] ?? ""), Number(flags["uid"])),
+      );
+    }
+
+    // Obsidian's own events, rather than a watcher. They are what the
+    // platform gives, they work on mobile, and they say when to look rather
+    // than what changed: the scan is what decides, and it re-reads the vault
+    // every time, so a missed event costs latency and never correctness.
+    //
+    // Registered inside onLayoutReady because Obsidian's own docs say to:
+    // "If you do not wish to receive create events on vault load, register
+    // your event handler inside Workspace.onLayoutReady". Otherwise opening
+    // a vault fires a create for every file in it. The coalescing below
+    // would collapse them into one sync, so this is about not doing
+    // thousands of pointless things rather than about correctness. The
+    // callback runs immediately if the layout is already up.
+    this.app.workspace.onLayoutReady(() => {
+      this.registerEvent(this.app.vault.on("create", (file) => this.nudge(file.path)));
+      this.registerEvent(this.app.vault.on("modify", (file) => this.nudge(file.path)));
+      this.registerEvent(this.app.vault.on("delete", (file) => this.nudge(file.path)));
+      // The old path is the whole point of this event. A rename that
+      // arrives as a delete plus an add still moves the file, but it
+      // retires the old path as a deletion, and the list of deleted notes
+      // is then mostly phantoms of files that still exist under another
+      // name. The engine turns the pair into one operation, and until
+      // this line existed nothing ever told it one had happened.
+      //
+      // Through the client rather than straight to the engine, so it
+      // waits for the pass in flight rather than moving an entry that
+      // pass has in hand.
+      this.registerEvent(
+        this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
+          void this.client?.noteRename(oldPath, file.path);
+          this.nudge();
+        }),
+      );
+    });
+
+    try {
+      this.activityLog = new ActivityLog(
+        this.app.vault.adapter,
+        `${this.pluginDir()}/activity.json`,
+      );
+      await this.activityLog.load();
+      this.config = await this.readConfig();
+    } catch (err) {
+      // Rule 2: an unreadable config is not an unpaired vault. Starting
+      // over would generate a new root secret and make everything already
+      // on the server undecryptable here.
+      this.unreadable = (err as Error).message;
+      this.setState({ kind: "stopped", why: this.unreadable });
+      new Notice(`Telimus: ${this.unreadable}`, 10_000);
+    }
+
+    this.registerObsidianProtocolHandler(INVITE_ACTION, (params) => {
+      try {
+        this.refuseUnlessPairable();
+        const invite = params["invite"]?.trim() ?? "";
+        try {
+          parseInvite(invite);
+        } catch {
+          throw new Error("This invite link is invalid. Create a new invite on the other device.");
+        }
+        new TelimusModal(this, invite).open();
+      } catch (err) {
+        new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+      }
+    });
+
+    if (this.unreadable !== undefined) return;
+    if (this.config) this.start();
+    else this.setState({ kind: "unpaired" });
+  }
+
+  /**
+   * Obsidian's unload is synchronous, so the close cannot be awaited here.
+   *
+   * It is started, and held in `closing` for anything that can wait. What
+   * the generation bump guarantees is that the run being closed writes no
+   * state and shows no notice from here on. The pass it may be finishing
+   * still writes the index, and that is the one write that must complete:
+   * an index behind its notes is safe, an index cut off mid-write is not.
+   */
+  override onunload(): void {
+    this.previewModal?.close();
+    this.previewModal = undefined;
+    for (const close of this.panelClosers) close();
+    this.panelClosers.clear();
+    this.stopResume?.();
+    this.stopResume = undefined;
+    this.running = false;
+    this.generation++;
+    this.clearTimers();
+    // After `running` is false, so the loop wakes into a decision to stop
+    // rather than into another attempt (I05).
+    this.wakeLoop?.();
+    this.wakeLoop = undefined;
+    const { live, client } = this.retireClients();
+    this.closing = Promise.all([
+      live?.close(),
+      client?.close(),
+      this.unlinking,
+      this.pausing,
+      ...this.settling,
+      this.activityLog?.flush(),
+    ])
+      .then(() => undefined)
+      .catch(() => undefined);
+  }
+
+  /* ------------------------------------------------------------ *
+   * Running
+   * ------------------------------------------------------------ */
+
+  private openPreview(): Promise<void> {
+    if (this.previewing) {
+      if (this.previewModal?.isClosed) this.previewModal.open();
+      return this.previewing;
+    }
+    const client = this.client;
+    if (!client) {
+      new Notice(this.whyNoClient());
+      return Promise.resolve();
+    }
+    this.previewModal?.close();
+    const modal = new SyncPreviewModal(this.app);
+    this.previewModal = modal;
+    modal.open();
+    const generation = this.generation;
+    const detach = this.watchUnload(() => modal.close());
+    const prepare = async () => {
+      try {
+        const preview = await client.preview();
+        if (this.client === client && this.generation === generation) modal.showPreview(preview);
+        else modal.close();
+      } catch (error) {
+        if (this.client === client && this.generation === generation)
+          modal.showError(`Could not preview sync: ${(error as Error).message}`);
+        else modal.close();
+      } finally {
+        detach();
+      }
+    };
+    const work = prepare();
+    this.previewing = work;
+    void work.then(() => {
+      if (this.previewing === work) this.previewing = undefined;
+    });
+    return work;
+  }
+
+  private async confirmSync(
+    preview: SyncPreview,
+    heading: string,
+    current: () => boolean,
+  ): Promise<boolean> {
+    if (!current()) return false;
+    const modal = new SyncPreviewModal(this.app, preview, heading);
+    const close = () => modal.close();
+    this.syncPrompts.add(close);
+    const detach = this.watchUnload(close);
+    try {
+      const proceed = await modal.confirm();
+      if (!proceed && current()) {
+        // Said out loud, because the two ways of getting here do not look
+        // alike (R083-15, rule 7). One is a button labelled "Pause sync"; the
+        // other is Escape or the close button, which a person reads as "not
+        // now" and which used to stop sync with nothing on screen to say so.
+        // Whichever it was, this names the state and how to leave it.
+        new Notice(
+          "Sync is paused until you review these changes. " +
+            "Choose Resume sync from the Telimus menu to continue.",
+          10_000,
+        );
+        void this.togglePause();
+      }
+      return proceed && current();
+    } finally {
+      this.syncPrompts.delete(close);
+      detach();
+    }
+  }
+
+  private openActivity(): void {
+    if (this.activityLog)
+      new ActivityModal(
+        this.app,
+        this.activityLog,
+        (path) => this.openExisting(path),
+        (close) => this.watchUnload(close),
+      ).open();
+  }
+
+  private openExisting(path: string): void {
+    const file = this.app.vault.getFileByPath(path);
+    if (!file) {
+      new Notice("This file has moved or was deleted. Look in version history or deleted notes.");
+      return;
+    }
+    void this.app.workspace.getLeaf().openFile(file);
+  }
+
+  private conflictPairs(): ConflictPair[] {
+    return this.app.vault.getFiles().flatMap((file) => {
+      const original = conflictOriginal(file.path);
+      return original ? [{ original, copy: file.path }] : [];
+    });
+  }
+
+  private openConflicts(): void {
+    new ConflictsModal(this.app, {
+      pairs: () => this.conflictPairs(),
+      open: (path) => this.openExisting(path),
+      review: (pair) => {
+        if (!this.client)
+          return reviewConflict(new ObsidianVault(this.app.vault, this.app.vault.configDir), pair);
+        return this.client.reviewConflict(pair);
+      },
+      resolve: async (review, choice, edited) => {
+        const client = this.client;
+        if (!client) throw new Error(this.whyNoClient());
+        await client.resolveConflict(review, choice, edited);
+        await this.activityLog?.flush();
+        await this.syncNow();
+      },
+    }).open();
+  }
+
+  private showMenu(event?: MouseEvent): void {
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle("Sync now")
+        .setIcon("refresh-cw")
+        .setDisabled(this.paused)
+        .onClick(() => void this.syncNow()),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Preview sync")
+        .setIcon("list-checks")
+        .onClick(() => void this.openPreview()),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Sync activity")
+        .setIcon("list")
+        .onClick(() => this.openActivity()),
+    );
+    const conflicts = this.conflictPairs().length;
+    menu.addItem((item) =>
+      item
+        .setTitle(`Review conflicts${conflicts ? ` (${conflicts})` : ""}`)
+        .setIcon("files")
+        .onClick(() => this.openConflicts()),
+    );
+    const file = this.app.workspace.getActiveFile();
+    menu.addItem((item) =>
+      item
+        .setTitle("Version history")
+        .setIcon("history")
+        .setDisabled(!file)
+        .onClick(() => {
+          if (file) this.openHistory(file.path);
+        }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Browse deleted")
+        .setIcon("trash-2")
+        .onClick(() => new RecoverModal(this).open()),
+    );
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle(this.paused ? "Resume sync" : "Pause sync")
+        .setIcon(this.paused ? "play" : "pause")
+        .setDisabled(!this.config || (!this.paused && !!this.pausing))
+        .onClick(() => void this.togglePause()),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Sync settings")
+        .setIcon("settings")
+        .onClick(() => new TelimusModal(this).open()),
+    );
+    if (event) menu.showAtMouseEvent(event);
+    else {
+      const rect = this.statusEl?.getBoundingClientRect();
+      menu.showAtPosition({ x: rect?.left ?? 0, y: rect?.top ?? 0 });
+    }
+  }
+
+  private async togglePause(): Promise<void> {
+    const config = this.config;
+    if (!config) return;
+    if (this.paused) {
+      const mine = this.generation;
+      await this.pausing;
+      if (mine !== this.generation || this.config !== config || !this.paused) return;
+      this.paused = false;
+      this.start();
+      return;
+    }
+    if (this.pausing) return;
+    this.paused = true;
+    this.running = false;
+    this.generation++;
+    this.clearTimers();
+    this.wakeLoop?.();
+    const { live, client } = this.retireClients();
+    // Resume must wait for the entire pause, including the activity write.
+    // Clear the flag before resolving so start() can accept the queued resume.
+    const closing = Promise.all([live?.close(), client?.close()])
+      .then(() => this.activityLog?.flush())
+      .finally(() => {
+        if (this.pausing === closing) this.pausing = undefined;
+      });
+    this.pausing = closing;
+    this.setState({ kind: "paused" });
+    await closing;
+  }
+
+  private start(): void {
+    const config = this.config;
+    if (!config || this.running || this.paused || this.pausing) return;
+    this.running = true;
+    this.everConnected = false;
+    this.announced = { attention: "", waiting: "", unknown: "" };
+    // Every run is numbered, and only the newest one may speak. A single
+    // boolean was not enough: unlinking cleared it, pairing again set it,
+    // and the *previous* run woke from its backoff, read the new run's
+    // flag, and carried on with the old vault's secret. It reconnected,
+    // failed authentication, and its refusal put "Telimus has stopped: not
+    // authorised for this vault" on screen while the real client was
+    // syncing perfectly well behind it.
+    const mine = ++this.generation;
+    this.setState({ kind: "connecting" });
+
+    void (async () => {
+      // Anything thrown while assembling the client lands here, and this
+      // is the only place it can be seen. Without the catch below it
+      // becomes an unhandled rejection and the plugin simply never syncs,
+      // with a status bar still saying "connecting".
+      try {
+        await this.runLoop(config, mine);
+      } catch (err) {
+        if (mine === this.generation) this.stop(err as Error);
+      }
+      if (mine === this.generation) this.running = false;
+    })();
+  }
+
+  /** Check a resumed socket before trusting its apparent connected state. */
+  private resume(): void {
+    if (!this.running || this.resuming) return;
+    const mine = this.generation;
+    const client = this.client;
+    if (!client) {
+      this.wakeLoop?.();
+      return;
+    }
+    const work = (async () => {
+      try {
+        await client.probe();
+        if (mine === this.generation && this.client === client) await client.sync();
+      } catch {
+        // probe closes an unresponsive transport. The loop drains any writes
+        // before reconnecting; waking it does not create a second writer.
+        if (mine === this.generation) this.wakeLoop?.();
+      }
+    })();
+    this.resuming = work;
+    void work.finally(() => {
+      if (this.resuming === work) this.resuming = undefined;
+    });
+  }
+
+  /**
+   * Checks there is something to connect with, then runs the loop.
+   *
+   * There is one credential and no list of candidates to try. A paired device
+   * holds one credential for one row, and either it opens the vault or nothing
+   * on this phone does. Trying a second would mean a device with a way in that
+   * revoking the first cannot close.
+   *
+   * So the check in front of the loop is not a step that can be resumed, it is
+   * a refusal. A config that holds no credential is one a pairing left behind
+   * unfinished, and there is nothing this can do about it that a person cannot
+   * see: it stops with `deviceCredential`'s words, which name what is missing
+   * and, if the vault's root is still here, print the recovery key so the vault
+   * can be paired again rather than lost. Retrying it forever instead would sit
+   * there saying "connecting" about a connection nothing was going to make.
+   */
+  private async runLoop(config: DeviceConfig, mine: number): Promise<void> {
+    const current = () => mine === this.generation;
+    try {
+      deviceCredential(config);
+    } catch (err) {
+      if (current()) this.stop(err as Error);
+      return;
+    }
+    const refusal = await this.runOnce(config, mine);
+    if (!current() || refusal === undefined) return;
+    this.stop(refusal);
+  }
+
+  /** One `runForever`, resolving with the refusal that ended it, if one did. */
+  private async runOnce(config: DeviceConfig, mine: number): Promise<Error | undefined> {
+    const current = () => mine === this.generation;
+    let fatal: Error | undefined;
+    await runForever(await this.clientOptions(config, mine), {
+      onConnecting: (client) => {
+        if (current()) {
+          this.live = client;
+          this.setState({ kind: "connecting" });
+        } else void client.close();
+      },
+      onClient: (client) => {
+        if (!current()) return;
+        this.client = client;
+        if (!client) return;
+        this.everConnected = true;
+        this.setState({ kind: "syncing", since: Date.now() });
+        // Nothing to write back. A connection used to settle which of several
+        // credentials had opened the vault, whether the first-run token was
+        // spent and what the vault's wrapped data key was; all three are
+        // settled by the registration that made this device, before it ever
+        // connects, and a connection now proves only what it says it proves.
+      },
+      onDisconnected: (cause, retryIn) => {
+        if (!current()) return;
+        this.working(undefined);
+        this.setState({
+          kind: "offline",
+          why: cause.message,
+          retryAt: Date.now() + retryIn,
+          refused: false,
+        });
+      },
+      onUnreachable: (cause, retryIn) => {
+        if (!current()) return;
+        this.working(undefined);
+        this.setState({
+          kind: "offline",
+          why: cause.message,
+          retryAt: Date.now() + retryIn,
+          refused: !this.everConnected,
+        });
+      },
+      onFatal: (cause) => {
+        fatal = cause;
+      },
+      keepGoing: () => this.running && current(),
+      // Ends the backoff wait rather than letting it run down (I05).
+      // Obsidian disabling a plugin used to leave a timer and a closure alive
+      // for whatever was left of a five-minute retry, because the loop asked
+      // whether to keep going before the sleep and after it and did nothing
+      // in between.
+      onWaiting: (wake) => {
+        if (current()) this.wakeLoop = wake;
+      },
+    });
+    // An old backoff can finish after a settings change starts another run.
+    // Its cleanup must leave the replacement run's reconnect handle intact.
+    if (current()) {
+      this.wakeLoop = undefined;
+      this.live = undefined;
+    }
+    return fatal;
+  }
+
+  /**
+   * A refusal that would be repeated word for word forever: a bad token, or
+   * a cursor the server says is impossible. Retrying is a loop that never
+   * ends and never says why.
+   *
+   * On a pairing that has never connected, the likeliest cause is the
+   * pairing itself, and the one thing that fixes that is offered by name.
+   */
+  private stop(cause: Error): void {
+    this.working(undefined);
+    const recovery = recoveryFor(cause);
+    this.setState({
+      kind: "stopped",
+      why: cause.message,
+      ...(recovery !== undefined ? { recovery } : {}),
+    });
+    new Notice(
+      recovery !== undefined
+        ? `Telimus has stopped: ${cause.message}. ${REJOIN_ADVICE}`
+        : this.everConnected
+          ? `Telimus has stopped: ${cause.message}`
+          : `Telimus could not join this vault: ${cause.message}. ` +
+            `If the pairing string or setup string was wrong, unlink this vault from the Telimus panel and pair again.`,
+      0,
+    );
+  }
+
+  /**
+   * Shows what is being worked on, without drowning the last real result.
+   *
+   * A pass over a settled vault visits every path and does nothing to any of
+   * them, so reporting each one would replace a useful summary with a blur.
+   * Fast passes keep the last result. Sustained work is shown even if no
+   * individual path takes long, with text updates limited to five per second.
+   */
+  private working(path: string | undefined): void {
+    this.workingPath = path;
+    if (path === undefined) {
+      this.workingTransfer = undefined;
+      clearTimeout(this.workingTimer);
+      this.workingTimer = undefined;
+      this.workingSince = undefined;
+      return;
+    }
+    this.scheduleWorking();
+  }
+
+  private scheduleWorking(): void {
+    this.workingSince ??= Date.now();
+    if (this.workingTimer !== undefined) return;
+    this.workingTimer = setTimeout(() => {
+      this.workingTimer = undefined;
+      this.setState({
+        kind: "syncing",
+        ...(this.workingPath ? { path: this.workingPath } : {}),
+        ...(this.workingTransfer ? { transfer: this.workingTransfer } : {}),
+        since: this.workingSince!,
+      });
+    }, 200);
+  }
+
+  private clearTimers(): void {
+    if (this.nudgeTimer !== undefined) clearTimeout(this.nudgeTimer);
+    this.nudgeTimer = undefined;
+    this.working(undefined);
+  }
+
+  private async clientOptions(config: DeviceConfig, mine: number): Promise<ClientOptions> {
+    const current = () => mine === this.generation;
+    const configDir = this.app.vault.configDir;
+    const log = (message: string, ...rest: unknown[]) => console.info("Telimus:", message, ...rest);
+    // Held, because the pass callbacks below read what it stranded. The report
+    // cannot carry that: a displaced version is something the adapter did, and
+    // the engine is told only that a path was kept.
+    const vault = new ObsidianVault(this.app.vault, configDir, log, {
+      displacedLog: `${this.pluginDir()}/${DISPLACED_LOG}`,
+      ...(config.ignore?.length ? { ignore: config.ignore } : {}),
+    });
+    // Whether this run is being measured, asked once. See `timingLog`.
+    const timingLog = this.timingLog();
+    const measuring = await this.app.vault.adapter.exists(timingLog).catch(() => false);
+    const filesystemMs: Record<string, { ms: number; calls: number }> = {};
+    let journal: JournalSaveCost | undefined;
+
+    // Also held here, so the recovery surface can read the ledger and put a
+    // hidden version back without a pass having to hand it over (Codex-08).
+    this.liveVault = vault;
+    return {
+      vault: measuring ? timedVault(vault, filesystemMs) : vault,
+      ...(measuring ? { timing: true } : {}),
+      activePath: () => this.app.workspace.getActiveFile()?.path,
+      store: this.indexStore(
+        measuring
+          ? {
+              onSave: (cost) => {
+                journal = cost;
+              },
+            }
+          : {},
+      ),
+      // Which key authenticates and what the vault is bound to, worked out in
+      // core so that both shells cannot answer it differently.
+      ...(await credentialsFor(config)),
+      confirmFirstSync: (preview) => this.confirmSync(preview, "Review your first sync", current),
+      confirmDeletions: (preview) => this.confirmSync(preview, "Review folder deletions", current),
+      onActivity: (event) => {
+        if (current()) this.activityLog?.add(event);
+      },
+      onSyncStart: () => {
+        if (!current()) return;
+        this.working(undefined);
+        this.scheduleWorking();
+      },
+      onProgress: (path) => {
+        if (!current()) return;
+        // An undefined path ends file transfer, but flushing and saving the
+        // index are still work. Only onPass/onSyncFailed end the busy state.
+        this.workingPath = path;
+        this.scheduleWorking();
+      },
+      onTransfer: (activity) => {
+        if (!current() || this.workingSince === undefined) return;
+        this.workingTransfer = activity;
+        this.workingPath = activity?.path;
+        this.scheduleWorking();
+      },
+      onCatchUp: (at) => {
+        if (!current()) return;
+        this.everConnected = true;
+        this.setState({ kind: "loading", ...at });
+      },
+      // Every pass, from one place, whatever started it. The ticker and an
+      // arriving batch start passes this shell never sees begin, and a
+      // status set only by the passes it asked for stuck on "Working on X"
+      // after any of the others.
+      onPass: (report) => {
+        if (!current()) return;
+        // Appended after the state below, and deliberately not awaited: the
+        // write is one more filesystem call and charging it to the pass it
+        // describes would be the measurement measuring itself.
+        if (measuring && report.phases) {
+          const line = {
+            at: Date.now(),
+            waitedMs:
+              this.measuringFrom === undefined ? null : performance.now() - this.measuringFrom,
+            ...report.phases,
+            filesystemMs,
+            journal: journal ?? null,
+            unchanged: report.unchanged,
+            uploaded: report.uploaded,
+            downloaded: report.downloaded,
+            merged: report.merged,
+            conflicted: report.conflicted,
+            chunksSent: report.chunksSent,
+            reusedChunks: report.reusedChunks,
+          };
+          // Serialised before the collectors are cleared, not after. `line`
+          // holds a reference to `filesystemMs` rather than a copy, so
+          // emptying it first produced a line that always said `{}`.
+          const text = `${JSON.stringify(line)}\n`;
+          this.measuringFrom = undefined;
+          journal = undefined;
+          for (const op of Object.keys(filesystemMs)) delete filesystemMs[op];
+          void this.app.vault.adapter.append(timingLog, text).catch(() => undefined);
+        }
+        this.working(undefined);
+        this.setState({
+          kind: "synced",
+          summary: summarise(report),
+          at: Date.now(),
+          // The same pair the exit code is built from and the same pair the
+          // needs-attention list holds, through the one helper, so the glyph,
+          // the sentence and the notice cannot start counting different things.
+          refused: needsAttention(report),
+          pending: report.retrying,
+          ...(report.nextUploadAt !== undefined ? { pendingAt: report.nextUploadAt } : {}),
+          waiting: vault.stranded.length,
+          recoveryUnknown: vault.recovery.complete ? undefined : vault.recovery.why,
+          // Kept, so the reason survives the notice that showed it. A refusal
+          // used to exist for twenty seconds and then be a number.
+          issues: report.needsAttention ?? [],
+          retryingPaths: report.retryingPaths ?? [],
+        });
+        this.announce(report, vault.displaced, vault.recovery);
+        void this.activityLog?.flush();
+      },
+      // A pass that failed outright, from wherever it was started (F16).
+      //
+      // The ticker and an arriving batch start passes this shell never sees
+      // begin, and their exceptions were swallowed, so a device that
+      // connected and then failed every pass went on showing the status of
+      // the last one that worked. `onPass` never fires for those, so nothing
+      // moved the status at all.
+      onSyncFailed: (err) => {
+        if (!current()) return;
+        this.passFailed(err.message);
+      },
+      // The engine's running commentary, which had nowhere to go.
+      //
+      // These are the lines that say why something did not sync: a file
+      // written off for good, a path that is a file here and a folder
+      // there, a retry and its reason, a platform that cannot stream. With
+      // no log they went nowhere, so a vault with one file missing looked
+      // exactly like a vault with none missing, and the only way to find
+      // out was to attach a debugger.
+      log,
+    };
+  }
+
+  /**
+   * This plugin's own folder, under Obsidian's config directory.
+   *
+   * `manifest.dir` is optional in the API. Interpolating it without looking
+   * produces the literal path "undefined/index.json" at the vault root, which
+   * is a perfectly ordinary folder as far as the never-sync list is concerned.
+   * So it is checked, and a folder outside the config directory stops the
+   * plugin rather than being used.
+   */
+  private pluginDir(): string {
+    const configDir = this.app.vault.configDir;
+    const dir = this.manifest.dir ?? `${configDir}/plugins/${this.manifest.id}`;
+    if (dir !== configDir && !dir.startsWith(`${configDir}/`)) {
+      throw new Error(
+        `refusing to run: this plugin is installed at ${dir}, which is outside ${configDir}, ` +
+          `so its index would sync to every other device`,
+      );
+    }
+    return dir;
+  }
+
+  /**
+   * Where the index goes: inside this plugin's own folder.
+   *
+   * That folder is under Obsidian's config directory, which never syncs, and
+   * an index that synced would sync to itself and be overwritten by every
+   * other device in turn.
+   */
+  private indexStore(opts: JournalStoreOptions = {}): ObsidianIndexStore {
+    return new ObsidianIndexStore(this.app.vault.adapter, `${this.pluginDir()}/index.json`, opts);
+  }
+
+  /**
+   * Where a measured run writes its lines, and the switch that turns one on.
+   *
+   * The file's existence is the switch. Creating it is `adb push` of an empty
+   * file, reading it is `adb pull`, and turning it off is deleting it. There
+   * is no setting and no `data.json` key: a key would have to survive the
+   * read-back `saveVerified` does, and a settings row would be a permanent
+   * surface for a question asked once (docs/open-work.md).
+   *
+   * Costs one `exists` per client start when absent, and nothing after that.
+   */
+  private timingLog(): string {
+    return `${this.pluginDir()}/pass-timings.ndjson`;
+  }
+
+  /** Where Obsidian keeps this plugin's settings, for a message that names it. */
+  get dataPath(): string {
+    try {
+      return `${this.pluginDir()}/data.json`;
+    } catch {
+      return `${this.manifest.dir ?? "this plugin's folder"}/data.json`;
+    }
+  }
+
+  /**
+   * Asks the live client to look, soon.
+   *
+   * Coalesced, because saving one file produces several events and copying a
+   * folder in produces one per file. Without this the engine would start a
+   * pass per event and spend the copy re-scanning.
+   */
+  private nudge(path?: string): void {
+    // The first event of a batch, which is the one somebody was waiting on.
+    // Several saves coalesce into one pass, so the last would understate the
+    // wait and an average would describe nobody.
+    if (this.measuringFrom === undefined) this.measuringFrom = performance.now();
+    if (path !== undefined) this.client?.noteChanged(path);
+    // Bound the wait from the first event. Resetting on every event let a
+    // busy vault postpone syncing indefinitely until the fallback poll.
+    if (!this.client || this.nudgeTimer !== undefined) return;
+    const mine = this.generation;
+    // Plain setTimeout rather than window's. Obsidian runs in a renderer
+    // where both exist, and the plain one also exists everywhere this can be
+    // tested, which is the difference between a tested nudge and an
+    // untested one.
+    this.nudgeTimer = setTimeout(() => {
+      this.nudgeTimer = undefined;
+      if (mine !== this.generation) return;
+      void this.client?.sync().then((report) => {
+        // The state is set by onPass when the pass finished. When it did
+        // not, nothing else would clear "Working on X".
+        if (report === undefined && mine === this.generation) {
+          this.passFailed("the last pass did not finish; the developer console has the reason");
+        }
+      });
+    }, SYNC_EVENT_DELAY_MS);
+  }
+
+  /**
+   * Offers the server every body this device holds, for the ones it has lost
+   * (I14).
+   *
+   * The same operation as `telimus repair`, and it is here for the reason
+   * `rejoin` is: the documented alternative for a plugin device was nothing at
+   * all. A phone can perfectly well be the last machine holding a body the
+   * server no longer has, and it has no shell to run the CLI in.
+   *
+   * Writes no version, so there is no generation dance around it: a repair
+   * changes nothing about this vault's state and cannot leave a stale result
+   * speaking for a vault that has since been unlinked. The panel disables the
+   * button while it runs, which is the whole of the concurrency here.
+   */
+  async repair(): Promise<RepairReport> {
+    const client = this.client;
+    if (!client) throw new Error(this.whyNoClient());
+    return client.repair();
+  }
+
+  /**
+   * Renames this device, on the server and then here, and restarts the loop.
+   *
+   * The order is `client.rename`'s: the server first, because the device list
+   * is what another person reads and what this device cannot repair while
+   * offline, and a local name that ran ahead would have this device writing
+   * conflict copies under a label the vault does not know.
+   *
+   * The restart is the part that is easy to leave out. The engine is handed
+   * `device` when it is built and reads it at every conflict copy, so a config
+   * saved under a running loop renames the device list and nothing else: the
+   * next conflict copy still carries the old name, and it does until Obsidian
+   * is restarted. That is a rename that half worked and said it worked.
+   *
+   * A reconnect costs a handshake, once, for something done rarely. The
+   * alternative is threading a mutable name through the engine so a pass in
+   * flight can change what it calls this device halfway, which is worse: two
+   * copies of one divergence would be named differently.
+   */
+  async renameDevice(name: string): Promise<string> {
+    if (this.unlinking) throw new Error("This vault is being unlinked.");
+    if (this.editingConnection) throw new Error("Another settings change is in progress.");
+    this.editingConnection = true;
+    try {
+      const client = this.client;
+      if (!client) throw new Error(this.whyNoClient());
+      const config = this.config;
+      if (!config) throw new Error("this vault is not paired yet.");
+      const mine = this.generation;
+
+      const said = await client.rename(name);
+      try {
+        await this.saveDuringRun(mine, { ...config, device: said });
+      } catch (err) {
+        // Both halves. "Renamed" and "written down here" are different facts and
+        // the visible consequence of the second failing is conflict copies that
+        // still say the old name, which is not something to discover from a
+        // filename later.
+        throw new Error(
+          `the device list now says ${said}, and this device could not write it down: ` +
+            `${(err as Error).message}. Conflict copies made here will still say ` +
+            `${config.device} until this is done again.`,
+        );
+      }
+      if (mine !== this.generation)
+        throw new Error("the pairing changed while renaming this device");
+      this.config = { ...config, device: said };
+
+      // `quiet` and then `start`, which is what rotate and rebase do and for a
+      // related reason: a run that is merely disconnected reconnects, and a pass
+      // in flight is still writing under the old name. `stop` is not the way to
+      // do this, because it puts "Telimus has stopped" and a cause on screen, and
+      // nothing here has gone wrong.
+      await this.quiet();
+      if (this.generation === mine + 1) this.start();
+      return said;
+    } finally {
+      this.editingConnection = false;
+    }
+  }
+
+  /** Move this pairing to a new address without resetting its sync history. */
+  async changeServerAddress(address: string): Promise<void> {
+    if (this.unlinking) throw new Error("This vault is being unlinked.");
+    if (this.editingConnection) throw new Error("Another settings change is in progress.");
+    this.editingConnection = true;
+    try {
+      const config = this.config;
+      if (!config || !this.paired) throw new Error("this vault is not paired yet.");
+      const next = { ...config, url: normaliseUrl(address) };
+      if (next.url === config.url) return;
+      let mine = this.generation;
+      const stillCurrent = () => mine === this.generation && this.config === config;
+
+      // Authenticate with the existing device credential. This connection applies
+      // no changes, so an incorrect address cannot replace the pairing or index.
+      await proveDeviceConnects(next, { timeoutMs: 15_000 });
+      if (!stillCurrent()) throw new Error("the pairing changed while checking the server address");
+
+      mine++;
+      await this.quiet();
+      if (!stillCurrent()) throw new Error("the pairing changed while updating the server address");
+      try {
+        // Unlink waits for a save already in flight; a retired run cannot start one.
+        await this.saveDuringRun(mine, next);
+      } catch (err) {
+        if (mine === this.generation) {
+          this.setState({
+            kind: "stopped",
+            why: `the server address could not be saved and verified: ${(err as Error).message}. Reopen Obsidian to reload the saved settings`,
+          });
+        }
+        throw err;
+      }
+      if (!stillCurrent()) throw new Error("the pairing changed while saving the server address");
+      this.config = next;
+      this.start();
+    } finally {
+      this.editingConnection = false;
+    }
+  }
+
+  /** The folder and file names this device leaves alone, beyond the dot rule. */
+  get ignoredNames(): readonly string[] {
+    return this.config?.ignore ?? [];
+  }
+
+  /**
+   * Changes what this device skips, and restarts sync under the new list.
+   *
+   * Per device and never sent anywhere (R083-13): a phone can leave a folder
+   * of attachments alone while the desktop keeps it, which is what Obsidian
+   * Sync and LiveSync both offer and what a person with a large media folder
+   * has otherwise no way to ask for here.
+   *
+   * The restart is not decoration. The ignore set is read when the vault
+   * adapter is built, so a list changed under a running client would be a
+   * client listing one set of files and reporting against another.
+   *
+   * Adding a name does not delete anything. What was already synced stays on
+   * the server and on every other device; this device stops listing it, and
+   * the pass counts it as `ignored`, which is out of the exit code and out of
+   * the attention list. Removing a name puts it back in the listing, and the
+   * next pass reconciles it like any other path.
+   */
+  async setIgnoredNames(names: readonly string[]): Promise<void> {
+    if (this.unlinking) throw new Error("This vault is being unlinked.");
+    if (this.editingConnection) throw new Error("Another settings change is in progress.");
+    this.editingConnection = true;
+    try {
+      const config = this.config;
+      if (!config) throw new Error("this vault is not paired yet.");
+      const wanted = [...new Set(names.map((name) => name.trim()))].filter((name) =>
+        isIgnorableName(name),
+      );
+      wanted.sort();
+      if (JSON.stringify(wanted) === JSON.stringify([...(config.ignore ?? [])].sort())) return;
+      const next: DeviceConfig = { ...config, ignore: wanted };
+      const mine = this.generation + 1;
+      await this.quiet();
+      if (this.generation !== mine || this.config !== config) {
+        throw new Error("the pairing changed while saving what this device skips");
+      }
+      try {
+        await this.saveDuringRun(mine, next);
+      } catch (err) {
+        if (mine === this.generation) {
+          this.setState({
+            kind: "stopped",
+            why: `what this device skips could not be saved: ${(err as Error).message}. Reopen Obsidian to reload the saved settings`,
+          });
+        }
+        throw err;
+      }
+      // Again, after the save, the way `changeServerAddress` does. An unlink
+      // started while the save was in flight has already taken the generation,
+      // removed the index and written the config away; starting here would run
+      // a client against a vault that no longer exists while the panel says
+      // this device is unpaired.
+      if (this.unlinking || this.generation !== mine || this.config !== config) {
+        throw new Error("the pairing changed while saving what this device skips");
+      }
+      this.config = next;
+      this.start();
+    } finally {
+      this.editingConnection = false;
+    }
+  }
+
+  /** Syncs on demand, and says so, because a command with no feedback is a guess. */
+  syncNow(verifyContents = false): Promise<void> {
+    if (this.manualSync) {
+      return verifyContents ? this.manualSync.then(() => this.syncNow(true)) : this.manualSync;
+    }
+    const work = this.syncOnDemand(verifyContents);
+    this.manualSync = work;
+    void work.then(
+      () => {
+        if (this.manualSync === work) this.manualSync = undefined;
+      },
+      () => {
+        if (this.manualSync === work) this.manualSync = undefined;
+      },
+    );
+    return work;
+  }
+
+  private async syncOnDemand(verifyContents = false): Promise<void> {
+    if (!this.config) {
+      new Notice("Telimus: this vault is not paired yet.");
+      new TelimusModal(this).open();
+      return;
+    }
+    if (this.paused) {
+      await this.togglePause();
+      return;
+    }
+    const client = this.client;
+    if (!client) {
+      if (this.running && this.state.kind === "offline" && this.wakeLoop) {
+        this.setState({ kind: "connecting" });
+        this.wakeLoop();
+        new Notice("Telimus: reconnecting…");
+        return;
+      }
+      new Notice(`Telimus: ${this.whyNoClient()}`);
+      return;
+    }
+    // Numbered like every other run. A pass takes as long as it takes, and
+    // unlinking during one used to leave its result speaking for a vault
+    // that is no longer paired: a summary notice over an unpaired panel, or
+    // `failed` painted over `unpaired` when the closed client rejected.
+    const mine = this.generation;
+    // The write debounce is off for this one. It exists so that somebody
+    // typing does not cause a push per keystroke, and the person who just
+    // chose "sync now" has said otherwise. Reporting "up to date" while
+    // their last paragraph sits unsent is the status rule 7 forbids.
+    let report: SyncReport;
+    this.setState({ kind: "syncing", since: Date.now() });
+    try {
+      // The editor's autosave has its own delay. A manual sync must include
+      // those buffers, not just the previous version already on disk.
+      for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+        // Deferred background tabs have no editor or save method. A leaf
+        // can also change views while an earlier editor is being saved.
+        const view = leaf.view as Partial<MarkdownView>;
+        if (typeof view.save === "function") await view.save();
+      }
+      if (mine !== this.generation || this.client !== client) return;
+      report = await client.settle({ coalesceWrites: false, verifyContents, retryFailures: true });
+    } catch (err) {
+      if (mine !== this.generation) return;
+      // Both callers discarded this promise, so a pass that threw was a
+      // person pressing a button and nothing happening.
+      this.passFailed((err as Error).message);
+      new Notice(`Telimus: sync failed: ${(err as Error).message}`, 10_000);
+      return;
+    }
+    if (mine !== this.generation) return;
+    // The state was set by onPass, once per pass. This is the feedback the
+    // command owes.
+    new Notice(`Telimus: ${summarise(report)}`);
+  }
+
+  private passFailed(why: string): void {
+    this.activityLog?.add({ at: Date.now(), action: "error" });
+    void this.activityLog?.flush();
+    this.working(undefined);
+    this.setState({ kind: "failed", why, at: Date.now() });
+  }
+
+  /**
+   * Why there is no connection to use, in the words that fit the state.
+   *
+   * "It will sync as soon as it reconnects" was shown while stopped, which is
+   * the one state in which it will not.
+   */
+  private whyNoClient(): string {
+    switch (this.state.kind) {
+      case "paused":
+        return "Sync is paused. Resume it from the Telimus menu.";
+      case "stopped":
+        return `Telimus has stopped: ${this.state.why}. It will not reconnect until that is fixed.`;
+      case "connecting":
+        return "still connecting to the server.";
+      case "loading":
+        return "loading sync history. Keep Obsidian open; your notes will sync next.";
+      case "unpaired":
+        return "this vault is not paired yet.";
+      default:
+        return "not connected. It will sync as soon as it reconnects.";
+    }
+  }
+
+  /**
+   * Tells the user about the things that need a person.
+   *
+   * A conflict is an event and is announced each time it happens. A file
+   * written off, or one blocked by a name that is a file here and a folder
+   * there, is a state: it is true on every pass until somebody acts, and a
+   * notice on every pass for it taught people to dismiss notices, which is
+   * how the one that matters gets dismissed too. Those are announced when
+   * the count or the names change and not otherwise.
+   */
+  private announce(
+    report: SyncReport,
+    waiting: readonly Displaced[] = [],
+    recovery: Inventory = { waiting: [], complete: true },
+  ): void {
+    // Before the list, because it is the one that says the list may be short.
+    // Keyed on the reason so a persistent fault is announced once.
+    if (!recovery.complete) {
+      const why = recovery.why ?? "the record could not be established";
+      if (why !== this.announced.unknown) {
+        this.announced.unknown = why;
+        new Notice(
+          `Telimus cannot tell whether any notes are waiting to be recovered: ${why}. ` +
+            `Notes may be sitting in a hidden folder with nothing pointing at them.`,
+          30_000,
+        );
+      }
+    } else {
+      this.announced.unknown = "";
+    }
+    // First, because it is the only one of these that means a note is not
+    // where its author left it. Keyed on the paths rather than the count, for
+    // the reason the attention notice is: one rescued in the same pass as
+    // another appears leaves the number where it was, and the new one would
+    // go unannounced for as long as they matched.
+    const waitingKey = waiting.map((d) => `${d.at} ${d.from}`).join("\n");
+    if (waitingKey !== this.announced.waiting) {
+      this.announced.waiting = waitingKey;
+      if (waiting.length > 0) {
+        const first = waiting[0]!;
+        const rest = waiting.length - 1;
+        new Notice(
+          `Telimus kept ${waiting.length} ${waiting.length === 1 ? "version" : "versions"} ` +
+            `somewhere Obsidian does not show. ${first.from} is at ${first.at}` +
+            `${rest > 0 ? `, and ${rest} more` : ""}. ${first.why}.`,
+          30_000,
+        );
+      }
+    }
+    if (report.conflicted > 0) {
+      const n = report.conflicted;
+      new Notice(
+        `Telimus kept both versions of ${n} ${n === 1 ? "file" : "files"}. ` +
+          `Look for "Conflicted copy" in the name.`,
+        10_000,
+      );
+    }
+    // One notice where there were two, for the reason on the report's
+    // `needsAttention`: "written off" and "blocked by a name" are two of our
+    // categories and one of a person's, and it was the two notices that made
+    // somebody learn the difference before they could act. What differs is the
+    // reason, and the reason is now what the notice carries.
+    //
+    // Keyed on which files and which reasons, not how many (N2). One file
+    // fixed in the same pass as another starts failing leaves the count where
+    // it was, and the new failure went unannounced for as long as the numbers
+    // matched: the glyph said something was wrong and nothing ever said what.
+    //
+    // `?? []` because the type promises the list and a hand-built report may
+    // not keep it: announcing must never throw over the notice it owes.
+    const attention = report.needsAttention ?? [];
+    const count = needsAttention(report);
+    const key =
+      count === 0 ? "" : `${count}:${attention.map((a) => `${a.path} ${a.why}`).join("\n")}`;
+    if (key !== this.announced.attention) {
+      this.announced.attention = key;
+      if (count > 0) {
+        // Named, because a count is not something anybody can act on. The
+        // list is bounded, so `attentionLines` says when it is not the whole
+        // of it. A report that named nothing still says the count.
+        const detail = attentionLines(report).join(" ");
+        new Notice(
+          `Telimus cannot sync ${count} file(s).${detail === "" ? "" : ` ${detail}`}`,
+          20_000,
+        );
+      }
+    }
+  }
+
+  /* ------------------------------------------------------------ *
+   * Pairing
+   * ------------------------------------------------------------ */
+
+  private async readConfig(): Promise<DeviceConfig | undefined> {
+    const raw: unknown = await this.loadData();
+    // Obsidian returns null for a missing data.json, but undefined after a
+    // failed read or JSON parse. The latter must not permit a new pairing.
+    if (raw === undefined) throw new Error(`Obsidian could not read ${this.dataPath}`);
+    if (raw === null) return undefined;
+    return decodeConfig(raw, "the Telimus plugin's saved settings");
+  }
+
+  /**
+   * Whether a pairing may be made now, and if not, why not.
+   *
+   * Re-pairing would replace the root secret, and everything already on the
+   * server would stop being decryptable here. That holds for a config that
+   * is there and for one that is there but unreadable, and it holds while a
+   * pairing is still being made: two presses of the button used to make two
+   * secrets, the second winning on disk while the first was the one running.
+   */
+  private refuseUnlessPairable(): void {
+    if (this.unlinking) throw new Error("This vault is being unlinked.");
+    if (this.unreadable !== undefined) {
+      throw new Error(
+        `the saved settings at ${this.dataPath} could not be read (${this.unreadable}), ` +
+          `and pairing over them would replace the credential they hold. Fix or move that file, then reload the plugin.`,
+      );
+    }
+    if (this.paired) throw new Error("this vault is already paired");
+    // A config holding only a root is a first pairing that was abandoned
+    // before it claimed anything. Pairing again is the way out of it, and it
+    // costs nothing: no vault was made, no device row exists, and the key that
+    // config holds opens nothing anybody has.
+    if (this.pairing) throw new Error("a pairing is already in progress");
+  }
+
+  /** Runs one pairing at a time. */
+  private async onePairing<T>(work: () => Promise<T>): Promise<T> {
+    this.refuseUnlessPairable();
+    const run = work();
+    this.pairing = run;
+    try {
+      return await run;
+    } finally {
+      this.pairing = undefined;
+    }
+  }
+
+  /**
+   * Adds this vault to one that already exists, with an invite or with the
+   * vault's recovery key.
+   *
+   * An invite is the ordinary way and the recovery key is the last resort.
+   * Both end with this device holding a row of its own, the credential for it
+   * and the vault's data key, and no root, which is what makes revoking this
+   * phone on its own mean anything.
+   *
+   * An **invite** is spent by the very exchange that registers this device, so
+   * there is nothing to save until the server has answered and everything to
+   * save the moment it has. A failure before the reply leaves this vault
+   * unpaired and one row on the server that nobody holds the key to, which is
+   * visible in the device list as a device that has never connected; the other
+   * ordering strands this phone instead. See `redeemInvite`.
+   *
+   * A **recovery key** buys a registrar session, which may register a device
+   * and may not sync, so that path is register-then-save and nothing is
+   * written until the row exists. The key was pasted in a moment ago, so there
+   * is nothing on this phone yet worth keeping and a key the vault does not
+   * know should leave it exactly as unpaired as it was found. The registration
+   * is *awaited*, so the server has answered before this reports a paired
+   * vault: a wrong address or a wrong key used to be saved and announced as
+   * paired, and the first sign of it was a status bar saying stopped, later
+   * (I13). See `registerAsDevice`.
+   */
+  async pair(
+    pairingString: string,
+    device: string,
+    mergeConfirmed = false,
+    /**
+     * Names this device will never sync, chosen before it starts (Codex-05).
+     *
+     * Here rather than only in the paired panel because the download starts
+     * the moment pairing finishes: somebody adding a phone to a vault with
+     * several gigabytes of attachments had to race it to the settings screen.
+     * The list is written with the pairing, so the first pass already honours
+     * it and the bytes are never asked for.
+     */
+    ignore: readonly string[] = [],
+  ): Promise<void> {
+    await this.onePairing(async () => {
+      const name = deviceName(device);
+      const skip = [...new Set(ignore.map((n) => n.trim()))].filter(isIgnorableName).sort();
+      const mine = this.generation;
+      const invite = isInvite(pairingString) ? parseInvite(pairingString) : undefined;
+      const pairing = invite === undefined ? parsePairing(pairingString) : undefined;
+      await checkFirstSync(this.app.vault.adapter, this.app.vault.configDir, mergeConfirmed);
+      if (mine !== this.generation)
+        throw new Error("Pairing was cancelled while checking local files.");
+      if (invite !== undefined) return await this.pairWithInvite(invite, name, skip);
+      let registered = false;
+      let paired: DeviceConfig;
+      try {
+        paired = await registerAsDevice(
+          {
+            url: pairing!.url,
+            vaultId: pairing!.vaultId,
+            device: name,
+            secret: pairing!.secret,
+            ...(skip.length > 0 ? { ignore: skip } : {}),
+          },
+          (next) => this.saveDuringRun(mine, next),
+          {
+            onRegistered: () => {
+              registered = true;
+            },
+            log: (message, ...rest) => console.info("Telimus:", message, ...rest),
+          },
+        );
+      } catch (err) {
+        if (!registered) throw err;
+        // Registered, and then what the disk says rather than which step threw
+        // (rule 4), through the counsellor the CLI's `init` and `pair` use.
+        // The `.catch(() => undefined)` this read it with is what that
+        // replaces: it made an unreadable data.json look like an absent one,
+        // so a save that succeeded with a read-back that then failed was told
+        // to revoke a row it was itself holding the key to.
+        const remains = await whatTheDiskHolds(() => this.readConfig());
+        // Guarded, because reading the disk is itself an await (R10). A
+        // pairing that was retired while this was asking is one `unlink` has
+        // waited for and is about to remove, and starting a loop on what it
+        // finds would put the pairing back on a vault somebody has just
+        // unlinked. The credential on the server is real either way, and the
+        // message below names it.
+        if (remains.kind === "credential" && mine === this.generation) {
+          // The row is real and this phone holds the only copy of its
+          // credential, so what was written stays and the panel says as much
+          // rather than looking unpaired.
+          this.config = remains.config;
+          this.start();
+        }
+        throw new Error(
+          `${(err as Error).message}. ` +
+            adviseAfterRegistering({
+              remains,
+              registered,
+              surface: "panel",
+              where: this.dataPath,
+            }),
+        );
+      }
+      // The same guard the invite branch has, and for the same reason (R10).
+      // `registerAsDevice` is a round trip and a save; a vault unlinked while
+      // it was in flight must not be started again from the credential it
+      // produced. The row on the server is real, so this says so rather than
+      // pretending the registration did not happen.
+      if (mine !== this.generation) {
+        throw new Error(
+          "this vault was unlinked while it was being paired. The device row it registered is " +
+            "on the server; remove it with telimus revoke, or pair again.",
+        );
+      }
+      this.config = paired;
+      this.start();
+    });
+  }
+
+  /**
+   * The invite half of pairing: redeem, save, start.
+   *
+   * The redemption is the registration, so what comes back is a finished
+   * device: this config never holds a root, at any point.
+   *
+   * Saved and read back before the run starts, because at the moment the reply
+   * lands the only copy of the data key on this phone is in memory and the
+   * invite that carried it is already spent (rule 4).
+   */
+  private async pairWithInvite(
+    invite: Invite,
+    name: string,
+    ignore: readonly string[] = [],
+  ): Promise<void> {
+    // The generation this pairing belongs to, taken before the network (F23).
+    //
+    // Redeeming is a round trip, and the plugin can be unloaded, unlinked or
+    // paired again while it is in flight. This wrote its config and started a
+    // sync loop unconditionally when it came back, so completing after an
+    // unload revived a plugin that had been retired: a save, a client, and a
+    // ticker belonging to nothing. The root registration path next door has
+    // used `saveDuringRun` for this since it was written; this one reached
+    // straight for `saveVerified`.
+    const mine = this.generation;
+    const redeemed = await redeemInvite(invite, name, {
+      log: (message, ...rest) => console.info("Telimus:", message, ...rest),
+    });
+    const config: DeviceConfig = {
+      url: invite.url,
+      vaultId: invite.vaultId,
+      device: name,
+      deviceId: redeemed.deviceId,
+      deviceSecret: redeemed.deviceSecret,
+      dataKey: redeemed.dataKey,
+      // Written with the pairing, so the first pass already skips them and
+      // nothing is downloaded that this device was never going to keep.
+      ...(ignore.length > 0 ? { ignore } : {}),
+    };
+    // Refuses once this run has been retired, and is registered where
+    // `unlink` waits for it, which is the pair of guarantees the two halves
+    // of `saveDuringRun` exist for.
+    await this.saveDuringRun(mine, config);
+    // Checked again after the save, because the save is itself an await: a
+    // config that landed for a retired run is one `unlink` has waited for and
+    // is about to remove, and starting a loop on it would put the pairing
+    // back. The row on the server is real either way, and the panel's
+    // counsellor is what names it.
+    if (mine !== this.generation) {
+      throw new Error(
+        "this vault was unlinked while the invite was being redeemed. The device row it " +
+          "registered is on the server; remove it with telimus revoke, or pair again.",
+      );
+    }
+    this.config = config;
+    this.start();
+  }
+
+  /**
+   * Starts a new vault from the one line the server printed: `host:3003#TOKEN`.
+   *
+   * It used to be two fields, and the server printed one line, so the line
+   * had to be split by hand and nothing said so. Every device now pastes one
+   * thing; only the thing differs.
+   *
+   * The root is saved before anything is sent, because here the handshake is
+   * the claim: the server binds the vault to this device's key the moment it
+   * says hello, and a root secret that had claimed a server without being
+   * written down first is a vault nobody can ever open. That save is the only
+   * reason a config here ever holds a root, and the registration below
+   * replaces it with this device's own credential.
+   *
+   * The claim and the registration are awaited rather than left to `start`,
+   * so what comes back is a phone that has joined the vault or an error
+   * saying it has not. If the claim went through and the registration did not,
+   * the root is still on disk and every screen from here on prints the
+   * recovery key out of it: the vault is recoverable by pairing again with
+   * that key, which is what the words say.
+   *
+   * The recovery key is returned for the panel to show once, and this is the
+   * only moment it exists anywhere: a paired device does not keep the root, on
+   * purpose, and nothing here can print it again.
+   *
+   * `onKey` is how it gets out before anything can lose it (F02). Returning
+   * it only at the end meant every failure after the registration threw it
+   * away: the save that records this device's credential replaces the root on
+   * disk, and the connection that proves the credential comes after, so a
+   * proof that failed left a working device, no root, and an error with no
+   * key in it. A crash in the same window did the same thing with no error at
+   * all. So the key is handed over while the root is still what is on disk
+   * and before the first byte goes out, and everything after it is allowed to
+   * fail.
+   */
+  async pairFirst(
+    setup: string,
+    device: string,
+    onKey?: (key: string) => void | Promise<void>,
+    /** Names this device will never sync, chosen before it starts (Codex-05). */
+    ignore: readonly string[] = [],
+  ): Promise<string> {
+    return this.onePairing(async () => {
+      // Captured before anything is awaited (R10). It was taken after the
+      // save and the key handoff below, so an unload during either of those
+      // was invisible to every check that followed and the pairing went on to
+      // start a loop for a vault that had been retired.
+      const mine = this.generation;
+      // The vault the line names, or `default` (R083-14). A server started
+      // with `-vault work` prints its name in the line, and until this the
+      // plugin could only ever claim `default`: the documented way to start a
+      // differently named vault from a phone was to install the CLI on
+      // something else first.
+      const { url, token, vaultId = DEFAULT_VAULT } = parseSetup(setup);
+      const secret = generateSecret();
+      const name = deviceName(device);
+      const skip = [...new Set(ignore.map((n) => n.trim()))].filter(isIgnorableName).sort();
+      const starting: DeviceConfig = {
+        url,
+        vaultId,
+        device: name,
+        secret,
+        ...(skip.length > 0 ? { ignore: skip } : {}),
+      };
+      await this.saveVerified(starting);
+      this.config = starting;
+      const recoveryKey = formatPairing({ url, vaultId, secret });
+      // On screen now, and *waited for*, while the root above is still the
+      // only thing on disk and nothing has been sent (R02).
+      //
+      // Showing it and carrying on was not a handoff. Registration replaces
+      // the root-bearing config with this device's own credential the moment
+      // there is one, so a reload, a crash or a closed panel between the two
+      // took the only copy of a key nothing can reissue. Returning from a
+      // callback is not evidence that anybody read the screen.
+      //
+      // Awaited, so a surface that asks somebody to confirm they have written
+      // it down actually holds the vault's claim until they have. The same
+      // obligation `rotateVault` documents and for the same reason; this is
+      // the other half of it.
+      //
+      // If the wait is abandoned, nothing has been claimed and the config
+      // still holds the root: `pendingFirstPairing` finds it on the next load
+      // and offers the key again, so the interrupted case recovers rather
+      // than losing anything.
+      await onKey?.(recoveryKey);
+
+      let registered = false;
+      try {
+        this.config = await registerAsDevice(
+          {
+            url,
+            vaultId,
+            device: name,
+            secret,
+            bootstrap: token,
+            ...(skip.length > 0 ? { ignore: skip } : {}),
+          },
+          (next) => this.saveDuringRun(mine, next),
+          {
+            onRegistered: () => {
+              registered = true;
+            },
+            log: (message, ...rest) => console.info("Telimus:", message, ...rest),
+          },
+        );
+      } catch (err) {
+        // The config stays, whatever it now holds. If it is still the root,
+        // the claim may have committed with its reply lost and throwing it
+        // away is a vault nothing will ever open again; `start` stops on it
+        // and puts the recovery key on the panel, which is somewhere it can be
+        // read from rather than a notice that goes. If the registration got as
+        // far as saving a credential, that is what is on disk and `start`
+        // connects with it. Read back rather than assumed (rule 4).
+        const remains = await whatTheDiskHolds(() => this.readConfig());
+        // Guarded, because reading the disk is an await (R10): a vault
+        // unlinked while this was asking must not be started again from what
+        // it finds. The key is still put on screen below, which is the part
+        // that must happen whatever the lifecycle did.
+        if (mine === this.generation) {
+          this.config = "config" in remains ? remains.config : starting;
+          this.start();
+        }
+        // The recovery key only when the root is still what is held: a
+        // credential that landed has replaced it, and there is then nothing on
+        // the panel to write down. The row this may have left is named by the
+        // same counsellor the pairing form above uses, because a phone sent
+        // straight back to pairing registers a second row without learning
+        // about the first.
+        // The key, either way, and most of all when the credential landed.
+        // That is the case where the root is gone from disk, so the copy the
+        // panel is holding is the only one left in the world; saying nothing
+        // there was the whole of F02.
+        const writeItDown =
+          remains.kind === "credential"
+            ? `Write down the recovery key on the panel now: it is no longer on this device. ${recoveryKey}. `
+            : "Write the recovery key shown in the Telimus panel down now. ";
+        throw new Error(
+          `the vault was started but this device could not register itself with it: ` +
+            `${(err as Error).message}. ${writeItDown}` +
+            adviseAfterRegistering({
+              remains,
+              registered,
+              surface: "panel",
+              where: this.dataPath,
+            }),
+        );
+      }
+      // And the success path (R10). Registration is a round trip, a save and
+      // a wait for somebody to write the key down, so a vault retired during
+      // any of that must not be started again from the credential it made.
+      if (mine !== this.generation) {
+        throw new Error(
+          "this vault was unlinked while it was being started. The device row it registered is " +
+            `on the server. Its recovery key is ${recoveryKey} and nothing else holds it.`,
+        );
+      }
+      this.start();
+      return recoveryKey;
+    });
+  }
+
+  /* ------------------------------------------------------------ *
+   * Recovery
+   * ------------------------------------------------------------ */
+
+  /**
+   * Notes the server still holds and this vault does not.
+   *
+   * Needs a connection, and says so rather than showing an empty list. "There
+   * is nothing to recover" and "I could not ask" are different answers, and
+   * confusing them in a recovery tool is the worst place to do it.
+   */
+  async deletedNotes(limit?: number, before?: number): Promise<DeletedList> {
+    if (!this.client)
+      throw new Error(`${this.whyNoClient()} There is no way to ask what the server has.`);
+    return this.client.deleted(limit, before);
+  }
+
+  /**
+   * Puts a note back, never over the top of something already there.
+   *
+   * What the deleted list hands over is the *deletion*, which is a version
+   * like any other and has no content in it. What has to be restored is the
+   * version before it, so that is looked up here rather than assumed.
+   */
+  async recover(deletion: Version): Promise<Restored> {
+    const client = this.client;
+    if (!client) throw new Error(`${this.whyNoClient()} There is nothing to restore from.`);
+    // The list may stay open while a peer recreates this name. Recover the
+    // selected deletion, not content uploaded after it.
+    const version = await client.findVersion(
+      deletion.path,
+      (version) => version.uid < deletion.uid && !version.deleted && !version.folder,
+    );
+    if (!version) {
+      throw new Error(
+        `the server no longer holds content from before this deletion of ${deletion.path}`,
+      );
+    }
+    return this.restoreAndSend(version);
+  }
+
+  /**
+   * Every version this device took off a name and could not put back.
+   *
+   * Read from the live vault's ledger, which is where the record is: the
+   * hidden file is not in Obsidian's index, so nothing else can walk for it.
+   * Incomplete is kept apart from empty, because a log that will not parse and
+   * a vault with nothing stranded look identical from a count (rule 2).
+   */
+  async displacedVersions(): Promise<Inventory> {
+    const vault = this.vaultForRecovery();
+    // The running client's copy has already listed, so its answer is current
+    // and free. Without one the ledger has to be read, and reading it means
+    // listing: recovering a note has to work on a device whose sync is paused
+    // or stopped, which is exactly when somebody reaches for it.
+    if (vault !== this.liveVault) await vault.list();
+    return vault.recovery;
+  }
+
+  /**
+   * An adapter that can reach the displaced ledger, running or not.
+   *
+   * The same one the client uses where there is a client, because it has the
+   * inventory already; a fresh one otherwise, pointed at the same log. Both
+   * write through Obsidian, which is the part that matters.
+   */
+  private vaultForRecovery(): ObsidianVault {
+    if (this.liveVault) return this.liveVault;
+    return new ObsidianVault(this.app.vault, this.app.vault.configDir, undefined, {
+      displacedLog: `${this.pluginDir()}/${DISPLACED_LOG}`,
+    });
+  }
+
+  /**
+   * Puts a hidden version back where Obsidian can see it (Codex-08).
+   *
+   * When preservation cannot place a visible copy it parks the bytes under a
+   * name Obsidian does not list, says so once, and afterwards the panel could
+   * only report that this had happened somewhere. Getting those bytes back
+   * meant a file manager or a terminal, on a device that may have neither, for
+   * what is sometimes the only surviving copy of somebody's note.
+   *
+   * Beside, never over: the visible name is the first free one, so a recovery
+   * cannot displace the thing that displaced it. The hidden copy is left where
+   * it is. Removing it would be the one destructive step in a recovery path,
+   * and there is no version of "it worked" worth taking that risk for; the
+   * ledger keeps naming it until somebody deletes it themselves.
+   */
+  async recoverDisplaced(version: Displaced): Promise<string> {
+    const vault = this.vaultForRecovery();
+    const bytes = await vault.readDisplaced(version.at);
+    const target = await firstFreeName(version.from, (path: string) => vault.exists(path));
+    const now = Date.now();
+    if (!(await vault.create(target, bytes, { mtime: now, ctime: now }))) {
+      throw new Error(`something is already at ${target}`);
+    }
+    await vault.flush?.();
+    // Sent like any other new note, and not waited on: the bytes are visible
+    // and durable now, which is the whole of what was asked for.
+    this.nudge(target);
+    return target;
+  }
+
+  /**
+   * Restores several deletions, and syncs once at the end (Codex-11).
+   *
+   * Recovering a deleted folder was one button per note, and each of those
+   * reconciled the whole vault before the next could start. A hundred notes
+   * was a hundred taps and a hundred passes, on a phone, one-handed, after
+   * something had already gone wrong.
+   *
+   * The two halves stay apart for the reason `restoreAndSend` keeps them
+   * apart: every restore that lands is durable the moment it returns, whatever
+   * the sync afterwards does. So each one is placed first, and the sync is
+   * asked once, and then each path is asked separately whether the server has
+   * it. A restore that could not be placed at all is its own answer and does
+   * not stop the others.
+   */
+  async recoverMany(deletions: readonly Version[]): Promise<Restored[]> {
+    const client = this.client;
+    if (!client) throw new Error(`${this.whyNoClient()} There is nothing to restore from.`);
+    const mine = this.generation;
+
+    const placed: { at: string; failed?: undefined }[] = [];
+    const out: (Restored | undefined)[] = deletions.map(() => undefined);
+    for (let i = 0; i < deletions.length; i++) {
+      const deletion = deletions[i]!;
+      try {
+        const version = await client.findVersion(
+          deletion.path,
+          (v) => v.uid < deletion.uid && !v.deleted && !v.folder,
+        );
+        if (!version) {
+          throw new Error(
+            `the server no longer holds content from before this deletion of ${deletion.path}`,
+          );
+        }
+        const done = await client.restore(version);
+        placed.push({ at: done.path });
+        out[i] = { path: done.path, sent: false, willRetry: true, why: "not sent yet" };
+      } catch (err) {
+        out[i] = {
+          path: deletion.path,
+          sent: false,
+          willRetry: false,
+          why: (err as Error).message,
+        };
+      }
+    }
+    if (placed.length === 0) return out.map((r) => r!);
+
+    // One pass for all of them, which is the whole point.
+    let failure: string | undefined;
+    try {
+      await client.settle({ coalesceWrites: false });
+    } catch (err) {
+      failure =
+        mine !== this.generation ? "this vault is no longer paired" : (err as Error).message;
+    }
+    for (let i = 0; i < out.length; i++) {
+      const done = out[i]!;
+      if (done.willRetry === false) continue; // never placed
+      if (client.engine.serverHasOurs(done.path)) {
+        out[i] = { path: done.path, sent: true };
+      } else if (failure !== undefined) {
+        out[i] = {
+          path: done.path,
+          sent: false,
+          ...(mine !== this.generation ? { willRetry: false } : {}),
+          why: failure,
+        };
+      } else {
+        out[i] = {
+          path: done.path,
+          sent: false,
+          willRetry: true,
+          why: "it has not been acknowledged by the server yet, and will be tried again",
+        };
+      }
+    }
+    return out.map((r) => r!);
+  }
+
+  /**
+   * Restores a version, then sends it, and keeps the two outcomes apart.
+   *
+   * The restore is local and durable the moment it returns. The send is a
+   * sync, and a sync can fail for every ordinary reason. Reporting the pair
+   * as one failure told somebody their restore had failed when the note was
+   * on their disk, and a second attempt found the name occupied and made a
+   * second copy beside the first.
+   */
+  private async restoreAndSend(version: Version): Promise<Restored> {
+    const client = this.client;
+    if (!client) throw new Error(`${this.whyNoClient()} There is nothing to restore from.`);
+    const mine = this.generation;
+    const done = await client.restore(version);
+    let report;
+    try {
+      // Sent now rather than at the next pass, so the other devices get it
+      // without anybody having to know that they would not have.
+      report = await client.settle({ coalesceWrites: false });
+    } catch (err) {
+      // "It will be sent when the next sync succeeds" is only true while
+      // there is a next sync. Unlinked mid-restore there is not one, and the
+      // note is on this device and nowhere else, which is what it says.
+      if (mine !== this.generation) {
+        return {
+          path: done.path,
+          sent: false,
+          willRetry: false,
+          why: "this vault is no longer paired",
+        };
+      }
+      return { path: done.path, sent: false, why: (err as Error).message };
+    }
+    // A pass that resolved is not a path that went (F15).
+    //
+    // `settle` resolves for a vault that is retrying or has written a path
+    // off, so ignoring its report reported the restored note as sent to the
+    // other devices when its upload had failed and been queued, or refused
+    // for good. The restore itself is durable either way, which is the whole
+    // reason these two outcomes are kept apart; saying the second happened
+    // because the first did is the same conflation from the other side.
+    //
+    // Only this path. Another note failing elsewhere in the vault says
+    // nothing about this one, and marking the restore unsent for it would
+    // send somebody looking in the wrong place.
+    // Asked about this path, not looked for in a list (R09).
+    //
+    // `skippedPaths` and `retryingPaths` are display samples: sorted,
+    // de-duplicated and cut to five, because a notice naming four hundred
+    // files is not a notice. Absence from a sample is not evidence of
+    // anything, and a pass with six failures reported the sixth as sent. A
+    // path that is merely blocked, or one in a pass that still has waiting
+    // work, was never in either list to begin with.
+    //
+    // So the question is put the other way round and answered affirmatively:
+    // is the server holding what this device holds for this path. Only
+    // `synced` writes that, and only where the server has acknowledged a
+    // version.
+    if (client.engine.serverHasOurs(done.path)) {
+      // No staleness check on this side on purpose: the upload happened, so
+      // "sent to your other devices" is true whatever became of the pairing
+      // afterwards, and saying otherwise would be the same lie reversed.
+      return { path: done.path, sent: true };
+    }
+
+    // Not acknowledged. The samples are used only to say *why*, which is what
+    // they are good for, and there is an answer for the case where they say
+    // nothing at all.
+    if (report.skippedPaths.includes(done.path)) {
+      return {
+        path: done.path,
+        sent: false,
+        willRetry: false,
+        why: "the server refused it, so it is on this device only",
+      };
+    }
+    if (report.inTheWay.some((t) => t.path === done.path)) {
+      return {
+        path: done.path,
+        sent: false,
+        willRetry: false,
+        why: "another file is in the way of that name, so it is on this device only",
+      };
+    }
+    return {
+      path: done.path,
+      sent: false,
+      willRetry: true,
+      why: "it has not been acknowledged by the server yet, and will be tried again",
+    };
+  }
+
+  /**
+   * Opens the history of one note.
+   *
+   * Refuses rather than opening an empty modal when there is no connection.
+   * "Nothing to show" and "I could not ask" are different answers, and a
+   * recovery tool is the worst place to confuse them.
+   */
+  openHistory(path: string): void {
+    if (!this.client) {
+      new Notice(`Telimus: ${this.whyNoClient()} There is no history to show.`, 8_000);
+      return;
+    }
+    new HistoryModal(this.app, this.historySource(), path).open();
+  }
+
+  /** What HistoryModal needs, which is four calls and no plugin internals. */
+  historySource(): HistorySource {
+    return {
+      history: async (path, opts) => {
+        if (!this.client) throw new Error(this.whyNoClient());
+        return this.client.history(path, opts);
+      },
+      contentAt: async (version) => {
+        if (!this.client) throw new Error(this.whyNoClient());
+        return new TextDecoder().decode(await this.client.contentAt(version));
+      },
+      // The outcome, not a sentence: the modal says it with the same
+      // describeRestore every other restore surface uses.
+      restoreVersion: (version) => this.restoreAndSend(version),
+      currentText: async (path, maxBytes) => {
+        // The note can go between the look and the read: somebody deleting
+        // it while its history is loading. That is a diff against nothing,
+        // not a version that could not be read.
+        try {
+          const stat = await this.app.vault.adapter.stat(path);
+          if (maxBytes !== undefined && stat && stat.size > maxBytes)
+            throw new Error(
+              "The current note is too large to compare here. Restore a copy to compare it.",
+            );
+          return await this.app.vault.adapter.read(path);
+        } catch (err) {
+          if (await this.app.vault.adapter.exists(path)) throw err;
+          return undefined;
+        }
+      },
+    };
+  }
+
+  /**
+   * The command-line pair. Everything is answered in the channel, because a
+   * handler that throws answers with a stack trace, and "not connected" is
+   * not an exceptional condition for a sync client.
+   */
+  private async cliHistory(path: string): Promise<string> {
+    if (!path) return "Which note? telimus:history needs a path.";
+    if (!this.client) return `Telimus is ${this.whyNoClient()}`;
+    try {
+      const versions = await this.client.history(path, { limit: 50 });
+      if (versions.length === 0) return `No history found for ${path}.`;
+      return versions
+        .map((v) => `${v.uid}\t${new Date(v.mtime).toISOString()}\t${v.size} B\t${v.device}`)
+        .join("\n");
+    } catch (err) {
+      return `Telimus could not ask: ${(err as Error).message}`;
+    }
+  }
+
+  private async cliRestore(path: string, uid: number): Promise<string> {
+    if (!path) return "Which note? telimus:restore needs a path.";
+    if (!Number.isInteger(uid) || uid <= 0) return "Which version? telimus:restore needs a uid.";
+    if (!this.client) return `Telimus is ${this.whyNoClient()}`;
+    try {
+      // Paged as far back as it has to go. One page of two hundred used to
+      // be all that was looked at, and a version older than that was one
+      // telimus:history would list and this would then say did not exist.
+      const version = await this.client.findVersion(path, (v) => v.uid === uid);
+      if (!version) return `No version ${uid} of ${path}.`;
+      return describeRestore(version, await this.restoreAndSend(version));
+    } catch (err) {
+      return `Telimus could not restore: ${(err as Error).message}`;
+    }
+  }
+
+  /**
+   * Every device that may reach this vault, any limit reported by an older
+   * server, and every invite that could still add one.
+   *
+   * Needs a connection, and says so rather than showing an empty list. "There
+   * are no other devices" and "I could not ask" are different answers, and
+   * this is the list somebody reads before deciding which one to cut off.
+   *
+   * The invites are part of the same answer. A row is a device that was added
+   * and an outstanding invite is one about to be, and until they were listed a
+   * string issued on a device somebody had just lost stayed invisible until
+   * somebody redeemed it, for up to an hour.
+   */
+  async devices(): Promise<{
+    devices: DeviceRow[];
+    maxDevices: number;
+    invites: InviteRow[];
+    thisDevice: string;
+  }> {
+    const client = this.client;
+    if (!client) throw new Error(`${this.whyNoClient()} There is no way to ask what is paired.`);
+    return { ...(await client.devices()), thisDevice: client.deviceId };
+  }
+
+  get deliveryReady(): boolean {
+    return this.client?.deliveryReady ?? false;
+  }
+
+  /**
+   * A single-use invite for another device, from the live connection.
+   *
+   * Needs a connection, because the server has to store it, and says so rather
+   * than handing over a string that would be refused.
+   *
+   * This is how a device is added. The recovery key is not: it is written down
+   * and offline, no device holds one, and what an invite hands over is the
+   * vault's data key, which is what a device holds anyway. The redemption
+   * registers the new device's own row, so what appears in the list below is a
+   * device that can be revoked on its own.
+   */
+  async createInvite(ttlMs?: number): Promise<{ invite: string; expiresAt: number }> {
+    const client = this.client;
+    if (!client) throw new Error(`${this.whyNoClient()} There is no way to register an invite.`);
+    return client.invite(ttlMs);
+  }
+
+  /**
+   * Cancels an outstanding invite, so the string stops working before it
+   * expires.
+   *
+   * The companion to being able to see one. Otherwise the only ways to retire
+   * an invite issued on a device that has just been lost are to wait out its
+   * hour or to replace the vault's secret, which retires the recovery key with
+   * it.
+   */
+  async uninvite(invite: string): Promise<void> {
+    const client = this.client;
+    if (!client) throw new Error(`${this.whyNoClient()} There is no way to cancel an invite.`);
+    return client.uninvite(invite);
+  }
+
+  /**
+   * Stops one device connecting, and closes whatever it has open.
+   *
+   * The device retains its notes and data key. Rotating an exposed recovery
+   * key prevents reuse of that recovery key; it does not change the data key
+   * or prevent decryption of ciphertext obtained elsewhere.
+   *
+   * No `allowLast`, and it is not an omission. Emptying the vault takes the
+   * recovery key, no device holds one, and a plugin that offered the flag
+   * would be offering a request the server can only refuse. The panel says so
+   * where the button would have been.
+   */
+  async revoke(deviceId: string): Promise<{ self: boolean }> {
+    const client = this.client;
+    if (!client) throw new Error(`${this.whyNoClient()} There is no way to revoke a device.`);
+    const { self } = await client.revoke(deviceId);
+    if (self) {
+      // Revoking this device is what unlinking is, from the server's side.
+      // The connection is already closing behind the reply, so the run is
+      // retired here rather than left to discover it by being refused.
+      await this.quiet();
+      this.setState({
+        kind: "stopped",
+        why:
+          "this device was revoked and may no longer sync this vault. Unlink it to forget the " +
+          "pairing, or pair again with the vault's recovery key.",
+      });
+    }
+    return { self };
+  }
+
+  /** This device's own row id, so the panel can tell it out of the list. */
+  get deviceId(): string | undefined {
+    return this.config?.deviceId;
+  }
+
+  /* ------------------------------------------------------------ *
+   * Rejoining a restored server, and retiring a leaked secret
+   * ------------------------------------------------------------ */
+
+  /**
+   * Where this device and the server each are, asked of the server directly.
+   *
+   * `cursors()` below reads a live connection, and the device that needs these
+   * two numbers is the one the server has refused: it has no live connection
+   * and never will until this is dealt with. So this makes its own, carrying no
+   * index, which is the only kind the server will talk to. Nothing is written.
+   */
+  async rejoinCursors(): Promise<{ local: number; server: number }> {
+    const config = this.config;
+    if (!config) throw new Error("this vault is not paired yet.");
+    return rebaseCursors(await this.clientOptions(config, this.generation));
+  }
+
+  /**
+   * Rejoins a server that has lost history this device already applied.
+   *
+   * The same operation as `telimus rebase --backup-taken`, and it exists here
+   * because the documented alternative for a plugin device was to unlink and
+   * pair again. Re-pairing throws away the index too, but it also throws away
+   * the merge base: every note comes back as an ancestor-less new version, and
+   * the next edit made on two devices at once cannot merge, so a restore was
+   * followed by a conflict-copy storm on precisely the devices least able to
+   * clean one up. A rebase keeps the pairing, so the ancestors the server
+   * agrees with survive.
+   *
+   * Nothing is deleted, here or on the server: what both sides hold identically
+   * is agreed again, what only this device holds goes up as new versions, and
+   * where the two disagree both are kept.
+   *
+   * In this order, and each step waited for. First the two cursors, from a
+   * connection that writes nothing, so a rebase that is not the answer is
+   * refused before anything has been touched. Then quiet: the run is retired
+   * and its clients closed, because the pass in flight ends by saving the index
+   * this is about to remove and two engines on one index is the state the
+   * single-flight rule exists to prevent. Then the index, both copies, proven
+   * gone. Only then the server.
+   *
+   * Whatever happens after the index goes, the loop is started again: from that
+   * moment this device has no record of what it had synced, and the only way it
+   * gets one back is by reaching the server.
+   */
+  async rebase(): Promise<SyncReport> {
+    if (this.unlinking) throw new Error("This vault is being unlinked.");
+    if (this.editingConnection) throw new Error("Another settings change is in progress.");
+    this.editingConnection = true;
+    try {
+      const config = this.config;
+      if (!config) throw new Error("this vault is not paired yet.");
+      if (this.pairing) throw new Error("a pairing is already in progress");
+      let mine = this.generation;
+      const current = () => mine === this.generation && this.config === config;
+      const requireCurrent = () => {
+        if (!current()) throw new Error("the pairing changed while rejoining the server");
+      };
+      refuseUnlessAhead(await this.rejoinCursors());
+      requireCurrent();
+
+      mine++;
+      await this.quiet();
+      requireCurrent();
+      this.setState({ kind: "connecting" });
+
+      try {
+        // Unlink must wait for an already-started reset, or this operation
+        // could remove the index of a new pairing after unlink has returned.
+        await this.trackStateWrite(this.indexStore().remove());
+        requireCurrent();
+        const options = await this.clientOptions(config, mine);
+        requireCurrent();
+        const client = new Client(options);
+        // The recovery client has the same lifecycle as the normal loop:
+        // unlink and unload can close it, including during its handshake.
+        this.live = client;
+        try {
+          await client.connect();
+          requireCurrent();
+          return await client.settle({ coalesceWrites: false });
+        } finally {
+          await client.close();
+          if (this.live === client) this.live = undefined;
+        }
+      } finally {
+        if (current()) this.start();
+      }
+    } finally {
+      this.editingConnection = false;
+    }
+  }
+
+  /**
+   * Gives the vault a new root secret, keeping its history and its devices.
+   *
+   * The answer to a recovery key that has been somewhere it should not have
+   * been. It takes that key as an argument, because no device holds one:
+   * rotating is the root's own power and a device that held the root could
+   * register itself again after being revoked, which is the whole thing
+   * per-device credentials removed.
+   *
+   * **Every device keeps syncing across this, including this one.** A rotation
+   * replaces the vault's secret and its wrapping of the data key, and touches
+   * no device row. A rotation that evicted every device would mean typing the
+   * new string into a phone, which is how a leaked key goes unrotated.
+   *
+   * The data key is this device's own, which is the vault's: a rotation
+   * replaces the wrapping and never the key, so the copy a paired device holds
+   * is always current and there is nothing to fetch before rewrapping it.
+   *
+   * The new recovery key is returned before the request goes out, and the
+   * panel shows it before pressing on, because there is nowhere on a device to
+   * stage a root any more: not holding one is the point. The server commits,
+   * closes every other registrar and only then replies, so if that reply is
+   * lost the only durable copy of the new key is the one somebody wrote down.
+   * `settled` says whether the server was heard from.
+   */
+  async rotate(
+    recoveryKey: string,
+    onKey?: (key: string) => void | Promise<void>,
+  ): Promise<{ recoveryKey: string; settled: boolean }> {
+    const config = this.config;
+    if (!config) throw new Error("this vault is not paired yet.");
+    if (this.pairing) throw new Error("a pairing is already in progress");
+    const { dataKey } = deviceCredential(config);
+
+    // The same state machine the CLI runs (I02). What differs between the two
+    // surfaces is how the candidate is put in front of somebody, which is the
+    // callback, and how the four outcomes are worded, which is below. Deciding
+    // what happened is not something either surface should be doing on its
+    // own: it is exactly where the two drifted, and F03 is what that cost.
+    const rotation = await rotateVault(
+      {
+        url: config.url,
+        vaultId: config.vaultId,
+        device: config.device,
+        recoveryKey,
+        dataKey,
+      },
+      // Awaited, like first pairing's (R24). `rotateVault` documents this as
+      // the step that makes the rest survivable and awaits it; passing a
+      // callback that returns before anybody has read the screen satisfies the
+      // type and not the obligation. Rotation is the worse of the two to get
+      // wrong: it retires the key that was written down, so a reload before
+      // the new one is copied leaves a vault with no way back at all.
+      async (candidate: string) => {
+        await onKey?.(candidate);
+      },
+    );
+
+    switch (rotation.kind) {
+      case "committed":
+        return { recoveryKey: rotation.recoveryKey, settled: true };
+      case "refused":
+        throw new Error(
+          "the vault's secret was replaced by somebody else first, so this was refused and no " +
+            "new key was made. The recovery key you used has been retired too.",
+        );
+      case "notCommitted":
+        throw new Error(
+          `the vault's secret was not replaced: ${rotation.why}. It still has the recovery key ` +
+            `you used.`,
+        );
+      case "unknown":
+        // The new key may be the vault's, so it goes back to be written down.
+        // `settled` is what says the server never confirmed it.
+        return { recoveryKey: rotation.recoveryKey, settled: false };
+    }
+    // Named rather than left implicit, so a fifth outcome fails loudly here.
+    throw new Error(`unhandled rotation outcome ${JSON.stringify(rotation)}`);
+  }
+
+  /**
+   * Stops everything this plugin has running, and waits for it.
+   *
+   * What `unlink` does before it touches a file, and what `rebase` and `rotate`
+   * need for the same reason: a run that is merely disconnected reconnects, a
+   * pass in flight is still writing the index, and a settle save already past
+   * its generation check is still going to write `data.json`. The bumped
+   * generation is what stops another starting.
+   */
+  private async quiet(): Promise<void> {
+    this.generation++;
+    this.running = false;
+    this.clearTimers();
+    this.wakeLoop?.();
+    this.wakeLoop = undefined;
+    const { live, client } = this.retireClients();
+    await live?.close();
+    await client?.close();
+    await this.pausing;
+    // Their callers report failures. Shutdown needs completion, including a
+    // failed write, so unlink can perform and verify its own cleanup next.
+    await Promise.allSettled([...this.settling]);
+  }
+
+  /**
+   * A config write made while something long-running is in flight, which
+   * `unlink` can wait for and a retired run cannot make.
+   *
+   * R10, in the shape protocol 4 gives it. The write that used to be in flight
+   * past a generation check was the settle that dropped a spent bootstrap; now
+   * it is the save that records this device's own credential, made in the
+   * middle of a registration that has already reached the server. The hazard
+   * is the same: unlinking writes `null` over the pairing, and a save that
+   * lands after it puts the pairing back, so memory says unpaired, the file
+   * says paired, and the next start syncs a vault the person removed.
+   *
+   * Two halves, because either alone leaves a window. The write is registered
+   * where `unlink` waits for it, and it refuses outright once its run has been
+   * retired, which is what stops one that had not started yet.
+   */
+  private saveDuringRun(mine: number, config: DeviceConfig): Promise<void> {
+    if (mine !== this.generation) {
+      // Not an error to report: this run has been replaced or unlinked, and
+      // what it belongs to should stop rather than finish writing.
+      return Promise.reject(new Error("this vault is no longer paired"));
+    }
+    return this.trackStateWrite(this.saveVerified(config));
+  }
+
+  /** Let unlink/unload drain a state write that has already started. */
+  private trackStateWrite(writing: Promise<void>): Promise<void> {
+    this.settling.add(writing);
+    void writing.catch(() => undefined).finally(() => this.settling.delete(writing));
+    return writing;
+  }
+
+  /**
+   * Writes the pairing and reads it back before believing it.
+   *
+   * Rule 4: verify the outcome, not the exit code. The one write that cannot
+   * afford to be taken on trust is the root a vault being started is saved
+   * with, because the claim that binds the server to it goes out on the
+   * strength of it. `decodeConfig` refuses a half-written config, so a torn
+   * write is caught here rather than on the next start.
+   */
+  /**
+   * The recovery key of a first pairing that never finished, or undefined
+   * (R02).
+   *
+   * A config holding the vault's root and no device credential is not a
+   * device: it is a vault that was started here and never joined. The root is
+   * the recovery key, so an interrupted pairing is recoverable, and the panel
+   * offers it rather than leaving somebody with a key they were shown once and
+   * a vault they cannot open.
+   */
+  pendingFirstPairing(): string | undefined {
+    const config = this.config;
+    if (config?.secret === undefined || config.deviceId !== undefined) return undefined;
+    return formatPairing({ url: config.url, vaultId: config.vaultId, secret: config.secret });
+  }
+
+  private async saveVerified(config: DeviceConfig): Promise<void> {
+    const record = encodeConfig(config);
+    await this.saveData(record);
+    let back: DeviceConfig | undefined;
+    try {
+      back = await this.readConfig();
+    } catch (err) {
+      throw new Error(`${this.dataPath} could not be read back: ${(err as Error).message}`);
+    }
+    if (back === undefined || JSON.stringify(encodeConfig(back)) !== JSON.stringify(record)) {
+      throw new Error(`${this.dataPath} did not read back as it was written`);
+    }
+  }
+
+  /**
+   * Where this device and the server each are, for a panel that shows both.
+   *
+   * The two numbers are what makes "behind and nothing arriving" visible.
+   * docs/design.md says the protocol cannot detect a server withholding
+   * versions; a person looking at these two lines can.
+   */
+  cursors(): { local: number; server: number } | undefined {
+    const client = this.connectedClient();
+    if (!client) return undefined;
+    return { local: client.engine.status().cursor, server: client.serverCursor };
+  }
+
+  /** A completed handshake is connected even while the initial history is loading. */
+  private connectedClient(): Client | undefined {
+    const client = this.client ?? this.live;
+    return client?.serverLimits && !client.transport.isClosed ? client : undefined;
+  }
+
+  /**
+   * What this device is talking to, as far as it knows.
+   *
+   * Two halves with two lifetimes, which is why they come back together. The
+   * address is the pairing's and is known whether or not anything is
+   * connected; the protocol and the build are the server's own account of
+   * itself, arrive in `ready`, and are gone again the moment the connection
+   * is. Nothing here is asked for specially: it is what the client already
+   * holds.
+   */
+  connection(): Connection | undefined {
+    const url = this.config?.url;
+    if (url === undefined) return undefined;
+    const limits = this.connectedClient()?.serverLimits;
+    return {
+      url,
+      ...(limits !== undefined
+        ? { server: { proto: limits.proto, version: limits.serverVersion } }
+        : {}),
+    };
+  }
+
+  /**
+   * Forgets the pairing. Every note stays where it is, on both ends.
+   *
+   * The index goes with it, and that is not tidiness. It records what this
+   * device believes it has already synced. Left behind, the next pairing
+   * starts from it: a cursor into a server that may be a different server, and
+   * entries claiming files are up to date when nothing has been checked. The
+   * device would skip uploading notes it had never sent.
+   *
+   * In this order, and each step waited for. First quiet: the run is
+   * retired and its client closed, which waits for the pass in flight,
+   * because that pass ends by saving the index this is about to remove.
+   * Then the index, both copies, proven gone. Then the pairing on disk, and
+   * only then the pairing in memory, so that at every step what the file
+   * says and what this object says agree. A step that fails leaves the
+   * vault paired and stopped, says so, and can be tried again.
+   */
+  async unlink(): Promise<void> {
+    if (this.unlinking) return this.unlinking;
+    this.unlinking = this.unlinkVault();
+    try {
+      await this.unlinking;
+    } finally {
+      this.unlinking = undefined;
+    }
+  }
+
+  private async unlinkVault(): Promise<void> {
+    // Retires every run in flight, closes their clients, and waits for every
+    // settle save that is already past its generation check, because each of
+    // those is a write to the same file this is about to empty. See `quiet`.
+    await this.quiet();
+
+    try {
+      await this.indexStore().remove();
+    } catch (err) {
+      throw this.unlinkFailed(`the index could not be removed: ${(err as Error).message}`);
+    }
+    try {
+      await this.saveData(null);
+      if ((await this.readConfig()) !== undefined) {
+        throw new Error("the pairing was not cleared when read back");
+      }
+    } catch (err) {
+      throw this.unlinkFailed(
+        `the pairing could not be removed from ${this.dataPath}: ${(err as Error).message}`,
+      );
+    }
+    this.config = undefined;
+    this.paused = false;
+    this.setState({ kind: "unpaired" });
+  }
+
+  /** Takes the clients off the plugin, so nothing reaches for them again. */
+  private retireClients(): { live: Client | undefined; client: Client | undefined } {
+    this.previewModal?.close();
+    this.previewModal = undefined;
+    this.previewing = undefined;
+    for (const close of this.syncPrompts) close();
+    this.syncPrompts.clear();
+    const taken = { live: this.live, client: this.client };
+    this.live = undefined;
+    this.client = undefined;
+    return taken;
+  }
+
+  private unlinkFailed(why: string): Error {
+    // Still paired, on disk and here, and no longer running: stopped is
+    // the honest state, and the panel still offers Unlink to try again.
+    this.setState({ kind: "stopped", why: `unlink did not finish, ${why}. Try again` });
+    return new Error(`unlink did not finish: ${why}`);
+  }
+
+  /* ------------------------------------------------------------ *
+   * Saying what is happening
+   * ------------------------------------------------------------ */
+
+  private setState(state: State): void {
+    this.state = state;
+    if (this.statusEl) paintStatus(this.statusEl, state);
+    // Where a phone can see it. `aria-label` is what Obsidian renders as a
+    // ribbon tooltip, and it is also what a screen reader reads out.
+    if (this.ribbonEl) {
+      const glyph = iconFor(state);
+      if (this.ribbonEl.getAttribute("data-telimus-icon") !== glyph) {
+        setIcon(this.ribbonEl, glyph);
+        this.ribbonEl.setAttribute("data-telimus-icon", glyph);
+      }
+      this.ribbonEl.removeClass("telimus-attention", "telimus-working");
+      const tone = toneFor(state);
+      if (tone) this.ribbonEl.addClass(tone);
+      this.ribbonEl.setAttribute("aria-label", `Telimus: ${longStatus(state)}`);
+    }
+    this.announceOnAPhone(state);
+    for (const listener of this.listeners) listener(state);
+  }
+
+  /** The condition a Notice has already been shown for, so it is shown once. */
+  private toldOnAPhone: "attention" | "offline" | undefined;
+  private lastToldOnAPhone = 0;
+
+  /**
+   * Puts the two states a phone most needs where a phone can see them (R083-16).
+   *
+   * There is no status bar on mobile: `addStatusBarItem` is documented as
+   * unavailable there, so on Android the whole of the state is the ribbon
+   * glyph and an `aria-label` that renders as a tooltip nobody taps. "Some
+   * files need attention" and "not connected" are exactly the two a person
+   * needs to be told rather than to go looking for, and both were invisible
+   * until they opened the panel.
+   *
+   * On the transition, and once. A Notice per pass would be the plugin talking
+   * over the person; a Notice when nothing has changed says nothing. The flag
+   * clears when the condition does, so the next occurrence is announced again.
+   */
+  private announceOnAPhone(state: State): void {
+    if (!Platform.isMobileApp) return;
+    const now =
+      state.kind === "offline"
+        ? "offline"
+        : state.kind === "synced" && (state.refused > 0 || state.waiting > 0)
+          ? "attention"
+          : undefined;
+    if (now === this.toldOnAPhone) return;
+    this.toldOnAPhone = now;
+    if (now === undefined) return;
+    // And not more than once every few minutes. A phone's radio drops and
+    // comes back on its own, and a Notice per drop is a plugin talking over
+    // somebody who is trying to write. The state is on the ribbon either way;
+    // this is the interruption, and an interruption that repeats stops being
+    // read.
+    const at = Date.now();
+    if (at - this.lastToldOnAPhone < PHONE_NOTICE_GAP_MS) return;
+    this.lastToldOnAPhone = at;
+    new Notice(`Telimus: ${longStatus(state)} Tap the Telimus icon for details.`, 10_000);
+  }
+
+  private readonly listeners = new Set<(state: State) => void>();
+
+  /** Lets the modal follow along while it is open. */
+  watchState(listener: (state: State) => void): () => void {
+    this.listeners.add(listener);
+    listener(this.state);
+    return () => this.listeners.delete(listener);
+  }
+
+  get currentState(): State {
+    return this.state;
+  }
+
+  /**
+   * Whether this vault has a device credential and can sync.
+   *
+   * Not "a config exists". `pairFirst` saves the root to disk before it shows
+   * the key, deliberately, so an interrupted first pairing is recoverable; the
+   * config at that point holds a root and no device row, and nothing has been
+   * claimed on any server. Counting that as paired drew the whole synced
+   * interface -- Sync, invites, the device list, Replace the secret -- over a
+   * vault that will never connect, and `refuseUnlessPairable` then answered
+   * every retry with "this vault is already paired", which is untrue and names
+   * no way out. `pendingFirstPairing` recovered the key and nothing recovered
+   * the vault.
+   */
+  get paired(): boolean {
+    return this.config !== undefined && this.pendingFirstPairing() === undefined;
+  }
+
+  /** Why the saved settings cannot be used, while that is so. */
+  get configProblem(): string | undefined {
+    return this.unreadable;
+  }
+
+  get deviceName(): string {
+    return this.config?.device ?? "";
+  }
+}
+
+/**
+ * Copies to the clipboard where there is one, and says so either way.
+ *
+ * Not every place this runs has a clipboard: mobile webviews and pages
+ * outside a secure context do not. A button that silently does nothing is
+ * worse than one that says the string is on screen to copy by hand, which it
+ * always is.
+ */
+async function copyToClipboard(text: string, said: string): Promise<void> {
+  const clipboard = (
+    globalThis as { navigator?: { clipboard?: { writeText(text: string): Promise<void> } } }
+  ).navigator?.clipboard;
+  try {
+    if (!clipboard) throw new Error("no clipboard here");
+    await clipboard.writeText(text);
+    new Notice(said);
+  } catch {
+    new Notice("This device has no clipboard. The string is shown in the panel, to copy by hand.");
+  }
+}
+
+/** Keep mobile keyboards from capitalizing or correcting addresses and keys. */
+function literalInput(field: TextComponent, address = false): void {
+  field.inputEl.setAttribute("autocapitalize", "none");
+  field.inputEl.setAttribute("autocorrect", "off");
+  field.inputEl.setAttribute("autocomplete", "off");
+  field.inputEl.spellcheck = false;
+  if (address) field.inputEl.inputMode = "url";
+}
+
+function offersRejoin(state: State): boolean {
+  return state.kind === "stopped" && state.recovery === "rejoin";
+}
+
+function recoveryFor(cause: Error): "rejoin" | undefined {
+  return cause instanceof ProtocolError && cause.code === "cursor" ? "rejoin" : undefined;
+}
+
+/**
+ * The name this device goes by, from what was typed or from the suggestion.
+ *
+ * Two devices left blank used to both be "obsidian", and their conflict
+ * copies were told apart only by the number `firstFreeName` appended. The
+ * copies were never lost, but a name that says which device wrote it is the
+ * point of having one in the filename, so a blank gets a suggestion. Shown in
+ * the panel, editable nowhere afterwards, because there is no settings screen.
+ */
+function deviceName(typed: string): string {
+  const name = typed.trim();
+  return name === "" ? suggestedDeviceName() : name;
+}
+
+/**
+ * A name to offer for this device: what kind of machine it is, and a short
+ * random tail.
+ *
+ * The pairing form has always had a name field and never had anything in it,
+ * so the honest thing to do with an empty field was leave it empty, and an
+ * empty one became `obsidian-3f2a`. A device list read from inside Obsidian,
+ * every row of which says Obsidian, identifies nothing. The CLI has had the
+ * better answer since it existed, the hostname and a tail (`deviceNameFor` in
+ * cli/cli.ts), and this is as near as a plugin gets: a phone has no hostname
+ * and the mobile bundle has no `os` module, but `Platform` says what kind of
+ * machine this is.
+ *
+ * The tail is the CLI's own two random bytes, and it is there whatever the
+ * platform word is, because two Macs are both "mac" and the name is what tells
+ * two conflict copies apart and what somebody reads in the device list before
+ * revoking a row. Typing a name replaces the whole suggestion, tail included,
+ * exactly as `--device` does.
+ */
+function suggestedDeviceName(): string {
+  const bytes = new Uint8Array(2);
+  crypto.getRandomValues(bytes);
+  const tail = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${platformWord()}-${tail}`;
+}
+
+/**
+ * One word for the machine, out of `Platform`.
+ *
+ * The mobile flags come first, and that ordering is the whole of what is
+ * subtle here: `obsidian.d.ts` says `isMacOS` is true on "a device that
+ * pretends to be one (like iPhones and iPads)", so an iPad checked in the
+ * other order would call itself a Mac. The last word is a fallback that a
+ * real Obsidian never reaches, since every host it runs on claims one of the
+ * five above.
+ */
+function platformWord(): string {
+  if (Platform.isAndroidApp) return "android";
+  if (Platform.isIosApp) return Platform.isTablet ? "ipad" : "iphone";
+  if (Platform.isMacOS) return "mac";
+  if (Platform.isWin) return "windows";
+  if (Platform.isLinux) return "linux";
+  return "obsidian";
+}
+
+/**
+ * The first line of the recovery list: what can come back and what cannot.
+ *
+ * Counted apart. Every row used to be called recoverable, including the ones
+ * drawn a few lines down as purged, and a list that says "all recoverable"
+ * over a note whose content is gone tells somebody their note is safe when it
+ * is not. The truncation wording is for the same reason: a short list that
+ * looks complete is one somebody reads and concludes their note is gone.
+ */
+export function describeDeleted(list: DeletedList): string {
+  const purged = list.notes.filter((n) => n.restorable === 0).length;
+  const restorable = list.notes.length - purged;
+  const parts: string[] = [];
+  if (restorable > 0) {
+    parts.push(
+      `${restorable} ${restorable === 1 ? "note is" : "notes are"} recoverable. ` +
+        `Restoring puts one back and sends it to your other devices.`,
+    );
+  }
+  if (purged > 0) {
+    parts.push(
+      `${purged} ${purged === 1 ? "note is" : "notes are"} listed but cannot be restored: ` +
+        `${purged === 1 ? "its" : "their"} history has been purged.`,
+    );
+  }
+  if (list.more) {
+    parts.push(
+      `The server has older deletions than the ${list.notes.length} shown here; ` +
+        `Show older lists more of them.`,
+    );
+  }
+  return parts.join(" ");
+}
+
+/** One compact status glyph, with the plugin name and details in its tooltip. */
+function paintStatus(el: HTMLElement, state: State): void {
+  const icon =
+    el.querySelector<HTMLElement>(".telimus-status-icon") ??
+    el.createSpan({ cls: "telimus-status-icon" });
+  icon.setAttribute("aria-hidden", "true");
+  const glyph = iconFor(state);
+  if (icon.getAttribute("data-telimus-icon") !== glyph) {
+    setIcon(icon, glyph);
+    icon.setAttribute("data-telimus-icon", glyph);
+  }
+  // Only when there is one. The settled state has no tone, and addClass with
+  // an empty string throws: "The token provided must not be empty", which
+  // arrives as a sync error about a DOMTokenList and says nothing about the
+  // status bar it came from.
+  const tone = toneFor(state);
+  if (el.getAttribute("data-telimus-tone") !== tone) {
+    el.removeClass("telimus-attention", "telimus-working");
+    if (tone !== "") el.addClass(tone);
+    el.setAttribute("data-telimus-tone", tone);
+  }
+  // Both, because Obsidian styles aria-label as its own tooltip and a plain
+  // title is what shows if it ever stops.
+  el.setAttribute("aria-label", `Telimus Sync: ${longStatus(state)}`);
+  el.setAttribute("title", `Telimus Sync: ${longStatus(state)}`);
+}
+
+/**
+ * Which glyph. Settled and working are different glyphs and not the same
+ * one spinning or not, because a spin is not something a glance can see.
+ * Settled with files that need a person is not the synced cloud either.
+ */
+function iconFor(state: State): string {
+  switch (state.kind) {
+    case "paused":
+      return "pause";
+    case "unpaired":
+      return "link";
+    case "connecting":
+    case "loading":
+    case "syncing":
+      return "refresh-cw";
+    case "synced":
+      if (state.refused > 0 || state.waiting > 0 || state.recoveryUnknown !== undefined) {
+        return "alert-circle";
+      }
+      // Not a tick. Something is still owed and will be tried again, which is
+      // neither "done" nor "somebody has to look at this" (Codex-03).
+      return (state.pending ?? 0) > 0 ? "refresh-cw" : "cloud-check";
+    case "offline":
+      return "cloud-off";
+    case "failed":
+    case "stopped":
+      return "alert-triangle";
+  }
+}
+
+function toneFor(state: State): string {
+  switch (state.kind) {
+    case "stopped":
+    case "failed":
+      return "telimus-attention";
+    // No tone. These used --text-faint, which measures 2.57:1 against the
+    // status bar in dark and 2.12:1 in light, under the 3:1 that a UI icon
+    // needs to be made out. Offline in particular is the state that means
+    // notes are not reaching the server, and it was the least legible thing
+    // on the screen. Untinted, they inherit the status bar's own colour and
+    // sit at the same weight as every item beside them; the glyph is what
+    // tells them apart.
+    case "offline":
+    case "paused":
+    case "unpaired":
+      return "";
+    case "connecting":
+    case "loading":
+    case "syncing":
+      return "telimus-working";
+    case "synced":
+      return state.refused > 0 || state.waiting > 0 || state.recoveryUnknown !== undefined
+        ? "telimus-attention"
+        : "";
+  }
+}
+
+/** The panel's own document, which is where the long form of all of this lives. */
+/**
+ * The shortest gap between two of the Notices a phone gets about its own sync
+ * state.
+ *
+ * There is no status bar on mobile, so a Notice is the only way to say
+ * "offline" or "some files need attention" to somebody who has not opened the
+ * panel. It is also the most intrusive thing this plugin can do, and a radio
+ * that drops and returns every few seconds would otherwise produce one per
+ * drop. Five minutes is long enough that the second one means something.
+ */
+const PHONE_NOTICE_GAP_MS = 5 * 60_000;
+
+/**
+ * How many outstanding paths the panel names before it stops being a message.
+ *
+ * The engine caps its own lists at five for the same reason, and this matches
+ * it: a wall of four hundred identical sentences is not a list somebody reads.
+ * Whatever is not shown is counted and said.
+ */
+const LISTED_IN_PANEL = 5;
+
+const DOCS = "https://github.com/waynehoover/telimus/blob/main/docs/plugin.md";
+
+/** Native settings groups on current Obsidian; flat rows on older releases. */
+function settingGroup(host: HTMLElement): HTMLElement {
+  return typeof SettingGroup === "function" ? new SettingGroup(host).listEl : host.createDiv();
+}
+
+/** A native row, with a short description only when the action needs context. */
+function row(host: HTMLElement, name: string, description = ""): Setting {
+  const setting = new Setting(host).setName(name);
+  if (description) setting.setDesc(description);
+  return setting;
+}
+
+/**
+ * A paragraph that is filled later, and takes no room until it is.
+ *
+ * An empty `<p>` still occupies a line. With a description under every row
+ * that went unnoticed; with rows that are a label and a control, the reserved
+ * space under "Add another device" was visibly wider than the gap under every
+ * other row, and it was two paragraphs waiting for an invite that did not
+ * exist yet. `say` is the only way to fill one, so a caller cannot set the
+ * text and forget to reveal it.
+ */
+function later(host: HTMLElement, cls: string): HTMLElement {
+  const el = host.createEl("p", { cls });
+  el.hide();
+  return el;
+}
+
+/** Fills a `later` paragraph and reveals it, or empties and hides it again. */
+function say(el: HTMLElement, text: string): void {
+  el.setText(text);
+  el.toggle(text !== "");
+}
+
+/**
+ * How many deletions a page of the recovery list holds.
+ *
+ * Small enough to read and large enough that paging is rare. The server caps
+ * what it will return whatever this says; the point of a fixed size is that
+ * the cursor does the walking rather than an ever-growing request (F21).
+ */
+const PAGE_SIZE = 50;
+
+/** A link out to `DOCS`, which is the panel's answer to "but why". */
+function docsLink(el: HTMLElement, text: string): void {
+  el.createEl("a", { text }).setAttribute("href", DOCS);
+}
+
+/** Shared settings and modal content. Recovery notices remain visible when needed. */
+class TelimusPanel {
+  private closed = false;
+  private unwatch: (() => void) | undefined;
+  private stopDelivery: (() => void) | undefined;
+  private renderGeneration = 0;
+  private unwatchUnload: () => void;
+
+  /**
+   * `host` is where it draws and `dismiss` is what "I am done here" means,
+   * which is the whole of the difference between the two places it appears.
+   * In the modal that closes it; in the settings tab there is nothing to
+   * close, so the tab hands it a function that does nothing and the panel
+   * does not have to know which one it is in.
+   */
+  constructor(
+    private readonly plugin: TelimusPlugin,
+    private readonly host: HTMLElement,
+    private readonly dismiss: () => void,
+    private readonly incomingInvite?: string,
+  ) {
+    this.unwatchUnload = plugin.watchUnload(() => this.teardown());
+  }
+
+  teardown(): void {
+    this.unwatchUnload();
+    this.closed = true;
+    this.renderGeneration++;
+    this.stopDelivery?.();
+    this.joinDraft = undefined;
+    this.confirmMerge = false;
+    this.unwatch?.();
+    // The wait for "I have written it down" needs an answer on every way out
+    // of it, and closing the panel is one of them (R40).
+    //
+    // It used to be left pending. The pairing awaiting it therefore never
+    // returned, `onePairing` never let go, and every later attempt was refused
+    // with "a pairing is already in progress" for the rest of the session:
+    // nothing was lost, because the root reaches the disk before the wait, and
+    // nothing worked either. Abandoning is an outcome and is reported as one.
+    this.abandonRecoveryKey("the panel was closed before the recovery key was acknowledged");
+    this.freshRecoveryKey = undefined;
+    this.host.empty();
+  }
+
+  render(): void {
+    // A pending settings request may finish after its modal or tab was closed.
+    if (this.closed) return;
+    this.renderGeneration++;
+    this.stopDelivery?.();
+    this.unwatch?.();
+    this.host.empty();
+
+    this.host.addClass("telimus-panel");
+    const contentEl = this.host;
+
+    const problem = this.plugin.configProblem;
+    if (problem !== undefined) {
+      this.renderUnreadable(contentEl, problem);
+      this.watchShape();
+      return;
+    }
+    if (!this.plugin.paired) {
+      // The key first, when there is one.
+      //
+      // A first pairing that was interrupted leaves a config holding the root
+      // and no device row: not paired, and holding the only copy of a key
+      // nothing can reissue. This block used to sit in the paired branch
+      // below, where `paired` meaning "a config exists" happened to reach it,
+      // and moving that definition to the truthful one took the key off the
+      // screen and let the pairing sail past the wait it is supposed to hold
+      // at. It belongs here, which is the state it describes.
+      // Two states, and they are not the same screen.
+      //
+      // A *fresh* key is a pairing in flight: it is waiting for somebody to say
+      // they have it (R02) and the claim is held open until they do. Nothing
+      // else is drawn, because a live "Start a new vault" under it is a second
+      // way forward that abandons the key the first one is asking to be written
+      // down. A screenshot showed both on one screen and every markup test was
+      // happy with it.
+      //
+      // A *pending* key is an abandoned pairing from some earlier session:
+      // nothing is in flight, the config holds the only copy of the key, and
+      // the form goes underneath because otherwise there is no way to try
+      // again. Drawing only the key here loops: acknowledging clears the fresh
+      // one and `pendingFirstPairing` still answers from the config, so the
+      // same screen comes back for ever. That is what this used to do for both
+      // states, and a test that says "there is no way to try again" is the one
+      // that caught it.
+      if (this.freshRecoveryKey !== undefined) {
+        this.renderRecoveryKey(contentEl, this.freshRecoveryKey);
+        this.watchShape();
+        return;
+      }
+      const pending = this.plugin.pendingFirstPairing();
+      if (pending !== undefined) this.renderRecoveryKey(contentEl, pending);
+      this.renderPairing(contentEl);
+      this.watchShape();
+      return;
+    }
+
+    const primary = settingGroup(contentEl);
+    const sync = row(primary, "Sync status");
+    const status = sync.descEl;
+    // What is outstanding, by name and with its reason, under the status line.
+    //
+    // These reasons used to exist for the twenty seconds a notice was on
+    // screen and then be a number, while the guide told people to look in the
+    // panel for them (Codex-03). A person who put their phone down during a
+    // sync had no way back to what it had said.
+    const outstanding = contentEl.createDiv("telimus-outstanding");
+    status.addClass("telimus-sync-status");
+    this.renderDelivery(sync.infoEl);
+    status.setAttribute("role", "status");
+    let syncButton!: ButtonComponent;
+    sync.addButton((b) => {
+      syncButton = b;
+      b.setButtonText("Sync now").onClick(async () => {
+        await this.plugin.syncNow();
+      });
+    });
+
+    const addDevice = contentEl.createEl("details", { cls: "telimus-add-device" });
+    addDevice.createEl("summary", { text: "Add another device" });
+    this.renderInvite(settingGroup(addDevice));
+
+    // The two cursors and what answered them, behind a disclosure.
+    //
+    // Three paragraphs of numbers at the top of the panel is what this was, and
+    // they are the answer to "why is it not working" rather than to "is it
+    // working": the status line above says the second. So they fold away.
+    //
+    // The summary keeps I11's point rather than burying it. That finding is why
+    // both cursors are shown at all, so being behind has to be visible without
+    // opening anything: the summary says how far behind, and the section starts
+    // open when it is.
+    const server = contentEl.createEl("details", { cls: "telimus-server" });
+    const serverSummary = server.createEl("summary");
+    const cursors = later(server, "telimus-advice");
+    const connection = later(server, "telimus-advice");
+    const connectionWarning = later(server, "telimus-advice");
+    this.renderServerAddress(settingGroup(server));
+    const advice = later(primary, "telimus-advice");
+    // Which rows this pass drew, so that a panel left open when the state
+    // changes under it grows the recovery it now needs. Everything else here
+    // is text a listener can update; a row is not, and a panel that was open
+    // when the server was restored would otherwise say "stopped" beside no way
+    // out until it was closed and opened again.
+    // What shape this pass drew, so a panel left open when the vault changes
+    // under it is redrawn rather than patched.
+    //
+    // This used to watch one thing, whether a rejoin row was needed. Unlinking
+    // from another surface therefore left every paired row on screen with "Not
+    // paired." above them: Sync, Add another device, Manage this vault and a
+    // Browse deleted that opened a recovery modal against a vault with no
+    // credential. Reported from the settings tab, which is the surface most
+    // likely to be sitting open while something else does the unlinking.
+    this.watchShape(() => {
+      const state = this.plugin.currentState;
+      status.setText(longStatus(state));
+      this.renderOutstanding(outstanding, state);
+      const busy =
+        state.kind === "connecting" || state.kind === "loading" || state.kind === "syncing";
+      syncButton
+        .setDisabled(busy)
+        .setButtonText(
+          state.kind === "paused"
+            ? "Resume sync"
+            : state.kind === "offline"
+              ? "Reconnect"
+              : state.kind === "connecting"
+                ? "Connecting…"
+                : state.kind === "loading"
+                  ? "Loading…"
+                  : state.kind === "syncing"
+                    ? "Syncing…"
+                    : "Sync now",
+        );
+      // Both cursors, so "behind and nothing arriving" is something a person
+      // can see (I11).
+      const at = this.plugin.cursors();
+      say(cursors, at === undefined ? "" : `Local cursor ${at.local}, server cursor ${at.server}.`);
+      const behind = at === undefined ? 0 : Math.max(0, at.server - at.local);
+      const showBehind = behind > 0 && state.kind !== "loading";
+      serverSummary.setText(showBehind ? `Server · ${behind} behind` : "Server");
+      // Opened, not just labelled, the first time it matters: a section that
+      // says "42 behind" and stays shut is I11's defect wearing a summary.
+      if (showBehind) server.setAttribute("open", "true");
+      const to = this.plugin.connection();
+      say(connection, to === undefined ? "" : describeConnection(to));
+      say(connectionWarning, to?.url.startsWith("ws://") ? connectionDetail(to) : "");
+      say(advice, originAdvice(state));
+    });
+
+    // Only while it is the answer to something, and never inside the
+    // disclosure below: a device the server has refused has to say so, and
+    // offer the way out, without anybody opening anything first.
+    if (offersRejoin(this.plugin.currentState)) this.renderRejoin(primary);
+
+    // A key this panel has just produced, still on screen until somebody says
+    // they have it (R02). The unfinished-pairing case is drawn in the unpaired
+    // branch above, which is the state it is actually in.
+    if (this.freshRecoveryKey !== undefined) {
+      this.renderRecoveryKey(contentEl, this.freshRecoveryKey);
+    }
+
+    row(primary, "Recover a deleted note", "Restore a copy.").addButton((b) =>
+      b.setButtonText("Browse deleted").onClick(() => {
+        // Checked at the press as well as by the shape watcher above, because
+        // a panel can be looked at for a while: a click that arrives after the
+        // vault was unlinked elsewhere used to open a recovery modal with no
+        // credential behind it, which then failed inside the modal. A sentence
+        // where the modal would have been, which is what `syncNow` and
+        // `createInvite` already do.
+        if (!this.plugin.paired) {
+          new Notice("Telimus: this vault is not paired yet. There is nothing to recover.");
+          return;
+        }
+        this.dismiss();
+        new RecoverModal(this.plugin).open();
+      }),
+    );
+
+    // Everything rare, behind one press. Named for what is inside rather than
+    // "Advanced", which says nothing and reads as a dare.
+    const manage = contentEl.createEl("details", { cls: "telimus-manage" });
+    manage.createEl("summary", { text: "Manage this vault" });
+    const management = settingGroup(manage);
+    this.renderThisDeviceName(management);
+    this.renderStranded(management);
+    this.renderIgnored(management);
+    this.renderDevices(management);
+    row(management, "Recovery key", "Not stored on this device. Keep your saved copy safe.");
+
+    // Beside the recovery key, because it is the same secret and the same
+    // warning, and behind two presses, because it is the one action here that
+    // retires the key somebody wrote down.
+    this.renderRotate(management);
+
+    // Beside the device list rather than under recovery, because it is a thing
+    // done to the server and not to this vault, and it is here at all for the
+    // reason rejoin is: the documented alternative for a plugin device was
+    // nothing. A phone may hold the only remaining copy of a body the server
+    // has lost, and it has no shell to run `telimus repair` in (I14).
+    row(
+      management,
+      "Send back what the server has lost",
+      "Repair missing server content using notes on this device.",
+    ).addButton((b) =>
+      b.setButtonText("Send").onClick(async () => {
+        b.setDisabled(true).setButtonText("Sending");
+        try {
+          const out = await this.plugin.repair();
+          // Both halves of the answer, always. "Sent 3" without "and this
+          // device cannot reach the rest" is the comfortable half of a story
+          // whose other half decides whether to go and find another machine.
+          const parts: string[] = [];
+          parts.push(
+            out.stored > 0
+              ? `Sent ${out.stored} back.`
+              : "The server already had everything this device can offer.",
+          );
+          if (out.stillMissing > 0) {
+            parts.push(`${out.stillMissing} would not store; check the server's disk.`);
+          }
+          if (out.failed.length > 0) {
+            parts.push(`${out.failed.length} could not be read here.`);
+          }
+          parts.push(
+            "Do this on your other devices too. Anything still missing is history this " +
+              "device never had.",
+          );
+          new Notice(`Telimus: ${parts.join(" ")}`, 15_000);
+        } catch (err) {
+          new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+        } finally {
+          b.setDisabled(false).setButtonText("Send");
+        }
+      }),
+    );
+
+    row(
+      management,
+      "Unlink this vault",
+      "Stop syncing on this device. Local and server notes are kept.",
+    ).addButton((b) =>
+      b
+        .setButtonText("Unlink")
+        .setWarning()
+        .onClick(async () => {
+          try {
+            await this.plugin.unlink();
+          } catch (err) {
+            new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+          }
+          this.render();
+        }),
+    );
+
+    docsLink(contentEl.createEl("p", { cls: "telimus-advice" }), "Telimus documentation");
+  }
+
+  /**
+   * The paths this device has not synced, with what it says about each.
+   *
+   * Two kinds, kept apart, because they need different things from a person
+   * (rule 7): a written-off path is one somebody has to look at, and a
+   * retrying one is one to leave alone until the deadline. Rebuilt in place on
+   * every state change rather than redrawn as rows, so a panel left open
+   * follows the vault.
+   */
+  private renderOutstanding(host: HTMLElement, state: State): void {
+    host.empty();
+    if (state.kind !== "synced") return;
+    const issues = state.issues ?? [];
+    const retrying = state.retryingPaths ?? [];
+    if (issues.length === 0 && retrying.length === 0) return;
+
+    if (issues.length > 0) {
+      const list = host.createEl("ul", { cls: "telimus-outstanding-list" });
+      for (const issue of issues.slice(0, LISTED_IN_PANEL)) {
+        list.createEl("li", { text: `${issue.path}: ${issue.why}` });
+      }
+      // Said, rather than left to a count that does not add up. The engine
+      // caps its own list, so the panel showing five of forty has to say so.
+      const more = state.refused - Math.min(issues.length, LISTED_IN_PANEL);
+      if (more > 0) {
+        host.createEl("p", {
+          cls: "telimus-advice",
+          text: `And ${more} more not listed here. Sync activity has the full record.`,
+        });
+      }
+    }
+
+    if (retrying.length > 0) {
+      const when =
+        state.pendingAt === undefined
+          ? ""
+          : ` Next attempt ${new Date(state.pendingAt).toLocaleTimeString()}.`;
+      const count = state.pending ?? retrying.length;
+      host.createEl("p", {
+        cls: "telimus-advice",
+        text:
+          `${count} ${count === 1 ? "file is" : "files are"} waiting to be sent again: ` +
+          `${retrying.slice(0, LISTED_IN_PANEL).join(", ")}.${when}`,
+      });
+    }
+  }
+
+  /** Form fields survive ordinary updates; a different pairing redraws every surface. */
+  private watchShape(update: () => void = () => {}): void {
+    const shape = () =>
+      JSON.stringify([
+        this.plugin.configProblem !== undefined,
+        this.plugin.paired,
+        (this.freshRecoveryKey ?? this.plugin.pendingFirstPairing()) !== undefined,
+        offersRejoin(this.plugin.currentState),
+      ]);
+    const drawn = shape();
+    this.unwatch = this.plugin.watchState(() => {
+      if (shape() !== drawn) this.render();
+      else update();
+    });
+  }
+
+  private renderServerAddress(contentEl: HTMLElement): void {
+    let address!: TextComponent;
+    const setting = row(
+      contentEl,
+      "Server address",
+      "Update this if your server moves to a new address.",
+    );
+    const said = later(contentEl, "telimus-advice");
+    setting
+      .addText((text) => {
+        address = text;
+        text.setPlaceholder("wss://sync.example.com").setValue(this.plugin.connection()?.url ?? "");
+        literalInput(text, true);
+        text.inputEl.setAttribute("aria-label", "Server address");
+      })
+      .addButton((button) =>
+        button.setButtonText("Save").onClick(async () => {
+          button.setDisabled(true).setButtonText("Checking…");
+          say(said, "");
+          try {
+            await this.plugin.changeServerAddress(address.getValue());
+            new Notice("Telimus: server address saved.");
+            this.render();
+          } catch (err) {
+            say(said, (err as Error).message);
+          } finally {
+            button.setDisabled(false).setButtonText("Save");
+          }
+        }),
+      );
+  }
+
+  /** Load devices on demand; explain revocation at the confirmation step. */
+  private renderDevices(contentEl: HTMLElement): void {
+    // Declared here and created below the setting that fills them, for the
+    // same reason renderInvite does it: created first, the rows rendered
+    // above the "Devices" row and the list appeared to belong to whatever
+    // sat above it. Found by taking a screenshot of the panel, twice now,
+    // which is a better reviewer of layout than a test.
+    let list!: HTMLElement;
+    let said!: HTMLElement;
+    let loading = false;
+    let refresh!: ButtonComponent;
+    const show = async () => {
+      if (loading) return;
+      loading = true;
+      refresh.setDisabled(true);
+      say(said, "");
+      let answer: {
+        devices: DeviceRow[];
+        maxDevices: number;
+        invites: InviteRow[];
+        thisDevice: string;
+      };
+      try {
+        answer = await this.plugin.devices();
+      } catch (err) {
+        say(said, (err as Error).message);
+        return;
+      } finally {
+        loading = false;
+        refresh.setDisabled(false);
+      }
+      list.empty();
+      // The last row is the vault's last device, and it is always this one:
+      // reading the list at all means this device connected. Emptying the
+      // vault is the recovery key's to do, so there is no button for it here.
+      // A button that could only ever be refused is worse than none.
+      const last = answer.devices.length === 1;
+      heading.setDesc(
+        answer.maxDevices > 0
+          ? `${answer.devices.length} of ${answer.maxDevices} devices`
+          : `${answer.devices.length} ${answer.devices.length === 1 ? "device" : "devices"}`,
+      );
+      const names = new Map<string, number>();
+      for (const device of answer.devices) {
+        const name = device.name || "Unnamed device";
+        names.set(name, (names.get(name) ?? 0) + 1);
+      }
+      for (const device of answer.devices) {
+        const mine = device.id === answer.thisDevice;
+        // Flagged rather than left as a blank, because a row nothing has ever
+        // connected under is the reclaimable one: a pairing that reached the
+        // server and then crashed leaves exactly that.
+        const cursor = this.plugin.cursors()?.server;
+        const seen =
+          cursor === undefined ? "Delivery unconfirmed" : describeDelivery(device, cursor);
+        const name = device.name || "Unnamed device";
+        const row = new Setting(list)
+          .setName(`${name}${mine ? " (this device)" : ""}`)
+          // Keep identical names distinguishable before a destructive action.
+          .setDesc(names.get(name)! > 1 ? `${seen} · ID ${device.id}` : seen);
+        if (last) continue;
+        let confirmed = false;
+        row.addButton((b) =>
+          b
+            .setButtonText(mine ? "Unlink from the server" : "Revoke")
+            .setWarning()
+            .onClick(async () => {
+              if (!confirmed) {
+                confirmed = true;
+                b.setButtonText("Yes, revoke");
+                say(
+                  said,
+                  `${mine ? "This device" : `"${name}"`} will stop syncing. ` +
+                    "It keeps its decryption key and can still read copies of your notes. " +
+                    "Press again to revoke.",
+                );
+                return;
+              }
+              try {
+                await this.plugin.revoke(device.id);
+                new Notice("Device revoked. Existing notes on that device are kept.", 10_000);
+                this.render();
+              } catch (err) {
+                say(said, (err as Error).message);
+              }
+            }),
+        );
+      }
+      // The invites under the rows, because they are the same question: a row
+      // is a device that was added and an outstanding invite is one about to
+      // be. Identifier and expiry only. The string itself is not here and
+      // cannot be: the server never had the invite key, so nothing on this
+      // screen redeems anything, and what the identifier is for is saying
+      // which invite to cancel.
+      for (const invite of answer.invites) {
+        const row = new Setting(list)
+          .setName("Outstanding invite")
+          .setDesc(`Expires ${when(invite.expiresAt)}`);
+        row.addButton((b) =>
+          b
+            .setButtonText("Cancel")
+            .setWarning()
+            .onClick(async () => {
+              try {
+                await this.plugin.uninvite(invite.id);
+                new Notice("Invite cancelled. It can no longer add a device.", 10_000);
+                this.render();
+              } catch (err) {
+                say(said, (err as Error).message);
+              }
+            }),
+        );
+      }
+    };
+
+    const heading = row(
+      contentEl,
+      "Devices",
+      "View connected devices and manage their access.",
+    ).addButton((b) => {
+      refresh = b;
+      b.setButtonText("Show devices").onClick(show);
+    });
+
+    list = contentEl.createEl("div");
+    said = later(contentEl, "telimus-advice");
+  }
+
+  /** Share delivery checks across open settings surfaces without rebuilding controls. */
+  private renderDelivery(host: HTMLElement): void {
+    const line = later(host, "setting-item-description telimus-delivery");
+    line.setAttribute("aria-live", "polite");
+    this.stopDelivery = watchDelivery(
+      this.plugin,
+      (message) => {
+        if (line.textContent !== message) say(line, message);
+      },
+      typeof line.ownerDocument?.addEventListener === "function"
+        ? line.ownerDocument
+        : globalThis.document,
+    );
+  }
+
+  /** Show the QR and a selectable pairing code, with Copy beside the code. */
+  private renderInvite(contentEl: HTMLElement): void {
+    let currentInvite = "";
+    let codeField!: TextComponent;
+    row(
+      contentEl,
+      "Add another device",
+      "Create a one-time invite. Expires in 10 minutes.",
+    ).addButton((b) =>
+      b.setButtonText("Create invite").onClick(async () => {
+        try {
+          const issued = await this.plugin.createInvite();
+          currentInvite = issued.invite;
+          codeField.setValue(issued.invite);
+          codeField.inputEl.scrollLeft = 0;
+          codeRow.settingEl.show();
+          let scanAdvice = "Copy the invite into Telimus on the new device.";
+          try {
+            qr.setAttribute("src", inviteQrImage(issued.invite));
+            qr.show();
+            scanAdvice =
+              "Scan with your phone's camera. Telimus must be installed and enabled in Obsidian.";
+          } catch {
+            // Long server addresses can exceed QR capacity. Copy still works.
+            qr.hide();
+          }
+          say(expiry, `${scanAdvice} Expires at ${when(issued.expiresAt)}.`);
+          await copyToClipboard(
+            issued.invite,
+            "Copied. Paste it into Telimus on the other device.",
+          );
+        } catch (err) {
+          new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+        }
+      }),
+    );
+
+    const qr = contentEl.createEl("img", { cls: "telimus-invite-qr" });
+    qr.setAttribute("alt", "Scan to open this invite in Obsidian");
+    qr.hide();
+    const expiry = later(contentEl, "telimus-advice");
+    const codeRow = row(contentEl, "Pairing code", "Paste this into Telimus on your other device.");
+    codeRow.settingEl.addClass("telimus-invite-code");
+    codeRow.settingEl.hide();
+    codeRow
+      .addText((text) => {
+        codeField = text;
+        text.inputEl.setAttribute("readonly", "");
+        text.inputEl.setAttribute("aria-label", "Pairing code");
+        text.inputEl.addEventListener("focus", () => text.inputEl.select());
+      })
+      .addButton((button) => {
+        button.setButtonText("Copy");
+        button.buttonEl.setAttribute("aria-label", "Copy pairing code");
+        button.onClick(async () => {
+          if (currentInvite === "") return;
+          await copyToClipboard(
+            currentInvite,
+            "Copied. Paste it into Telimus on the other device.",
+          );
+        });
+      });
+  }
+
+  /**
+   * The way back from a server that has lost history this device applied.
+   *
+   * Two presses, and the first one is not destructive: it asks the server where
+   * it is and puts both numbers on screen, which is also how somebody finds out
+   * that this is not their problem. The confirmation is what `--backup-taken`
+   * is on the command line, and it is worth more here: a flag has to be typed
+   * and a button is one tap from a thumb.
+   */
+  private renderRejoin(contentEl: HTMLElement): void {
+    const said = later(contentEl, "telimus-advice");
+    let confirmed = false;
+    row(
+      contentEl,
+      "Rejoin this server",
+      "The server has older history. Back it up before rejoining; local notes are kept.",
+    ).addButton((b) =>
+      b
+        .setButtonText("Rejoin")
+        .setWarning()
+        .onClick(async () => {
+          try {
+            if (!confirmed) {
+              const at = await this.plugin.rejoinCursors();
+              refuseUnlessAhead(at);
+              confirmed = true;
+              b.setButtonText("Yes, rejoin");
+              say(
+                said,
+                `This device is at version ${at.local} and the server is at ${at.server}. ` +
+                  `Take a backup of the server first (telimus backup). Press again to rejoin.`,
+              );
+              return;
+            }
+            say(said, "Rejoining. This sends everything only this device holds.");
+            const report = await this.plugin.rebase();
+            say(
+              said,
+              `Rejoined the server: ${summarise(report)}. Nothing was deleted, and where the ` +
+                `two sides disagreed both versions were kept.`,
+            );
+            new Notice(`Telimus rejoined the server: ${summarise(report)}`, 10_000);
+            this.render();
+          } catch (err) {
+            say(said, "");
+            new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+          }
+        }),
+    );
+  }
+
+  /**
+   * Replacing the vault's root secret.
+   *
+   * The answer to a recovery key that has been somewhere it should not have
+   * been, and the second half of the answer to a device that was stolen: the
+   * first half is revoking it above, which stops it connecting, and this is
+   * what stops the key it was holding opening the vault again.
+   *
+   * It asks for the current recovery key, because no device holds one. That is
+   * the whole point of the change: a device that could rotate could also
+   * register itself again after being revoked. So this is a field rather than
+   * a button, and somebody who has not got the key cannot do it from here,
+   * which is correct and is what the one-line description says: paste the
+   * vault's current recovery key.
+   *
+   * Two presses, because it retires the old key the moment it commits, and the
+   * new key goes on screen before the second press: the server commits, closes
+   * every other registrar and only then replies, so a reply lost in between
+   * leaves a vault whose new root exists only on paper.
+   */
+  /**
+   * This device's own name, changeable, which it was not until protocol 5.
+   *
+   * The name is what the device list, a note's history and every conflict copy
+   * are read by, and it was chosen once at pairing and then fixed: a typo or a
+   * laptop that became something else meant unlinking and pairing again, which
+   * makes a new row and detaches the old one's history of who wrote what.
+   *
+   * Under Manage rather than on the front of the panel, with the device list it
+   * changes, because it is a thing done once and not a thing done often.
+   *
+   * The server first and the config after, which is the order `client.rename`
+   * explains. If the save fails the sentence says both halves, because "renamed"
+   * and "written down here" are different facts and the visible consequence of
+   * the second failing is conflict copies that still carry the old name.
+   */
+  private renderThisDeviceName(contentEl: HTMLElement): void {
+    let field: TextComponent | undefined;
+    const setting = row(
+      contentEl,
+      "This device's name",
+      "Shown in the device list and future sync activity.",
+    );
+    setting.addText((t) => {
+      t.setPlaceholder("laptop");
+      t.inputEl.setAttribute("aria-label", "This device's name");
+      t.setValue(this.plugin.deviceName ?? "");
+      field = t;
+    });
+    setting.addButton((b) =>
+      b.setButtonText("Rename").onClick(async () => {
+        const wanted = (field?.getValue() ?? "").trim();
+        if (wanted === "") {
+          new Notice("A device name cannot be empty.");
+          return;
+        }
+        if (wanted === this.plugin.deviceName) {
+          new Notice("That is already this device's name.");
+          return;
+        }
+        b.setDisabled(true).setButtonText("Renaming");
+        try {
+          const said = await this.plugin.renameDevice(wanted);
+          new Notice(`This device is now ${said} in the device list.`);
+          this.render();
+        } catch (err) {
+          new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+          b.setDisabled(false).setButtonText("Rename");
+        }
+      }),
+    );
+  }
+
+  /**
+   * What this device skips, and a way to change it (R083-13).
+   *
+   * A list of names with a Remove each, and one field to add another, rather
+   * than a text area of comma-separated anything. The names are somebody's
+   * folders and the failure mode of free text is a typo that silently syncs
+   * the folder they asked to skip; a name that is already on the list is
+   * visible, and one that is not was never accepted.
+   */
+  private renderIgnored(contentEl: HTMLElement): void {
+    const names = this.plugin.ignoredNames;
+    const setting = row(
+      contentEl,
+      "Skip these on this device",
+      names.length === 0
+        ? "Nothing beyond hidden folders and Obsidian's own. This device only; other devices keep syncing them."
+        : `Not synced here: ${names.join(", ")}. This device only; other devices keep syncing them.`,
+    );
+    let field: TextComponent | undefined;
+    setting.addText((t) => {
+      t.setPlaceholder("Attachments");
+      t.inputEl.setAttribute("aria-label", "A folder or file name to skip on this device");
+      field = t;
+    });
+    const change = async (wanted: readonly string[], button: ButtonComponent, was: string) => {
+      button.setDisabled(true).setButtonText("Saving");
+      try {
+        await this.plugin.setIgnoredNames(wanted);
+        this.render();
+      } catch (err) {
+        new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+        button.setDisabled(false).setButtonText(was);
+      }
+    };
+    setting.addButton((b) =>
+      b.setButtonText("Skip").onClick(async () => {
+        const wanted = (field?.getValue() ?? "").trim();
+        if (!isIgnorableName(wanted)) {
+          new Notice("Telimus: give one folder or file name, with no slashes in it.");
+          return;
+        }
+        if (names.includes(wanted)) {
+          new Notice(`Telimus: ${wanted} is already skipped on this device.`);
+          return;
+        }
+        await change([...names, wanted], b, "Skip");
+      }),
+    );
+    for (const name of names) {
+      row(
+        contentEl,
+        name,
+        "Skipped on this device. Removing it syncs it again from the next pass.",
+      ).addButton((b) =>
+        b.setButtonText("Sync it").onClick(async () => {
+          await change(
+            names.filter((other) => other !== name),
+            b,
+            "Sync it",
+          );
+        }),
+      );
+    }
+  }
+
+  /**
+   * A way back to the versions this device could not leave visible (Codex-08).
+   *
+   * The panel said these existed and stopped there, so getting them back meant
+   * a file manager or a terminal, on a phone that has neither, for what is
+   * sometimes the only surviving copy of a note. The row is drawn even when
+   * the inventory is empty *and incomplete*, because "nothing is stranded" and
+   * "I cannot tell you what is stranded" are different answers (rule 2).
+   */
+  private renderStranded(contentEl: HTMLElement): void {
+    // From the state, which the pass already put there, rather than from a
+    // fresh read: the row is drawn on every panel render and the modal is the
+    // thing that goes and looks.
+    const state = this.plugin.currentState;
+    const waiting = state.kind === "synced" ? state.waiting : 0;
+    const unknown = state.kind === "synced" ? state.recoveryUnknown : undefined;
+    if (waiting === 0 && unknown === undefined) return;
+    row(
+      contentEl,
+      "Versions kept out of sight",
+      unknown === undefined
+        ? `${waiting} ${waiting === 1 ? "version is" : "versions are"} under a name Obsidian does not show.`
+        : `Telimus cannot tell what is waiting: ${unknown}`,
+    ).addButton((b) =>
+      b.setButtonText("Look").onClick(() => {
+        this.dismiss();
+        new StrandedModal(this.plugin).open();
+      }),
+    );
+  }
+
+  private renderRotate(contentEl: HTMLElement): void {
+    const said = later(contentEl, "telimus-advice");
+    let keyField: TextComponent | undefined;
+    row(
+      contentEl,
+      "Replace the vault's secret",
+      "Replace an exposed recovery key. Existing devices keep syncing.",
+    )
+      .addText((t) => {
+        t.setPlaceholder("Current recovery key");
+        t.inputEl.setAttribute("aria-label", "Current recovery key");
+        literalInput(t);
+        keyField = t;
+      })
+      .addButton((b) =>
+        b
+          .setButtonText("Replace the secret")
+          .setWarning()
+          .onClick(async () => {
+            const given = keyField?.getValue() ?? "";
+            if (given.trim() === "") {
+              say(said, "Paste the vault's current recovery key first.");
+              return;
+            }
+            try {
+              // Rendered before the request rather than after it returns: a
+              // rotation that commits and loses its reply has already changed
+              // the vault, and a key that only exists in a resolved promise is
+              // one a crash takes with it.
+              const { settled } = await this.plugin.rotate(given, async (key) => {
+                this.freshRecoveryKey = key;
+                this.render();
+                // Held here until somebody says they have it (R24). Nothing has
+                // been sent yet, so abandoning this costs only the candidate:
+                // the vault still has the key that was typed in above.
+                await this.writtenDown;
+              });
+              new Notice(
+                settled
+                  ? "The vault has a new secret. Write down the new recovery key shown in the panel. " +
+                      "Every device keeps syncing."
+                  : "The vault may already have the new secret: the server never answered. Write down " +
+                      "the new recovery key shown in the panel, keep the old one until you know, and " +
+                      "try each of them here.",
+                0,
+              );
+              this.render();
+            } catch (err) {
+              say(said, "");
+              new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+            }
+          }),
+      );
+  }
+
+  /**
+   * A config that is there and cannot be read gets no pairing form.
+   *
+   * Pairing writes a new root secret over the old one, and everything on the
+   * server would then be undecryptable from here. The only safe offers are
+   * the reason and the path.
+   */
+  private renderUnreadable(contentEl: HTMLElement, problem: string): void {
+    contentEl.createEl("p", { text: `Telimus has stopped: ${problem}` });
+    contentEl.createEl("p", {
+      text:
+        `Pairing again would replace the credential in ${this.plugin.dataPath}, so nothing here ` +
+        `offers to. Fix or move that file, then reload the plugin.`,
+    });
+  }
+
+  /**
+   * One field, because the string already says which kind it is.
+   *
+   * This screen has been rebuilt twice and both times for the same reason. It
+   * began as both forms at once: a device name, an invite field and *Pair*,
+   * then "Or start a new vault", a setup string and *Start a new vault*.
+   * Everything needed was on screen and nothing said which half was yours.
+   *
+   * The fix then was to ask first, so a choice came before a form. That did
+   * remove the ambiguity, and it bought it with a screen whose only content
+   * was a question. Reported as too much for what it does, and it is: a person
+   * with an invite in their clipboard has already made the choice the screen
+   * is asking them to make.
+   *
+   * An invite starts `basalt3i_`, a recovery key starts `basalt3_`, and a
+   * setup line is neither; `parseSetup` has always refused the other two by
+   * name. So the string is self-describing and the question was never
+   * necessary. One field takes all three, the line under it says what pressing
+   * the button will do and to which server, and the button says it too.
+   *
+   * The two things somebody might still want are behind *More options*, with
+   * working defaults in place: a device name suggested from the platform, and
+   * the skip list, which stays on this screen rather than moving to the paired
+   * panel because pairing starts the download immediately and a phone joining
+   * a vault of attachments has to be able to say no before that (Codex-05).
+   */
+  private renderPairing(host: HTMLElement): void {
+    if (this.confirmMerge && this.joinDraft) {
+      const draft = this.joinDraft;
+      new Setting(host).setName("Confirm merge").setHeading();
+      host.createEl("p", {
+        text: "This vault already contains files. They will be combined with your synced vault.",
+      });
+      host.createEl("p", {
+        cls: "telimus-advice",
+        text:
+          "Files moved or deleted on another device may reappear. " +
+          "Conflicting edits may create copies.",
+      });
+      let cancel!: ButtonComponent;
+      new Setting(host)
+        .addButton((b) => {
+          cancel = b;
+          b.setButtonText("Cancel").onClick(() => {
+            this.confirmMerge = false;
+            this.render();
+          });
+        })
+        .addButton((b) =>
+          b
+            .setButtonText("Continue")
+            .setCta()
+            .onClick(async () => {
+              b.setDisabled(true);
+              cancel.setDisabled(true);
+              try {
+                await this.pairFromPanel(draft.key, draft.device, this.joinSkip, true);
+              } finally {
+                b.setDisabled(false);
+                cancel.setDisabled(false);
+              }
+            }),
+        );
+      return;
+    }
+
+    new Setting(host).setName("Set up sync").setHeading();
+    const contentEl = settingGroup(host);
+
+    let pairingField: TextComponent | undefined;
+    row(
+      contentEl,
+      "Invite or setup line",
+      "Paste an invite from a paired device, or your saved recovery key. If this is the " +
+        "first device on this vault, paste the setup line from your server instead.",
+    ).addText((t) => {
+      t.setPlaceholder("basalt3i_...");
+      t.inputEl.setAttribute("aria-label", "Invite or setup line");
+      literalInput(t, true);
+      const key = this.joinDraft?.key ?? this.incomingInvite;
+      if (key !== undefined) t.setValue(key);
+      t.onChange(() => showDestination());
+      pairingField = t;
+    });
+
+    // Where this string goes, before it goes there (R083-05).
+    //
+    // An invite carries the server address and the vault name, and neither was
+    // on screen: a person pressed Pair on a base64 blob, and an invite arriving
+    // through `obsidian://telimus?invite=...` filled the field in for them.
+    // An unpaired vault pointed at a stranger's server uploads itself to it on
+    // the first sync, so the address has to be readable first and the button
+    // stays disabled until it is. A setup line claims a server for a vault that
+    // does not exist yet, so getting that address wrong is a vault started
+    // somewhere nobody meant; the same line answers both.
+    const destination = contentEl.createEl("p", { cls: "telimus-advice" });
+    destination.setAttribute("role", "status");
+    let goButton: ButtonComponent | undefined;
+
+    /** Which of the three this is, from the string alone. */
+    const kindOf = (value: string): "join" | "first" =>
+      value.startsWith(INVITE_PREFIX) || value.startsWith(PAIRING_PREFIX) ? "join" : "first";
+
+    const showDestination = () => {
+      const value = pairingField?.getValue().trim() ?? "";
+      let readable = false;
+      let starting = false;
+      if (value === "") {
+        destination.setText(
+          "Paste an invite from another device, or your server's setup line, to see where it goes.",
+        );
+      } else {
+        const kind = kindOf(value);
+        starting = kind === "first";
+        try {
+          const to = joinDestination(value, kind);
+          readable = true;
+          if (kind === "first") {
+            destination.setText(`Starts a new vault at ${to.url}. Check that this is your server.`);
+          } else {
+            // The vault is named only when somebody named it. Almost every
+            // invite carries "default", which is the value assumed when a
+            // string carries none, so naming it back reads as a placeholder
+            // that leaked rather than as the confirmation this line is for.
+            const named = to.vaultId !== undefined && to.vaultId !== DEFAULT_VAULT;
+            destination.setText(
+              named
+                ? `Joins vault "${to.vaultId}" at ${to.url}. Check that this is your server.`
+                : `Joins ${to.url}. Check that this is your server.`,
+            );
+          }
+        } catch (err) {
+          // Named shapes, not the parser's complaint.
+          //
+          // With one field a string that is none of the three reaches whichever
+          // parser its shape guessed, and that parser answers as though the
+          // guess were established: paste a typo and `parseSetup` explains what
+          // is wrong with a setup line, which is not what you were holding. So
+          // an unrecognised string is answered by the field, and only a string
+          // that named its own kind and then failed gets the parser's reason.
+          destination.setText(
+            starting && !value.includes("#")
+              ? "Cannot read that. An invite starts basalt3i_, a recovery key starts " +
+                  `${PAIRING_PREFIX}, and a setup line looks like homelab:3003#TOKEN.`
+              : `Cannot read that: ${(err as Error).message}`,
+          );
+        }
+      }
+      // The label follows the string, so the button says what it will do
+      // rather than what this screen is for. Before anything readable is
+      // there it reads Pair, because every device after the first joins and
+      // only one ever starts.
+      goButton?.setButtonText(readable && starting ? "Start a new vault" : "Pair");
+      goButton?.setDisabled(!readable);
+    };
+
+    // More options, collapsed, because both have answers that work.
+    //
+    // A device name is suggested from the platform and is only ever a label in
+    // the device list. A skip list is empty for almost everybody. Neither is a
+    // decision most people have to make, and a screen that asks anyway is a
+    // screen that says all four of these matter equally.
+    const more = contentEl.createEl("details", { cls: "telimus-more-options" });
+    more.createEl("summary", { text: "More options" });
+    const moreEl = settingGroup(more);
+
+    let deviceField: TextComponent | undefined;
+    const device = () => deviceField?.getValue() ?? "";
+
+    // A suggestion in the field, not a placeholder behind it. A placeholder is
+    // not a value, so the honest thing to do with the field was leave it
+    // alone, and every device ended up named after the app rather than after
+    // itself. What is offered is what will be used, and it can be typed over.
+    row(moreEl, "Device name", "Shown in the device list and future sync activity.").addText(
+      (t) => {
+        t.setPlaceholder("laptop");
+        t.inputEl.setAttribute("aria-label", "Device name");
+        t.setValue(this.joinDraft?.device ?? suggestedDeviceName());
+        deviceField = t;
+      },
+    );
+
+    this.renderJoinSkip(moreEl);
+    const skipping = () => this.joinSkip;
+
+    new Setting(contentEl).addButton((b) => {
+      goButton = b;
+      b.setButtonText("Pair")
+        .setCta()
+        .onClick(async () => {
+          const value = pairingField?.getValue() ?? "";
+          if (kindOf(value.trim()) === "join") {
+            b.setDisabled(true);
+            try {
+              await this.pairFromPanel(value, device(), skipping());
+            } finally {
+              showDestination();
+            }
+            return;
+          }
+          try {
+            // Rendered the moment the key exists, which is before the vault is
+            // claimed and long before the registration replaces the root on
+            // disk (F02), and the pairing *waits here* until somebody says they
+            // have it (R02).
+            //
+            // Showing it and carrying on was not a handoff. Registration
+            // replaces the root with this device's own credential, so a reload
+            // or a closed panel in between took the only copy of a key nothing
+            // can reissue, and returning from a callback is not evidence that
+            // anybody read the screen. Nothing has been claimed while this
+            // waits, so abandoning it costs nothing: the config still holds the
+            // root, and the panel offers the key again on the next load.
+            await this.plugin.pairFirst(
+              value,
+              device(),
+              async (key) => {
+                this.freshRecoveryKey = key;
+                this.render();
+                await this.writtenDown;
+              },
+              skipping(),
+            );
+            new Notice(
+              "Vault started. Telimus is connecting. Write down the recovery key shown in this panel.",
+            );
+            this.render();
+          } catch (err) {
+            new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+          }
+        });
+    });
+    showDestination();
+
+    docsLink(host.createEl("p", { cls: "telimus-advice" }), "How pairing works");
+  }
+
+  /**
+   * Names chosen on the pairing screen, before anything is downloaded.
+   *
+   * Held on the panel rather than in the config, because there is no config
+   * yet: this is the answer to "what should this device sync" asked at the one
+   * moment it can still prevent a download rather than undo one.
+   */
+  private joinSkip: string[] = [];
+
+  /**
+   * The skip list, on the pairing screen.
+   *
+   * A field and a row per chosen name, the same shape `renderIgnored` has for
+   * a paired vault, so the control somebody meets at setup is the control they
+   * meet again in the settings.
+   */
+  private renderJoinSkip(contentEl: HTMLElement): void {
+    const setting = row(
+      contentEl,
+      "Skip on this device",
+      this.joinSkip.length === 0
+        ? "Optional. A folder or file name this device should never sync, such as a large attachments folder."
+        : `Not synced here: ${this.joinSkip.join(", ")}. Other devices keep syncing them.`,
+    );
+    let field: TextComponent | undefined;
+    setting.addText((t) => {
+      t.setPlaceholder("Attachments");
+      t.inputEl.setAttribute("aria-label", "A folder or file name to skip on this device");
+      field = t;
+    });
+    setting.addButton((b) =>
+      b.setButtonText("Skip").onClick(() => {
+        const wanted = (field?.getValue() ?? "").trim();
+        if (!isIgnorableName(wanted)) {
+          new Notice("Telimus: give one folder or file name, with no slashes in it.");
+          return;
+        }
+        if (!this.joinSkip.includes(wanted)) this.joinSkip.push(wanted);
+        this.render();
+      }),
+    );
+    for (const name of this.joinSkip) {
+      row(contentEl, name, "Will not be synced to this device.").addButton((b) =>
+        b.setButtonText("Sync it").onClick(() => {
+          this.joinSkip = this.joinSkip.filter((other) => other !== name);
+          this.render();
+        }),
+      );
+    }
+  }
+
+  private joinDraft: { key: string; device: string } | undefined;
+  private confirmMerge = false;
+
+  /** Confirmation is a panel step; it never leaves a pairing request waiting. */
+  private async pairFromPanel(
+    key: string,
+    device: string,
+    ignore: readonly string[] = this.joinSkip,
+    mergeConfirmed = false,
+  ): Promise<void> {
+    if (this.closed) return;
+    this.joinDraft = { key, device };
+    try {
+      await this.plugin.pair(key, device, mergeConfirmed, ignore);
+      this.joinDraft = undefined;
+      this.confirmMerge = false;
+      new Notice("Paired. Telimus is connecting.");
+      this.render();
+    } catch (err) {
+      if (this.closed) return;
+      if (err instanceof MergeConfirmationRequired) {
+        this.confirmMerge = true;
+        this.render();
+      } else {
+        new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+      }
+    }
+  }
+
+  /** The recovery key of a vault this panel just started, shown once. */
+  private freshRecoveryKey: string | undefined;
+
+  /**
+   * Resolves when somebody presses "I have written it down" (R02).
+   *
+   * What makes the handoff a stage rather than a notification: the pairing
+   * awaits this before it claims the vault, so a key on screen that nobody has
+   * read cannot be retired by the next step.
+   */
+  private writtenDown: Promise<void> = Promise.resolve();
+  private confirmWrittenDown: (() => void) | undefined;
+  private giveUpWrittenDown: ((why: Error) => void) | undefined;
+
+  /**
+   * Ends the wait without an acknowledgement, if one is outstanding.
+   *
+   * Rejecting rather than resolving, because resolving would tell the pairing
+   * that somebody has the key when nobody said so, and the next thing it does
+   * is replace the root that key came from.
+   */
+  private abandonRecoveryKey(why: string): void {
+    const give = this.giveUpWrittenDown;
+    this.confirmWrittenDown = undefined;
+    this.giveUpWrittenDown = undefined;
+    this.writtenDown = Promise.resolve();
+    give?.(new Error(why));
+  }
+
+  private renderRecoveryKey(contentEl: HTMLElement, key: string): void {
+    if (this.confirmWrittenDown === undefined) {
+      this.writtenDown = new Promise<void>((go, stop) => {
+        this.confirmWrittenDown = go;
+        this.giveUpWrittenDown = stop;
+      });
+      // Nobody is necessarily awaiting this: the key is drawn again on a later
+      // load from `pendingFirstPairing`, with no pairing behind it. Marking it
+      // handled here keeps an abandoned one from surfacing as an unhandled
+      // rejection, and does not stop a real awaiter seeing it.
+      void this.writtenDown.catch(() => undefined);
+    }
+    new Setting(contentEl).setName("Write this down").setHeading();
+    contentEl.createEl("p", {
+      cls: "telimus-advice",
+      text:
+        "Save this key somewhere safe and separate. It is the only way back if every device " +
+        "is lost. Anyone with it can access your vault.",
+    });
+    // The key and its Copy on one row, so the button is beside the thing it
+    // copies rather than under the next paragraph.
+    //
+    // "Write it down" is the advice and a phone is where it is hardest to
+    // follow: there is no second screen to read from and no keyboard worth
+    // transcribing sixty characters on. Without a button the only ways off the
+    // device were a photograph of a secret or retyping it, and the clipboard is
+    // the least bad of the three for getting it into a password manager. The
+    // key is selectable for the same reason, which it was not: Obsidian's own
+    // UI turns selection off broadly, so a long press on a phone did nothing at
+    // all, and `copyToClipboard`'s fallback advice ("shown in the panel, to
+    // copy by hand") described something that could not be done. styles.css
+    // turns it back on for this one class.
+    // The key is a block in the panel, not a column in a row.
+    //
+    // Two wrong homes before this, both found by looking at it rather than by a
+    // test. In the row's `nameEl` it was clipped through the middle, because a
+    // name is laid out as one short line and this is sixty characters. In the
+    // row's description column it wrapped correctly and sat indented from the
+    // paragraph above, because a row's columns carry the row's padding: the one
+    // thing on screen that has to be read character by character was the one
+    // thing aligned with nothing.
+    contentEl.createEl("code", { cls: "telimus-pairing", text: key });
+
+    // Copy and the acknowledgement on one row, in reading order.
+    //
+    // They were two rows, which put a mostly empty row and a lone
+    // right-aligned button between the key and the bottom of the panel. What
+    // makes them safe together is R02 itself: a pairing abandoned here leaves
+    // the root in the config and the panel offers the key again on the next
+    // load, so a mis-tap costs a reload rather than a vault.
+    new Setting(contentEl)
+      .addButton((b) =>
+        b.setButtonText("Copy").onClick(async () => {
+          await copyToClipboard(
+            key,
+            "Recovery key copied. Put it somewhere offline, then clear the clipboard.",
+          );
+        }),
+      )
+      .addButton((b) =>
+        b.setButtonText("I have written it down").onClick(() => {
+          this.freshRecoveryKey = undefined;
+          // Releases the pairing, which has been holding the vault's claim
+          // until now. Cleared so a later key gets a wait of its own.
+          const go = this.confirmWrittenDown;
+          this.confirmWrittenDown = undefined;
+          this.giveUpWrittenDown = undefined;
+          this.writtenDown = Promise.resolve();
+          go?.();
+          this.render();
+        }),
+      );
+  }
+}
+
+/**
+ * The panel as a modal, which is what the ribbon, the status bar and the
+ * command palette open.
+ */
+class TelimusModal extends Modal {
+  private panel: TelimusPanel | undefined;
+
+  constructor(
+    private readonly plugin: TelimusPlugin,
+    private readonly incomingInvite?: string,
+  ) {
+    super(plugin.app);
+  }
+
+  override onOpen(): void {
+    this.setTitle("Telimus Sync");
+    this.modalEl.addClass("mod-telimus-panel");
+    this.panel = new TelimusPanel(
+      this.plugin,
+      this.contentEl,
+      () => this.close(),
+      this.incomingInvite,
+    );
+    this.panel.render();
+  }
+
+  override onClose(): void {
+    this.panel?.teardown();
+    this.panel = undefined;
+  }
+}
+
+/**
+ * The same panel, under Settings.
+ *
+ * This file used to say a settings tab was refused because there are no
+ * options to put in one, and that is still true: nothing below is a
+ * preference. What it got wrong is what the tab is for. Obsidian shows a
+ * plugin's gear in Settings only if it registers one, so refusing the tab
+ * meant Settings had no Telimus entry at all, and somebody looking for the
+ * plugin's interface in the one place every other plugin keeps it found
+ * nothing and concluded there was none. That is a discoverability bug
+ * wearing a principle's clothes.
+ *
+ * So: the same panel, drawn into the tab, with no options added to earn the
+ * place. `display` and `hide` are called every time the tab is opened and
+ * left, which is exactly the render and teardown the modal already does.
+ */
+class TelimusSettingTab extends PluginSettingTab {
+  private panel: TelimusPanel | undefined;
+
+  constructor(private readonly plugin: TelimusPlugin) {
+    super(plugin.app, plugin);
+  }
+
+  override display(): void {
+    // Nothing to close: leaving the tab is the person's own business, and a
+    // panel that closed Settings out from under them would be a surprise.
+    this.panel?.teardown();
+    this.panel = new TelimusPanel(this.plugin, this.containerEl, () => {});
+    this.panel.render();
+  }
+
+  override hide(): void {
+    this.panel?.teardown();
+    this.panel = undefined;
+  }
+}
+
+/**
+ * What the server still has and this vault does not.
+ *
+ * The only interface to the safety net. Deliberately a list of notes and a
+ * button each, with no options: recovery is something somebody reaches for once
+ * in a bad afternoon, and it should not be a thing to learn.
+ */
+class RecoverModal extends Modal {
+  private closed = false;
+  private rendering: Promise<void> | undefined;
+  private readonly restoring = new Set<number>();
+  /**
+   * Which deletions are picked out for a bulk restore, by uid.
+   *
+   * A button per row rather than a checkbox, because the stub and Obsidian
+   * both give a button a phone-sized tap target and neither gives a checkbox
+   * one. Recovering a deleted folder was one press and one whole-vault sync
+   * per note (Codex-11).
+   */
+  private readonly picked = new Set<number>();
+  /**
+   * Every deletion fetched so far, newest first.
+   *
+   * Kept rather than replaced, because the filter below has to have something
+   * to filter. "Show older" used to swap one page of fifty for the next, so a
+   * person looking for one name among three hundred deletions read fifty
+   * names, pressed a button, and lost the fifty they had just read (R083-17).
+   */
+  private readonly loaded: Deletion[] = [];
+  /** Whether the server said there are older deletions than the ones held. */
+  private more = false;
+  /** The oldest uid held, which is what asks for the page before it. */
+  private oldest: number | undefined;
+  private query = "";
+  private failure: string | undefined;
+
+  constructor(private readonly plugin: TelimusPlugin) {
+    super(plugin.app);
+  }
+
+  override onOpen(): void {
+    this.setTitle("Deleted notes");
+    this.modalEl.addClass("mod-telimus-panel");
+    this.contentEl.addClass("telimus-panel");
+    void this.render();
+  }
+
+  override onClose(): void {
+    this.closed = true;
+    this.listEl = undefined;
+    this.contentEl.empty();
+  }
+
+  /** Fetches the next page, then redraws. Never two fetches at once. */
+  private render(before?: number): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    if (this.rendering) return this.rendering;
+    this.rendering = this.fetchPage(before).finally(() => {
+      this.rendering = undefined;
+    });
+    return this.rendering;
+  }
+
+  private async fetchPage(before: number | undefined): Promise<void> {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("p", { cls: "telimus-advice", text: "Loading deleted notes…" });
+
+    let deleted: DeletedList;
+    try {
+      deleted = await this.plugin.deletedNotes(PAGE_SIZE, before);
+    } catch (err) {
+      if (this.closed) return;
+      // Not an empty list. "There is nothing to recover" and "I could not
+      // ask" are different answers and this is the worst place to confuse
+      // them.
+      this.failure = `Cannot ask the server: ${(err as Error).message}`;
+      this.draw();
+      return;
+    }
+    if (this.closed) return;
+
+    this.failure = undefined;
+    const held = new Set(this.loaded.map((note) => note.uid));
+    for (const note of deleted.notes) if (!held.has(note.uid)) this.loaded.push(note);
+    this.loaded.sort((a, b) => b.uid - a.uid);
+    this.more = deleted.more;
+    // Only from a page that had something in it: an empty answer names no uid
+    // to page from, and taking `undefined` here would ask for the newest page
+    // again on the next press.
+    if (deleted.oldest !== undefined) {
+      this.oldest =
+        this.oldest === undefined ? deleted.oldest : Math.min(this.oldest, deleted.oldest);
+    }
+    this.draw();
+  }
+
+  private draw(): void {
+    if (this.closed) return;
+    const { contentEl } = this;
+    contentEl.empty();
+    this.listEl = undefined;
+
+    if (this.failure !== undefined) {
+      contentEl.createEl("p", { cls: "telimus-advice", text: this.failure });
+      new Setting(contentEl).addButton((button) =>
+        button.setButtonText("Try again").onClick(() => this.render(this.oldest)),
+      );
+      if (this.loaded.length === 0) return;
+    }
+
+    if (this.loaded.length === 0) {
+      contentEl.createEl("p", { cls: "telimus-advice", text: "No deleted notes to restore." });
+      return;
+    }
+
+    // The same control the activity log has, for the same reason: the useful
+    // question is "which one was called something like this", and the answer
+    // was a page at a time of unfiltered names.
+    new Setting(contentEl).setName("Deleted notes").addSearch((input) => {
+      input.inputEl.setAttribute("aria-label", "Find a deleted note by filename");
+      input
+        .setPlaceholder("Find a file…")
+        .setValue(this.query)
+        .onChange((value) => {
+          this.query = value;
+          this.list();
+        });
+    });
+
+    // The filter redraws this and only this, so the field it is typed into
+    // survives the keystroke and keeps the caret.
+    this.listEl = contentEl.createDiv("telimus-deleted-list");
+    this.list();
+  }
+
+  private listEl: HTMLElement | undefined;
+  /** Whether a bulk restore is running, so a second press cannot start one. */
+  private bulk = false;
+
+  private list(): void {
+    const listEl = this.listEl;
+    if (this.closed || listEl === undefined) return;
+    listEl.empty();
+
+    const needle = this.query.trim().toLocaleLowerCase();
+    const shown = needle
+      ? this.loaded.filter((note) => note.path.toLocaleLowerCase().includes(needle))
+      : this.loaded;
+
+    listEl.createEl("p", {
+      cls: "telimus-advice",
+      text: describeDeleted({ notes: shown, more: this.more && !needle }),
+    });
+
+    if (this.more && this.oldest !== undefined) {
+      // A page, not a bigger ask (F21). This doubled the limit it requested,
+      // which stops working at the server's cap: at a thousand deletions the
+      // button fetched the same capped page for ever and said nothing. The
+      // cursor is the oldest uid held, so the next one starts below it however
+      // many there are.
+      const next = this.oldest;
+      row(
+        listEl,
+        "Show older",
+        needle
+          ? "Only the deletions already loaded are searched. Show older loads more of them."
+          : "The server has more deletions than are listed here.",
+      ).addButton((b) => b.setButtonText("Show older").onClick(() => this.render(next)));
+    }
+
+    if (shown.length === 0) {
+      listEl.createEl("p", {
+        cls: "telimus-advice",
+        text: needle ? "No deleted note matches that." : "No deleted notes to restore.",
+      });
+      return;
+    }
+
+    const restorable = shown.filter((note) => note.restorable > 0);
+    const chosen = restorable.filter((note) => this.picked.has(note.uid));
+    if (restorable.length > 1) {
+      const pick = row(
+        listEl,
+        chosen.length === 0
+          ? "Restore several at once"
+          : `${chosen.length} chosen of ${restorable.length}`,
+        chosen.length === 0
+          ? "Choose notes below, then restore them together in one sync."
+          : "Restored together, into names nothing already occupies.",
+      );
+      pick.addButton((b) =>
+        b
+          .setButtonText(chosen.length === restorable.length ? "Choose none" : "Choose all shown")
+          .onClick(() => {
+            if (chosen.length === restorable.length) {
+              for (const note of restorable) this.picked.delete(note.uid);
+            } else {
+              for (const note of restorable) this.picked.add(note.uid);
+            }
+            this.list();
+          }),
+      );
+      if (chosen.length > 0) {
+        pick.addButton((b) =>
+          b
+            .setButtonText(`Restore ${chosen.length}`)
+            .setCta()
+            .onClick(async () => {
+              if (this.closed || this.bulk) return;
+              this.bulk = true;
+              b.setDisabled(true).setButtonText("Restoring…");
+              try {
+                const done = await this.plugin.recoverMany(chosen);
+                const sent = done.filter((r) => r.sent).length;
+                const kept = done.filter((r) => !r.sent && r.willRetry !== false).length;
+                const lost = done.filter((r) => r.willRetry === false);
+                // All three counts, always. "Restored 40" without "and 2
+                // could not be" is the comfortable half of the story.
+                const parts = [`Restored ${sent + kept} of ${chosen.length}.`];
+                if (kept > 0) parts.push(`${kept} not yet sent to your other devices.`);
+                if (lost.length > 0) {
+                  parts.push(`${lost.length} could not be restored: ${lost[0]!.why}`);
+                }
+                new Notice(`Telimus: ${parts.join(" ")}`, 15_000);
+                for (const note of chosen) {
+                  if (lost.some((r) => r.path === note.path)) continue;
+                  this.picked.delete(note.uid);
+                  const at = this.loaded.findIndex((held) => held.uid === note.uid);
+                  if (at >= 0) this.loaded.splice(at, 1);
+                }
+                this.list();
+              } catch (err) {
+                new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+              } finally {
+                this.bulk = false;
+              }
+            }),
+        );
+      }
+    }
+
+    for (const version of shown) {
+      const deletedAt = when(version.mtime);
+      if (version.restorable === 0) {
+        // Purge can retain a deletion after its recoverable content is gone.
+        // Follow the server's restorable count, since some history survives
+        // purge as evidence of moves or deletions.
+        new Setting(listEl)
+          .setName(version.path)
+          .setDesc(
+            `Deleted ${deletedAt}. Its history has been purged, so there is nothing to restore.`,
+          );
+        continue;
+      }
+      const setting = new Setting(listEl)
+        .setName(version.path)
+        .setDesc(`Deleted ${deletedAt} on ${version.device}`);
+      if (restorable.length > 1) {
+        setting.addButton((b) =>
+          b.setButtonText(this.picked.has(version.uid) ? "Chosen" : "Choose").onClick(() => {
+            if (!this.picked.delete(version.uid)) this.picked.add(version.uid);
+            this.list();
+          }),
+        );
+      }
+      setting.addButton((b) =>
+        b
+          .setButtonText("Restore")
+          .setCta()
+          .onClick(async () => {
+            if (this.closed || this.restoring.has(version.uid)) return;
+            this.restoring.add(version.uid);
+            b.setDisabled(true).setButtonText("Restoring…");
+            try {
+              const done = await this.plugin.recover(version);
+              new Notice(describeRestore(version, done), done.sent ? undefined : 10_000);
+              // Restored, so it is no longer a deletion to offer. Dropped
+              // here rather than by refetching, which would throw away every
+              // older page that had been loaded.
+              const at = this.loaded.findIndex((note) => note.uid === version.uid);
+              if (at >= 0) this.loaded.splice(at, 1);
+              this.list();
+            } catch (err) {
+              new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+            } finally {
+              this.restoring.delete(version.uid);
+              b.setDisabled(false).setButtonText("Restore");
+            }
+          }),
+      );
+    }
+  }
+}
+
+/**
+ * The versions this device parked where Obsidian cannot see them.
+ *
+ * A preserving write moves whatever is at a name aside before writing over it,
+ * and where it cannot place the displaced bytes beside the note it parks them
+ * under a hidden name and writes a record. That record was the end of the
+ * story: the panel could say it had happened and nothing could act on it.
+ *
+ * Deliberately one button per row and nothing else. Somebody opening this has
+ * already lost something once.
+ */
+class StrandedModal extends Modal {
+  private closed = false;
+  private readonly working = new Set<string>();
+
+  constructor(private readonly plugin: TelimusPlugin) {
+    super(plugin.app);
+  }
+
+  private inventory: Inventory | undefined;
+
+  override onOpen(): void {
+    this.setTitle("Versions kept out of sight");
+    this.modalEl.addClass("mod-telimus-panel");
+    this.contentEl.addClass("telimus-panel");
+    this.contentEl.createEl("p", { cls: "telimus-advice", text: "Looking…" });
+    void this.load();
+  }
+
+  private async load(): Promise<void> {
+    try {
+      this.inventory = await this.plugin.displacedVersions();
+    } catch (err) {
+      // Rule 2 again, one level up: "I could not look" is not "there is
+      // nothing there", and this is the worst screen to confuse them on.
+      this.inventory = { waiting: [], complete: false, why: (err as Error).message };
+    }
+    this.draw();
+  }
+
+  override onClose(): void {
+    this.closed = true;
+    this.contentEl.empty();
+  }
+
+  private draw(): void {
+    if (this.closed) return;
+    const { contentEl } = this;
+    contentEl.empty();
+    const inventory = this.inventory;
+    if (inventory === undefined) return;
+
+    if (!inventory.complete) {
+      // Never folded into the list. An incomplete inventory reads exactly like
+      // an empty one, and the difference is whether anything is missing.
+      contentEl.createEl("p", {
+        cls: "telimus-advice",
+        text: `This list may be incomplete: ${inventory.why}`,
+      });
+    }
+    if (inventory.waiting.length === 0) {
+      contentEl.createEl("p", {
+        cls: "telimus-advice",
+        text: inventory.complete
+          ? "Nothing is waiting. Every version this device took off a name was put back."
+          : "Nothing is listed, and the record above says why that may not mean nothing is there.",
+      });
+      return;
+    }
+
+    contentEl.createEl("p", {
+      cls: "telimus-advice",
+      text:
+        "These are versions Telimus took off a name and could not put back beside it. " +
+        "Recovering one writes a visible copy next to the note it came from. The hidden " +
+        "copy is left where it is.",
+    });
+
+    for (const version of inventory.waiting) {
+      new Setting(contentEl)
+        .setName(version.from)
+        .setDesc(`Kept ${when(version.when)} at ${version.at}. ${version.why}`)
+        .addButton((b) =>
+          b
+            .setButtonText("Recover a visible copy")
+            .setCta()
+            .onClick(async () => {
+              if (this.closed || this.working.has(version.at)) return;
+              this.working.add(version.at);
+              b.setDisabled(true).setButtonText("Recovering…");
+              try {
+                const at = await this.plugin.recoverDisplaced(version);
+                new Notice(
+                  `Telimus: recovered to ${at}. The hidden copy is still at ${version.at}.`,
+                  15_000,
+                );
+                await this.load();
+              } catch (err) {
+                new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+                b.setDisabled(false).setButtonText("Recover a visible copy");
+              } finally {
+                this.working.delete(version.at);
+              }
+            }),
+        );
+    }
+  }
+}
+
+/**
+ * What to tell somebody whose handshake never completes, and nothing otherwise.
+ *
+ * The server refuses a browser origin it does not know, and the only thing
+ * that knows this device's origin is this device. The desktop one is in the
+ * built-in list; the mobile ones are Capacitor's documented defaults and have
+ * never been checked against a device, so a phone that has never got through
+ * should be able to say what to add rather than leaving somebody to guess. A
+ * connection that was up and went is not that: the origin was fine, the
+ * network is not.
+ */
+function originAdvice(state: State): string {
+  if (state.kind !== "offline" || !state.refused) return "";
+  const from = origin();
+  return (
+    `If it never connects, this device's origin is ${from}. ` +
+    `A server that does not know it refuses the connection, and logs the same thing. ` +
+    `Restart it with -allow-origin ${from}`
+  );
+}
+
+/**
+ * This device's browser origin, which is what a server checks a plugin against.
+ *
+ * `app://obsidian.md` on desktop, and something Capacitor chooses on a phone.
+ * Read rather than assumed, because the assumption is the thing that might be
+ * wrong.
+ */
+function origin(): string {
+  const l = (globalThis as { location?: { origin?: string } }).location;
+  return l?.origin ?? "unknown";
+}
+
+/**
+ * The time of day, without seconds. A status line is read at a glance and
+ * "1:00:37 PM" is not read any differently from "1:00 PM"; the history modal
+ * has always printed it this way.
+ */
+function clock(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+/**
+ * What this device syncs with: the address, the protocol and the build.
+ *
+ * @see TelimusPlugin.connection
+ */
+export interface Connection {
+  /** Where this device pairs to, from the saved config. */
+  readonly url: string;
+  /** What the server said at hello. Absent until there has been one. */
+  readonly server?: { readonly proto: number; readonly version: string } | undefined;
+}
+
+/**
+ * One line for what the panel is talking to.
+ *
+ * Four facts and no more, because each is one somebody is missing when sync is
+ * not working and none of them costs a request: the address this device
+ * actually holds, whether that hop has TLS in front of it, the protocol the
+ * two ends settled on, and the build on the other end. The last two come from
+ * `ready` and are absent until there has been one, and the line says so rather
+ * than leaving a gap: a build that is missing because nothing is connected
+ * reads exactly like a server that did not say, and they are different states
+ * (rule 2, at the width of a sentence).
+ *
+ * The scheme is the whole of what is known about the hop, and it is a complete
+ * test because `normaliseUrl` stores one of exactly two. `wss://` means
+ * something in front of the server terminated TLS, which is the arrangement
+ * server.md describes, and `ws://` means nothing did. The second is not a
+ * warning that the vault is exposed, because it is not: the notes are sealed
+ * on this device either way. What it does cost is named exactly, because the
+ * only wrong thing to say here is the vague thing. Which of the two is exposed
+ * is what fits on the line; which network can see it is in docs/plugin.md.
+ */
+export function describeConnection(at: Connection): string {
+  return at.server === undefined
+    ? `Not connected to ${at.url}.`
+    : `Connected to ${at.url}. Protocol ${at.server.proto}, telimus ${at.server.version}.`;
+}
+
+/**
+ * Whether the connection is protected, in one line.
+ *
+ * Shown in the connection details, which is somewhere somebody has gone
+ * looking for a fact rather than for an explanation. It used to spend three
+ * sentences here on what encryption covers and where to read more, in a panel
+ * whose last row is a link to that guide.
+ *
+ * Shorter, not smaller. `panel-shots.test.ts` guards this line as one of four
+ * things "paid for in incidents", and it is right to: the fact worth having is
+ * not that TLS is missing, it is that the notes are sealed anyway and the
+ * credential is not. Cutting to "this connection is not encrypted" reads as
+ * though the notes were exposed, which is both wrong and more alarming than
+ * the truth. So the clause stays and the lecture goes.
+ *
+ * Nothing at all when the hop is protected: explaining TLS to somebody who
+ * already has it is the same lecture with a happier ending.
+ */
+export function connectionDetail(at: Connection): string {
+  return at.url.startsWith("wss://")
+    ? ""
+    : "No TLS on this hop: your notes are still sealed, the device credential is not.";
+}
+
+/** A fragment placed where a sentence starts. A leading digit is left alone. */
+function opens(fragment: string): string {
+  return fragment.charAt(0).toUpperCase() + fragment.slice(1);
+}
+
+function longStatus(state: State): string {
+  switch (state.kind) {
+    case "paused":
+      return "Sync is paused on this device until you resume it or restart Obsidian.";
+    case "unpaired":
+      return "Not paired.";
+    case "connecting":
+      return "Connecting.";
+    case "loading": {
+      const percent =
+        state.server > 0 ? Math.min(100, Math.floor((100 * state.local) / state.server)) : 100;
+      return `Loading sync history… ${percent}%. Keep Obsidian open.`;
+    }
+    case "syncing":
+      if (state.transfer) return describeTransfer(state.transfer);
+      return state.path === undefined ? "Syncing notes." : `Working on ${state.path}.`;
+    case "synced": {
+      // `summarise` returns a fragment because three of its four callers put
+      // it after a colon. This is the fourth, and it opens a sentence: the
+      // tooltip, and the panel's first line above two proper ones.
+      const done = opens(state.summary);
+      const parts = [`${done}, as of ${clock(state.at)}.`];
+      if (state.refused > 0) {
+        parts.push(
+          `${state.refused} ${state.refused === 1 ? "file needs" : "files need"} attention.`,
+        );
+      }
+      // Its own sentence, because it is its own problem: these are notes that
+      // exist only under a name Obsidian does not show, and folding them into
+      // the attention count would hide the one thing a person has to go and
+      // rescue by hand.
+      if (state.waiting > 0) {
+        parts.push(
+          `${state.waiting} ${state.waiting === 1 ? "version was" : "versions were"} kept ` +
+            `somewhere Obsidian does not show.`,
+        );
+      }
+      // Last, and unconditional on the count, because it is the sentence that
+      // says the count may be wrong.
+      if (state.recoveryUnknown !== undefined) {
+        parts.push(`Telimus cannot tell what is waiting: ${state.recoveryUnknown}.`);
+      }
+      return parts.join(" ");
+    }
+    case "failed":
+      return `Last sync failed at ${clock(state.at)}: ${state.why}. It will try again.`;
+    case "offline":
+      return `Offline: ${state.why}. Trying again shortly.`;
+    case "stopped":
+      return state.recovery === "rejoin"
+        ? `Stopped: ${state.why} ${REJOIN_ADVICE}`
+        : `Stopped: ${state.why}. This will not fix itself by waiting.`;
+  }
+}

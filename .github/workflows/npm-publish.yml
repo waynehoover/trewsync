@@ -1,0 +1,118 @@
+# Publishes the headless client to npm.
+#
+# Its own file rather than a job in release.yml, because npm's trusted publishing
+# names one workflow and grants that file the right to publish this package. The
+# fewer other things the file does, the smaller the grant.
+#
+# No token lives here and none is stored in the repository. GitHub mints a
+# short-lived OIDC credential, npm checks it against the trusted publisher
+# configured on the package, and that is also why publishing from here needs no
+# 2FA code: publishing by hand does, which is what this replaces.
+name: npm
+
+on:
+  push:
+    # The headless client's own tags, because it is its own thing on its own
+    # clock. It used to publish on the plugin's tag, which meant a fix to the
+    # client could only reach npm by cutting a plugin release carrying an
+    # identical main.js, and a plugin release published a client nobody had
+    # changed. The `v` is not required by npm the way Go requires it of the
+    # server; it is here so the two prefixed tag lines look the same.
+    tags: ["cli/v*"]
+  # So a version can be published without cutting a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # What npm verifies. Publishing fails without it, and the failure reads like a
+  # missing token rather than a missing permission.
+  id-token: write
+
+jobs:
+  # Nothing is published from a commit CI has not passed on (I21). The reasons
+  # and the waiting are in scripts/ci-passed.sh, which all three publishing
+  # workflows call so there is one answer to "was this checked" rather than
+  # three that can drift.
+  checked:
+    name: CI passed on this commit
+    # `github.token` gets only what the workflow declares, and reading another
+    # workflow's runs is not in the default set.
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: refuse to publish from an unchecked commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/ci-passed.sh "${{ github.repository }}" "${{ github.sha }}"
+
+  publish:
+    name: publish
+    needs: checked
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Built with bun, like CI, so what is published is what the tests ran
+      # against. npm is here only to do the publishing.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or newer, and the npm bundled with a
+      # Node release is whatever shipped with it. When it is too old it refuses
+      # with a message about authentication, which sends you looking for a token
+      # that is deliberately not there, so this does not depend on which npm
+      # came with the Node above.
+      #
+      # Pinned rather than `@latest` (I22). This step decides how the package
+      # is published, and a moving version means the thing that publishes a
+      # release is not the thing that published the last one. Raise it
+      # deliberately, in a commit, where it can be reverted.
+      - name: npm new enough to publish this way
+        run: |
+          npm install -g npm@11.6.2
+          npm --version
+
+      - name: install
+        working-directory: client
+        run: bun install --frozen-lockfile
+
+      # A tag that disagrees with the manifest publishes the wrong version under
+      # the right name, and npm versions cannot be replaced once published.
+      - name: the tag and the package agree
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#cli/v}"
+          pkg=$(node -p "require('./client/package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag $GITHUB_REF_NAME is version $tag, but client/package.json says $pkg" >&2
+            exit 1
+          fi
+          echo "publishing $pkg"
+
+      # `files` in package.json ships dist/telimus.mjs, which exists only after a
+      # build. Publishing without this puts an empty package on the registry.
+      - name: build
+        working-directory: client
+        run: bun run build
+
+      # `test -s dist/telimus.mjs` used to be the whole of this: that a build
+      # had produced a file. This packs the tarball, installs it somewhere with
+      # no relationship to the checkout, and runs the command out of it under
+      # node, which is what the next person to install this will do and the one
+      # thing nothing here had ever done. An npm version cannot be replaced
+      # once published, so it is checked on the way out as well as in CI.
+      - name: the packed CLI installs and runs under node
+        run: scripts/pack-check.sh
+
+      - name: publish
+        working-directory: client
+        run: npm publish --access public

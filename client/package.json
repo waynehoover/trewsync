@@ -1,0 +1,72 @@
+{
+  "name": "telimus-sync",
+  "version": "0.10.0",
+  "description": "Self-hosted vault sync with full version history, on a server you run.",
+  "keywords": [
+    "obsidian",
+    "sync",
+    "self-hosted",
+    "end-to-end-encryption",
+    "notes"
+  ],
+  "homepage": "https://github.com/waynehoover/telimus",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/waynehoover/telimus.git",
+    "directory": "client"
+  },
+  "bugs": {
+    "url": "https://github.com/waynehoover/telimus/issues"
+  },
+  "license": "MIT",
+  "author": "Wayne Hoover",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist/telimus.mjs",
+    "README.md"
+  ],
+  "type": "module",
+  "scripts": {
+    "bench": "bun run bench.ts",
+    "bench:sync": "bun run bench-sync.ts",
+    "bench:cadence": "bun run bench-cadence.ts",
+    "build": "node esbuild.config.mjs production",
+    "build:cli": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "format": "prettier --config ../.prettierrc --write \"src/**/*.ts\" \"*.ts\" \"*.mjs\"",
+    "format:check": "prettier --config ../.prettierrc --check \"src/**/*.ts\" \"*.ts\" \"*.mjs\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "stress": "vitest run --config vitest.stress.config.ts",
+    "scale": "bun run src/stress/scale.ts",
+    "dedup": "bun run src/stress/dedup.ts",
+    "bench:pass": "bun run bench-pass.ts",
+    "bench:merge": "bun run bench-merge.ts",
+    "bench:android": "bun run bench-android.ts"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@types/diff-match-patch": "^1.0.36",
+    "@types/node": "^24.10.13",
+    "diff-match-patch": "1.0.5",
+    "esbuild": "^0.28.1",
+    "fflate": "0.8.3",
+    "mdast-util-from-markdown": "2.0.3",
+    "micromark": "4.0.2",
+    "micromark-util-decode-string": "2.0.1",
+    "obsidian": "^1.13.1",
+    "prettier": "^3.6.2",
+    "qrcode-generator": "2.0.4",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.8",
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
+  },
+  "bin": {
+    "telimus": "./dist/telimus.mjs"
+  }
+}

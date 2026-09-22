@@ -1,0 +1,405 @@
+{
+  "date": "2026-09-10",
+  "source": "920324c plus the unreleased review fixes (working tree)",
+  "cadence": [
+    {
+      "commit": "920324c6e3313cd0c56d02425963e46b2260bb01",
+      "dirty": true,
+      "variant": "current",
+      "runtime": "v22.23.2",
+      "hardware": "darwin arm64 Apple M4 Pro",
+      "environment": "loopback; real Go server; in-memory vaults; production sync timers; simulated Obsidian events",
+      "samplesMs": {
+        "new note": [
+          33,
+          20,
+          22,
+          20,
+          22,
+          20,
+          21,
+          22,
+          20,
+          21,
+          20,
+          22,
+          21,
+          20,
+          22,
+          22,
+          21,
+          22,
+          22,
+          22
+        ],
+        "initial note": [
+          22
+        ],
+        "repeat edit": [
+          21,
+          22,
+          22,
+          22,
+          31,
+          32,
+          19,
+          21,
+          21,
+          31,
+          22,
+          33,
+          31,
+          21,
+          20,
+          33,
+          32,
+          32,
+          19,
+          22
+        ],
+        "incoming update (sender forced)": [
+          28,
+          26,
+          30,
+          28,
+          29,
+          25,
+          27,
+          27,
+          28,
+          31,
+          32,
+          26,
+          31,
+          20,
+          29,
+          36,
+          29,
+          25,
+          29,
+          29
+        ],
+        "note beside attachment (500 ms read)": [
+          21,
+          21,
+          31,
+          22,
+          32,
+          31,
+          32,
+          21,
+          23,
+          20,
+          20,
+          31,
+          21,
+          21,
+          21,
+          19,
+          22,
+          20,
+          21,
+          20
+        ],
+        "current note beside background note (500 ms read)": [
+          22,
+          31,
+          19,
+          22,
+          21,
+          20,
+          21,
+          21,
+          32,
+          22,
+          20,
+          20,
+          21,
+          22,
+          20,
+          21,
+          19,
+          20,
+          21,
+          20
+        ],
+        "200-note event burst": [
+          1490
+        ]
+      },
+      "clientCount": 2,
+      "percentilesMs": {
+        "new note": {
+          "n": 20,
+          "p50": 21,
+          "p95": 22
+        },
+        "initial note": {
+          "n": 1,
+          "p50": 22,
+          "p95": 22
+        },
+        "repeat edit": {
+          "n": 20,
+          "p50": 22,
+          "p95": 33
+        },
+        "incoming update (sender forced)": {
+          "n": 20,
+          "p50": 28,
+          "p95": 32
+        },
+        "note beside attachment (500 ms read)": {
+          "n": 20,
+          "p50": 21,
+          "p95": 32
+        },
+        "current note beside background note (500 ms read)": {
+          "n": 20,
+          "p50": 21,
+          "p95": 31
+        },
+        "200-note event burst": {
+          "n": 1,
+          "p50": 1490,
+          "p95": 1490
+        }
+      },
+      "baselineNotes": 0,
+      "prioritizeActive": true,
+      "burstPasses": {
+        "sender": 1,
+        "receiver": 6
+      },
+      "exactContentVerified": true
+    },
+    {
+      "commit": "920324c6e3313cd0c56d02425963e46b2260bb01",
+      "dirty": true,
+      "variant": "current",
+      "runtime": "v22.23.2",
+      "hardware": "darwin arm64 Apple M4 Pro",
+      "environment": "loopback; real Go server; in-memory vaults; production sync timers; simulated Obsidian events",
+      "samplesMs": {
+        "new note": [
+          33,
+          21,
+          22,
+          22,
+          21,
+          20,
+          20,
+          20,
+          21,
+          22,
+          20,
+          20,
+          21,
+          21,
+          21,
+          19,
+          21,
+          20,
+          21,
+          20
+        ],
+        "initial note": [
+          21
+        ],
+        "repeat edit": [
+          32,
+          31,
+          19,
+          21,
+          21,
+          32,
+          30,
+          31,
+          21,
+          32,
+          32,
+          21,
+          21,
+          21,
+          32,
+          31,
+          31,
+          31,
+          32,
+          22
+        ],
+        "incoming update (sender forced)": [
+          26,
+          23,
+          27,
+          28,
+          28,
+          26,
+          28,
+          29,
+          30,
+          30,
+          29,
+          30,
+          29,
+          29,
+          25,
+          39,
+          31,
+          22,
+          30,
+          28
+        ],
+        "note beside attachment (500 ms read)": [
+          31,
+          20,
+          32,
+          21,
+          21,
+          30,
+          32,
+          21,
+          23,
+          21,
+          20,
+          21,
+          20,
+          34,
+          23,
+          31,
+          33,
+          21,
+          21,
+          32
+        ],
+        "current note beside background note (500 ms read)": [
+          21,
+          20,
+          32,
+          22,
+          21,
+          32,
+          32,
+          31,
+          32,
+          21,
+          33,
+          21,
+          32,
+          33,
+          34,
+          21,
+          20,
+          31,
+          22,
+          32
+        ],
+        "200-note event burst": [
+          1589
+        ]
+      },
+      "clientCount": 5,
+      "percentilesMs": {
+        "new note": {
+          "n": 20,
+          "p50": 21,
+          "p95": 22
+        },
+        "initial note": {
+          "n": 1,
+          "p50": 21,
+          "p95": 21
+        },
+        "repeat edit": {
+          "n": 20,
+          "p50": 31,
+          "p95": 32
+        },
+        "incoming update (sender forced)": {
+          "n": 20,
+          "p50": 28,
+          "p95": 31
+        },
+        "note beside attachment (500 ms read)": {
+          "n": 20,
+          "p50": 21,
+          "p95": 33
+        },
+        "current note beside background note (500 ms read)": {
+          "n": 20,
+          "p50": 31,
+          "p95": 33
+        },
+        "200-note event burst": {
+          "n": 1,
+          "p50": 1589,
+          "p95": 1589
+        }
+      },
+      "baselineNotes": 0,
+      "prioritizeActive": true,
+      "burstPasses": {
+        "sender": 1,
+        "receiver": 3,
+        "receiver-2": 3,
+        "receiver-3": 3,
+        "receiver-4": 3
+      },
+      "exactContentVerified": true
+    }
+  ],
+  "history": {
+    "runtime": "v22.23.2",
+    "protocol": 7,
+    "historyEntries": 1000,
+    "currentFiles": 1,
+    "samples": [
+      {
+        "metadataMs": 23,
+        "completeMs": 25
+      },
+      {
+        "metadataMs": 15,
+        "completeMs": 16
+      },
+      {
+        "metadataMs": 14,
+        "completeMs": 15
+      },
+      {
+        "metadataMs": 11,
+        "completeMs": 12
+      },
+      {
+        "metadataMs": 12,
+        "completeMs": 13
+      }
+    ],
+    "exactContentVerified": true,
+    "environment": "loopback; real Go server; in-memory client vaults"
+  },
+  "nativeEditor": {
+    "mode": "Basalt",
+    "splitViews": true,
+    "cursorPreserved": true,
+    "nativeUpdateMs": [
+      44.5,
+      40.4,
+      41.5,
+      35.2,
+      34.2,
+      36.7,
+      30.1,
+      31.6,
+      65,
+      44.3,
+      60.5,
+      41
+    ],
+    "unsavedEditsPreserved": true,
+    "undoIncludesRemoteEdit": true,
+    "undoRedoPreserved": true,
+    "ok": true
+  },
+  "filesystemPassOutput": "basalt: what a quiet pass costs, as the vault grows\n  Apple M4 Pro, 14 cores\n  node v22.23.2\n  median of 3, after two warm-up passes\n(node:33303) ExperimentalWarning: Transform Types is an experimental feature and might change at any time\n(Use `node --trace-warnings ...` to show where the warning was created)\n\n  measuring 500 notes... done\n  measuring 2000 notes... done\n\n  nothing changed\n      notes        ms  vs prev  heap\n        500       8.3             2313 KiB\n       2000      21.6    2.58x    9935 KiB\n\n  one note changed\n      notes        ms  vs prev  heap\n        500      27.4             4846 KiB\n       2000      55.5    2.03x   15773 KiB\n\n  a folder renamed\n      notes        ms  vs prev  heap\n        500      98.4            11721 KiB\n       2000     549.2    5.58x       0 KiB\n\n  catching up\n      notes        ms  vs prev  heap\n        500     340.3            11801 KiB\n       2000     386.9    1.14x   11517 KiB\n\n  Sizes double, so 2.0x means the cost is the vault's size and 1.0x means it is\n  the change's. Anything at or near 2.0x on \"nothing changed\" or \"one note\n  changed\" is what I07 is about.\n"
+}

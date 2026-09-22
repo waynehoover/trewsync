@@ -1,0 +1,130 @@
+/**
+ * The config folder the headless client refuses to sync.
+ *
+ * The plugin asks Obsidian for it, because Obsidian knows. This cannot ask
+ * anything, so it assumed `.obsidian` and had no way to be told otherwise: a
+ * vault whose config folder had been renamed in the app had it synced by the
+ * headless client and refused by the plugin, which is the same vault
+ * disagreeing with itself about the one thing this project says it will not
+ * sync.
+ */
+import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { parseArgs } from "./cli.ts";
+import { STATE_DIR } from "./config.ts";
+import { NodeVault, configFolderName } from "./vault.ts";
+import { removeTree } from "../core/test-server.ts";
+
+const made: string[] = [];
+
+afterEach(async () => {
+  for (const d of made.splice(0)) await removeTree(d);
+});
+
+/** A vault holding one note and two candidate config folders. */
+async function vaultWith(dirs: string[]): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "telimus-configdir-"));
+  made.push(root);
+  await writeFile(join(root, "note.md"), "a note\n");
+  for (const d of dirs) {
+    await mkdir(join(root, d));
+    await writeFile(join(root, d, "app.json"), "{}\n");
+  }
+  return root;
+}
+
+const paths = async (v: NodeVault): Promise<string[]> => (await v.list()).map((f) => f.path).sort();
+
+describe("which config folder is left alone", () => {
+  it("skips .obsidian when nobody says otherwise", async () => {
+    const root = await vaultWith([".obsidian"]);
+    expect(await paths(new NodeVault(root))).toEqual(["note.md"]);
+  });
+
+  it("skips the one it is told about, and syncs the one it is not", async () => {
+    // A config folder renamed to something without a dot, which is the one
+    // case the dot rule in core/paths.ts cannot cover by itself.
+    const root = await vaultWith(["obsidian-work"]);
+
+    // The bug: with no way to be told, this folder was ordinary content.
+    expect(await paths(new NodeVault(root))).toContain("obsidian-work/app.json");
+
+    const told = new NodeVault(root, { configDir: "obsidian-work" });
+    expect(await paths(told)).toEqual(["note.md"]);
+  });
+
+  it("still leaves .obsidian alone when it is not the config folder", async () => {
+    // Nothing dot-prefixed syncs, whatever the config folder is called. The
+    // plugin lists from Obsidian's index, which never names a dot-prefixed
+    // path, so a headless client that uploaded one would be sending every
+    // plugin peer a file it can only refuse.
+    const root = await vaultWith([".obsidian", ".config-here"]);
+    const held = await paths(new NodeVault(root, { configDir: ".config-here" }));
+    expect(held).toEqual(["note.md"]);
+  });
+
+  it("also leaves alone whatever --ignore named", async () => {
+    const root = await vaultWith([".obsidian", "scratch"]);
+    const v = new NodeVault(root, { alsoIgnore: ["scratch"] });
+    expect(await paths(v)).toEqual(["note.md"]);
+  });
+});
+
+describe("what counts as a config folder name", () => {
+  it("refuses anything that is not one folder at the root", () => {
+    for (const bad of ["", "/", "a/b", "/leading/slash", "//"]) {
+      expect(() => configFolderName(bad), `accepted ${JSON.stringify(bad)}`).toThrow(
+        /not a plain name/,
+      );
+    }
+  });
+
+  it("tolerates the slashes someone would type by hand", () => {
+    expect(configFolderName("/.obsidian/")).toBe(".obsidian");
+    expect(configFolderName("trailing/")).toBe("trailing");
+  });
+});
+
+describe("the flags", () => {
+  it("defaults the config folder and collects repeated ignores", () => {
+    const args = parseArgs(["sync", "--ignore", "one", "--ignore", "two"]);
+    expect(args.configDir).toBe(".obsidian");
+    expect(args.ignore).toEqual(["one", "two"]);
+  });
+
+  it("takes a config folder, and refuses a bad one before opening anything", () => {
+    expect(parseArgs(["sync", "--config-dir", ".obsidian-work"]).configDir).toBe(".obsidian-work");
+    expect(() => parseArgs(["sync", "--config-dir", "a/b"])).toThrow(/not a plain name/);
+  });
+
+  it("refuses a flag that swallowed the next flag", () => {
+    expect(() => parseArgs(["sync", "--config-dir", "--json"])).toThrow(/needs a value/);
+    expect(() => parseArgs(["sync", "--ignore", "--json"])).toThrow(/needs a value/);
+  });
+});
+
+/**
+ * The two spellings of the state folder, checked against each other.
+ *
+ * `vault.ts` cannot import `STATE_DIR` from `config.ts`, because `config.ts`
+ * imports `vault.ts` for its durable writes and a five-character constant is
+ * not worth a module cycle. So there are two copies, and this is what stops
+ * them drifting: a vault writing its lock and index into `.telimus` while its
+ * staging and displaced log went to something else would be two state folders
+ * with nothing saying so.
+ */
+describe("the state folder", () => {
+  it("is spelled the same in both modules that name it", async () => {
+    const source = await readFile(fileURLToPath(new URL("./vault.ts", import.meta.url)), "utf8");
+    const found = /const STATE_FOLDER = "([^"]+)"/.exec(source);
+    expect(
+      found,
+      "vault.ts no longer declares STATE_FOLDER, so this check is checking nothing",
+    ).not.toBeNull();
+    expect(found![1]).toBe(STATE_DIR);
+  });
+});

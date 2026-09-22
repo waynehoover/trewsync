@@ -1,0 +1,289 @@
+diff --git a/client/src/stress/review-multi.test.ts b/client/src/stress/review-multi.test.ts
+new file mode 100644
+--- /dev/null
++++ b/client/src/stress/review-multi.test.ts
+@@ -0,0 +1,177 @@
++import { afterEach, expect, it } from "vitest";
++import { readFile, writeFile, rename, rm, utimes } from "node:fs/promises";
++import { join } from "node:path";
++import type { Client } from "../core/client.ts";
++import { TestServer } from "../core/test-server.ts";
++import { deferred, within, receiveCommitted } from "../core/test-async.ts";
++import { device, reopen, fingerprint, differences, settle, tidy, type Device } from "./harness.ts";
++let server: TestServer;
++const open: Client[] = [];
++const dirs: string[] = [];
++afterEach(async () => tidy(open, dirs, server));
++async function setup(
++  count: number,
++  initial = "Original first line.\nOriginal second line.\nOriginal third line.\n",
++) {
++  server = new TestServer();
++  await server.start();
++  const a = await device(server, "a", dirs, open);
++  await writeFile(join(a.dir, "note.md"), initial);
++  await settle([a]);
++  const all = [a];
++  for (let i = 1; i < count; i++) {
++    const d = await device(server, String.fromCharCode(97 + i), dirs, open);
++    await settle([d]);
++    all.push(d);
++  }
++  return all;
++}
++async function assertCopies(all: Device[], markers: string[]) {
++  for (const d of all) {
++    const contents = await Promise.all(
++      [...(await fingerprint(d.dir)).keys()].map((p) => readFile(join(d.dir, p), "utf8")),
++    );
++    for (const marker of markers)
++      expect(contents.join("\n"), `missing ${marker}`).toContain(marker);
++    expect(differences(await fingerprint(all[0]!.dir), await fingerprint(d.dir))).toEqual([]);
++  }
++}
++it("three simultaneous conflicting writers and a fresh reader keep all three edits", async () => {
++  const all = await setup(3);
++  const markers = ["ALPHA NEW DRAFT", "BRAVO DIFFERENT REWRITE", "CHARLIE ANOTHER REVISION"];
++  await Promise.all(
++    all.map((d, i) =>
++      writeFile(
++        join(d.dir, "note.md"),
++        markers[i] + "\nOriginal second line.\nOriginal third line.\n",
++      ),
++    ),
++  );
++  await Promise.all(all.map((d) => d.c.settle({}, 16)));
++  await settle(all, 12);
++  const reader = await device(server, "reader", dirs, open);
++  await settle([reader]);
++  all.push(reader);
++  await assertCopies(all, markers);
++});
++it("merging a UTF-8 BOM note retains the BOM without false conflict copies", async () => {
++  const all = await setup(
++    2,
++    "\uFEFFOriginal first line.\nOriginal second line.\nOriginal third line.\n",
++  );
++  await writeFile(
++    join(all[0]!.dir, "note.md"),
++    "\uFEFFALPHA FIRST\nOriginal second line.\nOriginal third line.\n",
++  );
++  await writeFile(
++    join(all[1]!.dir, "note.md"),
++    "\uFEFFOriginal first line.\nBRAVO SECOND\nOriginal third line.\n",
++  );
++  await settle(all, 8);
++  await assertCopies(all, ["ALPHA FIRST", "BRAVO SECOND"]);
++  for (const d of all) expect([...(await fingerprint(d.dir)).keys()]).toEqual(["note.md"]);
++  for (const d of all)
++    expect((await readFile(join(d.dir, "note.md"), "utf8")).startsWith("\uFEFF")).toBe(true);
++});
++it("an equal-length replacement retaining mtime is not falsely reported synced", async () => {
++  const [a, b] = await setup(2);
++  const path = join(a!.dir, "note.md");
++  await writeFile(path, "BEFORE\n");
++  await utimes(path, 1600000000, 1600000000);
++  await settle([a!, b!]);
++  await writeFile(path, "AFTERS\n");
++  await utimes(path, 1600000000, 1600000000);
++  await settle([a!, b!]);
++  expect(await readFile(join(b!.dir, "note.md"), "utf8")).toBe("AFTERS\n");
++});
++it("three disjoint edits made offline converge without conflict copies", async () => {
++  let all = await setup(3);
++  all.forEach((d) => d.c.close());
++  const markers = ["ALPHA FIRST", "BRAVO SECOND", "CHARLIE THIRD"];
++  for (let i = 0; i < all.length; i++) {
++    const lines = ["Original first line.", "Original second line.", "Original third line."];
++    lines[i] = markers[i]!;
++    await writeFile(join(all[i]!.dir, "note.md"), lines.join("\n") + "\n");
++  }
++  all = await Promise.all(
++    all.map((d, i) => reopen(server, String.fromCharCode(97 + i), d.dir, open)),
++  );
++  await Promise.all(all.map((d) => d.c.settle({}, 16)));
++  await settle(all, 12);
++  await assertCopies(all, markers);
++  for (const d of all) expect((await fingerprint(d.dir)).size).toBe(1);
++});
++it("offline edit survives a concurrent rename and deletion on two other clients", async () => {
++  const all = await setup(3);
++  await rename(join(all[0]!.dir, "note.md"), join(all[0]!.dir, "moved.md"));
++  await rm(join(all[1]!.dir, "note.md"));
++  await writeFile(join(all[2]!.dir, "note.md"), "CHARLIE EDIT MUST SURVIVE\n");
++  await Promise.all(all.map((d) => d.c.settle({}, 16)));
++  await settle(all, 12);
++  await assertCopies(all, ["CHARLIE EDIT MUST SURVIVE"]);
++});
++it("deterministic three stale uploads preserve every independent edit", async () => {
++  const all = await setup(3);
++  const markers = ["ALPHA FIRST", "BRAVO SECOND", "CHARLIE THIRD"];
++  const entered = all.map(() => deferred<void>());
++  const release = all.map(() => deferred<void>());
++  const acknowledged = all.map(() => deferred<void>());
++  const finish = all.map(() => deferred<void>());
++  for (let i = 0; i < all.length; i++) {
++    const d = all[i]!;
++    const lines = ["Original first line.", "Original second line.", "Original third line."];
++    lines[i] = markers[i]!;
++    await writeFile(join(d.dir, "note.md"), lines.join("\n") + "\n");
++    const original = d.c.transport.putMany.bind(d.c.transport);
++    let first = true;
++    d.c.transport.putMany = async (...args) => {
++      if (!first) return original(...args);
++      first = false;
++      entered[i]!.resolve();
++      await release[i]!.promise;
++      const result = await original(...args);
++      acknowledged[i]!.resolve();
++      await finish[i]!.promise;
++      return result;
++    };
++  }
++  const passes = all.map((d) => d.c.settle({}, 0));
++  const complete = Promise.all(passes);
++  // Observe failures immediately, even while the ordering gates are closed.
++  void complete.catch(() => undefined);
++  try {
++    await within(Promise.all(entered.map((d) => d.promise)), "three writes were prepared");
++    release[1]!.resolve();
++    await within(acknowledged[1]!.promise, "B's first acknowledgement");
++    finish[1]!.resolve();
++    await within(passes[1]!, "B recorded its acknowledgement");
++    for (const i of [2, 0]) {
++      release[i]!.resolve();
++      await within(acknowledged[i]!.promise, `writer ${i}'s first acknowledgement`);
++    }
++    // All initial writes are complete on the wire; C and A have not recorded
++    // their acknowledgements yet. Make their queued fan-out observable first.
++    await within(
++      Promise.all([0, 2].map((i) => receiveCommitted(all[i]!.c.transport))),
++      "initial fan-out reached A and C",
++    );
++  } finally {
++    release.forEach((d) => d.resolve());
++    finish.forEach((d) => d.resolve());
++    await within(Promise.allSettled(passes), "initial passes finished");
++  }
++  await complete;
++  await settle(all, 12);
++  // Delivery and byte-for-byte convergence alone miss this defect. History
++  // still contains the edit that disappeared from all current working copies.
++  for (const d of all) {
++    expect(d.c.deliveryReady).toBe(true);
++    expect(differences(await fingerprint(all[0]!.dir), await fingerprint(d.dir))).toEqual([]);
++  }
++  const history = await all[0]!.c.history("note.md", { limit: 100 });
++  const historical = await Promise.all(
++    history.map(async (v) => new TextDecoder().decode(await all[0]!.c.contentAt(v))),
++  );
++  expect(historical.join("\n")).toContain("BRAVO SECOND");
++  await assertCopies(all, markers);
++});
+diff --git a/client/src/cli/review-cli.test.ts b/client/src/cli/review-cli.test.ts
+new file mode 100644
+--- /dev/null
++++ b/client/src/cli/review-cli.test.ts
+@@ -0,0 +1,66 @@
++import { afterEach, expect, it } from "vitest";
++import { mkdtemp, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { run } from "./cli.ts";
++import { TestServer, removeTree } from "../core/test-server.ts";
++let server: TestServer | undefined;
++let dir: string | undefined;
++afterEach(async () => {
++  await server?.cleanup();
++  if (dir) await removeTree(dir);
++});
++async function cli(...args: string[]) {
++  const output: string[] = [];
++  const errors: string[] = [];
++  const code = await run(args, { out: (s) => output.push(s), err: (s) => errors.push(s) });
++  return { code, output: output.join("\n"), errors: errors.join("\n") };
++}
++it("history can page to an older version with the existing before argument", async () => {
++  server = new TestServer();
++  await server.start();
++  dir = await mkdtemp(join(tmpdir(), "basalt-review-cli-"));
++  const init = await cli(
++    "init",
++    "--dir",
++    dir,
++    "--server",
++    server.wsUrl,
++    "--token",
++    server.token,
++    "--json",
++  );
++  expect(init.code).toBe(0);
++  for (const text of ["first\n", "second revision\n", "third different revision\n"]) {
++    await writeFile(join(dir, "note.md"), text);
++    expect((await cli("sync", "--dir", dir)).code).toBe(0);
++  }
++  const first = await cli("history", "note.md", "--dir", dir, "--json", "--limit", "1");
++  const uid = JSON.parse(first.output).versions[0].uid as number;
++  const next = await cli(
++    "history",
++    "note.md",
++    "--dir",
++    dir,
++    "--json",
++    "--limit",
++    "1",
++    "--before",
++    String(uid),
++  );
++  expect(next.code).toBe(0);
++  expect(JSON.parse(next.output).versions[0].uid).toBeLessThan(uid);
++});
++it("invalid command arguments use the documented exit code 2", async () => {
++  expect((await cli("sync", "unexpected-vault-argument")).code).toBe(2);
++});
++it("the documented nested backup is refused and a separate destination works", async () => {
++  server = new TestServer();
++  await server.start();
++  await server.stop();
++  await expect(server.cli("backup", "-to", join(server.dataDir, "before-purge"))).rejects.toThrow(
++    /contain one another/,
++  );
++  dir = await mkdtemp(join(tmpdir(), "basalt-review-backup-"));
++  await expect(server.cli("backup", "-to", join(dir, "snapshot"))).resolves.toBeTypeOf("string");
++});
+diff --git a/server/internal/server/review_delivery_test.go b/server/internal/server/review_delivery_test.go
+new file mode 100644
+--- /dev/null
++++ b/server/internal/server/review_delivery_test.go
+@@ -0,0 +1,31 @@
++package server
++
++import (
++	"testing"
++
++	"github.com/waynehoover/basalt-sync/server/internal/wire"
++)
++
++func TestReviewOverlappingSessionDelivery(t *testing.T) {
++	r := newRig(t)
++	a := r.dial("a")
++	a.hello(0)
++	b := r.dial("b")
++	b.hello(0)
++	id, _ := r.device("b")
++	uid := a.put("note.md", "latest content")
++	b.sendJSON(wire.In{Op: "applied", Applied: &uid})
++	var ack wire.Applied
++	b.recvInto("applied", &ack)
++	// Same device reconnects before the server notices its old connection died.
++	b2 := r.dial("b")
++	b2.hello(0)
++	a.sendJSON(wire.In{Op: "devices"})
++	var list wire.DeviceList
++	a.recvInto("devices", &list)
++	for _, d := range list.Devices {
++		if d.ID == id && d.Applied != nil {
++			t.Fatalf("device reported applied=%d although its replacement session has never confirmed delivery", *d.Applied)
++		}
++	}
++}

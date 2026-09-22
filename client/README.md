@@ -1,0 +1,373 @@
+# Telimus command-line client
+
+**Self-hosted vault sync with full version history, on a server you run.**
+
+Keep a local copy of your Obsidian notes on a NAS or another machine without
+Obsidian. Telimus connects to your own server, encrypts content before upload,
+and provides note history and recovery from the terminal.
+
+**Experimental.** Use macOS or Linux, Node **22 or newer**, and a local
+filesystem. Run one Telimus process that writes to each vault, and keep other
+sync tools and the Obsidian plugin off that same directory. For everyday
+editing, use the
+[Obsidian plugin](https://github.com/waynehoover/telimus/blob/main/docs/plugin.md).
+
+## Set up a mirror
+
+Create an invite on an existing device, using **Add another device** in the
+plugin or `telimus invite`. An invite works once and expires after ten minutes;
+`--ttl` raises that to at most one hour. Then, on the mirror machine:
+
+```bash
+npm install -g telimus-sync
+mkdir -p ~/telimus-mirror
+cd ~/telimus-mirror
+telimus pair 'INVITE' --read-only
+telimus sync --watch
+```
+
+Replace `INVITE` with the string you created. It works once and expires after
+ten minutes by default. `--read-only` is saved during pairing, so subsequent
+syncs keep local changes from being uploaded even without the flag.
+
+Keep the process running for continuous sync. For a scheduled job, use
+`telimus sync --dir /path/to/telimus-mirror` instead.
+
+## Start a new vault
+
+If no device has claimed the server yet, use its setup string:
+
+```bash
+telimus init 'wss://homelab.example.ts.net#TOKEN' --dir ~/vault
+telimus sync --dir ~/vault
+```
+
+This creates a writable client. Save the recovery key printed during setup,
+separate from your devices. If every device is lost, the key lets you pair a
+replacement. Telimus cannot recover it for you.
+
+See [server setup](https://github.com/waynehoover/telimus/blob/main/docs/server.md)
+for TLS and obtaining the token. A named server vault also needs
+`--vault-id NAME` on `init`.
+
+## Everyday commands
+
+Commands use the current directory unless you pass `--dir DIR`.
+
+| Command | Use it to… |
+|---|---|
+| `telimus sync` | Sync once and exit. |
+| `telimus sync --watch` | Keep syncing and reconnect after temporary outages. |
+| `telimus mcp` | Expose this paired directory over stdio, or HTTP with `--listen`. |
+| `telimus mcp-token` | Issue or rotate the HTTP MCP credential; `--revoke` revokes it. |
+| `telimus status` | Check connection, local changes, and recovery issues. |
+| `telimus invite` | Add another device with a single-use invite. |
+| `telimus devices` | List devices and outstanding invites. |
+| `telimus rename NAME` | Rename this device's label. |
+| `telimus history "Note.md"` | View a note's versions, newest first. |
+| `telimus deleted` | List deleted notes and whether they can be restored. |
+| `telimus restore "Note.md"` | Restore the newest version with content. |
+| `telimus unlink` | Remove local pairing and index while keeping notes. |
+
+The [command reference](https://github.com/waynehoover/telimus/blob/main/docs/cli-reference.md)
+covers all flags, device revocation, rotation, repair, and server recovery.
+
+## Connect a local agent
+
+`telimus mcp` lets a local MCP host read notes and make exact edits while Telimus
+syncs its own headless copy. The host and any model service it uses can receive
+plaintext note content. Choose a host you trust with those notes.
+
+First create an invite on an existing device and pair a **separate directory**:
+
+```bash
+mkdir -p /absolute/path/to/agent-vault
+telimus pair --dir /absolute/path/to/agent-vault --key-file /private/path/invite.txt
+```
+
+For an inspection-only host, add `--read-only` at pairing or launch. A saved
+read-only pairing cannot be made writable by omitting the flag. Never point the
+CLI at the local vault already being synced by the Obsidian plugin.
+
+Configure the host to launch Node with an absolute executable path, the absolute
+installed `telimus.mjs` path, and `--dir`. For a host using `mcpServers` JSON:
+
+```json
+{
+  "mcpServers": {
+    "telimus": {
+      "command": "/absolute/path/to/node",
+      "args": [
+        "/absolute/path/to/telimus-sync/dist/telimus.mjs",
+        "mcp",
+        "--dir",
+        "/absolute/path/to/agent-vault"
+      ]
+    }
+  }
+}
+```
+
+Replace all paths with your installation's paths. `command -v node` locates Node;
+for a global npm installation, `npm root -g` locates the directory containing
+`telimus-sync/dist/telimus.mjs`. Use Node 22 or newer. Node 22 and 24 have been
+exercised with the production MCP artifact. Hosts may use a different outer
+configuration format; the executable and argument array stay the same.
+
+The host owns this long-running process. Stop `sync --watch` first, and configure
+one host process per directory. MCP holds the vault lock and handles ongoing
+sync itself. Stdout is reserved for protocol messages; do not add `--json` or
+`--watch`. EOF, SIGINT and SIGTERM drain admitted writes before releasing the
+lock. A host that force-kills its child can interrupt that drain; inspect any
+unknown outcome.
+
+Start with `sync_status`, `list_notes` and `read_note`. Initialization and local
+reads work during connection setup or outages. They can be stale; a missing local
+file may simply be waiting to download. Edits require `writeReady:true` after
+initial sync. History and restore need a server connection.
+
+Search by content, filename or tag with `search_notes`. Tag changes, moves and
+recoverable deletion use a preview first, then require the returned exact
+changes and bases to apply. `compare_versions` shows differences from retained
+history; `delivery_status` reports device checkpoints without promising that a
+particular edit reached every device.
+
+To expose several separately paired directories, replace `--dir` with repeated
+`--vault name=/absolute/path` arguments. `list_vaults` discovers those aliases;
+every other tool requires `vault` when several are configured. For HTTP, the
+first configured directory's credential grants access to the whole explicit set.
+See [multiple vaults](https://github.com/waynehoover/telimus/blob/main/docs/cli-reference.md#several-vaults)
+for credential scope and per-vault permissions.
+
+To change a note, read it and supply its returned `base` with exact `{old,new}`
+spans to `edit_note`. Each old span must be unique; all spans are validated
+against the same original and published as one replacement. `append_note` and `prepend_note` also
+require a base and add exactly the supplied text, including only the newlines
+you supply. `create_note` and `restore_note` require free destination paths.
+UTF-8 Markdown and plain text are supported up to 1 MiB; drawings and attachments
+cannot be mutated. There is no whole-file writer.
+
+Every mutation of an existing note preserves a verified, flushed
+before-image. Read the returned `beforeImage` to inspect it, or list with
+`includeBackups:true` to find older copies. Backups sync as ordinary notes and
+MCP cannot alter or delete them.
+`applied:true` and `durable:true` describe the local commit, not delivery to the
+server or another device. Errors may report an applied change or preserved paths.
+After `stale`, a timeout or a lost response, reread and reconsider before retrying.
+
+Follow continuation fields to read later pages. `--read-only` omits every mutation
+tool but still downloads remote edits. The
+[MCP reference and recovery example](https://github.com/waynehoover/telimus/blob/main/docs/cli-reference.md#mcp-over-stdio)
+cover exact limits, partial results and restoring an inspected version to a new
+path.
+
+## Connect over HTTP
+
+For an agent running on the same machine, stdio can use the configuration above.
+HTTP lets multiple clients share one running process. Use the same separately
+paired headless directory and stop its existing watcher first. Issue the HTTP
+credential, exporting it outside the vault to a new private file:
+
+```bash
+telimus mcp-token --dir /srv/vault --key-out /private/path/telimus-mcp.key
+telimus mcp --dir /srv/vault --listen 127.0.0.1:3010
+```
+
+The output directory must already exist. Without `--key-out`, the command prints
+the token once. With it, only the credential id and file path are printed.
+Every HTTP request needs `Authorization: Bearer TOKEN`, including requests on
+loopback. The token is separate from your recovery key and device credential.
+HTTP has read-only tools by default; add `--writable` only when the agent should
+edit notes. A saved read-only pairing cannot be overridden. This default limits
+MCP tools, while ordinary sync still uploads on a writable device.
+
+On Linux, a service can own this directory. For example, save the following as
+`/etc/systemd/system/telimus-mcp.service`, adjusting the account, Node executable,
+installed artifact and vault paths:
+
+```ini
+[Unit]
+Description=Telimus MCP
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=telimus
+ExecStart=/usr/local/bin/node /usr/local/lib/node_modules/telimus-sync/dist/telimus.mjs mcp --dir /srv/vault --listen 127.0.0.1:3010
+Restart=on-failure
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The service account must own the paired directory and its credential state.
+Use `command -v node` and `npm root -g` to locate your installation. Then enable
+the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now telimus-mcp
+```
+
+SIGTERM drains admitted edits before releasing the vault lock. If the service
+manager force-kills the process after its shutdown allowance, inspect uncertain
+outcomes and recovery copies. HTTP ignores stdin EOF and writes diagnostics only
+to stderr. Systemd acceptance of this example remains untested locally on macOS.
+
+On the same machine, publish the loopback listener through Tailscale Serve:
+
+```bash
+tailscale serve --bg --https=8443 3010
+```
+
+Replace `host.ts.net` with the machine's full Tailscale DNS name. Enter
+`https://host.ts.net:8443/mcp` in the MCP client and put the token in its bearer
+token/API-key field, or configure the exact `Authorization` header above. The
+client must support that header and have a network path into your tailnet.
+This static-key service does not provide OAuth discovery or a browser login.
+If your phone only sends prompts to an agent on your Mac, the Mac is the MCP
+client and can use local stdio instead.
+
+Rotate without restarting the service, then update each client:
+
+```bash
+telimus mcp-token --dir /srv/vault --key-out /private/path/telimus-mcp-next.key
+```
+
+Use a new export filename; existing files are never overwritten. Old keys fail
+their next request, and old sessions end when the new credential is observed.
+Queued old-key operations are cancelled; admitted edits finish. Revoking uses
+`telimus mcp-token --dir /srv/vault --revoke`. Issuing another credential restores
+access. The stored hash cannot recover a lost token.
+
+The [HTTP reference](https://github.com/waynehoover/telimus/blob/main/docs/cli-reference.md#mcp-over-http)
+covers origins, limits and reconnect behavior. TLS terminators receive plaintext
+notes; read the [Cloudflare and proxy warning](https://github.com/waynehoover/telimus/blob/main/docs/security.md#http-access-for-an-agent)
+before choosing another proxy. Real Tailscale HTTPS was tested with official SDK
+clients, including edits, before-images, credential rotation and restart.
+**Cloudflare Tunnel, Collie and a specific phone MCP client remain unverified**,
+including phone lockout and re-entry after token rotation.
+
+## A mirror, and turning merging off
+
+`--read-only` stops ordinary sync from uploading local edits, deletions, and
+conflict copies. It still downloads and changes local files. Preserve local
+edits you care about separately; this mode does not make the local directory
+immutable.
+
+The setting is a client behavior, **not a server-enforced permission**. The
+client keeps an ordinary device credential, and explicit administrative
+commands still work. In particular, `telimus repair` can resend missing content.
+Use this mode on a machine you trust.
+
+`init` and `pair` persist `--read-only`; passing it to `sync` applies it to that
+invocation. There is no flag to turn a persisted setting off.
+
+To review conflicting edits yourself instead of merging them:
+
+```bash
+telimus sync --no-merge
+telimus sync --watch --no-merge
+```
+
+Pass `--no-merge` on each invocation that should use it. Telimus keeps both
+versions when a merge would otherwise be needed.
+
+## Recovery
+
+```bash
+telimus history "Quarterly plan.md"
+telimus restore "Quarterly plan.md" --uid 42
+telimus restore "Quarterly plan.md" --uid 42 --to "Recovered plan.md"
+```
+
+Restore never overwrites an existing file. If the target is occupied, it writes
+a copy such as `Quarterly plan (restored 42).md`. On a writable client, it then
+attempts to send that copy. On a read-only mirror, the copy stays local.
+
+When the server has been restored from an older backup, use `telimus rebase`
+to inspect the recovery situation, then `telimus rebase --backup-taken` after
+preserving local notes and backing up the server. This rejoins without deleting
+local files and sends local-only versions when the device is writable.
+
+If a command reports a version kept at a hidden path, preserve that file and
+`.telimus/`. Copy the retained version to a new visible filename and inspect it
+before removing recovery material. An unreadable recovery inventory needs
+attention even when other transfers succeed.
+
+## Automation and output
+
+Use `--json` for structured command output. `mcp` and `mcp-token` refuse this flag.
+MCP stdout is protocol-only for stdio and empty for HTTP; `mcp-token` prints
+the token once, or the id and path when exporting.
+Exit **0** means the command succeeded,
+**1** means a failure or unresolved issue, and **2** means invalid arguments.
+For sync, `outcome` explains the result and the counters describe the work.
+
+A conflict exits 0 because both versions were preserved. Ignored files and
+changes held back by read-only mode also do not make a sync fail. Inspect those
+fields if your job needs a stricter condition. Hidden versions awaiting recovery
+and an unreadable recovery inventory make sync fail until addressed.
+
+Restore separates `restored` (the local file was written), `sent` (that copy was
+acknowledged by the server), and `ok` (the overall operation succeeded). If the
+copy was restored but sync failed, retry `telimus sync` to avoid creating another copy.
+
+To keep setup strings, invites, and recovery keys out of command arguments, use
+an existing private file or standard input:
+
+```bash
+telimus pair --key-file /private/path/invite.txt --read-only
+telimus pair - --read-only < /private/path/invite.txt
+telimus rotate --key-file /private/path/recovery.txt --key-out /private/path/new-recovery.txt
+```
+
+`--key-out` creates a new private file and refuses to overwrite one. Recovery
+keys are also printed, so protect command output and logs. For `mcp-token`,
+exporting suppresses the token on stdout.
+
+## Files and local state
+
+Telimus stores credentials and the sync index in `.telimus/`, which never syncs.
+Protect this directory: it contains the keys this device needs to read notes.
+Unlink through the command rather than deleting state files by hand.
+
+The CLI excludes dot-prefixed files and folders, `node_modules`, and the
+Obsidian configuration folder. Use `--config-dir NAME` if yours differs from
+`.obsidian`. Add `--ignore NAME` for a file or folder name to exclude at every
+depth; repeat the flag for more names. These choices apply to this device only.
+
+Equivalent Unicode filename spellings are normalized. If two distinct files
+would become the same name, Telimus blocks those paths and identifies them;
+rename one yourself. Keep clients updated together to avoid older clients
+reintroducing obsolete spellings. Filesystem renames can appear as a deletion
+of the old path and a creation of the new one; both names retain their history.
+
+## A command says the vault is locked
+
+Stop an existing watcher before starting another command that writes to the
+vault. On supported local macOS and Linux setups, process exit releases the
+lock automatically, including after a crash.
+
+If Telimus reports that manual recovery is required, run `telimus unlock` after
+confirming the previous process has stopped. It refuses a live local holder.
+`--force` is only for a holder recorded on another machine and requires you to
+verify that it is stopped. Shared network vaults remain unsupported.
+
+## More
+
+- [Install with an agent](https://github.com/waynehoover/telimus/blob/main/llm.md)
+- [All documentation](https://github.com/waynehoover/telimus/blob/main/docs/index.md)
+- [Command reference](https://github.com/waynehoover/telimus/blob/main/docs/cli-reference.md)
+- [Security and privacy](https://github.com/waynehoover/telimus/blob/main/docs/security.md)
+- [Build and contribute](https://github.com/waynehoover/telimus/blob/main/docs/development.md)
+
+## Preview and verify
+
+`telimus preview --dir ~/vault` shows planned changes without writing notes.
+Add `--json` for file actions and counts. Run `telimus sync --verify --dir ~/vault`
+to re-read every file when an external edit may have preserved its timestamps.
+History supports `--before UID` for older pages; see the
+[CLI reference](https://github.com/waynehoover/telimus/blob/main/docs/cli-reference.md).

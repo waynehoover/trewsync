@@ -1,0 +1,781 @@
+/**
+ * The `obsidian` module, at runtime, for tests.
+ *
+ * The npm package is types only: `"main": ""`. Obsidian itself provides the
+ * implementation when it loads a plugin, which is why the build marks it
+ * external and why nothing here could be run.
+ *
+ * This is the implementation, for tests only. `vitest.config.ts` aliases
+ * `obsidian` to this file; nothing else does, so `tsc` still checks every use
+ * against the real `obsidian.d.ts` and the shipped bundle still expects the real
+ * one. Types from the declarations, behaviour from here.
+ *
+ * It is deliberately not exhaustive. It implements what the plugin actually
+ * touches, and a plugin that started touching more would fail here loudly rather
+ * than silently working against a fake that agreed with it.
+ */
+
+import { FakeAdapter, normalizePath } from "./fake.ts";
+
+export { normalizePath };
+
+/* ---------------------------------------------------------------- *
+ * Just enough of an element
+ * ---------------------------------------------------------------- */
+
+/**
+ * A stand-in for Obsidian's augmented HTMLElement.
+ *
+ * Obsidian adds `createEl`, `createDiv`, `empty` and `setText` to every element,
+ * and the plugin uses all four. A real DOM would need jsdom for no gain: what is
+ * being checked is that the plugin builds the controls it says it does, and a
+ * tree of plain objects answers that.
+ */
+export class FakeEl {
+  readonly children: FakeEl[] = [];
+  private parent: FakeEl | undefined;
+  get firstElementChild(): FakeEl | null {
+    return this.children[0] ?? null;
+  }
+  get nextElementSibling(): FakeEl | null {
+    return this.parent?.children[this.parent.children.indexOf(this) + 1] ?? null;
+  }
+  appendChild(el: FakeEl): FakeEl {
+    return this.insertBefore(el, null);
+  }
+  insertBefore(el: FakeEl, before: FakeEl | null): FakeEl {
+    if (el === before) return el;
+    el.remove();
+    const index = before ? this.children.indexOf(before) : this.children.length;
+    if (index < 0) throw new Error("Reference is not a child");
+    this.children.splice(index, 0, el);
+    el.parent = this;
+    return el;
+  }
+  remove(): void {
+    if (!this.parent) return;
+    if (FakeEl.activeElement && this.contains(FakeEl.activeElement))
+      FakeEl.activeElement = undefined;
+    this.parent.children.splice(this.parent.children.indexOf(this), 1);
+    this.parent = undefined;
+  }
+  text = "";
+  disabled = false;
+  value = "";
+  static activeElement: FakeEl | undefined;
+  get ownerDocument() {
+    return {
+      get activeElement() {
+        return FakeEl.activeElement;
+      },
+    };
+  }
+  focus(): void {
+    FakeEl.activeElement = this;
+  }
+  getAttribute(name: string): string | null {
+    return this.attributes.get(name) ?? null;
+  }
+  getBoundingClientRect() {
+    return { left: 0, top: 0 };
+  }
+  querySelectorAll(selector: string): FakeEl[] {
+    const match = (el: FakeEl) =>
+      selector.startsWith("[data-version=")
+        ? el.attributes.get("data-version") === /"(.*)"/.exec(selector)?.[1]
+        : selector.startsWith(".")
+          ? el.cls.split(" ").includes(selector.slice(1))
+          : el.tag === selector;
+    return this.children.flatMap((child) => [
+      ...(match(child) ? [child] : []),
+      ...child.querySelectorAll(selector),
+    ]);
+  }
+  querySelector(selector: string): FakeEl | undefined {
+    return this.querySelectorAll(selector)[0];
+  }
+
+  constructor(
+    readonly tag: string,
+    public cls: string = "",
+  ) {}
+
+  createEl(tag: string, o?: { text?: string; cls?: string } | string): FakeEl {
+    const el = new FakeEl(tag, typeof o === "string" ? o : (o?.cls ?? ""));
+    if (typeof o === "object" && o?.text) el.text = o.text;
+    this.appendChild(el);
+    return el;
+  }
+
+  createDiv(o?: { text?: string; cls?: string } | string): FakeEl {
+    return this.createEl("div", o);
+  }
+
+  createSpan(o?: { text?: string; cls?: string } | string): FakeEl {
+    return this.createEl("span", o);
+  }
+
+  empty(): void {
+    if (FakeEl.activeElement && this.contains(FakeEl.activeElement))
+      FakeEl.activeElement = undefined;
+    for (const child of this.children) child.parent = undefined;
+    this.children.length = 0;
+  }
+
+  contains(el: FakeEl): boolean {
+    return el === this || this.children.some((child) => child.contains(el));
+  }
+
+  setText(value: string): void {
+    this.text = value;
+  }
+
+  /**
+   * Obsidian's own `toggle`, which sets `hidden` rather than a class. Modelled
+   * because a badge that is only hidden when there is nothing to explain is a
+   * badge whose visibility is behaviour, and `allText` has to agree with what
+   * a person would see or an assertion about the panel's words is fiction.
+   */
+  hidden = false;
+
+  toggle(shown: boolean): void {
+    this.hidden = !shown;
+  }
+
+  hide(): void {
+    this.hidden = true;
+  }
+
+  show(): void {
+    this.hidden = false;
+  }
+
+  /**
+   * Listeners are recorded rather than ignored, so a test can click what the
+   * plugin drew. A modal whose buttons cannot be pressed is a modal whose
+   * behaviour is untested no matter how much of its markup is asserted on.
+   */
+  private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
+
+  addEventListener(event: string, handler: (event?: unknown) => void): void {
+    const list = this.listeners.get(event) ?? [];
+    list.push(handler);
+    this.listeners.set(event, list);
+  }
+
+  fire(event: string, value?: unknown): void {
+    for (const h of this.listeners.get(event) ?? []) h(value);
+  }
+
+  addClass(...classes: string[]): void {
+    for (const c of classes) {
+      // What a real DOMTokenList does, word for word, because a stub that
+      // shrugs at an empty token lets a crash through: the status bar
+      // painter passed one and it surfaced as a sync error about a
+      // DOMTokenList, from a stack that never mentioned the status bar.
+      if (c === "")
+        throw new Error(
+          "Failed to execute 'add' on 'DOMTokenList': The token provided must not be empty.",
+        );
+      if (/\s/.test(c))
+        throw new Error(
+          "Failed to execute 'add' on 'DOMTokenList': The token provided contains HTML space characters.",
+        );
+    }
+    this.cls = [this.cls, ...classes].filter(Boolean).join(" ");
+  }
+
+  removeClass(...classes: string[]): void {
+    const drop = new Set(classes);
+    this.cls = this.cls
+      .split(" ")
+      .filter((c) => c && !drop.has(c))
+      .join(" ");
+  }
+
+  readonly attributes = new Map<string, string>();
+
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
+  }
+
+  /** Every string anywhere in the tree, for asserting on what was rendered. */
+  allText(): string {
+    if (this.hidden) return "";
+    return [this.text, ...this.children.map((c) => c.allText())].filter(Boolean).join("\n");
+  }
+}
+
+/**
+ * Where the plugin is running, as far as it can tell.
+ *
+ * Desktop by default, and mutable so a test can make the host look like a
+ * phone: `addStatusBarItem` is declared unavailable there, and the guard
+ * around it is only tested if something can flip this.
+ */
+export const Platform = {
+  isDesktop: true,
+  isMobile: false,
+  isDesktopApp: true,
+  isMobileApp: false,
+  isIosApp: false,
+  isAndroidApp: false,
+  isTablet: false,
+  // Which operating system, which is what the suggested device name is made
+  // of. All false by default, which no real host is: that is the fallback
+  // word, and leaving it reachable is what tests it.
+  isMacOS: false,
+  isWin: false,
+  isLinux: false,
+};
+
+/* ---------------------------------------------------------------- *
+ * The app
+ * ---------------------------------------------------------------- */
+
+type VaultEvent = "create" | "modify" | "delete" | "rename";
+
+export class FakeVault {
+  readonly adapter = new FakeAdapter();
+
+  /** What the plugin reads instead of asking the adapter about every file. */
+  getAllLoadedFiles() {
+    return this.adapter.index();
+  }
+  getFiles() {
+    return this.getAllLoadedFiles().filter((file) => "extension" in file);
+  }
+  getFileByPath(path: string) {
+    return this.getFiles().find((file) => file.path === path) ?? null;
+  }
+  getAbstractFileByPath(path: string) {
+    return this.getAllLoadedFiles().find((file) => file.path === normalizePath(path)) ?? null;
+  }
+  /** Obsidian's own: "typically `.obsidian` but it could be different". */
+  configDir = ".obsidian";
+  private readonly handlers = new Map<VaultEvent, ((...args: unknown[]) => void)[]>();
+
+  on(name: VaultEvent, callback: (...args: unknown[]) => void): { name: VaultEvent } {
+    const list = this.handlers.get(name) ?? [];
+    list.push(callback);
+    this.handlers.set(name, list);
+    return { name };
+  }
+
+  /** Fires an event, as Obsidian would after a file changed. */
+  fire(name: VaultEvent, ...args: unknown[]): void {
+    for (const handler of this.handlers.get(name) ?? []) handler(...args);
+  }
+
+  /** How many handlers a plugin registered, so a test can see it registered any. */
+  handlerCount(): number {
+    return [...this.handlers.values()].reduce((n, list) => n + list.length, 0);
+  }
+}
+
+/**
+ * Just enough workspace.
+ *
+ * `onLayoutReady` runs its callback immediately when the layout is already up,
+ * and queues it otherwise. Both are modelled, because a plugin that only worked
+ * in one of the two cases would pass a test that only exercised the other.
+ */
+export class FakeWorkspace {
+  layoutReady = true;
+  private readonly waiting: (() => void)[] = [];
+
+  /** The file the plugin will be told is open. */
+  activeFile: { path: string; extension: string } | undefined;
+  readonly markdownLeaves: {
+    isDeferred?: boolean;
+    view: { save?: () => Promise<void> };
+  }[] = [];
+  getLeavesOfType(type: string) {
+    return type === "markdown" ? this.markdownLeaves : [];
+  }
+  /** Handlers registered per event name, so a test can fire one. */
+  readonly handlers = new Map<string, ((...args: unknown[]) => unknown)[]>();
+
+  onLayoutReady(callback: () => void): void {
+    if (this.layoutReady) callback();
+    else this.waiting.push(callback);
+  }
+
+  on(name: string, handler: (...args: unknown[]) => unknown): { name: string } {
+    const list = this.handlers.get(name) ?? [];
+    list.push(handler);
+    this.handlers.set(name, list);
+    return { name };
+  }
+
+  getActiveFile(): { path: string; extension: string } | undefined {
+    return this.activeFile;
+  }
+
+  /** Fires a registered event, which is what Obsidian would do. */
+  fire(name: string, ...args: unknown[]): void {
+    for (const h of this.handlers.get(name) ?? []) h(...args);
+  }
+
+  /** Obsidian finishing its startup. */
+  finishLayout(): void {
+    this.layoutReady = true;
+    while (this.waiting.length) this.waiting.shift()!();
+  }
+}
+
+export class App {
+  readonly vault = new FakeVault();
+  readonly workspace = new FakeWorkspace();
+}
+
+/* ---------------------------------------------------------------- *
+ * Notices
+ * ---------------------------------------------------------------- */
+
+/** Everything shown to the user, in order, for asserting on what was said. */
+export const notices: { message: string; duration: number | undefined }[] = [];
+
+/**
+ * Obsidian's icon helper, which sets a glyph inside an element.
+ *
+ * Recorded as an attribute so a test can assert which icon a state chose: the
+ * status bar is an icon and a tooltip now, and "which glyph" is the whole of
+ * what it says.
+ */
+export function setIcon(el: FakeEl, name: string): void {
+  el.setAttribute("data-icon", name);
+}
+
+export class Notice {
+  constructor(
+    message: string,
+    public duration?: number,
+  ) {
+    notices.push({ message: String(message), duration });
+  }
+
+  setMessage(): this {
+    return this;
+  }
+
+  hide(): void {
+    /* nothing to hide */
+  }
+}
+
+/* ---------------------------------------------------------------- *
+ * Plugin
+ * ---------------------------------------------------------------- */
+
+export class Component {
+  onload(): void {}
+  onunload(): void {}
+}
+
+export class Plugin extends Component {
+  /** What `saveData` wrote, which Obsidian keeps in the plugin's data.json. */
+  savedData: unknown = null;
+  readonly statusBarItems: FakeEl[] = [];
+  readonly ribbonIcons: { icon: string; title: string; callback: () => void; el: FakeEl }[] = [];
+  readonly commands: {
+    id: string;
+    name: string;
+    // Obsidian permits an async command callback and runCommand below
+    // awaits one. Typed as returning void, that await was awaiting a
+    // non-promise: the stub would resolve before the command it ran had
+    // finished, which is the sort of thing that makes a test flake rather
+    // than fail.
+    callback?: () => void | Promise<void>;
+    checkCallback?: (checking: boolean) => boolean;
+  }[] = [];
+  /** What registerCliHandler was given, so the handlers can be driven. */
+  readonly cliHandlers = new Map<
+    string,
+    { description: string; handler: (flags: Record<string, unknown>) => unknown }
+  >();
+  readonly registeredEvents: unknown[] = [];
+  readonly settingTabs: PluginSettingTab[] = [];
+  readonly protocolHandlers = new Map<string, (params: Record<string, string>) => void>();
+
+  constructor(
+    public app: App,
+    public manifest: { id: string; dir?: string },
+  ) {
+    super();
+  }
+
+  addStatusBarItem(): FakeEl {
+    const el = new FakeEl("div", "status-bar-item");
+    this.statusBarItems.push(el);
+    return el;
+  }
+
+  /**
+   * Recorded rather than ignored, because whether a tab was registered is the
+   * whole of whether Settings shows this plugin at all. Obsidian draws the
+   * gear beside a community plugin only for a plugin that calls this, so a
+   * stub that shrugged would let the panel go missing from the one place
+   * people look for it and no test would notice.
+   */
+  addSettingTab(tab: PluginSettingTab): void {
+    this.settingTabs.push(tab);
+  }
+
+  addRibbonIcon(icon: string, title: string, callback: (evt: unknown) => void): FakeEl {
+    const el = new FakeEl("div", "ribbon");
+    this.ribbonIcons.push({ icon, title, callback: () => callback(undefined), el });
+    return el;
+  }
+
+  addCommand(command: {
+    id: string;
+    name: string;
+    callback?: () => void;
+    checkCallback?: (checking: boolean) => boolean;
+  }): typeof command {
+    this.commands.push(command);
+    return command;
+  }
+
+  registerCliHandler(
+    command: string,
+    description: string,
+    _flags: unknown,
+    handler: (flags: Record<string, unknown>) => unknown,
+  ): void {
+    this.cliHandlers.set(command, { description, handler });
+  }
+
+  registerDomEvent(el: FakeEl, event: string, handler: (event?: unknown) => void): void {
+    el.addEventListener(event, handler);
+  }
+
+  registerEvent(ref: unknown): void {
+    this.registeredEvents.push(ref);
+  }
+
+  registerObsidianProtocolHandler(
+    action: string,
+    handler: (params: Record<string, string>) => void,
+  ): void {
+    this.protocolHandlers.set(action, handler);
+  }
+
+  registerInterval(id: number): number {
+    return id;
+  }
+
+  async loadData(): Promise<unknown> {
+    return this.savedData;
+  }
+
+  async saveData(data: unknown): Promise<void> {
+    // Round-tripped through JSON, as Obsidian's does by writing a file. A
+    // value that does not survive JSON would work here and fail there.
+    this.savedData = data === null || data === undefined ? null : JSON.parse(JSON.stringify(data));
+  }
+
+  /** Runs a command by id, the way a person would from the palette. */
+  async runCommand(id: string): Promise<void> {
+    const command = this.commands.find((c) => c.id === id);
+    if (!command) throw new Error(`no such command: ${id}`);
+    await command.callback?.();
+  }
+}
+
+/* ---------------------------------------------------------------- *
+ * Modal and Setting
+ * ---------------------------------------------------------------- */
+
+/**
+ * A plugin's tab in Obsidian's Settings dialog.
+ *
+ * Obsidian calls `display` each time the tab is opened and `hide` each time it
+ * is left, and hands the tab a `containerEl` it is expected to empty and
+ * refill. Both are modelled, because a tab that renders once and never tears
+ * down leaks its watcher, and that is a bug you only see the third time
+ * somebody opens Settings.
+ */
+export abstract class PluginSettingTab {
+  readonly containerEl = new FakeEl("div", "vertical-tab-content");
+
+  constructor(
+    public app: App,
+    public plugin: Plugin,
+  ) {}
+
+  abstract display(): void;
+  hide(): void {}
+}
+
+/** Every Modal built, newest last, so a test can read what it rendered. */
+export const modals: Modal[] = [];
+
+export class Modal {
+  readonly contentEl = new FakeEl("div", "modal-content");
+  readonly modalEl = new FakeEl("div", "modal");
+  readonly titleEl = new FakeEl("div", "modal-title");
+  isOpen = false;
+
+  setTitle(title: string): this {
+    this.titleEl.setText(title);
+    return this;
+  }
+
+  constructor(public app: App) {
+    modals.push(this);
+  }
+
+  open(): void {
+    this.isOpen = true;
+    this.onOpen();
+  }
+
+  close(): void {
+    this.isOpen = false;
+    this.onClose();
+  }
+
+  onOpen(): void {}
+  onClose(): void {}
+}
+
+export class TextComponent {
+  private value = "";
+  placeholder = "";
+  readonly inputEl = new FakeEl("input");
+  private change: ((value: string) => unknown) | undefined;
+
+  onChange(callback: (value: string) => unknown): this {
+    this.change = callback;
+    return this;
+  }
+
+  setPlaceholder(placeholder: string): this {
+    this.placeholder = placeholder;
+    return this;
+  }
+
+  getValue(): string {
+    return this.value;
+  }
+
+  setValue(value: string): this {
+    this.value = value;
+    return this;
+  }
+
+  /** Types into the field, as a person would. */
+  type(value: string): void {
+    this.value = value;
+    this.change?.(value);
+  }
+}
+
+export class DropdownComponent {
+  readonly selectEl = new FakeEl("select");
+  readonly options = new Map<string, string>();
+  private value = "";
+  private change: ((value: string) => unknown) | undefined;
+
+  addOptions(options: Record<string, string>): this {
+    for (const [value, label] of Object.entries(options)) this.addOption(value, label);
+    return this;
+  }
+  addOption(value: string, label: string): this {
+    this.options.set(value, label);
+    return this;
+  }
+  setValue(value: string): this {
+    this.value = value;
+    return this;
+  }
+  getValue(): string {
+    return this.value;
+  }
+  onChange(callback: (value: string) => unknown): this {
+    this.change = callback;
+    return this;
+  }
+  choose(value: string): void {
+    if (!this.options.has(value)) throw new Error("Unknown dropdown option");
+    this.value = value;
+    this.change?.(value);
+  }
+}
+
+export class ButtonComponent {
+  readonly buttonEl = new FakeEl("button");
+  disabled = false;
+  label = "";
+  cta = false;
+  warning = false;
+  private onClickHandler: (() => unknown) | undefined;
+
+  setIcon(_icon: string): this {
+    return this;
+  }
+  setTooltip(_tip: string): this {
+    return this;
+  }
+  setButtonText(name: string): this {
+    this.label = name;
+    return this;
+  }
+
+  setCta(): this {
+    this.cta = true;
+    return this;
+  }
+
+  setWarning(): this {
+    this.warning = true;
+    return this;
+  }
+
+  setDisabled(disabled: boolean): this {
+    this.disabled = disabled;
+    return this;
+  }
+
+  onClick(callback: () => unknown): this {
+    this.onClickHandler = callback;
+    return this;
+  }
+
+  /** Presses the button, and waits for whatever it started. */
+  async click(): Promise<void> {
+    if (this.disabled) return;
+    await this.onClickHandler?.();
+  }
+}
+
+/**
+ * Obsidian's settings row builder.
+ *
+ * Records what was built rather than rendering it, so a test can find a control
+ * by the name next to it, which is how a person finds it too.
+ */
+export class Setting {
+  name = "";
+  desc = "";
+  readonly texts: TextComponent[] = [];
+  readonly dropdowns: DropdownComponent[] = [];
+  readonly buttons: ButtonComponent[] = [];
+  readonly settingEl = new FakeEl("div", "setting-item");
+  /**
+   * The two children the real `Setting` exposes and this used to leave out.
+   *
+   * Obsidian's own type has `settingEl`, `infoEl` and `nameEl` since 0.9.7,
+   * and code that hangs a hover marker on the row's name reaches for
+   * `nameEl`. Without them here that code threw only in a real vault, which
+   * is the whole failure mode this fake exists to prevent.
+   */
+  readonly infoEl = new FakeEl("div", "setting-item-info");
+  readonly nameEl = new FakeEl("div", "setting-item-name");
+  /**
+   * The block under the name, which is where a revealed `?` detail goes.
+   *
+   * Added for the same reason as the two above: `help` writes into it, and a
+   * fake without it would let that throw only in a real vault. This is the
+   * third time that comment has had to be extended, which is the argument for
+   * modelling the whole of what is reached for rather than what is reached for
+   * today.
+   */
+  readonly descEl = new FakeEl("div", "setting-item-description");
+
+  constructor(containerEl: FakeEl) {
+    this.settingEl.appendChild(this.infoEl);
+    this.infoEl.appendChild(this.nameEl);
+    this.infoEl.appendChild(this.descEl);
+    containerEl.appendChild(this.settingEl);
+    built.push(this);
+  }
+
+  setName(name: string): this {
+    this.name = String(name);
+    return this;
+  }
+
+  setDesc(desc: string): this {
+    this.desc = String(desc);
+    return this;
+  }
+
+  setHeading(): this {
+    this.settingEl.addClass("setting-item-heading");
+    return this;
+  }
+
+  addSearch(cb: (component: TextComponent) => unknown): this {
+    return this.addText(cb);
+  }
+  addExtraButton(cb: (component: ButtonComponent) => unknown): this {
+    return this.addButton(cb);
+  }
+  addText(cb: (component: TextComponent) => unknown): this {
+    const component = new TextComponent();
+    this.texts.push(component);
+    cb(component);
+    return this;
+  }
+
+  addDropdown(cb: (component: DropdownComponent) => unknown): this {
+    const component = new DropdownComponent();
+    this.dropdowns.push(component);
+    cb(component);
+    return this;
+  }
+
+  addButton(cb: (component: ButtonComponent) => unknown): this {
+    const component = new ButtonComponent();
+    this.buttons.push(component);
+    cb(component);
+    return this;
+  }
+}
+
+/** Native row grouping introduced in Obsidian 1.11. */
+export class SettingGroup {
+  readonly listEl: FakeEl;
+
+  constructor(containerEl: FakeEl) {
+    this.listEl = containerEl.createDiv("setting-group").createDiv("setting-items");
+  }
+}
+
+/** Every Setting built, newest last, so a test can find one by name. */
+export const built: Setting[] = [];
+
+/** Forgets everything recorded, between tests. */
+export function resetStub(): void {
+  FakeEl.activeElement = undefined;
+  notices.length = 0;
+  built.length = 0;
+  modals.length = 0;
+}
+
+export class MenuItem extends ButtonComponent {
+  setTitle(title: string): this {
+    return this.setButtonText(title);
+  }
+}
+export class Menu {
+  static latest: Menu | undefined;
+  items: MenuItem[] = [];
+  constructor() {
+    Menu.latest = this;
+  }
+  addItem(build: (item: MenuItem) => unknown): this {
+    const item = new MenuItem();
+    build(item);
+    this.items.push(item);
+    return this;
+  }
+  addSeparator(): this {
+    return this;
+  }
+  showAtMouseEvent(_event: unknown): void {}
+  showAtPosition(_position: unknown): void {}
+}

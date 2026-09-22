@@ -1,0 +1,124 @@
+# Asks, weekly, whether anything this depends on has turned out to be a hole.
+#
+# Nothing here has ever asked. The lockfiles are pinned, the actions are pinned
+# and the toolchain is pinned, all of which is good and none of which is the
+# same as the pinned versions being sound: a dependency does not change when an
+# advisory is published against it, which is exactly why nobody notices. A pin
+# without a watch is a decision to run one version for ever.
+#
+# Weekly rather than on every push. An advisory is not caused by a commit, and
+# a check that runs on commits reports old news on every one of them until
+# somebody stops reading it.
+#
+# ## The policy, because a check nobody owns is a check nobody acts on
+#
+# This is one person's project, so ownership is not a rota: it is that a red
+# run here opens an issue and the issue is the record. What to do with one:
+#
+#   - Reachable from this code, and exploitable by a server or a device on the
+#     network: fix it, and cut a release. This is the only class that is
+#     urgent, and the reason `govulncheck` is used rather than a manifest
+#     scanner is that it answers exactly this question for Go.
+#   - Reachable, and not exploitable in the way this project uses it: say so in
+#     the issue, in a sentence naming the call path, and update on the next
+#     ordinary bump. An advisory is a reason to look, not a proof that the code
+#     is affected.
+#   - Not reachable: update on the next ordinary bump, and close the issue with
+#     the reason.
+#
+# What is not acceptable is a green tick that means "nobody looked". A run that
+# cannot complete fails rather than passing, for the same reason
+# `scripts/check.sh` exits 2 when a check could not run.
+#
+# Updating a dependency changes bytes that this protocol depends on. The
+# compression golden check in CI pins the sealed-chunk format byte for byte
+# across both runtimes: a compressor that emits different bytes gives one chunk
+# two names and deduplication stops without an error. So an update goes through
+# the full gate like anything else, and a green `bun audit` is never a reason
+# to skip it.
+name: Advisories
+
+on:
+  schedule:
+    # Monday morning, UTC. A day with a week in front of it.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # govulncheck rather than a manifest scanner: it reports the advisories
+      # whose vulnerable functions this code can actually reach, which is the
+      # difference between a list to triage and a list to ignore.
+      - name: govulncheck
+        run: |
+          # Pinned like everything else (I22). The advisory data is fetched
+          # at run time and is always current; what is pinned here is the
+          # tool that reads it, so a run failing is news about a dependency
+          # rather than news about the scanner.
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          govulncheck ./...
+
+  js:
+    name: JavaScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.1
+      - name: install
+        working-directory: client
+        run: bun install --frozen-lockfile
+      - name: bun audit
+        working-directory: client
+        run: bun audit
+
+  # One issue, reopened and appended to, rather than one per run. A weekly job
+  # that files a new issue every Monday is a job whose notifications get muted,
+  # and a muted advisory check is worse than none because it looks like cover.
+  say-so:
+    name: say so
+    needs: [go, js]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: open or update the advisory issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body="A dependency advisory check failed. The run says which and where:
+
+          $RUN
+
+          What to do with it is in .github/workflows/advisories.yml. In short:
+          reachable and exploitable is a fix and a release, reachable and not is
+          a sentence in this issue naming the call path, and not reachable waits
+          for the next ordinary bump. Close this with the reason, not silently."
+
+          existing=$(gh issue list --repo "$REPO" --state open \
+            --label advisory --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+            echo "commented on #$existing"
+          else
+            gh label create advisory --repo "$REPO" \
+              --description "A dependency advisory needs triage" --color d93f0b 2>/dev/null || true
+            gh issue create --repo "$REPO" --label advisory \
+              --title "Dependency advisories need triage" --body "$body"
+          fi

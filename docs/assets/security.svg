@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" width="960" height="520" role="img"><defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B8C4D2"/></marker></defs>
+<rect x="1" y="1" width="418" height="518" rx="6" fill="#E8EDF3" stroke="#B8C4D2" stroke-width="1"/>
+<text x="20" y="30" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#2C3844" text-anchor="start">Your keys</text>
+<rect x="18" y="44" width="384" height="66" rx="6" fill="#F4F6F9" stroke="#8FA3B8" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="32" y="66" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="#2C3844" text-anchor="start">Recovery key</text>
+<text x="32" y="84" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="start">Keep a separate copy. Paired devices do not retain it.</text>
+<text x="32" y="100" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="start">Adds devices, manages access, and replaces the root key.</text>
+<path d="M210,110 L210,136" stroke="#B8C4D2" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<text x="20" y="154" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="#2C3844" text-anchor="start">On each paired device</text>
+<text x="20" y="170" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="start">An invite grants access to the data key, without sharing the recovery key.</text>
+<rect x="18" y="180" width="188" height="62" rx="6" fill="#F4F6F9" stroke="#B8C4D2" stroke-width="1"/>
+<text x="32" y="201" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="#2C3844" text-anchor="start">Device secret</text>
+<text x="32" y="218" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="start">this device&#x27;s own,</text>
+<text x="32" y="234" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="start">and revocable on its own</text>
+<rect x="214" y="180" width="188" height="62" rx="6" fill="#F4F6F9" stroke="#B8C4D2" stroke-width="1"/>
+<text x="228" y="201" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="#2C3844" text-anchor="start">Data key</text>
+<text x="228" y="218" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="start">32 bytes, one per vault,</text>
+<text x="228" y="234" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="start">held by every paired device</text>
+<path d="M112,242 L112,254" stroke="#B8C4D2" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<path d="M296,242 L296,322" stroke="#B8C4D2" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<rect x="18" y="256" width="188" height="62" rx="6" fill="#F4F6F9" stroke="#B8C4D2" stroke-width="1"/>
+<text x="32" y="277" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="#2C3844" text-anchor="start">Device auth key</text>
+<text x="32" y="294" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="start">proves this device may connect;</text>
+<text x="32" y="310" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="start">the server keeps only its hash</text>
+<rect x="18" y="324" width="384" height="62" rx="6" fill="#F4F6F9" stroke="#B8C4D2" stroke-width="1"/>
+<text x="32" y="345" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="#2C3844" text-anchor="start">Content keys</text>
+<text x="32" y="364" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">names   bodies   nonces   entry MACs</text>
+<text x="32" y="379" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="start">a new recovery key never changes these</text>
+<rect x="18" y="400" width="384" height="104" rx="6" fill="#F4F6F9" stroke="#8FA3B8" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="32" y="422" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="#2C3844" text-anchor="start">What leaving looks like</text>
+<text x="32" y="444" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">•  a note is cut into content-defined chunks</text>
+<text x="32" y="462" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">•  each chunk is deflated, then sealed with AES-GCM-256</text>
+<text x="32" y="480" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">•  a chunk is named by the SHA-256 of its ciphertext</text>
+<text x="32" y="498" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">•  content and selected entry fields share a MAC</text>
+<path d="M428,255 L512,255" stroke="#8FA3B8" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+<text x="470" y="243" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="600" fill="#4B5C70" text-anchor="middle">ciphertext</text>
+<text x="470" y="279" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="middle">sizes and times</text>
+<text x="470" y="293" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11" font-weight="400" fill="#5A6B7D" text-anchor="middle">in the clear</text>
+<rect x="521" y="1" width="438" height="518" rx="6" fill="#E8EDF3" stroke="#B8C4D2" stroke-width="1"/>
+<text x="540" y="30" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#2C3844" text-anchor="start">On your server</text>
+<rect x="540" y="46" width="400" height="190" rx="6" fill="#F4F6F9" stroke="#B8C4D2" stroke-width="1"/>
+<text x="554" y="68" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="#2C3844" text-anchor="start">What it holds</text>
+<text x="554" y="90" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">•  sealed chunk bodies, named by their hash</text>
+<text x="554" y="111" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">•  sealed file names it has never read</text>
+<text x="554" y="132" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">•  sizes, times and chunk counts</text>
+<text x="554" y="153" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">•  one row per device: id, name, and a hash of its key</text>
+<text x="554" y="174" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">•  stored auth hashes; use TLS to protect credentials</text>
+<text x="554" y="195" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">•  the wrapped data key, which it cannot open</text>
+<text x="554" y="216" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">•  invite blobs, which it also cannot open</text>
+<rect x="540" y="252" width="400" height="132" rx="6" fill="#F4F6F9" stroke="#8FA3B8" stroke-width="1"/>
+<text x="554" y="274" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="#2C3844" text-anchor="start">Without the data key, it cannot</text>
+<text x="554" y="296" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">✗  read a note, a name, or a folder</text>
+<text x="554" y="317" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">✗  forge protected content or entry fields</text>
+<text x="554" y="338" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">✗  unwrap the data key, or open an invite</text>
+<text x="554" y="359" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">UIDs and device labels are outside the MAC.</text>
+<rect x="540" y="400" width="400" height="104" rx="6" fill="#F4F6F9" stroke="#8FA3B8" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="554" y="422" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="#2C3844" text-anchor="start">What it can still do</text>
+<text x="554" y="444" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">Withhold updates, or replay an older valid version.</text>
+<text x="554" y="462" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">Replay can revert an unchanged local note. Ordering</text>
+<text x="554" y="480" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5A6B7D" text-anchor="start">and completeness still depend on trusting the server.</text>
+</svg>

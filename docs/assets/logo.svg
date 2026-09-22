@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" width="320" height="320" role="img" aria-labelledby="title">
+  <title id="title">Telimus Sync</title>
+  <defs>
+    <radialGradient id="cap" cx="112" cy="35" r="113" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f5ecff"/>
+      <stop offset=".5" stop-color="#d3baff"/>
+      <stop offset="1" stop-color="#9b74ec"/>
+    </radialGradient>
+    <radialGradient id="left-cap" cx="39" cy="88" r="71" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ebdfff"/>
+      <stop offset=".52" stop-color="#c1a3f1"/>
+      <stop offset="1" stop-color="#8260bd"/>
+    </radialGradient>
+    <linearGradient id="right-cap" x1="209" y1="116" x2="284" y2="145" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7752b1"/>
+      <stop offset=".52" stop-color="#ceb4ff"/>
+      <stop offset="1" stop-color="#a881ee"/>
+    </linearGradient>
+    <linearGradient id="left-face" x1="26" y1="127" x2="83" y2="241" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#b798e7"/>
+      <stop offset=".58" stop-color="#8a68c8"/>
+      <stop offset="1" stop-color="#6845aa"/>
+    </linearGradient>
+    <linearGradient id="left-side" x1="58" y1="150" x2="107" y2="224" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7854b8"/>
+      <stop offset=".55" stop-color="#4d3087"/>
+      <stop offset="1" stop-color="#25164e"/>
+    </linearGradient>
+    <linearGradient id="center-left" x1="98" y1="96" x2="154" y2="276" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d2b1ff"/>
+      <stop offset=".47" stop-color="#ac80f0"/>
+      <stop offset="1" stop-color="#8657e0"/>
+    </linearGradient>
+    <linearGradient id="center-front" x1="132" y1="91" x2="192" y2="286" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9368e5"/>
+      <stop offset=".4" stop-color="#7950d1"/>
+      <stop offset="1" stop-color="#4d269c"/>
+    </linearGradient>
+    <linearGradient id="center-side" x1="181" y1="120" x2="228" y2="190" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#493083"/>
+      <stop offset=".45" stop-color="#352065"/>
+      <stop offset="1" stop-color="#1c103e"/>
+    </linearGradient>
+    <linearGradient id="right-front" x1="202" y1="163" x2="263" y2="233" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#704bad"/>
+      <stop offset=".45" stop-color="#9b75e6"/>
+      <stop offset="1" stop-color="#57309d"/>
+    </linearGradient>
+    <linearGradient id="right-side" x1="252" y1="177" x2="294" y2="217" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#352062"/>
+      <stop offset="1" stop-color="#493079"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="78" y1="58" x2="244" y2="231" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff" stop-opacity=".95"/>
+      <stop offset=".48" stop-color="#e6d2ff" stop-opacity=".65"/>
+      <stop offset="1" stop-color="#ad87f2" stop-opacity=".12"/>
+    </linearGradient>
+    <linearGradient id="reflection" x1="74" y1="116" x2="201" y2="256" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ead9ff" stop-opacity=".26"/>
+      <stop offset="1" stop-color="#cfb4ff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="left-clip">
+      <path d="M28 112Q28 108 33 111L61 130Q64 132 64 137V253Q64 257 60 253L31 224Q28 221 28 217Z"/>
+    </clipPath>
+    <clipPath id="center-clip">
+      <path d="M100 61Q100 57 105 61L132 85Q135 87 135 93Q135 87 142 87H182Q189 87 189 94V285Q189 292 182 292H141Q136 292 131 287L103 260Q100 257 100 251Z"/>
+    </clipPath>
+    <clipPath id="right-clip">
+      <path d="M205 142L250 159Q256 161 256 167V254Q256 261 250 262L211 269Q205 270 205 264Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- The rear column sits in the shadow of the central stone. -->
+  <path d="M28 112Q28 108 32 104L59 79Q61 77 65 77L101 72V254L68 258Q62 259 58 254L31 225Q28 222 28 217Z" fill="#362054"/>
+  <path d="M29 112Q29 108 33 111L61 130Q64 132 64 137V253Q64 257 60 253L32 224Q29 221 29 217Z" fill="url(#left-face)"/>
+  <path d="M64 138Q64 132 69 131L99 119V250Q99 254 95 254L69 257Q64 257 64 251Z" fill="url(#left-side)"/>
+  <path d="M30 107L60 80Q62 78 66 78L97 74Q100 74 100 79V109Q100 116 96 118L68 129Q64 131 60 128L32 110Q29 109 30 107Z" fill="url(#left-cap)"/>
+  <path d="M30 108Q31 110 35 112L60 129Q64 132 64 139M64 139Q64 133 69 131L96 120" fill="none" stroke="url(#rim)" stroke-width="1.6"/>
+  <path d="M31 105L60 79Q63 77 67 77L97 74" fill="none" stroke="#f1e5ff" stroke-opacity=".65" stroke-width=".8"/>
+  <path d="M27 137Q54 186 100 213V270H27Z" fill="url(#reflection)" clip-path="url(#left-clip)"/>
+
+  <!-- Broad shaded facets and small bevels give the main column its depth. -->
+  <path d="M100 61Q100 56 104 52L130 28Q133 25 138 25H182Q186 25 190 29L216 53Q220 57 220 63V246Q220 253 215 259L191 288Q188 292 182 292H140Q134 292 130 288L104 261Q100 257 100 252Z" fill="#42216e"/>
+  <path d="M101 63Q101 58 106 62L131 85Q135 88 135 94V285Q135 291 131 287L105 260Q101 256 101 252Z" fill="url(#center-left)"/>
+  <path d="M135 94Q135 87 142 87H182Q189 87 189 94V284Q189 291 182 291H142Q135 291 135 284Z" fill="url(#center-front)"/>
+  <path d="M189 94Q189 88 194 83L214 64Q219 59 219 65V246Q219 252 215 257L191 287Q189 290 189 284Z" fill="url(#center-side)"/>
+  <path d="M102 58Q101 56 105 52L131 29Q134 26 138 26H182Q186 26 189 29L215 54Q219 58 216 61L191 83Q188 86 182 86H141Q135 86 131 82L105 61Z" fill="url(#cap)"/>
+  <path d="M104 53L132 28Q135 26 139 26H181Q186 26 189 29L215 54" fill="none" stroke="#f3e7ff" stroke-opacity=".75" stroke-width="1"/>
+  <path d="M102 60Q104 59 108 63L131 84Q135 87 135 95M135 95Q135 87 143 87H181Q189 87 193 83L215 63Q219 59 219 63" fill="none" stroke="url(#rim)" stroke-width="1.7"/>
+  <path d="M100 107Q140 165 189 200V292H100Z" fill="url(#reflection)" clip-path="url(#center-clip)"/>
+  <path d="M102 68V250Q102 256 106 260L132 286M136 96V282Q136 290 142 290H181" fill="none" stroke="url(#rim)" stroke-width=".7"/>
+
+  <!-- The shortest column overlaps the shaded face, keeping the silhouette compact. -->
+  <path d="M220 102H257Q262 102 266 106L289 129Q292 132 292 138V218Q292 222 288 226L259 259Q256 263 250 264L210 271Q203 272 203 264L202 144Q201 139 205 134L218 113Q220 110 220 102Z" fill="#25113f"/>
+  <path d="M206 142L250 159Q256 161 256 168V254Q256 261 250 262L211 269Q205 270 205 264V149Q205 145 206 142Z" fill="url(#right-front)"/>
+  <path d="M256 168Q256 162 261 158L287 136Q291 132 291 138V217Q291 221 288 225L260 256Q256 261 256 254Z" fill="url(#right-side)"/>
+  <path d="M221 103L257 104Q262 104 265 107L288 130Q292 133 288 136L260 158Q256 161 251 159L208 142Q203 140 206 135L219 114Q221 110 221 103Z" fill="url(#right-cap)"/>
+  <path d="M223 103L257 104Q262 104 265 107L288 130" fill="none" stroke="#e5d5ff" stroke-opacity=".65" stroke-width=".9"/>
+  <path d="M205 142Q207 140 211 143L251 159Q256 161 256 168M256 168Q256 162 261 158L287 136Q291 133 291 138" fill="none" stroke="url(#rim)" stroke-width="1.6"/>
+  <path d="M204 222Q236 199 256 176V264L204 274Z" fill="url(#reflection)" clip-path="url(#right-clip)"/>
+</svg>

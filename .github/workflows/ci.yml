@@ -1,0 +1,548 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # Formatting is checked rather than applied, so a diff never lands as a
+      # surprise in somebody else's commit.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      # The store and the chunk writer are concurrent, and a data race there is
+      # the kind of fault that shows up as a lost note rather than a crash.
+      - name: test
+        run: go test -race -count=1 ./...
+
+      # The systemd unit `telimus service` prints is a deployment artifact, so
+      # it is rendered here and checked by systemd itself rather than by eye.
+      # The binary and user are real ones on this runner, because verify
+      # checks that ExecStart exists and that User resolves. Skipped, saying
+      # so, on a runner without systemd.
+      - name: the systemd unit verifies
+        run: |
+          if ! command -v systemd-analyze >/dev/null; then
+            echo "systemd-analyze is not on this runner; skipping the unit check"
+            exit 0
+          fi
+          go build -o "$RUNNER_TEMP/telimus" ./cmd/telimus
+          "$RUNNER_TEMP/telimus" service \
+            -data "$RUNNER_TEMP/telimus-data" -addr 127.0.0.1:3003 \
+            -binary "$RUNNER_TEMP/telimus" -user "$(id -un)" > "$RUNNER_TEMP/telimus.service"
+          cat "$RUNNER_TEMP/telimus.service"
+          systemd-analyze verify "$RUNNER_TEMP/telimus.service"
+
+  # The compose file is the example people copy, and its whole point is that
+  # a pull cannot move you to an image nobody tested. A pin two releases stale
+  # is that hazard wearing a seatbelt, and nothing noticed for two releases.
+  #
+  # Compared against the newest `server/v*` tag, not the plugin's manifest:
+  # the image is built on a server tag, so a client-only release moves the
+  # plugin while the server correctly stays put. Comparing against the
+  # manifest would fail every client-only release for no reason.
+  #
+  # Older-than fails; equal or newer passes, because the version bump commit
+  # lands before the tag that releases it.
+  compose-pin:
+    name: the compose pin is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      # The release verifier now delegates its packed CLI check to Bun. This
+      # job lacked it, so the first MCP release passed locally and failed here.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.1
+
+      - name: the pinned image is not behind the newest server release
+        run: scripts/pin-check.sh
+
+      # The gate the three publishing workflows call. Checked here rather than
+      # only in those, because the only place it runs for real is a release,
+      # and a release is the wrong moment to find out it says yes to a commit
+      # nothing has tested.
+      - name: the publish gate refuses an unchecked commit
+        run: scripts/ci-passed.test.sh
+
+      # And which tags a release is allowed to move. The cases it gets wrong
+      # are the ones that happen once: the first backport, the first
+      # prerelease, both of which used to take `latest` from the newest stable
+      # server without saying so.
+      - name: the tags a release may move are the right ones
+        run: scripts/release-tags.test.sh
+
+      # And that the workflow asks for them at the moment it applies them. Two
+      # releases in flight together each decided while it was the newest, and
+      # the one that finished last moved `latest` backward onto an older
+      # server.
+      - name: the image release promotes in order
+        run: scripts/release-order.test.sh
+
+      # And that the workflow which publishes a release can be started at all.
+      # A draft fires no release event, so one listening for `created` sat
+      # there with nothing running, on the documented flow.
+      # And that the step which applies them picks an image that exists, moves
+      # an alias no further back than it already is, and treats a repository
+      # with nothing to promote as a no-op.
+      - name: the image promotion picks published images
+        run: scripts/release-promote.test.sh
+
+      - name: the attestation can be started
+        run: scripts/attest-trigger.test.sh
+
+      - name: the runbook prints what it means to
+        run: scripts/release-runbook.test.sh
+
+      - name: the release verifier refuses incomplete assets
+        run: bash scripts/verify-release.test.sh
+
+      - name: the pin check excuses one commit and no others
+        run: scripts/pin-check.test.sh
+
+      # A declaration inserted between a doc comment and its function leaves
+      # the paragraph documenting something else, and the compiler has nothing
+      # to say about it. Eight had accumulated, one of them the durability
+      # contract on `chunks.Store.Put`.
+      - name: every doc comment names what it sits on
+        run: scripts/godoc-attached.sh
+
+      # And that no workflow reaches for a mutable tag, here included. A tag is
+      # a name somebody else can repoint, and these files are what builds,
+      # signs and publishes the project.
+      - name: every action is pinned to a commit
+        run: scripts/actions-pinned.sh
+
+  # docs/server.md has carried the restore rehearsal as prose since the backup
+  # was written, and a recovery path tested only in docs is a rumour. Not
+  # because the steps are wrong: because nobody has run them since the backup
+  # format, the schema or the startup checks last moved, and the one command
+  # nothing else exercises is the one you reach for on the worst day.
+  #
+  # Its own job so that "the restore rehearsal failed" is a sentence CI can
+  # say, and behind a build tag so that a -run filter over the unit tests
+  # cannot skip it in silence. `go test` compiles and vets the tagged file, so
+  # it is not outside the checks above by being outside `go vet ./...`.
+  restore:
+    name: the restore rehearsal
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # The runbook, executed against the built binary: back up, lose the
+      # original, copy the backup somewhere fresh, verify it deeply, check what
+      # it holds against what it claims, start a server on it, and read every
+      # version and every body back over a real socket.
+      - name: the backup restores, verifies and serves what it held
+        run: go test -tags rehearsal -run TestRestoreRehearsal -count=1 ./cmd/telimus/
+
+  # The same client suite on a case-folding filesystem (I18).
+  #
+  # A dozen tests ask the disk whether it folds case and skip when it does not,
+  # which is honest and which meant they only ever ran on a maintainer's laptop.
+  # Every runner above is Linux, so the behaviour that F01 was about (a stat for
+  # "NOTE.md" finding "Note.md", and a delete of one taking the other) was
+  # checked in CI exactly never. macOS runners are APFS, which folds case by
+  # default, so this is the same suite against the other kind of disk.
+  #
+  # Its own job rather than a matrix on `client`, because the Linux one carries
+  # the format check, the typecheck and the compression golden, and running
+  # those twice buys nothing. What this adds is the filesystem.
+  # systemd's opinion of the unit `telimus service` writes (I20).
+  #
+  # `TestService` checks the unit's text against what this project meant to
+  # write, which is a test of this repository agreeing with itself. Whether
+  # systemd accepts it is a different question and has never been asked: no
+  # runner ran systemd and `scripts/check.sh` runs on macOS, where there is
+  # none. A directive misspelled, or one that a newer systemd refuses, produces
+  # a unit that fails on first start and every five seconds after that under
+  # Restart=always, at whatever hour somebody installed it.
+  #
+  # `systemd-analyze verify` is what systemd itself says. It is stricter than
+  # loading the unit and it needs no root and no running service.
+  systemd:
+    name: the systemd unit is one systemd accepts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: systemd accepts the unit
+        run: |
+          set -euo pipefail
+          systemd-analyze --version | head -1
+
+          go build -o /tmp/telimus ./cmd/telimus
+          # The flags somebody would actually use, including the ceiling,
+          # because that is the one a person adds by hand and the one most
+          # likely to be written into the unit wrongly.
+          /tmp/telimus service \
+            -data /var/lib/telimus -addr 0.0.0.0:3003 -vault default \
+            -user telimus -binary /usr/local/bin/telimus -max-file 134217728 \
+            > /tmp/telimus.service
+          cat /tmp/telimus.service
+
+          # Copied into a directory systemd looks in, because verify resolves a
+          # unit by name and reports "not found" for a bare path in some
+          # versions, which passes for the wrong reason.
+          sudo mkdir -p /etc/systemd/system
+          sudo cp /tmp/telimus.service /etc/systemd/system/telimus.service
+
+          # And put the binary where the unit says it is.
+          #
+          # Newer systemd checks that ExecStart names something executable and
+          # says "Command /usr/local/bin/telimus is not executable: No such
+          # file or directory". The filter below was written against an older
+          # version's wording and did not match it, so this job started failing
+          # on a runner image bump with nothing wrong in the unit.
+          #
+          # Installing it rather than widening the filter, because the filter
+          # would then be hiding the one thing this check should catch: a
+          # `-binary` path that is wrong. With the file really there, systemd
+          # resolving ExecStart is part of what passes.
+          sudo install -m 0755 /tmp/telimus /usr/local/bin/telimus
+
+          # Warnings about a user or a binary that does not exist on a runner
+          # are expected and are not what this is looking for. Everything else
+          # is: a directive systemd does not know, a value it cannot parse, a
+          # dependency that cannot be resolved.
+          out=$(systemd-analyze verify /etc/systemd/system/telimus.service 2>&1 || true)
+          echo "$out"
+          # Grep out the two classes that are about this runner rather than
+          # about the unit.
+          real=$(printf '%s\n' "$out" \
+            | grep -v -e "Unit configuration has fatal error" \
+            | grep -v -e "telimus.service: Failed to create" \
+            | grep -vi -e "user or group" -e "does not exist" -e "Cannot find user" \
+            | grep -v -e "^$" || true)
+          if [ -n "$real" ]; then
+            echo "systemd objects to the unit telimus writes:" >&2
+            printf '%s\n' "$real" >&2
+            exit 1
+          fi
+          echo "systemd accepts it"
+
+  # The client suite with its vaults on a filesystem of its own (I20).
+  #
+  # Every test makes its vault under `tmpdir()`, which on a runner is the root
+  # filesystem, and that is the only kind of disk this project has ever been
+  # tested against. The matrix in docs/server.md had "a vault on a mounted
+  # subdirectory: never", and that is the case somebody actually has: a NAS
+  # mount, an external drive, a separate partition for notes.
+  #
+  # A loopback ext4 image is a real filesystem with its own superblock, its own
+  # free space and its own mount options, reached through a mount point. Setting
+  # TMPDIR is what puts the vaults on it, with no change to a single test: every
+  # one of them already asks the OS where temporary files go.
+  #
+  # Not a substitute for testing a network filesystem, which is the case the
+  # matrix is honest about not covering. It is the difference between "one
+  # filesystem, the runner's" and "a filesystem, mounted".
+  client-mounted:
+    name: client, with vaults on a mounted filesystem
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.1
+
+      - name: a filesystem of its own, mounted
+        run: |
+          set -euo pipefail
+          # 4 GiB, which is room for the stress suite's attachments with a wide
+          # margin. A vault that filled the image would fail as a disk-full
+          # error and read as a bug in this project.
+          dd if=/dev/zero of=/tmp/telimus.img bs=1M count=4096 status=none
+          mkfs.ext4 -q /tmp/telimus.img
+          sudo mkdir -p /mnt/telimus
+          sudo mount -o loop /tmp/telimus.img /mnt/telimus
+          sudo mkdir -p /mnt/telimus/tmp
+          sudo chown -R "$(id -u):$(id -g)" /mnt/telimus
+          # Asserted, not assumed. A mount that silently did not happen would
+          # leave TMPDIR pointing at the root filesystem and this job would go
+          # on passing while testing nothing new, which is the shape of failure
+          # the case-folding job also guards against.
+          mountpoint -q /mnt/telimus
+          df -h /mnt/telimus
+
+      - name: install
+        working-directory: client
+        run: bun install --frozen-lockfile
+
+      - name: test
+        working-directory: client
+        env:
+          TMPDIR: /mnt/telimus/tmp
+        run: |
+          set -euo pipefail
+          # The vaults land wherever the OS says temporary files go, so this is
+          # the whole of the change.
+          test "$(node -p 'require("node:os").tmpdir()')" = /mnt/telimus/tmp
+          bun run test
+
+  client-case-folding:
+    name: client, on a case-folding filesystem
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Both toolchains, because the client's tests build cmd/telimus and talk
+      # to it over a real socket.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.1
+
+      # The runner's filesystem is asserted rather than assumed. If GitHub ever
+      # moves macOS runners to a case-sensitive volume this job would go on
+      # passing while quietly skipping the only thing it is here for, which is
+      # the exact failure the job exists to end.
+      - name: this runner folds case
+        run: |
+          set -euo pipefail
+          d=$(mktemp -d)
+          printf 'probe' > "$d/CaseProbe.tmp"
+          if [ ! -f "$d/caseprobe.tmp" ]; then
+            echo "This runner's filesystem is case-sensitive, so the tests this" >&2
+            echo "job exists for would all skip. Nothing here would say so." >&2
+            exit 1
+          fi
+          echo "case-folding, as expected"
+
+      - name: install
+        working-directory: client
+        run: bun install --frozen-lockfile
+
+      - name: test
+        working-directory: client
+        run: bun run test
+
+  client:
+    name: client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The client's tests build cmd/telimus and talk to it over a real socket,
+      # so this job needs both toolchains.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.1
+
+      - name: install
+        working-directory: client
+        run: bun install --frozen-lockfile
+
+      # Formatting is checked, never written, because a CI job that rewrites
+      # your branch is one you stop trusting. `bun run format` fixes it.
+      - name: format
+        working-directory: client
+        run: bun run format:check
+
+      - name: typecheck
+        working-directory: client
+        run: bun run typecheck
+
+      - name: test
+        working-directory: client
+        run: bun run test
+
+      # The sealed-chunk format, byte for byte, under a second runtime. A chunk
+      # is named by the hash of its sealed bytes, so a compressor or cipher
+      # that differed between Node and Bun would give one chunk two names and
+      # dedup would silently stop; the vitest run above checks the same table
+      # under Node.
+      - name: compression golden, under bun
+        working-directory: client
+        run: bun run src/core/compression-golden.run.ts
+
+      # A plugin bundle that reaches for a node: builtin compiles, passes every
+      # other test, and fails only on a phone.
+      - name: build
+        working-directory: client
+        run: bun run build
+
+      # Everything between that build and a working `telimus` on somebody else's
+      # machine: what `files` ships, what `bin` points at, and whether the
+      # bundle starts under node, which is the runtime the package claims and
+      # the one nothing above uses. An npm version cannot be replaced once it
+      # is published, so this runs here as well as in the publish workflow.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: gallery screenshots contain PNG images
+        run: node scripts/check-screenshots.mjs
+      - name: the packed CLI installs and runs under node
+        run: scripts/pack-check.sh
+
+  # The panel, in every state it has, walked and written down so that somebody
+  # can look at it. Two layout bugs here have been found by taking a screenshot
+  # and none by a test, and taking a screenshot only happens when somebody
+  # remembers to, on a machine with Obsidian on it.
+  #
+  # It is not a screenshot and it cannot be one. Obsidian is proprietary and is
+  # not on a runner, and every pixel of the panel's appearance comes from
+  # Obsidian's own theme rather than from this repository, so a headless render
+  # would be a picture of a panel that does not exist. What this uploads is the
+  # honest half: which elements the panel builds, in what order, nested how,
+  # carrying what words, which is the half both of those bugs lived in.
+  # panel-shots.ts says all of this at the top of the artifact too, because an
+  # artifact that overstates what it is is worse than none.
+  #
+  # Uploaded rather than diffed. Its point is to be looked at, and a golden copy
+  # of it would be one more thing to keep in step for no gain. The test that
+  # writes it is the gate, and it checks what a gate can: that the walk reached
+  # every state and captured something real in each.
+  #
+  # Its own job so that "the panel states were not captured" is a sentence CI
+  # can say, and so the artifact is uploaded even when the walk fails, because a
+  # half-written capture is the first thing to look at when it does.
+  panel:
+    name: the panel states
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The walk starts a vault and pairs a second device into it against a
+      # real telimus, so this needs both toolchains for the same reason the
+      # client job does.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.1
+
+      # Unnamed on purpose: it is the same install the client job already does
+      # under that name, and scripts/check.sh's guard matches step names.
+      - working-directory: client
+        run: bun install --frozen-lockfile
+
+      - name: capture every panel state
+        working-directory: client
+        run: bunx vitest run src/plugin/panel-shots.test.ts
+
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        if: always()
+        with:
+          name: panel-states
+          path: client/panel-shots/
+          if-no-files-found: error
+
+  # Its own job so that "the stress suite failed" is a sentence CI can say.
+  #
+  # Unit tests are necessary here and never sufficient: every real defect this
+  # project has had was a silent one that only appeared when the system ran, and
+  # the four found the week this was written were all of that kind. These kill the
+  # server mid-commit, let two devices disagree, and write the filenames people
+  # actually have. Linux as well as a laptop, which matters: the server's fsync
+  # behaviour is not the same on the two.
+  stress:
+    name: stress
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.1
+
+      - name: install
+        working-directory: client
+        run: bun install --frozen-lockfile
+
+      - name: stress
+        working-directory: client
+        run: bun run stress
+
+  # The kernel exclusion, on Linux, which is the mechanism a developer's Mac
+  # never runs. macOS takes a `flock` at `open` and Linux binds an abstract
+  # socket, so `scripts/check.sh` passing on a Mac says nothing whatever about
+  # this one (I27). The property is that the kernel gives the lock back when a
+  # telimus dies, and it is checked by killing one.
+  kernel-lock:
+    name: the kernel lock on Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.1
+
+      - name: install
+        working-directory: client
+        run: bun install --frozen-lockfile
+
+      - name: the kernel gives the lock back when a telimus dies
+        working-directory: client
+        run: bun run ../scripts/kernel-lock.test.ts
+
+  docker:
+    name: docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: build the image
+        run: docker build -t telimus:ci .
+      - name: it runs
+        run: docker run --rm telimus:ci version
+
+      # compose.yaml is what the docs tell people to run. A file that does not
+      # parse is found here rather than on somebody's homelab.
+      - name: the compose file is valid
+        run: docker compose -f compose.yaml config -q

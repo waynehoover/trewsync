@@ -1,0 +1,18 @@
+# Build output
+/telimus
+/go/telimus
+
+# Local server state
+*.db
+*.db-wal
+*.db-shm
+/chunks/
+client/dist/
+release/
+client/release/
+
+# Locally built server binary
+/server/telimus
+
+# Relay working files, not part of the project.
+tmp/

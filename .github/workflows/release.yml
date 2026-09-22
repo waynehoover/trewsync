@@ -1,0 +1,388 @@
+# Publishes the container image the README tells people to run.
+#
+# Only on a tag. `scripts/release.sh` deliberately does no uploading, tagging or
+# publishing, because a script that makes decisions is one you cannot run to see
+# what it would do; pushing the tag is the decision, and this is what follows
+# from it. The binaries and the plugin bundle are still attached to the release
+# by hand from what that script builds.
+name: Release
+
+on:
+  push:
+    # Server tags only. The plugin is released on a bare version tag, because
+    # the community directory requires the tag to be exactly the manifest
+    # version, and the server has no reason to move when the plugin does: what
+    # decides whether the two can talk is the protocol version each carries,
+    # not the release number. A `server/v*` tag does not match a `v*` filter,
+    # which is what keeps the two apart.
+    tags: ["server/v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Nothing is published from a commit CI has not passed on (I21). The reasons
+  # and the waiting are in scripts/ci-passed.sh, which all three publishing
+  # workflows call so there is one answer to "was this checked" rather than
+  # three that can drift.
+  checked:
+    name: CI passed on this commit
+    # `github.token` gets only what the workflow declares, and reading another
+    # workflow's runs is not in the default set.
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: refuse to publish from an unchecked commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/ci-passed.sh "${{ github.repository }}" "${{ github.sha }}"
+
+  image:
+    name: image
+    needs: checked
+    runs-on: ubuntu-latest
+    # Not serialised, and that is deliberate (R30).
+    #
+    # This job builds the image, checks both architectures, and gives it its
+    # own immutable version tag. None of that depends on any other release:
+    # `0.4.2` means one thing for ever and two releases can produce their own
+    # at the same time without interfering.
+    #
+    # It used to be inside the promotion group, which looked safer and was not.
+    # GitHub keeps exactly one pending run per group: with A running, B waiting
+    # and C arriving, B is cancelled, and `cancel-in-progress: false` does not
+    # change that, because it governs the *running* job and not the queue. B
+    # was then a release whose immutable tag was never published, which is a
+    # release that silently did not happen. Only the moving aliases need an
+    # order, so only they are serialised, in the job below.
+    steps:
+      # Every tag, because which tags this release may move is decided by where
+      # its version sits among the ones already out, and a shallow clone cannot
+      # answer that.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # The tag's syntax, checked before anything is built (I23), so a tag this
+      # cannot make sense of stops the release rather than publishing something
+      # under a name nothing resolves.
+      #
+      # Which moving tags it may take is *not* decided here. That answer
+      # depends on the other releases that exist, and it is worked out again
+      # inside the promotion step, where the concurrency group means it cannot
+      # go stale between being decided and being used (R17). What is printed
+      # here is what the answer would be right now, which is useful to read in
+      # a log and is not what gets applied.
+      - id: tags
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#server/v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          image="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "as things stand, this release would move:"
+          ./scripts/release-tags.sh "$GITHUB_REF_NAME" | sed 's/^/  /'
+
+      # The docker driver cannot build for several platforms at once; this one
+      # can. The build needs no QEMU, because the Dockerfile cross-compiles
+      # rather than emulating: Go needs two environment variables and the final
+      # stage is scratch plus a binary, so nothing runs on the target arch until
+      # the check below deliberately does.
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      # For that check, and only for it. The arm64 image is the one nobody here
+      # can run without this, which is exactly why it was the one never run.
+      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+        with:
+          platforms: arm64
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.tags.outputs.image }}
+          # Labels only. The tags are decided above and applied at the end.
+          tags: type=raw,value=ignored,enable=false
+
+      # Pushed by digest and under no tag at all (I21).
+      #
+      # `latest` used to move as part of the push, so the first thing to find
+      # out whether the image works was whoever pulled it. There is no way to
+      # take a tag back once it has been served, and the person it breaks is
+      # the one following the README. So the bytes go up nameless, get checked,
+      # and only then are given names.
+      #
+      # Names are applied to this digest rather than by rebuilding, so what
+      # `latest` ends up pointing at is the manifest that passed below, not a
+      # second build of the same source that nothing has run.
+      - id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          outputs: type=image,name=${{ steps.tags.outputs.image }},push-by-digest=true,name-canonical=true
+          labels: ${{ steps.meta.outputs.labels }}
+          # The version out of the tag, not the tag. The ref is server/v0.1.3,
+          # and `telimus version` printing that would be wrong in the one place
+          # a person looks to find out what they are running.
+          build-args: VERSION=${{ steps.tags.outputs.version }}
+
+      # Both architectures, before either has a name.
+      #
+      # `it runs` ran on whatever the runner was, which is amd64, so the arm64
+      # image was published for years having never been started. It is a
+      # separate compilation with its own linker output, and the way it would
+      # fail is not subtle: it would not execute at all, on the machines least
+      # likely to be the ones testing it.
+      #
+      # The version is asserted rather than just the exit code, because a
+      # `version` subcommand that runs and prints the wrong number is the whole
+      # failure this build-arg has had twice.
+      - name: both architectures run, and agree about what they are
+        env:
+          REF: ${{ steps.tags.outputs.image }}@${{ steps.build.outputs.digest }}
+          WANT: ${{ steps.tags.outputs.version }}
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            # The local copy goes first, every time.
+            #
+            # `$REF` names a manifest list by digest, and one digest can only
+            # be stored once locally. Running amd64 caches that digest as the
+            # amd64 image, and the arm64 run then tries to store a different
+            # image under the same name: newer Docker refuses with "cannot
+            # overwrite digest" and exits 125. The first architecture had
+            # already passed, so this looked like an arm64 failure and was a
+            # cache collision. Removing it between the two makes each pull the
+            # only one for that digest.
+            docker image rm -f "$REF" >/dev/null 2>&1 || true
+            got=$(docker run --rm --platform "linux/$arch" "$REF" version)
+            echo "linux/$arch: $got"
+            if [ "$(printf '%s\n' "$got" | awk 'NR == 1 { print $2 }')" != "$WANT" ]; then
+              echo "linux/$arch does not say it is $WANT" >&2
+              exit 1
+            fi
+          done
+          docker image rm -f "$REF" >/dev/null 2>&1 || true
+
+      # Now, and not before: same digest, so this name points at the manifest
+      # the step above ran.
+      #
+      # This is the tag that belongs to this release alone. `0.4.2` cannot mean
+      # anything else no matter what else is released, so it needs no ordering
+      # and is applied here, outside the promotion group, where nothing can
+      # take it away (R30).
+      - name: give the image its own version
+        env:
+          REF: ${{ steps.tags.outputs.image }}@${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.tags.outputs.image }}
+          VERSION: ${{ steps.tags.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "$IMAGE:$VERSION" "$REF"
+          got=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$IMAGE:$VERSION")
+          [ "$got" = "${REF#*@}" ] || {
+            echo "$IMAGE:$VERSION is $got, not ${REF#*@}" >&2
+            exit 1
+          }
+          echo "$IMAGE:$VERSION -> $got"
+
+
+  # The moving aliases, one release at a time (R17, R30, R38).
+  #
+  # `latest` and the minor aliases are the only things whose value depends on
+  # what else has been released, so they are the only things that need an
+  # order. Keeping this job small is what makes the queue's one-pending limit
+  # survivable: a promotion that is dropped costs no immutable tag.
+  #
+  # It costs nothing else either, and that took a second go. This job used to
+  # apply the aliases *this* release had earned, and the note beside it said a
+  # dropped promotion would be repaired by the next one. True while releases
+  # march up one line, false the first time they do not: A promoting, B
+  # (0.5.0) queued, C (0.3.9) arriving discards B, and C is a backport that
+  # moves neither `0.5` nor `latest`. B's image is published under its own
+  # version tag for ever and nothing points at it (R38).
+  #
+  # So this reconciles rather than appends. It works out what every alias
+  # should be from the releases that exist and fixes the ones that are wrong,
+  # which makes a dropped promotion cost nothing at all: the next one, from any
+  # line, in any order, repairs it.
+  promote:
+    name: moving tags
+    needs: image
+    runs-on: ubuntu-latest
+    #
+    # `cancel-in-progress: false` stops a running promotion being killed
+    # half-applied. It does not make the queue durable, whatever it looks like:
+    # a third arrival still discards whatever was waiting. That is survivable
+    # here and was not while the build shared this group (R30).
+    concurrency:
+      group: image-promotion
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: point every moving alias at the release it belongs to
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # `tr` rather than `${REPO,,}`, which needs bash 4: the runner has
+          # it and the machine this step is tested on does not, and a step
+          # that cannot be run outside CI is a step nothing checks.
+          IMAGE="ghcr.io/$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
+
+          # Worked out here rather than carried from before the build (R17).
+          #
+          # The concurrency group means no other release is promoting right
+          # now, and the tags pushed while this one was building are visible to
+          # git by the time it gets here. Deciding once at the start and
+          # applying that answer at the end is how a release that started first
+          # moved `latest` back onto an older server: the answer was true when
+          # it was worked out and stale when it was used.
+          git fetch --tags --force --quiet
+
+          # Every alias, not only this release's (R38).
+          : > /tmp/applied-tags
+          applied=0
+          planned=0
+          resolved=0
+          while read -r alias candidates; do
+            [ -n "$alias" ] || continue
+            planned=$((planned + 1))
+
+            # The newest candidate the registry can actually resolve (R41).
+            #
+            # An alias is a promise that `docker pull` works, so it may only
+            # name a published image. Naming one version and skipping when it
+            # was not there left the alias exactly where it was: with 0.4.1,
+            # 0.4.2 and 0.5.0 tagged and only the first two built, `latest`
+            # stayed at 0.4.1 while 0.4.2 sat published, and the run exited 0.
+            # A rollback by omission, reported as success. Walking the
+            # candidates moves it as far forward as the registry can support,
+            # and 0.5.0's own promotion finishes the job.
+            #
+            # Every candidate is looked up, not just up to the first hit,
+            # because what the others answer is what the guard below needs.
+            want=""
+            target=""
+            unreadable=0
+            seen=""
+            for version in $candidates; do
+              if digest=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' \
+                "$IMAGE:$version" 2>/dev/null); then
+                seen="$seen $digest"
+                if [ -z "$want" ]; then
+                  want="$digest"
+                  target="$version"
+                fi
+              else
+                unreadable=$((unreadable + 1))
+              fi
+            done
+            if [ -z "$want" ]; then
+              echo "  $alias: nothing published to point at yet, left alone"
+              continue
+            fi
+            resolved=$((resolved + 1))
+
+            # What the alias is now, and whether that could be established at
+            # all. A failed lookup is not an absent alias (R45): `inspect`
+            # gives one word for "no such tag" and "the registry did not
+            # answer", and reading the second as the first is how an alias
+            # whose state is unknown gets assigned an older image.
+            if now=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' \
+              "$IMAGE:$alias" 2>/dev/null); then
+              readable=yes
+            else
+              now=""
+              readable=""
+            fi
+            if [ "$now" = "$want" ]; then
+              echo "  $alias -> $target ($want) already"
+              continue
+            fi
+
+            # And never backwards on a lookup that merely failed (R41).
+            #
+            # Absent and unreadable are not the same answer, and `inspect`
+            # gives one word for both. So: if this alias is at a digest that
+            # belongs to none of the versions the registry *did* answer for,
+            # and there were versions it would not answer for, then it is
+            # already at one of those and moving it would be a rollback caused
+            # by a bad minute on the network. The next promotion will get it.
+            if [ "$unreadable" -gt 0 ]; then
+              known=""
+              for digest in $seen; do
+                [ "$digest" = "$now" ] && known=yes
+              done
+              if [ -z "$known" ]; then
+                # Either the alias is at an image none of the versions this
+                # pass could read has, or it could not be read at all (R45).
+                # Both mean its state is unestablished while something newer
+                # is unreadable, and assigning it an older image would be a
+                # rollback. Waiting for a healthy run costs one promotion.
+                #
+                # The empty case is the one that used to slip through: a failed
+                # lookup became `now=""`, and the guard only ran when `now` had
+                # something in it, so two silences together were read as an
+                # absent alias and an unbuilt release.
+                if [ -z "$readable" ]; then
+                  echo "  $alias could not be read, and $unreadable version(s) could not" \
+                    "either; left alone"
+                else
+                  echo "  $alias is at an image none of the readable versions has," \
+                    "and $unreadable could not be read; left alone"
+                fi
+                continue
+              fi
+            fi
+
+            docker buildx imagetools create --tag "$IMAGE:$alias" "$IMAGE@$want"
+            applied=$((applied + 1))
+            echo "  $alias -> $target ($want)"
+            printf '%s\n' "$IMAGE:$alias $want" >> /tmp/applied-tags
+          done < <(./scripts/release-aliases.sh)
+
+          # Rule 5, in its smallest form, and only where there was something to
+          # do. An empty plan is a valid answer: a repository whose only server
+          # tag is a prerelease has no moving alias to set, and treating that
+          # as a failure made the first such release exit 1 (R42). A plan with
+          # lines in it that resolved none of them is the registry not
+          # answering, which is not the same thing.
+          if [ "$planned" -gt 0 ] && [ "$resolved" -eq 0 ]; then
+            echo "$planned alias(es) planned and none resolved to a published image" >&2
+            exit 1
+          fi
+          echo "$applied alias(es) moved, $resolved resolved, $planned planned"
+
+      # What a person will actually type. Pulled by name, so this also proves
+      # the names were applied and resolve to the manifest that was checked.
+      - name: the published aliases resolve to what they were set to
+        run: |
+          set -euo pipefail
+          [ -s /tmp/applied-tags ] || { echo "nothing was moved"; exit 0; }
+          while read -r ref want; do
+            [ -n "$ref" ] || continue
+            got=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$ref")
+            [ "$got" = "$want" ] || { echo "$ref is $got, not $want" >&2; exit 1; }
+            echo "  $ref -> $got"
+          done < /tmp/applied-tags
