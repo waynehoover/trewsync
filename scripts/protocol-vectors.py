@@ -489,6 +489,9 @@ def frame_vectors() -> dict:
     good_frame("deflate", b"\x01" + deflate_raw(text), text)
     good_frame("deflate at level 9", b"\x01" + deflate_raw(text, 9), text)
     good_frame("deflate followed by bytes after the final block, which are ignored", b"\x01" + deflate_raw(text) + b"junk", text)
+    # Longer than the 4 KiB slices a bounded inflater feeds itself, so a decoder
+    # that only tolerated junk inside its first slice would be caught.
+    good_frame("deflate followed by 5000 bytes after the final block", b"\x01" + deflate_raw(text) + b"\xab" * 5000, text)
 
     generated = [
         {"why": "raw at exactly chunkMax, incompressible", "marker": 0, "gen": {"kind": "sha256-ctr", "seed": "frames", "length": CHUNK_MAX}, "valid": True},
