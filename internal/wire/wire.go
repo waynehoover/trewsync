@@ -288,27 +288,28 @@ func (p PutEntry) Entry(device string) store.Entry {
 const MaxBatchEntries = 256
 
 // MaxBatchBytes bounds one batched put two ways: the encoded `putmany` frame
-// may not exceed it, and neither may the summed ciphertext budget of the
-// entries in it (S18). Both are advertised in `ready` so a client can split a
-// batch before sending rather than discover the bound by being refused.
+// may not exceed it, and neither may the summed declared sizes of the entries
+// in it (S18), which is the raw budget of plan/protocol.md ("Limits"). Both are
+// advertised in `ready` so a client can split a batch before sending rather
+// than discover the bound by being refused.
 //
 // The frame bound is what makes "every legal message is receivable" true: the
 // read limit is set above it (server.ReadLimit), so a frame over this cap is
 // read in full and refused with `toolarge`, never dropped with a bare
 // disconnect that the client answers by retrying the identical batch for ever
-// (S22). The budget bound is what stops one authenticated batch streaming
+// (S22). The size bound is what stops one authenticated batch streaming
 // gigabytes of bodies: 256 entries at the 64 MiB file limit was 16 GiB of
-// allowed upload in one exchange. A file whose budget alone exceeds this goes
+// allowed upload in one exchange. A file whose size alone exceeds this goes
 // through a single `put`, which is bounded by perFileMax instead.
 //
 // 16 MiB is thousands of notes at the sizes people write them and small enough
 // that a batch is never why a server ran out of memory holding it.
 const MaxBatchBytes = 16 << 20
 
-// MaxFetchBytes bounds the summed stored size of the bodies one `fetch` may ask
+// MaxFetchBytes bounds the summed raw size of the bodies one `fetch` may ask
 // for (S21). The server knows every size from the same stat that answers
-// presence; a client bounds itself with CiphertextBudget over the files it is
-// fetching, which is never smaller. Over it is `toolarge` with no bodies.
+// presence; a client bounds itself with the declared sizes of the files it is
+// fetching, which are exactly those sums. Over it is `toolarge` with no bodies.
 //
 // 64 MiB matches the default file limit, so one fetch can always carry one
 // file, and a first download of a text vault is still a handful of round trips.

@@ -114,34 +114,7 @@ const (
 	// the same reason MaxWrappedLen is and for the same cost.
 	MaxSealedLen = 256
 	MaxInviteLen = 64
-
-	// ChunkOverheadMax bounds what encryption adds to one chunk: a nonce, an
-	// authentication tag, and any framing. AES-GCM-SIV needs 12 plus 16, so
-	// this is an order of magnitude of headroom, which is deliberate: it is the
-	// slack a future scheme, or padding to obscure sizes, would need. Anything
-	// wanting more than this is a protocol version, not a bigger constant.
-	ChunkOverheadMax = 256
 )
-
-// CiphertextBudget is the most stored ciphertext an entry may reference, given
-// the plaintext size it declares and how many chunks it splits into.
-//
-// A client chunks size bytes of plaintext into n pieces and encrypts each, so
-// the honest total is size + n*overhead and this is an upper bound on it.
-//
-// It exists because size and chunk count were bounded independently, and their
-// product was the real ceiling: an entry declaring one byte could reference
-// 65536 chunks of a megabyte each, and neither bound was violated. Every other
-// unbounded case in this package is closed with a comment saying why; this one
-// was the exception.
-//
-// The comparison is per *reference*, not per distinct body. A file with two
-// identical blocks counts that ciphertext twice, because its declared size
-// counts the plaintext twice, and the two numbers have to be about the same
-// thing to be comparable.
-func CiphertextBudget(size int64, n int) int64 {
-	return size + int64(n)*ChunkOverheadMax
-}
 
 var (
 	// ErrUnknownVault is a write against a vault id with no row. Callers must
@@ -161,9 +134,11 @@ var (
 	// it on download when it is too late to refuse.
 	ErrBadEntry = errors.New("invalid entry")
 
-	// ErrOverBudget is an entry referencing more ciphertext than its declared
-	// plaintext size can account for. See CiphertextBudget.
-	ErrOverBudget = errors.New("entry references more ciphertext than its declared size allows")
+	// ErrSizeMismatch is an entry whose declared size is not the sum of its
+	// chunks' lengths (plan/protocol.md, "Chunk bodies"). It is ErrBadEntry as
+	// well, so it is refused as `badentry` like every other shape the entry
+	// itself got wrong. See sizeAccountedFor.
+	ErrSizeMismatch = fmt.Errorf("%w: the declared size is not the sum of its chunks' lengths", ErrBadEntry)
 
 	// ErrRotated is a rotation whose compare-and-swap found another hash in
 	// the row: somebody else rotated the vault between this session's
@@ -783,7 +758,7 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 	// than likely.
 	still := pending[:0]
 	for _, i := range pending {
-		if err := s.chunksAccountedFor(vaultID, entries[i]); err != nil {
+		if err := s.sizeAccountedFor(vaultID, entries[i]); err != nil {
 			out[i] = ManyResult{Err: err}
 			continue
 		}
@@ -856,20 +831,43 @@ func checkConditional(e Entry, base, prevBase int64) error {
 	return ValidateBase(prevBase)
 }
 
-// chunksAccountedFor is the presence and budget check, which the caller must
-// hold writeMu across.
-func (s *Store) chunksAccountedFor(vaultID string, e Entry) error {
-	var stored int64
+// sizeAccountedFor is the presence check and the size invariant, which the
+// caller must hold writeMu across: every chunk is a durable body, and the
+// declared size is exactly the sum of their lengths (PLAN.md section 2.2).
+//
+// # Why the sum costs nothing
+//
+// The size check runs on the hot path of every write, inside the commit lock,
+// for up to 256 entries of up to 65,536 chunks each, so its cost was decided
+// rather than inherited (PLAN.md section 2.2 asks that it be written down).
+// It adds no work: the presence check already stats every chunk under this
+// lock, which it must, because presence answered anywhere else races the
+// chunk sweep. That stat returns the body's length, and the chunk store holds
+// raw chunk bytes named by their SHA-256 and verified when stored, so the
+// length on disk is the raw length. Summing what the stat already returned is
+// the whole check. No metadata table carries lengths beside the files, so
+// there is no second record of a length that could disagree with the file it
+// describes.
+//
+// Every reference counts, repeats included: the declared size counts a
+// repeated block once per occurrence, and the sum has to count the same
+// thing. Chunks already held are counted exactly like ones uploaded a moment
+// ago, which is what makes this the authority: an entry pointing at bodies the
+// server has, with nothing uploaded, is checked here and nowhere else.
+func (s *Store) sizeAccountedFor(vaultID string, e Entry) error {
+	var sum int64
 	for i, n := range e.Chunks {
 		size, ok := s.chunks.Size(vaultID, n)
 		if !ok {
 			return fmt.Errorf("%w: chunk %d of %d: %s", ErrChunkMissing, i+1, len(e.Chunks), n)
 		}
-		stored += size
+		// No overflow to guard: 65,536 chunks of at most ChunkMax each is
+		// 2^36 bytes, far inside an int64.
+		sum += size
 	}
-	if budget := CiphertextBudget(e.Size, len(e.Chunks)); stored > budget {
-		return fmt.Errorf("%w: %d chunks holding %d bytes for a declared size of %d, budget %d",
-			ErrOverBudget, len(e.Chunks), stored, e.Size, budget)
+	if sum != e.Size {
+		return fmt.Errorf("%w: %d chunks holding %d bytes for a declared size of %d",
+			ErrSizeMismatch, len(e.Chunks), sum, e.Size)
 	}
 	return nil
 }
@@ -939,13 +937,12 @@ func (s *Store) appendEntry(vaultID string, e Entry, base *int64, prevBase int64
 	// across the check and the commit is what makes "committed implies
 	// serveable" true rather than likely.
 	//
-	// The same stat yields each body's size, and the total is checked against
-	// what the declared plaintext size can account for. This is the
-	// authoritative check: the session bounds uploads as they arrive so a
-	// hostile client cannot write the disk full before being refused, but that
-	// pre-check can be bypassed by referencing chunks the server already holds,
-	// and this one cannot be bypassed at all.
-	if err := s.chunksAccountedFor(vaultID, e); err != nil {
+	// The same stat yields each body's size, and the total must be the size
+	// the entry declares. This is the authoritative check: the session bounds
+	// uploads as they arrive so a hostile client cannot write the disk full
+	// before being refused, but that pre-check can be bypassed by referencing
+	// chunks the server already holds, and this one cannot be bypassed at all.
+	if err := s.sizeAccountedFor(vaultID, e); err != nil {
 		return 0, err
 	}
 

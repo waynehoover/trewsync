@@ -2076,7 +2076,7 @@ func TestVerifyDeepSeesATruncatedChunkList(t *testing.T) {
 				names = append(names, n)
 			}
 			uid, err := st.AppendEntry("default", store.Entry{
-				Path: "note.md", Size: 14, MTime: 1, Device: "d", Chunks: names, Mac: testMac,
+				Path: "note.md", Size: 13, MTime: 1, Device: "d", Chunks: names, Mac: testMac,
 			})
 			if err != nil {
 				t.Fatal(err)

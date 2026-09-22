@@ -239,10 +239,10 @@ func TestABatchIsBounded(t *testing.T) {
 
 // A commit refusal is an entry's refusal, not the batch's.
 //
-// checkEntry runs before the bodies arrive, so it cannot know how much
-// ciphertext an entry will end up referencing. The budget is therefore enforced
-// again at commit, and a batch spends one allowance across every entry in it, so
-// an entry that overruns its own share is caught only there.
+// checkEntry runs before the bodies arrive, so it cannot know how many bytes an
+// entry will end up referencing. The size is therefore checked again at
+// commit, and a batch spends one allowance across every entry in it, so an
+// entry whose chunks do not sum to its size is caught only there.
 //
 // This used to end the session. The entries that had already committed were
 // never acked, the client retried all of them, and the server grew a second
@@ -253,7 +253,7 @@ func TestACommitRefusalDoesNotTakeTheBatchWithIt(t *testing.T) {
 	cl.hello(0)
 
 	// Three honest entries and one that declares a byte while naming a chunk
-	// the batch is paying for. Its own budget cannot cover that chunk, but the
+	// the batch is paying for. Its own size cannot cover that chunk, but the
 	// batch's summed allowance can, so the bodies all arrive.
 	big := make([]byte, 4096)
 	for i := range big {
@@ -278,8 +278,8 @@ func TestACommitRefusalDoesNotTakeTheBatchWithIt(t *testing.T) {
 	if len(acks.Results) != 4 {
 		t.Fatalf("%d results, want 4", len(acks.Results))
 	}
-	if acks.Results[1].Code != wire.CodeToolarge {
-		t.Fatalf("the overrunning entry came back as %+v, want %s", acks.Results[1], wire.CodeToolarge)
+	if acks.Results[1].Code != wire.CodeBadEntry {
+		t.Fatalf("the overrunning entry came back as %+v, want %s", acks.Results[1], wire.CodeBadEntry)
 	}
 	// The three honest ones, including the two that were queued behind the
 	// refusal, all committed and all said so.

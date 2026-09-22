@@ -699,7 +699,7 @@ func TestUnknownOpIsAnsweredRatherThanIgnored(t *testing.T) {
 }
 
 /* ---------------------------------------------------------------- *
- * The ciphertext budget
+ * The size invariant: a declared size is the sum of its chunks
  * ---------------------------------------------------------------- */
 
 // A client declaring one byte and then uploading megabytes must be stopped
@@ -748,9 +748,10 @@ func TestUploadsAreCutOffOnceTheyPassTheDeclaredSize(t *testing.T) {
 }
 
 // Pointing a tiny entry at chunks the server already holds uploads nothing, so
-// only the commit can refuse it. The session has to turn that into a code the
-// client can act on rather than an internal fault.
-func TestAnEntryPointedAtAlreadyHeldChunksIsRefusedByTheBudget(t *testing.T) {
+// the upload bound cannot refuse it. The session refuses it before asking for
+// anything, as `badentry`, because a size smaller than the chunks it names can
+// never be the sum of them; the session survives.
+func TestAnEntryPointedAtAlreadyHeldChunksIsRefusedForItsSize(t *testing.T) {
 	r := newRig(t)
 	big := make([]byte, 64<<10)
 	e := r.seed("big.md", string(big))
@@ -759,43 +760,83 @@ func TestAnEntryPointedAtAlreadyHeldChunksIsRefusedByTheBudget(t *testing.T) {
 	cl.hello(0)
 	cl.sendJSON(wire.In{Op: "put", Path: "tiny.md", Mac: testMac, Chunks: e.Chunks,
 		Meta: wire.PutMeta{Size: 10, MTime: 5}})
-	cl.expectErr(wire.CodeToolarge)
+	msg := cl.expectErr(wire.CodeBadEntry)
+	if !strings.Contains(msg, "65536") || !strings.Contains(msg, "declared size of 10") {
+		t.Fatalf("the refusal does not give the numbers: %s", msg)
+	}
 
 	if st := r.mustStats(); st.Files != 1 {
 		t.Fatalf("stats = %+v, want only the seeded file", st)
 	}
 	// The session survives: this rejects one request, it does not desync.
 	if uid := cl.put("fine.md", "a normal note"); uid == 0 {
-		t.Fatal("the session was unusable after a budget refusal")
+		t.Fatal("the session was unusable after a size refusal")
 	}
 }
 
-// An honestly sized file must not be caught by the bound, or the fix is worse
-// than the hole. This is a realistic shape: 8 KiB plaintext chunks with an
-// AES-GCM nonce and tag on each.
-func TestAnHonestlySizedUploadIsNotRefused(t *testing.T) {
+// An honestly sized file must not be caught by the rule, or the fix is worse
+// than the hole, and a size one byte off in either direction must be. The two
+// directions are caught in different places. One byte short, the bodies
+// outrun the allowance and the upload is cut off with `toolarge`, which ends
+// the session because frames are still coming. One byte long, every body
+// arrives and the commit refuses the sum as `badentry`, which the session
+// survives.
+func TestAnHonestlySizedUploadIsNotRefusedAndADishonestOneIs(t *testing.T) {
 	r := newRig(t)
-	cl := r.dial("a")
-	cl.hello(0)
 
-	const plain, n = 8192, 6
+	const raw, n = 8192, 6
 	bodies := make([]string, n)
 	names := make([]string, n)
 	for i := range bodies {
-		b := make([]byte, plain+28)
+		b := make([]byte, raw)
 		b[0] = byte(i)
 		bodies[i] = string(b)
 		names[i] = chunks.Name(b)
 	}
-	cl.sendJSON(wire.In{Op: "put", Path: "real.md", Chunks: names, Mac: testMac,
-		Meta: wire.PutMeta{Size: plain * n, MTime: 5}})
-	var want wire.Want
-	cl.recvInto("want", &want)
-	for _, n := range want.Chunks {
-		cl.sendBinary([]byte(bodyFor(t, bodies, n)))
+	upload := func(cl *client, size int64) map[string]any {
+		t.Helper()
+		cl.sendJSON(wire.In{Op: "put", Path: "real.md", Chunks: names, Mac: testMac,
+			Meta: wire.PutMeta{Size: size, MTime: 5}})
+		m := cl.recv()
+		if m["res"] == "want" {
+			for _, name := range toStrings(t, m["chunks"]) {
+				// The short one is cut off part way through, so a write can
+				// fail here: that is the refusal arriving.
+				if err := cl.conn.Write(cl.ctx, websocket.MessageBinary, []byte(bodyFor(t, bodies, name))); err != nil {
+					break
+				}
+			}
+			m = cl.recv()
+		}
+		return m
 	}
-	var ack wire.Ack
-	cl.recvInto("ack", &ack)
+
+	// Short first, while no body is held, so its upload is the one cut off.
+	short := r.dial("a")
+	short.hello(0)
+	if m := upload(short, raw*n-1); m["res"] != "err" || m["code"] != wire.CodeToolarge {
+		t.Fatalf("a size one byte under the chunks' sum was answered %v, want toolarge", m)
+	}
+
+	long := r.dial("a")
+	long.hello(0)
+	if m := upload(long, raw*n+1); m["res"] != "err" || m["code"] != wire.CodeBadEntry {
+		t.Fatalf("a size one byte over the chunks' sum was answered %v, want badentry", m)
+	}
+	long.sendJSON(wire.In{Op: "ping"})
+	long.recvInto("pong", &wire.Pong{})
+	if st := r.mustStats(); st.Versions != 0 {
+		t.Fatalf("%d versions committed from dishonest sizes", st.Versions)
+	}
+
+	honest := r.dial("a")
+	honest.hello(0)
+	if m := upload(honest, raw*n); m["res"] != "ack" && m["res"] != "have" {
+		t.Fatalf("an honest file was answered %v", m)
+	}
+	if st := r.mustStats(); st.Versions != 1 {
+		t.Fatalf("%d versions, want the honest one", st.Versions)
+	}
 	r.mustVerify()
 }
 
@@ -917,10 +958,10 @@ func TestABodyThatCannotBeWrittenCommitsNothing(t *testing.T) {
 	}
 }
 
-// The declared size counts a repeated block once per reference, so the budget
-// must too. Four references to one body is four blocks of plaintext, whatever
+// The declared size counts a repeated block once per reference, so the sum
+// must too. Four references to one body is four blocks of the file, whatever
 // the disk holds.
-func TestRepeatedChunksAreBudgetedPerReferenceOverTheWire(t *testing.T) {
+func TestRepeatedChunksAreCountedPerReferenceOverTheWire(t *testing.T) {
 	r := newRig(t)
 	cl := r.dial("a")
 	cl.hello(0)
@@ -936,12 +977,12 @@ func TestRepeatedChunksAreBudgetedPerReferenceOverTheWire(t *testing.T) {
 	if m["res"] == "want" {
 		// The body is not held yet, so the server asks for it once. Uploading
 		// it stays inside the per-upload allowance; the commit is what refuses,
-		// because only it counts references rather than uploads.
+		// because only it sums every reference rather than every upload.
 		cl.sendBinary(body)
 		m = cl.recv()
 	}
-	if m["res"] != "err" || m["code"] != wire.CodeToolarge {
-		t.Fatalf("four references to one body declaring one body of plaintext was accepted: %v", m)
+	if m["res"] != "err" || m["code"] != wire.CodeBadEntry {
+		t.Fatalf("four references to one body declaring one body's size was accepted: %v", m)
 	}
 	if st := r.mustStats(); st.Versions != 0 {
 		t.Fatalf("%d entries committed", st.Versions)

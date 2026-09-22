@@ -1492,11 +1492,12 @@ func (s *Session) handlePutMany(m wire.In, frameLen int) error {
 	}
 	// The two bounds maxBatchBytes names (S18). The frame, so that a batch
 	// naming enough chunks to matter is refused with a code rather than dying
-	// at the read limit; and the summed budget over every entry, so that one
-	// exchange can never be allowed to upload more than the cap however many
-	// files it carries. The budget is summed over every entry rather than
-	// over what the server lacks, because that is the figure a client can
-	// compute for itself before sending.
+	// at the read limit; and the declared sizes summed over every entry, which
+	// is the raw budget of plan/protocol.md ("Limits"), so that one exchange
+	// can never be allowed to upload more than the cap however many files it
+	// carries. It is summed over every entry rather than over what the server
+	// lacks, because that is the figure a client can compute for itself before
+	// sending.
 	if int64(frameLen) > s.srv.maxBatchBytes {
 		return s.reject(wire.CodeToolarge, fmt.Errorf(
 			"the putmany frame is %d bytes, limit is %d; split the batch", frameLen, s.srv.maxBatchBytes))
@@ -1514,7 +1515,7 @@ func (s *Session) handlePutMany(m wire.In, frameLen int) error {
 	// numbers is not a cap.
 	var budgets int64
 	for _, in := range m.Entries {
-		spend := store.CiphertextBudget(in.Meta.Size, len(in.Chunks))
+		spend := in.Meta.Size
 		// A size the peer chose cannot make the sum smaller. Nothing is
 		// refused here for it: an entry with an impossible size is refused on
 		// its own by `prepare`, and the rest of the batch still commits, which
@@ -1756,21 +1757,24 @@ func (s *Session) prepare(e store.Entry, base, prevBase int64) (missing []string
 		return nil, 0, &r
 	}
 
-	// What this entry may reference in total, and what it already accounts for.
+	// What this entry may still upload: its declared size, less what the
+	// chunks the server already holds account for. The declared size must be
+	// the sum of the raw chunk lengths (plan/protocol.md, "Chunk bodies"), so
+	// an entry whose held chunks alone exceed it can never be committed, and
+	// is refused as `badentry` before any body is asked for.
 	//
-	// The store re-checks this at commit and is the authority; the point of
-	// doing it here too is that the commit happens *after* the upload, so
+	// The store re-checks the sum at commit and is the authority; the point of
+	// bounding it here too is that the commit happens *after* the upload, so
 	// relying on it alone would let a client write the disk full and only then
 	// be told no. Refusing before the want list goes out costs nothing.
-	budget := store.CiphertextBudget(e.Size, len(e.Chunks))
 	held := heldBytes(e.Chunks, missing, sizes)
-	if held > budget {
-		r := wire.Error(wire.CodeToolarge, fmt.Sprintf(
-			"the chunks named already hold %d bytes for a declared size of %d, budget %d",
-			held, e.Size, budget))
+	if held > e.Size {
+		r := wire.Error(wire.CodeBadEntry, fmt.Sprintf(
+			"the chunks named already hold %d bytes for a declared size of %d, and the size of an "+
+				"entry is the sum of its chunks' lengths", held, e.Size))
 		return nil, 0, &r
 	}
-	return missing, budget - held, nil
+	return missing, e.Size - held, nil
 }
 
 func (s *Session) handlePut(m wire.In) error {
@@ -1813,8 +1817,8 @@ func (s *Session) handlePut(m wire.In) error {
 // gathered rather than by stat'ing them again.
 //
 // Once per reference, not once per distinct chunk: an entry naming the same
-// chunk twice is charged for it twice, which is what the budget means and what
-// TestTheBudgetCountsRepeatedChunksOncePerReference is about.
+// chunk twice is charged for it twice, which is what the declared size counts
+// and what TestTheSizeCountsRepeatedChunksOncePerReference is about.
 //
 // A name that is neither missing nor sized was present when Missing looked and
 // is not now. The sweep can do that; the commit will refuse and the client
@@ -1921,8 +1925,6 @@ func commitCode(err error) string {
 	switch {
 	case errors.Is(err, store.ErrBadEntry):
 		return wire.CodeBadEntry
-	case errors.Is(err, store.ErrOverBudget):
-		return wire.CodeToolarge
 	case errors.Is(err, store.ErrChunkMissing):
 		// A body was swept between the upload and the commit. The client is
 		// told which entry and re-uploads; see chunks.DefaultGrace for why this
@@ -2203,9 +2205,11 @@ func (s *Session) handleResend(m wire.In) error {
 	if err := s.writeJSON(wire.Want{Res: "want", ID: s.reqID, Chunks: missing}); err != nil {
 		return err
 	}
-	// These are existing ciphertext chunks, which include encryption overhead
-	// and may belong to older versions larger than today's file ceiling. Bound
-	// them by the chunk ceiling; the per-file limit measures plaintext uploads.
+	// These are bodies of versions the vault already holds, which may be larger
+	// than today's file ceiling: the ceiling can come down after a large file
+	// was stored. Bound them by the chunk ceiling, never by the per-file limit,
+	// or the one body that can heal an old version would be refused for a
+	// limit that version predates.
 	if err := s.readBodies(missing, s.srv.st.Chunks().Max()*int64(len(missing))); err != nil {
 		return err
 	}

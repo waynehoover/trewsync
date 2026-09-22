@@ -889,7 +889,7 @@ func TestAnEntryIsNeverCommittedWhileItsChunkIsBeingSwept(t *testing.T) {
 	for i, name := range aged {
 		// No Put: the server said it had this chunk, so the client sent nothing.
 		_, err := h.AppendEntry("v1", Entry{
-			Path: fmt.Sprintf("reverted%d.md", i), Size: 20, MTime: 7,
+			Path: fmt.Sprintf("reverted%d.md", i), Size: int64(len(fmt.Sprintf("previously uploaded %d", i))), MTime: 7,
 			Chunks: []string{name}, Mac: testMac})
 		switch {
 		case err == nil:
@@ -1490,7 +1490,7 @@ func TestATruncatedChunkListIsRefused(t *testing.T) {
 		names = append(names, n)
 	}
 	uid, err := st.AppendEntry("v", Entry{
-		Path: "note.md", Size: 14, MTime: 1, Device: "d", Chunks: names, Mac: testMac,
+		Path: "note.md", Size: 13, MTime: 1, Device: "d", Chunks: names, Mac: testMac,
 	})
 	if err != nil {
 		t.Fatal(err)

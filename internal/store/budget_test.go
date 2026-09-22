@@ -29,13 +29,16 @@ func (h *harness) bigChunks(t *testing.T, n, size int) []string {
 // the real ceiling: an entry declaring one byte could reference 65536 chunks of
 // a megabyte each, and neither bound was violated. That is 64 GiB of disk
 // behind a metadata field that says 1.
-func TestAnEntryCannotReferenceMoreCiphertextThanItsSizeAllows(t *testing.T) {
+//
+// The rule is exact now (PLAN.md section 2.2): the declared size is the sum of
+// the raw chunk lengths, so the lie is refused for what it is.
+func TestAnEntryWhoseChunksHoldMoreThanItsSizeIsRefused(t *testing.T) {
 	h := newTestStore(t)
 	names := h.bigChunks(t, 8, 1<<16) // 512 KiB of bodies
 
 	_, err := h.AppendEntry("v1", Entry{Path: "lie.md", Mac: testMac, Size: 1, MTime: 1, Chunks: names})
-	if !errors.Is(err, ErrOverBudget) {
-		t.Fatalf("err = %v, want ErrOverBudget", err)
+	if !errors.Is(err, ErrSizeMismatch) || !errors.Is(err, ErrBadEntry) {
+		t.Fatalf("err = %v, want ErrSizeMismatch, which is ErrBadEntry", err)
 	}
 	// The numbers are in the message, because rule 8 is that an implausible
 	// figure is what makes this kind of fault visible.
@@ -49,26 +52,37 @@ func TestAnEntryCannotReferenceMoreCiphertextThanItsSizeAllows(t *testing.T) {
 	}
 }
 
-// The budget must not refuse honest files. A real client chunks the plaintext,
-// encrypts each piece, and the total is the size plus a per-chunk overhead.
-func TestAnHonestlySizedEntryFitsTheBudget(t *testing.T) {
+// The rule must not refuse honest files, and it must refuse every dishonest
+// one: a size that is the sum of the chunks' lengths is accepted, and one byte
+// either side of it is not.
+func TestASizeIsAcceptedExactlyWhenItIsTheSumOfItsChunks(t *testing.T) {
 	h := newTestStore(t)
 
-	const chunkPlain, n = 4096, 12
-	names := h.bigChunks(t, n, chunkPlain+28) // 28 bytes: an AES-GCM nonce and tag
-	size := int64(chunkPlain * n)
+	const chunkRaw, n = 4096, 12
+	names := h.bigChunks(t, n, chunkRaw)
+	size := int64(chunkRaw * n)
 
+	for _, wrong := range []int64{size - 1, size + 1} {
+		if _, err := h.AppendEntry("v1", Entry{
+			Path: "real.md", Mac: testMac, Size: wrong, MTime: 1, Chunks: names,
+		}); !errors.Is(err, ErrSizeMismatch) {
+			t.Fatalf("a size of %d for chunks summing to %d was answered %v", wrong, size, err)
+		}
+	}
 	if _, err := h.AppendEntry("v1", Entry{
 		Path: "real.md", Mac: testMac, Size: size, MTime: 1, Chunks: names,
 	}); err != nil {
 		t.Fatalf("an honest %d byte file in %d chunks was refused: %v", size, n, err)
 	}
+	if st := h.mustStats(t); st.Versions != 1 {
+		t.Fatalf("%d versions, want only the honest one", st.Versions)
+	}
 }
 
-// The declared size counts a repeated block twice, so the budget has to count
-// its ciphertext twice as well. Comparing per distinct body against a per
+// The declared size counts a repeated block twice, so the sum has to count
+// its bytes twice as well. Comparing per distinct body against a per
 // reference size would be comparing two different things.
-func TestTheBudgetCountsRepeatedChunksOncePerReference(t *testing.T) {
+func TestTheSizeCountsRepeatedChunksOncePerReference(t *testing.T) {
 	h := newTestStore(t)
 	body := make([]byte, 2048)
 	name := chunks.Name(body)
@@ -76,7 +90,7 @@ func TestTheBudgetCountsRepeatedChunksOncePerReference(t *testing.T) {
 		t.Fatalf("put: %v", err)
 	}
 
-	// Two references to one 2048 byte body, declaring 4096 bytes of plaintext.
+	// Two references to one 2048 byte body, declaring 4096 bytes.
 	if _, err := h.AppendEntry("v1", Entry{
 		Path: "repeat.md", Mac: testMac, Size: 4096, MTime: 1, Chunks: []string{name, name},
 	}); err != nil {
@@ -85,19 +99,19 @@ func TestTheBudgetCountsRepeatedChunksOncePerReference(t *testing.T) {
 	// The same two references declaring one byte is still a lie.
 	if _, err := h.AppendEntry("v1", Entry{
 		Path: "lie.md", Mac: testMac, Size: 1, MTime: 1, Chunks: []string{name, name},
-	}); !errors.Is(err, ErrOverBudget) {
-		t.Fatalf("err = %v, want ErrOverBudget", err)
+	}); !errors.Is(err, ErrSizeMismatch) {
+		t.Fatalf("err = %v, want ErrSizeMismatch", err)
 	}
 
 	// The case that separates the two counting rules. Four references to one
-	// 2048 byte body is 8192 bytes of ciphertext by reference and 2048 by
-	// distinct body, so a declared size of 2048 passes one rule and fails the
-	// other. Per reference is the correct one, because the declared size counts
-	// the plaintext once per reference too.
+	// 2048 byte body is 8192 bytes by reference and 2048 by distinct body, so a
+	// declared size of 2048 passes one rule and fails the other. Per reference
+	// is the correct one, because the declared size counts the bytes once per
+	// reference too.
 	refs := []string{name, name, name, name}
 	_, err := h.AppendEntry("v1", Entry{Path: "four.md", Mac: testMac, Size: 2048, MTime: 1, Chunks: refs})
-	if !errors.Is(err, ErrOverBudget) {
-		t.Fatalf("err = %v, want ErrOverBudget: four references to one body were counted once", err)
+	if !errors.Is(err, ErrSizeMismatch) {
+		t.Fatalf("err = %v, want ErrSizeMismatch: four references to one body were counted once", err)
 	}
 	// Declared honestly, the same four references are fine.
 	if _, err := h.AppendEntry("v1", Entry{
@@ -108,8 +122,10 @@ func TestTheBudgetCountsRepeatedChunksOncePerReference(t *testing.T) {
 }
 
 // Referencing chunks the server already holds needs no upload at all, so the
-// bound on uploads cannot catch it. The commit-time check is what does.
-func TestReferencingAlreadyHeldChunksIsStillBudgeted(t *testing.T) {
+// bound on uploads cannot catch it. The commit-time check is what does, and it
+// is the case a "check only what this session uploaded" shortcut would skip
+// (strip ledger, budget_test.go:112).
+func TestReferencingAlreadyHeldChunksIsStillChecked(t *testing.T) {
 	h := newTestStore(t)
 
 	// An honest large file, committed normally.
@@ -124,25 +140,25 @@ func TestReferencingAlreadyHeldChunksIsStillBudgeted(t *testing.T) {
 	// A second entry claiming to be tiny while pointing at all of it. Nothing
 	// is uploaded, so only the commit can refuse this.
 	_, err := h.AppendEntry("v1", Entry{Path: "tiny.md", Mac: testMac, Size: 10, MTime: 2, Chunks: names})
-	if !errors.Is(err, ErrOverBudget) {
-		t.Fatalf("err = %v, want ErrOverBudget", err)
+	if !errors.Is(err, ErrSizeMismatch) {
+		t.Fatalf("err = %v, want ErrSizeMismatch", err)
 	}
-}
-
-func TestCiphertextBudgetArithmetic(t *testing.T) {
-	cases := []struct {
-		size int64
-		n    int
-		want int64
-	}{
-		{0, 0, 0},
-		{1, 1, 1 + ChunkOverheadMax},
-		{1 << 20, 128, 1<<20 + 128*ChunkOverheadMax},
+	// And one claiming more than the chunks hold, which the old budget, an
+	// upper bound, let through.
+	_, err = h.AppendEntry("v1", Entry{Path: "vast.md", Mac: testMac, Size: n*(1<<15) + 1, MTime: 2, Chunks: names})
+	if !errors.Is(err, ErrSizeMismatch) {
+		t.Fatalf("err = %v, want ErrSizeMismatch", err)
 	}
-	for _, c := range cases {
-		if got := CiphertextBudget(c.size, c.n); got != c.want {
-			t.Errorf("CiphertextBudget(%d, %d) = %d, want %d", c.size, c.n, got, c.want)
-		}
+	// The same refusals inside a batch, entry by entry.
+	res, err := h.AppendMany("v1", []Entry{
+		{Path: "tiny.md", Mac: testMac, Size: 10, MTime: 3, Chunks: names},
+		{Path: "copy.md", Mac: testMac, Size: n * (1 << 15), MTime: 3, Chunks: names},
+	}, []int64{0, 0}, []int64{0, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(res[0].Err, ErrSizeMismatch) || res[1].Err != nil || res[1].UID == 0 {
+		t.Fatalf("batch results %+v, want the tiny entry refused and the honest copy committed", res)
 	}
 }
 
@@ -151,12 +167,13 @@ func TestCiphertextBudgetArithmetic(t *testing.T) {
  * ---------------------------------------------------------------- */
 
 // A zero-byte file used to be two legal things: no chunks, or chunks summing to
-// nothing. Encrypting empty plaintext does produce ciphertext, so a client
-// would plausibly have sent the second, and two shapes for one state is a trap
-// for whoever writes it.
+// nothing, and two shapes for one state is a trap for whoever writes it. The
+// size rule does not settle it on its own: no chunk is empty, but a client
+// could still name one and declare its length as nothing, and that is refused
+// as the wrong shape before the sizes are ever summed.
 func TestAZeroByteFileHasExactlyOneShape(t *testing.T) {
 	h := newTestStore(t)
-	names := h.put(t, "v1", "ciphertext of nothing")
+	names := h.put(t, "v1", "not nothing")
 
 	err := Entry{Path: "empty.md", Mac: testMac, Size: 0, Chunks: names}.Validate()
 	if !errors.Is(err, ErrBadEntry) {
