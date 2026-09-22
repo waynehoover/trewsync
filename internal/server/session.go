@@ -598,6 +598,9 @@ func (s *Session) run() error {
 		return s.fatal(wire.CodeProtoState,
 			fmt.Errorf("first frame must be text hello, got %v", typ))
 	}
+	if err := wire.ValidText(data); err != nil {
+		return s.fatal(wire.CodeProtoState, fmt.Errorf("hello: %w", err))
+	}
 	var m wire.In
 	if err := json.Unmarshal(data, &m); err != nil {
 		return s.fatal(wire.CodeProtoState, fmt.Errorf("hello parse: %w", err))
@@ -629,6 +632,11 @@ func (s *Session) run() error {
 			// would mean guessing what it was.
 			return s.fatal(wire.CodeProtoState,
 				fmt.Errorf("unexpected binary frame (%d bytes)", len(data)))
+		}
+		// Before decoding, because decoding would quietly repair what this
+		// refuses: a path with invalid UTF-8 in it arrives as another path.
+		if err := wire.ValidText(data); err != nil {
+			return s.fatal(wire.CodeProtoState, err)
 		}
 		var m wire.In
 		if err := json.Unmarshal(data, &m); err != nil {
@@ -1446,14 +1454,18 @@ func (s *Session) flushPendingOnce(cursor int64) (bool, int64) {
 // checkEntry runs every refusal a single put makes, without writing one.
 //
 // Split out of handlePut so a batch can decide per entry and carry on. The
-// order matters and is the order handlePut used: the two named refusals first,
-// because docs/protocol.md gives badname and toolarge their own codes and a
-// client acts on them differently, then Validate, which is the enforcer.
+// order matters: the named refusals first, because the protocol gives badpath
+// and toolarge their own codes and a client acts on them differently, then
+// Validate, which is the enforcer.
+//
+// The path first of all, for every kind of entry and for a rename's source as
+// well as its destination, since the server is the last line of defence
+// against a client that sends a path Obsidian would never hold (PLAN.md
+// section 4.1). The reason code leads the message.
 func (s *Session) checkEntry(e store.Entry) *wire.Err {
-	if e.Path == "" || len(e.Path) > store.MaxPathLen {
-		err := wire.Error(wire.CodeBadName,
-			fmt.Sprintf("path is %d bytes, must be 1 to %d", len(e.Path), store.MaxPathLen))
-		return &err
+	if err := e.CheckPaths(); err != nil {
+		refusal := wire.Error(wire.CodeBadPath, err.Error())
+		return &refusal
 	}
 	if e.Size > s.srv.perFileMax {
 		err := wire.Error(wire.CodeToolarge,
@@ -1466,7 +1478,11 @@ func (s *Session) checkEntry(e store.Entry) *wire.Err {
 		return &err
 	}
 	if err := e.Validate(); err != nil {
-		refusal := wire.Error(wire.CodeBadEntry, err.Error())
+		code := wire.CodeBadEntry
+		if errors.Is(err, store.ErrBadPath) {
+			code = wire.CodeBadPath
+		}
+		refusal := wire.Error(code, err.Error())
 		return &refusal
 	}
 	return nil
@@ -1923,6 +1939,8 @@ func commitCode(err error) string {
 		return wire.CodeStale
 	}
 	switch {
+	case errors.Is(err, store.ErrBadPath):
+		return wire.CodeBadPath
 	case errors.Is(err, store.ErrBadEntry):
 		return wire.CodeBadEntry
 	case errors.Is(err, store.ErrChunkMissing):
@@ -2091,7 +2109,7 @@ func (s *Session) noteFutureMTime(e store.Entry) {
 // inventing a distinction it cannot support would be a lie in a recovery tool.
 func (s *Session) handleHistory(m wire.In) error {
 	if m.Path == "" {
-		return s.reject(wire.CodeBadName, errors.New("history needs a path"))
+		return s.reject(wire.CodeBadPath, errors.New("empty: history needs a path"))
 	}
 	if m.Before < 0 {
 		return s.reject(wire.CodeProtoState, fmt.Errorf("negative before %d", m.Before))

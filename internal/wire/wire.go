@@ -12,7 +12,12 @@
 // no `ok` here.
 package wire
 
-import "github.com/waynehoover/telimus/internal/store"
+import (
+	"errors"
+	"unicode/utf8"
+
+	"github.com/waynehoover/telimus/internal/store"
+)
 
 // Proto is the newest protocol version this server implements, and MinProto the
 // oldest it still answers. A version outside that range is refused at hello
@@ -54,10 +59,16 @@ const (
 	// is read, and the session continues.
 	CodeBadEntry = "badentry"
 	CodeStale    = "stale" // the path changed; reconcile and retry the write
-	// CodeBadName is a path the server cannot store: empty, or over the length
-	// bound. The plaintext-name check is the client's, since the server holds
-	// no key; see docs/protocol.md.
+	// CodeBadName is a vault or device name the server will not store: over
+	// its bound, or carrying a control character, or a device id of the wrong
+	// shape. Paths have their own code.
 	CodeBadName = "badname"
+	// CodeBadPath is a path the protocol refuses (plan/protocol.md, "Paths").
+	// It rejects the entry and the session continues. The message begins with
+	// the reason code and a colon, "dotprefix: ...", because the wire has one
+	// code for twelve rules and the rule is what the person whose file will
+	// not sync needs to know (PLAN.md section 4.9).
+	CodeBadPath = "badpath"
 	// CodeBadChunk is an uploaded body that does not hash to the name it was
 	// asked for, or a chunk name that is not a hex SHA-256.
 	CodeBadChunk = "badchunk"
@@ -753,4 +764,89 @@ func Retryable(code string) bool {
 		return true
 	}
 	return false
+}
+
+// ErrNotText is a text frame that is not well-formed text: invalid UTF-8, or a
+// JSON string escape naming half of a surrogate pair.
+var ErrNotText = errors.New("the frame is not well-formed text")
+
+// ValidText refuses a text frame that JSON decoding would quietly change.
+//
+// Go's decoder does not refuse invalid UTF-8 or an unpaired surrogate escape
+// such as "\ud800": it substitutes U+FFFD and carries on. For a path that is
+// a silent rename. A device sending one would have its note stored under a
+// name it does not hold, told nothing, and every other device would receive a
+// file its origin cannot find. So a frame that is not well-formed text is
+// refused before it is decoded, as `protostate`, since the two ends no longer
+// agree on what was said. RFC 6455 requires a text frame to be valid UTF-8,
+// and RFC 8259 leaves an unpaired surrogate's meaning undefined, so nothing a
+// correct client sends is refused.
+func ValidText(data []byte) error {
+	if !utf8.Valid(data) {
+		return errors.Join(ErrNotText, errors.New("it is not valid UTF-8"))
+	}
+	inString := false
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		if !inString {
+			if c == '"' {
+				inString = true
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = false
+		case '\\':
+			if i+1 >= len(data) {
+				return nil // unterminated: the decoder refuses it
+			}
+			if data[i+1] != 'u' {
+				i++ // a one-character escape
+				continue
+			}
+			unit, ok := hex4(data, i+2)
+			if !ok {
+				return nil // malformed: the decoder refuses it
+			}
+			i += 5
+			switch {
+			case unit >= 0xdc00 && unit <= 0xdfff:
+				return errors.Join(ErrNotText, errors.New("it escapes a low surrogate with no high surrogate before it"))
+			case unit >= 0xd800 && unit <= 0xdbff:
+				low, ok := uint16(0), false
+				if i+6 < len(data) && data[i+1] == '\\' && data[i+2] == 'u' {
+					low, ok = hex4(data, i+3)
+				}
+				if !ok || low < 0xdc00 || low > 0xdfff {
+					return errors.Join(ErrNotText, errors.New("it escapes a high surrogate with no low surrogate after it"))
+				}
+				i += 6
+			}
+		}
+	}
+	return nil
+}
+
+// hex4 reads four hex digits at data[at:], as a JSON \u escape carries.
+func hex4(data []byte, at int) (uint16, bool) {
+	if at+4 > len(data) {
+		return 0, false
+	}
+	var v uint16
+	for _, c := range data[at : at+4] {
+		var d byte
+		switch {
+		case c >= '0' && c <= '9':
+			d = c - '0'
+		case c >= 'a' && c <= 'f':
+			d = c - 'a' + 10
+		case c >= 'A' && c <= 'F':
+			d = c - 'A' + 10
+		default:
+			return 0, false
+		}
+		v = v<<4 | uint16(d)
+	}
+	return v, true
 }

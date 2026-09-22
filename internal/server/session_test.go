@@ -493,8 +493,10 @@ func TestPutRefusals(t *testing.T) {
 		msg  wire.In
 		code string
 	}{
-		{"empty path", wire.In{Op: "put", Path: "", Mac: testMac, Meta: wire.PutMeta{Size: 0}}, wire.CodeBadName},
-		{"path over the bound", wire.In{Op: "put", Path: string(longPath)}, wire.CodeBadName},
+		{"empty path", wire.In{Op: "put", Path: "", Mac: testMac, Meta: wire.PutMeta{Size: 0}}, wire.CodeBadPath},
+		{"path over the bound", wire.In{Op: "put", Path: string(longPath)}, wire.CodeBadPath},
+		{"a rename from a path over the bound", wire.In{Op: "put", Path: "a.md", Mac: testMac,
+			Meta: wire.PutMeta{Prev: string(longPath)}}, wire.CodeBadPath},
 		{"file over the ceiling", wire.In{Op: "put", Path: "big.md", Mac: testMac,
 			Meta: wire.PutMeta{Size: store.PerFileMax + 1}}, wire.CodeToolarge},
 		{"size with no chunks", wire.In{Op: "put", Path: "a.md", Mac: testMac,

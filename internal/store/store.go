@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/telimus/internal/paths"
 
 	_ "modernc.org/sqlite"
 )
@@ -69,10 +70,11 @@ const (
 	// client could claim millions of chunks and park the session.
 	MaxChunksPerEntry = 1 << 16 // 65536
 
-	// MaxPathLen bounds an encrypted path. Ciphertext plus encoding is a few
-	// times the plaintext, and Obsidian's own paths are bounded by the
-	// filesystem, so this has room to spare while still being a bound.
-	MaxPathLen = 4096
+	// MaxPathLen bounds a path, in bytes of UTF-8: the protocol's bound, which
+	// the path policy in internal/paths enforces (plan/protocol.md, "Paths").
+	// Named here too because the read limit's arithmetic is written against
+	// the store's constants.
+	MaxPathLen = paths.MaxPathBytes
 
 	// MaxDeviceLen bounds a device name.
 	//
@@ -128,6 +130,11 @@ var (
 	// retry that download forever, which presents as a sync that never
 	// finishes rather than as an error.
 	ErrChunkMissing = errors.New("entry references a chunk the server does not hold")
+
+	// ErrBadPath is a path the protocol refuses (plan/protocol.md, "Paths"),
+	// answered `badpath`. Every refusal is a *PathError carrying the rule that
+	// refused it, which both implementations report identically.
+	ErrBadPath = errors.New("path refused")
 
 	// ErrBadEntry is a structurally invalid entry, rejected on the way in.
 	// docs/protocol.md: validate at put, with a reason, rather than discovering
@@ -582,17 +589,84 @@ func isHex64(v string) bool {
 	return true
 }
 
+// PathError is a path the protocol refuses, and which of its rules refused it.
+//
+// The message begins with the reason code and a colon, "dotprefix: the path
+// ...", because the reason has to reach the person whose file will not sync
+// (PLAN.md section 4.9) and the wire has one code for all of them. A client
+// reads the reason as the text before the first colon. The codes and their
+// order are the fixture's, shared with the TypeScript client.
+type PathError struct {
+	// Field is "path" or "prev": which of the entry's two paths it is.
+	Field  string
+	Reason paths.Reason
+	// Len is the path's length in bytes, which the message gives for
+	// "toolong" so the number that is wrong is in front of the person.
+	Len int
+}
+
+func (e *PathError) Error() string {
+	var why string
+	switch e.Reason {
+	case paths.ReasonUTF8:
+		why = "is not valid UTF-8"
+	case paths.ReasonEmpty:
+		why = "is empty"
+	case paths.ReasonTooLong:
+		why = fmt.Sprintf("is %d bytes of UTF-8, and a path is at most %d", e.Len, paths.MaxPathBytes)
+	case paths.ReasonControl:
+		why = "contains a control character"
+	case paths.ReasonNFC:
+		why = "is not in Unicode normal form C"
+	case paths.ReasonNBSP:
+		why = "contains a no-break space (U+00A0 or U+202F), which Obsidian turns into an ordinary space"
+	case paths.ReasonBackslash:
+		why = "contains a backslash, which Obsidian turns into a slash"
+	case paths.ReasonSlash:
+		why = "begins or ends with a slash"
+	case paths.ReasonEmptySegment:
+		why = "has an empty segment"
+	case paths.ReasonDotSegment:
+		why = "has a segment that is . or .."
+	case paths.ReasonDotPrefix:
+		why = "has a segment that begins with a dot, and such a path never syncs: it is where " +
+			".obsidian, .trash and a client's own state live"
+	case paths.ReasonStaging:
+		why = "contains " + paths.StagingMark + ", which only a client's half-written file carries"
+	default:
+		why = "is refused"
+	}
+	return fmt.Sprintf("%s: the %s %s", e.Reason, e.Field, why)
+}
+
+// Unwrap makes a PathError an ErrBadPath.
+func (e *PathError) Unwrap() error { return ErrBadPath }
+
+// CheckPaths applies the path policy to an entry's path and, on a rename, to
+// the path it came from: the rules of plan/protocol.md, "Paths", through
+// internal/paths, which is where they are written down once for the server.
+func (e Entry) CheckPaths() error {
+	if r := paths.Check(e.Path); r != "" {
+		return &PathError{Field: "path", Reason: r, Len: len(e.Path)}
+	}
+	if e.Prev != "" {
+		if r := paths.Check(e.Prev); r != "" {
+			return &PathError{Field: "prev", Reason: r, Len: len(e.Prev)}
+		}
+	}
+	return nil
+}
+
 // Validate checks an entry's shape. Exported so the session can reject a put
 // before reading any body, and so the reason is the same one in both places.
+//
+// The paths first, and for every kind of entry: a folder and a deletion carry
+// a path like any file, and a check that skipped them would store a folder no
+// client can create or delete. F20 was exactly that shape: a rule applied to
+// files alone, and rows every reader then refused.
 func (e Entry) Validate() error {
-	if e.Path == "" {
-		return fmt.Errorf("%w: empty path", ErrBadEntry)
-	}
-	if len(e.Path) > MaxPathLen {
-		return fmt.Errorf("%w: path is %d bytes, max %d", ErrBadEntry, len(e.Path), MaxPathLen)
-	}
-	if len(e.Prev) > MaxPathLen {
-		return fmt.Errorf("%w: prev path is %d bytes, max %d", ErrBadEntry, len(e.Prev), MaxPathLen)
+	if err := e.CheckPaths(); err != nil {
+		return err
 	}
 	if e.Prev == e.Path && e.Prev != "" {
 		return fmt.Errorf("%w: prev path equals path", ErrBadEntry)

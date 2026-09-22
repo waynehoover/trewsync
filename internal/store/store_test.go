@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/telimus/internal/paths"
 )
 
 // A mac of the right shape, standing in for a real writer's. The server holds
@@ -230,8 +231,6 @@ func TestValidateRejectsStructurallyBadEntries(t *testing.T) {
 		why   string
 		entry Entry
 	}{
-		{"empty path", Entry{Path: "", Mac: testMac, Size: 1, Chunks: []string{good}}},
-		{"oversized path", Entry{Path: string(make([]byte, MaxPathLen+1)), Size: 0}},
 		{"prev equals path", Entry{Path: "a.md", Mac: testMac, Prev: "a.md"}},
 		{"folder and deletion at once", Entry{Path: "a", Mac: testMac, Folder: true, Deleted: true}},
 		{"negative size", Entry{Path: "a.md", Mac: testMac, Size: -1}},
@@ -245,6 +244,29 @@ func TestValidateRejectsStructurallyBadEntries(t *testing.T) {
 	for _, c := range cases {
 		if err := c.entry.Validate(); !errors.Is(err, ErrBadEntry) {
 			t.Errorf("%s: err = %v, want ErrBadEntry", c.why, err)
+		}
+	}
+	// A path is refused as a path, with the rule that refused it, and never
+	// as the entry's other shape, which is a different fix for the client.
+	for _, c := range []struct {
+		why    string
+		entry  Entry
+		field  string
+		reason paths.Reason
+	}{
+		{"empty path", Entry{Path: "", Mac: testMac, Size: 1, Chunks: []string{good}}, "path", paths.ReasonEmpty},
+		{"oversized path", Entry{Path: strings.Repeat("x", MaxPathLen+1), Size: 0}, "path", paths.ReasonTooLong},
+		{"oversized previous path", Entry{Path: "a.md", Mac: testMac, Prev: strings.Repeat("x", MaxPathLen+1)},
+			"prev", paths.ReasonTooLong},
+	} {
+		err := c.entry.Validate()
+		var pe *PathError
+		if !errors.As(err, &pe) || !errors.Is(err, ErrBadPath) || errors.Is(err, ErrBadEntry) {
+			t.Errorf("%s: err = %v, want a PathError that is ErrBadPath and not ErrBadEntry", c.why, err)
+			continue
+		}
+		if pe.Field != c.field || pe.Reason != c.reason || !strings.HasPrefix(err.Error(), string(c.reason)+": ") {
+			t.Errorf("%s: refused as %s/%s (%q), want %s/%s", c.why, pe.Field, pe.Reason, err, c.field, c.reason)
 		}
 	}
 }

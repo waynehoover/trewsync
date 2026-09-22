@@ -120,7 +120,7 @@ func TestHistoryRefusesAnEmptyPath(t *testing.T) {
 	cl := r.dial("a")
 	cl.hello(0)
 	cl.sendJSON(wire.In{Op: "history"})
-	cl.expectErr(wire.CodeBadName)
+	cl.expectErr(wire.CodeBadPath)
 
 	// Still usable, asserted by using it. A refusal a client can recover from
 	// has to leave a session it can carry on with.

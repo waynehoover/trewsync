@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/waynehoover/telimus/internal/chunks"
@@ -22,7 +23,10 @@ func (c *client) putMany(entries []wire.PutEntry, bodies map[string]string) wire
 	}
 	c.sendJSON(wire.In{Op: "putmany", Entries: entries})
 
-	frame := c.recvRaw()
+	// Batches queued rather than read as the answer: when every body is held
+	// the entries commit at once, and the echo of this device's own commits
+	// is broadcast before the acks are written.
+	frame := string(c.recvFrame())
 	var head struct {
 		Res string `json:"res"`
 	}
@@ -191,8 +195,13 @@ func TestOneBadEntryDoesNotRefuseTheRest(t *testing.T) {
 	if acks.Results[0].UID == 0 || acks.Results[2].UID == 0 {
 		t.Fatalf("a good entry was refused alongside a bad one: %+v", acks.Results)
 	}
-	if acks.Results[1].Code != wire.CodeBadName {
-		t.Fatalf("the bad entry was refused as %q, want %q", acks.Results[1].Code, wire.CodeBadName)
+	if acks.Results[1].Code != wire.CodeBadPath {
+		t.Fatalf("the bad entry was refused as %q, want %q", acks.Results[1].Code, wire.CodeBadPath)
+	}
+	// The rule that refused it leads the message, for the person whose file
+	// will not sync (PLAN.md section 4.9).
+	if !strings.HasPrefix(acks.Results[1].Msg, "empty: ") {
+		t.Fatalf("the refusal does not lead with its reason: %q", acks.Results[1].Msg)
 	}
 	if cl.closed() {
 		t.Fatal("one unacceptable entry closed the session")

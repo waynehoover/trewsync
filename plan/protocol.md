@@ -6,6 +6,8 @@ Derived from Basalt's protocol 7 (`basalt:docs/protocol.md`) by removing encrypt
 
 WebSocket. Text frames carry JSON control messages; binary frames carry chunk bodies. Contents, paths, sizes, timestamps, and device labels are readable by the server. TLS in front of the server is required.
 
+**A text frame must be well-formed text** (settled in M1). A frame that is not valid UTF-8, or that carries a JSON `\u` escape naming half of a surrogate pair, is refused with `protostate` before it is decoded, and the session ends. Go's JSON decoder would otherwise substitute U+FFFD without a word, and for a path that is a silent rename: the note would be stored under a name its device does not hold. RFC 6455 already requires text frames to be UTF-8, so no correct client is refused.
+
 ## Design rules
 
 Kept from protocol 7, numbered as there because code comments cite them:
@@ -91,7 +93,7 @@ Every `path` and `prev` on the wire is the plaintext vault-relative path, `/`-se
 - U+00A0 or U+202F anywhere, because Obsidian's `normalizePath` turns them into ordinary spaces and the server's keyspace is Obsidian's (PLAN §4.1)
 - a backslash anywhere, because `normalizePath` turns it into a slash
 
-With the NFC, slash and empty-segment rules, these are exactly the paths `normalizePath` leaves unchanged. Each refusal has a reason code, and both implementations must report the same one, checked in this order: `utf8`, `empty`, `toolong`, `control`, `nfc`, `nbsp`, `backslash`, `slash`, `emptysegment`, `dotsegment`, `dotprefix`, `staging`. The wire code is `badpath` for all of them; the reason travels in the message and reaches the person (PLAN §4.9).
+With the NFC, slash and empty-segment rules, these are exactly the paths `normalizePath` leaves unchanged. Each refusal has a reason code, and both implementations must report the same one, checked in this order: `utf8`, `empty`, `toolong`, `control`, `nfc`, `nbsp`, `backslash`, `slash`, `emptysegment`, `dotsegment`, `dotprefix`, `staging`. The wire code is `badpath` for all of them; the reason travels in the message and reaches the person (PLAN §4.9). **Settled in M1:** the message begins with the reason code, the field and a colon-separated explanation, as in `dotprefix: the path has a segment that begins with a dot, ...` or `toolong: the prev is 1030 bytes of UTF-8, ...`, so a client reads the reason as the text before the first colon. The field is `path` or `prev`: a rename's source is checked by the same rules as its destination, and so are folders and deletions.
 
 **Collisions**, refused with `collision`. The fold is `fold(s) = NFC(table(NFC(s)))`, where the table is Unicode full case folding (CaseFolding.txt statuses C and F) at Unicode 15.1, generated into `internal/paths/fold_table.go` and `client/src/core/fold-table.ts` and proven identical by digest. Under full folding `Straße.md` and `STRASSE.md` collide, as do `İ.md` and `i̇.md`. For a create, or the destination of a move:
 
@@ -191,7 +193,10 @@ The batch budget is **not** `size + 64` per entry. That is not an exact wire-mem
 | `badname` | invalid vault or device name | no | ends at hello, else rejects |
 | `toolarge` | limit exceeded | no | ends if framing cannot continue |
 | `nospace` | storage exhausted | yes | ends during upload |
-| `nouid`, `nocontent`, `nochunk`, `nodevice` | as protocol 7 | no | rejects |
+| `nouid` | a `get` for a uid this vault does not have | no | rejects |
+| `nocontent` | a `get` for a folder or a deletion, which has no body | no | rejects |
+| `nochunk` | a `fetch` or `resend` naming a body the server does not hold or no entry refers to | no | rejects |
+| `nodevice` | a `revoke` for a device id this vault does not have | no | rejects |
 | `internal` | server fault, not committed | yes | ends in handshake, else rejects |
 
 `rotated` is removed.
