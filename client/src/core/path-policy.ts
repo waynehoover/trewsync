@@ -17,6 +17,13 @@ import { fold } from "./fold.ts";
 export const MAX_PATH_BYTES = 1024;
 
 /**
+ * The longest single name in a path, in bytes of UTF-8: ext4 and f2fs, which
+ * Android and Linux use, hold no more, so a longer name is refused where it is
+ * made rather than failing on every Android and Linux device later.
+ */
+export const MAX_SEGMENT_BYTES = 255;
+
+/**
  * The name the adapters give files they are staging. Derived from the product
  * name, which is not final (PLAN.md section 10).
  */
@@ -27,6 +34,7 @@ export type PathReason =
   | "utf8"
   | "empty"
   | "toolong"
+  | "segmenttoolong"
   | "control"
   | "nfc"
   | "nbsp"
@@ -59,6 +67,8 @@ export function pathReason(path: string): PathReason | undefined {
   if (!wellFormed(path)) return "utf8";
   if (path === "") return "empty";
   if (utf8.encode(path).length > MAX_PATH_BYTES) return "toolong";
+  if (path.split("/").some((s) => utf8.encode(s).length > MAX_SEGMENT_BYTES))
+    return "segmenttoolong";
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/u.test(path)) return "control";
   if (path.normalize("NFC") !== path) return "nfc";

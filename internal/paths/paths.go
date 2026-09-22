@@ -23,6 +23,12 @@ import (
 // MaxPathBytes is the longest path, in bytes of UTF-8, the server accepts.
 const MaxPathBytes = 1024
 
+// MaxSegmentBytes is the longest single name in a path, in bytes of UTF-8:
+// ext4 and f2fs, which Android and Linux use, hold no more. A longer name made
+// on a Mac would be accepted and then fail on every Android and Linux device,
+// so it is refused where it is made, with its reason, instead.
+const MaxSegmentBytes = 255
+
 // StagingMark is the name the adapters give files they are staging. A path
 // containing it is one of theirs mid-write, never a note.
 //
@@ -40,6 +46,7 @@ const (
 	ReasonUTF8         Reason = "utf8"
 	ReasonEmpty        Reason = "empty"
 	ReasonTooLong      Reason = "toolong"
+	ReasonSegmentLong  Reason = "segmenttoolong"
 	ReasonControl      Reason = "control"
 	ReasonNFC          Reason = "nfc"
 	ReasonNBSP         Reason = "nbsp"
@@ -64,6 +71,11 @@ func Check(p string) Reason {
 	}
 	if len(p) > MaxPathBytes {
 		return ReasonTooLong
+	}
+	for _, s := range strings.Split(p, "/") {
+		if len(s) > MaxSegmentBytes {
+			return ReasonSegmentLong
+		}
 	}
 	for _, r := range p {
 		if r < 0x20 || r == 0x7f {

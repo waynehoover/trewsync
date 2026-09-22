@@ -49,6 +49,8 @@ INVITE_VERSION = 1
 INVITE_TOKEN_BYTES = 16
 DEVICE_TOKEN_BYTES = 32
 MAX_PATH_BYTES = 1024
+# ext4 and f2fs, which Android and Linux use, hold at most 255 bytes per name.
+MAX_SEGMENT_BYTES = 255
 MAX_NAME_BYTES = 64
 CHUNK_MAX = 1 << 20
 
@@ -169,6 +171,8 @@ def path_reason(raw: bytes) -> str | None:
         return "empty"
     if len(raw) > MAX_PATH_BYTES:
         return "toolong"
+    if any(len(s.encode("utf-8")) > MAX_SEGMENT_BYTES for s in text.split("/")):
+        return "segmenttoolong"
     if any(ord(c) < 0x20 or ord(c) == 0x7F for c in text):
         return "control"
     if unicodedata.normalize("NFC", text) != text:
@@ -206,6 +210,10 @@ def path_vectors() -> list[dict]:
         ("empty", ""),
         ("1025 bytes", "a" * (MAX_PATH_BYTES - 2) + ".md"),
         ("1026 bytes in 513 characters", "\u00e9" * (MAX_PATH_BYTES // 2 + 1)),
+        ("a 255-byte name", "d/" + "a" * (MAX_SEGMENT_BYTES - 3) + ".md"),
+        ("a 256-byte name", "d/" + "a" * (MAX_SEGMENT_BYTES - 2) + ".md"),
+        ("a 255-byte name in three-byte characters", "\u30d5" * (MAX_SEGMENT_BYTES // 3)),
+        ("a 258-byte name in 86 characters", "\u30d5" * (MAX_SEGMENT_BYTES // 3 + 1)),
         ("invalid UTF-8", b"a\xffb.md"),
         ("a truncated UTF-8 sequence", b"a\xe3\x81.md"),
         ("an encoded lone surrogate", b"a\xed\xa0\x80.md"),
@@ -710,6 +718,7 @@ def main() -> None:
         "inviteTokenBytes": INVITE_TOKEN_BYTES,
         "deviceTokenBytes": DEVICE_TOKEN_BYTES,
         "maxPathBytes": MAX_PATH_BYTES,
+        "maxSegmentBytes": MAX_SEGMENT_BYTES,
         "maxNameBytes": MAX_NAME_BYTES,
         "chunkMax": CHUNK_MAX,
     }

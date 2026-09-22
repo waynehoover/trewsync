@@ -28,6 +28,7 @@ import {
 import {
   CHUNKING_TEXT_EXTENSIONS,
   MAX_PATH_BYTES,
+  MAX_SEGMENT_BYTES,
   STAGING_MARK,
   chunkingText,
   collides,
@@ -45,6 +46,7 @@ interface Contract {
     stagingMark: string;
     inviteTokenBytes: number;
     maxPathBytes: number;
+    maxSegmentBytes: number;
     maxNameBytes: number;
     chunkMax: number;
   };
@@ -154,6 +156,7 @@ describe("the protocol 1 contract", () => {
     expect(STAGING_MARK).toBe(contract.constants.stagingMark);
     expect(INVITE_TOKEN_BYTES).toBe(contract.constants.inviteTokenBytes);
     expect(MAX_PATH_BYTES).toBe(contract.constants.maxPathBytes);
+    expect(MAX_SEGMENT_BYTES).toBe(contract.constants.maxSegmentBytes);
     expect(MAX_VAULT_NAME_BYTES).toBe(contract.constants.maxNameBytes);
     expect(contract.frames.chunkMax).toBe(contract.constants.chunkMax);
   });

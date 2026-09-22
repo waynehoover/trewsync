@@ -82,6 +82,7 @@ Created by `telimus invite` on the server host or by the wire `invite` op from a
 Every `path` and `prev` on the wire is the plaintext vault-relative path, `/`-separated, NFC-normalized UTF-8. The server refuses with `badpath`:
 
 - empty, or longer than 1024 bytes
+- any segment longer than 255 bytes, because ext4 and f2fs, which Android and Linux use, hold no more; refusing it where it is made shows the reason there, instead of every Android and Linux device failing to write it later (added 2026-09-22 from the platform probe work)
 - invalid UTF-8, or not in NFC
 - any control character (U+0000 to U+001F, U+007F)
 - leading or trailing `/`, or an empty segment
@@ -91,7 +92,7 @@ Every `path` and `prev` on the wire is the plaintext vault-relative path, `/`-se
 - U+00A0 or U+202F anywhere, because Obsidian's `normalizePath` turns them into ordinary spaces and the server's keyspace is Obsidian's (PLAN §4.1)
 - a backslash anywhere, because `normalizePath` turns it into a slash
 
-With the NFC, slash and empty-segment rules, these are exactly the paths `normalizePath` leaves unchanged. Each refusal has a reason code, and both implementations must report the same one, checked in this order: `utf8`, `empty`, `toolong`, `control`, `nfc`, `nbsp`, `backslash`, `slash`, `emptysegment`, `dotsegment`, `dotprefix`, `staging`. The wire code is `badpath` for all of them; the reason travels in the message and reaches the person (PLAN §4.9).
+With the NFC, slash and empty-segment rules, these are exactly the paths `normalizePath` leaves unchanged. Each refusal has a reason code, and both implementations must report the same one, checked in this order: `utf8`, `empty`, `toolong`, `segmenttoolong`, `control`, `nfc`, `nbsp`, `backslash`, `slash`, `emptysegment`, `dotsegment`, `dotprefix`, `staging`. The wire code is `badpath` for all of them; the reason travels in the message and reaches the person (PLAN §4.9).
 
 **Collisions**, refused with `collision`. The fold is `fold(s) = NFC(table(NFC(s)))`, where the table is Unicode full case folding (CaseFolding.txt statuses C and F) at Unicode 15.1, generated into `internal/paths/fold_table.go` and `client/src/core/fold-table.ts` and proven identical by digest. Under full folding `Straße.md` and `STRASSE.md` collide, as do `İ.md` and `i̇.md`. For a create, or the destination of a move:
 
