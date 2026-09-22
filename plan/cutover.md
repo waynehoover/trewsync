@@ -9,16 +9,16 @@ A concrete version of M10 against the setup that exists today, drafted on 2026-0
 | Basalt server | `basalt` service in `~/code/homelab/docker-compose.yml`, image `ghcr.io/waynehoover/basalt-sync:0.9.0@sha256:4718...`, data `/home/user/basalt/data` (`./basalt/data`) | Loopback `127.0.0.1:3003`; `tailscale serve` terminates TLS at `https://homelab.example.ts.net:3003`. Read-only root, caps dropped, 30 s stop grace. Watchtower disabled for it. |
 | Basalt MCP | `basalt-mcp` service, a paired headless client with a plaintext vault copy at `./basalt-mcp/data/vault`, serving MCP on `127.0.0.1:3010`, `network_mode: host` | A device in its own right: it has to be settled like any other before the cut. |
 | Server backups | The backup service mounts `/home/user/basalt/data` read-only as `/backup-sources/basalt` | Encrypted Basalt data: useful only with the recovery key and a Basalt build. |
-| Mac vault | `~/Documents/My Vault` in Obsidian | The primary vault. |
-| Phone | Pixel 9 (Obsidian on Android) | Has replayed an old tree before (the 2026-09-09 incident in the owner's notes): settle it first and let it converge before anything else. |
-| Other writers? | `deploy.sh` lists `daily-note-log` (writes daily notes into a `VAULT_DIR`, then triggers an Obsidian Sync run) and `obsidian-headless` (Obsidian Sync's headless client), but neither is a service in `docker-compose.yml` | **Open question 1.** Whether either runs, and into which directory. A second sync tool on the same local vault is out of scope (PLAN §1). |
+| Mac vault | `~/Documents/My Vault` in Obsidian | The primary vault. One of the owner's two devices (confirmed 2026-09-22). |
+| Phone | Pixel 9 (Obsidian on Android) | The other device (confirmed 2026-09-22). Has replayed an old tree before (the 2026-09-09 incident in the owner's notes): settle it first and let it converge before anything else. |
+| Other writers | None. `daily-note-log` and `obsidian-headless` are retired (confirmed 2026-09-22); `deploy.sh`, the homelab README and the dashboard were updated to match. | The only writers are the two devices and `basalt-mcp`. |
 
-## Open questions for the owner
+## Settled with the owner (2026-09-22)
 
-1. Do `daily-note-log` and `obsidian-headless` run anywhere now, and if so, into which vault directory? If `daily-note-log` writes into the vault, it becomes an MCP client of Telimus (an `append_note` with a write token) rather than a filesystem writer.
-2. Which devices are paired to Basalt today (the Basalt devices panel lists them)? Each needs settling, or freezing with a rejoin procedure.
-3. Is the data volume on encrypted storage (threat model S1)? The Basalt data was ciphertext; Telimus's is not.
-4. Where should Telimus backups go, and to which `age` recipient (threat model S2)?
+1. **Other writers:** none. `daily-note-log` and `obsidian-headless` no longer run.
+2. **Devices:** the phone and the Mac. `basalt-mcp` is a third paired client (headless), settled and retired with the rest.
+3. **Encryption at rest:** the data volume is not encrypted, and the owner accepts that (threat model S1, accepted risk). Telimus's data is plaintext where Basalt's was ciphertext, so anyone who can read the homelab's disk can read the notes.
+4. **Telimus backups:** deferred. The cutover's own way back still stands: the verified Basalt backup (already covered by the homelab's backup job) and the readable snapshot of the Mac vault in step 3.
 
 ## The procedure
 

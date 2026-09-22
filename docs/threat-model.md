@@ -56,16 +56,17 @@ means).
 ## Requirements
 
 Status is one of **enforced** (code and a test hold it), **planned** (a
-milestone task owns it), or **documented** (it is the operator's to do, and
-this page and the operations guide say how).
+milestone task owns it), **documented** (it is the operator's to do, and this
+page and the operations guide say how), **accepted risk** or **deferred** (the
+owner decided, with the date and what it costs).
 
 ### Storage and backups
 
 | # | Requirement | Enforced by | Status |
 |---|---|---|---|
-| S1 | The data volume sits on encrypted storage (LUKS, FileVault, ZFS native encryption), and where its key lives and how an unattended restart unlocks it is written down | `docs/operations.md` (M5.5); `telimus doctor` reports whether it can tell | documented, planned |
-| S2 | Backups are encrypted, including backups that stay on the same box: `telimus backup` refuses to write outside the data directory without `--plaintext-ok`, or takes `--encrypt-to <age recipient>` | `backup` (M5.5) | planned |
-| S3 | The restore rehearsal exercises the encrypted path, not a plaintext shortcut | M5.5 rehearsal | planned |
+| S1 | The data volume sits on encrypted storage (LUKS, FileVault, ZFS native encryption), and where its key lives and how an unattended restart unlocks it is written down | `docs/operations.md` (M5.5); `telimus doctor` reports whether it can tell | **accepted risk**: the owner's homelab volume is not encrypted and the owner accepts that (2026-09-22). Anyone who can read that disk can read every note and its history. `doctor` still reports it. |
+| S2 | Backups are encrypted, including backups that stay on the same box: `telimus backup` refuses to write outside the data directory without `--plaintext-ok`, or takes `--encrypt-to <age recipient>` | `backup` | **deferred** by the owner (2026-09-22): no Telimus backup destination yet. The M5.5 restore rehearsal still runs, locally, because a recovery path tested only in docs is a rumour (rule 11). |
+| S3 | The restore rehearsal exercises the encrypted path, not a plaintext shortcut | M5.5 rehearsal | **deferred** with S2 |
 | S4 | A data directory on storage a container replacement or a reboot erases is reported, and `serve` refuses to start an empty store there without `--allow-ephemeral` | `internal/doctor` (the check exists; wiring is M5.5) | planned |
 | S5 | A directory of another product, or a newer schema, is refused before any write and left byte-identical | store identity (M1) | planned |
 | S6 | Deleted versions a person expects gone are gone only when purge says so, and purge never reclaims a version pinned by an agent operation inside its window | purge survivor set (M1, M5) | planned |

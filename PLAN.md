@@ -304,8 +304,8 @@ The server is trusted with everything. That is the decision, and it is the right
 
 **Requirements, not advice:**
 
-- The data volume sits on encrypted storage (LUKS, FileVault, ZFS native). Document where the key lives and how an unattended restart unlocks it.
-- Backups are encrypted, **including backups that stay on the same box**. `telimus backup` refuses to write outside the data directory without `--plaintext-ok`, or takes `--encrypt-to <age recipient>`. A backup on the homelab is still a backup another process can read.
+- The data volume sits on encrypted storage (LUKS, FileVault, ZFS native). Document where the key lives and how an unattended restart unlocks it. **Owner's decision, 2026-09-22:** the homelab volume is not encrypted and that is accepted; `docs/threat-model.md` S1 records it as an accepted risk with what it costs.
+- Backups are encrypted, **including backups that stay on the same box**. `telimus backup` refuses to write outside the data directory without `--plaintext-ok`, or takes `--encrypt-to <age recipient>`. A backup on the homelab is still a backup another process can read. **Deferred by the owner, 2026-09-22:** no Telimus backup destination yet. The restore rehearsal in M5.5 still runs locally, because rule 11 is about recovery, not about where copies live.
 - The restore rehearsal (M5.5) exercises the encrypted path, not a plaintext shortcut.
 - Chunk names and paths are sensitive metadata: not in metrics labels, not on unauthenticated endpoints, not in public manifests.
 
