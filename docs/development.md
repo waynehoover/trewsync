@@ -426,6 +426,25 @@ versions.
 This is M0's acceptance, not M3's: one desktop, one machine, loopback, and
 the flows driven through the plugin's own methods rather than by hand.
 
+### The MCP transport: hand-rolled, with the SDK as the test client
+
+Decided 2026-09-22 (PLAN.md M4 task 1). The server speaks MCP's streamable
+HTTP itself: stateless `POST /mcp` answered with `application/json`, `GET` and
+`DELETE` answered 405, and the protocol version negotiated from the client's
+`initialize` among 2025-06-18, 2025-11-25 and 2026-07-28. The tool surface is
+fixed and small (`initialize`, `tools/list`, `tools/call`, the `initialized`
+notification), and every input is validated more strictly than a generic
+schema layer would (character and UTF-8 byte limits, lone surrogates).
+
+The official Go SDK, `github.com/modelcontextprotocol/go-sdk` v1.8.0, is a
+test-only dependency. Its client drives the handler at every protocol version
+it supports (2024-11-05 through 2026-07-28), so interoperability is proven by
+an implementation that is not this one. Linking its `mcp` package into the
+server was measured and rejected: it pulls `golang.org/x/oauth2`,
+`google/jsonschema-go`, segmentio's assembly-accelerated JSON and base64,
+`uritemplate` and `x/time/rate` into the binary, beside a 12,000-line
+streamable transport. Test-only imports are not linked into `telimus`.
+
 ### The strip ledger
 
 Before M1 or M2 deletes a test file, each of its assertions is classified as
