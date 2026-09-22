@@ -184,6 +184,11 @@ func openForInspection(dataDir, verb string) (*store.Store, error) {
 // directory to put the lock file in. Checked afterwards, a mistyped -data was
 // still refused and still left an empty directory with a lock file in it,
 // which is litter in whatever place the typo pointed at.
+//
+// The store's identity is checked here too, for the same reason (PLAN.md
+// section 2.8): a directory holding another product's database, a Basalt one
+// renamed for instance, is refused before its lock files are touched, and the
+// directory is left exactly as it was.
 func requireDataDir(dataDir, verb string) error {
 	dbPath, _ := store.DataDir(dataDir)
 	if _, err := os.Stat(dbPath); err != nil {
@@ -194,7 +199,7 @@ func requireDataDir(dataDir, verb string) error {
 		}
 		return err
 	}
-	return nil
+	return store.CheckDataDir(dataDir)
 }
 
 // locked turns a lock refusal into something a person can act on.
@@ -298,6 +303,15 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		level = slog.LevelDebug
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+
+	// What this directory is, before anything is written to it (PLAN.md
+	// section 2.8). Before the locks, because taking a lock writes a lock file
+	// and a Basalt directory has lock files of the same names: a refusal after
+	// them would already have changed the directory it refuses. The store
+	// checks again when it opens, under the locks.
+	if err := store.CheckDataDir(*dataDir); err != nil {
+		return err
+	}
 
 	// One server per data directory. Two would each have their own fan-out and
 	// their own commit ordering, so neither would see the other's live changes
@@ -1220,6 +1234,11 @@ func backupCovers(
 		}
 		return 0, nil, err
 	}
+	// What the backup is, before its lock is taken, as every other command
+	// asks of its data directory.
+	if err := store.CheckDataDir(dir); err != nil {
+		return 0, nil, fmt.Errorf("the backup at %s: %w; nothing was purged", dir, err)
+	}
 	sourceLatest, err := source.LatestUID(vault)
 	if err != nil {
 		return 0, nil, err
@@ -1449,6 +1468,13 @@ func cmdBackup(args []string, out io.Writer) error {
 		return err
 	}
 	if err := store.RefuseSamePlace(destDir, *dataDir); err != nil {
+		return err
+	}
+	// A destination holding another product's database is refused before it
+	// is locked or written: a snapshot published beside a Basalt database
+	// would adopt its chunk tree, and a purge of the result would sweep every
+	// body in it.
+	if err := store.CheckBackupDestination(destDir); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(destDir, 0o700); err != nil {

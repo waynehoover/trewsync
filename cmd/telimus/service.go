@@ -60,6 +60,9 @@ func cmdService(args []string, out io.Writer) error {
 	// can run beside a live server.
 	dbPath, _ := store.DataDir(*dataDir)
 	if _, err := os.Stat(dbPath); err == nil {
+		if err := store.CheckDataDir(*dataDir); err != nil {
+			return err
+		}
 		lock, err := dirlock.Shared(*dataDir, dirlock.Data)
 		if err != nil {
 			return locked(err, *dataDir, "service", stopFirst)

@@ -281,28 +281,17 @@ const (
 	SyncNormal SyncMode = "NORMAL"
 )
 
+// schema is every table and index a store has, as statements that are safe to
+// run again on a store that already has them.
+//
+// No pragmas. A pragma in a statement applies to the one pooled connection
+// that ran it, so the ones every connection needs (`busy_timeout`,
+// `synchronous`, `foreign_keys` and `temp_store`) are in the connection string
+// in open.go, and the one that is a property of the file, `journal_mode`, is set
+// once when the store is initialised. `temp_store = MEMORY` in particular is
+// load-bearing: see dsn for the production incident behind it and for why it
+// used to reach only one connection.
 const schema = `
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
--- Statement journals in memory, because this server is built to run with a
--- read-only root filesystem and nothing else needs a scratch file.
---
--- SQLite writes a statement journal when a statement inside a transaction may
--- have to be rolled back on its own, which is exactly what a SAVEPOINT is for,
--- and it puts that journal in a temp directory. The shipped container mounts
--- only /data and sets read_only, so there is no temp directory to have: the
--- batched commit added in 0.8.4 asked for one and got
--- SQLITE_IOERR_GETTEMPPATH (6410) on every batch large enough to need it,
--- twenty-two thousand times in a day on the author's own server before anyone
--- noticed, because a single put never takes that path and a failed batch just
--- looks like a client retrying.
---
--- MEMORY is the right answer here rather than a workaround: these
--- transactions hold one batch of entries, the size of which the protocol
--- already bounds, so the journal they would spill is small and the disk it
--- would spill to is one this server is deliberately not given.
-PRAGMA temp_store = MEMORY;
-
 CREATE TABLE IF NOT EXISTS vaults (
   vault_id   TEXT    PRIMARY KEY,
   next_uid   INTEGER NOT NULL DEFAULT 1,
@@ -474,6 +463,10 @@ type Store struct {
 	db     *sql.DB
 	chunks *chunks.Store
 	dbPath string
+
+	// identity is the store's identity row, read and validated when it was
+	// opened, before anything was written (PLAN.md section 2.8).
+	identity Identity
 
 	// hasChunkCount is whether the entries table has `n_chunks`.
 	//
@@ -813,7 +806,7 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 
 	committed := 0
 	for _, i := range pending {
-		name := fmt.Sprintf("telimus_entry_%d", i)
+		name := fmt.Sprintf("%s_entry_%d", Product, i)
 		if _, err := tx.Exec("SAVEPOINT " + name); err != nil {
 			return nil, err
 		}
@@ -2410,134 +2403,6 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
-}
-
-// migrate brings an older database up to the current schema.
-//
-// CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, so a
-// column added to the schema above never reaches a database made before it.
-// Additive only, and each step is idempotent, because the alternative is a
-// server that starts fine on a fresh directory and fails on the one that has
-// somebody's notes in it.
-func migrate(db *sql.DB) error {
-	// Nothing to migrate before the table exists; the schema will create it.
-	var tables int
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'vaults'`).Scan(&tables); err != nil {
-		return err
-	}
-	if tables == 0 {
-		return nil
-	}
-
-	// auth_hash arrived with the one-secret model, wrapped with the data key. A
-	// database written before either keeps the empty string in the new column.
-	// An unclaimed vault is an ordinary state; a claimed one with no data key
-	// is a vault an older build wrote, and the server refuses that session at
-	// hello rather than guessing at a key schedule that no longer exists.
-	for _, col := range []string{"auth_hash", "wrapped"} {
-		has, err := hasColumn(db, "vaults", col)
-		if err != nil {
-			return err
-		}
-		if !has {
-			if _, err := db.Exec(`ALTER TABLE vaults ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
-				return err
-			}
-		}
-	}
-
-	// The rotation generation. A database written before it starts at zero,
-	// which is right: the count is only ever compared with itself, within one
-	// handshake, so where it starts does not matter and only that it moves
-	// does.
-	if has, err := hasColumn(db, "vaults", "rotations"); err != nil {
-		return err
-	} else if !has {
-		if _, err := db.Exec(
-			`ALTER TABLE vaults ADD COLUMN rotations INTEGER NOT NULL DEFAULT 0`); err != nil {
-			return err
-		}
-	}
-
-	// The purge generation. A database written before it starts at zero, which
-	// is right for the same reason rotations is: a backup taken from it says
-	// generation zero, the first purge afterwards makes it one, and the only
-	// comparison anyone makes is between two of these numbers.
-	if has, err := hasColumn(db, "vaults", "purges"); err != nil {
-		return err
-	} else if !has {
-		if _, err := db.Exec(
-			`ALTER TABLE vaults ADD COLUMN purges INTEGER NOT NULL DEFAULT 0`); err != nil {
-			return err
-		}
-	}
-
-	// The devices table. Unlike a column, a new *table* does reach an older
-	// database on its own: CREATE TABLE IF NOT EXISTS in the schema above does
-	// nothing only to a table that is already there, and this one is not. So
-	// this statement is a second one saying the same thing, in the belt and
-	// braces style the index below is in, and it stays so that migrate reads
-	// as the complete list of what a database from an older build is missing.
-	// TestADatabaseFromAnOlderBuildGainsTheDevicesTable asserts the table is
-	// there and usable, not which statement made it.
-	// Character for character what the schema says, so that the definition
-	// SQLite records is the same one whichever statement created it.
-	if _, err := db.Exec(`
-CREATE TABLE IF NOT EXISTS devices (
-  vault_id   TEXT    NOT NULL,
-  device_id  TEXT    NOT NULL,   -- 16 random bytes, base64url, chosen by the device
-  name       TEXT    NOT NULL DEFAULT '',
-  auth_hash  TEXT    NOT NULL,   -- hex SHA-256 of this device's auth key
-  created_at INTEGER NOT NULL,
-  last_seen  INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (vault_id, device_id)
-)`); err != nil {
-		return err
-	}
-
-	// The index behind Deleted()'s rename suppression. Belt and braces: unlike
-	// CREATE TABLE IF NOT EXISTS, the CREATE INDEX IF NOT EXISTS in the schema
-	// does reach a table that already exists, so this is a second statement
-	// saying the same thing rather than the only one that says it. It stays so
-	// the migration reads as the complete list of what an older database is
-	// missing. TestOpeningADatabaseFromAnOlderBuildAddsTheColumnsAndLosesNothing
-	// asserts the index is there, not which statement made it.
-	if _, err := db.Exec(
-		`CREATE INDEX IF NOT EXISTS entries_by_prev ON entries(vault_id, prev_path, uid)`); err != nil {
-		return err
-	}
-
-	// Every entry carries its own authenticator. A row written before the
-	// columns existed has none and cannot be given one here, because the server
-	// has no key: it keeps the empty string, and a client refuses it.
-	for _, col := range []string{"mac", "parent"} {
-		has, err := hasColumn(db, "entries", col)
-		if err != nil {
-			return err
-		}
-		if !has {
-			if _, err := db.Exec(`ALTER TABLE entries ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
-				return err
-			}
-		}
-	}
-
-	// The chunk count, which older rows do not have and cannot be given: what
-	// the writer wrote is exactly the thing that was never recorded, and
-	// counting the rows that are there now would record the corruption as the
-	// truth. Minus one says "unknown" and the read path leaves those alone.
-	has, err := hasColumn(db, "entries", "n_chunks")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(
-			`ALTER TABLE entries ADD COLUMN n_chunks INTEGER NOT NULL DEFAULT -1`); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func hasColumn(db *sql.DB, table, column string) (bool, error) {

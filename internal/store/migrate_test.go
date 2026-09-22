@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -12,16 +13,15 @@ import (
  * A database written by an older build
  * ---------------------------------------------------------------- */
 
-// The whole risk in migrate is that it runs against a directory with somebody's
-// notes in it, and nothing exercised it: `grep -rn migrat --include='*_test.go'`
-// found nothing covering purges, rotations, auth_hash, wrapped, mac or parent.
-// CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, so
-// every one of those columns is invisible to a fresh-directory test, which is
-// every other test in this package. Rule 9 wants a test that fails without the
-// ALTER, and this is it.
+// oldSchema is a database in the shape a build before protocol 1 left: Basalt's
+// tables, from before the columns Basalt later added, and no store identity.
 //
-// oldSchema is the shape before any of them: the tables as they were, with the
-// columns this build adds left out, and without the index migrate adds too.
+// Basalt's migrations added those columns in place, and two tests held them
+// to losing nothing (strip ledger, `migrate_test.go:107` and `:268`, both
+// obsolete with the fresh schema of PLAN.md section 3.3). What replaces them is
+// the refusal: a database this build did not write is not adopted and not
+// migrated, and it is left byte for byte as it was, which
+// TestADatabaseFromAnOlderBuildIsRefusedAndLeftAsItWas holds.
 const oldSchema = `
 CREATE TABLE vaults (
   vault_id   TEXT    PRIMARY KEY,
@@ -58,7 +58,7 @@ CREATE INDEX entry_chunks_by_name ON entry_chunks(vault_id, name);
 
 // writeOldDatabase makes a database in the shape an older build left, with a
 // vault, three versions of one note, a folder, a deletion and a rename in it,
-// so the migration has something to lose.
+// so a refusal has something to leave alone.
 func writeOldDatabase(t *testing.T, dbPath string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", dbPath)
@@ -68,6 +68,9 @@ func writeOldDatabase(t *testing.T, dbPath string) {
 	defer db.Close()
 	if _, err := db.Exec(oldSchema); err != nil {
 		t.Fatalf("old schema: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatalf("stamping Basalt's schema version: %v", err)
 	}
 	if _, err := db.Exec(
 		`INSERT INTO vaults (vault_id, next_uid, created_at) VALUES ('v1', 7, 1000)`); err != nil {
@@ -104,139 +107,97 @@ func writeOldDatabase(t *testing.T, dbPath string) {
 	}
 }
 
-func TestOpeningADatabaseFromAnOlderBuildAddsTheColumnsAndLosesNothing(t *testing.T) {
+// A database from a build before protocol 1 is refused in every mode, and the
+// directory holding it is exactly as it was afterwards.
+//
+// Its schema version is 1, which is this build's too: the collision PLAN.md
+// section 2.8 names. Before the identity row, this build would have found a
+// version it accepts, migrated the tables in place and served another
+// product's history under protocol 1.
+func TestADatabaseFromAnOlderBuildIsRefusedAndLeftAsItWas(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "telimus.db")
+	dbPath, chunkDir := DataDir(dir)
 	writeOldDatabase(t, dbPath)
+	before := treeDigest(t, dir)
 
-	s, err := Open(dbPath, filepath.Join(dir, "chunks"))
-	if err != nil {
-		t.Fatalf("opening a database from an older build: %v", err)
-	}
-	defer s.Close()
-
-	// Every column this build added since, on both tables.
-	for _, c := range []struct{ table, column string }{
-		{"vaults", "auth_hash"}, {"vaults", "wrapped"},
-		{"vaults", "rotations"}, {"vaults", "purges"},
-		{"entries", "mac"}, {"entries", "parent"},
-	} {
-		has, err := hasColumn(s.db, c.table, c.column)
-		if err != nil {
-			t.Fatalf("%s.%s: %v", c.table, c.column, err)
+	for _, mode := range []Mode{Create, Existing, ReadOnly} {
+		st, err := OpenMode(dbPath, chunkDir, mode, SyncFull)
+		if err == nil {
+			st.Close()
+			t.Fatalf("mode %d: a database from an older build was opened", mode)
 		}
-		if !has {
-			t.Fatalf("%s has no %s after migrating; this build's queries cannot run against it",
-				c.table, c.column)
+		if !errors.Is(err, ErrForeignStore) {
+			t.Fatalf("mode %d: refused, but not as a foreign store: %v", mode, err)
 		}
-	}
-
-	// And the index migrate adds, which CREATE INDEX IF NOT EXISTS in the
-	// schema would never reach on a table that already existed.
-	var indexes int
-	if err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'entries_by_prev'`).Scan(&indexes); err != nil {
-		t.Fatalf("looking for entries_by_prev: %v", err)
-	}
-	if indexes != 1 {
-		t.Fatal("entries_by_prev is missing after migrating")
-	}
-
-	// Rule 5: a migration that makes the list smaller is a bug. Every row is
-	// still there, with the values it had.
-	st, err := s.Stats("v1")
-	if err != nil {
-		t.Fatalf("stats: %v", err)
-	}
-	if st.Versions != 6 {
-		t.Fatalf("%d versions survived the migration, want 6", st.Versions)
-	}
-	if st.OldestUID != 1 || st.LatestUID != 6 || st.AllocatedTo != 6 {
-		t.Fatalf("uid range after migrating: oldest %d latest %d allocated %d, want 1, 6, 6",
-			st.OldestUID, st.LatestUID, st.AllocatedTo)
-	}
-	// The generations start at zero, which is right: both are only ever
-	// compared with another value of themselves.
-	if st.Purges != 0 {
-		t.Fatalf("purges = %d on a database that predates the column, want 0", st.Purges)
-	}
-	hash, wrapped, rotations, err := s.VaultKeys("v1")
-	if err != nil {
-		t.Fatalf("vault keys: %v", err)
-	}
-	if hash != "" || wrapped != "" || rotations != 0 {
-		t.Fatalf("an unclaimed vault came back as hash %q wrapped %q rotations %d", hash, wrapped, rotations)
-	}
-
-	// The entries themselves, including the columns that were already there
-	// and the ones that were not. A row written before the authenticator
-	// existed keeps the empty string, because the server holds no key and
-	// cannot invent one; a client refuses it, which is the point.
-	e, ok, err := s.EntryByUID("v1", 3)
-	if err != nil || !ok {
-		t.Fatalf("uid 3 after migrating: ok=%v err=%v", ok, err)
-	}
-	if e.Path != "sealed-note" || e.Size != 13 || e.Device != "old-device" {
-		t.Fatalf("uid 3 came back as %+v", e)
-	}
-	if len(e.Chunks) != 1 || e.Chunks[0] != chunks.Name([]byte("version three")) {
-		t.Fatalf("uid 3 lost its chunk list: %v", e.Chunks)
-	}
-	if e.Mac != "" || e.Parent != "" {
-		t.Fatalf("uid 3 gained an authenticator out of nowhere: mac %q parent %q", e.Mac, e.Parent)
-	}
-	if renamed, ok, err := s.EntryByUID("v1", 6); err != nil || !ok || renamed.Prev != "sealed-old-name" {
-		t.Fatalf("uid 6 lost its rename: %+v ok=%v err=%v", renamed, ok, err)
-	}
-
-	// The migrated store is writable, and uids continue from where the old
-	// build left off rather than being reissued over the top of history.
-	next, err := s.AppendEntry("v1", Entry{Path: "sealed-after", Mac: testMac, MTime: 20})
-	if err != nil {
-		t.Fatalf("appending to a migrated store: %v", err)
-	}
-	if next != 7 {
-		t.Fatalf("the next uid is %d, want 7", next)
+		if after := treeDigest(t, dir); after != before {
+			t.Fatalf("mode %d: the refusal changed the directory:\nbefore\n%s\nafter\n%s", mode, before, after)
+		}
 	}
 }
 
 // Idempotent, because it runs on every open. The second pass must find every
-// column already there and change nothing: an ALTER that ran twice would fail
-// the open, and a server that starts once and not again is worse than one that
-// never started.
+// table already there and change nothing: a step that ran twice would fail the
+// open, and a server that starts once and not again is worse than one that
+// never started. The identity, epoch included, is untouched by it too.
 func TestMigratingTwiceChangesNothing(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "telimus.db")
-	writeOldDatabase(t, dbPath)
 
 	first, err := Open(dbPath, filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
+	if err := first.EnsureVault("v1", 1000); err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{Store: first, dir: dir}
+	h.file(t, "note.md", "one version")
 	before := schemaOf(t, first.db)
+	identity := first.Identity()
 	if err := first.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 
-	second, err := Open(dbPath, filepath.Join(dir, "chunks"))
-	if err != nil {
-		t.Fatalf("second open of an already migrated database: %v", err)
+	for pass := 0; pass < 2; pass++ {
+		again, err := Open(dbPath, filepath.Join(dir, "chunks"))
+		if err != nil {
+			t.Fatalf("reopen %d of a current database: %v", pass, err)
+		}
+		if after := schemaOf(t, again.db); after != before {
+			again.Close()
+			t.Fatalf("reopening changed the schema:\nfirst:\n%s\nlater:\n%s", before, after)
+		}
+		if got := again.Identity(); got != identity {
+			again.Close()
+			t.Fatalf("reopening changed the identity from %+v to %+v", identity, got)
+		}
+		st, err := again.Stats("v1")
+		if err != nil || st.Versions != 1 {
+			again.Close()
+			t.Fatalf("stats after reopening: %+v %v", st, err)
+		}
+		again.Close()
 	}
-	defer second.Close()
-	if after := schemaOf(t, second.db); after != before {
-		t.Fatalf("the second migration changed the schema:\nfirst:\n%s\nsecond:\n%s", before, after)
+}
+
+// Every schema version this build knows how to leave has a step, and the steps
+// end at this build's version: a version bumped without its migration is a
+// store that stops opening on upgrade.
+func TestEveryOlderSchemaHasAStep(t *testing.T) {
+	for v := 1; v < SchemaVersion; v++ {
+		if migrations[v] == nil {
+			t.Errorf("no migration from schema %d", v)
+		}
 	}
-	st, err := second.Stats("v1")
-	if err != nil {
-		t.Fatalf("stats: %v", err)
-	}
-	if st.Versions != 6 {
-		t.Fatalf("%d versions after migrating twice, want 6", st.Versions)
+	for v := range migrations {
+		if v < 1 || v >= SchemaVersion {
+			t.Errorf("a migration from schema %d, which is not before this build's %d", v, SchemaVersion)
+		}
 	}
 }
 
 // schemaOf is every table and index definition, in a stable order, so two
-// migrations can be compared as strings.
+// opens can be compared as strings.
 func schemaOf(t *testing.T, db *sql.DB) string {
 	t.Helper()
 	rows, err := db.Query(
@@ -257,58 +218,4 @@ func schemaOf(t *testing.T, db *sql.DB) string {
 		t.Fatalf("rows: %v", err)
 	}
 	return out
-}
-
-// The devices table, which a database written before per-device credentials has
-// no row of and no table for. A whole table, unlike a column, does reach an
-// older database through the schema's CREATE TABLE IF NOT EXISTS, and migrate
-// says it a second time so that it reads as the complete list of what an older
-// build is missing. This asserts the table is there and usable, not which
-// statement made it, and it fails against a build with neither.
-func TestADatabaseFromAnOlderBuildGainsTheDevicesTable(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "telimus.db")
-	writeOldDatabase(t, dbPath)
-
-	s, err := Open(dbPath, filepath.Join(dir, "chunks"))
-	if err != nil {
-		t.Fatalf("opening a database from an older build: %v", err)
-	}
-	defer s.Close()
-
-	var tables int
-	if err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'devices'`).Scan(&tables); err != nil {
-		t.Fatalf("looking for the devices table: %v", err)
-	}
-	if tables != 1 {
-		t.Fatal("there is no devices table after migrating, so every query over it fails on somebody's notes")
-	}
-
-	// A vault with no device rows is a vault with no devices rather than an
-	// error: it is where an unclaimed vault starts, and a migration that
-	// turned it into a failure would break the empty case first.
-	ds, err := s.Devices("v1")
-	if err != nil {
-		t.Fatalf("devices of a migrated vault: %v", err)
-	}
-	if len(ds) != 0 {
-		t.Fatalf("a migrated vault came with %d devices", len(ds))
-	}
-
-	// And it is writable: the vault's own auth hash is the registration
-	// credential, so a migrated vault that has been claimed can register the
-	// first device without any other change.
-	if _, err := s.ClaimVault("v1", "0000000000000000000000000000000000000000000000000000000000000001",
-		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 2000); err != nil {
-		t.Fatalf("claiming a migrated vault: %v", err)
-	}
-	if err := s.RegisterDevice("v1", "device-one", "laptop",
-		"1111111111111111111111111111111111111111111111111111111111111111",
-		"0000000000000000000000000000000000000000000000000000000000000001", 3000); err != nil {
-		t.Fatalf("registering a device on a migrated vault: %v", err)
-	}
-	if got, err := s.Devices("v1"); err != nil || len(got) != 1 || got[0].ID != "device-one" {
-		t.Fatalf("devices after registering one: %+v %v", got, err)
-	}
 }

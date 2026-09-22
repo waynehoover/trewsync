@@ -480,7 +480,9 @@ func (s *Store) ChunkRefs(fn func(vaultID, name string) error) error {
 	return rows.Err()
 }
 
-const stagedPrefix = ".telimus.db.snapshot"
+// stagedPrefix names a snapshot being written but not yet published. Every
+// file under it in a backup directory is this operation's or a dead one's.
+const stagedPrefix = "." + dbFileName + ".snapshot"
 
 // Backup writes everything this store holds into destDir, which becomes a data
 // directory in its own right: restoring is copying it back, and checking it is
@@ -525,8 +527,6 @@ const stagedPrefix = ".telimus.db.snapshot"
 // deep re-reads every body already in the backup as well as the ones just
 // written. The bodies just written are always checksummed; deep is for finding
 // bit rot in a backup that has been sitting on a disk for a year.
-// stagedPrefix names a snapshot being written but not yet published. Every
-// file under it in a backup directory is this operation's or a dead one's.
 func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 	rep := BackupReport{Dir: destDir}
 
@@ -607,6 +607,16 @@ func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 	dest, err := Open(stagedDB, chunkDir)
 	if err != nil {
 		return rep, fmt.Errorf("opening the staged snapshot: %w", err)
+	}
+	// A new epoch for the copy, before anything is verified or published, so a
+	// database served from this backup is never mistaken for the store it was
+	// taken from. Restoring is serving the backup's database, and a device that
+	// followed the source's uid sequence past this snapshot must be told that
+	// the sequence it is holding a cursor into may be reissued (PLAN.md section
+	// 2.8): a different epoch in `ready` is how it is told.
+	if err := dest.renewEpoch(); err != nil {
+		dest.Close()
+		return rep, fmt.Errorf("giving the snapshot its own epoch: %w", err)
 	}
 
 	vaults, err := dest.Vaults()
@@ -933,7 +943,7 @@ func resolvePath(path string) (string, error) {
 // Names of the two things a data directory holds, so the backup writes a
 // directory the server can be pointed straight at.
 const (
-	dbFileName   = "telimus.db"
+	dbFileName   = Product + ".db"
 	chunkDirName = "chunks"
 )
 
