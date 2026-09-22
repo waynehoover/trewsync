@@ -624,6 +624,8 @@ Done when: each fault produces an actionable status, preserves acknowledged cont
 
 ### M10. Cutover: rehearse, inventory, cut, keep the way back (M, after M5.5 and M9)
 
+A concrete runbook for the setup that exists today, with the owner's open questions, is [plan/cutover.md](plan/cutover.md) (drafted 2026-09-22; nothing in it runs against the live vault without the owner's go-ahead at the time).
+
 The earlier version of this milestone was seven steps ending in "verify counts". Counts do not prove equal paths or equal bytes, a server backup cannot show that an unsynced local edit survived, and because the plugin id changes, both plugins can sit installed on the same vault, the one arrangement the scope refusals forbid.
 
 1. **Rehearse the whole procedure on a disposable copy first.** Include attachments, large notes, nested renames, deleted notes, conflict copies, Unicode names, and a device that was offline with edits. Do not connect the rehearsal to the live vault.
