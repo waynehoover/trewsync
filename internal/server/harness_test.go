@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/telimus/internal/frame"
 	"github.com/waynehoover/telimus/internal/store"
 	"github.com/waynehoover/telimus/internal/wire"
 )
@@ -161,6 +163,21 @@ func (r *rig) device(name string) (id, key string) {
 	}
 	r.devices[name] = id
 	return id, key
+}
+
+// incompressible is n bytes that deflate will not shrink, the same n bytes for
+// the same seed.
+//
+// What a test that is about bytes on the wire has to carry. The fetch path
+// deflates a body whenever that is shorter, so a megabyte of one repeated byte
+// crosses the wire as a kilobyte, and a test built to fill the send queue with
+// it fills nothing. Basalt's harness learned the same thing about dedup:
+// generators cycling a few words faked 80% of it and hid the defects they were
+// meant to find.
+func incompressible(seed, n int) []byte {
+	b := make([]byte, n)
+	rand.New(rand.NewSource(int64(seed))).Read(b)
+	return b
 }
 
 // seed commits an entry straight through the store, as though another device
@@ -319,7 +336,18 @@ func (c *client) check(data []byte) {
 	}
 }
 
+// sendBinary sends one chunk body as a protocol 1 body frame: the raw marker
+// and the bytes (plan/protocol.md, "Chunk bodies"). A client may deflate or
+// not, and raw is the one that tests every path of the server's decoder
+// except inflation, which the frame tests exercise by sending frames exactly.
 func (c *client) sendBinary(b []byte) {
+	c.t.Helper()
+	c.sendFrame(append([]byte{frame.MarkerRaw}, b...))
+}
+
+// sendFrame sends a binary frame exactly as given, marker and all, for the
+// tests that are about what a frame may be.
+func (c *client) sendFrame(b []byte) {
 	c.t.Helper()
 	if err := c.conn.Write(c.ctx, websocket.MessageBinary, b); err != nil {
 		c.t.Fatalf("%s: write body: %v", c.name, err)
@@ -401,7 +429,22 @@ func (c *client) recv() map[string]any {
 	return m
 }
 
+// recvBinary reads one body frame and returns the raw chunk it carries,
+// decoded the way a client decodes it, at the transport boundary. A frame the
+// decoder refuses fails the test: the server sent something no client can
+// read.
 func (c *client) recvBinary() []byte {
+	c.t.Helper()
+	raw, err := frame.Decode(c.recvFrameBytes(), store.ChunkMax)
+	if err != nil {
+		c.t.Fatalf("%s: the server sent a body frame no client can decode: %v", c.name, err)
+	}
+	return raw
+}
+
+// recvFrameBytes reads one binary frame and returns it undecoded, for the tests
+// that are about how the server framed it.
+func (c *client) recvFrameBytes() []byte {
 	c.t.Helper()
 	typ, data, err := c.read()
 	if err != nil {

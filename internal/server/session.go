@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/telimus/internal/frame"
 	"github.com/waynehoover/telimus/internal/store"
 	"github.com/waynehoover/telimus/internal/wire"
 )
@@ -1864,10 +1865,19 @@ func heldBytes(all, missing []string, sizes map[string]int64) int64 {
 // readBodies reads one binary frame per wanted chunk and stores each, refusing
 // once the uploads pass what the entry's declared size can account for.
 //
-// Frames are matched to names by hashing the body, not by position. That is
-// only possible because a chunk name *is* the hash of its body, and it is
-// strictly better than trusting order: a client that reorders, repeats or skips
-// a frame is caught here rather than storing one body under another's name.
+// Each frame is decoded first, here, at the transport boundary
+// (plan/protocol.md, "Chunk bodies"): a marker byte, then the raw chunk or
+// its raw DEFLATE, inflated with a bound so a small payload cannot expand
+// without limit. Everything after this line sees raw bytes and nothing else:
+// the name is the SHA-256 of the raw chunk, the allowance counts raw bytes,
+// and the chunk store holds raw bytes. How a client chose to encode a body
+// never reaches identity.
+//
+// Frames are matched to names by hashing the decoded body, not by position.
+// That is only possible because a chunk name *is* the hash of its body, and it
+// is strictly better than trusting order: a client that reorders, repeats or
+// skips a frame is caught here rather than storing one body under another's
+// name.
 //
 // Every failure in here ends the session. Mid-stream there is no way to tell
 // the client "skip that one and carry on" without both ends agreeing how many
@@ -1908,24 +1918,33 @@ func (s *Session) readBodies(want []string, allowance int64) error {
 				len(outstanding)))
 		}
 
-		name := chunks.Name(body)
+		raw, err := frame.Decode(body, int(s.srv.st.Chunks().Max()))
+		if err != nil {
+			code := wire.CodeBadChunk
+			if errors.Is(err, frame.ErrTooLarge) {
+				code = wire.CodeToolarge
+			}
+			return s.fatal(code, fmt.Errorf("a %d byte body frame could not be read, with %d chunks still wanted: %w",
+				len(body), len(outstanding), err))
+		}
+		name := chunks.Name(raw)
 		if _, wanted := outstanding[name]; !wanted {
 			// Either a body nobody asked for, or one sent twice. Both mean the
 			// remaining frame count is no longer agreed.
 			return s.fatal(wire.CodeBadChunk, fmt.Errorf(
 				"received a %d byte body hashing to %s, which was not among the %d chunks still wanted",
-				len(body), name, len(outstanding)))
+				len(raw), name, len(outstanding)))
 		}
 		// Checked before the write, not after. The point of the bound is that
 		// the bytes never reach the disk.
-		uploaded += int64(len(body))
+		uploaded += int64(len(raw))
 		if uploaded > allowance {
 			return s.fatal(wire.CodeToolarge, fmt.Errorf(
 				"uploads reached %d bytes with %d chunks still wanted, and this entry's "+
 					"declared size allows %d",
 				uploaded, len(outstanding), allowance))
 		}
-		if err := w.Add(name, body); err != nil {
+		if err := w.Add(name, raw); err != nil {
 			return s.fatal(putErrorCode(err), err)
 		}
 		delete(outstanding, name)
@@ -2287,7 +2306,7 @@ func kindOf(e store.Entry) string {
 }
 
 // handleFetch streams the requested chunk bodies as binary frames, in the order
-// requested.
+// requested, each one framed by frame.Encode.
 //
 // Every chunk is checked to be present, and then read and checked against its
 // own name, before any frame is sent. Discovering the third of five is missing
@@ -2394,7 +2413,10 @@ func (s *Session) handleFetch(m wire.In) error {
 					fmt.Errorf("chunk %d of %d (%s): %w", i+1, len(m.Chunks), n, err))
 			}
 		}
-		if err := s.writeBinary(body); err != nil {
+		// Framed here and nowhere else, at the transport boundary: deflated
+		// when that is shorter, raw otherwise, so every frame is at most one
+		// byte longer than the chunk it carries.
+		if err := s.writeBinary(frame.Encode(body)); err != nil {
 			return err
 		}
 	}

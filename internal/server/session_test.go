@@ -1,11 +1,11 @@
 package server
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"github.com/coder/websocket"
 	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/telimus/internal/frame"
 	"github.com/waynehoover/telimus/internal/store"
 	"github.com/waynehoover/telimus/internal/wire"
 	"os"
@@ -728,7 +728,7 @@ func TestUploadsAreCutOffOnceTheyPassTheDeclaredSize(t *testing.T) {
 	for _, b := range bodies {
 		// The server stops reading part way through, so a write can fail here.
 		// That is the refusal arriving, not a test failure.
-		if err := cl.conn.Write(cl.ctx, websocket.MessageBinary, []byte(b)); err != nil {
+		if err := cl.conn.Write(cl.ctx, websocket.MessageBinary, append([]byte{frame.MarkerRaw}, b...)); err != nil {
 			break
 		}
 	}
@@ -804,7 +804,8 @@ func TestAnHonestlySizedUploadIsNotRefusedAndADishonestOneIs(t *testing.T) {
 			for _, name := range toStrings(t, m["chunks"]) {
 				// The short one is cut off part way through, so a write can
 				// fail here: that is the refusal arriving.
-				if err := cl.conn.Write(cl.ctx, websocket.MessageBinary, []byte(bodyFor(t, bodies, name))); err != nil {
+				if err := cl.conn.Write(cl.ctx, websocket.MessageBinary,
+					append([]byte{frame.MarkerRaw}, bodyFor(t, bodies, name)...)); err != nil {
 					break
 				}
 			}
@@ -1204,7 +1205,8 @@ func TestAClientReadingAFetchSlowlyIsNotReaped(t *testing.T) {
 	const bodies = 32
 	names := make([]string, bodies)
 	for i := range names {
-		b := bytes.Repeat([]byte{byte(i + 1)}, 1<<20)
+		// Incompressible, so each is a mebibyte on the wire: see incompressible.
+		b := incompressible(i+1, 1<<20)
 		names[i] = chunks.Name(b)
 		if err := r.st.Chunks().Put(testVault, names[i], b); err != nil {
 			t.Fatalf("seed body: %v", err)
@@ -1223,7 +1225,11 @@ func TestAClientReadingAFetchSlowlyIsNotReaped(t *testing.T) {
 		if typ != websocket.MessageBinary {
 			t.Fatalf("body %d: got a text frame instead: %s", i, data)
 		}
-		if got := chunks.Name(data); got != want {
+		raw, err := frame.Decode(data, store.ChunkMax)
+		if err != nil {
+			t.Fatalf("body %d is not a frame a client can decode: %v", i, err)
+		}
+		if got := chunks.Name(raw); got != want {
 			t.Fatalf("body %d is %s, want %s", i, got, want)
 		}
 		// A slow link. The client is reading, and answering pings as it

@@ -42,6 +42,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/waynehoover/telimus/internal/chunks"
+	bodyframe "github.com/waynehoover/telimus/internal/frame"
 	"github.com/waynehoover/telimus/internal/store"
 	"github.com/waynehoover/telimus/internal/wire"
 )
@@ -483,9 +484,13 @@ compare:
 		t.Fatalf("the restored server would not serve its bodies: %s", frame)
 	}
 	for i, n := range names {
-		typ, body := read()
+		typ, framed := read()
 		if typ != websocket.MessageBinary {
-			t.Fatalf("body %d of %d is not a binary frame: %s", i, len(names), body)
+			t.Fatalf("body %d of %d is not a binary frame: %s", i, len(names), framed)
+		}
+		body, err := bodyframe.Decode(framed, store.ChunkMax)
+		if err != nil {
+			t.Fatalf("body %d of %d is not a frame a client can decode: %v", i, len(names), err)
 		}
 		if string(body) != string(want.bodies[n]) {
 			t.Fatalf("chunk %s came back as %q, was %q", n, body, want.bodies[n])

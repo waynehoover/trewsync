@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/telimus/internal/frame"
 	"github.com/waynehoover/telimus/internal/wire"
 )
 
@@ -234,9 +235,11 @@ func (c *wsClient) write(v any) {
 	}
 }
 
+// writeBinary sends one chunk body as a protocol 1 body frame, raw marker and
+// bytes (plan/protocol.md, "Chunk bodies").
 func (c *wsClient) writeBinary(b []byte) {
 	c.t.Helper()
-	if err := c.conn.Write(c.ctx, websocket.MessageBinary, b); err != nil {
+	if err := c.conn.Write(c.ctx, websocket.MessageBinary, append([]byte{frame.MarkerRaw}, b...)); err != nil {
 		c.t.Fatalf("write body: %v", err)
 	}
 }

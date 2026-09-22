@@ -110,8 +110,9 @@ func HTTPHandler(srv *Server, log *slog.Logger, extraOrigins ...string) http.Han
 			return
 		}
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			// Compression off: bodies are ciphertext and do not compress, so
-			// the CPU would buy nothing.
+			// Compression off: a body frame is already deflated when that is
+			// worth it (plan/protocol.md, "Chunk bodies"), and compressing it
+			// again per message would spend the CPU twice for nothing.
 			CompressionMode: websocket.CompressionDisabled,
 			OriginPatterns:  origins,
 		})
