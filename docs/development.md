@@ -14,6 +14,7 @@ use, start with the [server](server.md), [plugin](plugin.md), or
 | [Protocol](protocol.md) | Requests, replies, authentication, limits, and cryptography. |
 | [Index journal](index-journal.md) | Client state format and recovery behavior. |
 | [Engineering notes](research.md) | Historical measurements, design evaluations, and credits. |
+| [Threat model](threat-model.md) | Requirements for the plaintext server and agent endpoint, each with where it is enforced and its status. |
 | [Findings index](findings.md) | Definitions of review IDs cited in code. |
 | [Open work](open-work.md) | What is deliberately not done, and what would change that. |
 | [Documentation review](documentation-review.md) | Editorial changes and guidance for future docs. |
