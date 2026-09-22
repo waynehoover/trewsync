@@ -1,0 +1,241 @@
+package paths
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// contract is the part of protocol-fixtures.json this package answers to. The
+// vectors come from scripts/protocol-vectors.py, not from this package, and
+// the TypeScript client reads the same file (PLAN.md M0.5 task 6).
+type contract struct {
+	Constants struct {
+		StagingMark  string `json:"stagingMark"`
+		MaxPathBytes int    `json:"maxPathBytes"`
+	} `json:"constants"`
+	Fold struct {
+		UnicodeVersion string `json:"unicodeVersion"`
+		TableDigest    string `json:"tableDigest"`
+		TableSize      int    `json:"tableSize"`
+		Vectors        []struct {
+			Input string `json:"input"`
+			Fold  string `json:"fold"`
+		} `json:"vectors"`
+	} `json:"fold"`
+	Paths struct {
+		Cases []pathCase `json:"cases"`
+	} `json:"paths"`
+	Collisions struct {
+		Scenarios []scenario `json:"scenarios"`
+	} `json:"collisions"`
+	Formats struct {
+		TextExtensions []string `json:"textExtensions"`
+		Samples        []struct {
+			Path         string `json:"path"`
+			Syncable     bool   `json:"syncable"`
+			ChunkingText bool   `json:"chunkingText"`
+			Searchable   bool   `json:"searchable"`
+			MCPReadable  bool   `json:"mcpReadable"`
+			MCPEditable  bool   `json:"mcpEditable"`
+		} `json:"samples"`
+	} `json:"formats"`
+}
+
+type pathCase struct {
+	Name   string  `json:"name"`
+	Hex    string  `json:"hex"`
+	Valid  bool    `json:"valid"`
+	Reason *string `json:"reason"`
+}
+
+type scenario struct {
+	Name string `json:"name"`
+	Live []struct {
+		Path   string `json:"path"`
+		Folder bool   `json:"folder"`
+	} `json:"live"`
+	Op struct {
+		Type   string `json:"type"`
+		Path   string `json:"path"`
+		Prev   string `json:"prev"`
+		Folder bool   `json:"folder"`
+	} `json:"op"`
+	Expect string `json:"expect"`
+}
+
+func load(t *testing.T) contract {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "protocol-fixtures.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c contract
+	if err := json.Unmarshal(raw, &c); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Paths.Cases) < 20 || len(c.Collisions.Scenarios) < 15 || len(c.Fold.Vectors) < 10 {
+		t.Fatalf("the contract sections are nearly empty (%d paths, %d scenarios, %d fold vectors), "+
+			"which is not a contract; regenerate with scripts/protocol-vectors.py",
+			len(c.Paths.Cases), len(c.Collisions.Scenarios), len(c.Fold.Vectors))
+	}
+	return c
+}
+
+func TestTheConstantsAreTheContracts(t *testing.T) {
+	c := load(t)
+	if StagingMark != c.Constants.StagingMark {
+		t.Errorf("StagingMark is %q and the contract says %q", StagingMark, c.Constants.StagingMark)
+	}
+	if MaxPathBytes != c.Constants.MaxPathBytes {
+		t.Errorf("MaxPathBytes is %d and the contract says %d", MaxPathBytes, c.Constants.MaxPathBytes)
+	}
+}
+
+// The table's canonical form, as the generator and TypeScript compute it:
+// "XXXX:YYYY ZZZZ\n", uppercase hex of at least four digits, by source.
+func tableDigest(table map[rune]string) string {
+	keys := make([]rune, 0, len(table))
+	for r := range table {
+		keys = append(keys, r)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	var b strings.Builder
+	for _, r := range keys {
+		var target []string
+		for _, c := range table[r] {
+			target = append(target, fmt.Sprintf("%04X", c))
+		}
+		fmt.Fprintf(&b, "%04X:%s\n", r, strings.Join(target, " "))
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+func TestTheFoldTableIsTheOneTheContractPins(t *testing.T) {
+	c := load(t)
+	if got := tableDigest(foldTable); got != c.Fold.TableDigest || got != FoldTableDigest {
+		t.Fatalf("the fold table digests to %s; the contract pins %s and the generated file says %s",
+			got, c.Fold.TableDigest, FoldTableDigest)
+	}
+	if len(foldTable) != c.Fold.TableSize {
+		t.Errorf("the fold table has %d entries and the contract %d", len(foldTable), c.Fold.TableSize)
+	}
+	if FoldTableUnicodeVersion != c.Fold.UnicodeVersion {
+		t.Errorf("the table is Unicode %s and the contract %s", FoldTableUnicodeVersion, c.Fold.UnicodeVersion)
+	}
+}
+
+func TestFoldAgreesWithTheReference(t *testing.T) {
+	for _, v := range load(t).Fold.Vectors {
+		if got := Fold(v.Input); got != v.Fold {
+			t.Errorf("Fold(%+q) = %+q, the reference says %+q", v.Input, got, v.Fold)
+		}
+	}
+}
+
+func pathVerdict(c pathCase) (got, want Reason, err error) {
+	raw, err := hex.DecodeString(c.Hex)
+	if err != nil {
+		return "", "", err
+	}
+	if c.Reason != nil {
+		want = Reason(*c.Reason)
+	}
+	return Check(string(raw)), want, nil
+}
+
+func TestEveryPathGetsTheReferenceVerdictAndReason(t *testing.T) {
+	for _, c := range load(t).Paths.Cases {
+		got, want, err := pathVerdict(c)
+		if err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		if (want == "") != c.Valid {
+			t.Fatalf("%s: the fixture says valid=%v with reason %q", c.Name, c.Valid, want)
+		}
+		if got != want {
+			t.Errorf("%s: Check gives %q, the reference %q", c.Name, got, want)
+		}
+	}
+}
+
+func collides(s scenario) bool {
+	live := make([]Live, len(s.Live))
+	for i, e := range s.Live {
+		live[i] = Live{Path: e.Path, Folder: e.Folder}
+	}
+	return Collides(live, Op{Path: s.Op.Path, Prev: s.Op.Prev, Move: s.Op.Type == "move", Folder: s.Op.Folder})
+}
+
+func TestEveryCollisionScenarioGetsTheReferenceVerdict(t *testing.T) {
+	for _, s := range load(t).Collisions.Scenarios {
+		if s.Op.Type != "create" && s.Op.Type != "move" {
+			t.Fatalf("%s: unknown op type %q", s.Name, s.Op.Type)
+		}
+		want := s.Expect == "collision"
+		if got := collides(s); got != want {
+			t.Errorf("%s: Collides = %v, the reference says %s", s.Name, got, s.Expect)
+		}
+	}
+}
+
+func TestTheFormatPoliciesAgreeWithTheReference(t *testing.T) {
+	c := load(t)
+	if strings.Join(TextExtensions, ",") != strings.Join(c.Formats.TextExtensions, ",") {
+		t.Fatalf("TextExtensions is %v and the contract %v", TextExtensions, c.Formats.TextExtensions)
+	}
+	for _, s := range c.Formats.Samples {
+		for _, check := range []struct {
+			policy    string
+			got, want bool
+		}{
+			{"syncable", Syncable(s.Path), s.Syncable},
+			{"chunkingText", ChunkingText(s.Path), s.ChunkingText},
+			{"searchable", Searchable(s.Path), s.Searchable},
+			{"mcpReadable", MCPReadable(s.Path), s.MCPReadable},
+			{"mcpEditable", MCPEditable(s.Path), s.MCPEditable},
+		} {
+			if check.got != check.want {
+				t.Errorf("%s(%q) = %v, the reference says %v", check.policy, s.Path, check.got, check.want)
+			}
+		}
+	}
+}
+
+// A corrupted vector must fail on the consuming side (PLAN.md M0.5). If the
+// comparisons above could not tell a wrong expectation from a right one, they
+// would pass whatever the fixture said.
+func TestACorruptedVectorIsCaught(t *testing.T) {
+	c := load(t)
+
+	p := c.Paths.Cases[len(c.Paths.Cases)-1]
+	wrong := "empty"
+	if p.Reason != nil && *p.Reason == wrong {
+		wrong = "utf8"
+	}
+	p.Reason = &wrong
+	if got, want, _ := pathVerdict(p); got == want {
+		t.Errorf("a path case whose reason was changed to %q still matched", wrong)
+	}
+
+	s := c.Collisions.Scenarios[0]
+	flipped := s.Expect == "collision"
+	if collides(s) == !flipped {
+		t.Errorf("a collision scenario with its expectation flipped still matched")
+	}
+
+	v := c.Fold.Vectors[0]
+	if Fold(v.Input) == v.Fold+"x" {
+		t.Errorf("a fold vector with a changed result still matched")
+	}
+	if tableDigest(map[rune]string{'A': "b"}) == c.Fold.TableDigest {
+		t.Errorf("a different table produced the pinned digest")
+	}
+}

@@ -16,3 +16,6 @@ client/release/
 
 # Relay working files, not part of the project.
 tmp/
+
+# Agent worktrees, created inside the repository by Claude Code. Never content.
+/.claude/worktrees/
