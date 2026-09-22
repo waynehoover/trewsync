@@ -35,6 +35,12 @@ jobs:
       - name: vet
         run: go vet ./...
 
+      # The contract's vectors and fold tables are generated; this is the gate
+      # step that keeps them the reference's answer (scripts/check.sh says why).
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - name: the protocol vectors are what the reference writes
+        run: uv run --no-project --python 3.13 scripts/protocol-vectors.py --check
+
       # The store and the chunk writer are concurrent, and a data race there is
       # the kind of fault that shows up as a lost note rather than a crash.
       - name: test
