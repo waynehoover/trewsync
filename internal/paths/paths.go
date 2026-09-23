@@ -14,6 +14,7 @@
 package paths
 
 import (
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -265,6 +266,20 @@ func MCPReadable(p string) bool { return mcpText(p) }
 func MCPEditable(p string) bool {
 	return mcpText(p) && !strings.HasSuffix(asciiLower(p), ".excalidraw.md")
 }
+
+// conflictCopy is the name the engine gives the copy it keeps when a merge is
+// abandoned, as conflictOriginal in client/src/core/conflicts.ts reads it
+// back: "<name> (Conflicted copy <device> <twelve digits>)", with an optional
+// " <n>" when that name was taken, and then the extension. JavaScript's \d is
+// ASCII without the u flag, as it is here.
+var conflictCopy = regexp.MustCompile(`^(.*) \(Conflicted copy [^/]+ [0-9]{12}\)(?: [0-9]+)?(\.[^/]*)?$`)
+
+// ConflictCopy reports whether p has the shape of a conflict copy's name.
+// The MCP tools refuse to create one (reserved_name): the plugin's conflict
+// review lists every such path as a copy of its original and offers to
+// resolve it, so an agent's note with that name would be offered to a person
+// as a conflict to throw away.
+func ConflictCopy(p string) bool { return conflictCopy.MatchString(p) }
 
 func mcpText(p string) bool {
 	if !Syncable(p) {

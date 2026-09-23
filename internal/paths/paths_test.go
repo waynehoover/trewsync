@@ -243,3 +243,24 @@ func TestACorruptedVectorIsCaught(t *testing.T) {
 		t.Errorf("a different table produced the pinned digest")
 	}
 }
+
+// The conflict-copy name is the engine's (conflictOriginal in
+// client/src/core/conflicts.ts), including the cases its own test pins.
+func TestConflictCopyNamesAreTheEnginesShape(t *testing.T) {
+	for p, want := range map[string]bool{
+		"n (Conflicted copy phone 202609101200).md":           true,
+		"n (Conflicted copy phone 202609101200) 2.md":         true,
+		"README (Conflicted copy phone.v2 202609101200)":      true,
+		"a/b (Conflicted copy Claude-on-Mac 202609171130).md": true,
+		"n (restored 42).md":                                  false,
+		"n (Conflicted copy phone 2026091012).md":             false,
+		"n (Conflicted copy a/b 202609101200).md":             false,
+		"n (Conflicted copy phone 202609101200)x":             false,
+		"Conflicted copy phone 202609101200.md":               false,
+		"n (Conflicted copy phone ٢٠٢٦٠٩١٠١٢٠٠).md":           false,
+	} {
+		if got := ConflictCopy(p); got != want {
+			t.Errorf("ConflictCopy(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
