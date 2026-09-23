@@ -293,6 +293,8 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		"the address devices reach this server at, ws:// or wss://, which invites carry (default: this machine's addresses)")
 	inviteOut := fs.String("invite-out", "",
 		"where to write the first device's invite when the vault has none (default: first-invite in the data directory)")
+	serveMCP := fs.Bool("mcp", false,
+		"also serve the MCP endpoint at /mcp, for agents holding a token from `trew mcp-token`")
 	verbose := fs.Bool("v", false, "verbose logging")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -410,14 +412,29 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 
+	// Built in internal/server so that it can be tested. What is in there
+	// and not here is the list of browser origins allowed to connect, which
+	// nothing caught until the plugin was loaded into a real vault.
+	handler := server.HTTPHandler(srv, log, allowOrigin...)
+	var agents *mcpEndpoint
+	if *serveMCP {
+		// The index and the endpoint stop after the listener and before the
+		// store, by the order of the defers: the endpoint writes the use
+		// counts it holds, and the index finishes the batch it is in.
+		agents, err = startMCP(*dataDir, srv, *vault, allowOrigin, log)
+		if err != nil {
+			return err
+		}
+		defer agents.close()
+		handler = withMCP(handler, agents)
+		logMCP(log, st, *vault, *addr)
+	}
 	hs := &http.Server{
-		Addr: *addr,
-		// Built in internal/server so that it can be tested. What is in there
-		// and not here is the list of browser origins allowed to connect, which
-		// nothing caught until the plugin was loaded into a real vault.
-		Handler:           server.HTTPHandler(srv, log, allowOrigin...),
+		Addr:              *addr,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
-		// No WriteTimeout: these are long-lived websockets.
+		// No WriteTimeout: these are long-lived websockets. An MCP request
+		// bounds its own body and its tool's work.
 	}
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -461,7 +478,11 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	// The operator's socket, before "listening on" is printed, so `trew
 	// invite` and the rest work from the moment anybody is told the server is
 	// up. Closed before the store is, by the order of the defers.
-	ctl, err := control.Listen(*dataDir, &operator{srv: srv, vault: *vault, urls: urls}, log)
+	op := &operator{srv: srv, vault: *vault, urls: urls}
+	if agents != nil {
+		op.mcp = agents.handler
+	}
+	ctl, err := control.Listen(*dataDir, op, log)
 	if err != nil {
 		ln.Close()
 		return err
