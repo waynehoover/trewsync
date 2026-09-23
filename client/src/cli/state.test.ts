@@ -17,8 +17,9 @@ import { Readable } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { cleanupBinary, removeTree, serverBinary, TestServer, until } from "../core/test-server.ts";
+import { isPendingPairing } from "../core/pairing.ts";
 import { run, type Console } from "./cli.ts";
-import { configPath, indexPath, loadConfig, saveConfig } from "./config.ts";
+import { configPath, indexPath, loadConfig } from "./config.ts";
 import { STATE_DIR } from "./config.ts";
 import { alive, currentHolder, lockPath, lockVault } from "./lock.ts";
 
@@ -127,24 +128,24 @@ async function vaultDir(name: string): Promise<string> {
   return dir;
 }
 
-async function paired(name = "a"): Promise<string> {
-  return (await pairedWithKey(name)).dir;
-}
-
 /**
- * The same, and the recovery key `init` printed.
- *
- * Kept by the caller because nothing reprints it: a paired device holds its
- * own credential and not the vault's root, which is what makes revoking one
- * device mean anything.
+ * A fresh server and its first device, paired from the invite `trew serve`
+ * wrote to `<data>/first-invite`, which is how a first device pairs.
  */
-async function pairedWithKey(name = "a"): Promise<{ dir: string; recoveryKey: string }> {
+async function paired(name = "a"): Promise<string> {
   server = new TestServer();
   await server.start();
   const dir = await vaultDir(name);
-  const init = await cli("init", server.setup, "--dir", dir, "--device", name, "--json");
-  expect(init.code, init.all).toBe(0);
-  return { dir, recoveryKey: init.json()["recoveryKey"] as string };
+  const pair = await cli("pair", await server.firstInvite(), "--dir", dir, "--device", name);
+  expect(pair.code, pair.all).toBe(0);
+  return dir;
+}
+
+/** An invite minted by a paired device, for the next one. */
+async function inviteOf(dir: string): Promise<string> {
+  const issued = await cli("invite", "--dir", dir, "--json");
+  expect(issued.code, issued.all).toBe(0);
+  return issued.json()["invite"] as string;
 }
 
 /** The CLI as a separate process, which is the only way two of them contend. */
@@ -167,22 +168,6 @@ const exited = (child: ChildProcess) =>
     else child.once("exit", (code) => r(code ?? -1));
   });
 
-/**
- * F02, the CLI half. The key has to be printed before the step that erases it.
- *
- * `init` writes the root, claims the vault, registers this device, and the
- * registration replaces the root on disk with a device credential. Printing
- * the key after all that meant the window between the replacement and the
- * print held the only copy of it in a local variable, and a kill there left a
- * working device on a vault nobody could ever recover.
- */
-/**
- * F26. A rebase reports the same outcome to a person and to a script.
- *
- * The JSON branch returned zero unconditionally while the text branch called
- * `exitCodeFor`, so an incomplete replay was a failure interactively and a
- * success in automation: exactly the difference a cron job cannot see.
- */
 /**
  * F27. Cursors matching is not the same as nothing to send.
  *
@@ -226,99 +211,102 @@ describe("what status knows about this device (F27)", () => {
   }, 300_000);
 });
 
-/**
- * Secrets that never touch the command line (I12).
- *
- * A recovery key typed as an argument is in the shell's history and in
- * `/proc` for every process on the machine while the command runs. Fine for a
- * one-off on a laptop you own, wrong for a script or a shared box. The
- * argument still works, because taking it away would make the common case
- * worse for no gain.
- */
-describe("where a secret can come from (I12)", () => {
-  it("reads the recovery key from a file, and writes a new one to a file only you can read", async () => {
-    server = new TestServer();
-    await server.start();
-    const dir = await vaultDir("keyfile");
-    const out = join(await vaultDir("keyout"), "key.txt");
+describe("where an invite can come from (I12)", () => {
+  /**
+   * state.test.ts:239 in the ledger (SPLIT). Reading the invite from a file
+   * stays, for `pair`: an invite typed as an argument sits in the shell's
+   * history and in `/proc` while it can still add a device. Writing a secret
+   * to a private file moved to the server, whose first invite is exactly that
+   * (M1 task 9).
+   */
+  it("reads the invite from a file", async () => {
+    const a = await paired("keyfile-a");
+    const b = await vaultDir("keyfile-b");
+    const file = join(await vaultDir("keyfile"), "invite.txt");
+    await writeFile(file, `${await inviteOf(a)}\n`);
 
-    // The setup string from a file, and the generated key to one.
-    const setupFile = join(dir, "setup.txt");
-    await writeFile(setupFile, `${server.setup}\n`);
-    const init = await cli("init", "--key-file", setupFile, "--key-out", out, "--dir", dir);
-    expect(init.code, init.all).toBe(0);
-
-    const written = (await readFile(out, "utf8")).trim();
-    expect(written, "the key file holds no key").toMatch(/^basalt3_/);
-    // And it is the key the command printed, not some other one.
-    expect(init.all).toContain(written);
-    // Readable by nobody else.
-    expect((await stat(out)).mode & 0o077, "the key file is readable by others").toBe(0);
-
-    // That key, back in from a file, to rotate with.
-    const rotated = await cli("rotate", "--key-file", out, "--dir", dir, "--json");
-    expect(rotated.code, rotated.all).toBe(0);
-    expect(rotated.json()["recoveryKey"]).not.toBe(written);
+    const pair = await cli("pair", "--key-file", file, "--dir", b, "--json");
+    expect(pair.code, pair.all).toBe(0);
+    expect((await loadConfig(b))?.deviceId).toBe(pair.json()["deviceId"]);
+    await writeFile(join(a, "from the file.md"), "paired from a file\n");
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    expect(await readFile(join(b, "from the file.md"), "utf8")).toBe("paired from a file\n");
   }, 300_000);
 
-  it("refuses an empty key file rather than treating it as no key at all", async () => {
+  /**
+   * state.test.ts:264 in the ledger (GUARANTEE). An empty file is somebody's
+   * mistake, not a request to pair with nothing, and `pair` with nothing
+   * means something now: finish a pairing already started. So it is refused
+   * as empty, and nothing is saved.
+   */
+  it("refuses an empty invite file rather than treating it as no invite at all", async () => {
     server = new TestServer();
     await server.start();
     const dir = await vaultDir("emptykey");
-    const empty = join(dir, "empty.txt");
+    const empty = join(await vaultDir("emptyfile"), "empty.txt");
     await writeFile(empty, "   \n");
-    const r = await cli("init", "--key-file", empty, "--dir", dir);
+    const r = await cli("pair", "--key-file", empty, "--dir", dir);
     expect(r.code).not.toBe(0);
     expect(r.all).toMatch(/is empty/);
+    expect(r.all).not.toMatch(/pair needs an invite/);
+    expect(await loadConfig(dir)).toBeUndefined();
   }, 300_000);
 
-  it("will not take the same secret twice, from a file and an argument", async () => {
-    server = new TestServer();
-    await server.start();
+  /** state.test.ts:275 in the ledger (GUARANTEE), for `pair`. */
+  it("will not take the invite twice, from a file and an argument", async () => {
+    const a = await paired("bothkeys-a");
+    const invite = await inviteOf(a);
     const dir = await vaultDir("bothkeys");
-    const f = join(dir, "setup.txt");
-    await writeFile(f, `${server.setup}\n`);
-    const r = await cli("init", server.setup, "--key-file", f, "--dir", dir);
+    const f = join(await vaultDir("bothfile"), "invite.txt");
+    await writeFile(f, `${invite}\n`);
+    const r = await cli("pair", invite, "--key-file", f, "--dir", dir);
     expect(r.code).not.toBe(0);
     expect(r.all).toMatch(/not both/);
+    expect(await loadConfig(dir)).toBeUndefined();
   }, 300_000);
 });
 
-describe("what a rebase exits with (F26)", () => {
-  it("gives JSON and text the same status when a path cannot be replayed", async () => {
-    // A server that refuses anything over a few bytes, so the replay after
-    // the rebase has a path it cannot finish.
+/**
+ * F26, where `trew rebase` used to answer it. A server restored through
+ * `trew backup` starts a new epoch, and a device that meets it forgets what it
+ * believed was synced and reads the replay as a fresh listing (PLAN.md section
+ * 2.8): the same content agrees, what only the device holds is sent again, and
+ * nothing is deleted. That now happens inside an ordinary sync, and what F26
+ * asked of the rebase stands for the sync: a person and a script are told the
+ * same outcome when a path cannot be replayed.
+ */
+describe("a sync against a server restored from a backup (F26)", () => {
+  it("replays what the server lost, and gives JSON and text the same status", async () => {
+    // A server that refuses anything over a few bytes, so the replay has a
+    // path it cannot finish.
     server = new TestServer();
     server.extraArgs = ["-max-file", "32"];
     await server.start();
 
-    // Two devices of one vault, in the same state, because a rebase changes
-    // the state it was asked about: running one and then the other on a
-    // single vault compares a replay against a refusal.
-    const first = await vaultDir("rebasetext");
-    const started = await cli("init", server.setup, "--dir", first, "--device", "a", "--json");
-    expect(started.code, started.all).toBe(0);
-    const key = started.json()["recoveryKey"] as string;
+    // Two devices of one vault, in the same state, because a restore is met
+    // once by each of them: the first one's sync puts back what the server
+    // lost, and the second is measured against the same restore again.
+    const first = await vaultDir("restoretext");
+    const invite = await server.firstInvite();
+    expect((await cli("pair", invite, "--dir", first, "--device", "a")).code).toBe(0);
+    const second = await vaultDir("restorejson");
+    expect((await cli("pair", await inviteOf(first), "--dir", second, "--device", "b")).code).toBe(
+      0,
+    );
 
-    const second = await vaultDir("rebasejson");
-    expect((await cli("pair", key, "--dir", second, "--device", "b")).code).toBe(0);
-
-    // One note each side knows about, then a backup, then more history. The
-    // restore puts the server back before the second note, which is exactly
-    // the state `rebase` exists for: the devices hold versions it does not.
-    // Without that a rebase refuses before it replays anything, and both
-    // formats then exit the same way for the wrong reason.
+    // One note both devices know about, then a backup, then more history the
+    // backup does not have.
     await writeFile(join(first, "one.md"), "first");
     expect((await cli("sync", "--dir", first)).code).toBe(0);
     expect((await cli("sync", "--dir", second)).code).toBe(0);
-    const backup = await vaultDir("rebasebackup");
+    const backup = await vaultDir("restorebackup");
     await server.cli("backup", "-to", backup);
     await writeFile(join(first, "two.md"), "second");
     expect((await cli("sync", "--dir", first)).code).toBe(0);
     expect((await cli("sync", "--dir", second)).code).toBe(0);
 
     const dataDir = server.dataDir;
-
     // And a note on each device the restored server will refuse, so the
     // replay is incomplete rather than clean.
     await writeFile(join(first, "big.md"), "x".repeat(4096));
@@ -332,12 +320,12 @@ describe("what a rebase exits with (F26)", () => {
     };
 
     await restore();
-    const text = await cli("rebase", "--backup-taken", "--dir", first);
-    // The first rebase pushes its history back, so the server is no longer
-    // behind the second device. Put it back, or the second run measures a
-    // refusal rather than a replay.
+    const text = await cli("sync", "--dir", first);
+    // The first sync puts two.md back, so the server no longer lacks what
+    // the second device holds. Restore again, so the second run meets the
+    // same restore rather than the first one's repair.
     await restore();
-    const asJson = await cli("rebase", "--backup-taken", "--dir", second, "--json");
+    const asJson = await cli("sync", "--dir", second, "--json");
 
     expect(
       asJson.code,
@@ -346,34 +334,20 @@ describe("what a rebase exits with (F26)", () => {
     expect(text.code, `the oversized note was replayed cleanly:\n${text.all}`).toBe(1);
     // And the machine-readable answer says so in its own field too.
     expect(asJson.json()["ok"], `ok disagreed with the exit code:\n${asJson.all}`).toBe(false);
-  }, 300_000);
-});
-
-describe("what init prints, and when (F02)", () => {
-  it("prints the recovery key before it registers the device", async () => {
-    server = new TestServer();
-    await server.start();
-    const dir = await vaultDir("initorder");
-    // The order the lines were produced in, which is the whole property: the
-    // key has to be out before the config on disk stops holding the root.
-    const init = await cli("init", server.setup, "--dir", dir, "--device", "a");
-    expect(init.code, init.all).toBe(0);
-
-    const printed = init.out.join("\n");
-    const key = printed.match(/basalt3_[A-Za-z0-9_-]+/)?.[0];
-    expect(key, `no recovery key was printed at all: ${init.all}`).toBeDefined();
-    const keyAt = printed.indexOf(key!);
-    const startedAt = printed.indexOf("Started the vault");
-    expect(startedAt, "init never reported success").toBeGreaterThan(-1);
-    expect(
-      keyAt,
-      "the key was printed after the registration that had already erased it from disk",
-    ).toBeLessThan(startedAt);
-
-    // And the disk is in the state that makes revoking mean something.
-    const held = await loadConfig(dir);
-    expect(held?.deviceId).toBeDefined();
-    expect(held?.secret, "a paired device kept the vault's root").toBeUndefined();
+    // What only the devices held went back up, byte for byte: a device that
+    // never saw the vault gets it from the restored server.
+    expect(asJson.json()["uploaded"], asJson.all).toBeGreaterThanOrEqual(1);
+    const late = await vaultDir("restorelate");
+    expect((await cli("pair", await server.invite(), "--dir", late)).code).toBe(0);
+    expect((await cli("sync", "--dir", late)).code).toBe(0);
+    expect(await readFile(join(late, "one.md"), "utf8")).toBe("first");
+    expect(await readFile(join(late, "two.md"), "utf8")).toBe("second");
+    // And nothing was deleted anywhere.
+    for (const dir of [first, second]) {
+      for (const name of ["one.md", "two.md", "big.md"]) {
+        expect(existsSync(join(dir, name)), `${name} went missing from ${dir}`).toBe(true);
+      }
+    }
   }, 300_000);
 });
 
@@ -975,8 +949,10 @@ describe("unlinking as one transition", () => {
     const attempt = await cli("unlink", "--dir", dir);
     expect(attempt.code).toBe(1);
     // Still paired, which is the state that refuses to pair again.
-    await expect(readFile(configPath(dir), "utf8")).resolves.toMatch(/"deviceSecret"/);
-    expect((await cli("init", server!.setup, "--dir", dir)).code).toBe(1);
+    await expect(readFile(configPath(dir), "utf8")).resolves.toMatch(/"deviceToken"/);
+    const again = await cli("pair", await server!.invite(), "--dir", dir);
+    expect(again.code).toBe(1);
+    expect(again.all).toMatch(/already paired/);
 
     await rm(indexPath(dir), { recursive: true });
     const done = await cli("unlink", "--dir", dir, "--json");
@@ -986,21 +962,22 @@ describe("unlinking as one transition", () => {
   }, 120_000);
 
   it("refuses to pair over an index left by an unfinished unlink", async () => {
-    const { dir, recoveryKey: pairing } = await pairedWithKey("orphan");
+    const dir = await paired("orphan");
     expect((await cli("sync", "--dir", dir)).code).toBe(0);
     // The old order's failure state: config gone, index still there.
     await rm(configPath(dir));
 
-    const init = await cli("init", server!.setup, "--dir", dir);
-    expect(init.code).toBe(1);
-    expect(init.all).toMatch(/still holds an index/);
-    const pair = await cli("pair", pairing, "--dir", dir);
+    // Refused before anything is sent, so the invite is not spent and the
+    // same one pairs once the index is cleared.
+    const invite = await server!.invite();
+    const pair = await cli("pair", invite, "--dir", dir);
     expect(pair.code).toBe(1);
     expect(pair.all).toMatch(/still holds an index/);
+    expect(await loadConfig(dir), "the refusal saved a pairing").toBeUndefined();
 
     // Unlink clears it, and then pairing is allowed.
     expect((await cli("unlink", "--dir", dir)).code).toBe(0);
-    const again = await cli("pair", pairing, "--dir", dir, "--device", "again", "--json");
+    const again = await cli("pair", invite, "--dir", dir, "--device", "again", "--json");
     expect(again.code, again.all).toBe(0);
   }, 120_000);
 
@@ -1015,7 +992,7 @@ describe("unlinking as one transition", () => {
     const attempt = await cli("unlink", "--dir", dir);
     expect(attempt.code).toBe(1);
     expect(attempt.all).toMatch(/another trew is using this vault/);
-    await expect(readFile(configPath(dir), "utf8")).resolves.toMatch(/"deviceSecret"/);
+    await expect(readFile(configPath(dir), "utf8")).resolves.toMatch(/"deviceToken"/);
   }, 120_000);
 });
 
@@ -1041,228 +1018,118 @@ describe("an index that is valid JSON and wrong", () => {
 });
 
 /**
- * at the place protocol 4 leaves it.
+ * A pairing that did not finish (plan/protocol.md, "Invite redemption").
  *
- * A vault is claimed by the hello that starts it, and the config holding the
- * root is written and read back before that hello goes out for exactly this
- * reason: the claim commits, its reply is lost, and the only copy of the
- * vault's recovery key is the one on this disk. Nothing resumes from the
- * config, retries the spent token or falls back to the key the root derives,
- * so the answer has to be complete without any of that: every command refuses
- * such a config, prints the
- * recovery key back out of it, and pairing again with that key joins the vault
- * that was claimed, with every note still on it.
- *
- * A vault that could be claimed and then not got back into would be the worst
- * failure this project has, so it is tested end to end rather than by the
- * words of the refusal alone.
+ * `trew pair` saves a pending pairing, with the id and token it is about to
+ * register, before it sends the redemption, and replaces it with the finished
+ * device once `redeemed` comes back. These are the disk failures around that
+ * order, injected where the CLI meets them. What each has to leave is a state
+ * the next command can read truthfully and a way back that works, walked to
+ * the end rather than asserted as a sentence (rule 11).
  */
-describe("a vault that was started and never joined", () => {
+describe("a pairing that did not finish", () => {
   /**
-   * Puts a vault back into the state a lost reply leaves: claimed on the
-   * server, and a config on disk that still holds the root and has no device
-   * row of its own.
-   *
-   * Written out rather than kept from before, because `init` gets all the way
-   * to a registered device now: this is the state it would have been left in
-   * had the registration failed after the claim committed.
+   * state.test.ts:1117 in the ledger (SPLIT), and hazard 2. The redemption
+   * commits and saving the finished device fails. Persisting before sending is
+   * what makes this recoverable: the pending pairing on disk holds exactly the
+   * credential the server registered, so the row is not an orphan nothing can
+   * connect as, and `trew pair` again finishes it under that same row.
    */
-  async function startedNotJoined(dir: string, recoveryKey: string): Promise<void> {
-    const { parsePairing } = await import("../core/pairing.ts");
-    const config = (await loadConfig(dir))!;
-    await saveConfig(dir, {
-      url: config.url,
-      vaultId: config.vaultId,
-      device: config.device,
-      secret: parsePairing(recoveryKey).secret,
-    });
-  }
-
-  it("refuses, hands the recovery key back, and pairs again with it", async () => {
-    const { dir, recoveryKey } = await pairedWithKey("lost");
-    await writeFile(join(dir, "note.md"), "kept\n");
-    await cli("sync", "--dir", dir);
-    await startedNotJoined(dir, recoveryKey);
-
-    const sync = await cli("sync", "--dir", dir);
-    expect(sync.code, sync.all).toBe(1);
-    expect(sync.all).toMatch(/never registered itself/);
-    // The key itself, not advice to find it somewhere: this config is the only
-    // place it exists, and a refusal that does not print it is a lost vault.
-    expect(sync.all).toContain(recoveryKey);
-    expect(sync.all).toMatch(/unlink this vault and pair again/);
-    // And nothing was written on the way past. The root is still there to be
-    // read out again by the next command that refuses.
-    expect((await loadConfig(dir))!.secret, "the root was dropped by a refusal").toBeDefined();
-
-    // The way back the refusal names, all the way to the notes.
-    expect((await cli("unlink", "--dir", dir)).code).toBe(0);
-    const again = await cli("pair", recoveryKey, "--dir", dir, "--json");
-    expect(again.code, again.all).toBe(0);
-    const after = (await loadConfig(dir))!;
-    expect(after.secret, "the recovery key was kept after pairing").toBeUndefined();
-    expect(after.deviceId).toBeDefined();
-    expect((await cli("sync", "--dir", dir)).code).toBe(0);
-    expect(await readFile(join(dir, "note.md"), "utf8")).toBe("kept\n");
-  }, 180_000);
-
-  /**
-   * The other half of the same disk failure, on the pairing path rather than
-   * the starting one. A registration commits and its credential does not reach
-   * the disk, so the vault has a row nothing holds the key to. That is the
-   * orphan the invite path already leaves when a reply is lost, and the
-   * refusal has to name it: an unnamed registration is one nobody can
-   * account for later.
-   */
-  it("names the row it left behind when a pairing could not save its credential", async () => {
-    const { dir, recoveryKey } = await pairedWithKey("orphan");
+  it("finishes a pairing whose credential could not be saved, under the row the server made", async () => {
+    const dir = await paired("orphan");
+    const invite = await inviteOf(dir);
     const second = await vaultDir("second");
 
-    failSavesAfter = saves; // the very next save fails, which is the credential
-    const attempt = await cli("pair", recoveryKey, "--dir", second);
+    // The pending pairing is saved, and the save that would replace it with
+    // the finished device fails.
+    failSavesAfter = saves + 1;
+    const attempt = await cli("pair", invite, "--dir", second, "--device", "second");
     expect(attempt.code, attempt.all).toBe(1);
-    expect(attempt.all).toMatch(/nothing can connect as/);
-    expect(attempt.all).toMatch(/trew revoke/);
-    // Nothing here claims to be paired, because nothing here can connect.
+    expect(attempt.all).not.toMatch(/Paired/);
+    expect(attempt.all).toMatch(/the disk is full/);
+    expect(attempt.all).toMatch(/run trew pair here again/);
     failSavesAfter = Infinity;
-    expect(await loadConfig(second)).toBeUndefined();
 
-    // And the row the refusal names is really there, and really goes.
+    const pending = await loadConfig(second);
+    expect(pending && isPendingPairing(pending), "the pending pairing was not kept").toBe(true);
+    const id = pending!.deviceId!;
+    // The row the server made is the one this pending pairing holds the
+    // token to, and nothing has connected under it yet.
     const listed = await cli("devices", "--dir", dir, "--json");
     const rows = listed.json()["devices"] as { id: string; lastSeen: number }[];
-    const orphan = rows.find((d) => d.lastSeen === 0);
-    expect(orphan, listed.all).toBeDefined();
-    expect((await cli("revoke", orphan!.id, "--dir", dir)).code).toBe(0);
-  }, 180_000);
+    expect(rows.find((d) => d.id === id)?.lastSeen, listed.all).toBe(0);
 
-  /**
-   * The init half of the same failure, and the sentence it was missing.
-   *
-   * `init` claims the vault, registers this device's row and then saves the
-   * credential. When that save fails it printed the recovery key, which is
-   * right, and said "unlink here, and pair with that key", which is right and
-   * incomplete: the row is already on the server and nothing holds its key, so
-   * pairing again registers a *second* row without explaining the first.
-   * `pair` said so and `init` did not, which is
-   * what one shared counsellor is for; see `adviseAfterRegistering`.
-   *
-   * Walked to the end rather than asserted as a sentence (rule 11): the row is
-   * really there, it has really never connected, and the order the words give
-   * really takes it off.
-   */
-  it("names the row a failed init left, and the way back it names works", async () => {
-    server = new TestServer();
-    await server.start();
-    const dir = await vaultDir("initorphan");
-    // The root is saved, the claim and the registration commit, and the save
-    // that would record this device's credential fails.
-    failSavesAfter = 1;
-    const init = await cli("init", server.setup, "--dir", dir, "--device", "first");
-    expect(init.code, init.all).toBe(1);
-    expect(init.all).toMatch(/Write this recovery key down now/);
-    const printed = init.err.join("\n").match(/(basalt3_[A-Za-z0-9_-]+)/)![1]!;
-    expect(init.all).toMatch(/device row was registered/);
-    expect(init.all).toMatch(/never connected/);
-    expect(init.all).toMatch(/trew revoke/);
-    failSavesAfter = Infinity;
-
-    // The row is really there, and has really never connected. Only the
-    // recovery key can ask: the vault has no device that can.
-    const look = await vaultDir("look");
-    const listed = await cli("devices", "--recovery-key", printed, "--dir", look, "--json");
-    expect(listed.code, listed.all).toBe(0);
-    const stranded = listed.json()["devices"] as { id: string; lastSeen: number }[];
-    expect(
-      stranded.map((d) => d.lastSeen),
-      listed.all,
-    ).toEqual([0]);
-
-    // And the way back, in the order the message gives it: pair again, then
-    // revoke the row that never connected. That order and not the other one,
-    // because the stranded row is this vault's only row and revoking the last
-    // one takes --allow-last and the recovery key.
-    expect((await cli("unlink", "--dir", dir)).code).toBe(0);
-    const again = await cli("pair", printed, "--dir", dir, "--device", "second", "--json");
-    expect(again.code, again.all).toBe(0);
-    const now = await cli("devices", "--dir", dir, "--json");
-    const mine = now.json()["thisDevice"] as string;
-    const rows = now.json()["devices"] as { id: string; lastSeen: number }[];
-    const orphan = rows.find((d) => d.id !== mine);
-    expect(orphan?.lastSeen, now.all).toBe(0);
-    expect((await cli("revoke", orphan!.id, "--dir", dir)).code).toBe(0);
-    const left = await cli("devices", "--dir", dir, "--json");
-    expect((left.json()["devices"] as unknown[]).length, left.all).toBe(1);
+    // Finished with nothing but what is on disk, under that row, and the
+    // vault gains no second one.
+    const done = await cli("pair", "--dir", second, "--json");
+    expect(done.code, done.all).toBe(0);
+    expect(done.json()["deviceId"]).toBe(id);
+    const after = (await cli("devices", "--dir", dir, "--json")).json()["devices"] as unknown[];
+    expect(after, "finishing the pairing registered a second row").toHaveLength(2);
+    await writeFile(join(dir, "note.md"), "for the second device\n");
     expect((await cli("sync", "--dir", dir)).code).toBe(0);
+    expect((await cli("sync", "--dir", second)).code).toBe(0);
+    expect(await readFile(join(second, "note.md"), "utf8")).toBe("for the second device\n");
   }, 180_000);
 
   /**
-   * The mirror image of the orphan above, and the reason the advice is read
-   * off the disk in four states rather than two.
-   *
-   * A disk that writes and will not read back saves the credential, fails the
-   * read-back, and then fails the read the catch does as well. Both reads
-   * being gone is what makes it dangerous: the row is live and its only key is
-   * on this disk, so "that row is one nothing can connect as, revoke it" would
-   * destroy a row this device could have used. Rule 2, in the place where
-   * absent and unreadable have different consequences.
+   * state.test.ts:1209 in the ledger (GUARANTEE). A disk that writes and will
+   * not read back saves the finished device, fails the read-back, and then
+   * fails the read the advice is chosen from as well. The row is live and its
+   * only token is on this disk, so advice to revoke it, or to treat it as a
+   * row nothing can connect as, would destroy a row this device can use. Rule
+   * 2, where absent and unreadable have different consequences.
    */
   it("will not send somebody revoking a row when the disk refuses to say what is here", async () => {
-    const { dir, recoveryKey } = await pairedWithKey("writeonly");
-    expect(dir).toBeDefined();
+    const dir = await paired("writeonly");
+    const invite = await inviteOf(dir);
     const second = await vaultDir("writeonly-2");
 
-    breakLoadsAfterSaves = saves;
-    const attempt = await cli("pair", recoveryKey, "--dir", second, "--device", "two");
+    // Reads work until the finished device has been written, the second save
+    // of this pairing, and fail after it.
+    breakLoadsAfterSaves = saves + 1;
+    const attempt = await cli("pair", invite, "--dir", second, "--device", "two");
     expect(attempt.code, attempt.all).toBe(1);
     expect(attempt.all).toMatch(/could not be read/);
     expect(attempt.all).toMatch(/not known/);
     // The row must not be named for revoking, because it is this device's.
     expect(attempt.all).not.toMatch(/trew revoke/);
     expect(attempt.all).not.toMatch(/never connected/);
+    expect(attempt.all).not.toMatch(/Paired/);
 
     // And the credential really was written: with the disk reading again this
     // device connects as the row the advice would have told somebody to take
     // away.
     breakLoadsAfterSaves = Infinity;
-    expect((await loadConfig(second))!.deviceId).toBeDefined();
+    const held = await loadConfig(second);
+    expect(held?.deviceId).toBeDefined();
+    expect(held && isPendingPairing(held), "the finished device was not what was written").toBe(
+      false,
+    );
     expect((await cli("sync", "--dir", second)).code).toBe(0);
   }, 180_000);
 
+  /**
+   * state.test.ts:1231 in the ledger (SPLIT), with cli.test.ts:552. Rule 7
+   * for a pairing that has not finished, met the way it really happens: the
+   * server asked nothing that was answered, so it is neither reachable nor
+   * refused, and calling it refused sends somebody after an outage that is
+   * not happening.
+   */
   it("says the same thing to status, without blaming the server", async () => {
-    const { dir, recoveryKey } = await pairedWithKey("status");
-    await startedNotJoined(dir, recoveryKey);
-    const s = await cli("status", "--dir", dir, "--json");
+    const dir = await paired("status");
+    const invite = await inviteOf(dir);
+    const second = await vaultDir("status-2");
+    failSavesAfter = saves + 1;
+    expect((await cli("pair", invite, "--dir", second)).code).toBe(1);
+    failSavesAfter = Infinity;
+
+    const s = await cli("status", "--dir", second, "--json");
     expect(s.code, s.all).toBe(1);
     const answer = s.json()["server"] as Record<string, unknown>;
-    // Rule 7. Nothing was asked of the server, so it is neither reachable nor
-    // refused, and calling it refused sends somebody after an outage that is
-    // not happening.
     expect(answer["reachable"], s.all).toBe(false);
     expect(answer["refused"], s.all).toBe(false);
-    expect(String(answer["error"])).toMatch(/never registered itself/);
+    expect(String(answer["error"])).toMatch(/has not finished/);
+    expect(String(answer["error"])).toMatch(/trew pair/);
   }, 120_000);
-
-  it("fails init honestly when the claim succeeds and the registration is not saved", async () => {
-    server = new TestServer();
-    await server.start();
-    const dir = await vaultDir("init");
-    // The root is saved, the claim goes out and commits, and the save that
-    // would record this device's credential fails.
-    failSavesAfter = 1;
-    const init = await cli("init", server.setup, "--dir", dir, "--device", "init");
-    expect(init.code).toBe(1);
-    expect(init.all).toMatch(/could not register itself/);
-    // The recovery key is printed anyway, because at that moment the secret in
-    // this config is the only copy of it on this machine.
-    expect(init.all).toMatch(/Write this recovery key down now/);
-    const printed = init.err.join("\n").match(/(basalt3_[A-Za-z0-9_-]+)/)![1]!;
-    expect((await loadConfig(dir))!.secret, "init threw the root away").toBeDefined();
-
-    failSavesAfter = Infinity;
-    expect((await cli("unlink", "--dir", dir)).code).toBe(0);
-    const again = await cli("pair", printed, "--dir", dir, "--json");
-    expect(again.code, again.all).toBe(0);
-    expect((await loadConfig(dir))!.secret).toBeUndefined();
-    expect((await cli("sync", "--dir", dir)).code).toBe(0);
-  }, 180_000);
 });
