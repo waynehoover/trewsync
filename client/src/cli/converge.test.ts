@@ -84,22 +84,13 @@ async function twoDevices(): Promise<{ a: string; b: string }> {
   const a = await vaultDir("a");
   const b = await vaultDir("b");
 
-  const init = await cli(
-    "init",
-    "--dir",
-    a,
-    "--server",
-    server.wsUrl,
-    "--token",
-    server.token,
-    "--device",
-    "a",
-    "--json",
-  );
-  expect(init.code, init.all).toBe(0);
+  const first = await cli("pair", await server.firstInvite(), "--dir", a, "--device", "a");
+  expect(first.code, first.all).toBe(0);
+  const issued = await cli("invite", "--dir", a, "--json");
+  expect(issued.code, issued.all).toBe(0);
   const paired = await cli(
     "pair",
-    init.json()["recoveryKey"] as string,
+    issued.json()["invite"] as string,
     "--dir",
     b,
     "--device",

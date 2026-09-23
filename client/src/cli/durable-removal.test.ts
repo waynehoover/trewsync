@@ -87,15 +87,14 @@ describe("what the removals do with that", () => {
   it("returns the reason rather than throwing, because the pairing is already gone", async () => {
     const { removeState, configPath } = await import("./config.ts");
     const { saveConfig } = await import("./config.ts");
-    const { generateSecret } = await import("../core/crypto.ts");
+    const { generateDeviceToken } = await import("../core/pairing.ts");
     const dir = await tempDir();
     await saveConfig(dir, {
       url: "ws://example.invalid",
       vaultId: "default",
       device: "d",
       deviceId: "d1",
-      deviceSecret: generateSecret(),
-      dataKey: generateSecret(),
+      deviceToken: generateDeviceToken(),
     });
 
     // The ordinary path: the removal happens and reports nothing wrong.

@@ -34,9 +34,10 @@ async function setup() {
   await server.start();
   const dir = await mkdtemp(join(tmpdir(), "trew-inspection-"));
   dirs.push(dir);
-  const init = await cli(dir, "init", server.setup);
-  expect(init.code, init.text + init.errors).toBe(0);
-  return { dir, key: JSON.parse(init.text).recoveryKey as string };
+  const first = await cli(dir, "pair", await server.firstInvite());
+  expect(first.code, first.text + first.errors).toBe(0);
+  // An invite for the other device a test adds, minted while the server runs.
+  return { dir, invite: await server.invite() };
 }
 
 it("preview leaves staging and the recovery ledger untouched while a writer holds the vault", async () => {
@@ -72,12 +73,12 @@ it("preview leaves staging and the recovery ledger untouched while a writer hold
 });
 
 it("repair never schedules ordinary sync when a peer edit arrives while it resends", async () => {
-  const { dir, key } = await setup();
+  const { dir, invite } = await setup();
   await writeFile(join(dir, "note.md"), "Original text.\n");
   expect((await cli(dir, "sync")).code).toBe(0);
   const peer = await mkdtemp(join(tmpdir(), "trew-inspection-peer-"));
   dirs.push(peer);
-  expect((await cli(peer, "pair", key)).code).toBe(0);
+  expect((await cli(peer, "pair", invite)).code).toBe(0);
   expect((await cli(peer, "sync")).code).toBe(0);
 
   const resend = Transport.prototype.resend;

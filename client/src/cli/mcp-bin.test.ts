@@ -11,7 +11,7 @@ import { loadConfig, saveConfig } from "./config.ts";
 import { buildMcp, cli } from "./mcp-test.ts";
 import { mcpProcess } from "./mcp-process-test.ts";
 
-let buildDir: string, bundle: string, recoveryKey: string, server: TestServer | undefined;
+let buildDir: string, bundle: string, server: TestServer | undefined;
 const roots: string[] = [];
 const processes: ReturnType<typeof mcpProcess>[] = [];
 beforeAll(async () => {
@@ -30,9 +30,8 @@ async function paired() {
   await server.start();
   const dir = await mkdtemp(join(tmpdir(), "trew-mcp-process-"));
   roots.push(dir);
-  const result = await cli("init", server.setup, "--dir", dir, "--json");
+  const result = await cli("pair", await server.firstInvite(), "--dir", dir, "--json");
   expect(result.code, result.err).toBe(0);
-  recoveryKey = JSON.parse(result.out).recoveryKey;
   return dir;
 }
 function start(dir: string, flags: string[] = []) {
@@ -238,7 +237,7 @@ it.each(["EOF", "SIGTERM"])(
     await owner.ready();
     const phone = await mkdtemp(join(tmpdir(), "trew-mcp-incoming-"));
     roots.push(phone);
-    expect((await cli("pair", recoveryKey, "--dir", phone)).code).toBe(0);
+    expect((await cli("pair", await server!.invite(), "--dir", phone)).code).toBe(0);
     expect((await cli("sync", "--dir", phone)).code).toBe(0);
     await owner.hold("cli/vault:replace.staged");
     await writeFile(join(phone, "note.md"), "INDEPENDENT REMOTE COMMIT\n");

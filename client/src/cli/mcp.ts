@@ -13,7 +13,7 @@ export async function cmdMcp(args: Args, io: Console, version: string): Promise<
     const configs = await Promise.all(
       roots.map(async (root) => {
         const config = await loadConfig(root.dir);
-        if (!config) throw new Error(`${root.id} is not paired. Run trew init or trew pair first.`);
+        if (!config) throw new Error(`${root.id} is not paired. Run trew pair first.`);
         return config;
       }),
     );

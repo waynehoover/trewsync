@@ -24,7 +24,7 @@ const NEWLINE = "\n";
 
 import { STATE_DIR, saveConfig } from "./config.ts";
 import { NodeVault, TEMP_MARK } from "./vault.ts";
-import { generateSecret } from "../core/crypto.ts";
+import { generateDeviceToken } from "../core/pairing.ts";
 import { run } from "./cli.ts";
 
 const dirs: string[] = [];
@@ -40,8 +40,7 @@ async function pairedVault(): Promise<string> {
     vaultId: "default",
     device: "d",
     deviceId: "d1",
-    deviceSecret: generateSecret(),
-    dataKey: generateSecret(),
+    deviceToken: generateDeviceToken(),
   });
   return dir;
 }

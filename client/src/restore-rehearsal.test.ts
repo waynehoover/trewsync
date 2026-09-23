@@ -7,24 +7,25 @@
  * copy the backup somewhere fresh, verify it deeply, start a server on it, and
  * read every version and every body back over a real socket. What it cannot do
  * is the last step of the actual disaster, because it is the server testing
- * itself: the server holds no key and has never seen a plaintext, so "every
- * body came back" is as far as it can get. Whether any of it decrypts to the
- * note somebody wrote is a question only a client can answer.
+ * itself: "every body came back" is as far as it can get. Whether a device can
+ * join the restored vault and end up holding the notes somebody wrote, byte
+ * for byte, through pairing, the engine, chunk assembly and the adapter, is a
+ * question only a client can answer.
  *
  * That gap is the whole of what a backup is for. Every byte can be present and
- * verified and the vault still be unrecoverable, if what came back cannot be
- * opened by the recovery key on the piece of paper. Nothing checked that end to
- * end, so this does:
+ * verified and the vault still be unrecoverable, if nothing can join it and
+ * read it back. Nothing checked that end to end, so this does:
  *
- *   1. a device writes notes whose plaintext hashes are known here,
+ *   1. a device writes notes whose hashes are known here,
  *   2. `trew backup` takes a copy,
  *   3. the live directory is destroyed, which is the disaster,
  *   4. a server starts on the backup,
- *   5. a device that has never existed pairs with the recovery key alone,
+ *   5. a device that has never existed pairs from an invite made with
+ *      `trew invite` on that server,
  *   6. and every note it pulls down is compared by hash to what was written.
  *
  * Step 5 is the one that matters and the one no server-side test can reach: it
- * is somebody who has lost every device, holding only what they wrote down.
+ * is somebody who has lost every device, holding only the server.
  */
 
 import { createHash } from "node:crypto";
@@ -36,7 +37,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "./core/client.ts";
 import { MemoryIndexStore, MemoryVault } from "./core/vault.ts";
 import { TestServer, serverBinary } from "./core/test-server.ts";
-import { testWrapped } from "./core/test-keys.ts";
 
 const enc = new TextEncoder();
 const hashOf = (text: string): string =>
@@ -68,7 +68,7 @@ function theVault(): Map<string, string> {
 }
 
 describe("losing the server and getting the vault back", () => {
-  it("restores a backup that a device with only the recovery key can read", async () => {
+  it("restores a backup that a device paired from the restored server can read", async () => {
     await serverBinary();
 
     // ---- before the disaster ------------------------------------------
@@ -76,16 +76,13 @@ describe("losing the server and getting the vault back", () => {
     await live.start();
     cleanups.push(() => live.cleanup());
 
-    const secret = new Uint8Array(32).fill(19);
-    const wrapped = await testWrapped(secret);
-
     const written = theVault();
     const first = new MemoryVault();
     const a = new Client({
       vault: first,
       store: new MemoryIndexStore(),
       url: live.wsUrl,
-      ...(await live.deviceCredentials(secret, wrapped, "a")),
+      ...(await live.deviceCredentials("a")),
       vaultId: "default",
       device: "a",
       timeoutMs: 60_000,
@@ -124,14 +121,15 @@ describe("losing the server and getting the vault back", () => {
       await restored.stop();
     });
 
-    // A device that has never existed, holding the vault's secret and nothing
-    // else. This is the person who lost every machine they own.
+    // A device that has never existed, paired from an invite `trew invite`
+    // makes on the restored server, and holding nothing else. This is the
+    // person who lost every machine they own.
     const second = new MemoryVault();
     const b = new Client({
       vault: second,
       store: new MemoryIndexStore(),
       url: restored.wsUrl,
-      ...(await restored.deviceCredentials(secret, wrapped, "recovered")),
+      ...(await restored.deviceCredentials("recovered")),
       vaultId: "default",
       device: "recovered",
       timeoutMs: 60_000,
@@ -175,14 +173,12 @@ describe("losing the server and getting the vault back", () => {
     await live.start();
     cleanups.push(() => live.cleanup());
 
-    const secret = new Uint8Array(32).fill(23);
-    const wrapped = await testWrapped(secret);
     const vault = new MemoryVault();
     const a = new Client({
       vault,
       store: new MemoryIndexStore(),
       url: live.wsUrl,
-      ...(await live.deviceCredentials(secret, wrapped, "a")),
+      ...(await live.deviceCredentials("a")),
       vaultId: "default",
       device: "a",
       timeoutMs: 60_000,
@@ -215,7 +211,7 @@ describe("losing the server and getting the vault back", () => {
       vault: second,
       store: new MemoryIndexStore(),
       url: restored.wsUrl,
-      ...(await restored.deviceCredentials(secret, wrapped, "recovered")),
+      ...(await restored.deviceCredentials("recovered")),
       vaultId: "default",
       device: "recovered",
       timeoutMs: 60_000,

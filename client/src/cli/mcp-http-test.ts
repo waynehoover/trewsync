@@ -9,6 +9,7 @@ import { McpReader } from "./mcp-read.ts";
 import { createTools, type McpSession } from "./mcp-tools.ts";
 import { startHttp } from "./mcp-http.ts";
 import { removeTree } from "../core/test-server.ts";
+import { generateDeviceId, generateDeviceToken } from "../core/pairing.ts";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:net";
@@ -29,7 +30,8 @@ export async function httpFixture(
     url: "ws://127.0.0.1:1",
     vaultId: "private-http-vault",
     device: "test",
-    secret: new Uint8Array(32).fill(7),
+    deviceId: generateDeviceId(),
+    deviceToken: generateDeviceToken(),
   });
   await writeFile(join(root, "note.md"), "private note marker 813751\n");
   const issued = await cli("mcp-token", "--dir", root);

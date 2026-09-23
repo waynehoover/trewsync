@@ -16,7 +16,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { JsonIndexStore, NodeVault, TEMP_MARK } from "./vault.ts";
 import { Client } from "../core/client.ts";
 import { TestServer } from "../core/test-server.ts";
-import { testWrapped } from "../core/test-keys.ts";
 import { deferred, receiveCommitted, within } from "../core/test-async.ts";
 
 const watching = vi.hoisted(() => ({
@@ -226,12 +225,11 @@ it("does not retry an old deletion after a restored note's watcher event is miss
   try {
     await server.start();
     const vault = new NodeVault(root);
-    const secret = new Uint8Array(32).fill(91);
     client = new Client({
       vault,
       store: new JsonIndexStore(join(root, ".trew/index.json")),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(secret, await testWrapped(secret), "writer")),
+      ...(await server.deviceCredentials("writer")),
       vaultId: "default",
       device: "writer",
       coalesceWrites: false,
@@ -291,12 +289,11 @@ it.each([false, true])(
       await writeFile(join(root, "a-restored.md"), "Original restored note\n");
       await writeFile(join(root, "public.md"), "Original public note\n");
       await server.start();
-      const secret = new Uint8Array(32).fill(163);
       const opts = {
         url: server.wsUrl,
         vaultId: "default",
         device: "writer",
-        ...(await server.deviceCredentials(secret, await testWrapped(secret), "writer")),
+        ...(await server.deviceCredentials("writer")),
         coalesceWrites: false,
         inspect: true,
       };
@@ -349,14 +346,13 @@ it("still aborts reconciliation when an omitted synced path cannot be checked", 
   try {
     await server.start();
     const vault = new NodeVault(root);
-    const secret = new Uint8Array(32).fill(164);
     client = new Client({
       vault,
       store: new JsonIndexStore(join(root, ".trew/index.json")),
       url: server.wsUrl,
       vaultId: "default",
       device: "writer",
-      ...(await server.deviceCredentials(secret, await testWrapped(secret), "writer")),
+      ...(await server.deviceCredentials("writer")),
       coalesceWrites: false,
       inspect: true,
     });

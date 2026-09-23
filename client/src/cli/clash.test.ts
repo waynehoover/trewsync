@@ -15,16 +15,12 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "../core/client.ts";
-import { testWrapped } from "../core/test-keys.ts";
 import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "../core/vault.ts";
 import { JsonIndexStore, NodeVault } from "./vault.ts";
 
-const SECRET = new Uint8Array(32).fill(11);
-let wrapped: string;
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 afterAll(async () => await cleanupBinary());
 
@@ -45,7 +41,7 @@ async function device(name: string): Promise<{ c: Client; dir: string }> {
     vault: new NodeVault(dir),
     store: new JsonIndexStore(join(dir, ".trew", "index.json")),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(SECRET, wrapped)),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device: name,
     timeoutMs: 20_000,
@@ -104,6 +100,12 @@ describe("a rename that changes only case", () => {
    * case those are one file: it wrote the note and then deleted it, then
    * reported the deletion, and the server marked the note gone. The device
    * that still had it was told so on its next pass.
+   *
+   * Protocol 1 made a second way to lose it. The renaming device sent the new
+   * name as a new note and the old one as a deletion; the server refused the
+   * first as a collision with the still-live old name and took the second, so
+   * the note left the vault on every other device. A case-only rename now goes
+   * up as one move, which the server allows.
    */
   it("does not delete the file it has just written", async () => {
     server = new TestServer();
@@ -125,12 +127,14 @@ describe("a rename that changes only case", () => {
     await b.c.settle({}, 8);
     await a.c.settle({}, 8);
 
-    // The property is the text, not the spelling. Which case each device shows
-    // is the filesystem's business; that the note is readable is not.
+    // The property is the text, on both devices and byte for byte (rule 10).
+    // On a disk that folds case the name reaches the file whatever its case,
+    // so the spelling is checked apart, below, off the listing.
+    const text = "the only copy of this text\n";
+    expect(await readFile(join(a.dir, "NOTE.md"), "utf8")).toBe(text);
+    expect(await readFile(join(b.dir, "NOTE.md"), "utf8")).toBe(text);
     const onB = await contents(b.dir);
-    expect(onB, `b holds: ${onB}`).toContain("the only copy of this text");
     const onA = await contents(a.dir);
-    expect(onA, `a holds: ${onA}`).toContain("the only copy of this text");
 
     // Both devices spell it the way the rename asked for. Getting the bytes
     // right and the name wrong is not enough: the next scan would call the new
@@ -138,24 +142,45 @@ describe("a rename that changes only case", () => {
     expect(onB).toContain("NOTE.md:");
     expect(onA).toContain("NOTE.md:");
 
-    // The old name is deleted, which is what a rename is. The new one must not
-    // be: b reporting that deletion is how the note disappeared everywhere, so
-    // this is the assertion that actually pins the bug.
+    // And a rename is one note moved, not a divergence: neither device keeps a
+    // conflict copy of a note that did not change. On a disk that folds case
+    // the receiver finds the note already under the new name, and taking that
+    // for an edit nobody explained is what made one.
+    expect(onA, `a holds: ${onA}`).not.toContain("Conflicted copy");
+    expect(onB, `b holds: ${onB}`).not.toContain("Conflicted copy");
+
+    // The new name must never be reported deleted: b reporting that deletion
+    // is how the note disappeared everywhere, so this is the assertion that
+    // actually pins the bug.
     const deleted = await b.c.deleted();
     const names = deleted.notes.map((n) => n.path);
     expect(names, `the server thinks these are deleted: ${names.join(", ")}`).not.toContain(
       "NOTE.md",
     );
-    expect(names).toContain("Note.md");
+    // It went up as the move it is, which is what protocol 1 allows for a
+    // rename that changes only case, rather than as a new note beside the old
+    // one: the new name's history names the old one. It used to travel as a
+    // create and a deletion, which the server now refuses, as a collision, in
+    // that order.
+    const history = await b.c.history("NOTE.md");
+    expect(history[0]?.previousPath, JSON.stringify(history)).toBe("Note.md");
 
     // And it holds after another pass each way, which is where it went wrong
     // before: the first pass looked right and the second reported the loss.
     await b.c.settle({}, 8);
     await a.c.settle({}, 8);
-    expect(await contents(a.dir)).toContain("the only copy of this text");
-    expect(await contents(b.dir)).toContain("the only copy of this text");
+    expect(await readFile(join(a.dir, "NOTE.md"), "utf8")).toBe(text);
+    expect(await readFile(join(b.dir, "NOTE.md"), "utf8")).toBe(text);
     const later = (await b.c.deleted()).notes.map((n) => n.path);
     expect(later, `after settling: ${later.join(", ")}`).not.toContain("NOTE.md");
+
+    // A device pairing now receives one note, under the new name, with the
+    // bytes: the vault holds the rename, not both spellings of it.
+    const c = await device("c");
+    await c.c.settle({}, 8);
+    const onC = await contents(c.dir);
+    expect(onC, `c holds: ${onC}`).toBe(`NOTE.md: ${text.trim()}`);
+    expect(await readFile(join(c.dir, "NOTE.md"), "utf8")).toBe(text);
   }, 60_000);
 });
 
@@ -371,7 +396,7 @@ describe("a never-synced name nested inside an ordinary folder", () => {
       vault,
       store: new MemoryIndexStore(),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(SECRET, wrapped)),
+      ...(await server.deviceCredentials()),
       vaultId: "default",
       device: name,
       timeoutMs: 20_000,
@@ -456,10 +481,11 @@ describe("a never-synced name nested inside an ordinary folder", () => {
  * Two notes whose names differ only by case, created on two devices.
  *
  * `Note.md` on a device whose disk keeps case apart and `note.md` on one whose
- * disk does not are two files to the server and one to the second device. The
- * case-only rename is covered above; this is two people writing two notes. The
- * folding device cannot hold both, and the one thing it must not do is let the
- * arriving one land on top of the one it has.
+ * disk does not are one name to the server now (protocol 1 folds case), and
+ * were two files to it and one to the second device before. The case-only
+ * rename is covered above; this is two people writing two notes. The folding
+ * device cannot hold both, and the one thing that must not happen is either
+ * text being lost, or landing on top of the other.
  */
 describe("two notes that differ only by case, one written on each device", () => {
   /**
@@ -482,7 +508,7 @@ describe("two notes that differ only by case, one written on each device", () =>
       vault,
       store: new MemoryIndexStore(),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(SECRET, wrapped)),
+      ...(await server.deviceCredentials()),
       vaultId: "default",
       device: name,
       timeoutMs: 20_000,
@@ -508,12 +534,12 @@ describe("two notes that differ only by case, one written on each device", () =>
     await linux.vault.edit("Note.md", "written on linux\n");
 
     let macReport = await mac.c.settle();
-    await linux.c.settle();
+    let linuxReport = await linux.c.settle();
     for (let i = 0; i < 4; i++) {
       await receiveCommitted(mac.c.transport);
       macReport = await mac.c.settle();
       await receiveCommitted(linux.c.transport);
-      await linux.c.settle();
+      linuxReport = await linux.c.settle();
     }
 
     // Rule 1. The Mac's note is the Mac's note, untouched.
@@ -528,9 +554,18 @@ describe("two notes that differ only by case, one written on each device", () =>
     const deleted = (await mac.c.deleted()).notes.map((n) => n.path);
     expect(deleted).toEqual([]);
 
-    // The Mac says what it could not do and names the file in the way, rather
-    // than settling quietly with one note short.
-    expect(macReport.blocked, `mac: ${JSON.stringify(macReport)}`).toBeGreaterThan(0);
-    expect(macReport.inTheWay).toContainEqual({ path: "Note.md", blockedBy: "note.md" });
+    // Protocol 1 refuses the second of two names that fold alike, at the
+    // server (PLAN.md section 4.1, "the cost, accepted"), so the vault holds
+    // one note under that name. The device whose note was refused says so and
+    // names the live path it folds like, rather than settling quietly with one
+    // note short; it used to be the Mac, blocked by a name the server had
+    // accepted, and now nothing reaches the Mac that it cannot hold.
+    const why = linuxReport.needsAttention.find((n) => n.path === "Note.md")?.why;
+    expect(why, `linux: ${JSON.stringify(linuxReport)}`).toMatch(/^collision: .*"note\.md"/);
+    expect(linuxReport.skipped, `linux: ${JSON.stringify(linuxReport)}`).toBeGreaterThan(0);
+    expect(
+      { blocked: macReport.blocked, skipped: macReport.skipped },
+      `mac: ${JSON.stringify(macReport)}`,
+    ).toEqual({ blocked: 0, skipped: 0 });
   }, 120_000);
 });

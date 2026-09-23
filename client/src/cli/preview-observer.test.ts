@@ -14,7 +14,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { Client } from "../core/client.ts";
 import { deferred, nextTurn, within } from "../core/test-async.ts";
-import { testWrapped } from "../core/test-keys.ts";
 import { TestServer } from "../core/test-server.ts";
 import { MemoryIndexStore } from "../core/vault.ts";
 import { NodeVault, STALE_TEMP_MS } from "./vault.ts";
@@ -31,12 +30,11 @@ beforeEach(async () => {
   await server.start();
   writer = new NodeVault(root);
   reader = new NodeVault(root, { observeOnly: true });
-  const secret = new Uint8Array(32).fill(61);
   client = new Client({
     vault: writer,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(secret, await testWrapped(secret))),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device: "preview",
     inspect: true,

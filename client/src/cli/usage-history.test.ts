@@ -20,17 +20,8 @@ it("history can page to an older version with the existing before argument", asy
   server = new TestServer();
   await server.start();
   dir = await mkdtemp(join(tmpdir(), "trew-review-cli-"));
-  const init = await cli(
-    "init",
-    "--dir",
-    dir,
-    "--server",
-    server.wsUrl,
-    "--token",
-    server.token,
-    "--json",
-  );
-  expect(init.code).toBe(0);
+  const paired = await cli("pair", await server.firstInvite(), "--dir", dir, "--json");
+  expect(paired.code).toBe(0);
   for (const text of ["first\n", "second revision\n", "third different revision\n"]) {
     await writeFile(join(dir, "note.md"), text);
     expect((await cli("sync", "--dir", dir)).code).toBe(0);
@@ -60,17 +51,8 @@ it("preview JSON reports blocked files as unsuccessful without changing the note
   server.extraArgs = ["-max-file", "10"];
   await server.start();
   dir = await mkdtemp(join(tmpdir(), "trew-preview-cli-"));
-  const init = await cli(
-    "init",
-    "--dir",
-    dir,
-    "--server",
-    server.wsUrl,
-    "--token",
-    server.token,
-    "--json",
-  );
-  expect(init.code).toBe(0);
+  const paired = await cli("pair", await server.firstInvite(), "--dir", dir, "--json");
+  expect(paired.code).toBe(0);
   const text = "This note exceeds the server's ten-byte file limit.";
   await writeFile(join(dir, "note.md"), text);
   const blocked = await cli("preview", "--dir", dir, "--json");

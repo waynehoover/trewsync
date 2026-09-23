@@ -68,34 +68,17 @@ afterEach(async () => {
   if (server) await server.cleanup();
 });
 
-/** One paired vault against a fresh server. */
-async function paired(): Promise<string> {
-  return (await pairedWithKey()).dir;
-}
-
 /**
- * The same, and the recovery key `init` printed. Kept by the caller because
- * nothing reprints it: a paired device holds its own credential and not the
- * vault's root.
+ * One paired vault against a fresh server, its first device paired from the
+ * invite `trew serve` wrote to `<data>/first-invite`.
  */
-async function pairedWithKey(): Promise<{ dir: string; recoveryKey: string }> {
+async function paired(): Promise<string> {
   server = new TestServer();
   await server.start();
   const dir = await vaultDir("a");
-  const init = await cli(
-    "init",
-    "--dir",
-    dir,
-    "--server",
-    server.wsUrl,
-    "--token",
-    server.token,
-    "--device",
-    "a",
-    "--json",
-  );
-  expect(init.code, init.all).toBe(0);
-  return { dir, recoveryKey: init.json()["recoveryKey"] as string };
+  const first = await cli("pair", await server.firstInvite(), "--dir", dir, "--device", "a");
+  expect(first.code, first.all).toBe(0);
+  return dir;
 }
 
 const read = (dir: string, path: string) => readFile(join(dir, path), "utf8");
@@ -200,11 +183,11 @@ describe("the list of what is gone", () => {
   }, 300_000);
 
   /**
-   * The paths come back unsealed. The server never saw them in the clear and
-   * still has not: it answered with the sealed names, and the client opened
-   * them with a key the server has never held.
+   * The deleted list names a note exactly as it was written, spaces and all:
+   * the path travels and is stored as the plain string it is, and what comes
+   * back is that string rather than anything standing in for it.
    */
-  it("reads back plaintext names the server cannot", async () => {
+  it("reads back the names exactly as they were written", async () => {
     const dir = await paired();
     await write(dir, "Meeting notes 2026.md", "x\n");
     await cli("sync", "--dir", dir);
@@ -409,12 +392,12 @@ describe("restoring", () => {
    * would mean somebody who has just recovered a note has to know that.
    */
   it("sends the restored note to the other devices", async () => {
-    const { dir, recoveryKey: pairing } = await pairedWithKey();
+    const dir = await paired();
     await write(dir, "shared.md", "the original\n");
     await cli("sync", "--dir", dir);
 
     const other = await vaultDir("b");
-    await cli("pair", pairing, "--dir", other, "--device", "b");
+    await cli("pair", await server.invite(), "--dir", other, "--device", "b");
     await cli("sync", "--dir", other);
     expect(await read(other, "shared.md")).toBe("the original\n");
 

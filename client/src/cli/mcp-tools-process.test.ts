@@ -32,8 +32,8 @@ async function start(http: boolean) {
   server = new TestServer();
   await server.start();
   const dir = await directory();
-  const init = await cli("init", server.setup, "--dir", dir, "--json");
-  expect(init.code, init.err).toBe(0);
+  const pair = await cli("pair", await server.firstInvite(), "--dir", dir, "--json");
+  expect(pair.code, pair.err).toBe(0);
   const token = await cli("mcp-token", "--dir", dir);
   expect(token.code, token.err).toBe(0);
   const host = http
@@ -41,7 +41,8 @@ async function start(http: boolean) {
     : await openMcp(bundle, dir);
   hosts.push(host);
   await waitFor(host.client, (status) => status.writeReady);
-  return { dir, key: JSON.parse(init.out).recoveryKey as string, client: host.client };
+  // An invite for the other device each test adds, minted while the server runs.
+  return { dir, invite: await server.invite(), client: host.client };
 }
 async function waitFor(client: Client, predicate: (status: Record<string, any>) => boolean) {
   await within(
@@ -59,7 +60,7 @@ async function waitFor(client: Client, predicate: (status: Record<string, any>) 
 it.each([false, true])(
   "searches tags and filenames, then prepends recoverably through the built CLI, HTTP=%s",
   async (http) => {
-    const { dir, key, client } = await start(http);
+    const { dir, invite, client } = await start(http);
     const path = "Projects/project.md";
     const original = "\ufeffUNSENT prose\r\n#project/active [[keep]]\r\n`#ignored`\r\n";
     expect(await tool(client, "create_note", { path, content: original })).toMatchObject({
@@ -103,7 +104,7 @@ it.each([false, true])(
         !status.localWritesSincePass && !status.engine.syncing && status.engine.pending === 0,
     );
     const phone = await directory();
-    expect((await cli("pair", key, "--dir", phone, "--device", "phone")).code).toBe(0);
+    expect((await cli("pair", invite, "--dir", phone, "--device", "phone")).code).toBe(0);
     const synced = await cli("sync", "--dir", phone);
     expect(synced.code, synced.err).toBe(0);
     expect(await readFile(join(phone, path), "utf8")).toBe(expected);
@@ -115,7 +116,7 @@ it.each([false, true])(
 it.each([false, true])(
   "previews and applies tag, move, directory and delete workflows through the built transport, HTTP=%s",
   async (http) => {
-    const { dir, key, client } = await start(http);
+    const { dir, invite, client } = await start(http);
     expect(await tool(client, "create_directory", { path: "Projects" })).toMatchObject({
       applied: true,
       durable: true,
@@ -183,7 +184,7 @@ it.each([false, true])(
         !status.localWritesSincePass && !status.engine.syncing && status.engine.pending === 0,
     );
     const phone = await directory();
-    expect((await cli("pair", key, "--dir", phone, "--device", "phone")).code).toBe(0);
+    expect((await cli("pair", invite, "--dir", phone, "--device", "phone")).code).toBe(0);
     const synced = await cli("sync", "--dir", phone);
     expect(synced.code, synced.err).toBe(0);
     expect(await readFile(join(phone, beforeImage), "utf8")).toBe(read.content);

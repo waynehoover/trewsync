@@ -6,6 +6,7 @@ import { parseArgs } from "./cli.ts";
 import { validateUsage } from "./usage.ts";
 import { cli } from "./mcp-test.ts";
 import { saveConfig } from "./config.ts";
+import { generateDeviceId, generateDeviceToken } from "../core/pairing.ts";
 import { removeTree } from "../core/test-server.ts";
 
 const roots: string[] = [];
@@ -19,7 +20,8 @@ async function paired(readOnly = false) {
     url: "ws://127.0.0.1:1",
     vaultId: "test",
     device: "test",
-    secret: new Uint8Array(32).fill(7),
+    deviceId: generateDeviceId(),
+    deviceToken: generateDeviceToken(),
     readOnly,
   });
   return root;

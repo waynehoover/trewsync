@@ -34,9 +34,10 @@ async function paired() {
   server = new TestServer();
   await server.start();
   const dir = await directory();
-  const initialized = await cli("init", server.setup, "--dir", dir, "--json");
-  expect(initialized.code, initialized.err).toBe(0);
-  return { dir, key: JSON.parse(initialized.out).recoveryKey as string };
+  const first = await cli("pair", await server.firstInvite(), "--dir", dir, "--json");
+  expect(first.code, first.err).toBe(0);
+  // An invite for the other device a test adds, minted while the server runs.
+  return { dir, invite: await server.invite() };
 }
 async function host(dir: string, flags: string[] = [], modern = false) {
   const result = await openMcp(bundle, dir, flags, modern);
@@ -59,7 +60,7 @@ async function ready(client: Awaited<ReturnType<typeof host>>["client"]) {
 }
 
 it("edits two daily tasks over stdio while keeping unrelated bytes and the backup on a second device", async () => {
-  const { dir, key } = await paired();
+  const { dir, invite } = await paired();
   const name = "Daily/2026-09-14.md";
   const original =
     "\ufeff---\r\nprivate: true\r\n---\r\nUnsent marker 982317 with [[a link]].\r\n- [ ] Call Sam\r\n- [ ] Pay bill\r\nKeep every unrelated paragraph.\r\n";
@@ -107,7 +108,7 @@ it("edits two daily tasks over stdio while keeping unrelated bytes and the backu
     15000,
   );
   const phone = await directory();
-  const pair = await cli("pair", key, "--dir", phone, "--device", "phone");
+  const pair = await cli("pair", invite, "--dir", phone, "--device", "phone");
   expect(pair.code, pair.err).toBe(0);
   const synced = await cli("sync", "--dir", phone);
   expect(synced.code, synced.err).toBe(0);
@@ -335,7 +336,7 @@ it("serves a cancelled search without losing the next request", async () => {
 });
 
 it("reads old versions and restores deleted notes to explicit destinations across restart and another device", async () => {
-  const { dir, key } = await paired();
+  const { dir, invite } = await paired();
   const original =
     "\ufeff---\r\ntitle: Before\r\n---\r\nOriginal [[link]] and unique historical marker.\r\n";
   await writeFile(join(dir, "daily.md"), original);
@@ -406,7 +407,7 @@ it("reads old versions and restores deleted notes to explicit destinations acros
   hosts.splice(hosts.indexOf(secondHost), 1);
   expect((await cli("sync", "--dir", dir)).code).toBe(0);
   const fresh = await directory();
-  expect((await cli("pair", key, "--dir", fresh, "--device", "fresh-reader")).code).toBe(0);
+  expect((await cli("pair", invite, "--dir", fresh, "--device", "fresh-reader")).code).toBe(0);
   expect((await cli("sync", "--dir", fresh)).code).toBe(0);
   expect(await readFile(join(fresh, "Recovered/daily.md"), "utf8")).toBe(original);
   expect(await readFile(join(fresh, "Recovered/from-deleted.md"), "utf8")).toBe(original);

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { saveConfig } from "./config.ts";
+import { generateDeviceId, generateDeviceToken } from "../core/pairing.ts";
 import { cli } from "./mcp-test.ts";
 
 const roots: string[] = [];
@@ -18,7 +19,8 @@ async function directory(paired = true) {
       url: "ws://127.0.0.1:1",
       vaultId: "private-vault",
       device: "test",
-      secret: new Uint8Array(32).fill(7),
+      deviceId: generateDeviceId(),
+      deviceToken: generateDeviceToken(),
     });
   return root;
 }

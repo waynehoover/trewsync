@@ -396,7 +396,7 @@ describe("a journal whose snapshot is gone", () => {
     );
   });
 
-  it("is what unlink and rebase avoid by removing the journal first", async () => {
+  it("is what unlink avoids by removing the journal first", async () => {
     // The order in cli/config.ts. A crash halfway through must leave a
     // snapshot with no journal, which loads without a word, and never a
     // journal with no snapshot, which does not load at all.
