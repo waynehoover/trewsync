@@ -164,8 +164,6 @@ func describeStep(s store.UndoStep, uidOf map[string]int64) string {
 		return fmt.Sprintf("removed the folder %q, which the operation created", s.Path)
 	case store.UndoKeepFolder:
 		return fmt.Sprintf("kept the folder %q, which the operation created: %s", s.Path, s.Why)
-	case store.UndoMakeFolder:
-		return fmt.Sprintf("made the folder %q for what is put back in it", s.Path)
 	case store.UndoCopy:
 		return fmt.Sprintf("copied uid %d of %q to %q%s", s.Before, s.Path, s.Copy, now(s.Copy))
 	case store.UndoNothing:

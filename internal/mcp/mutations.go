@@ -237,13 +237,15 @@ func writeTools() []*Tool {
 			Name: "lookup_operation", Title: "Look up an operation", Scope: store.ScopeRead,
 			Description: "Say what one of this token's own writes did, by the opId its result, or an unknown outcome, " +
 				"named: whether it committed, when, and every path it changed with the uid before and after. This is " +
-				"how a reply that never arrived is resolved. found false means no write of this token committed under " +
-				"that id.",
+				"how a reply that never arrived is resolved. An undo names the operation it undid (undoes), and an " +
+				"operation undone in place names the undo that did it (undoneBy). found false means no write of this " +
+				"token committed under that id.",
 			Input: object([]string{"opId"}, map[string]schema{
 				"opId": textProp(64, "the operation's id"),
 			}),
 			Run: lookupOperation,
 		},
+		undoTool(),
 	}
 }
 
@@ -927,8 +929,12 @@ func lookupOperation(c *call, a *args) outcome {
 		Found bool   `json:"found"`
 		OpID  string `json:"opId"`
 		// The operation as recorded, when found.
-		Tool            string `json:"tool,omitempty"`
-		Outcome         string `json:"outcome,omitempty"`
+		Tool    string `json:"tool,omitempty"`
+		Outcome string `json:"outcome,omitempty"`
+		// Undoes is, for an undo, the operation it undid; UndoneBy the undo
+		// in place that undid this one, which undo_operation can undo in turn.
+		Undoes          string `json:"undoes,omitempty"`
+		UndoneBy        string `json:"undoneBy,omitempty"`
 		CommittedAt     int64  `json:"committedAt,omitempty"`
 		OperationEpoch  string `json:"operationEpoch,omitempty"`
 		IdempotencyKey  string `json:"idempotencyKey,omitempty"`
@@ -957,12 +963,16 @@ func lookupOperation(c *call, a *args) outcome {
 			return c.failErr(err)
 		}
 	}
-	if !ok || rec.ActorID != c.cred.token.ID {
+	// The kind as well as the id: a device's id is chosen by the device, and
+	// nothing stops one from spelling a token's, so the id alone would read
+	// that device's undos as this token's.
+	if !ok || rec.ActorKind != store.AuthorKindMCP || rec.ActorID != c.cred.token.ID {
 		out.Message = "no write of this token committed under this id. After an unknown outcome this means it did " +
 			"not commit; if the server restarted in between, look again once it is back"
 		return c.ok(out, listed{rows})
 	}
 	out.Found, out.Tool, out.Outcome, out.CommittedAt = true, rec.Tool, rec.Outcome, rec.CommittedAt
+	out.Undoes, out.UndoneBy = rec.Undoes, rec.UndoneBy
 	out.OperationEpoch, out.IdempotencyKey, out.SnapshotHead = rec.Epoch, rec.IdempotencyKey, rec.SnapshotHead
 	out.PathsTotal = rec.PathsTotal
 	out.Message = "the operation committed; its uids belong to operationEpoch"

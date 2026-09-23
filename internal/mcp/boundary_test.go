@@ -48,6 +48,9 @@ var outsideTheBoundary = map[string]bool{
 	// prepared (a read, answered from the key's record; CommitOperation asks
 	// again inside its transaction), and an operation by id for a lost reply.
 	"Replay": true, "LookupOperation": true,
+	// An undo's plan: reads of the log, the heads and the before-images,
+	// which the commit checks all over again (store.PlanUndo).
+	"PlanUndo": true,
 	// Content: the chunk store is reached to read a body, and its own methods
 	// are checked by name like the store's. PutAll stores a write's bodies
 	// before its commit, as PLAN.md section 4.3, step 3 requires: content

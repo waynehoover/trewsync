@@ -207,8 +207,9 @@ func TestAFolderFilledAfterThePlanRefusesTheUndoAtTheCommit(t *testing.T) {
 }
 
 // Undo of a delete writes the note it deleted back, exact bytes, at the path
-// it had, and makes the folder a person removed since so the note has
-// somewhere to be.
+// it had, even with the folder it was in deleted by a person since: the undo
+// puts back what the operation displaced, not the folder entry, which a
+// device makes on disk for the note it writes into it.
 func TestUndoOfADeleteWritesTheNoteBack(t *testing.T) {
 	h := newTestStore(t)
 	a := h.writer(t, "agent")
@@ -229,15 +230,13 @@ func TestUndoOfADeleteWritesTheNoteBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("undo: %v", err)
 	}
-	if plan.Steps[0].Action != UndoMakeFolder || plan.Steps[1].Action != UndoRestore {
+	if len(plan.Steps) != 1 || plan.Steps[0].Action != UndoRestore || plan.Steps[0].Before != note.UID {
 		t.Fatalf("steps %+v", plan.Steps)
 	}
 	if got, _ := h.headBytes(t, "notes/keep.md"); got != "what the agent deleted" {
 		t.Fatalf("the note reads %q", got)
 	}
-	if _, f := h.headBytes(t, "notes"); !f.Folder {
-		t.Fatal("no folder for it")
-	}
+	h.gone(t, "notes")
 	h.verified(t)
 }
 

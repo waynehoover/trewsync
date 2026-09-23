@@ -139,7 +139,7 @@ export interface OperationRef {
 export interface UndoStep {
   /**
    * `restore`, `move_back` (from `from`), `remove`, `remove_folder`,
-   * `keep_folder` (with `why`), `make_folder`, `copy` (to `copy`), or
+   * `keep_folder` (with `why`), `copy` (to `copy`), or
    * `nothing` (in a copy, a path with nothing to copy).
    */
   readonly action: string;
