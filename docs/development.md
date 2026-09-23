@@ -103,6 +103,8 @@ rename edits against a phone, and an offline phone catching up) are the cases M5
 task 12 ports to the server's MCP, from Basalt's identical copy, and its crash
 and before-image cases belong to the MCP write path M5 replaces (tasks 3 and 9).
 The classification of its 43 cases is in plan/strip-ledger.md, "M2 outcome".
+Both are ported now, as `client/src/stress/mcp-races.stress.ts` and
+`mcp-crash.stress.ts` ("The crash matrix and the phone races (M5)", below).
 
 The workflow finds a daily note, changes two exact task lines, compares unrelated
 BOM/CRLF/frontmatter/link bytes, reads the before-image, and checks both copies
@@ -1037,12 +1039,13 @@ commit lock, then the reply the transaction recorded. `CommitOperation` and
 Previews commit nothing and go through none of it but `begin`.
 
 **Seams for the crash matrix (task 9).** `Config.Seam` is called at
+`SeamUploading` (the first of several bodies durable, the rest not written),
 `SeamBodies` (bodies durable, before the commit lock), `SeamCommitted`
 (inside the lock, committed, not yet broadcast) and `SeamBroadcast` (after
 the lock, before the reply); `TestAWritesSeamsComeInOrderAroundItsCommit`
-holds the order. Nil in production. A crash-matrix binary binds it to a
-kill; the idempotency key and `lookup_operation` are what resolve the kill
-after the commit.
+holds the order. Nil in production. The crash build of trewd binds it to a
+hold the test kills the server at (below); the idempotency key and
+`lookup_operation` are what resolve the kill after the commit.
 
 **The link index (task 6).** Beside `note_tags` in each search-index
 generation, `gN_links (note_id, key)` holds every note's link keys, from
@@ -1086,6 +1089,93 @@ reissues the agent's base uid to other bytes, and plans a move through the
 link index and without it. `injection_write_test.go` is task 11: poisoned
 text written through the tools is stored exactly and read back by the next
 session only under `untrusted_content`, normalised.
+
+### The crash matrix and the phone races (M5)
+
+M5 tasks 9 and 12, and the done-when's "zero entries committed" and "exactly
+one discoverable result on retry", against the built binary rather than the
+handler in a test's process.
+
+**The crash build.** `cmd/trewd/testseam.go` is compiled only with
+`-tags crashmatrix`, which no release, image, `go install` or CI build step
+passes; the crash tests build it for themselves. It binds `mcp.Config.Seam`
+to a hold: with `TREW_TEST_SEAM` naming a seam (an unknown name exits 2
+rather than hold nothing), every write that reaches it writes
+`trewd test seam: holding at SEAM` to stderr and reads a line from stdin,
+`go` to go on and anything else, the end of stdin included, to wait there
+until the process is killed. The variable is read once, at startup, and
+nothing a request carries reaches the hold. A production build has none of
+it: `TestAProductionBuildHasNoTestSeam` builds trewd as a release does
+(`-trimpath -ldflags "-s -w"`), finds neither the variable's name nor the
+hold's line in the binary, and has a write with the variable set commit
+straight through; the tagged build, given the same variable, holds the same
+write, so the check is not looking at a binary that could never hold.
+
+**In `go test`** (`cmd/trewd/crash_test.go`, a child process each):
+
+- SIGKILL at `bodies`, `committed` and `broadcast` around an append, restart
+  on the same directory, retry with the same key: absent and then committed
+  by the retry before the commit, present and replayed as the same bytes
+  after it; one operation holds the key, `lookup_operation` finds it,
+  `verify -deep` is clean, a keyless retry is `stale`, and the line is in the
+  note once.
+- A write held at `bodies` while a device moves one of three tagged notes,
+  creates the note a create in a new folder was for, adds a backlink, or adds
+  a second note of the moved note's name, or while the operator revokes the
+  token, then let go: refused (`plan_changed`, `exists`, `plan_changed`,
+  `plan_changed`, 401), the vault's head the device's last write, the log
+  empty, and a fresh preview applying over the device's bytes. Through the
+  tools a preview's head is what refuses a batch first; the store's check of
+  each slot is behind it, and the create is refused by that check itself.
+  With the snapshot head check taken out of the store, the backlink and
+  namespace cases commit and fail.
+- The chunk store read-only, a trigger failing a pin inside the transaction,
+  and a deferred foreign key failing the `COMMIT`, each under a tag batch of
+  three notes: nothing committed, the last `committed: "unknown"` with an
+  `opId` that `lookup_operation` does not find, and the same request with the
+  same key committing once when the fault is gone.
+
+**In the stress suite** (`bun run stress`, so in `scripts/check.sh` and CI):
+
+`mcp-crash.stress.ts` is the matrix: `create_note` into a new folder,
+`edit_note`, `append_note`, `move_note` with two backlinks into a new folder
+and `add_tags` over three notes, at `bodies`, `committed` and `broadcast`,
+and at `uploading` for every write of several bodies, among them a create of
+300 KiB. A laptop writes the notes; the server is restarted armed; the
+agent's keyed write is held and the server SIGKILLed with the request still
+waiting. Restarted unarmed on the same directory: `verify -deep` passes; the
+log holds one operation for the key or none, and its uids are the heads; a
+freshly paired headless client downloads exactly the seed or exactly what the
+write leaves, as the seam says; the retry with the same key is one result,
+the same bytes each time, one operation, which `lookup_operation` finds; and
+the witness, the laptop that was connected when the server died, and a
+second fresh client then hold exactly what the write leaves. What a move or a
+tag batch writes is worked out by the test from its preview's changes
+(`applyPlan`), not read back from the server. With the key's replay taken
+out of both `call.begin` and the store's transaction, all eighteen cases
+fail.
+
+`mcp-races.stress.ts` is the phone races: a laptop that stays connected, a
+phone that goes offline, and the agent through the server's HTTP tools.
+Disjoint edits and an append against a replacement merge; overlapping edits
+keep the phone's text in place and the agent's in a conflict copy named
+after the phone; the phone's deletion leaves the agent's edit, and the
+agent's deletion leaves the phone's; the phone's rename keeps its edit at the
+new name and the agent's at the old; an offline phone catches up with the
+append the laptop already has; an agent edit prepared before the phone's is
+refused `stale` with the phone's uid and applies once read again. The
+laptop, the phone and a freshly paired third device hold exactly the expected
+bytes, the log holds the one write, and its displaced version reads back
+before and after a default purge.
+
+```bash
+go test -run 'TestAProductionBuildHasNoTestSeam|TestAKillAround|TestAWriteThatLoses|TestAStorageError' ./cmd/trewd/
+cd client && bunx vitest run --config vitest.stress.config.ts src/stress/mcp-crash.stress.ts src/stress/mcp-races.stress.ts
+```
+
+A SIGKILL is not a power cut: the page cache survives it, so these prove the
+ordering of bodies, commit, broadcast and reply, and the recovery of the
+unknown outcome, not durability against losing power (M5.5).
 
 ### Latent issues in the chunker
 
