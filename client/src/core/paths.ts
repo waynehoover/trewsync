@@ -19,6 +19,8 @@
  * something without a dot.
  */
 
+import { fold } from "./fold.ts";
+
 /**
  * Whether any segment of a vault-relative path is one that never syncs.
  *
@@ -139,11 +141,17 @@ export function canonicalSpelling(path: string): string {
  * Folding here errs towards calling two paths one file, which keeps a note
  * rather than removing one, and that is the side to be wrong on.
  *
+ * It is the protocol's own fold (`fold.ts`, PLAN.md section 4.1): NFC, then
+ * Unicode full case folding, then NFC, from a table the Go server carries too,
+ * so this device and the server's collision rule agree on which two names are
+ * one. Full folding joins more names than lower-casing did (`Straße.md` and
+ * `STRASSE.md`), which errs further towards keeping a note.
+ *
  * One function because the rule was written out at six sites, and two of them
  * deciding differently is two notes that turn into one.
  */
 export function foldPath(path: string): string {
-  return canonicalSpelling(path).toLowerCase();
+  return fold(path);
 }
 
 /** Whether two paths would be one file wherever the platform will not say. */
@@ -238,8 +246,8 @@ export function ignoredHere(relPath: string, extra: ReadonlySet<string>): boolea
  * Obsidian's config folder is one folder at the root, and if it were ever
  * anything else then quietly ignoring the wrong thing is how a vault's
  * settings get uploaded: that folder holds the plugin's `data.json`, and
- * `data.json` holds this device's credential and the vault's data key. Not the
- * root, since protocol 4, but the data key opens every note either way.
+ * `data.json` holds this device's credential, and anything that syncs it hands
+ * that credential to every device and to the server's history.
  */
 export function configFolderName(configDir: string): string {
   const name = configDir.replace(/^\/+|\/+$/g, "");

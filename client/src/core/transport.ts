@@ -37,15 +37,18 @@
  */
 
 import { notifyTransfer } from "./transfer.ts";
-import { CRYPTO_SUITE, chunkName, isChunkName } from "./crypto.ts";
+import { base64urlDecode, chunkName, isChunkName } from "./digest.ts";
+import { FrameError, decodeFrame, encodeFrame } from "./frame.ts";
 
 /**
  * The protocol version this client speaks. A mismatch is refused, not negotiated.
  *
- * Seven adds conditional writes to preserve concurrent edits. Upgrade
- * the server and all clients together; there is no older-protocol fallback.
+ * Version 1 of Trew's protocol (plan/protocol.md): Basalt's protocol 7 with
+ * the encryption taken out. Paths and bodies are plaintext, a device connects
+ * with a random token of its own, and a new device joins by redeeming an
+ * invite. Upgrade the server and all clients together; there is no fallback.
  */
-export const PROTO = 7;
+export const PROTO = 1;
 
 /** How long a request may go unanswered before the connection is considered dead. */
 export const REQUEST_TIMEOUT_MS = 60_000;
@@ -67,17 +70,17 @@ export const MAX_NAME_BYTES = 64;
 export const MAX_FETCH_NAMES = 65536;
 
 /**
- * The ciphertext budget of one entry, as the server accounts it: its declared
- * size plus 256 bytes for each chunk it names, which covers the sealing
- * overhead and a little more. The server bounds a `putmany` by the sum of
- * these and a `fetch` by the summed stored sizes, which this is never smaller
- * than. One function, so the client and the server add the same thing up.
+ * The budget of one entry, as the server accounts it: its declared size, which
+ * is the sum of its chunks' raw lengths (plan/protocol.md, "Limits"). The
+ * server bounds a `putmany` by the sum of these and a `fetch` by the summed
+ * raw sizes of the bodies it serves. One function, so the client and the
+ * server add the same thing up.
  */
-export function entryBudget(size: number, chunkCount: number): number {
-  return size + 256 * chunkCount;
+export function entryBudget(size: number): number {
+  return size;
 }
 
-/** An entry as it arrives from the server. Paths and chunk names are sealed. */
+/** A deletion as the server lists it: an entry, and whether anything restores it. */
 export interface WireDeletion extends WireEntry {
   /**
    * The newest version with content, or 0 when purge has taken them all.
@@ -93,25 +96,15 @@ export interface WireDeletion extends WireEntry {
  * One version as the server hands it over.
  *
  * `uid`, `path` and `chunks` are the three the parsers check, because they are
- * the three a reader cannot do without. The rest carries no check here and
- * needs none: every field below except `uid`, `mac` and `device` is covered by
- * the entry's authenticator, so a server that alters one produces an entry no
- * device will accept. `uid` is the server's to assign, `mac` is what is being
- * checked, and `device` is a label shown to a person and acted on by nothing.
+ * the three a reader cannot do without. The engine then holds every entry to
+ * `checkEntryShape`, which is the server's own list of rules, because a server
+ * is not obliged to be honest and nothing else checks what it says. Devices
+ * trust the server's word about who wrote an entry: protocol 1 carries no
+ * writer authenticity (PLAN.md section 3.6).
  */
 export interface WireEntry {
   readonly uid: number;
   readonly path: string;
-  /** The writer's authenticator over this entry. Anything that does not verify is refused. */
-  readonly mac: string;
-  /**
-   * The version this entry was written on top of, as `parentOf` names it.
-   *
-   * Optional for the same reason `restorable` is: nothing validates it, and a
-   * missing one is read as "" by everything that uses it, which is what an
-   * entry with no parent carries anyway.
-   */
-  readonly parent?: string;
   readonly size: number;
   readonly ctime: number;
   readonly mtime: number;
@@ -136,6 +129,15 @@ export interface ServerLimits {
   readonly minProto: number;
   /** The server's release, for an error that names both ends. */
   readonly serverVersion: string;
+  /**
+   * The store's epoch, an opaque string (PLAN.md section 2.8).
+   *
+   * Minted when the store was made and new in every backup of it, so a
+   * different one means the server's history was restored or replaced and the
+   * uid sequence a cursor points into may have been reissued. A device keeps
+   * it beside its cursor and sends it back at the next hello.
+   */
+  readonly epoch: string;
   /** The newest uid the server holds. */
   readonly cursor: number;
   readonly perFileMax: number;
@@ -145,50 +147,40 @@ export interface ServerLimits {
   readonly maxBatchBytes: number;
   /** The most body bytes one `fetch` may ask for, as summed entry budget. */
   readonly maxFetchBytes: number;
-  /**
-   * The vault's data key, wrapped under a key derived from the root secret.
-   *
-   * Every vault has one, so this is not optional: see `readReady` for what an
-   * absent one would mean. docs/protocol.md, "The data key".
-   *
-   * A device does not use it. It was handed the data key itself
-   * when it was registered, by the session holding the root that could unwrap
-   * this, and it has held it ever since. What the field is still good for is
-   * the check in `readReady`: a vault with a hash and no data key is one an
-   * older build wrote, and nothing here can read it.
-   */
-  readonly wrapped: string;
-}
-
-/**
- * What the server advertises in reply to a hello that offered the vault's own
- * credential rather than a device's.
- *
- * Four fields, and deliberately not `ServerLimits`. A registrar may register a
- * device and rotate the vault's secret; it gets no cursor, no ceilings and no
- * catch-up, because it may not put anything and nothing will be sent to it.
- * Giving it the same type would be a promise of a backlog nobody would send.
- */
-export interface RegistrarLimits {
-  readonly proto: number;
-  readonly minProto: number;
-  readonly serverVersion: string;
-  /** The most devices this vault may have registered at once. */
-  readonly maxDevices: number;
 }
 
 /**
  * One outstanding invite, as the server hands it over.
  *
- * The identifier and the expiry, and deliberately nothing else. Redeeming an
- * invite also takes the invite key, which never reached the server and lives
- * only in the string somebody is holding, so a reader of this list cannot
- * redeem one. What the identifier is for is saying which invite to cancel.
+ * Its id, its label and its expiry, and deliberately nothing else. The id is a
+ * non-secret handle minted beside the invite's token and not derived from it,
+ * so a reader of this list cannot redeem anything; what the id is for is
+ * saying which invite to cancel (plan/protocol.md, "Devices and invites").
  */
 export interface InviteRow {
-  readonly id: string;
-  /** When it stops working, in server milliseconds. */
-  readonly expiresAt: number;
+  /** The invite's id, which `uninvite` takes. Never the token. */
+  readonly invite: string;
+  /** A name for it a person reads, or "" when it was given none. */
+  readonly label: string;
+  /** When it stops working, in server milliseconds, or null for an invite that never expires. */
+  readonly expiresAt: number | null;
+}
+
+/**
+ * A freshly minted invite, as the device that asked for it is told.
+ *
+ * `token` is the whole credential: the one field anywhere in the protocol that
+ * can redeem an invite, sent once, to this device. It is formatted into a
+ * `trew1i_` string with this device's own server address and vault
+ * (`formatInviteString`), and nothing here keeps it.
+ */
+export interface MintedInvite {
+  /** The non-secret id the device list shows and `uninvite` takes. */
+  readonly invite: string;
+  /** The 16-byte redemption token, unpadded base64url. */
+  readonly token: string;
+  /** When it stops working, in server milliseconds, or null for never. */
+  readonly expiresAt: number | null;
 }
 
 /** One device's row in the vault's list, as the server hands it over. */
@@ -221,10 +213,9 @@ export interface BatchEntry {
   readonly path: string;
   readonly meta: PutMeta;
   readonly names: readonly string[];
-  readonly mac: string;
-  readonly parent: string;
   /** Expected current UID; zero (the default) asserts there is no live entry. */
   readonly base?: number;
+  /** A rename's expected source UID. Sent only with `meta.prev`. */
   readonly prevBase?: number;
 }
 
@@ -254,29 +245,43 @@ function wireMeta(meta: PutMeta): Record<string, unknown> {
   };
 }
 
+/**
+ * The conditional-write fields of one write, as the wire carries them.
+ *
+ * `base` always, zero meaning no live entry. `prevBase` only on a rename,
+ * which is the only write that has a source (plan/protocol.md, "Writing").
+ */
+function conditions(meta: PutMeta, base?: number, prevBase?: number): Record<string, unknown> {
+  return { base: base ?? 0, ...(meta.prev ? { prevBase: prevBase ?? 0 } : {}) };
+}
+
 /** One entry as it travels inside a `putmany`. */
 function wireEntry(e: BatchEntry): Record<string, unknown> {
   return {
     path: e.path,
     meta: wireMeta(e.meta),
     chunks: [...e.names],
-    mac: e.mac,
-    parent: e.parent,
-    base: e.base ?? 0,
-    prevBase: e.prevBase ?? 0,
+    ...conditions(e.meta, e.base, e.prevBase),
   };
+}
+
+const utf8 = new TextEncoder();
+
+/** How many bytes of UTF-8 a text frame holding `text` is. */
+function frameBytes(text: string): number {
+  return utf8.encode(text).length;
 }
 
 /**
  * How many bytes one entry adds to an encoded `putmany` frame.
  *
  * Measured by encoding it, because an estimate is the kind of thing that is
- * right until a path is long. Every field is ASCII on the wire (sealed paths
- * are base64url, chunk names hex), so the string length is the byte length.
+ * right until a path is long. Bytes of UTF-8, not characters: paths travel in
+ * plaintext, and a note called in Greek is twice as many bytes as characters.
  * The one byte is the comma between entries.
  */
 export function encodedEntryBytes(e: BatchEntry): number {
-  return JSON.stringify(wireEntry(e)).length + 1;
+  return frameBytes(JSON.stringify(wireEntry(e))) + 1;
 }
 
 /**
@@ -305,10 +310,6 @@ const ENDS_SESSION = new Set([
   "protostate",
   "nospace",
   "internal",
-  // A rotate refused because another device rotated first. The credential this
-  // session is holding is not the vault's any more, so there is nothing else
-  // it could usefully do.
-  "rotated",
 ]);
 
 /**
@@ -391,7 +392,7 @@ function errorFrom(frame: Reply): ProtocolError {
 /**
  * The one thing a failed `wss://` connection is most often missing.
  *
- * A bare host in a pairing string becomes `wss://`, which is right for the
+ * A bare host a person types becomes `wss://`, which is right for the
  * tunnel or the tailnet this is meant to be reached through: a server with TLS
  * in front of it. A server without TLS in front of it answers nothing at all,
  * and the failure looks exactly like a wrong address or a machine that is off.
@@ -485,6 +486,16 @@ interface Pending {
   timer: ReturnType<typeof setTimeout> | undefined;
   /** Whether the clock is running. A put's is stopped while its bodies go out. */
   armed: boolean;
+  /**
+   * Run on the reply the moment it arrives, before anything after it is read.
+   *
+   * For the one reply whose content decides how the frames behind it are
+   * read: `ready`, whose epoch says whether the batches that follow continue
+   * this device's cursor or start the vault again from uid 1. The caller of
+   * `hello` learns of the reply a few turns later, and a batch can be queued
+   * in between.
+   */
+  onArrival?: (frame: Reply) => void;
 }
 
 /**
@@ -521,6 +532,13 @@ const MAX_UNAGREED_FETCH_BYTES = 1 << 20;
  */
 export const LOCAL_MAX_BATCH_BYTES = 16 << 20;
 export const LOCAL_MAX_FETCH_BYTES = 64 << 20;
+/**
+ * The largest raw chunk this device will take from a body frame, whatever the
+ * server advertises: the protocol's `chunkMax` (plan/protocol.md, "Limits").
+ * A frame is refused before anything is inflated when it is longer than this
+ * plus its marker, and inflating stops the moment it passes this.
+ */
+export const LOCAL_MAX_CHUNK_BYTES = 1 << 20;
 
 export class Transport {
   private socket: SocketLike | undefined;
@@ -586,6 +604,16 @@ export class Transport {
   private notifying: Promise<void> = Promise.resolve();
   /** What the server said at hello, for the bounds this side keeps to. */
   private limits: ServerLimits | undefined;
+  /**
+   * Whether the `ready` this session began with carried an epoch other than
+   * the one the hello's cursor was read under.
+   *
+   * The server then ignores the cursor and replays the whole vault from uid 1
+   * (plan/protocol.md, "Device session"), so this transport's own cursor starts
+   * again from zero, and whoever applies the batches has to read them as a
+   * fresh listing rather than as versions it has seen.
+   */
+  private replaced = false;
 
   /**
    * The largest text frame this device will parse (R13).
@@ -619,6 +647,17 @@ export class Transport {
   /** What the server advertised at hello, or undefined before it. */
   get serverLimits(): ServerLimits | undefined {
     return this.limits;
+  }
+
+  /**
+   * Whether the server's history is not the one this device's cursor was read
+   * from, as the `ready` of this session said.
+   *
+   * Set the moment that `ready` arrives, before any batch behind it is read,
+   * so a reader of the batches can ask it first.
+   */
+  get historyReplaced(): boolean {
+    return this.replaced;
   }
 
   /**
@@ -825,7 +864,11 @@ export class Transport {
     // been sent either, so the fallback is only ever reached by a peer sending
     // bodies nobody asked for; the branch above has already refused that.
     const ceiling = this.limits?.maxFetchBytes ?? MAX_UNAGREED_FETCH_BYTES;
-    if (fetch.bytes > ceiling) {
+    // The budget is on raw bytes, and a frame carries one marker byte over its
+    // chunk when it is sent raw, so a fetch at exactly the ceiling arrives as
+    // the ceiling plus one byte per body. Refusing that would end a session
+    // over a fetch the server was entitled to answer.
+    if (fetch.bytes > ceiling + fetch.want) {
       this.die(
         new ProtocolError(
           "toolarge",
@@ -899,6 +942,12 @@ export class Transport {
       }
       this.pending.delete(id);
       this.disarm(waiting);
+      try {
+        waiting.onArrival?.(frame);
+      } catch {
+        // Only ever a reading of the reply, which its caller reads again and
+        // refuses properly; a hook that throws must not strand the waiter.
+      }
       waiting.resolve(frame);
       return;
     }
@@ -918,8 +967,8 @@ export class Transport {
     if (frame["res"] === "err") {
       // An error nobody asked for is the server saying why it is about to
       // hang up, and the protocol says so: on shutdown every idle session is
-      // sent `busy` and then closed, and a rotation sends every other
-      // device `auth`. Read as a stray reply this was a protocol violation,
+      // sent `busy` and then closed, and a revoke sends the revoked
+      // device's sessions `auth`. Read as a stray reply this was a protocol violation,
       // so a server restarting put every plugin into "stopped" when what it
       // meant was "not now". Whether a loop retries is the error's
       // own `retryable`, which the server set.
@@ -1115,7 +1164,12 @@ export class Transport {
    * (`drained`), so the clock on the reply starts once every body is with the
    * socket, from `awaitReply`.
    */
-  private begin(value: Record<string, unknown>, what: string, clock = true): Promise<Reply> {
+  private begin(
+    value: Record<string, unknown>,
+    what: string,
+    clock = true,
+    onArrival?: (frame: Reply) => void,
+  ): Promise<Reply> {
     const id = this.takeId();
     const text = JSON.stringify({ ...value, id });
     this.requestsSent++;
@@ -1124,7 +1178,14 @@ export class Transport {
         reject(this.closeReason ?? new ConnectionError("not connected"));
         return;
       }
-      const p: Pending = { what, resolve, reject, timer: undefined, armed: false };
+      const p: Pending = {
+        what,
+        resolve,
+        reject,
+        timer: undefined,
+        armed: false,
+        ...(onArrival ? { onArrival } : {}),
+      };
       this.pending.set(id, p);
       if (clock) this.arm(p);
       try {
@@ -1160,8 +1221,12 @@ export class Transport {
   }
 
   /** One round trip: send, wait, and refuse a refusal. */
-  private async request(value: Record<string, unknown>, what: string): Promise<Reply> {
-    return this.awaitReply(this.begin(value, what));
+  private async request(
+    value: Record<string, unknown>,
+    what: string,
+    onArrival?: (frame: Reply) => void,
+  ): Promise<Reply> {
+    return this.awaitReply(this.begin(value, what, true, onArrival));
   }
 
   /* ------------------------------------------------------------ *
@@ -1174,33 +1239,58 @@ export class Transport {
    * The cursor sent is what this device has applied. The reply's cursor is what
    * the *server* holds, so the difference says how far behind this device is
    * without anything having remembered a verdict from last time.
+   *
+   * `epoch` is the store epoch that cursor was read under, as an earlier
+   * `ready` said, and absent on a first connect. A `ready` carrying another
+   * one means the server's history was replaced: it replays the vault from
+   * uid 1, and this transport's cursor starts from zero to read it
+   * (`historyReplaced`).
    */
   async hello(args: {
     vault: string;
     /** This device's row in the vault's device list. */
     deviceId: string;
-    /** This device's own auth key, derived from its own secret. */
+    /** This device's own 32-byte token, unpadded base64url. */
     token: string;
     device: string;
     cursor: number;
+    epoch?: string | undefined;
   }): Promise<ServerLimits> {
     checkName("vault", args.vault);
     checkName("device", args.device);
     this.cursor = args.cursor;
+    this.replaced = false;
     let reply: Reply;
     try {
       reply = await this.request(
         {
           op: "hello",
           proto: PROTO,
-          crypto: CRYPTO_SUITE,
           vault: args.vault,
           deviceId: args.deviceId,
           token: args.token,
           device: args.device,
           cursor: args.cursor,
+          ...(args.epoch !== undefined ? { epoch: args.epoch } : {}),
         },
         "ready",
+        (frame) => {
+          // Decided as the frame lands, because the batches behind it are
+          // read against this transport's cursor, and one of them can be
+          // queued before the caller of `hello` hears back. A cursor that
+          // belongs to another history would refuse the replay's first batch,
+          // from 1, as a gap.
+          const epoch = frame["epoch"];
+          if (
+            frame["res"] === "ready" &&
+            args.epoch !== undefined &&
+            typeof epoch === "string" &&
+            epoch !== args.epoch
+          ) {
+            this.cursor = 0;
+            this.replaced = true;
+          }
+        },
       );
     } catch (err) {
       throw protoRefusal(err);
@@ -1209,105 +1299,37 @@ export class Transport {
   }
 
   /**
-   * Opens a registrar session: a hello offering the vault's own credential,
-   * with no `deviceId`.
+   * Redeems a single-use invite, which is how this device joins a vault.
    *
-   * What comes back may register a device and rotate the vault's secret, and
-   * may do nothing else. It is given no `ready`, no cursor and no place in the
-   * vault's fan-out, so there is deliberately no `ServerLimits` here: a caller
-   * that was handed ceilings and a cursor would be holding the promise of a
-   * catch-up nobody is going to send.
+   * The hello carries the invite token in place of a credential and, beside
+   * it, the device row it is asking for: an id of its own and the 32-byte token
+   * it will connect with (plan/protocol.md, "Invite redemption"). Both halves
+   * are one server transaction, so a redemption is either an invite spent and
+   * a row written or neither, and a refusal writes nothing: it never spends the
+   * invite.
    *
-   * `claim` binds an unclaimed vault to this key and data key. It is sent only
-   * while this device still holds the server's first-run token, and the same
-   * pair every time, so a claim retried after a lost reply offers the key it
-   * offered before rather than a second candidate.
-   */
-  async helloAsRegistrar(args: {
-    vault: string;
-    token: string;
-    device: string;
-    claim?: { auth: string; wrapped: string };
-  }): Promise<RegistrarLimits> {
-    checkName("vault", args.vault);
-    checkName("device", args.device);
-    let reply: Reply;
-    try {
-      reply = await this.request(
-        {
-          op: "hello",
-          proto: PROTO,
-          crypto: CRYPTO_SUITE,
-          vault: args.vault,
-          token: args.token,
-          device: args.device,
-          cursor: 0,
-          ...(args.claim !== undefined
-            ? { claim: args.claim.auth, wrapped: args.claim.wrapped }
-            : {}),
-        },
-        "registrar",
-      );
-    } catch (err) {
-      throw protoRefusal(err);
-    }
-    if (reply["res"] !== "registrar") {
-      throw new ProtocolError("protostate", `expected registrar, got ${JSON.stringify(reply)}`);
-    }
-    const version = reply["serverVersion"];
-    const limits: RegistrarLimits = {
-      proto: this.count(reply, "proto", "registrar"),
-      minProto: this.count(reply, "minProto", "registrar"),
-      serverVersion: typeof version === "string" ? version : "unknown",
-      maxDevices: this.count(reply, "maxDevices", "registrar"),
-    };
-    if (limits.proto !== PROTO) {
-      const err = new ProtocolError(
-        "proto",
-        `server (version ${limits.serverVersion}) answered in protocol ${limits.proto}, ` +
-          `this client speaks ${PROTO}; upgrade the server first`,
-      );
-      this.die(err);
-      throw err;
-    }
-    this.log("registrar", limits);
-    return limits;
-  }
-
-  /**
-   * Redeems a single-use invite, which is how this device is registered.
+   * The server closes the session after `redeemed`: this connection proved
+   * that somebody held an invite, not that anybody holds the token just
+   * registered. The caller keeps the credential and connects again as a
+   * device, and that hello is the proof.
    *
-   * The hello carries the invite in place of a credential and, beside it, the
-   * device row it is asking for: an id of its own and the auth key it will
-   * connect with. Both halves are one server transaction, so a redemption is
-   * either an invite spent and a row written or neither of the two, and a
-   * refusal leaves the string in somebody's hand still working.
-   *
-   * It has to be one exchange. Under protocol 4 the device that issued the
-   * invite holds no root, so it cannot register a row for the newcomer, and
-   * the newcomer holds nothing the server would accept a registration under.
-   * The invite is the only authority either of them has, and it is a good one:
-   * unguessable, single use and expiring.
-   *
-   * What comes back is the vault's data key sealed under the invite key, which
-   * never reached the server, and the id of the row that was written. The
-   * server closes the session after it: this connection has proved that
-   * somebody held an invite and not that anybody holds the key just
-   * registered. The caller writes both down and connects again as a device,
-   * and that hello is the proof. docs/protocol.md, "Adding a device with a
-   * single-use invite".
+   * A retry with the same id and token after a lost reply is answered
+   * `redeemed` again, even after the invite has expired, because the
+   * redemption it repeats did not. That is why the caller persists both before
+   * this is sent and keeps them until an answer arrives (`pairWithInvite` in
+   * client.ts).
    */
   async redeem(args: {
     vault: string;
+    /** The label the new row takes. */
     device: string;
+    /** The 16-byte invite token, unpadded base64url. */
     invite: string;
     /** The row this device is asking the invite to register. */
     deviceId: string;
-    /** The auth key that row will be recognised by, derived from a fresh device secret. */
-    auth: string;
-    /** The label for the row. Defaults, at the server, to `device`. */
-    name?: string;
-  }): Promise<{ sealed: string; deviceId: string }> {
+    /** The token that row will be recognised by. */
+    token: string;
+  }): Promise<{ deviceId: string }> {
     checkName("vault", args.vault);
     checkName("device", args.device);
     let reply: Reply;
@@ -1316,14 +1338,11 @@ export class Transport {
         {
           op: "hello",
           proto: PROTO,
-          crypto: CRYPTO_SUITE,
           vault: args.vault,
           device: args.device,
-          cursor: 0,
           invite: args.invite,
           deviceId: args.deviceId,
-          auth: args.auth,
-          ...(args.name !== undefined ? { name: args.name } : {}),
+          token: args.token,
         },
         "redeemed",
       );
@@ -1333,20 +1352,16 @@ export class Transport {
     if (reply["res"] !== "redeemed") {
       throw new ProtocolError("protostate", `expected redeemed, got ${JSON.stringify(reply)}`);
     }
-    const sealed = reply["sealed"];
-    if (typeof sealed !== "string" || sealed === "") {
-      throw this.malformed("redeemed with no sealed data key");
-    }
     if (reply["deviceId"] !== args.deviceId) {
       // The reply names the row that was written. A different id means this
-      // device is about to store a credential for a row that is not its own,
+      // device is about to keep a credential for a row that is not its own,
       // and it would be refused at every hello from then on with nothing to
-      // say why. The same check `register` makes, for the same reason.
+      // say why.
       throw this.malformed(
         `a redeemed naming device ${JSON.stringify(reply["deviceId"])}, which is not the ${JSON.stringify(args.deviceId)} that was redeemed for`,
       );
     }
-    return { sealed, deviceId: args.deviceId };
+    return { deviceId: args.deviceId };
   }
 
   private readReady(reply: Reply): ServerLimits {
@@ -1354,26 +1369,23 @@ export class Transport {
       throw new ProtocolError("protostate", `expected ready, got ${JSON.stringify(reply)}`);
     }
     const version = reply["serverVersion"];
-    const wrapped = reply["wrapped"];
-    if (typeof wrapped !== "string" || wrapped === "") {
-      // Every vault has a data key, so an absent one is not a second
-      // kind of vault to accommodate: it is a server saying "derive your
-      // content keys some other way", and the only other way was the
-      // root-derived schedule. A device that took the hint would seal its
-      // notes under keys no other device on the vault derives, and both ends
-      // would report success while the vault quietly split in two. Refused
-      // here, before a single path is sealed, and the session ends.
-      throw this.malformed(
-        "a ready with no wrapped data key, which no vault has; this device will not seal anything under a key the rest of the vault cannot derive",
-      );
+    const epoch = reply["epoch"];
+    if (typeof epoch !== "string" || epoch === "") {
+      // Without it a device cannot tell a restored server from the one it
+      // left, and a cursor into a reissued uid sequence silently skips the
+      // versions that replaced the ones it saw (PLAN.md section 2.8).
+      throw this.malformed("a ready with no epoch, so which history it serves cannot be told");
     }
     const limits: ServerLimits = {
       proto: this.count(reply, "proto", "ready"),
       minProto: this.count(reply, "minProto", "ready"),
       serverVersion: typeof version === "string" ? version : "unknown",
+      epoch,
       cursor: this.count(reply, "cursor", "ready"),
       perFileMax: this.count(reply, "perFileMax", "ready"),
-      chunkMax: this.count(reply, "chunkMax", "ready"),
+      // Capped by what this device is willing to decode, like the two
+      // budgets below: a frame is bounded by it before anything is inflated.
+      chunkMax: Math.min(this.count(reply, "chunkMax", "ready"), LOCAL_MAX_CHUNK_BYTES),
       maxChunks: this.count(reply, "maxChunks", "ready"),
       // Capped by what this device is willing to hold, not only by what the
       // server says it will send (R26).
@@ -1387,7 +1399,6 @@ export class Transport {
       // will accept.
       maxBatchBytes: Math.min(this.count(reply, "maxBatchBytes", "ready"), LOCAL_MAX_BATCH_BYTES),
       maxFetchBytes: Math.min(this.count(reply, "maxFetchBytes", "ready"), LOCAL_MAX_FETCH_BYTES),
-      wrapped,
     };
     if (limits.proto !== PROTO) {
       // A server answers in the version the client asked for, so a ready in
@@ -1418,29 +1429,28 @@ export class Transport {
     meta: PutMeta,
     names: readonly string[],
     /**
-     * The sealed bytes of one chunk, asked for only if the server wants it.
+     * The raw bytes of one chunk, asked for only if the server wants it.
      *
      * A callback rather than the bodies themselves, because a put used to
-     * take every sealed chunk of a file at once and a 256 MiB attachment,
-     * which is the size the server advertises it will take, meant 512 MiB
-     * live: the file and a sealed copy of it. Measured, not guessed. On a
-     * phone that is not a spike, it is the end of the process.
+     * take every chunk of a file at once and a 256 MiB attachment, which is
+     * the size the server advertises it will take, meant twice that live.
+     * Measured, not guessed. On a phone that is not a spike, it is the end of
+     * the process.
      *
-     * The caller decides what that costs it. A small file keeps its bodies
-     * and this is a map lookup; a large one keeps offsets and seals the
-     * chunk again, which is deterministic and so gives the same bytes.
+     * The caller decides what that costs it. A file held in memory hands out
+     * views into it; a streamed one keeps offsets and reads the chunk back
+     * off the disk. Each body is framed here, as it goes.
      */
     bodyOf: (name: string) => Promise<Uint8Array>,
     /**
-     * The authenticator and parent this entry travels with.
+     * The versions this write was prepared against: `base` for the target,
+     * zero for no live entry, and `prevBase` for a rename's source.
      *
-     * Required, with no default. It had one, an empty mac and an empty
-     * parent, so that transport tests need not build a real entry; what a
-     * default also does is let a caller that forgot send an unsigned put,
-     * which every device on the vault would then refuse to act on and
-     * nothing here would have said so.
+     * Required, with no default. A default of zero would let a caller that
+     * forgot send an unconditional write, which overwrites a peer's newer
+     * version where it should have been refused as `stale`.
      */
-    auth: { mac: string; parent: string; base?: number; prevBase?: number },
+    cond: { base?: number; prevBase?: number },
     onBytes?: (bytes: number) => void,
     /** Work on a separate connection while this upload yields between bodies. */
     interleave?: () => Promise<void>,
@@ -1452,10 +1462,7 @@ export class Transport {
         path,
         meta: wireMeta(meta),
         chunks: [...names],
-        mac: auth.mac,
-        parent: auth.parent,
-        base: auth.base ?? 0,
-        prevBase: auth.prevBase ?? 0,
+        ...conditions(meta, cond.base, cond.prevBase),
       },
       "want or have",
     );
@@ -1525,7 +1532,8 @@ export class Transport {
       // and the engine would write every note in the batch off for good,
       // when what happened is that the caller did not split. Raised as a
       // fault of this program, it is retried like a dropped connection.
-      const encoded = JSON.stringify(frame).length + 24;
+      // Bytes of UTF-8, because that is what the server measures.
+      const encoded = frameBytes(JSON.stringify(frame)) + 24;
       if (encoded > cap) {
         throw new Error(
           `a putmany of ${entries.length} entries encodes to ${encoded} bytes, over the server's ${cap}; it should have been split`,
@@ -1590,17 +1598,16 @@ export class Transport {
   }
 
   /**
-   * The server queues earlier commits before this write's ack, but their
-   * authentication and path decryption run asynchronously. Let that work
-   * finish before the engine checks whether its upload was built on a stale
-   * version. Otherwise both writers can mark divergent edits synced and
-   * silently replace them on the next pass.
+   * The server queues earlier commits before this write's ack, but applying
+   * them to the engine runs asynchronously. Let that work finish before the
+   * engine checks whether its upload was built on a stale version. Otherwise
+   * both writers can mark divergent edits synced and silently replace them on
+   * the next pass.
    *
    * Also used before an arrival-triggered pass, so a burst of metadata is
    * checked together before scanning the vault. Wait only for notifications
    * already queued; no round trip or timer, and later arrivals cannot extend it.
-   * Handshake and intermediate `want` replies must remain independent:
-   * verification can itself be waiting for the handshake's keys.
+   * Handshake and intermediate `want` replies must remain independent of it.
    */
   async drainReceived(): Promise<void> {
     await this.notifying;
@@ -1613,6 +1620,11 @@ export class Transport {
    * Every name is checked against what was offered before anything goes out,
    * because sending a body the put never named is caught by the server as a
    * protocol failure and ends the session.
+   *
+   * Each body is framed here and nowhere else (plan/protocol.md, "Chunk
+   * bodies"): deflated when that is shorter, raw otherwise, so nothing above
+   * this line ever sees a marker byte. The byte count is what went on the
+   * wire.
    */
   private async sendBodies(
     wanted: readonly string[],
@@ -1667,8 +1679,9 @@ export class Transport {
         throw err;
       }
       await interleave?.();
-      this.send(body);
-      bytes += body.length;
+      const frame = encodeFrame(body);
+      this.send(frame);
+      bytes += frame.length;
       await this.drained(interleave ? 256 * 1024 : UPLOAD_HIGH_WATER, progress, interleave);
     }
     // Every body is with the socket before the clock on the ack starts. The
@@ -1681,7 +1694,7 @@ export class Transport {
   /**
    * Waits until the socket has handed its queued bytes on, down to `below`.
    *
-   * Bodies used to be pushed into the socket as fast as they could be sealed,
+   * Bodies used to be pushed into the socket as fast as they could be made,
    * and the timer for the ack was armed for the whole drain. A file larger
    * than the link could carry inside one timeout could therefore never be
    * sent: the ack was always late, the connection was closed, and the client
@@ -1776,28 +1789,18 @@ export class Transport {
   }
 
   /**
-   * Every version of one path, newest first.
-   *
-   * The path goes up sealed and comes back sealed. The server has never been
-   * able to read one and this does not change that: recovery is a client
-   * asking a blind store what it is holding.
-   *
-   * An empty list means the server has no versions of that path. It cannot
-   * tell "never existed" from "history purged", so neither can this.
-   */
-  /**
    * Offers bodies for chunks the server has lost, and writes no entry (I14).
    *
    * A put with no version attached. The server answers `want` with whatever it
    * is actually missing, takes those bodies, and reports what it stored and
-   * what it still lacks; no uid is allocated and no authenticator is touched,
-   * so a vault repaired this way is the vault it should have been rather than
-   * one with a synthetic edit in its history.
+   * what it still lacks; no uid is allocated, so a vault repaired this way is
+   * the vault it should have been rather than one with a synthetic edit in its
+   * history. The bodies go up as frames, like a put's (plan/protocol.md,
+   * "`resend` is an upload path").
    *
    * `bodyOf` is asked for a chunk only if the server wants it, exactly as in
-   * `put` and for the same reason: producing every sealed body up front to
-   * discover the server needed none of them is the whole file in memory for
-   * nothing.
+   * `put` and for the same reason: producing every body up front to discover
+   * the server needed none of them is the whole file in memory for nothing.
    */
   async resend(
     names: readonly string[],
@@ -1830,14 +1833,20 @@ export class Transport {
     return { stored: countOf(final, "stored"), missing: countOf(final, "missing"), bytes };
   }
 
+  /**
+   * Every version of one path, newest first.
+   *
+   * An empty list means the server has no versions of that path. It cannot
+   * tell "never existed" from "history purged", so neither can this.
+   */
   async history(
-    sealedPath: string,
+    path: string,
     opts: { before?: number; limit?: number } = {},
   ): Promise<WireEntry[]> {
     const reply = await this.request(
       {
         op: "history",
-        path: sealedPath,
+        path,
         ...(opts.before !== undefined ? { before: opts.before } : {}),
         ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
       },
@@ -1890,9 +1899,11 @@ export class Transport {
    * bodies from a refused fetch can no longer be taken as the answer to the
    * next one.
    *
-   * Every body is checked against the name it was asked for, here rather than
-   * in the caller. Bodies arrive as bare binary frames with nothing but their
-   * order tying them to a name, and the name is a hash of exactly these bytes,
+   * Every body is decoded from its frame and checked against the name it was
+   * asked for, here rather than in the caller, so what comes back is verified
+   * raw chunks and nothing above sees a marker byte (plan/protocol.md, "Chunk
+   * bodies"). Bodies arrive as bare binary frames with nothing but their order
+   * tying them to a name, and the name is a hash of exactly the decoded bytes,
    * so the check is exact and costs one digest.
    *
    * The caller keeps within `maxFetchBytes` and `MAX_FETCH_NAMES`; this
@@ -1938,9 +1949,15 @@ export class Transport {
       armed: false,
     };
     const got: Uint8Array[] = [];
+    const raws: Uint8Array[] = [];
     let received = 0;
+    let decoded = 0;
     notifyTransfer(onBytes, 0);
     this.collecting = { pending: collector, want: names.length, got, bytes: 0 };
+    // Decoded against the server's own chunk ceiling, which is the most a
+    // chunk may inflate to: bounded as it inflates, not after (R13).
+    const maxRaw = this.limits?.chunkMax ?? LOCAL_MAX_CHUNK_BYTES;
+    const maxFetch = this.limits?.maxFetchBytes ?? MAX_UNAGREED_FETCH_BYTES;
     const checks: Promise<void>[] = [];
 
     // The first failing hash, made observable the moment it fails (F18).
@@ -1979,9 +1996,40 @@ export class Transport {
       for (let i = 0; i < count; i++) {
         // Whichever comes first: the next body, or a body already received
         // turning out to be the wrong bytes.
-        const next = await Promise.race([this.body(i), aborted]);
-        received += next.length;
+        const frame = await Promise.race([this.body(i), aborted]);
+        received += frame.length;
         notifyTransfer(onBytes, received);
+        let next: Uint8Array;
+        try {
+          next = decodeFrame(frame, maxRaw);
+        } catch (err) {
+          if (!(err instanceof FrameError)) throw err;
+          // A body that is not a chunk at all leaves the two ends disagreeing
+          // about what was sent, and the rest of the stream cannot be matched
+          // to names, so the session ends here, as it does on a bad hash.
+          const bad = new ProtocolError(
+            err.kind === "toolarge" ? "toolarge" : "badchunk",
+            `asked for ${names[i]!} and received a body that does not decode: ${err.message}`,
+          );
+          this.die(bad);
+          throw bad;
+        }
+        // The frame is done with once it is decoded. Kept, it would double
+        // what a large fetch holds for no reason.
+        got[i] = EMPTY;
+        // And the decoded total against the same budget the frames were held
+        // to, since a small deflate stream is not a small chunk.
+        decoded += next.length;
+        if (decoded > maxFetch) {
+          const over = new ProtocolError(
+            "toolarge",
+            `server sent bodies decoding to ${decoded} bytes for a fetch it said would hold at ` +
+              `most ${maxFetch}`,
+          );
+          this.die(over);
+          throw over;
+        }
+        raws.push(next);
         // Between bodies, not between fetches. A fetch of one 64 MiB
         // attachment is a single request, so a yield that only happened
         // between requests never happened at all, and a note saved during
@@ -2026,7 +2074,7 @@ export class Transport {
       this.disarm(collector);
       this.collecting = undefined;
     }
-    return got;
+    return raws;
   }
 
   /** Waits for the i-th body of the fetch in progress. */
@@ -2043,95 +2091,53 @@ export class Transport {
   }
 
   /**
-   * Registers a device row and returns the vault's wrapped data key.
+   * Mints a single-use invite for another device (plan/protocol.md, "Devices
+   * and invites").
    *
-   * A registrar's operation, because it is the vault's credential that
-   * authorises it: a device holds no root and so may not add a device.
-   *
-   * `auth` is the new device's auth key rather than its digest, for the same
-   * reason a claim is the key: the server stores only the digest either way,
-   * so the key reveals nothing the digest would have hidden, and what it buys
-   * is that a credential short enough to guess can be refused.
-   *
-   * **Registering the same id with the same key again succeeds**, and is the
-   * registration having happened: the row committed, the reply was lost, and
-   * a caller told `badentry` there would retry for ever. A *different* key
-   * under an id the vault already holds is somebody else's device and is
-   * refused.
-   * docs/protocol.md, "The device list".
+   * The server makes the token and answers with it once, with the invite's id
+   * and when it stops working. `ttlMs` of zero or absent is the server's
+   * default of an hour, and anything above an hour is clamped to it; an invite
+   * that never expires is made only with `trew invite -ttl 0` on the server.
    */
-  async register(args: {
-    deviceId: string;
-    auth: string;
-    name?: string;
-  }): Promise<{ deviceId: string; wrapped: string }> {
-    const reply = await this.request(
-      {
-        op: "register",
-        deviceId: args.deviceId,
-        auth: args.auth,
-        ...(args.name !== undefined ? { name: args.name } : {}),
-      },
-      "registered",
-    );
-    if (reply["res"] !== "registered") {
-      throw new ProtocolError("protostate", `expected registered, got ${JSON.stringify(reply)}`);
-    }
-    const deviceId = reply["deviceId"];
-    const wrapped = reply["wrapped"];
-    if (deviceId !== args.deviceId) {
-      // The reply names the row that was written. A different id means the
-      // server registered something other than what was asked for, and this
-      // device is about to store a credential for a row that is not its own:
-      // it would drop the root and then be refused at every hello.
-      throw this.malformed(
-        `a registered naming device ${JSON.stringify(deviceId)}, which is not the ${JSON.stringify(args.deviceId)} that was registered`,
-      );
-    }
-    if (typeof wrapped !== "string" || wrapped === "") {
-      // Every claimed vault has a data key, and this is how the registering
-      // session hands it over. Without it there is nothing to unwrap and the
-      // device would have a row it could connect with and no way to read a
-      // note; see readReady for the other half of the same rule.
-      throw this.malformed("a registered with no wrapped data key, which no claimed vault has");
-    }
-    return { deviceId, wrapped };
-  }
-
-  /**
-   * Registers a single-use invite: an identifier, and the vault's data key
-   * sealed under a key the server never sees. Returns when it expires, in
-   * server milliseconds.
-   *
-   * A device's operation, and only a device's: the sealed blob is the data
-   * key, which is exactly what a paired device holds and a registrar does not.
-   * The server holds a blob it cannot open under a name it cannot guess, for a
-   * few minutes.
-   */
-  async invite(args: { invite: string; sealed: string; ttlMs?: number }): Promise<number> {
+  async invite(args: { ttlMs?: number; label?: string } = {}): Promise<MintedInvite> {
     const reply = await this.request(
       {
         op: "invite",
-        invite: args.invite,
-        sealed: args.sealed,
         ...(args.ttlMs !== undefined ? { ttlMs: args.ttlMs } : {}),
+        ...(args.label !== undefined && args.label !== "" ? { label: args.label } : {}),
       },
       "invited",
     );
     if (reply["res"] !== "invited") {
       throw new ProtocolError("protostate", `expected invited, got ${JSON.stringify(reply)}`);
     }
-    return this.count(reply, "expiresAt", "invited");
+    const invite = reply["invite"];
+    if (typeof invite !== "string" || invite === "") {
+      throw this.malformed("an invited with no invite id");
+    }
+    const token = reply["token"];
+    let raw: Uint8Array | undefined;
+    try {
+      raw = typeof token === "string" ? base64urlDecode(token) : undefined;
+    } catch {
+      raw = undefined;
+    }
+    if (typeof token !== "string" || raw?.length !== INVITE_TOKEN_WIRE_BYTES) {
+      // The token is what goes into the string somebody pastes. One this
+      // device cannot read back as sixteen bytes makes an invite that fails
+      // on the other device, far from here.
+      throw this.malformed(`an invited whose token is not ${INVITE_TOKEN_WIRE_BYTES} bytes`);
+    }
+    return { invite, token, expiresAt: this.expiry(reply["expiresAt"], "invited") };
   }
 
   /**
    * Cancels an outstanding invite, so the string somebody is holding stops
    * working before it expires.
    *
-   * Either credential may send it, the same as `revoke`: an invite is part of
-   * who may reach the vault rather than part of its content. An identifier
-   * that is unknown, expired or already redeemed is one refusal, `badentry`,
-   * saying which of the three to nobody.
+   * Takes the invite's id, the handle a listing shows, which cannot redeem
+   * anything. An id that is unknown, malformed, spent, cancelled or expired is
+   * one refusal, `badentry`, saying which to nobody.
    */
   async uninvite(invite: string): Promise<void> {
     const reply = await this.request({ op: "uninvite", invite }, "uninvited");
@@ -2146,17 +2152,13 @@ export class Transport {
   }
 
   /**
-   * Every device that may reach this vault, the cap on how many there may be,
-   * and every invite that could still add one.
+   * Every device that may reach this vault, and every invite that could still
+   * add one.
    *
    * The invites come with the devices because they are one answer: a row is
    * what has been added and an outstanding invite is what is about to be.
    */
-  async devices(): Promise<{
-    devices: DeviceRow[];
-    maxDevices: number;
-    invites: InviteRow[];
-  }> {
+  async devices(): Promise<{ devices: DeviceRow[]; invites: InviteRow[] }> {
     const reply = await this.request({ op: "devices" }, "devices");
     if (reply["res"] !== "devices") {
       throw new ProtocolError("protostate", `expected devices, got ${JSON.stringify(reply)}`);
@@ -2175,7 +2177,6 @@ export class Transport {
     }
     return {
       devices: list.map((raw, i) => this.deviceRow(raw, i)),
-      maxDevices: this.count(reply, "maxDevices", "devices"),
       invites: invites.map((raw, i) => this.inviteRow(raw, i)),
     };
   }
@@ -2191,18 +2192,32 @@ export class Transport {
   /** One invite, read as strictly as a device row and for the same reason. */
   private inviteRow(raw: unknown, i: number): InviteRow {
     const row = raw as Record<string, unknown>;
-    const id = row?.["id"];
-    if (typeof id !== "string" || id === "") {
+    const invite = row?.["invite"];
+    if (typeof invite !== "string" || invite === "") {
       throw this.malformed(`a devices reply whose invite ${i} has no id`);
     }
-    const expiresAt = row["expiresAt"];
-    if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= 0) {
-      // An expiry is what says whether the string is still live, so a missing
-      // one cannot become zero: that reads as "expired in 1970" and would have
-      // a person ignore an invite that still works.
-      throw this.malformed(`a devices reply whose invite ${i} has no expiry`);
+    const label = row["label"];
+    return {
+      invite,
+      label: typeof label === "string" ? label : "",
+      expiresAt: this.expiry(row["expiresAt"], `a devices reply's invite ${i}`),
+    };
+  }
+
+  /**
+   * An invite's expiry: server milliseconds, or null for one that never
+   * expires, and nothing else.
+   *
+   * A missing one cannot become zero: that reads as "expired in 1970" and
+   * would have a person ignore an invite that still works. Null is a real
+   * answer and is kept apart from absent for the same reason.
+   */
+  private expiry(v: unknown, of: string): number | null {
+    if (v === null) return null;
+    if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) {
+      throw this.malformed(`${of} with expiresAt = ${JSON.stringify(v)}, not a time or null`);
     }
-    return { id, expiresAt };
+    return v;
   }
 
   /** One row, read strictly: a list somebody acts on is not a place to guess. */
@@ -2243,25 +2258,15 @@ export class Transport {
    * Removes a device's row and closes every session it has open.
    *
    * The reply means both, in that order, and the ordering is the guarantee:
-   * see docs/protocol.md, "The device list". `allowLast` is the caller saying
-   * out loud that it means to leave the vault reachable only by the recovery
-   * key; without it the last device is refused with `badentry`.
+   * see plan/protocol.md, "Devices and invites". Revoking a device also
+   * cancels the invites it issued, and the last device may be revoked: the way
+   * back is `trew invite` on the server.
    *
    * `self` says the row removed was this session's own, in which case this is
    * the last frame on the connection.
    */
-  async revoke(args: {
-    deviceId: string;
-    allowLast?: boolean;
-  }): Promise<{ deviceId: string; self: boolean }> {
-    const reply = await this.request(
-      {
-        op: "revoke",
-        deviceId: args.deviceId,
-        ...(args.allowLast ? { allowLast: true } : {}),
-      },
-      "revoked",
-    );
+  async revoke(args: { deviceId: string }): Promise<{ deviceId: string; self: boolean }> {
+    const reply = await this.request({ op: "revoke", deviceId: args.deviceId }, "revoked");
     if (reply["res"] !== "revoked") {
       throw new ProtocolError("protostate", `expected revoked, got ${JSON.stringify(reply)}`);
     }
@@ -2303,24 +2308,6 @@ export class Transport {
       );
     }
     return name;
-  }
-
-  /**
-   * Replaces the vault's auth hash and wrapped data key together.
-   *
-   * `auth` is the new auth key and `wrapped` the same data key under the new
-   * root. Every other session on the vault is closed by the server with
-   * `auth` before this returns, so "rotated" also means nobody else is still
-   * writing under the old string.
-   */
-  async rotate(args: { auth: string; wrapped: string }): Promise<void> {
-    const reply = await this.request(
-      { op: "rotate", auth: args.auth, wrapped: args.wrapped },
-      "rotated",
-    );
-    if (reply["res"] !== "rotated") {
-      throw new ProtocolError("protostate", `expected rotated, got ${JSON.stringify(reply)}`);
-    }
   }
 
   /* ------------------------------------------------------------ *
@@ -2591,7 +2578,7 @@ function defaultSocketFactory(url: string): SocketLike {
 /**
  * How much may sit in the socket's buffer before the next body waits.
  *
- * Enough to keep the link busy between one body being sealed and the next,
+ * Enough to keep the link busy between one body being framed and the next,
  * not so much that a large attachment is held twice, once by the caller and
  * once by the socket.
  */
@@ -2614,6 +2601,12 @@ const DRAIN_POLL_MS = 5;
 const DRAIN_POLL_MAX_MS = 50;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** What a frame is replaced by once its chunk is decoded, so it can be freed. */
+const EMPTY = new Uint8Array(0);
+
+/** The length of an invite token, as the `invited` reply carries it. */
+const INVITE_TOKEN_WIRE_BYTES = 16;
 
 function toBytes(data: unknown): Uint8Array | undefined {
   if (data instanceof Uint8Array) return data;

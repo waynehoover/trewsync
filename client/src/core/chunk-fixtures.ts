@@ -22,8 +22,8 @@
  * the input's SHA-256 so that two generators disagreeing is reported as that
  * and not as a chunker bug.
  *
- * Imported only by the fixture test and the runner, like compression-golden.ts,
- * so none of this reaches a shipped bundle; that is also why it may use
+ * Imported only by the fixture test and the runner, like test-server.ts, so
+ * none of this reaches a shipped bundle; that is also why it may use
  * `node:crypto` and `node:fs`.
  */
 

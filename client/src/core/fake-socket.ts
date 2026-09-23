@@ -11,8 +11,6 @@
  * shipped bundle.
  */
 
-import { type Schedule } from "./crypto.ts";
-import { TEST_DATA_KEY, testKeys, testWrapped } from "./test-keys.ts";
 import { Engine } from "./engine.ts";
 import { PROTO, Transport, type SocketLike } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
@@ -83,16 +81,25 @@ export class FakeSocket implements SocketLike {
     });
   }
 
-  /** Answers a fetch: the header, then the bodies, as a protocol 4 server does. */
+  /**
+   * Answers a fetch: the header, then the bodies, each framed raw the way a
+   * protocol 1 server may send it (plan/protocol.md, "Chunk bodies").
+   *
+   * `body` sends exactly the bytes it is given, for a case that wants a frame
+   * of its own making: a deflated one, an unknown marker, an empty frame.
+   */
   bodies(...bodies: Uint8Array[]): void {
     this.reply({ res: "bodies", count: bodies.length });
-    for (const b of bodies) this.body(b);
+    for (const b of bodies) this.body(rawFrame(b));
   }
 
   hangUp(code = 1006, reason = "gone"): void {
     this.onclose?.({ code, reason });
   }
 }
+
+/** The epoch every fake server's `ready` carries unless a case says otherwise. */
+export const RIG_EPOCH = "rig-epoch";
 
 /** A well-formed ready, with whatever the case wants changed. */
 export function ready(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -101,17 +108,27 @@ export function ready(over: Record<string, unknown> = {}): Record<string, unknow
     proto: PROTO,
     minProto: PROTO,
     serverVersion: "test",
+    // Every store has one, so the well-formed frame carries one. A case that
+    // wants a server without it passes `epoch: undefined`.
+    epoch: RIG_EPOCH,
     cursor: 10,
     perFileMax: 1,
-    chunkMax: 1,
+    // The protocol's own ceiling, and above the chunker's floor, which an
+    // engine refuses a server for being under.
+    chunkMax: 1 << 20,
     maxChunks: 1,
     maxBatchBytes: 16 << 20,
     maxFetchBytes: 64 << 20,
-    // Every vault has one, so the well-formed frame carries one. A case that
-    // wants a server without it passes `wrapped: undefined`.
-    wrapped: RIG_WRAPPED,
     ...over,
   };
+}
+
+/** A chunk framed raw: the marker byte, then the bytes. */
+export function rawFrame(raw: Uint8Array): Uint8Array {
+  const out = new Uint8Array(1 + raw.length);
+  out[0] = 0;
+  out.set(raw, 1);
+  return out;
 }
 
 /** Lets queued notification work run before asserting on it. */
@@ -122,12 +139,12 @@ export const settle = (): Promise<unknown> => new Promise((r) => setTimeout(r, 0
  *
  * `settle()` is one macrotask, so `await settle(); await settle();` is a guess
  * about how many the work takes. It is right for notification work, which is
- * queued and synchronous once it runs. It is wrong for anything that verifies:
- * refusing a batch signed by another vault checks a MAC, which is async crypto,
- * and two settles was enough on a laptop and not enough on a loaded CI runner.
- * The test failed there saying "nothing refused the forged batch, so this
- * proves nothing", which is the guard doing its job about a race in the test
- * rather than a fault in the client.
+ * queued and synchronous once it runs. It is wrong for anything that waits on
+ * something asynchronous, a digest or a vault read, and two settles was enough
+ * on a laptop and not enough on a loaded CI runner. The test failed there
+ * saying "nothing refused the batch, so this proves nothing", which is the
+ * guard doing its job about a race in the test rather than a fault in the
+ * client.
  *
  * `invariants.test.ts` already had this shape written out inline in two places,
  * as `for (let i = 0; i < 200 && ...; i++) await settle()`. This is the same
@@ -142,12 +159,6 @@ export async function settleUntil(what: string, cond: () => boolean, ticks = 400
   if (!cond()) throw new Error(`settled ${ticks} times and ${what} never happened`);
 }
 
-/** The fixed root every fake-socket rig derives its keys from. */
-export const RIG_SECRET = new Uint8Array(32).fill(1);
-
-/** The vault's data key as the rig's server holds it, wrapped under RIG_SECRET. */
-const RIG_WRAPPED = await testWrapped(RIG_SECRET);
-
 /** An engine wired to a fake socket, connected, with limits of the test's choosing. */
 export async function engineOnFakeSocket(
   limits: {
@@ -157,6 +168,7 @@ export async function engineOnFakeSocket(
     maxBatchBytes?: number;
     maxFetchBytes?: number;
     cursor?: number;
+    epoch?: string;
   } = {},
   opts: { vault?: MemoryVault; store?: MemoryIndexStore } = {},
 ): Promise<{
@@ -165,7 +177,6 @@ export async function engineOnFakeSocket(
   t: Transport;
   vault: MemoryVault;
   logs: string[];
-  keys: Schedule;
   store: MemoryIndexStore;
 }> {
   const socket = new FakeSocket();
@@ -185,11 +196,9 @@ export async function engineOnFakeSocket(
   // Sharable, so a test can build a second engine on the state the first
   // wrote and ask what survives a restart.
   const store = opts.store ?? new MemoryIndexStore();
-  const keys = await testKeys(RIG_SECRET);
   engine = new Engine({
     vault,
     store,
-    dataKey: TEST_DATA_KEY,
     transport: t,
     device: "d",
     vaultId: "v",
@@ -201,6 +210,7 @@ export async function engineOnFakeSocket(
   await settle();
   socket.reply(
     ready({
+      epoch: limits.epoch ?? RIG_EPOCH,
       cursor: limits.cursor ?? 0,
       perFileMax: limits.perFileMax ?? 1 << 28,
       chunkMax: limits.chunkMax ?? 1 << 20,
@@ -212,5 +222,5 @@ export async function engineOnFakeSocket(
   await settle();
   socket.raw({ op: "caught-up", cursor: limits.cursor ?? 0 });
   await started;
-  return { engine, socket, t, vault, logs, keys, store };
+  return { engine, socket, t, vault, logs, store };
 }

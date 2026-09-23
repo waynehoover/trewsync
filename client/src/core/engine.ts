@@ -4,10 +4,10 @@ import type { Activity, ActivityAction } from "./activity.ts";
  * The engine: everything that decides, and nothing that knows where files live.
  *
  * Structure follows Obsidian's: an orchestrator collaborating with a transport
- * that knows no policy, a filter that knows only paths, and a crypto provider
- * with no reference to the app. That
- * shape is why the same engine runs in their plugin and their headless client,
- * and it is why this one can run against a vault held in memory.
+ * that knows no policy, a filter that knows only paths, and a chunker with no
+ * reference to the app. That shape is why the same engine runs in their plugin
+ * and their headless client, and it is why this one can run against a vault
+ * held in memory.
  *
  * Two properties this is built around, both from that reading:
  *
@@ -45,6 +45,7 @@ import type { Activity, ActivityAction } from "./activity.ts";
 
 import { notifyTransfer, type TransferActivity } from "./transfer.ts";
 import {
+  CHUNK_FLOOR,
   looksLikeJson,
   looksLikeText,
   looksLikeYaml,
@@ -55,19 +56,8 @@ import {
 import { parsesAsYaml } from "./yaml.ts";
 import { drawingGate, looksLikeExcalidraw } from "./excalidraw.ts";
 import { looksLikeMarkupPath, wellFormedMarkup } from "./markup.ts";
-import {
-  deriveSchedule,
-  entryIsOurs,
-  macEntry,
-  openChunk,
-  openPath,
-  parentOf,
-  plainDigest,
-  sealChunks,
-  sealPath,
-  type Schedule,
-  type SealedChunk,
-} from "./crypto.ts";
+import { chunkName, chunkNames, plainDigest } from "./digest.ts";
+import { pathReason, type PathReason } from "./path-policy.ts";
 import { conflictCopyPath, mergeText } from "./merge.ts";
 import {
   decide,
@@ -151,8 +141,9 @@ function unpacked(path: string, raw: Record<string, unknown>): IndexEntry {
 /**
  * The identity of a file's content, as both sides can compute it.
  *
- * The server holds no plaintext hash, so equality of content is equality of the
- * chunk name sequence. Sealing is deterministic precisely so that works.
+ * Equality of content is equality of the chunk name sequence. A chunk's name is
+ * the SHA-256 of its raw bytes and the chunker is deterministic, so the same
+ * bytes are always the same list, on this device and on the server.
  *
  * An empty file gets a marker rather than the empty string, because the index
  * uses `synchash === ""` to mean "never synced". Without this an empty note that
@@ -213,9 +204,10 @@ export function refuseIfBehind(serverCursor: number, ownCursor: number): void {
  * the button that does it.
  */
 export const REJOIN_ADVICE =
-  "To rejoin it and keep what only this device holds, back the server up and then run " +
-  "trew rebase --backup-taken here, or press Rejoin this server in the Trew panel. " +
-  "Unlinking and pairing again also works, and it resets the merge base, so the next " +
+  "A restore through trew backup starts a new epoch and needs nothing from here; this is a " +
+  "data directory copied back behind the server's back. To rejoin it and keep what only this " +
+  "device holds, back the server up, then press Rejoin this server in the Trew panel, or unlink " +
+  "this device and pair it again with a new invite. Either resets the merge base, so the next " +
   "edit made on two devices at once makes conflict copies instead of merging.";
 
 /**
@@ -239,7 +231,7 @@ export const OWN_LIMITS = {
   maxBatchBytes: 16 << 20,
   /** 64 MiB, the most body bytes any server serves for one fetch. */
   maxFetchBytes: 64 << 20,
-  /** 1 MiB, the largest sealed chunk any server stores. */
+  /** 1 MiB, the largest raw chunk any server stores. */
   chunkMax: 1 << 20,
 } as const;
 
@@ -249,67 +241,15 @@ export function boundedBy(fromServer: number, own: number): number {
 }
 
 /**
- * Refuses a list of entries holding one this vault's key did not sign.
- *
- * The nine fields are exactly what the writer signed, and reading them out of
- * a `WireEntry` is the whole check: a field left out here is a field the
- * server may set freely. A parent of "" is a real value, so a server omitting
- * the field means the same thing. A mac cannot be defaulted that way: an
- * absent one fails, which is the point.
- *
- * Every path that acts on an entry comes through here, and the reason it is
- * one function is that for a while it was two and only one of them existed.
- * The sync path checked every batch entry; recovery did not, so a
- * `history` was shown, a `deleted` list was offered for restore, and the
- * version chosen was fetched and written, all on the server's word. The
- * server holds every sealed path and could name any file; an entry it
- * invented would decrypt, being made of real chunks, and be written into the
- * vault as a restored note.
- *
- * `suffix` is for a caller whose refusal has something more to say, such as
- * recovery adding that the entry is not being shown either.
- */
-export async function mustBeOurs(
-  keys: Schedule,
-  entries: readonly WireEntry[],
-  suffix = "",
-): Promise<void> {
-  const ours = await Promise.all(
-    entries.map((e) =>
-      entryIsOurs(
-        keys,
-        {
-          path: e.path,
-          size: e.size,
-          ctime: e.ctime,
-          mtime: e.mtime,
-          folder: e.folder,
-          deleted: e.deleted,
-          prev: e.prev,
-          chunks: e.chunks,
-          parent: e.parent ?? "",
-        },
-        e.mac,
-      ),
-    ),
-  );
-  const forged = ours.indexOf(false);
-  if (forged >= 0) {
-    throw new Error(
-      `version ${entries[forged]!.uid} is not authenticated by this vault's key, ` +
-        `so nothing that holds the key wrote it${suffix}`,
-    );
-  }
-}
-
-/**
  * Refuses an entry that contradicts itself, before anything acts on it.
  *
- * Everything here except the sealed path arrives in the clear and unsigned, and
- * the server holds every sealed path in the vault, so it can name any file. The
- * protocol doc states this invariant and assigned it to the server: "a file
- * declaring a size names at least one chunk, since a size with no chunks is
- * byte-identical on the wire to an empty note." It was never mirrored here.
+ * Every path that acts on an entry comes through here: the sync path for every
+ * batch entry, and recovery for every version it shows or restores, because a
+ * server that answers with a shape it would never store is still a server this
+ * device has to survive. The protocol states this invariant and assigns it to
+ * the server: "a file declaring a size names at least one chunk, since a size
+ * with no chunks is byte-identical on the wire to an empty note." It was once
+ * not mirrored here.
  *
  * Unmirrored, one frame emptied a note. `contentId([])` is `-empty-`,
  * `chunkNamesOf` gives it back as no chunks, nothing is fetched, and the
@@ -339,16 +279,6 @@ export function checkEntryShape(e: WireEntry): void {
   if (e.size < 0) {
     throw new Error(`version ${e.uid} declares ${e.size} bytes, and there is no such file`);
   }
-  if (!isDigest(e.mac)) {
-    throw new Error(
-      `version ${e.uid} carries no authenticator of the right shape, so nothing can check it`,
-    );
-  }
-  // `parent` is always sent and an absent one arrives as undefined rather than
-  // as the empty string, which is a real value meaning a first version.
-  if (e.parent !== undefined && e.parent !== "" && !isDigest(e.parent)) {
-    throw new Error(`version ${e.uid} names a parent that is neither empty nor a digest`);
-  }
   for (const name of e.chunks) {
     if (!isDigest(name)) {
       throw new Error(`version ${e.uid} names ${JSON.stringify(name)}, which is not a chunk name`);
@@ -368,7 +298,7 @@ export function checkEntryShape(e: WireEntry): void {
   }
 }
 
-/** Lowercase hex SHA-256, which is the shape of a MAC, a parent and a chunk name. */
+/** Lowercase hex SHA-256, which is the shape of a chunk name. */
 function isDigest(s: string): boolean {
   return /^[0-9a-f]{64}$/.test(s);
 }
@@ -390,19 +320,6 @@ export function chunkNamesOf(id: string): string[] {
 export interface EngineOptions {
   readonly vault: Vault;
   readonly store: IndexStore;
-  /**
-   * The vault's data key. Every key this engine uses derives from it.
-   *
-   * Held directly rather than unwrapped from what `ready` returns, because
-   * the key that would unwrap it comes from the root secret and a registered
-   * device does not have one. It was handed over once, at registration, by
-   * the session that did; see `registerAsDevice` in client.ts.
-   *
-   * The schedule is still derived in `start` rather than in the constructor,
-   * so there is one moment the keys become known and no window in which
-   * something could be sealed under a different one.
-   */
-  readonly dataKey: Uint8Array;
   readonly transport: Transport;
   /** Keep the main wire available while a large upload sends its bodies. */
   readonly withUploadTransport?: <T>(work: (transport: Transport) => Promise<T>) => Promise<T>;
@@ -420,7 +337,7 @@ export interface EngineOptions {
   readonly vaultId: string;
   /** This device's row in the vault's device list. */
   readonly deviceId: string;
-  /** This device's own auth key, derived from its own secret. */
+  /** This device's own 32-byte token, unpadded base64url. */
   readonly token: string;
   readonly now?: () => number;
   readonly log?: (message: string, ...rest: unknown[]) => void;
@@ -807,7 +724,11 @@ function nextStepFor(code: string | undefined): string {
     case "nochunk":
       return "The server no longer holds its content. Restore it from a backup, or write it again from a device that still has it.";
     case "cursor":
-      return "The server has lost history this device applied. Back the server up, then trew rebase.";
+      return "The server has lost history this device applied without starting a new epoch. Back the server up, then unlink this device and pair it again.";
+    case "badpath":
+      return "Rename it on this device to a name the server takes; the rule it broke is named first.";
+    case "collision":
+      return "Another note already has this name in a different case or form. Rename one of the two.";
     default:
       return "";
   }
@@ -1053,61 +974,21 @@ export class Engine {
    * off, and "too large" is only meaningful next to the number.
    */
   limits: ServerLimits | undefined;
-  /** Sealed path to plaintext, so a path is unsealed once per session. */
-  private readonly unsealed = new Map<string, string>();
-
-  /**
-   * The vault's keys, known from `ready` onwards and not before.
-   *
-   * Undefined until the handshake has handed over the wrapped data key. Read
-   * through `keys`, which refuses rather than sealing anything under a
-   * schedule nobody has agreed on yet.
-   */
-  private derived: Schedule | undefined;
-  /**
-   * Settled once `derived` is set, which is after `ready`. The first batch can
-   * arrive in the same moment, and a batch opened under the wrong schedule
-   * fails its authenticator and ends the session, so `acceptBatch` waits here.
-   */
-  private readonly keysReady: Promise<void>;
-  private settleKeys!: () => void;
-  private failKeys!: (err: Error) => void;
 
   private cursor = 0;
+  /**
+   * The store epoch `cursor` belongs to (PLAN.md section 2.8): what the last
+   * `ready` said, saved beside the cursor and sent back at the next hello.
+   * Undefined until the first connection.
+   */
+  private epoch: string | undefined;
+  /** Whether this session has already read the server's history as new. */
+  private adoptedReplacedHistory = false;
   private syncing = false;
   private again = false;
   private started = false;
 
-  constructor(private readonly opts: EngineOptions) {
-    this.keysReady = new Promise<void>((resolve, reject) => {
-      this.settleKeys = resolve;
-      this.failKeys = reject;
-    });
-    // Awaited by acceptBatch and by nothing before start; a start that
-    // never happens must not surface as an unhandled rejection.
-    this.keysReady.catch(() => {});
-  }
-
-  /**
-   * The vault's keys, or a refusal.
-   *
-   * Everything that seals, opens or authenticates goes through here. A caller
-   * that reaches it before the handshake is a bug, and the message says which
-   * bug rather than letting WebCrypto complain about an undefined key.
-   */
-  private get keys(): Schedule {
-    if (this.derived === undefined) {
-      throw new Error(
-        "this engine has not finished its handshake, so the vault's keys are not known yet",
-      );
-    }
-    return this.derived;
-  }
-
-  /** The keys in use, which a shell needs to seal a path for recovery. */
-  get vaultKeys(): Schedule {
-    return this.keys;
-  }
+  constructor(private readonly opts: EngineOptions) {}
 
   private now(): number {
     return this.opts.now?.() ?? Date.now();
@@ -1238,8 +1119,6 @@ export class Engine {
      */
     ignored: number;
     syncing: boolean;
-    /** How many sealed paths are cached, which prune keeps to what is referred to. */
-    cachedPaths: number;
   } {
     let files = 0;
     for (const e of this.entries.values()) if (!e.folder) files++;
@@ -1251,7 +1130,6 @@ export class Engine {
       skipped: this.skipped.size + this.refusedInbound.size,
       ignored: this.ignoredPaths.size,
       syncing: this.syncing,
-      cachedPaths: this.unsealed.size,
     };
   }
 
@@ -1272,6 +1150,7 @@ export class Engine {
     const stored = validateStoredState(await this.opts.store.load());
     if (stored) {
       this.cursor = stored.cursor;
+      this.epoch = stored.epoch;
       for (const [path, raw] of Object.entries(stored.entries)) {
         this.entries.set(path, unpacked(path, raw as Record<string, unknown>));
       }
@@ -1286,109 +1165,124 @@ export class Engine {
       });
     }
 
-    let limits: ServerLimits;
-    try {
-      limits = await this.opts.transport.hello({
-        vault: this.opts.vaultId,
-        deviceId: this.opts.deviceId,
-        token: this.opts.token,
-        device: this.opts.device,
-        cursor: this.cursor,
-      });
-      // The docs present the client-ahead case as what catches a server
-      // restored from an old backup or pointed at the wrong vault, and the
-      // refusal lived only in the server, so it was missing exactly when it
-      // was needed. A server behind this device would answer no batches, and
-      // the status line reported `behind` clamped at zero, so it looked like
-      // being up to date.
-      refuseIfBehind(limits.cursor, this.cursor);
-      // The vault's keys, from the data key this device was registered with.
-      // This is the only place they are set, and it happens before the first
-      // batch is opened: a batch unsealed under any other schedule fails its
-      // authenticator.
-      this.derived = await deriveSchedule(this.opts.dataKey);
-    } catch (err) {
-      this.failKeys(err instanceof Error ? err : new Error(String(err)));
+    const limits = await this.opts.transport.hello({
+      vault: this.opts.vaultId,
+      deviceId: this.opts.deviceId,
+      token: this.opts.token,
+      device: this.opts.device,
+      cursor: this.cursor,
+      epoch: this.epoch,
+    });
+    // A server whose history is not the one this device's cursor was read
+    // from: restored from a backup, or replaced. It replays the vault from uid
+    // 1, and a batch of that replay may already have been applied by now, in
+    // which case this has been done once already and does nothing.
+    if (this.opts.transport.historyReplaced) this.adoptReplacedHistory(limits.epoch);
+    this.epoch = limits.epoch;
+    // The docs present the client-ahead case as what catches a server
+    // restored from an old backup or pointed at the wrong vault, and the
+    // refusal lived only in the server, so it was missing exactly when it
+    // was needed. A server behind this device would answer no batches, and
+    // the status line reported `behind` clamped at zero, so it looked like
+    // being up to date. With epochs the server replays a restored history
+    // instead, so what is left here is a store rolled back without a new
+    // epoch, which only a copy made behind the server's back produces.
+    refuseIfBehind(limits.cursor, this.cursor);
+    // A ceiling the chunker cannot cut under. `sizesFor` never goes below a
+    // window's worth, so every chunk this device made would be over the
+    // server's limit and refused for ever, one file at a time, with nothing
+    // pointing at the server. Refused here, once, naming it.
+    if (limits.chunkMax < CHUNK_FLOOR) {
+      const err = new ProtocolError(
+        "protostate",
+        `this server takes chunks of at most ${limits.chunkMax} bytes, and this device cannot ` +
+          `cut a chunk smaller than ${CHUNK_FLOOR}, so every file it sent would be refused; the ` +
+          `server's chunk limit has to be at least ${CHUNK_FLOOR}`,
+        { retryable: false },
+      );
+      this.opts.transport.close();
       throw err;
     }
-    this.settleKeys();
     this.limits = limits;
     this.log("connected", limits);
     return limits;
   }
 
   /**
-   * Authenticates one outgoing entry.
+   * Reads the server's history as new, because it is not the one this
+   * device's cursor was read from (plan/protocol.md, "Device session").
    *
-   * Everything a receiving device acts on, signed with a key the server does
-   * not have, plus the version this was written on top of. The uid is not in
-   * it: the server assigns uids and ordering the log is its job, which this
-   * does not try to take. What it settles is that the server cannot invent an
-   * entry, alter one, or move one file's chunk list onto another file.
+   * A different epoch means the store was restored or replaced, so the uid
+   * sequence may have been reissued: a uid this device remembers can name a
+   * different version now, and a version this device synced may not be there
+   * at all. The server replays the whole vault from uid 1, and it is read the
+   * way a device that had never synced would read it. The cursor, the server's
+   * word per path and the inbound work list all describe the history that is
+   * gone, so they go.
+   *
+   * The index entries stay, because they describe the files on this disk, and
+   * only their sync state is forgotten. That is the half that keeps notes. An
+   * entry whose last-synced content is still what is on disk would otherwise
+   * read a restored, older version as "changed on another device and
+   * unchanged here" and be written over by it, and the newer text would be on
+   * no server and no device. Forgotten, the two versions are compared as they
+   * are: the same content is agreement, different content is kept both ways,
+   * a file only here is sent, and nothing is deleted on the strength of a
+   * history that has been replaced (rules 3 and 6).
    */
-  private async authFor(
-    entry: PutFacts,
-    builtOn: string,
-  ): Promise<{ mac: string; parent: string }> {
-    const parent = await parentOf(builtOn);
-    const mac = await macEntry(this.keys, {
-      path: entry.path,
-      size: entry.meta.size,
-      ctime: entry.meta.ctime,
-      mtime: entry.meta.mtime,
-      folder: entry.meta.folder ?? false,
-      deleted: entry.meta.deleted ?? false,
-      prev: entry.meta.prev,
-      chunks: entry.names,
-      parent,
+  private adoptReplacedHistory(epoch?: string): void {
+    if (this.adoptedReplacedHistory) return;
+    this.adoptedReplacedHistory = true;
+    this.log("the server's history is not the one this device synced against; reading it as new", {
+      was: this.epoch,
+      now: epoch ?? this.opts.transport.serverLimits?.epoch,
+      cursor: this.cursor,
     });
-    return { mac, parent };
+    this.cursor = 0;
+    this.remote.clear();
+    this.pending.clear();
+    this.staleHeads.clear();
+    this.asked.clear();
+    for (const entry of this.entries.values()) {
+      entry.synchash = "";
+      entry.syncuid = 0;
+      entry.synctime = 0;
+    }
   }
 
   /**
    * Takes a batch from the transport into the remote index.
    *
    * Wired to the transport's `onBatch`. The transport has already checked that
-   * the range continues this device's cursor, so what is left here is unsealing
-   * the paths and remembering that these paths have work outstanding.
+   * the range continues this device's cursor, so what is left here is checking
+   * the entries and remembering that these paths have work outstanding.
    *
    * A batch with no entries is this device's own write coming back: it carries
    * the cursor advance and nothing to apply.
    */
   async acceptBatch(batch: { from: number; to: number; entries: WireEntry[] }): Promise<void> {
-    // Not before the handshake has said which keys this vault uses; see
-    // `keysReady`.
-    await this.keysReady;
-    // Staged, then committed once every entry has unsealed and passed its
-    // checks. Applied entry by entry, a batch that failed part way through
-    // left the entries before the failure recorded and no way to undo them,
-    // and `save()` persists `remote` and `pending`, so they survived the
-    // session dying. `deleteLocal` needs no server, so a batch of
-    // [forged deletion, entry sealed under another vault's key] applied the
-    // deletion on the next pass while the connection died looking like a
-    // misconfiguration. "The session ended safely" is not "nothing was
-    // applied" unless the state is committed together.
-    // Verified and unsealed as two passes over the batch, not one crypto
-    // call at a time.
-    //
-    // Both are WebCrypto, both are per entry, and neither depends on the
-    // one before it. Serially a 2000 entry catch-up spent 25.7 ms on the
-    // authenticators and 25.0 ms opening paths; together those are 11.5 ms
-    // and 8.4 ms. The staging map already commits at the end, so checking
-    // the whole batch before touching anything is the same all-or-nothing
-    // it already had.
-    await mustBeOurs(this.keys, batch.entries);
+    // The first batch of a replayed history can arrive before `start` has
+    // heard its `ready`, and it is read against a fresh listing either way.
+    if (this.opts.transport.historyReplaced) this.adoptReplacedHistory();
+    // Staged, then committed once every entry has passed its checks. Applied
+    // entry by entry, a batch that failed part way through left the entries
+    // before the failure recorded and no way to undo them, and `save()`
+    // persists `remote` and `pending`, so they survived the session dying.
+    // `deleteLocal` needs no server, so a batch of [deletion, malformed entry]
+    // applied the deletion on the next pass while the connection died looking
+    // like a misconfiguration. "The session ended safely" is not "nothing was
+    // applied" unless the state is committed together, so the whole batch is
+    // checked before anything is touched.
     for (const e of batch.entries) checkEntryShape(e);
 
     // The spelling the sender used, and the one this device files it under.
     // They differ only when a peer spells a name in a Unicode normal form
-    // that is not NFC, which a Mac running a client older than this rule
-    // does for every accented name it uploads.
-    const wires = await Promise.all(batch.entries.map((e) => this.plaintextPath(e.path)));
+    // that is not NFC, which the server refuses, so for a Trew server they
+    // are always the same; the fold is kept because it is the one place a
+    // path off the wire becomes an identity here.
+    const wires = batch.entries.map((e) => e.path);
     const paths = wires.map(canonicalSpelling);
-    const olds = await Promise.all(
-      batch.entries.map((e) => (e.prev ? this.plaintextPath(e.prev) : undefined)),
-    );
+    const olds = batch.entries.map((e) => (e.prev ? e.prev : undefined));
 
     const staged = new Map<string, Remote>();
     for (let at = 0; at < batch.entries.length; at++) {
@@ -1474,14 +1368,6 @@ export class Engine {
     this.cursor = batch.to;
   }
 
-  private async plaintextPath(sealed: string): Promise<string> {
-    const known = this.unsealed.get(sealed);
-    if (known !== undefined) return known;
-    const plain = await openPath(this.keys, sealed);
-    this.unsealed.set(sealed, plain);
-    return plain;
-  }
-
   /**
    * Runs one reconciliation pass, and only one.
    *
@@ -1541,9 +1427,8 @@ export class Engine {
    * pass at four thousand notes: the whole cost of a check that says no to
    * approximately nothing.
    *
-   * Pruned with the sealed-path cache and against the same sets, so a vault
-   * that churns through names does not accumulate answers about paths nothing
-   * refers to any more.
+   * Pruned against the sets the index keeps, so a vault that churns through
+   * names does not accumulate answers about paths nothing refers to any more.
    */
   private refusedName(path: string): string | undefined {
     const known = this.refusalOf.get(path);
@@ -1569,7 +1454,7 @@ export class Engine {
    *
    * Asking is the only thing that breaks that, because the missing fact is one
    * the fan-out will never carry. `history` with a limit of one is the ask, the
-   * answer is authenticated exactly as a batch entry is, and no cursor moves.
+   * answer is checked exactly as a batch entry is, and no cursor moves.
    *
    * Under the server's own spelling where that differs, since the name this
    * device files a note under need not be the name the server has (`Remote.wire`).
@@ -1590,8 +1475,7 @@ export class Engine {
       const known = this.remote.get(path);
       const wire = known?.wire ?? path;
       try {
-        const sealed = await this.sealedPath(wire);
-        const [newest] = await this.opts.transport.history(sealed, { limit: 1 });
+        const [newest] = await this.opts.transport.history(wire, { limit: 1 });
         if (newest === undefined) {
           // The server holds no version of this path at all: purged, or a
           // vault restored from before it existed. The next decision is made
@@ -1600,13 +1484,12 @@ export class Engine {
           this.pending.delete(path);
           continue;
         }
-        // The two checks a batch entry gets, and one the batch path does not
-        // need: a batch says which path each entry is for, and an answer to a
+        // The check a batch entry gets, and one the batch path does not need:
+        // a batch says which path each entry is for, and an answer to a
         // question does not, so a version of another note would otherwise be
         // recorded as this path's head.
-        await mustBeOurs(this.keys, [newest], ", so it is not this vault's version of that path");
         checkEntryShape(newest);
-        if (newest.path !== sealed) {
+        if (newest.path !== wire) {
           throw new Error(
             `the server answered a request for the newest version of ${path} with a version of ` +
               `another note, so the current version of this path is still not known here`,
@@ -1658,10 +1541,10 @@ export class Engine {
           observe(index, stat);
           if (stat.size > this.limitOn("perFileMax")) throw new Error("File too large");
           // The same cache the pass honours, for the same reason. This used
-          // to read, chunk and seal every file on disk unconditionally, and
+          // to read, chunk and name every file on disk unconditionally, and
           // then throw the work away: `index` is a copy, so the fresh hashes
           // went nowhere and the pass that followed did it all again. A
-          // folder deletion on a 5,000-note phone vault therefore sealed the
+          // folder deletion on a 5,000-note phone vault therefore read the
           // whole vault twice before the dialog appeared (R083-08).
           //
           // The comment that stood here said a preview must not hide a
@@ -2236,7 +2119,7 @@ export class Engine {
 
     // Checked from the stat, before the file is opened. The server refuses
     // an oversized file at the put, which is correct and far too late: by
-    // then the client has read it, chunked it and sealed it, and a file just
+    // then the client has read it, chunked it and named it, and a file just
     // over the limit costs several times its own size in memory to produce
     // an error that its size alone predicted. On a phone that is not a
     // wasted pass, it is the end of the process.
@@ -2247,12 +2130,12 @@ export class Engine {
     }
 
     let local: LocalState | undefined;
-    let sealed: Scanned | undefined;
+    let scanned: Scanned | undefined;
     if (stat) {
       if (!stat.folder && needsRehash(entry, Math.ceil(stat.mtime), stat.size, stat.changeId)) {
         // The only place a file is read for its content, and only when
         // the stat says it moved.
-        sealed = await this.rehash(entry, path, stat.size);
+        scanned = await this.rehash(entry, path, stat.size);
       }
       local = { folder: stat.folder, mtime: entry.mtime, size: entry.size, hash: entry.hash };
     }
@@ -2308,21 +2191,23 @@ export class Engine {
       return;
     }
 
-    await this.act(path, action, entry, local, remote, report, now, sealed);
+    await this.act(path, action, entry, local, remote, report, now, scanned);
     this.pending.delete(path);
   }
 
   /**
-   * Chunks and seals a file, filling in the index's content cache.
+   * Chunks and names a file, filling in the index's content cache.
    *
-   * The sealed bodies come back so that an upload deciding to send this file
-   * does not read, chunk and seal it all over again. On a first sync that
-   * second pass was half of everything the client did: seventeen megabytes
-   * took thirty seconds against four seconds of wire, and the four round
-   * trips it now costs made the duplication the whole cost.
+   * The cut pieces come back so that an upload deciding to send this file
+   * does not read and chunk it all over again. On a first sync that second
+   * pass was half of everything the client did: seventeen megabytes took
+   * thirty seconds against four seconds of wire, and the four round trips it
+   * now costs made the duplication the whole cost. The pieces are views into
+   * the bytes read, so keeping them costs nothing the read did not.
    *
-   * Only for files small enough to hold. Above that the bodies are dropped
-   * for the reason `planUpload` explains, and it does its own work.
+   * Hashed a window at a time, concurrently within each window, which is the
+   * measured middle between hashing one chunk at a time and holding a copy of
+   * every chunk in flight (`chunkNames`).
    */
   private async rehash(entry: IndexEntry, path: string, knownSize?: number): Promise<Scanned> {
     const streamed = await this.streamScan(entry, path, knownSize);
@@ -2331,22 +2216,7 @@ export class Engine {
     const bytes = await this.opts.vault.read(path);
     const isText = this.mergeable(path);
     const pieces = [...chunkBytes(bytes, this.sizesFor(bytes.length, isText), isText)];
-    const parts = pieces.map((c) => c.bytes);
-
-    // Small enough to keep: seal it all, and the upload that is about to
-    // want the bodies has them.
-    if (bytes.length <= KEEP_SEALED_BELOW) {
-      const sealed = await sealChunks(this.keys, parts);
-      entry.chunks = sealed.map((c) => c.name);
-      entry.hash = contentId(entry.chunks);
-      entry.size = bytes.length;
-      return { bytes, pieces, names: entry.chunks, sealed };
-    }
-
-    // Too big to keep the bodies even for a moment, so only the names are
-    // taken and the sealed copies are dropped a window at a time.
-    // Chunk names without keeping the bodies. See `sealedNames`.
-    entry.chunks = await sealedNames(this.keys, parts);
+    entry.chunks = await chunkNames(pieces.map((c) => c.bytes));
     entry.hash = contentId(entry.chunks);
     entry.size = bytes.length;
     return { bytes, pieces, names: entry.chunks };
@@ -2356,9 +2226,9 @@ export class Engine {
    * Names a large file without ever holding it, when the vault can stream.
    *
    * The buffered path holds the whole file from the moment it is read until
-   * the last chunk has gone, because a wanted chunk is sealed again from the
-   * bytes in hand. That is the whole of why a 256 MiB attachment costs most of
-   * a gigabyte: not the sending, the holding.
+   * the last chunk has gone, because a wanted chunk is sent from the bytes in
+   * hand. That is the whole of why a 256 MiB attachment costs most of a
+   * gigabyte: not the sending, the holding.
    *
    * With blocks and ranges the file is read twice from disk instead: once to
    * cut and name it, keeping one chunk at a time, and again for the chunks the
@@ -2377,7 +2247,7 @@ export class Engine {
   ): Promise<Scanned | undefined> {
     const vault = this.opts.vault;
     if (!vault.readBlocks || !vault.readRange || this.cannotStream) return undefined;
-    if (knownSize === undefined || knownSize <= KEEP_SEALED_BELOW) return undefined;
+    if (knownSize === undefined || knownSize <= KEEP_BODIES_BELOW) return undefined;
 
     try {
       return await this.streamed(entry, path, knownSize);
@@ -2410,8 +2280,7 @@ export class Engine {
       this.sizesFor(knownSize, isText),
       isText,
     )) {
-      const sealed = await sealChunks(this.keys, [piece.bytes]);
-      names.push(sealed[0]!.name);
+      names.push(await chunkName(piece.bytes));
       spans.push({ start: piece.offset, end: piece.offset + piece.bytes.length });
       size += piece.bytes.length;
     }
@@ -2432,7 +2301,7 @@ export class Engine {
     /** The pass's own clock reading, so the hot branches do not take another. */
     now: number,
     /** What the rehash read and cut, if this file was just scanned. */
-    sealed?: Scanned,
+    scanned?: Scanned,
   ): Promise<void> {
     switch (action.kind) {
       case "nothing":
@@ -2459,7 +2328,7 @@ export class Engine {
         return;
 
       case "upload":
-        await this.upload(path, entry, report, remote?.uid, true, sealed);
+        await this.upload(path, entry, report, remote?.uid, true, scanned);
         return;
 
       case "download":
@@ -2520,8 +2389,6 @@ export class Engine {
           this.heldBack(path, report, "this device is read-only, so it was not deleted anywhere");
           return;
         }
-        // Fixed once, because it is signed and then sent: calling now()
-        // twice would sign one timestamp and send another.
         const deletedAt = this.now();
         const facts: PutFacts = {
           // Under the name the server has, where that is not the name this
@@ -2531,7 +2398,7 @@ export class Engine {
           // to the server: a deletion sent under the NFC name deletes
           // nothing, and the note stays alive on every device that has not
           // folded it (engine.test.ts, "deletes the note the server has").
-          path: await this.sealedPath(remote?.wire ?? path),
+          path: remote?.wire ?? path,
           meta: { size: 0, ctime: 0, mtime: deletedAt, deleted: true },
           names: [],
         };
@@ -2539,11 +2406,7 @@ export class Engine {
           {
             path,
             size: 0,
-            entry: {
-              ...facts,
-              ...(await this.authFor(facts, entry.synchash)),
-              base: remote?.uid ?? 0,
-            },
+            entry: { ...facts, base: remote?.uid ?? 0 },
             bodyOf: noBodies,
             commit: (uid, remoteIsNewer) => {
               // Recorded before the entry is forgotten. This
@@ -2599,7 +2462,7 @@ export class Engine {
      * only where the file has not been touched since: a merge rewrites it,
      * so a merge scans again.
      */
-    sealed?: Scanned,
+    scanned?: Scanned,
   ): Promise<void> {
     const base = pathBase(this.remote.get(path), path, basedOn);
     // Here rather than at the decision, because this is the choke point (I29).
@@ -2640,7 +2503,7 @@ export class Engine {
     }
     if (entry.folder) {
       const facts: PutFacts = {
-        path: await this.sealedPath(path),
+        path,
         meta: { size: 0, ctime: 0, mtime: 0, folder: true },
         names: [],
       };
@@ -2648,8 +2511,7 @@ export class Engine {
         {
           path,
           size: 0,
-          // A folder has no content and so no lineage.
-          entry: { ...facts, ...(await this.authFor(facts, "")), base },
+          entry: { ...facts, base },
           bodyOf: noBodies,
           commit: (uid, remoteIsNewer) => {
             synced(entry, "", [], uid, this.now());
@@ -2670,7 +2532,7 @@ export class Engine {
       return;
     }
 
-    const plan = await this.planUpload(entry, path, sealed);
+    const plan = await this.planUpload(entry, path, scanned);
     // Read now, applied later. `entry` is mutable and the commit runs after
     // the flush, so what gets recorded has to be what actually went up.
     const hash = entry.hash;
@@ -2681,12 +2543,12 @@ export class Engine {
     const previous = entry.prev;
     const prevBase = previous ? (this.entries.get(canonicalSpelling(previous))?.syncuid ?? 0) : 0;
     const facts: PutFacts = {
-      path: await this.sealedPath(path),
+      path,
       meta: {
         size,
         ctime: entry.ctime,
         mtime,
-        ...(previous ? { prev: await this.sealedPath(previous) } : {}),
+        ...(previous ? { prev: previous } : {}),
       },
       names: plan.names,
     };
@@ -2695,9 +2557,9 @@ export class Engine {
       {
         path,
         size,
-        // Built on whatever this device last had in sync, which is what lets
-        // a receiver tell a new version from a replayed old one.
-        entry: { ...facts, ...(await this.authFor(facts, entry.synchash)), base, prevBase },
+        // The versions this was prepared against: a peer's write since is
+        // refused as `stale` rather than replaced.
+        entry: { ...facts, base, prevBase },
         bodyOf: plan.bodyOf,
         commit: (uid, remoteIsNewer) => {
           synced(entry, hash, chunks, uid, this.now());
@@ -2758,24 +2620,23 @@ export class Engine {
    * Three bounds, because they guard different things. The count is the
    * server's, and it is what makes a vault of notes one exchange instead of
    * hundreds. The other two are the server's caps on a batched write, one on
-   * the summed ciphertext budget of the entries and one on the encoded frame,
+   * the summed declared sizes of the entries and one on the encoded frame,
    * and between them they bound this device's memory as well: a queued file
-   * pins roughly its own size until the batch goes, either as sealed bodies or
-   * as the plaintext its offsets point into, so batching two hundred and
-   * fifty-six attachments would otherwise hold all of them at once. Notes
-   * batch to the count; attachments flush almost every file, which is what
-   * this did before.
+   * pins roughly its own size until the batch goes, as the bytes its bodies
+   * are cut from, so batching two hundred and fifty-six attachments would
+   * otherwise hold all of them at once. Notes batch to the count; attachments
+   * flush almost every file, which is what this did before.
    */
   private async queue(q: Queued, report: SyncReport): Promise<void> {
-    // Two caps from `ready`, both on the whole batch: the summed ciphertext
-    // budget of its entries, and the encoded size of the frame. A write that
+    // Two caps from `ready`, both on the whole batch: the summed declared
+    // sizes of its entries, and the encoded size of the frame. A write that
     // would take either over the cap goes in the next batch, and one whose
     // own budget is over it goes alone, as a `put`, which the server bounds
     // by the file limit instead. Added regardless, one attachment made one
     // batch of everything, the server refused the batch by bytes, and every
     // note in it was written off for the attachment's size.
     const cap = this.batchCap;
-    const budget = entryBudget(q.size, q.entry.names.length);
+    const budget = entryBudget(q.size);
     const encoded = encodedEntryBytes(q.entry);
     if (
       this.outbox.length > 0 &&
@@ -2863,10 +2724,7 @@ export class Engine {
         batch.filter((q) => q.entry.names.length > 0).map((q) => q.path),
         async (onBytes) => {
           const alone = batch.length === 1 ? batch[0]! : undefined;
-          if (
-            alone !== undefined &&
-            entryBudget(alone.size, alone.entry.names.length) > this.batchCap
-          ) {
+          if (alone !== undefined && entryBudget(alone.size) > this.batchCap) {
             // One large file is a `put`, not a batch of one. The server caps a
             // batched write by budget and says so in its refusal: split the
             // batch, and send a file over the limit on its own with put. A
@@ -2878,12 +2736,7 @@ export class Engine {
                 entry.meta,
                 entry.names,
                 bodyOf,
-                {
-                  mac: entry.mac,
-                  parent: entry.parent,
-                  base: entry.base ?? 0,
-                  prevBase: entry.prevBase ?? 0,
-                },
+                { base: entry.base ?? 0, prevBase: entry.prevBase ?? 0 },
                 onBytes,
                 transport === this.opts.transport
                   ? undefined
@@ -3049,7 +2902,7 @@ export class Engine {
       entry.hash = "";
       entry.chunks = [];
       observe(entry, stat);
-      const sealed = await this.rehash(entry, path, stat.size);
+      const scanned = await this.rehash(entry, path, stat.size);
       // A save can grow the file after the stat. Keep bulk content off the
       // interactive wire even when its original size fitted this path.
       if (entry.size > Math.min(512 * 1024, this.limitOn("perFileMax"))) {
@@ -3067,7 +2920,7 @@ export class Engine {
         this.again = true;
         return;
       }
-      await this.upload(path, entry, report, current?.uid, true, sealed);
+      await this.upload(path, entry, report, current?.uid, true, scanned);
       await this.flush(report);
     } catch (err) {
       this.recordFailure(path, err, report);
@@ -3080,27 +2933,6 @@ export class Engine {
     }
   }
 
-  /**
-   * Works out what a file's chunks are called, and how to produce one.
-   *
-   * The names have to be known before the put is sent, because the server
-   * answers with the subset it wants, so a file is chunked and sealed in full
-   * either way. What changes is whether the sealed bytes are then *kept*.
-   *
-   * Keeping them all is what this did, and for a 256 MiB attachment, which is
-   * the size the server advertises it will take, it meant 512 MiB live at
-   * once: the file and a sealed copy of it. Measured rather than guessed, and
-   * on a phone that is not a spike but the end of the process.
-   *
-   * So above a threshold the bodies are dropped and only their offsets kept,
-   * and a wanted chunk is sealed again from the file still in hand. Sealing
-   * is deterministic, so the second answer is the first one. It costs the
-   * sealing twice for the chunks the server actually asks for, and takes the
-   * peak from twice the file to the file plus one chunk.
-   *
-   * Below the threshold nothing is dropped, because almost every file is a
-   * note and re-sealing a note to save a few kilobytes is a worse trade.
-   */
   /**
    * Sends the server bodies it has lost, without writing a version (I14).
    *
@@ -3271,6 +3103,17 @@ export class Engine {
     return report;
   }
 
+  /**
+   * Works out what a file's chunks are called, and how to produce one.
+   *
+   * The names have to be known before the put is sent, because the server
+   * answers with the subset it wants, so a file is chunked and named in full
+   * either way. A body is produced only when the server asks for it: from the
+   * bytes the scan already holds, where it held the file, or read back off
+   * the disk by offset and hashed again, where it streamed it. Holding a
+   * separate copy of every body was what made a 256 MiB attachment cost twice
+   * its size, and on a phone that is not a spike but the end of the process.
+   */
   private async planUpload(entry: IndexEntry, path: string, fresh?: Scanned): Promise<UploadPlan> {
     // A file whose chunk list is already right does not need reading at all.
     //
@@ -3282,7 +3125,7 @@ export class Engine {
     //
     // This is what a rename costs. Moving a folder changes no byte of any note
     // under it, so the server already holds every chunk and wants none of
-    // them, and the old shape read, cut and sealed all of them anyway to
+    // them, and the old shape read, cut and hashed all of them anyway to
     // rediscover a list it was holding. The bodies are produced only if the
     // server asks, and then they are checked against the name they were
     // promised under, so a file that changed between the scan and the ask is
@@ -3306,31 +3149,17 @@ export class Engine {
     }
 
     // The scan that decided this file changed already read it, cut it and
-    // sealed it. Doing that again was the single largest cost of sending a
-    // large attachment: a 64 MiB file was read twice, chunked twice and
-    // sealed twice, and the garbage from both passes was live at once.
-    // Read and cut here when the caller had no fresh scan to hand over. A
-    // merge and a conflict copy both rewrite the file before uploading it, so
-    // whatever the pass scanned is stale by the time they are done.
+    // named it. Doing that again was the single largest cost of sending a
+    // large attachment: a 64 MiB file was read twice and chunked twice, and
+    // the garbage from both passes was live at once. Read and cut here when
+    // the caller had no fresh scan to hand over. A merge and a conflict copy
+    // both rewrite the file before uploading it, so whatever the pass scanned
+    // is stale by the time they are done.
     const scan = fresh ?? (await this.rehash(entry, path));
 
-    if (scan.sealed) {
-      const byName = new Map(scan.sealed.map((c) => [c.name, c.bytes]));
-      return {
-        names: scan.names,
-        bodyOf: async (name) => {
-          const body = byName.get(name);
-          if (!body) throw new Error(`no sealed body for ${name} of ${path}`);
-          return body;
-        },
-      };
-    }
-
-    // Offsets only, for a file too large to hold sealed. A wanted chunk is
-    // sealed again, which is deterministic and so gives back exactly what
-    // was named: either from the bytes still in hand, or by reading the
-    // range back off the disk if the file was never held at all.
-    const keys = this.keys;
+    // Offsets only, for a file too large to hold. A wanted chunk is read back
+    // off the disk and hashed again, and only sent if it is still the bytes
+    // it was named for.
     const vault = this.opts.vault;
 
     if (scan.spans) {
@@ -3341,34 +3170,30 @@ export class Engine {
           const span = spanOf.get(name);
           if (!span) throw new Error(`no chunk named ${name} in ${path}`);
           const range = await vault.readRange!(scan.path, span.start, span.end);
-          const again = await sealChunks(keys, [range]);
           // Checked against the name it was promised under. The file
           // was read to name it and is being read again to send it,
           // so an edit in between would otherwise put bytes on the
           // wire under a name that is not theirs. The server would
           // catch that and end the session; caught here it is one
           // file to try again next pass.
-          if (again[0]!.name !== name) {
+          if ((await chunkName(range)) !== name) {
             throw new Error(`${path} changed while it was being sent, so it was not sent`);
           }
-          return again[0]!.bytes;
+          return range;
         },
       };
     }
 
-    const spanOf = new Map<string, { start: number; end: number }>();
-    for (let i = 0; i < scan.names.length; i++) {
-      const piece = scan.pieces[i]!;
-      spanOf.set(scan.names[i]!, { start: piece.offset, end: piece.offset + piece.bytes.length });
-    }
-    const bytes = scan.bytes;
+    // The file is in hand, and each piece is a view into it: the bytes the
+    // name was computed from, so they are the body as they stand.
+    const byName = new Map<string, Uint8Array>();
+    for (let i = 0; i < scan.names.length; i++) byName.set(scan.names[i]!, scan.pieces[i]!.bytes);
     return {
       names: scan.names,
       bodyOf: async (name) => {
-        const span = spanOf.get(name);
-        if (!span) throw new Error(`no chunk named ${name} in ${path}`);
-        const again = await sealChunks(keys, [bytes.subarray(span.start, span.end)]);
-        return again[0]!.bytes;
+        const body = byName.get(name);
+        if (!body) throw new Error(`no chunk named ${name} in ${path}`);
+        return body;
       },
     };
   }
@@ -3418,8 +3243,8 @@ export class Engine {
 
     // Bytes this device already holds are not worth asking for again.
     //
-    // A move is the case that matters. Chunk names are hashes of
-    // ciphertext, so moving a file costs the sender nothing: the server
+    // A move is the case that matters. Chunk names are hashes of the
+    // chunks' bytes, so moving a file costs the sender nothing: the server
     // already has every chunk and only metadata travels. The receiver had
     // no such luck, and downloaded the whole file back over a name it was
     // already storing under. Moving one folder of attachments re-pulled all
@@ -3437,10 +3262,10 @@ export class Engine {
     // The whole-file check above catches a move. This catches an edit, which
     // is the common case and the expensive one: a paragraph changed in a
     // 200 MB recording renames one chunk and leaves the other eight hundred
-    // alone, and the receiver downloaded all of it. Chunk names are hashes of
-    // ciphertext and sealing is deterministic, so a name this device's own
-    // index lists is a body this device can make, exactly, from the file on
-    // its disk. Making it costs a read and a seal; fetching it costs the
+    // alone, and the receiver downloaded all of it. A chunk's name is the hash
+    // of its bytes and the chunker is deterministic, so a name this device's
+    // own index lists is a body this device can make, exactly, from the file
+    // on its disk. Making it costs a read and a hash; fetching it costs the
     // bytes over somebody's phone connection.
     const reuse = this.reusableFrom(batch, local);
 
@@ -3763,15 +3588,15 @@ export class Engine {
    * Which incoming chunks this device can make from the file already at that
    * path, without asking for them.
    *
-   * A name test only. Nothing is read here: the index already holds the sealed
+   * A name test only. Nothing is read here: the index already holds the chunk
    * names of what is on this disk, so the intersection with the incoming
-   * version's names is free, and it is exact, because a chunk name is a hash
-   * of the ciphertext and sealing is deterministic.
+   * version's names is free, and it is exact, because a chunk name is the hash
+   * of the chunk's bytes.
    *
    * Two gates, both about not making a small download slower. Under
    * `REUSE_ABOVE` there is nothing to save: a note's whole body is smaller
    * than the bookkeeping. And under half the chunks in common, the read and
-   * the seal of the local file cost more than fetching the difference would.
+   * the hashing of the local file cost more than fetching the difference would.
    */
   private reusableFrom(
     batch: readonly Incoming[],
@@ -3794,10 +3619,10 @@ export class Engine {
    * `held`, plus the bodies made from the file this version is replacing.
    *
    * The file is cut exactly as the scan cut it, so piece `i` is the piece the
-   * index named `entry.chunks[i]`, and each piece is sealed again to confirm
-   * it: sealing is deterministic, so a name that comes back different is a
-   * file that has changed under the index, and that piece is simply not
-   * offered. Nothing is trusted here that is not re-derived.
+   * index named `entry.chunks[i]`, and each piece is hashed again to confirm
+   * it: a name that comes back different is a file that has changed under the
+   * index, and that piece is simply not offered. Nothing is trusted here that
+   * is not re-derived.
    *
    * Streamed where the vault can, which is what keeps a 200 MB file to one
    * piece at a time plus the bodies actually reused. Where it cannot, the file
@@ -3825,16 +3650,16 @@ export class Engine {
       const pieces =
         vault.readBlocks && !this.cannotStream
           ? chunkStream(vault.readBlocks(d.path), sizes, isText)
-          : (entry?.size ?? Infinity) <= KEEP_SEALED_BELOW
+          : (entry?.size ?? Infinity) <= KEEP_BODIES_BELOW
             ? chunkBytes(await vault.read(d.path), sizes, isText)
             : undefined;
       if (pieces === undefined) return out;
       for await (const piece of pieces) {
         if (need.size === 0) break;
-        const [sealed] = await sealChunks(this.keys, [piece.bytes]);
-        if (sealed === undefined || !need.has(sealed.name)) continue;
-        out.set(sealed.name, sealed.bytes);
-        need.delete(sealed.name);
+        const name = await chunkName(piece.bytes);
+        if (!need.has(name)) continue;
+        out.set(name, piece.bytes);
+        need.delete(name);
         made++;
       }
     } catch (err) {
@@ -3876,11 +3701,10 @@ export class Engine {
    *
    * One `fetch` may carry at most `maxFetchBytes` of summed budget and at
    * most 65536 names, and the server refuses more with `toolarge` and no
-   * bodies. This device does not know the stored size of a chunk it has not
-   * got, so it costs each at its share of the file's declared size plus the
-   * sealing allowance, which is what the server's own budget rule allows and
-   * is never under the truth. The bodies come back in the order asked, across
-   * every ask.
+   * bodies. This device does not know the size of a chunk it has not got, so
+   * it costs each at its share of the file's declared size, which for a whole
+   * file adds up to exactly what the server counts. The bodies come back in
+   * the order asked, across every ask.
    */
   private async fetchAll(
     names: readonly string[],
@@ -3981,10 +3805,10 @@ export class Engine {
    *
    * Declining is the important half. The index says this path holds that
    * content, and the index can be out of date: the file may have been edited
-   * between the scan and here. So the bytes are re-chunked and re-sealed and
-   * the names compared, which is exact rather than trusting: sealing is
-   * deterministic, so identical content gives identical names, and that is
-   * the same property deduplication is built on.
+   * between the scan and here. So the bytes are re-chunked and re-hashed and
+   * the names compared, which is exact rather than trusting: identical content
+   * gives identical names, and that is the same property deduplication is
+   * built on.
    *
    * A false negative costs one round trip, which is what the old code did
    * every time. A false positive would write the wrong bytes into somebody's
@@ -4013,12 +3837,12 @@ export class Engine {
     const parts = [...chunkBytes(bytes, this.sizesFor(bytes.length, isText), isText)].map(
       (c) => c.bytes,
     );
-    // A window at a time, because only the names are wanted: sealing every
-    // part at once held a whole sealed copy of the file beside the plaintext,
-    // which is the peak `rehash` was already windowed to avoid. Moving a
-    // 64 MiB attachment on one device makes every other device take this
-    // path, on the hardware with the least memory (R083-07).
-    const names = await sealedNames(this.keys, parts);
+    // A window at a time, because only the names are wanted: hashing every
+    // part at once holds a copy of every part in flight beside the file,
+    // which is the peak `rehash` is windowed to avoid. Moving a 64 MiB
+    // attachment on one device makes every other device take this path, on
+    // the hardware with the least memory (R083-07).
+    const names = await chunkNames(parts);
     if (contentId(names) !== contentId(d.chunks)) return "ask";
 
     // The same check as `land`, for the same reason: this writes over
@@ -4339,7 +4163,7 @@ export class Engine {
    * its content and writing it back, and there is no reason for a second copy
    * of the reassembly to exist for that.
    */
-  async contentOf(uid: number, expected?: string, signedSize?: number): Promise<Uint8Array> {
+  async contentOf(uid: number, expected?: string, listedSize?: number): Promise<Uint8Array> {
     const meta = await this.opts.transport.get(uid);
     // `expected` is a content id the caller already holds for this uid, and
     // the one that matters is the merge ancestor's. A three-way merge
@@ -4368,19 +4192,20 @@ export class Engine {
     // Substituted bodies are not the hole here: `fetch` hashes every body
     // against the name it asked for, so a server cannot answer one name with
     // another chunk's bytes. What this catches is an entry that contradicts
-    // itself, from a signing bug or a corrupt row: 500 bytes made of chunks
+    // itself, from a writer's bug or a corrupt row: 500 bytes made of chunks
     // holding five restored as five bytes and said nothing.
     //
-    // `signedSize` is the size off an entry whose authenticator this device
-    // checked, where the caller has one; `meta.size` is the server's own word
-    // for the same number, which it is free to choose. Where both exist they
-    // have to agree, and the signed one is what the assembly is held to.
-    if (signedSize !== undefined && signedSize !== meta.size) {
+    // `listedSize` is the size off the history or deletion entry the caller
+    // chose this version from, where it has one; `meta.size` is the server's
+    // word for the same number in another answer. Where both exist they have
+    // to agree, and the listed one is what the assembly is held to, because it
+    // is the one a person was shown.
+    if (listedSize !== undefined && listedSize !== meta.size) {
       throw new Error(
-        `version ${uid} is offered as ${meta.size} bytes and was signed as ${signedSize} bytes`,
+        `version ${uid} is offered as ${meta.size} bytes and was listed as ${listedSize} bytes`,
       );
     }
-    const declared = signedSize ?? meta.size;
+    const declared = listedSize ?? meta.size;
     if (meta.chunks.length === 0) {
       if (declared !== 0) {
         throw new Error(
@@ -4414,29 +4239,28 @@ export class Engine {
   }
 
   /**
-   * Opens sealed bodies in order and joins the plaintext.
+   * Joins raw chunk bodies, in order, into the file they make.
    *
-   * Into one buffer of the declared size, filled window by window, rather than
-   * a list of opened parts joined at the end. The old shape held three copies
-   * of the file at its peak, the sealed bodies, every opened part and the
-   * join, on the device with the least memory to spare: a 64 MiB attachment on
-   * a phone wanted around 192 MiB plus the fetch buffers (R083-06). The
-   * comment that used to be here said the window kept a large file from
-   * holding every opened chunk at once, and it did not; the window bounds how
-   * many are opened at a time, not how many are kept.
+   * The bodies are raw and verified: the transport decoded each frame and
+   * checked it against its name before anything here saw it (plan/protocol.md,
+   * "Chunk bodies"), so what is left is copying them into place.
    *
-   * Each sealed body is dropped from the list as it is opened, which is why
-   * `bodies` is mutable: both callers build it for this call alone. That is
-   * the whole saving for `contentOf`, where the list is the only reference to
-   * them. It is not for `land`, whose bodies are also held by the inbox until
-   * the file is written; `INBOX_BYTES` bounds that for many small files and
-   * not for one large one, which is a separate thing and still true.
+   * Into one buffer of the declared size rather than a list of parts joined at
+   * the end. The join shape held two copies of the file at its peak, on the
+   * device with the least memory to spare (R083-06).
    *
-   * `declared` is the size the entry says it is, already checked against the
-   * signed size by the caller. Allocating from it is what makes one buffer
-   * possible, and it is why the size check that used to be the caller's is
-   * now made here: `out.length` is the declared length by construction, so a
-   * caller comparing the two would be comparing a number with itself.
+   * Each body is dropped from the list as it is copied, which is why `bodies`
+   * is mutable: both callers build it for this call alone. That is the whole
+   * saving for `contentOf`, where the list is the only reference to them. It
+   * is not for `land`, whose bodies are also held by the inbox until the file
+   * is written; `INBOX_BYTES` bounds that for many small files and not for one
+   * large one, which is a separate thing and still true.
+   *
+   * `declared` is the size the entry says it is. Allocating from it is what
+   * makes one buffer possible, and it is why the size check that used to be
+   * the caller's is made here: `out.length` is the declared length by
+   * construction, so a caller comparing the two would be comparing a number
+   * with itself.
    */
   private async assemble(
     uid: number,
@@ -4461,28 +4285,20 @@ export class Engine {
     }
     const out = new Uint8Array(declared);
     let total = 0;
-    // A window at a time, for the reason sealChunks takes one: opening is
-    // mostly waiting on WebCrypto, and one at a time leaves it idle.
-    for (let at = 0; at < bodies.length; at += SEAL_WINDOW) {
-      const window = await Promise.all(
-        bodies.slice(at, at + SEAL_WINDOW).map(async (b, i) => {
-          if (b === undefined) throw new Error(`version ${uid} is missing one of its chunks`);
-          bodies[at + i] = undefined;
-          return openChunk(this.keys, b);
-        }),
-      );
-      for (const part of window) {
-        total += part.length;
-        if (total > perFileMax) {
-          throw new Error(
-            `version ${uid} is over ${total} bytes, and this server said it stores at most ${perFileMax}`,
-          );
-        }
-        // More bytes than the entry declares is the entry contradicting
-        // itself. Kept counting so the refusal below can name the real total,
-        // and not written, because there is no room for it.
-        if (total <= declared) out.set(part, total - part.length);
+    for (let at = 0; at < bodies.length; at++) {
+      const part = bodies[at];
+      if (part === undefined) throw new Error(`version ${uid} is missing one of its chunks`);
+      bodies[at] = undefined;
+      total += part.length;
+      if (total > perFileMax) {
+        throw new Error(
+          `version ${uid} is over ${total} bytes, and this server said it stores at most ${perFileMax}`,
+        );
       }
+      // More bytes than the entry declares is the entry contradicting itself.
+      // Kept counting so the refusal below can name the real total, and not
+      // written, because there is no room for it.
+      if (total <= declared) out.set(part, total - part.length);
     }
     // Rule 5, and the line that enforces it: a version made of chunks holding
     // five bytes and declaring five hundred is refused rather than written.
@@ -4645,7 +4461,7 @@ export class Engine {
     // recorded a size the file does not have, and a second reading of the
     // clock recorded an mtime the file does not have either. Both are what
     // `needsRehash` compares against, so the note was read, chunked and
-    // sealed again on the very next pass to discover it had not changed.
+    // hashed again on the very next pass to discover it had not changed.
     observe(entry, {
       folder: false,
       mtime: wroteAt,
@@ -4741,12 +4557,6 @@ export class Engine {
     this.activity("conflict", path, copyPath);
   }
 
-  private async sealedPath(path: string): Promise<string> {
-    const sealed = await sealPath(this.keys, path);
-    this.unsealed.set(sealed, path);
-    return sealed;
-  }
-
   /**
    * Records a failure, and decides whether the file is worth trying again.
    *
@@ -4823,9 +4633,14 @@ export class Engine {
       return;
     }
     // `neversync` is a vault refusing to write under a name its shell never
-    // syncs, which no retry changes; the other three are the server's.
+    // syncs, which no retry changes; the others are the server's. `badpath`
+    // and `collision` are a path the server will not hold, with the reason in
+    // the message (plan/protocol.md, "Paths"): a stranded path the person has
+    // to see, in the panel and in `trew-sync status`, rather than a log line
+    // nobody reads while the file never syncs (PLAN.md section 4.9).
     const permanent =
-      code !== undefined && ["badentry", "badname", "toolarge", "neversync"].includes(code);
+      code !== undefined &&
+      ["badentry", "badname", "toolarge", "neversync", "badpath", "collision"].includes(code);
 
     if (permanent) {
       this.skipped.set(path, {
@@ -4926,22 +4741,6 @@ export class Engine {
         if (!live.has(path)) this.refusalOf.delete(path);
       }
     }
-
-    // The sealed-path cache, kept to what the two indexes still name.
-    // It was never pruned, so a device connected through months of renames
-    // held every name it had ever been told. Unsealing a path it meets again
-    // costs one cipher call, and forgetting one it will not is free.
-    if (this.unsealed.size > this.entries.size + this.remote.size + this.pending.size) {
-      const keep = new Set<string>([
-        ...this.entries.keys(),
-        ...this.remote.keys(),
-        ...this.pending,
-        ...this.refusedInbound.keys(),
-      ]);
-      for (const [sealed, plain] of this.unsealed) {
-        if (!keep.has(plain)) this.unsealed.delete(sealed);
-      }
-    }
   }
 
   private async save(): Promise<void> {
@@ -4963,6 +4762,7 @@ export class Engine {
     for (const [path, r] of this.remote) remote[path] = r;
     await this.opts.store.save({
       cursor: this.cursor,
+      ...(this.epoch !== undefined ? { epoch: this.epoch } : {}),
       entries,
       remote,
       pending: [...this.pending],
@@ -5168,24 +4968,46 @@ export function validityGateFor(
  * Why a path from another device is one this device will not act on, or
  * undefined for a path it will.
  *
- * Two rules. The dot rule is the shared one from paths.ts: a dot-prefixed
- * segment never syncs in either direction, because Obsidian's index does not
- * list it and a file written and never listed is reported deleted. The
- * canonical rule is that the path is exactly what a filesystem would file it
- * under: no empty segment, no `.` or `..`, nothing leading or trailing.
+ * The protocol's own rule (`pathReason`, plan/protocol.md, "Paths"), which the
+ * server applies to every entry before it stores one. Checked again on the way
+ * in because two checks are cheaper than one recovery (PLAN.md section 4.1): a
+ * server is not obliged to be honest, and the dot rule in particular is what
+ * stops a path under `.obsidian` being written into this vault's settings. The
+ * dot rule is also the shared one from paths.ts: a dot-prefixed segment never
+ * syncs in either direction, because Obsidian's index does not list it and a
+ * file written and never listed is reported deleted.
  */
 export function refusedInboundPath(path: string): string | undefined {
-  if (path === "") return "an empty path";
-  if (isNeverSynced(path, new Set())) return "a path under a dot-prefixed name never syncs";
-  if (path.startsWith("/")) return "a path starting with a slash is not canonical";
-  if (path.endsWith("/")) return "a path ending with a slash is not canonical";
-  for (const part of path.split("/")) {
-    if (part === "") return "a path with an empty segment (//) is not canonical";
-    if (part === "." || part === "..")
-      return `a path with a ${JSON.stringify(part)} segment is not canonical`;
+  const reason = pathReason(path);
+  if (reason === undefined) return undefined;
+  if (reason === "slash") {
+    return path.startsWith("/")
+      ? "a path starting with a slash is not canonical"
+      : "a path ending with a slash is not canonical";
   }
-  return undefined;
+  if (reason === "dotsegment") {
+    const part = path.split("/").find((s) => s === "." || s === "..") ?? ".";
+    return `a path with a ${JSON.stringify(part)} segment is not canonical`;
+  }
+  return INBOUND_REFUSALS[reason];
 }
+
+/** What `refusedInboundPath` says for each of the protocol's reasons. */
+const INBOUND_REFUSALS: Record<PathReason, string> = {
+  utf8: "a path that is not valid UTF-8",
+  empty: "an empty path",
+  toolong: "a path longer than the 1024 bytes the server holds",
+  segmenttoolong: "a path with a name longer than the 255 bytes Android and Linux can hold",
+  control: "a path with a control character in it",
+  nfc: "a path that is not in Unicode NFC",
+  nbsp: "a path with a no-break space in it, which Obsidian would turn into a space",
+  backslash: "a path with a backslash in it, which Obsidian would turn into a slash",
+  slash: "a path starting or ending with a slash is not canonical",
+  emptysegment: "a path with an empty segment (//) is not canonical",
+  dotsegment: "a path with a . or .. segment is not canonical",
+  dotprefix: "a path under a dot-prefixed name never syncs",
+  staging: "a path carrying the name the vaults give files they are staging",
+};
 
 /**
  * Enough of a file to notice it changed.
@@ -5213,18 +5035,22 @@ function fingerprintOf(entry: IndexEntry | undefined): string {
 }
 
 /**
- * Below this, a file's sealed chunks are kept rather than made twice.
+ * Below this, a file is held whole while it is chunked and sent, and above it
+ * a vault that can stream reads it a block at a time instead.
  *
- * Almost every file is a note, and re-sealing a note to save a few kilobytes is
- * a worse trade than the memory. Above it a file is an attachment, and the
- * memory is the thing that matters.
+ * Almost every file is a note, and reading a note twice from the disk to save
+ * a few kilobytes of memory is a worse trade. Above it a file is an
+ * attachment, and the memory is the thing that matters: streaming keeps one
+ * chunk at a time plus the offsets, and reads back only the chunks the server
+ * asks for. The same line decides whether a download that can reuse this
+ * device's own copy of a file may read that copy whole.
  */
-const KEEP_SEALED_BELOW = 8 * 1024 * 1024;
+const KEEP_BODIES_BELOW = 8 * 1024 * 1024;
 
 /**
  * Below this, a download does not look at what this device already holds.
  *
- * The reuse costs a read and a seal of the local file to save fetching the
+ * The reuse costs a read and a hash of the local file to save fetching the
  * parts that have not changed, which is a good trade for an attachment and a
  * bad one for a note: a note's whole body is a couple of chunks, and the
  * bookkeeping is most of the work. A mebibyte is where the saving starts to be
@@ -5259,47 +5085,6 @@ const REPAIR_BATCH_NAMES = 4096;
  */
 const INTERACTIVE_GAP_MS = 200;
 
-/** How many chunks are sealed at once when the bodies are not being kept. */
-export const SEAL_WINDOW = 16;
-
-/**
- * Chunk names, sealing a bounded window at a time.
- *
- * Sealing is deterministic, so a name can be computed and the body it came from
- * thrown away. Doing them all at once holds a sealed copy of the whole file,
- * plus the compression garbage behind it, live at the same moment.
- *
- * Measured through a whole sync of one 64 MiB attachment, peak resident in a
- * fresh process: 816 MB with everything sealed at once against 522 MB with a
- * window of sixteen. Sealing is mostly waiting on WebCrypto, and sixteen is
- * enough in flight to keep it busy, so the smaller window is not slower.
- *
- * The saving is larger than one sealed copy of the file because a changed file
- * is sealed twice: once by the rehash that decides it changed, and once by the
- * upload that sends it. Both are windowed.
- *
- * This does not contradict `sealChunks`, which measured whole-file sealing as
- * the fast path. That was 1,893 chunks of about a kilobyte, where the
- * per-promise overhead is the cost. These are hundreds of kilobytes each, where
- * the work is.
- *
- * Exported because the property worth testing is that windowing changes nothing
- * but the memory: the names must be exactly what sealing everything at once
- * produces, or a file would be stored under names no other device agrees with.
- */
-export async function sealedNames(
-  keys: Schedule,
-  parts: readonly Uint8Array[],
-  window = SEAL_WINDOW,
-): Promise<string[]> {
-  const names: string[] = [];
-  for (let at = 0; at < parts.length; at += window) {
-    const sealed = await sealChunks(keys, parts.slice(at, at + window));
-    for (const chunk of sealed) names.push(chunk.name);
-  }
-  return names;
-}
-
 /**
  * How many bytes of incoming version this device will queue before fetching.
  * See `receive`: the count bound is the server's and the fetch caps split
@@ -5310,12 +5095,12 @@ const INBOX_BYTES = 8 * 1024 * 1024;
 
 /**
  * What one chunk of a file is costed at when only the file's size is known:
- * its share of the declared size, plus the sealing allowance the server's
- * budget rule grants per chunk. Never under the stored size, because the
- * server's rule is what bounds that.
+ * its share of the declared size, rounded up. Over a whole file the shares add
+ * up to at least the declared size, which is the sum of the chunks' raw
+ * lengths and exactly what the server's fetch budget counts.
  */
 function perChunkBudget(size: number, chunks: number): number {
-  return entryBudget(Math.ceil(size / Math.max(1, chunks)), 1);
+  return entryBudget(Math.ceil(size / Math.max(1, chunks)));
 }
 
 /**
@@ -5402,17 +5187,16 @@ function tooLarge(size: number, max: number): Error {
 /**
  * One read of a file, cut and named, which an upload can use as it stands.
  *
- * `sealed` is present only when the file was small enough to keep the bodies;
- * above that threshold the names were taken a window at a time and the bodies
- * dropped, and a wanted chunk is sealed again from `bytes`.
+ * Read whole, the pieces are views into `bytes` and are the bodies as they
+ * stand. Streamed, only the offsets are kept, and a wanted chunk is read back
+ * off the disk and hashed again.
  */
 type Scanned =
-  /** The file was read whole, because the vault could only hand it over whole. */
+  /** The file was read whole, because it was small or the vault could only hand it over whole. */
   | {
       readonly bytes: Uint8Array;
       readonly pieces: readonly { offset: number; bytes: Uint8Array }[];
       readonly names: string[];
-      readonly sealed?: SealedChunk[];
       readonly spans?: undefined;
     }
   /** The file was streamed, and nothing of it is held but the offsets. */
@@ -5422,7 +5206,6 @@ type Scanned =
       readonly path: string;
       readonly size: number;
       readonly bytes?: undefined;
-      readonly sealed?: undefined;
     };
 
 /** One version waiting for company in the inbox. */
@@ -5471,14 +5254,7 @@ interface Queued {
   readonly commit: (uid: number, remoteIsNewer: boolean) => void;
 }
 
-/**
- * Everything about an entry that its MAC covers.
- *
- * Built once and then both sent and authenticated, rather than written out
- * twice: the MAC has to cover exactly what goes on the wire, and two literals
- * kept in step by hand is how that stops being true. Sealing the path is a key
- * derivation and a cipher call, so building it once also halves them.
- */
+/** What a write says about the version it carries, before its conditions are added. */
 type PutFacts = Pick<BatchEntry, "path" | "meta" | "names">;
 
 /** What an upload needs: every chunk's name, and a way to get one's bytes. */

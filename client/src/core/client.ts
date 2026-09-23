@@ -30,7 +30,6 @@ import {
   checkEntryShape,
   combinePasses,
   contentId,
-  mustBeOurs,
   placeBeside,
   type RepairReport,
   type SyncOptions,
@@ -43,51 +42,31 @@ import {
   Transport,
   type DeviceRow,
   type InviteRow,
-  type RegistrarLimits,
   type ServerLimits,
   type SocketLike,
   type WireEntry,
 } from "./transport.ts";
 import { MemoryIndexStore, type FileStat, type IndexStore, type Vault } from "./vault.ts";
 import { validateStoredState } from "./stored-state.ts";
+import { base64urlDecode } from "./digest.ts";
+import { formatInviteString } from "./invite-string.ts";
 import {
-  authToken,
-  base64urlEncode,
-  deriveRootKeys,
-  deviceAuthToken,
-  generateDataKey,
-  generateDeviceSecret,
-  openPath,
-  randomBytes,
-  sealPath,
-  sealSecret,
-  unsealSecret,
-  unwrapDataKey,
-  wrapDataKey,
-  type RootKeys,
-  type Schedule,
-} from "./crypto.ts";
-import {
-  generateInviteId,
-  INVITE_KEY_LENGTH,
   deviceCredential,
-  formatInvite,
-  generateDeviceId,
+  finishedPairing,
+  isPendingPairing,
   type DeviceConfig,
-  type Invite,
+  type PendingPairing,
 } from "./pairing.ts";
 import { firstFreeName, splitName } from "./paths.ts";
 
 export interface ClientOptions {
   readonly vault: Vault;
   readonly store: IndexStore;
-  /** The vault's data key, which every content key derives from. See EngineOptions. */
-  readonly dataKey: Uint8Array;
   /** WebSocket URL of the server. */
   readonly url: string;
   /** This device's row in the vault's device list. */
   readonly deviceId: string;
-  /** This device's own auth key, derived from its own secret. */
+  /** This device's own 32-byte token, unpadded base64url. */
   readonly token: string;
   readonly vaultId: string;
   readonly device: string;
@@ -262,7 +241,6 @@ export class Client {
     engine = new Engine({
       vault: opts.vault,
       store: opts.store,
-      dataKey: opts.dataKey,
       transport: this.transport,
       withUploadTransport: (work) => this.withUploadTransport(work),
       releaseUploadTransport: () => this.releaseUploadTransport(),
@@ -298,8 +276,8 @@ export class Client {
       }
     }
     const transport = new Transport(this.opts.url, {
-      // The main connection alone authenticates/applies metadata to the engine.
-      // The auxiliary stream is checked for framing/continuity and discarded.
+      // The main connection alone applies metadata to the engine. The
+      // auxiliary stream is checked for framing and continuity and discarded.
       onBatch: () => {},
       ...(this.opts.timeoutMs !== undefined ? { timeoutMs: this.opts.timeoutMs } : {}),
       ...(this.opts.socketFactory ? { socketFactory: this.opts.socketFactory } : {}),
@@ -314,7 +292,13 @@ export class Client {
         token: this.opts.token,
         device: this.opts.device,
         cursor,
+        epoch: this.limits?.epoch,
       });
+      // The same store the main connection is on, or nothing goes up here:
+      // a history replaced between the two handshakes is one the main
+      // connection has not read yet.
+      if (transport.historyReplaced || limits.epoch !== this.limits?.epoch)
+        throw new Error("the server's history changed under this connection; reconnect sync");
       if (limits.cursor < cursor)
         throw new ProtocolError("cursor", "upload server is behind this device");
       for (const key of [
@@ -347,7 +331,7 @@ export class Client {
   ): Promise<T> {
     const result = await work(transport);
     // Broadcasts precede the auxiliary ACK. A later pong on the main wire
-    // covers them too, including authenticated metadata still being decoded.
+    // covers them too, including metadata still being applied.
     // Without this barrier an older main frame could arrive after q.commit
     // and replace its newly acknowledged head with an older revision.
     await this.transport.ping();
@@ -534,11 +518,6 @@ export class Client {
     return this.limits;
   }
 
-  /** The keys in use, which are the data key's and are known from `ready` onwards. */
-  get keys(): Schedule {
-    return this.engine.vaultKeys;
-  }
-
   /**
    * Connects, says hello, and waits for the backlog.
    *
@@ -546,13 +525,13 @@ export class Client {
    * before catch-up finishes sees a vault the server already has files for,
    * decides they are local-only, and uploads the lot.
    *
-   * `waitForBacklog: false` is for the two callers that ask a question and
-   * close: `trew status` and the cursor probe in `trew rebase`. Both want
+   * `waitForBacklog: false` is for the callers that ask a question and close:
+   * `trew status` and the cursor probe behind the panel's Rejoin. Both want
    * `ready.cursor`, which is the server's own number and is already here when
-   * `start` returns, and a device weeks behind was paying minutes of unsealing
-   * and MAC checking to print one line (R1). Closing straight after is what
-   * makes it cheap on the other end too: the server stops streaming. Nothing
-   * that syncs may pass it.
+   * `start` returns, and a device weeks behind was paying minutes of catch-up
+   * to print one line (R1). Closing straight after is what makes it cheap on
+   * the other end too: the server stops streaming. Nothing that syncs may pass
+   * it.
    */
   async connect(opts: { waitForBacklog?: boolean } = {}): Promise<ServerLimits> {
     await this.transport.connect();
@@ -750,8 +729,8 @@ export class Client {
     if (!this.caughtUp || this.soonTimer !== undefined) return;
     this.soonTimer = setTimeout(() => {
       // Retain the scheduled marker until this snapshot finishes checking.
-      // Per-entry crypto may still be working through frames already on the
-      // socket; scanning between those entries repeats the same vault walk.
+      // The engine may still be applying frames already on the socket;
+      // scanning between those entries repeats the same vault walk.
       void this.transport.drainReceived().then(
         () => {
           this.soonTimer = undefined;
@@ -878,50 +857,42 @@ export class Client {
   /**
    * Every version of one note, newest first.
    *
-   * The path is sealed on the way out and the answer's paths are unsealed on
-   * the way back, so the server takes no part in any of it beyond looking up
-   * a key in a table.
+   * Every answer is held to the entry shape the sync path holds a batch to,
+   * and to being about the note that was asked for, before anything is shown.
    */
   async history(path: string, opts: { before?: number; limit?: number } = {}): Promise<Version[]> {
-    const sealed = await sealPath(this.keys, path);
-    const entries = await this.serial(() => this.transport.history(sealed, opts));
-    await this.recoveryIsOurs(entries);
-    this.recoveryIsAboutThisPath(entries, sealed, path, opts.before);
+    const entries = await this.serial(() => this.transport.history(path, opts));
+    this.recoveryIsWellFormed(entries);
+    this.recoveryIsAboutThisPath(entries, path, opts.before);
     // The names these versions were moved from, so a rename does not end a
-    // note's history (Codex-06). Unsealed together rather than one at a time,
-    // and only where there is one to unseal.
-    const from = await Promise.all(
-      entries.map((e) => (e.prev ? openPath(this.keys, e.prev) : undefined)),
-    );
-    return entries.map((e, i) => this.asVersion(e, path, from[i]));
+    // note's history (Codex-06).
+    return entries.map((e) => this.asVersion(e, path, e.prev));
   }
 
   /**
    * Refuses a history answer that is not about the note that was asked for
    * (F10).
    *
-   * The signature check above says this vault's key wrote every entry. It
-   * does not say they are entries of *this* note, and the answer was then
-   * relabelled with the path the caller asked for: a valid signed entry for
-   * `other.md` came back as a version of `requested.md`, and restoring it
-   * wrote one note's contents over another's name. Nothing later catches
-   * that. The chunk list matches its own entry perfectly, because it is a
-   * real entry; it is simply somebody else's.
+   * The shape check above says every entry is well formed. It does not say
+   * they are entries of *this* note, and the answer was then relabelled with
+   * the path the caller asked for: a valid entry for `other.md` came back as a
+   * version of `requested.md`, and restoring it wrote one note's contents over
+   * another's name. Nothing later catches that. The chunk list matches its own
+   * entry perfectly, because it is a real entry; it is simply somebody else's.
    *
-   * Path sealing is deterministic, so the comparison is exact: one note has
-   * one sealed name, and an entry that does not carry it is not a version of
-   * it. Ordering and the `before` bound are checked here too, because a
-   * caller paging backwards trusts both and neither was ever tested.
+   * The comparison is exact: one note has one path, and an entry that does not
+   * carry it is not a version of it. Ordering and the `before` bound are
+   * checked here too, because a caller paging backwards trusts both and
+   * neither was ever tested.
    */
   private recoveryIsAboutThisPath(
     entries: readonly WireEntry[],
-    sealed: string,
     path: string,
     before: number | undefined,
   ): void {
     let last: number | undefined;
     for (const e of entries) {
-      if (e.path !== sealed) {
+      if (e.path !== path) {
         throw new Error(
           `the server answered a history request for ${path} with a version of some other ` +
             "note, and it is not shown",
@@ -944,31 +915,24 @@ export class Client {
   }
 
   /**
-   * Refuses a recovery list holding an entry this vault's key did not sign.
+   * Refuses a recovery list holding an entry that contradicts itself.
    *
    * The same check the sync path runs on every batch entry, which for a while
-   * recovery did not run at all; `mustBeOurs` in the engine holds the
-   * reason. What is added here is the tail of the sentence: nothing forged is
-   * acted on, and nothing forged is put in front of somebody either.
-   *
-   * Both of the sync path's checks, not one. A signature says who wrote an
-   * entry and not that the entry makes sense, and the two are separate
-   * failures: an entry declaring 500 bytes and naming no chunks is signed by
-   * this vault's key and restores as an empty file, which is a note lost to a
-   * recovery tool. `acceptBatch` has always refused that shape.
+   * recovery did not run at all: an entry declaring 500 bytes and naming no
+   * chunks restores as an empty file, which is a note lost to a recovery tool.
+   * `acceptBatch` has always refused that shape, and nothing it refuses is put
+   * in front of somebody either.
    */
-  private async recoveryIsOurs(entries: readonly WireEntry[]): Promise<void> {
-    await mustBeOurs(this.keys, entries, ", and it is not shown");
-    for (const e of entries) checkEntryShape(e);
+  private recoveryIsWellFormed(entries: readonly WireEntry[]): void {
+    for (const e of entries) {
+      try {
+        checkEntryShape(e);
+      } catch (err) {
+        throw new Error(`${(err as Error).message}, and it is not shown`);
+      }
+    }
   }
 
-  /**
-   * Every note whose newest version is a deletion, newest first.
-   *
-   * This is the list somebody reads when they know a note is gone and cannot
-   * remember what it was called, which is why the paths are unsealed here
-   * rather than left for the caller.
-   */
   /**
    * Sends the server bodies it has lost, writing no version (I14).
    *
@@ -986,9 +950,15 @@ export class Client {
     return this.serial(() => this.engine.repair());
   }
 
+  /**
+   * Every note whose newest version is a deletion, newest first.
+   *
+   * This is the list somebody reads when they know a note is gone and cannot
+   * remember what it was called.
+   */
   async deleted(limit?: number, before?: number): Promise<DeletedList> {
     const answer = await this.serial(() => this.transport.deleted(limit, before));
-    await this.recoveryIsOurs(answer.entries);
+    this.recoveryIsWellFormed(answer.entries);
     const notes: Deletion[] = [];
     let last: number | undefined;
     for (const e of answer.entries) {
@@ -1009,7 +979,7 @@ export class Client {
       }
       last = e.uid;
       notes.push({
-        ...this.asVersion(e, await openPath(this.keys, e.path)),
+        ...this.asVersion(e, e.path),
         // Zero means purge has taken every version that had content.
         // The note is still listed, and there is nothing to bring back.
         restorable: e.restorable ?? 0,
@@ -1084,7 +1054,7 @@ export class Client {
         return { path: at, bytes: 0 };
       }
 
-      // The signed history entry's chunk list is what `get` must answer with.
+      // The listed history entry's chunk list is what `get` must answer with.
       const content = await this.engine.contentOf(version.uid, version.contentId, version.size);
       const wanted = to ?? version.path;
       const vault = this.opts.vault;
@@ -1183,36 +1153,32 @@ export class Client {
   /**
    * Issues a single-use invite for another device.
    *
-   * The vault's data key goes to the server sealed under a fresh key the
-   * server never sees, under a fresh identifier it cannot guess, for `ttlMs`
-   * (the server's default and cap apply when this is absent or over). What
-   * comes back is the string to hand over and the moment it stops working, in
-   * server milliseconds. The string is the only copy of the invite key;
-   * nothing here keeps it.
+   * The server mints the token and answers with it once, with the invite's id
+   * and when it stops working (the server's default of an hour, and its cap,
+   * apply when `ttlMs` is absent or over). What comes back is the `trew1i_`
+   * string to hand over, formatted with this device's own server address and
+   * vault, the id a listing shows and `uninvite` takes, and the expiry in
+   * server milliseconds. The string is the only copy of the token; nothing
+   * here keeps it.
    *
-   * This is how a device is added, and the recovery key is not. A device holds
-   * the data key and its own credential and no root, so an invite is the most
-   * a device can give away, and it is exactly enough: the redeeming device
-   * gets the data key and a row of its own, and nothing that could register a
-   * third device or rewrap the vault. The recovery key stays written down for
-   * the day every device is gone.
+   * An invite is standing authority to add a device until it is used, expires
+   * or is cancelled, and revoking this device cancels the invites it issued.
    */
-  async invite(ttlMs?: number): Promise<{ invite: string; expiresAt: number }> {
-    // Not `randomBytes` straight: an id whose base64url starts with `-` is a
-    // word the command line reads as an option, and `trew uninvite` could
-    // not cancel one.
-    const id = generateInviteId();
-    const key = randomBytes(INVITE_KEY_LENGTH);
-    const sealed = await sealSecret(key, this.opts.dataKey);
-    const expiresAt = await this.serial(() =>
+  async invite(
+    opts: { ttlMs?: number; label?: string } = {},
+  ): Promise<{ invite: string; id: string; expiresAt: number | null }> {
+    const minted = await this.serial(() =>
       this.transport.invite({
-        invite: base64urlEncode(id),
-        sealed,
-        ...(ttlMs !== undefined ? { ttlMs } : {}),
+        ...(opts.ttlMs !== undefined ? { ttlMs: opts.ttlMs } : {}),
+        ...(opts.label !== undefined ? { label: opts.label } : {}),
       }),
     );
-    const invite: Invite = { url: this.opts.url, vaultId: this.opts.vaultId, id, key };
-    return { invite: formatInvite(invite), expiresAt };
+    const invite = formatInviteString({
+      token: base64urlDecode(minted.token),
+      url: this.opts.url,
+      vault: this.opts.vaultId,
+    });
+    return { invite, id: minted.invite, expiresAt: minted.expiresAt };
   }
 
   /* ------------------------------------------------------------ *
@@ -1220,18 +1186,10 @@ export class Client {
    * ------------------------------------------------------------ */
 
   /**
-   * Every device that may reach this vault, and the cap on how many there
-   * may be.
-   *
-   * A device's operation, not a registrar's: the list is what somebody reads
-   * to answer "what is still connected to my notes", and a registrar reads
-   * nothing.
+   * Every device that may reach this vault, and every invite that could still
+   * add one: the answer to "what is still connected to my notes".
    */
-  async devices(): Promise<{
-    devices: DeviceRow[];
-    maxDevices: number;
-    invites: InviteRow[];
-  }> {
+  async devices(): Promise<{ devices: DeviceRow[]; invites: InviteRow[] }> {
     return this.serial(() => this.transport.devices());
   }
 
@@ -1240,14 +1198,14 @@ export class Client {
    * holding stops working before it expires.
    *
    * The companion to being able to see one. An invite is a standing authority
-   * to register a device, and before this the only ways to retire one were to
-   * wait out the hour or to rotate the vault, which retires the recovery key
-   * with it: neither is an answer to "I issued that on the laptop I just
-   * lost".
+   * to register a device, and waiting out the hour is not an answer to "I
+   * issued that on the laptop I just lost". Revoking that laptop cancels the
+   * invites it issued too.
    *
-   * An identifier that is unknown, expired or already redeemed is one refusal,
-   * saying which of the three to nobody, because saying more would tell
-   * somebody guessing identifiers that they had found a real one.
+   * Takes the invite's id from the device list. An id that is unknown,
+   * expired or already redeemed is one refusal, saying which to nobody,
+   * because saying more would tell somebody guessing ids that they had found
+   * a real one.
    */
   async uninvite(invite: string): Promise<void> {
     return this.serial(() => this.transport.uninvite(invite));
@@ -1260,25 +1218,17 @@ export class Client {
    * revoked device holds an authenticated connection is a revocation it does
    * not notice, because nothing on a live session is re-checked.
    *
-   * A device may revoke another and may revoke itself. Revoking the last one
-   * is refused without `allowLast`, because what it leaves is a vault only the
-   * recovery key can reach.
+   * A device may revoke another, may revoke itself, and may revoke the last
+   * one: the way back into a vault with no devices is `trew invite` on the
+   * server, and nothing a device holds is needed for it.
    *
-   * What this does **not** do is un-read what that device already read: it
-   * still holds the vault's data key and can decrypt every note it had synced.
-   * A device that was stolen rather than merely lost wants a rotation as well.
-   * Every surface that offers this has to say so; the honesty is the feature.
+   * What this does **not** do is un-read what that device already read: every
+   * note it had synced is still on its disk, in plaintext. Revoking stops it
+   * receiving anything new and stops it writing. Every surface that offers
+   * this has to say so; the honesty is the feature.
    */
-  async revoke(
-    deviceId: string,
-    opts: { allowLast?: boolean } = {},
-  ): Promise<{ deviceId: string; self: boolean }> {
-    return this.serial(() =>
-      this.transport.revoke({
-        deviceId,
-        ...(opts.allowLast !== undefined ? { allowLast: opts.allowLast } : {}),
-      }),
-    );
+  async revoke(deviceId: string): Promise<{ deviceId: string; self: boolean }> {
+    return this.serial(() => this.transport.revoke({ deviceId }));
   }
 
   /**
@@ -1381,7 +1331,7 @@ export interface Deletion extends Version {
 /** One version of one note, as recovery talks about it. */
 export interface Version {
   readonly uid: number;
-  /** Plaintext, unsealed by whoever asked. */
+  /** The note's path, as the server holds it. */
   readonly path: string;
   readonly size: number;
   readonly ctime: number;
@@ -1394,7 +1344,7 @@ export interface Version {
   /** How many chunks it is stored in. Zero for a folder, a deletion, or empty. */
   readonly chunks: number;
   /**
-   * The chunk list as the signed entry named it, in the engine's content id
+   * The chunk list as the listed entry named it, in the engine's content id
    * form. What a restore holds `get` to, so the server cannot answer with
    * another file's chunks.
    */
@@ -1402,12 +1352,10 @@ export interface Version {
   /**
    * The name this version was moved from, where it carries one (Codex-06).
    *
-   * A rename travels as one signed operation, so this is authenticated with
-   * the rest of the entry. History matches one exact sealed path, so without
-   * it a note renamed today has a history that starts today, however many
-   * months of it the server is still holding under the old name.
-   *
-   * Unsealed here, because it is a sealed path on the wire like any other.
+   * A rename travels as one operation, with the old name on the entry. History
+   * matches one exact path, so without it a note renamed today has a history
+   * that starts today, however many months of it the server is still holding
+   * under the old name.
    */
   readonly previousPath?: string;
 }
@@ -1671,359 +1619,149 @@ export function retryWait(cause: Error, backoffMs: number): number {
   return Math.max(backoffMs, hint ?? 0);
 }
 
-/**
- * A fresh data key for a vault about to be claimed, wrapped under its root so
- * the server can store it.
- *
- * Made once, on the one attempt there is. It used to be staged in the device
- * config, because the claim was retried from disk and a fresh candidate per
- * attempt could bind the vault to one key while the device went on offering
- * another. Nothing retries a claim from disk any more: a claim that commits
- * with its reply lost is recovered by pairing with the recovery key, and the
- * server hands that session the key the claim already bound.
- */
-export async function wrappedForClaim(keys: RootKeys): Promise<string> {
-  return wrapDataKey(keys.wrap, generateDataKey());
-}
-
 /* ---------------------------------------------------------------- *
- * The registrar, and becoming a device
+ * Joining a vault
  * ---------------------------------------------------------------- */
 
 /**
- * A connection holding the vault's own credential, which is the recovery key.
+ * Where a pairing's progress is kept: the shell's own config file.
  *
- * It may register a device, rotate the vault's secret and administer the
- * device list: read it, and take a row off it, including the last row. It may
- * do nothing else: no entries, no history, no catch-up, and nothing that reads
- * or writes a note. That is the server's shape rather than a promise this
- * class keeps, and it is the whole of the privilege separation per-device
- * credentials are made of. See docs/protocol.md, "Authentication".
- *
- * The device list is here because two things need it. Emptying the vault is
- * the recovery key's alone, since it is the one revocation nothing on a device
- * can undo, and a vault whose every row is a pairing that crashed refuses
- * every registration until somebody prunes it, with no device left to prune
- * it from.
- *
- * A separate class from `Client` on purpose. One object that was sometimes a
- * device and sometimes a registrar would have every caller asking which, and
- * the one place that must never get it wrong is the one that decides whether
- * a credential may sync.
+ * Both halves are the shell's, because only it knows where its config lives
+ * and how it is made durable. `save` writes and reads back before it returns
+ * (rule 4); `forget` removes what was saved and proves it gone.
  */
-export class Registrar {
-  private constructor(
-    readonly transport: Transport,
-    readonly limits: RegistrarLimits,
-    private readonly root: RootKeys,
-  ) {}
-
-  /**
-   * Opens one, with the root secret the caller holds.
-   *
-   * `claim` binds an unclaimed vault and is sent only while the caller still
-   * holds the server's first-run token; see `wrappedForClaim`.
-   */
-  static async open(opts: {
-    url: string;
-    vaultId: string;
-    device: string;
-    secret: Uint8Array;
-    /** The server's first-run token, while the vault is still being claimed. */
-    bootstrap?: string | undefined;
-    claim?: { auth: string; wrapped: string } | undefined;
-    timeoutMs?: number | undefined;
-    socketFactory?: ((url: string) => SocketLike) | undefined;
-    log?: ((message: string, ...rest: unknown[]) => void) | undefined;
-  }): Promise<Registrar> {
-    const root = await deriveRootKeys(opts.secret);
-    const transport = new Transport(opts.url, {
-      onBatch: () => {
-        // A registrar is in no vault's fan-out, so this is unreachable
-        // against any server that keeps the protocol. Present because the
-        // transport requires a handler, and doing nothing is right: there is
-        // no engine here and no keys to open an entry with.
-      },
-      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-      ...(opts.socketFactory !== undefined ? { socketFactory: opts.socketFactory } : {}),
-      ...(opts.log !== undefined ? { log: opts.log } : {}),
-    });
-    try {
-      await transport.connect();
-      const limits = await transport.helloAsRegistrar({
-        vault: opts.vaultId,
-        device: opts.device,
-        // The bootstrap while there is one, and what the root derives once
-        // the vault has been claimed.
-        token: opts.bootstrap ?? authToken(root),
-        ...(opts.claim !== undefined ? { claim: opts.claim } : {}),
-      });
-      return new Registrar(transport, limits, root);
-    } catch (err) {
-      transport.close();
-      throw err;
-    }
-  }
-
-  /**
-   * Registers a device row and returns the vault's data key, unwrapped.
-   *
-   * The unwrapping happens here because this session is the one that can: it
-   * holds the root, and the wrapping key derives from it. That is the whole
-   * mechanism by which a device ends up holding the data key without ever
-   * holding the root, and it is also the check on what came back: a wrapping
-   * the server invented does not open under this root, so a key no other
-   * device on the vault derives cannot be installed by being handed over.
-   */
-  async register(args: {
-    deviceId: string;
-    deviceSecret: Uint8Array;
-    name: string;
-  }): Promise<{ dataKey: Uint8Array; wrapped: string }> {
-    const { wrapped } = await this.transport.register({
-      deviceId: args.deviceId,
-      auth: await deviceAuthToken(args.deviceSecret),
-      name: args.name,
-    });
-    return { dataKey: await unwrapDataKey(this.root.wrap, wrapped), wrapped };
-  }
-
-  /**
-   * Gives the vault a new root secret, keeping its history and every device.
-   *
-   * The data key does not change: it is unwrapped under the old root and
-   * wrapped again under the new one, and the server swaps the auth hash and
-   * the blob together. **No device row is touched and every device goes on
-   * syncing across a rotation**, which is the expensive half of what per-device
-   * credentials removed: a rotation that evicted every device is how a leaked
-   * key goes unrotated.
-   *
-   * The data key comes from the caller rather than from a wrapping, because a
-   * registrar is handed no wrapping at hello and the caller has the key
-   * already: it is a paired device on this vault, and holding the data key is
-   * what being one means.
-   */
-  async rotate(newSecret: Uint8Array, dataKey: Uint8Array): Promise<{ rewrapped: string }> {
-    const fresh = await deriveRootKeys(newSecret);
-    const rewrapped = await wrapDataKey(fresh.wrap, dataKey);
-    await this.transport.rotate({ auth: authToken(fresh), wrapped: rewrapped });
-    return { rewrapped };
-  }
-
-  /**
-   * Every device that may reach this vault, and the cap on how many there may
-   * be.
-   *
-   * The same op a device sends, and the same answer. It is the access list
-   * rather than the vault's content, it carries no key material, and the
-   * recovery key needs it to be able to act: revoking takes an id.
-   */
-  async devices(): Promise<{
-    devices: DeviceRow[];
-    maxDevices: number;
-    invites: InviteRow[];
-  }> {
-    return this.transport.devices();
-  }
-
-  /**
-   * Cancels an outstanding invite. The recovery key's, on the same reasoning
-   * as the device list: an invite is who may reach the vault, not what it
-   * holds, and on a vault whose devices are gone this is the only credential
-   * left to retire one with.
-   */
-  async uninvite(invite: string): Promise<void> {
-    return this.transport.uninvite(invite);
-  }
-
-  /**
-   * Removes a device's row and closes every session it has open.
-   *
-   * `allowLast` is why this is here. A device is refused it, because emptying
-   * the vault is the one revocation nothing on a device can undo: what it
-   * leaves is a vault only the recovery key opens, so it is the recovery key's
-   * to do. The server still asks for the word, which is the confirmation, now
-   * asked of the credential that can undo the answer.
-   *
-   * It does not un-read what that device already read, here any more than
-   * anywhere else, and a device that was stolen wants a rotation as well.
-   */
-  async revoke(
-    deviceId: string,
-    opts: { allowLast?: boolean } = {},
-  ): Promise<{ deviceId: string; self: boolean }> {
-    return this.transport.revoke({
-      deviceId,
-      ...(opts.allowLast !== undefined ? { allowLast: opts.allowLast } : {}),
-    });
-  }
-
-  close(): void {
-    this.transport.close();
-  }
-}
-
-/** Where a device is joining from, and what it holds to join with. */
-export interface JoiningVault {
-  /** WebSocket URL of the server, without the path. */
-  readonly url: string;
-  readonly vaultId: string;
-  /** This device's local name, which becomes the label on its row. */
-  readonly device: string;
-  /**
-   * The vault's root secret: a recovery key somebody pasted, or the one this
-   * device has just made for a vault it is starting.
-   */
-  readonly secret: Uint8Array;
-  /**
-   * Whether the device being registered may send anything to the server (I29).
-   *
-   * Carried through registration rather than written afterwards, because the
-   * config this produces *replaces* whatever was on disk: setting it at `init`
-   * and letting registration rebuild the file dropped it silently, and the
-   * spread that set it bypassed the excess-property check that would have
-   * said so.
-   */
-  readonly readOnly?: boolean;
-  /**
-   * Names this device will never sync, chosen before it starts (Codex-05).
-   *
-   * Carried through registration for the same reason `readOnly` is: the config
-   * this produces *replaces* whatever was on disk, so a list written
-   * beforehand and left to registration to preserve is a list that vanishes.
-   */
-  readonly ignore?: readonly string[];
-  /**
-   * The server's first-run token, present only while this device is claiming
-   * an unclaimed vault. The claim rides on the registrar hello below, so it is
-   * spent by the same exchange that registers this device's row.
-   */
-  readonly bootstrap?: string | undefined;
+export interface PairingStore {
+  save(config: DeviceConfig): Promise<void>;
+  forget(): Promise<void>;
 }
 
 /**
- * Registers this device against a vault it holds the root of, and returns the
- * config of a device that holds no root.
+ * A redemption that went out and heard no answer.
  *
- * The two ways in are `trew init` and the panel's "start a new vault", which
- * arrive with a bootstrap token and a secret nobody has seen yet, and `trew
- * pair RECOVERY-KEY` and the panel's pairing form, which arrive with a secret
- * somebody pasted. Both end in the same place, which is the point: a row on
- * the vault, the credential for it, the data key, and no root.
- *
- * One save, and its placement is the whole of the crash story. `save` must
- * write durably and read back before returning (rule 4, verify the outcome and
- * not the exit code), and it is called *after* the registration has committed
- * and *before* anything else can fail. What a crash leaves:
- *
- *  - **Before the registration.** Nothing here has written anything. A vault
- *    being started still has its root on disk from before the claim, which is
- *    the only copy of the recovery key and is why it is written there; a
- *    pairing has the key in somebody's hand already.
- *  - **Between the registration and the save.** One row on the server that
- *    nobody holds the credential for. It shows in `trew devices` as a device
- *    that has never connected and goes with `trew revoke`, which is exactly
- *    the failure the invite path has and is documented with.
- *  - **After the save.** A finished device. The connection below only confirms
- *    it, so failing there costs a retry and no state.
- *
- * There is deliberately no resumable half-state. The root and the device
- * credential never sit on disk together, so a stolen laptop cannot re-derive
- * the vault's credential and register itself again, and there is no shape a
- * config can be in that some later command has to recognise and finish.
- *
- * The first two crash points are walked against a real server in
- * cli/state.test.ts, "a vault that was started and never joined ": the
- * refusal that hands the recovery key back and pairs again with it, notes and
- * all, and the row a failed save leaves for `trew revoke` to take.
+ * The server may have committed it, and whether it did is exactly what this
+ * device does not know. The pending pairing is kept, and retrying it with the
+ * same id and token is answered `redeemed` if the server registered them, even
+ * after the invite has expired, and refused if it did not (plan/protocol.md,
+ * "Invite redemption"). A `ConnectionError`, so a loop that retries dropped
+ * connections retries this too.
  */
-export async function registerAsDevice(
-  joining: JoiningVault,
-  save: (device: DeviceConfig) => Promise<void>,
+export class PairingInterrupted extends ConnectionError {
+  constructor(
+    message: string,
+    /** The pairing kept on disk, to retry with. */
+    readonly pending: PendingPairing,
+  ) {
+    super(message);
+    this.name = "PairingInterrupted";
+  }
+}
+
+/**
+ * Joins a vault by redeeming an invite, persisting before it sends
+ * (plan/protocol.md, "Invite redemption").
+ *
+ * The order is the whole design, and each outcome leaves one state behind:
+ *
+ *  - **Saved first.** The pending pairing, with the id and token this device
+ *    will connect with and the invite being redeemed, is on disk before a byte
+ *    goes to the server. A crash anywhere after this leaves a pairing that can
+ *    be finished, never a row on the server whose credential nobody holds.
+ *  - **The server never reached.** A connection that never opened sent
+ *    nothing, so nothing can have committed, and the pending pairing is
+ *    removed: an unreachable server leaves the vault as unpaired as it was.
+ *  - **Refused.** Any refusal writes nothing on the server and never spends
+ *    the invite, so the pending pairing is removed too, and nothing is left
+ *    saved after a refusal. The invite still works if it was ever good.
+ *  - **No answer.** A connection that closed or timed out after the
+ *    redemption went out may have committed it, so the pending pairing is
+ *    kept and `PairingInterrupted` says so. Calling this again with it is the
+ *    retry, with the same id and token.
+ *  - **`redeemed`.** The pending pairing is replaced by the finished device,
+ *    which holds no invite. If that save fails, the pending pairing is still
+ *    on disk with the same credential, and the retry is answered `redeemed`
+ *    again.
+ *
+ * Starting and resuming are the same call: a shell that finds a pending
+ * pairing in its config passes it here as it is.
+ */
+export async function pairWithInvite(
+  pending: PendingPairing,
+  store: PairingStore,
   opts: {
     timeoutMs?: number | undefined;
     socketFactory?: ((url: string) => SocketLike) | undefined;
     log?: ((message: string, ...rest: unknown[]) => void) | undefined;
-    /**
-     * Called the moment the server has accepted the registration, before
-     * anything else can fail.
-     *
-     * For the callers that have to tell the two failures apart: a pairing that
-     * never registered leaves the vault exactly as unpaired as it found it,
-     * because a recovery key that turns out to be wrong should cost nothing,
-     * and one that did register has a row on the server to say so.
-     */
-    onRegistered?: (() => void) | undefined;
+    /** Called once the redemption has been sent, for a shell that reports progress. */
+    onSent?: (() => void) | undefined;
   } = {},
 ): Promise<DeviceConfig> {
-  const root = await deriveRootKeys(joining.secret);
-  const deviceId = generateDeviceId();
-  const deviceSecret = generateDeviceSecret();
-
-  const registrar = await Registrar.open({
-    url: joining.url,
-    vaultId: joining.vaultId,
-    device: joining.device,
-    secret: joining.secret,
-    ...(joining.bootstrap !== undefined
-      ? {
-          bootstrap: joining.bootstrap,
-          claim: { auth: authToken(root), wrapped: await wrappedForClaim(root) },
-        }
-      : {}),
+  await store.save(pending);
+  const transport = new Transport(pending.url, {
+    onBatch: () => {
+      // A redeeming connection joins no vault's fan-out, so this is
+      // unreachable against any server that keeps the protocol. Present
+      // because the transport requires a handler.
+    },
     ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     ...(opts.socketFactory !== undefined ? { socketFactory: opts.socketFactory } : {}),
     ...(opts.log !== undefined ? { log: opts.log } : {}),
   });
-  let dataKey: Uint8Array;
+  let sent = false;
   try {
-    ({ dataKey } = await registrar.register({
-      deviceId,
-      deviceSecret,
-      name: joining.device,
-    }));
+    await transport.connect();
+    sent = true;
+    opts.onSent?.();
+    await transport.redeem({
+      vault: pending.vaultId,
+      device: pending.device,
+      invite: pending.invite,
+      deviceId: pending.deviceId,
+      token: pending.deviceToken,
+    });
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    if (sent && !(error instanceof ProtocolError)) {
+      throw new PairingInterrupted(
+        `the invite was sent and no answer came back (${error.message}), so whether the server ` +
+          "registered this device is not known. The pairing is kept, and trying again finishes " +
+          "it with the same credential.",
+        pending,
+      );
+    }
+    try {
+      await store.forget();
+    } catch (cause) {
+      throw new Error(
+        `${error.message}; and the pairing saved before it was sent could not be removed: ` +
+          (cause as Error).message,
+        { cause: error },
+      );
+    }
+    throw error;
   } finally {
-    registrar.close();
+    transport.close();
   }
-  opts.onRegistered?.();
-
-  const device: DeviceConfig = {
-    url: joining.url,
-    vaultId: joining.vaultId,
-    device: joining.device,
-    deviceId,
-    deviceSecret,
-    dataKey,
-    ...(joining.readOnly === true ? { readOnly: true } : {}),
-    ...(joining.ignore?.length ? { ignore: joining.ignore } : {}),
-  };
-  await save(device);
-
-  // Use the row. A hello that is answered `ready` is the row existing, this
-  // key opening it, and the server willing to serve this vault, all proven by
-  // the one thing that has to be true afterwards. It comes after the save, so
-  // a device whose confirmation failed still has a credential on disk to try
-  // again with rather than a row it has forgotten the key to.
-  await proveDeviceConnects(device, opts);
-  opts.log?.("registered a per-device credential", { deviceId });
+  const device = finishedPairing(pending);
+  await store.save(device);
+  opts.log?.("paired", { deviceId: device.deviceId });
   return device;
 }
 
 /**
- * What is on the disk where a device's credential should be, after a
- * registration that did not finish.
+ * What is on the disk where a device's credential should be, after a pairing
+ * that did not finish.
  *
  * Four states and not two, because rule 2 is what reading it is for: an
  * unreadable config is not an absent one. A config that was written and cannot
  * be read back holds a credential that may be the only copy of a live row's
- * key, and calling that nothing is how advice comes to destroy a row this
+ * token, and calling that nothing is how advice comes to destroy a row this
  * device could have used.
  */
 export type PairingRemains =
-  /** A credential for a row: this device is finished bar the confirmation. */
+  /** A finished device: its credential is here. */
   | { readonly kind: "credential"; readonly config: DeviceConfig }
-  /** The vault's root and no credential: a vault started here and not joined. */
-  | { readonly kind: "root"; readonly config: DeviceConfig }
+  /** A redemption sent and not answered: the credential is here, and whether it was registered is not known. */
+  | { readonly kind: "pending"; readonly config: PendingPairing }
   /** Nothing at all, which is also what an unpaired vault looks like. */
   | { readonly kind: "nothing" }
   /** Something is there and will not read, so nothing here is known. */
@@ -2035,8 +1773,8 @@ export type PairingRemains =
  * `read` is the surface's own reader: `loadConfig` in the CLI, `readConfig` in
  * the plugin. Both return undefined for a config that is not there and throw
  * for one that is there and will not decode, which is the distinction this
- * turns into a state instead of the `.catch(() => undefined)` that flattened
- * the two.
+ * turns into a state instead of a `.catch(() => undefined)` that flattened the
+ * two.
  */
 export async function whatTheDiskHolds(
   read: () => Promise<DeviceConfig | undefined>,
@@ -2047,239 +1785,96 @@ export async function whatTheDiskHolds(
   } catch (err) {
     return { kind: "unreadable", why: (err as Error).message };
   }
-  if (held?.deviceId !== undefined) return { kind: "credential", config: held };
-  // Anything else that decoded holds the root and nothing else: `decodeConfig`
-  // refuses a config with neither, so there is no third shape to be in. The
-  // config comes back with the state because the caller that has to keep it,
-  // the panel, would otherwise read the same file a second time to get it.
-  if (held !== undefined) return { kind: "root", config: held };
-  return { kind: "nothing" };
+  if (held === undefined) return { kind: "nothing" };
+  if (isPendingPairing(held)) return { kind: "pending", config: held };
+  return { kind: "credential", config: held };
 }
 
 /**
- * What to do next when registering this device did not finish: one counsellor
- * for `trew init`, `trew pair` and both of the panel's pairing paths.
+ * What to do next when pairing this device did not finish: one counsellor for
+ * `trew-sync pair` and the panel.
  *
  * It answers from what the disk says rather than from which step threw (rule
  * 4), because that is the only thing that tells the states apart, and it is
- * one function because four copies of these words is how three of them come to
- * be missing a sentence. `init`'s copy was: it printed the recovery key and
- * said "unlink here, and pair with that key", which is right and incomplete.
- * A registration may already have committed, so pairing again registers a
- * *second* row, leaving an unused registration behind. `pair`'s copy said so;
- * `init`'s did not.
+ * one function because two copies of these words is how one of them comes to
+ * be missing a sentence.
  *
- * What each state is owed:
- *
- *  - **credential**: the row is real and this is the only copy of its key, so
- *    what was written stays and syncing finishes it.
- *  - **root** and **nothing**: no credential here, so a row on the server may
- *    be one nothing can connect as. Naming it is the whole point.
- *  - **unreadable**: nothing is known, so nothing is advised. A `saveConfig`
- *    that succeeded with a read-back that then failed lands here holding a
- *    perfectly good credential, and "revoke the row and pair again" would
- *    throw away a row this device could have used. It takes a disk that writes
- *    and will not read back, which is exactly the disk that makes the advice
- *    wrong, so the refusal says what is unknown instead of guessing.
- *
- * Whether a row exists cannot be read off a config, and saying so is the
- * honest part. `registered` is one way only: true means the server was seen to
- * accept the registration, false means it may still have committed with the
- * reply lost. So a row "was" or "may have been" registered, and never was not.
- *
- * The way back is pair-again-then-revoke rather than revoke-then-pair-again,
- * because the stranded row is often the vault's only one, and revoking the
- * last row takes `--allow-last` and the recovery key. Pairing first makes it
- * an ordinary revocation from an ordinary device.
- *
- * cli/state.test.ts walks these against a real server, and plugin/main.test.ts
- * walks the panel's two paths.
+ *  - **credential**: the row is real and this is the only copy of its token,
+ *    so what was written stays and syncing finishes it.
+ *  - **pending**: the redemption went out and no answer came, so whether the
+ *    row exists is not known; trying again finishes it with the same token.
+ *  - **nothing**: the pairing was refused or never reached the server, and
+ *    either way nothing was registered and the invite was not spent.
+ *  - **unreadable**: nothing is known, so nothing is advised. A save that
+ *    succeeded with a read-back that then failed lands here holding a
+ *    perfectly good credential, and advice to revoke and pair again would
+ *    throw away a row this device could have used.
  */
-export function adviseAfterRegistering(what: {
+export function adviseAfterPairing(what: {
   readonly remains: PairingRemains;
-  /** Whether the server was seen to accept the registration. */
-  readonly registered: boolean;
   /** Which shell is speaking, so it names commands that exist there. */
   readonly surface: "cli" | "panel";
   /** Where the config lives, in that shell's words. */
   readonly where: string;
 }): string {
-  const { remains, registered, surface, where } = what;
+  const { remains, surface, where } = what;
   const cli = surface === "cli";
   switch (remains.kind) {
     case "credential":
       return cli
-        ? `This device is registered with the vault and ${where} holds its credential; ` +
-            `run trew sync here to finish, or trew unlink to start again.`
-        : `This device is registered with the vault; Trew will connect as it on the next attempt.`;
+        ? `This device is paired with the vault and ${where} holds its credential; ` +
+            `run trew-sync sync here to finish, or trew-sync unlink to start again.`
+        : `This device is paired with the vault; Trew will connect as it on the next attempt.`;
+    case "pending":
+      return cli
+        ? `The invite was sent and no answer came back, so whether the server registered this ` +
+            `device is not known. ${where} holds the pairing: run trew-sync pair here again to ` +
+            `finish it with the same credential, which works even after the invite has expired ` +
+            `if the server did register it.`
+        : `The invite was sent and no answer came back, so whether the server registered this ` +
+            `device is not known. Trew will finish the pairing with the same credential the ` +
+            `next time it connects.`;
     case "unreadable":
       return (
         `${where} could not be read (${remains.why}), so what this device holds is not known and ` +
         `nothing should be revoked on the strength of it: a credential that was written and ` +
-        `cannot be read back is still the only copy of its row's key. Fix that first, ` +
+        `cannot be read back is still the only copy of its row's token. Fix that first, ` +
         (cli
-          ? `then trew status here says whether this device has one.`
+          ? `then trew-sync status here says whether this device has one.`
           : `then reload the plugin, which says whether this device has one.`)
       );
-    default: {
-      const wayBack =
-        remains.kind !== "root"
-          ? "Pair again"
-          : cli
-            ? "Run trew unlink here and trew pair with the recovery key"
-            : "Unlink this vault and pair again with the recovery key on the panel";
+    default:
       return (
-        `A device row ${registered ? "was" : "may have been"} registered with the vault and its ` +
-        `credential is not here, so nothing can connect as that device. ${wayBack}, then ` +
-        (cli
-          ? `trew devices lists that row as never connected and trew revoke ID removes it.`
-          : `the device list shows that row as never connected, with Revoke beside it.`)
+        `Nothing was registered and nothing is saved here, so the invite was not spent by this ` +
+        `attempt. Pair again with it, or with a new one if it has expired.`
       );
-    }
-  }
-}
-/**
- * One hello as the device, and nothing after it.
- *
- * `waitForBacklog` is not on offer: this connection exists to find out whether
- * the credential works, and a device joining after months away would otherwise
- * sit through its whole backlog twice, once here and once when the command it
- * was actually running connects.
- */
-export async function proveDeviceConnects(
-  config: DeviceConfig,
-  opts: {
-    timeoutMs?: number | undefined;
-    socketFactory?: ((url: string) => SocketLike) | undefined;
-    log?: ((message: string, ...rest: unknown[]) => void) | undefined;
-  } = {},
-): Promise<void> {
-  const { deviceId, deviceSecret } = deviceCredential(config);
-  const transport = new Transport(config.url, {
-    onBatch: () => {},
-    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-    ...(opts.socketFactory !== undefined ? { socketFactory: opts.socketFactory } : {}),
-    ...(opts.log !== undefined ? { log: opts.log } : {}),
-  });
-  try {
-    await transport.connect();
-    await transport.hello({
-      vault: config.vaultId,
-      deviceId,
-      token: await deviceAuthToken(deviceSecret),
-      device: config.device,
-      // Zero, because nothing here applies anything. A cursor is only ever
-      // refused for being ahead of the server, so zero cannot be refused and
-      // this connection cannot fail for a reason that is not about the
-      // credential it is testing.
-      cursor: 0,
-    });
-  } finally {
-    transport.close();
   }
 }
 
 /**
- * Redeems an invite: one connection that hands over the invite, asks for a
- * device row, takes the vault's data key, and closes.
+ * The half of a client's options that says who this device is: which row it
+ * connects as and which token proves it.
  *
- * What comes back is everything a paired device is: a row of its own, the
- * credential for it, and the data key. No root, which is the point. A device
- * added this way cannot register a third, cannot rewrap the vault and cannot
- * show anybody the recovery key, so revoking it means something.
- *
- * The id and the secret are made here and sent in the same frame as the
- * invite, because the server registers the row in the same transaction that
- * spends it. There is no separate `register` to make: a device holds no root,
- * so the device that issued this invite could not have made the row, and this
- * connection holds nothing else the server would accept one under.
- *
- * **Nothing is written to disk before this runs, and everything after it.**
- * The other order was considered and is worse. Saving the id and the secret
- * first would mean a crash between the save and the reply leaves a device
- * holding a credential for a row it cannot use, because the data key it needs
- * is in a reply that never arrived and the invite that carried it is spent:
- * that device is stuck, and the retry with a fresh invite registers a second
- * row and strands the first. This way a crash costs a row nobody holds the key
- * to, which is visible in `trew devices` as a device that has never
- * connected and is removed with `trew revoke`, and the local vault is left
- * exactly as unpaired as it was found, so the retry is the ordinary path.
- *
- * The caller saves what this returns, durably, and reads it back before it
- * relies on it (rule 4). Until it does, the only copy of the data key on this
- * machine is in this process.
- */
-export async function redeemInvite(
-  invite: Invite,
-  device: string,
-  opts: {
-    timeoutMs?: number | undefined;
-    socketFactory?: ((url: string) => SocketLike) | undefined;
-    log?: ((message: string, ...rest: unknown[]) => void) | undefined;
-  } = {},
-): Promise<{ deviceId: string; deviceSecret: Uint8Array; dataKey: Uint8Array }> {
-  const deviceId = generateDeviceId();
-  const deviceSecret = generateDeviceSecret();
-  const transport = new Transport(invite.url, {
-    onBatch: () => {
-      // A redeeming connection joins no vault's fan-out, so this is
-      // unreachable against any server that keeps the protocol. Present
-      // because the transport requires a handler, and doing nothing is right:
-      // there is no engine here and, until the reply lands, no key to open an
-      // entry with.
-    },
-    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-    ...(opts.socketFactory !== undefined ? { socketFactory: opts.socketFactory } : {}),
-    ...(opts.log !== undefined ? { log: opts.log } : {}),
-  });
-  try {
-    await transport.connect();
-    const redeemed = await transport.redeem({
-      vault: invite.vaultId,
-      device,
-      invite: base64urlEncode(invite.id),
-      deviceId,
-      auth: await deviceAuthToken(deviceSecret),
-      name: device,
-    });
-    // Unsealed with the key that travelled in the string and never to the
-    // server, so a server holding every invite it was ever handed holds blobs
-    // it cannot open. A wrong key fails here rather than later as content that
-    // will not decrypt.
-    return { deviceId, deviceSecret, dataKey: await unsealSecret(invite.key, redeemed.sealed) };
-  } finally {
-    transport.close();
-  }
-}
-
-/**
- * The half of a client's options that says who this device is.
- *
- * Which row it connects as, which key proves it, and the data key it reads and
- * writes content with. Both shells worked the equivalent out for themselves
- * once, from the same stored config, and the two copies were the
- * highest-consequence drift point in the client.
- *
- * It refuses a config that holds no credential rather than falling back to the
- * root. A device that can fall back to the root is a device revoking cannot
- * stop. `deviceCredential` is where the refusal is worded.
+ * Both shells worked the equivalent out for themselves once, from the same
+ * stored config, and the two copies were the highest-consequence drift point
+ * in the client. It refuses a config that holds no credential, and a pairing
+ * that has not finished; `deviceCredential` is where the refusal is worded.
  */
 export function credentialsFor(
   config: DeviceConfig,
-): Promise<Pick<ClientOptions, "dataKey" | "url" | "token" | "deviceId" | "vaultId" | "device">> {
-  const { deviceId, deviceSecret, dataKey } = deviceCredential(config);
-  return deviceAuthToken(deviceSecret).then((token) => ({
-    dataKey,
+): Pick<ClientOptions, "url" | "token" | "deviceId" | "vaultId" | "device"> {
+  const { deviceId, deviceToken } = deviceCredential(config);
+  return {
     url: config.url,
-    token,
+    token: deviceToken,
     deviceId,
     vaultId: config.vaultId,
     device: config.device,
-  }));
+  };
 }
 
 /** The shapes a shell needs to show a device list, re-exported for the same reason. */
-export type { DeviceRow, InviteRow, RegistrarLimits } from "./transport.ts";
+export type { DeviceRow, InviteRow } from "./transport.ts";
 
 /**
  * Where this device and the server each are, for deciding whether a rebase is

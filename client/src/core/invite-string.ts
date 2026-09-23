@@ -14,7 +14,7 @@
  */
 
 import { crc32Bytes } from "./crc32.ts";
-import { base64urlDecode, base64urlEncode } from "./crypto.ts";
+import { base64urlDecode, base64urlEncode } from "./digest.ts";
 
 /** What every invite starts with. Derived from the product name, which is not final. */
 export const INVITE_PREFIX = "trew1i_";

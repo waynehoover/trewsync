@@ -28,7 +28,7 @@
  * with tiny edits, too large and the hash takes longer to forget an edit that
  * has passed. It is not a tunable and there is no setting for it.
  */
-import { SEAL_OVERHEAD } from "./crypto.ts";
+import { CHUNKING_TEXT_EXTENSIONS, chunkingText } from "./path-policy.ts";
 
 export const WINDOW = 48;
 
@@ -119,8 +119,8 @@ export interface ChunkSizes {
  *
  * The minimum matters more than it looks. Without it a run of low-entropy
  * content can fire the boundary test repeatedly and produce a chunk every few
- * bytes, and per-chunk overhead is 29 bytes of sealing plus 64 characters of
- * name. A floor bounds that; without one it is unbounded.
+ * bytes, and every chunk costs 64 characters of name in each put and a row on
+ * the server. A floor bounds that; without one it is unbounded.
  */
 export const TEXT_SIZES: ChunkSizes = { min: 512, avg: 1024, max: 4096 };
 
@@ -144,10 +144,10 @@ const TEXT_AVG_MAX = 64 * 1024;
  * make it two thousand chunks whose names alone are 128 KiB, so an edit to it
  * costs more in names than the note contains.
  *
- * Clamped at both ends. Below the floor the per-chunk overhead of twenty-nine
- * bytes of sealing starts to matter more than the name list; above the ceiling
- * the chunks are large enough that an edit stops being cheap, which is the
- * whole point of chunking.
+ * Clamped at both ends. Below the floor a chunk's fixed costs, its name in
+ * every put and its row on the server, start to matter more than the bytes it
+ * saves; above the ceiling the chunks are large enough that an edit stops
+ * being cheap, which is the whole point of chunking.
  */
 export function textSizesFor(size: number): ChunkSizes {
   const ideal = Math.sqrt(NAME_BYTES * Math.max(size, 1));
@@ -188,12 +188,28 @@ export const BINARY_SIZES: ChunkSizes = { min: 128 * 1024, avg: 256 * 1024, max:
 export const TEXT_AS_BINARY_ABOVE = 4 * 1024 * 1024;
 
 /**
+ * The smallest chunk ceiling the chunker can work under.
+ *
+ * A window's worth of data is the least that can produce a boundary at all, so
+ * `sizesFor` raises any maximum to this. A server advertising a `chunkMax` below
+ * it would therefore be sent chunks larger than it takes, and would refuse every
+ * one of them for ever; the engine refuses such a server at the handshake
+ * instead (docs/development.md, "Latent issues in the chunker").
+ */
+export const CHUNK_FLOOR = WINDOW * 4;
+
+/**
  * Chooses sizes for a file, clamped to what the server will accept.
  *
  * `serverChunkMax` comes from the handshake. Clamping here rather than trusting
  * the constants means a server with a smaller ceiling produces smaller chunks
  * instead of rejected puts, and a client that has not asked yet still gets
  * something sane.
+ *
+ * The protocol 1 rule, which Go's `SizesFor` implements too and
+ * `chunk-fixtures.json` pins for both (`sizesForV1`): `max = min(base.max,
+ * serverChunkMax)`, then raised to `CHUNK_FLOOR`, with `min` and `avg` clamped
+ * to it.
  */
 export function sizesFor(
   size: number,
@@ -203,20 +219,18 @@ export function sizesFor(
   if (!Number.isFinite(serverChunkMax) || serverChunkMax <= 0) serverChunkMax = BINARY_SIZES.max;
   const base = isText && size < TEXT_AS_BINARY_ABOVE ? textSizesFor(size) : BINARY_SIZES;
 
-  // The ceiling is on the *sealed* chunk, and sealing adds a nonce, a tag and
-  // a marker byte. A cut made at exactly the ceiling therefore produces a
-  // body the server refuses, permanently, and the file never syncs.
-  //
-  // Nothing caught this for a long time because the test data compressed:
-  // deflate made the sealed chunk smaller than the plaintext and the overhead
-  // disappeared into the saving. Incompressible data is what an attachment
-  // actually is, and it does not.
-  const max = Math.min(base.max, serverChunkMax - SEAL_OVERHEAD);
+  // The ceiling is on the raw chunk (plan/protocol.md, "Chunk bodies"). A body
+  // frame's marker byte sits on top of it, and deflate is sent only when it is
+  // shorter, so a chunk cut at exactly `chunkMax` is one the server takes.
+  // Nothing is reserved below it: an allowance kept here would be one the
+  // server does not count, and the two ends would disagree about the largest
+  // chunk for no gain.
+  const max = Math.min(base.max, serverChunkMax);
   // A window's worth of data is the least that can produce a boundary at all,
   // so a maximum below it would make every chunk a forced cut and the rolling
-  // hash pointless. Clamping up keeps the algorithm meaningful even if a
-  // server advertises something absurd.
-  const clampedMax = Math.max(max, WINDOW * 4);
+  // hash pointless. Clamping up keeps the algorithm meaningful; a server
+  // advertising less than this is refused at the handshake (`CHUNK_FLOOR`).
+  const clampedMax = Math.max(max, CHUNK_FLOOR);
   return {
     min: Math.min(base.min, clampedMax),
     avg: Math.min(base.avg, clampedMax),
@@ -266,7 +280,7 @@ export interface Chunk {
  * Splits bytes into content-defined chunks.
  *
  * A generator, and synchronous, because the caller decides what to do with each
- * chunk (seal it, name it, decide whether the server already has it) and holding
+ * chunk (name it, decide whether the server already has it, send it) and holding
  * a whole file's worth of chunks to hand back at the end would double the peak
  * memory for no gain.
  *
@@ -327,7 +341,7 @@ export function* chunkBytes(
     if (size >= max) boundary = true;
 
     if (boundary) {
-      // Sealing and reassembly are byte exact, so splitting a character
+      // Framing and reassembly are byte exact, so splitting a character
       // would corrupt nothing. It would make a chunk that is not valid
       // UTF-8 on its own, which cannot be diffed, logged or looked at, and
       // LiveSync carries a regression test for a U+FEFF landing here.
@@ -496,41 +510,29 @@ export async function* blobBlocks(blob: Blob, blockSize = 1024 * 1024): AsyncGen
 }
 
 /**
+ * The extensions whose files are chunked, and merged, as text.
+ *
+ * The list lives once, in the protocol's format policies (`chunkingText` in
+ * path-policy.ts, with its Go twin in `internal/paths`), and this is a view of
+ * it for the callers that want a set. It includes `.base`, Obsidian's Bases:
+ * YAML, a few hundred bytes, and edited from a table view on every device, so
+ * as an attachment it took the 128 KiB binary minimum for a one-line change, it
+ * conflicted rather than merged, and its history showed "preview unavailable"
+ * (R083-12).
+ */
+export const TEXT_EXTENSIONS: ReadonlySet<string> = new Set(CHUNKING_TEXT_EXTENSIONS);
+
+/**
  * Guesses whether a path holds text, for choosing chunk sizes.
  *
- * A guess, and only ever used to pick sizes: getting it wrong costs efficiency
- * and never correctness, because both paths are byte exact. Extension based
- * rather than content sniffing, because the answer is wanted before the file is
- * read.
+ * A guess, and only ever used to pick sizes and whether to merge: getting it
+ * wrong costs efficiency and never correctness, because both paths are byte
+ * exact. Extension based rather than content sniffing, because the answer is
+ * wanted before the file is read. It is the protocol's `chunkingText` policy,
+ * so the server's chunker and this one agree on which files are text.
  */
-export const TEXT_EXTENSIONS = new Set([
-  "md",
-  "txt",
-  "canvas",
-  "json",
-  "csv",
-  "yml",
-  "yaml",
-  // Obsidian's Bases. YAML, a few hundred bytes, and edited from a table view
-  // on every device, so it is the shape of file this project exists for: as an
-  // attachment it took the 128 KiB binary minimum for a one-line change, it
-  // conflicted rather than merged, and its history showed "preview
-  // unavailable" (R083-12).
-  "base",
-  "xml",
-  "html",
-  "css",
-  "js",
-  "ts",
-  "svg",
-  "bib",
-  "tex",
-]);
-
 export function looksLikeText(path: string): boolean {
-  const dot = path.lastIndexOf(".");
-  if (dot < 0) return false;
-  return TEXT_EXTENSIONS.has(path.slice(dot + 1).toLowerCase());
+  return chunkingText(path);
 }
 
 /**

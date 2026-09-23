@@ -59,7 +59,7 @@ import {
 } from "obsidian";
 
 import { looksLikeText } from "../core/chunk.ts";
-import { plainDigest } from "../core/crypto.ts";
+import { plainDigest } from "../core/digest.ts";
 import {
   DISPLACED_LOG,
   DisplacedLedger,
@@ -393,9 +393,8 @@ export class ObsidianVault implements Vault {
     );
     // Obsidian's config folder is *not* assumed to be `.obsidian`: the API
     // says plainly that it could be something else, and that folder holds
-    // this plugin's `data.json`, which holds this device's credential and the
-    // vault's data key. So the real
-    // name is passed in, and it is the one thing added to the rule in
+    // this plugin's `data.json`, which holds this device's credential. So the
+    // real name is passed in, and it is the one thing added to the rule in
     // core/paths.ts, which already covers every dot-prefixed name.
     // Plus whatever this device has been told to leave alone, which is
     // per-device configuration and goes nowhere near the server (R083-13).
@@ -468,14 +467,14 @@ export class ObsidianVault implements Vault {
       throw new Error(`cannot read ${path} at ${start}: the vault answered ${res.status}`);
     const got = new Uint8Array(await res.arrayBuffer());
     // A handler that ignored the Range would answer with the whole file,
-    // which would then be sealed and refused for not matching its name. Said
+    // which would then be sent and refused for not matching its name. Said
     // here instead, where the reason is knowable.
     if (got.length > end - start) {
       throw new Error(`this vault does not honour ranged reads, so ${path} cannot be streamed`);
     }
     // And a short answer is not the range either. A file cut down between
     // being scanned and being fetched used to hand back what was left, which
-    // was sealed as the chunk it no longer was and refused much later, by
+    // was sent as the chunk it no longer was and refused much later, by
     // name, with nothing pointing back here. Rule 4.
     if (got.length < end - start) {
       throw new Error(
@@ -681,13 +680,15 @@ export class ObsidianVault implements Vault {
    * Turns a path from anywhere into the name the adapter knows.
    *
    * Paths reach this from two directions: out of `list`, already normalized,
-   * and off the wire, sealed by another device and in whatever form that
+   * and off the wire, written by another device in whatever form that
    * device's filesystem uses. Both end up normalized, and then mapped back to
    * the adapter's own name if it has a different one.
    *
-   * The refusals are for the second direction. The seal on a path proves it
-   * came from somebody holding the vault key; it does not prove that device is
-   * well, and a bug on it is enough to be handed `../../.ssh/authorized_keys`.
+   * The refusals are for the second direction. The server checks every path
+   * it stores, and it is trusted with that; it is also the last thing between
+   * this vault and another device's bug, or a compromised server, handing it
+   * `../../.ssh/authorized_keys` or a plugin's `main.js` (PLAN.md section 3.6),
+   * so the check is made here as well.
    */
   private resolve(path: string): string {
     const normalized = normalizePath(path);
