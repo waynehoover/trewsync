@@ -98,9 +98,12 @@ type textContent struct {
 }
 
 func contentOf(o outcome) (toolContent, error) {
-	b, err := Marshal(o.env)
-	if err != nil {
-		return toolContent{}, err
+	b := o.raw
+	if b == nil {
+		var err error
+		if b, err = Marshal(o.env); err != nil {
+			return toolContent{}, err
+		}
 	}
 	return toolContent{
 		Content:    []textContent{{Type: "text", Text: string(b)}},

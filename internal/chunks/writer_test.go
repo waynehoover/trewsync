@@ -396,3 +396,30 @@ func TestAPutDoesNotInheritABatchesUnflushedChunk(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 }
+
+// PutAll is a batch for bodies in hand: every one stored under its own name,
+// a body given twice stored once, and a body over the limit refused, with the
+// ones handed over before it still waited for.
+func TestPutAllStoresEveryBodyUnderItsName(t *testing.T) {
+	s := newTestStore(t)
+	var bodies [][]byte
+	for i := 0; i < 40; i++ {
+		bodies = append(bodies, []byte(fmt.Sprintf("an agent's chunk %d", i)))
+	}
+	bodies = append(bodies, bodies[3])
+	if err := s.PutAll("v1", bodies); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range bodies {
+		got, err := s.Get("v1", Name(b))
+		if err != nil || string(got) != string(b) {
+			t.Fatalf("%q reads %q, %v", b, got, err)
+		}
+	}
+	if err := s.PutAll("v1", [][]byte{[]byte("fine"), make([]byte, s.Max()+1)}); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("an oversized body: %v", err)
+	}
+	if err := s.PutAll("v1", nil); err != nil {
+		t.Fatalf("no bodies: %v", err)
+	}
+}

@@ -256,6 +256,83 @@ func (a *args) folder(key string) string {
 	return p
 }
 
+// list is a JSON array of at most max items, and min when present, each as
+// its raw value, or nil when it is absent. present reports whether it was
+// given.
+func (a *args) list(key string, min, max int) (items []json.RawMessage, present bool) {
+	raw := a.take(key)
+	if raw == nil {
+		return nil, false
+	}
+	if raw[0] != '[' || json.Unmarshal(raw, &items) != nil {
+		a.refuse(invalidArguments(key + " must be an array"))
+		return nil, false
+	}
+	if len(items) < min || len(items) > max {
+		a.refuse(invalidArguments(key + " must hold from " + strconv.Itoa(min) + " to " + strconv.Itoa(max) + " items"))
+		return nil, false
+	}
+	return items, true
+}
+
+// texts is an array of text(maxBytes), each at least minBytes long, between
+// min and max of them, or nil when absent.
+func (a *args) texts(key string, min, max, minBytes, maxBytes int) ([]string, bool) {
+	items, present := a.list(key, min, max)
+	if !present {
+		return nil, false
+	}
+	out := make([]string, len(items))
+	for i, raw := range items {
+		item := key + "[" + strconv.Itoa(i) + "]"
+		s, err := jsonText(raw)
+		switch {
+		case err != nil:
+			err.Message = item + ": " + err.Message
+			a.refuse(err)
+			return nil, false
+		case len(s) > maxBytes:
+			a.refuse(&ToolError{Code: "input_too_large",
+				Message: item + " is " + strconv.Itoa(len(s)) + " bytes of UTF-8, and at most " + strconv.Itoa(maxBytes) + " are accepted"})
+			return nil, false
+		case len(s) < minBytes:
+			a.refuse(invalidArguments(item + " must not be empty"))
+			return nil, false
+		}
+		out[i] = s
+	}
+	return out, true
+}
+
+// objects is an array of objects, each read as arguments of its own with the
+// same strictness, between min and max of them. Each item's reads are the
+// caller's; its finish, with the item named, is what item does after them.
+func (a *args) objects(key string, min, max int) ([]*args, bool) {
+	items, present := a.list(key, min, max)
+	if !present {
+		return nil, false
+	}
+	out := make([]*args, len(items))
+	for i, raw := range items {
+		if len(raw) == 0 || raw[0] != '{' {
+			a.refuse(invalidArguments(key + "[" + strconv.Itoa(i) + "] must be an object"))
+			return nil, false
+		}
+		out[i] = parseArgs(raw)
+	}
+	return out, true
+}
+
+// adopt takes an item's first failure, prefixed with where the item is, as
+// this call's.
+func (a *args) adopt(item *args, where string) {
+	if e := item.finish(); e != nil {
+		c := *e
+		c.Message = where + ": " + c.Message
+		a.refuse(&c)
+	}
+}
+
 // finish is the first failure, or one for a key no read asked for.
 func (a *args) finish() *ToolError {
 	if a.fail != nil {

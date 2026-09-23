@@ -25,6 +25,12 @@ type Tool struct {
 	Description string
 	// Scope is what a token needs to see and call it.
 	Scope store.MCPScope
+	// Additive marks a write tool that only adds: it creates a path that held
+	// nothing, or adds text to a note without removing any, so a client may
+	// treat it as not destructive (plan/mcp-tools.md: every mutation tool is
+	// destructiveHint except create_*, append_note, prepend_note and
+	// restore_note). Every version it displaces is still pinned.
+	Additive bool
 	// Input is the JSON Schema of the arguments. The schema is what a client
 	// is shown; the tool's own reads of its arguments are what is enforced.
 	Input schema
@@ -69,11 +75,19 @@ type call struct {
 	cred *credential
 	tool *Tool
 	now  time.Time
+	// client is what the MCP client said it is, when the request said
+	// (protocol 2026-07-28 carries it on every request); untrusted, and
+	// stored capped with an operation.
+	client implementation
 }
 
 // outcome is what a tool returns: its envelope, and whether it is an error.
+// raw, when set, is an envelope already encoded, which is sent as it is: a
+// mutation's reply, rendered and bounded before its commit and recorded with
+// it, and the same bytes again when its idempotency key replays it.
 type outcome struct {
 	env     Result
+	raw     []byte
 	isError bool
 }
 
@@ -136,7 +150,7 @@ func (h *Handler) listed(scope store.MCPScope) []listedTool {
 		out = append(out, listedTool{
 			Name: t.Name, Title: t.Title, Description: Describe(t.Description), InputSchema: t.Input,
 			Annotations: annotations{
-				Title: t.Title, ReadOnlyHint: t.ReadOnly(), DestructiveHint: !t.ReadOnly(),
+				Title: t.Title, ReadOnlyHint: t.ReadOnly(), DestructiveHint: !t.ReadOnly() && !t.Additive,
 				IdempotentHint: t.ReadOnly(), OpenWorldHint: false,
 			},
 		})

@@ -3,6 +3,8 @@ package notes
 import (
 	"strings"
 	"unicode/utf8"
+
+	"github.com/waynehoover/trew/internal/paths"
 )
 
 // LinkResolver is changeLinks's name resolution: which notes of an inventory
@@ -88,9 +90,6 @@ func hasScheme(name string) bool {
 // note of that file name; for a Markdown link the name relative to the
 // owner's folder. Each in inventory order, without repeats.
 func (r *LinkResolver) Resolve(name string, wiki bool, owner string) []string {
-	if name == "" || hasScheme(name) || strings.HasPrefix(name, "//") {
-		return nil
-	}
 	var candidates []string
 	seen := map[string]bool{}
 	take := func(list []string) {
@@ -101,20 +100,37 @@ func (r *LinkResolver) Resolve(name string, wiki bool, owner string) []string {
 			}
 		}
 	}
-	add := func(n string) { take(r.paths[r.canonical(posixNormalize(n))]) }
-	switch {
-	case strings.HasPrefix(name, "/"):
-		add(name[1:])
-	case wiki:
-		add(name)
-		add(posixJoin(posixDirname(owner), name))
-		if !strings.Contains(name, "/") {
-			take(r.short[r.canonical(name)])
-		}
-	default:
-		add(posixJoin(posixDirname(owner), name))
+	full, short := linkLookups(name, wiki, owner)
+	for _, n := range full {
+		take(r.paths[r.canonical(n)])
+	}
+	if short != "" {
+		take(r.short[r.canonical(short)])
 	}
 	return candidates
+}
+
+// linkLookups is what Resolve looks a link's name up as, before the fold: the
+// paths it may be (normalised, each looked up among the inventory's paths and
+// their extensionless forms), in the order Resolve takes them, and the bare
+// file name a wiki link without a "/" may be, or "". The link index keys a
+// note's links by the same lookups (LinkKeys), so the notes it says may link
+// to a path are the notes Resolve could find linking to it.
+func linkLookups(name string, wiki bool, owner string) (full []string, short string) {
+	if name == "" || hasScheme(name) || strings.HasPrefix(name, "//") {
+		return nil, ""
+	}
+	switch {
+	case strings.HasPrefix(name, "/"):
+		return []string{posixNormalize(name[1:])}, ""
+	case wiki:
+		full = []string{posixNormalize(name), posixNormalize(posixJoin(posixDirname(owner), name))}
+		if !strings.Contains(name, "/") {
+			short = name
+		}
+		return full, short
+	}
+	return []string{posixNormalize(posixJoin(posixDirname(owner), name))}, ""
 }
 
 // decodeURIComponent is JavaScript's: percent escapes decoded as UTF-8, or
@@ -271,12 +287,7 @@ func ChangeLinks(source string, change LinkChange) ([]SourceEdit, int, error) {
 	ambiguous := 0
 	outbound := !change.Delete && canonical(change.Path) == canonical(change.From)
 	for _, span := range sorted {
-		hash := strings.IndexByte(span.url, '#')
-		encoded := span.url
-		if hash >= 0 {
-			encoded = span.url[:hash]
-		}
-		name, ok := decodeURIComponent(encoded)
+		name, hash, ok := span.name()
 		if !ok {
 			continue
 		}
@@ -387,6 +398,96 @@ func ChangeLinks(source string, change LinkChange) ([]SourceEdit, int, error) {
 		}
 	}
 	return disjoint, ambiguous, nil
+}
+
+// name is the note name a link span resolves by: its destination before any
+// "#", percent escapes decoded as decodeURIComponent decodes them, and where
+// the "#" was (-1 for none). ok is false for a destination that does not
+// decode, which ChangeLinks passes over and so can never rewrite.
+func (s linkSpan) name() (name string, hash int, ok bool) {
+	hash = strings.IndexByte(s.url, '#')
+	encoded := s.url
+	if hash >= 0 {
+		encoded = s.url[:hash]
+	}
+	name, ok = decodeURIComponent(encoded)
+	return name, hash, ok
+}
+
+// The link index (PLAN.md M5 task 6). A move, and a deletion that strikes its
+// backlinks through, run ChangeLinks over every editable note, as Basalt did;
+// past 512 notes or 8 MiB that is scan_incomplete. The server's search index
+// keeps, for every note, the keys its links resolve by, so a plan can read only
+// the notes that may link to the path it moves or deletes. The keys are built
+// from the lookups Resolve itself makes (linkLookups), through the fold every
+// plan resolves with (paths.Fold), on both sides:
+//
+//   - a link looked up as a path matches a note when the two fold alike, so
+//     their last segments fold alike too, and the link's key, the last segment
+//     of its folded lookup, is one of the target's two (of its folded path and
+//     of its folded extensionless path);
+//   - a wiki link looked up as a bare file name matches when the name and the
+//     note's file name, or that without its extension, fold alike, so the
+//     link's key, its folded name, is one of the target's other two.
+//
+// So a note with a link that Resolve could resolve to the target always
+// shares a key with it, whatever the fold does to any one character. The
+// converse does not hold, and need not: a shared key only makes a note a
+// candidate, and the plan reads every candidate and resolves its links
+// against the whole inventory, as it does without an index.
+
+// LinkKeys is the keys the links in source resolve by, for the note at owner:
+// what the link index holds for it. Each key once, in no particular order.
+// Refused as linkSpans refuses a note (invalid_frontmatter), in which case the
+// note must be read by any plan it could matter to.
+func LinkKeys(source, owner string) ([]string, error) {
+	spans, err := linkSpans(source)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(k string) {
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	for _, span := range spans {
+		name, _, ok := span.name()
+		if !ok {
+			continue
+		}
+		full, short := linkLookups(name, span.wiki, owner)
+		for _, n := range full {
+			add(posixBasename(paths.Fold(n)))
+		}
+		if short != "" {
+			add(paths.Fold(short))
+		}
+	}
+	return out, nil
+}
+
+// TargetKeys is the keys a link resolving to the note at path has one of
+// (LinkKeys): the last segment of its folded path and of its folded
+// extensionless path, and its folded file name with and without the
+// extension.
+func TargetKeys(path string) []string {
+	trimmed := trimNoteExtension(path)
+	keys := []string{
+		posixBasename(paths.Fold(path)), posixBasename(paths.Fold(trimmed)),
+		paths.Fold(posixBasename(path)), paths.Fold(posixBasename(trimmed)),
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, k := range keys {
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // ApplySourceEdits is Basalt's applySourceEdits: the source with every edit

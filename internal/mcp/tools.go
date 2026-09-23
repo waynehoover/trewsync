@@ -26,10 +26,13 @@ import (
 // so an agent reads a path beside its facts.
 
 // SearchIndex is what the tools ask of the search index; *search.Index is
-// one. Nil means there is none, and search scans.
+// one. Nil means there is none, and search scans, and a move or a deletion
+// that rewrites backlinks reads every note.
 type SearchIndex interface {
 	Status() search.Status
 	Propose(ctx context.Context, q notes.Query, folder, from string) (search.Proposal, error)
+	Backlinks(ctx context.Context, head int64, keys []string) (search.Backlinks, error)
+	Await(ctx context.Context, head int64) bool
 }
 
 // maxSafe is JavaScript's Number.MAX_SAFE_INTEGER, the largest uid.

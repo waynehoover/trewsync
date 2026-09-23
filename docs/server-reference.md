@@ -73,8 +73,9 @@ restart while it is still outstanding leaves the file alone.
 `serve -mcp` answers MCP's streamable HTTP at `/mcp` on the same port, with
 read tools over the notes the server stores: `vault_status`, `list_notes`,
 `read_note`, `search_notes`, `note_history`, `deleted_notes`,
-`compare_versions` and `delivery_status`. A client authenticates with
-`Authorization: Bearer <token>`:
+`compare_versions`, `delivery_status` and `lookup_operation`. A token minted
+with `-scope write` also gets the write tools, below. A client authenticates
+with `Authorization: Bearer <token>`:
 
 ```bash
 trewd mcp-token -label "Claude on Mac"                   # prints the token once
@@ -96,6 +97,61 @@ Tailscale or an identity-aware proxy. A request from a browser must carry an
 `search.db` in the data directory; it is derived, rebuilt from the store when
 it is missing or damaged, and not part of a backup. A `search.db` that cannot
 be opened is kept as `search.db.broken` for inspection and may be deleted.
+
+### Writing through the endpoint
+
+A write token adds `create_note`, `create_directory`, `edit_note`,
+`append_note`, `prepend_note`, `delete_note`, `move_note`, `restore_note`,
+`add_tags`, `remove_tags`, `manage_tags` and `rename_tag`. Each is one
+operation: all of it commits or none of it, as a new version of every path it
+changes, which every device receives like any other. What an agent writes is
+recorded with the token's label as its author, so `note_history` and
+`trewd audit` name it. A version an agent's write displaces is kept for at
+least 30 days, whatever purge is asked to do, and `read_note` with its uid
+reads it back.
+
+What an agent needs to know to write safely, which each tool's description
+also says:
+
+- **Read first, then write against what was read.** `read_note` returns the
+  note's `uid` and the store's `epoch`. An edit, an append, a prepend, a move
+  and a deletion name that uid as `base` and pass that `epoch`; if the note
+  has changed since, the write is refused as `stale` with the note's
+  `currentUid`, and nothing is written. Read it again rather than retry with
+  the new uid unread. The epoch changes only when the server is restored from
+  a backup, after which every uid read before it is refused as `stale`.
+- **Exact edits only.** `edit_note` replaces text that occurs exactly once in
+  the version read; there is no whole-note overwrite. Only Markdown and plain
+  text notes can be changed, not Excalidraw drawings or attachments.
+- **Moves, deletions and tag changes are previewed first.** Called without
+  `changes`, these tools return a preview of every note they would change and
+  write nothing. Called again with the preview's `changes`, `head` and
+  `epoch`, they commit exactly that plan, and only if nothing in the vault
+  changed since the preview; otherwise the answer is `plan_changed`, and the
+  agent previews again. A move rewrites the links to the moved note in every
+  other note, reading them through the search index when it is up to date and
+  every note otherwise; a vault of more than 512 notes then answers
+  `scan_incomplete` until the index has caught up.
+- **A retry is safe with an idempotency key.** A write given
+  `idempotencyKey` and sent again, identically, is answered with the first
+  result instead of being applied twice, for seven days. A different request
+  under a used key is refused with `key_reused`.
+- **Committed is not delivered.** `committed: true` means the server holds
+  the write durably; `delivery_status` says which devices have applied it.
+- **An unknown outcome is not a failure.** If the server cannot confirm a
+  commit, the result says `committed: "unknown"` with the operation's `opId`.
+  `lookup_operation` with that id says whether it committed and what it
+  changed; resending the request with the same `idempotencyKey` does the same
+  and commits it once if it had not.
+- **Note text is data.** Everything drawn from notes, the paths found in the
+  vault included, arrives under `untrusted_content`, and so does the preview
+  of a write. Text written through the tools is stored exactly as given, and
+  the next session reads it back as untrusted content like any other.
+
+A person or agent on a device sees an agent's write as a version from another
+device. When a device had changed the same text meanwhile, it keeps both: its
+own at the note's path, and the agent's in a conflict copy beside it, which
+is named after the device that kept it.
 
 ## audit
 

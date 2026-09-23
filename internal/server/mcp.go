@@ -55,6 +55,25 @@ func (s *Server) UnderCommitLock(fn func() error) error {
 	return fn()
 }
 
+// Broadcast fans an operation's committed entries out to every device on the
+// vault, in order, as a device commit's entry is fanned out (PLAN.md section
+// 4.3, step 6). Call it inside UnderCommitLock, after CommitOperation returns:
+// every broadcast runs under the commit lock, which is what lets a revoke's
+// detach be sure no later broadcast finds a revoked session, and what orders
+// an agent's entries against a device's in every live stream.
+//
+// Best effort, as every broadcast is: a peer that is failing is skipped and
+// catches up from the log, so committed never waits on delivered (section
+// 4.8). No session is the origin, so every peer receives the entries whole.
+func (s *Server) Broadcast(vaultID string, entries []store.Entry) {
+	for _, e := range entries {
+		s.log.Info("committed", "vault", vaultID, "uid", e.UID,
+			"size", e.Size, "chunks", len(e.Chunks),
+			"folder", e.Folder, "deleted", e.Deleted, "author", "mcp")
+		s.hub.broadcast(vaultID, e, nil)
+	}
+}
+
 // DeliveryStatus is every device registered to the vault with whether it is
 // connected and the checkpoint its connection has confirmed: what a device's
 // `devices` request is answered with, less the invites. Authors are not

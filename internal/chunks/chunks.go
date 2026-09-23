@@ -848,6 +848,30 @@ func (w *Writer) Close() error {
 	return nil
 }
 
+// PutAll stores every body under its own name through one Writer, and returns
+// once all of them are durable, names included: Close's guarantee, for a
+// caller that has the bodies in hand. It is how an MCP write stores the chunks
+// of the bytes it computed before it commits the entry that names them
+// (PLAN.md section 4.3, step 3), so a body is never referenced before it is
+// durable (rule 1). A body the store already holds is written again, which the
+// content-addressed name makes harmless.
+func (s *Store) PutAll(vaultID string, bodies [][]byte) error {
+	w := s.NewWriter(vaultID)
+	var first error
+	for _, b := range bodies {
+		if err := w.Add(Name(b), b); err != nil {
+			first = err
+			break
+		}
+	}
+	// Close even after a failed Add: it waits for the bodies already handed
+	// over, which must not be left mid-write.
+	if err := w.Close(); err != nil && first == nil {
+		first = err
+	}
+	return first
+}
+
 // Quarantine moves a body that failed verification out of the way.
 //
 // Presence here is a stat, not a hash: Missing reports a chunk that exists as

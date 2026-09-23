@@ -16,7 +16,7 @@ import (
 )
 
 var readToolNames = []string{"compare_versions", "deleted_notes", "delivery_status", "list_notes",
-	"note_history", "read_note", "search_notes", "vault_status"}
+	"lookup_operation", "note_history", "read_note", "search_notes", "vault_status"}
 
 // The official Go SDK's client, at every protocol version it speaks, reaches
 // the endpoint, lists the tools and reads a note (PLAN.md M4 task 1): the
@@ -427,7 +427,7 @@ func TestDiscoverDescribesTheServer(t *testing.T) {
 		TTLMs      *int         `json:"ttlMs"`
 		CacheScope string       `json:"cacheScope"`
 	}
-	if status != http.StatusOK || json.Unmarshal(parseReply(t, body).Result, &list) != nil || len(list.Tools) != 8 ||
+	if status != http.StatusOK || json.Unmarshal(parseReply(t, body).Result, &list) != nil || len(list.Tools) != len(readToolNames) ||
 		list.TTLMs == nil || list.CacheScope != "private" {
 		t.Fatalf("tools/list: %d %s", status, body)
 	}
