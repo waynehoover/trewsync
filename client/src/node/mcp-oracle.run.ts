@@ -1,5 +1,7 @@
 /**
- * The oracle for the Go port of the MCP read side (PLAN.md section 2.1).
+ * The oracle for the Go port of the MCP tools' note functions (PLAN.md
+ * section 2.1): the read side (M4), and the write side's pure half (M5):
+ * exact edits, tag edits and operation plans.
  *
  * Feeds a corpus through the TypeScript functions internal/notes is ported
  * from, and writes what they return to mcp-fixtures.json at the repository
@@ -29,6 +31,7 @@ import { compareText, compareVersions } from "./mcp-inspect.ts";
 import type { McpHistory } from "./mcp-history.ts";
 import { linkResolver, linkSpans, changeLinks, type LinkChange } from "./mcp-links.ts";
 import {
+  changeTags,
   frontmatter,
   inlineTags,
   markdownHidden,
@@ -36,10 +39,24 @@ import {
   tagOccurrences,
   tagPattern,
   validateTag,
+  type TagChange,
 } from "./mcp-markdown.ts";
-import { NoteError, noteDigest } from "./mcp-notes.ts";
+import {
+  INPUT_BYTES,
+  NOTE_BYTES,
+  NoteError,
+  noteDigest,
+  prepareNote,
+  type NoteMutation,
+} from "./mcp-notes.ts";
+import {
+  previewOperation,
+  samePlan,
+  type PlannedChange,
+  type VaultOperation,
+} from "./mcp-operations.ts";
 import { fingerprint, McpReader, pageNote, position, token } from "./mcp-read.ts";
-import { NodeVault } from "./vault.ts";
+import { CheckedPathError, NodeVault } from "./vault.ts";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const enc = new TextEncoder();
@@ -1075,6 +1092,23 @@ const DIVERGENCES = [
   "---\ntags: [a]\n\t\nb: c\n---\n",
   "---\ntags:\n-\ta\n---\n",
   "---\n?\ttags\n:\t[a]\n---\n",
+  '---\na: "x\n\ty"\ntags: [x]\n---\n',
+  "---\na: [x,\n\ty]\ntags: [x]\n---\n",
+  "---\ntags:\n  - a\n\t# c\n---\n",
+  "---\ntags:\n  - a\n  \t# c\n---\n",
+  "---\na: |\n  x\n\t# c\ntags: [x]\n---\n",
+  "---\ntags:\n  - |\n    a\n  # m\n\t# c\n---\n",
+  "---\ntags: 'x'# c\n---\n",
+  "---\ntags: [x]# c\n---\n",
+  "---\ntags: [x,# c\n  y]\n---\n",
+  '---\na: "b\n  c"#d\ntags: [y]\n---\n',
+  "---\na: 1\n--- b\ntags: [x]\n---\n",
+  '---\ntags: [a]\n...\n"x\n---\n',
+  "---\n# c\n--- !!map\ntags: [a]\n--- b: c\n---\n",
+  "---\n# c\n--- tags: [a]\n--- b: c\n---\n",
+  "---\n# c\n--- [a]\n--- b: c\n---\n",
+  "---\ntags: [a]\n--- \n- x: [\n---\n",
+  "---\n...\ntags: [a]\n---\n",
 ];
 
 /** Everything the read side derives from one note, in one record. */
@@ -1377,9 +1411,91 @@ function randomAnchors(): string {
   return ["---", ...lines, "---", "#body"].join("\n") + "\n";
 }
 
+// Random tags properties, for the edit that rewrites one: block lists with
+// comments, blank lines and empty items in every place, flow lists over
+// lines, block scalars with header comments, empty values with properties,
+// at several indentations, between other properties, with LF or CRLF.
+const tagsRandom = mulberry32(0x7a95);
+function randomTagsProperty(): string {
+  const choose = <T>(list: readonly T[]): T => list[Math.floor(tagsRandom() * list.length)]!;
+  const items = [
+    "a",
+    "b",
+    "'c'",
+    '"d e"',
+    "~",
+    "",
+    "!!str f",
+    "|\n    g",
+    ">-\n    h i",
+    "| # hh\n    j",
+    "t/x",
+    "caf\u00e9",
+    "a b",
+    "'#y'",
+    "k\n    l",
+  ];
+  const trailing = ["", "", "", " ", "  # c", "\t# c", " #c", " # c  "];
+  const between = ["", "", "", "\n", "\n  # m", "\n# m", "\n    # m", "\n  ", "\n\t"];
+  const indent = choose(["  ", "  ", "    ", " ", ""]);
+  const count = Math.floor(tagsRandom() * 4);
+  const list = Array.from({ length: count }, () => choose(items));
+  let value: string;
+  switch (choose(["block", "block", "flow", "scalar", "empty"])) {
+    case "block":
+      value =
+        choose(["", "", " # h", " !!seq"]) +
+        (count ? "" : "\n" + indent + "-") +
+        list
+          .map(
+            (item) =>
+              "\n" + indent + "-" + (item ? " " + item : "") + choose(trailing) + choose(between),
+          )
+          .join("");
+      break;
+    case "flow": {
+      const separator = choose([", ", ",", ",\n  ", " # c\n  , ", "\n  , "]);
+      const flow = list.filter(
+        (item) => !item.includes("\n") && item !== "" && !item.startsWith("!!"),
+      );
+      value =
+        " [" + choose(["", " ", "\n  "]) + flow.join(separator) + choose(["", " ", "\n"]) + "]";
+      break;
+    }
+    case "scalar":
+      value =
+        " " +
+        choose(["a b", "'a, b'", "|\n  a\n  b", "| # h\n  a", ">-\n  a", "~", "!!str a", "a\n  b"]);
+      break;
+    default:
+      value = choose(["", " ", "  # c", " !!null", " !!str", "\n# c"]);
+  }
+  value += choose(trailing);
+  const others = [
+    "title: x",
+    "a: [1]",
+    "# comment",
+    "",
+    "next: y",
+    "  # indented",
+    "deep:\n  k: v",
+  ];
+  const lines = [
+    ...Array.from({ length: Math.floor(tagsRandom() * 2) }, () => choose(others)),
+    choose(["tags:", "tags:", "tags :", "'tags':", "? tags\n:"]) + value,
+    ...Array.from({ length: Math.floor(tagsRandom() * 3) }, () => choose(others)),
+  ];
+  const newline = tagsRandom() < 0.2 ? "\r\n" : "\n";
+  const body = choose(["", "#a #b\n", "text #t", "```\ncode #a\n", "#a/b #c"]);
+  return (["---", ...lines, "---"].join("\n") + "\n" + body).replace(/\n/gu, newline);
+}
+
 function tagVectors() {
   const notes: unknown[] = [];
-  const add = (source: string) => notes.push(noteVector(source));
+  const add = (source: string, kind: TagKind = "frontmatter") => {
+    notes.push(noteVector(source));
+    tagCorpus.push({ source, kind });
+  };
   for (const s of FRONTMATTER) add(s);
   for (const s of INLINE) add(s);
   for (const s of DIVERGENCES) add(s);
@@ -1418,14 +1534,18 @@ function tagVectors() {
     "x",
   ];
   for (let n = 0; n < 120; n++)
-    add(Array.from({ length: 5 + Math.floor(random() * 30) }, () => pick(pieces)).join(""));
+    add(
+      Array.from({ length: 5 + Math.floor(random() * 30) }, () => pick(pieces)).join(""),
+      "markdown",
+    );
   // ORACLE_EXTRA=n adds n more of each generated kind, for a deeper search
   // for divergences than the committed fixture carries (write it elsewhere
   // with ORACLE_OUT, and point the Go test at it with MCP_FIXTURES).
   const extra = Number(process.env["ORACLE_EXTRA"] ?? 0);
-  for (let n = 0; n < 600 + extra; n++) add(randomMarkdown());
+  for (let n = 0; n < 600 + extra; n++) add(randomMarkdown(), "markdown");
   for (let n = 0; n < 400 + extra; n++) add(randomFrontmatter());
-  for (let n = 0; n < 300 + extra; n++) add(randomAnchors());
+  for (let n = 0; n < 300 + extra; n++) add(randomAnchors(), "anchors");
+  for (let n = 0; n < 300 + extra; n++) add(randomTagsProperty());
 
   const inline: unknown[] = [];
   for (const s of INLINE.slice(0, 20))
@@ -1742,6 +1862,729 @@ function linkVectors() {
 }
 
 // ---------------------------------------------------------------------------
+// The write side: exact edits (prepareNote in mcp-notes.ts), tag edits
+// (changeTags in mcp-markdown.ts), and operation plans (previewOperation and
+// samePlan in mcp-operations.ts).
+
+/**
+ * A string as the fixture carries it. One with a lone surrogate is written as
+ * the bytes a Go string holds it in, WTF-8: a Go string cannot hold a
+ * surrogate as UTF-8, and JSON decoding would replace it.
+ */
+function wtf8(s: string): Text {
+  if (!/\p{Surrogate}/u.test(s)) return s;
+  const out: number[] = [];
+  // for..of yields code points, and a lone surrogate as itself.
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!;
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+    else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    else
+      out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+  }
+  return bytesText(new Uint8Array(out));
+}
+
+/** An error the write side reports, by the code its tools gave it. */
+function writeFailure(error: unknown): { error: string } {
+  if (error instanceof NoteError || error instanceof CheckedPathError) return { error: error.code };
+  throw error;
+}
+
+type NoteInput = string | Uint8Array | { repeat: [string, number][] };
+function noteInput(n: NoteInput): { text: Text; bytes: Uint8Array } {
+  if (n instanceof Uint8Array) return { text: bytesText(n), bytes: n };
+  if (typeof n === "string") return { text: n, bytes: enc.encode(n) };
+  const r = repeatText(n.repeat);
+  return { text: r.text, bytes: enc.encode(r.value) };
+}
+
+/** A string an edit supplies: itself, or pieces to repeat when it is long. */
+type Piece = string | { repeat: [string, number][] };
+const rep = (s: string, n: number): Piece => ({ repeat: [[s, n]] });
+const pieceValue = (p: Piece): string => (typeof p === "string" ? p : repeatText(p.repeat).value);
+const pieceText = (p: Piece): Text => (typeof p === "string" ? wtf8(p) : p);
+
+type EditRequest =
+  | { kind: "edit"; edits: { old: Piece; new: Piece }[] }
+  | { kind: "append" | "prepend"; text: Piece };
+
+function editCases(): { note: NoteInput; request: EditRequest }[] {
+  const edit = (note: NoteInput, ...edits: [Piece, Piece][]) => ({
+    note,
+    request: { kind: "edit" as const, edits: edits.map(([old, n]) => ({ old, new: n })) },
+  });
+  const insert = (kind: "append" | "prepend", note: NoteInput, text: Piece) => ({
+    note,
+    request: { kind, text },
+  });
+  const daily =
+    "# Daily\r\n\r\n- [ ] Book tickets\r\n- [ ] Pack bags\r\n\r\nUNSENT: call the school\r\n";
+  const tasks =
+    "\ufeff---\r\ntags: [daily]\r\n---\r\n[[Family]] cafe\u0301 \u{1f600}\r\n- [ ] Book tickets\r\n- [ ] Pack bags\r\nUNSENT end\r\n";
+  const many = (n: number, old: Piece, text: Piece) => ({
+    note: daily,
+    request: {
+      kind: "edit" as const,
+      edits: Array.from({ length: n }, () => ({ old, new: text })),
+    },
+  });
+  const near = NOTE_BYTES - 10;
+  return [
+    // mcp-notes.test.ts
+    insert("prepend", "\ufeffUNSENT original\r\n", "Heading\r\n"),
+    edit(
+      tasks,
+      ["- [ ] Pack bags", "- [x] Pack bags"],
+      ["- [ ] Book tickets", "- [x] Book tickets"],
+    ),
+    edit(daily, ["UNSENT: call the school\r\n", ""]),
+    edit(daily, ["- [ ] Book tickets", "done"], ["missing", "lost"]),
+    edit(daily, ["[ ]", "[x]"]),
+    edit(daily, ["Book tickets", "Booked"], ["tickets", "seats"]),
+    edit(daily, ["", "blank"]),
+    edit(daily),
+    many(33, "Book", "done"),
+    edit(daily, ["Book", rep("x", 8193)]),
+    edit(daily, ["Book", "\ud800"]),
+    edit("aaaa", ["aaa", "b"]),
+    {
+      note: Array.from({ length: 9 }, (_, i) => `unique-${i}`).join("\n"),
+      request: {
+        kind: "edit" as const,
+        edits: Array.from({ length: 9 }, (_, i) => ({ old: `unique-${i}`, new: rep("x", 8192) })),
+      },
+    },
+    insert("append", "source", "\r\nexact suffix"),
+    insert("append", "source", "suffix"),
+    insert("append", new Uint8Array([0xff, 0xfe]), "suffix"),
+    insert("append", "original", "\udfff"),
+    insert("append", { repeat: [["x", NOTE_BYTES]] }, "suffix"),
+    edit("unchanged", ["unchanged", "unchanged"]),
+    // Counting, order and bounds.
+    many(32, "Book", "done"),
+    many(2, "Book", "done"),
+    edit(daily, ["missing", "x"], ["Book", "\ud800"]),
+    edit(daily, ["Book", "\ud800"], ["missing", "x"]),
+    edit(daily, ["\udc00", "x"]),
+    edit(daily, ["", "\ud800"]),
+    edit(daily, [rep("x", 8193), "y"]),
+    edit(rep("\u00e9", 4097), [rep("\u00e9", 4097), "y"]),
+    edit(
+      {
+        repeat: [
+          ["a", 8192],
+          ["|", 1],
+        ],
+      },
+      [rep("a", 8192), rep("b", 8192)],
+    ),
+    edit(
+      Array.from({ length: 5 }, (_, i) => `k${i}`).join(" "),
+      ...Array.from({ length: 4 }, (_, i): [Piece, Piece] => [`k${i}`, rep("\u00e9", 4096)]),
+    ),
+    edit(
+      Array.from({ length: 5 }, (_, i) => `k${i}`).join(" "),
+      ...Array.from({ length: 4 }, (_, i): [Piece, Piece] => [`k${i}`, rep("\u00e9", 4095)]),
+    ),
+    edit("abcdef", ["abc", "X"], ["def", "Y"]),
+    edit("abcdef", ["def", "Y"], ["abc", "X"]),
+    edit("abcdef", ["abc", "X"], ["abc", "Y"]),
+    edit("abcdef", ["abcd", "X"], ["bc", "Y"]),
+    edit("abcdef", ["cd", "X"], ["abcdef", "Y"]),
+    edit("\ufeffabc", ["\ufeffa", "Z"]),
+    edit("\ufeffabc", ["\ufeff", ""]),
+    edit("a\r\nb\r\nc", ["a\r\nb", "ab"]),
+    edit("cafe\u0301 caf\u00e9", ["e", "E"]),
+    edit("cafe\u0301 caf\u00e9", ["\u00e9", "E"]),
+    edit("x\u{1f600}y\u{1f600}z", ["y\u{1f600}", "\u{1f44d}\u{1f3fd}"]),
+    edit("x\u{1f600}y\u{1f600}z", ["\u{1f600}", "-"]),
+    edit("one two", ["one", "one"], ["two", "two"]),
+    edit("one two", ["one", "two"], ["two", "one"]),
+    edit("one two", ["one", "one two"]),
+    edit("", ["a", "b"]),
+    edit(new Uint8Array([0x61, 0xc3]), ["a", "b"]),
+    edit({ repeat: [["x", NOTE_BYTES + 1]] }, ["x", "y"]),
+    edit(
+      {
+        repeat: [
+          ["x", near],
+          ["END", 1],
+        ],
+      },
+      [
+        "END",
+        {
+          repeat: [
+            ["END", 1],
+            ["y", 7],
+          ],
+        },
+      ],
+    ),
+    edit(
+      {
+        repeat: [
+          ["x", near],
+          ["END", 1],
+        ],
+      },
+      [
+        "END",
+        {
+          repeat: [
+            ["END", 1],
+            ["y", 8],
+          ],
+        },
+      ],
+    ),
+    insert("append", "", "text"),
+    insert("prepend", "", "text"),
+    insert("prepend", "\ufeff", "text"),
+    insert("prepend", "\ufeffbody", "\ufeffnew"),
+    insert("prepend", "body\ufeff", "new"),
+    insert("prepend", "body", "new\r\n"),
+    insert("append", "body", ""),
+    insert("prepend", "body", ""),
+    insert("prepend", "body", "\ud800x"),
+    insert("append", "body", rep("x", INPUT_BYTES)),
+    insert("append", "body", rep("x", INPUT_BYTES + 1)),
+    insert("prepend", "body", rep("\u00e9", INPUT_BYTES / 2 + 1)),
+    insert("append", { repeat: [["x", NOTE_BYTES - 4]] }, "four"),
+    insert("append", { repeat: [["x", NOTE_BYTES - 4]] }, "five!"),
+    insert(
+      "prepend",
+      {
+        repeat: [
+          ["\ufeff", 1],
+          ["x", NOTE_BYTES - 7],
+        ],
+      },
+      "four",
+    ),
+    insert("append", new Uint8Array([0xed, 0xa0, 0x80]), "x"),
+    insert("append", new Uint8Array([0xc0, 0xaf]), "x"),
+    insert("prepend", { repeat: [["x", NOTE_BYTES + 1]] }, "x"),
+  ];
+}
+
+async function editVectors() {
+  const root = await mkdtemp(join(tmpdir(), "trew-oracle-edit-"));
+  const out: unknown[] = [];
+  try {
+    const vault = new NodeVault(root);
+    // A byte-order mark is kept, as Basalt's own decoder kept it.
+    const dec = new TextDecoder("utf-8", { ignoreBOM: true });
+    for (const { note, request } of editCases()) {
+      const { text, bytes } = noteInput(note);
+      await writeFile(join(root, "note.md"), bytes);
+      const mutation = {
+        ...(request.kind === "edit"
+          ? {
+              kind: "edit",
+              edits: request.edits.map((e) => ({ old: pieceValue(e.old), new: pieceValue(e.new) })),
+            }
+          : { kind: request.kind, text: pieceValue(request.text) }),
+        path: "note.md",
+        base: noteDigest(bytes),
+      } as NoteMutation;
+      let want: unknown;
+      try {
+        const plan = await prepareNote(vault, mutation);
+        want = { text: big(dec.decode(plan.proposed!)), noop: plan.result.noop === true };
+      } catch (error) {
+        want = writeFailure(error);
+      }
+      out.push({
+        note: text,
+        request:
+          request.kind === "edit"
+            ? {
+                kind: "edit",
+                edits: request.edits.map((e) => ({ old: pieceText(e.old), new: pieceText(e.new) })),
+              }
+            : { kind: request.kind, text: pieceText(request.text) },
+        want,
+      });
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+  return out;
+}
+
+// Every note the read side's tag vectors were built from, and which kind of
+// note it is: the generated Markdown has no frontmatter to edit, and the
+// generated anchors are about reading one.
+type TagKind = "frontmatter" | "markdown" | "anchors";
+const tagCorpus: { source: string; kind: TagKind }[] = [];
+
+// Shapes of the tags property that the edit rewrites: where npm yaml's range
+// for the value ends, and which comments move with it.
+const TAG_EDITS = [
+  "---\ntags:\n  - a\n  - b # c\n---\n",
+  "---\ntags:\n  - a\n\n  # after\nnext: x\n---\n",
+  "---\ntags:\n  - a # one\n  # two\n  - b\n  # three\nnext: x\n---\n",
+  "---\ntags: | # hdr\n  a\n  b\n---\n",
+  "---\ntags: [a # c\n  , b]\n---\n",
+  "---\ntags:   \n---\n",
+  "---\ntags: !!str\n---\n",
+  "---\ntags: !!null\n---\n",
+  "---\n? tags\n:\n---\n",
+  "---\n{tags: [a, b]}\n---\n",
+  "---\n{tags: }\n---\n",
+  "---\r\ntags:\r\n  - a # c  \r\n  - b\r\n---\r\n",
+  "---\ntags: [a]   # c\n---\n",
+  "---\ntags:\n  [a, b]\n---\n",
+  "---\ntags:\n  - |\n    a\n  - b\n---\n",
+  "---\ntags:\n  - a\n  -\n---\n",
+  "---\ntags:\n  - a\n  - # c\n---\n",
+  "---\ntags: a\n  b\nx: 1\n---\n",
+  "---\ntags:\n  - a\n  - b\n---",
+  "---\ntags:\n  - a\n  - # c\n  # d\nnext: x\n---\n",
+  "---\ntags:\n  - a\n  -\n  # d\nnext: x\n---\n",
+  "---\ntags:\n  - a\n  -\n# d\nnext: x\n---\n",
+  "---\ntags:\n  - a\n  -   \n---\n",
+  "---\ntags:\n  - a\n  -\t\n---\n",
+  "---\ntags:\n  - a\n  - b   \n---\n",
+  "---\ntags:\n  - a\n  - b\t# x\n---\n",
+  "---\ntags:\n  - a\n  - 'b' # x\n---\n",
+  "---\ntags:\n  - a\n  - |\n    b\n\n---\n",
+  "---\ntags:\n  - a\n  - b\n    c\n---\n",
+  "---\ntags:\n  - a\n  - !!str b # x\n---\n",
+  "---\ntags:\n  - a\n  - b\n\n\n---\n",
+  "---\ntags: [a, b] \n---\n",
+  "---\ntags: [ ]\n---\n",
+  "---\ntags: []\n---\n",
+  "---\ntags: >- # h\n  a b\n---\n",
+  "---\ntags: |2 # h\n    a\n---\n",
+  "---\n'tags':\n---\n",
+  "---\ntags :\n---\n",
+  "---\n? tags # c\n: [a]\n---\n",
+  "---\n? tags\n:   \n---\n",
+  "---\ntags:\n  - a\n  -\n  - b\n---\n",
+  "---\ntags:\n  -\n---\n",
+  "---\ntags:\n  - # c\n---\n",
+  "---\ntags:\n  - a\n  - b #c\n---\n",
+  "---\ntags:\n  - a\n  -\n  # d\n\nnext: x\n---\n",
+  "---\ntags:\n  - a\n  -\n\n  # d\nnext: x\n---\n",
+  "---\ntags:\n  - a\n  -\n    # d\n  # e\n---\n",
+  "---\ntags:\n  -\n  # d\n  - b\n---\n",
+  "---\ntags:\n  - a\n  - # c\r\n  # d\r\n---\n",
+  "---\ntags:\n    - a\n    - b # deep\nx: 1\n---\n",
+  // Comments indented past the list go with its last item; one before an
+  // empty item's "-" makes that item run over the lines after it; a block
+  // scalar takes none.
+  "---\ntags:\n  - ~ #c\n   # c  \n---\n",
+  "---\ntags:\n  - t/x  # c\n    # c\n  # indented\n---\n",
+  "---\ntags:\n  - k\n    l  # c\n    # m \n  # indented\n---\n",
+  "---\ntags:\n  - a\n\t\n    # m\n\n  # x\n---\n",
+  "---\ntags:\n  - >-\n    h i\n  # m\n  -\na: [1]\n---\n",
+  "---\ntags:\n  - |\n    a\n   # m\n---\n",
+  "---\ntags:\n - a\n\t# c\n---\n",
+  // An insertion before a comment would touch it.
+  "---\ntags: #c\n---\n",
+  "---\ntags :  # c\n---\n",
+  "---\ntags: !!seq\n  - a\n---\n",
+  "---\ntags: !!seq [a]\n---\n",
+  "---\ntags: a b c # c\n---\n#b #c\n",
+  "---\ntags: 'a, b'\n---\n",
+  '---\ntags: "a b" # c\n---\n',
+  "---\ntags: ~\n---\n",
+  "---\ntags: null # c\n---\n",
+  "---\ntags:\n  - ~\n  - a\n---\n",
+  "---\ntags: [~]\n---\n",
+  "---\ntags: 'a #b'\n---\n",
+  "---\ntags:\n  - 'a #b'\n  - \"c # d\"\n---\n",
+  '---\ntags: ["a # b", c]\n---\n',
+  "---\ntitle: x\n---\n#a #b\n",
+  "---\n---\n#a",
+  "---\n# only\n---\n#a",
+  "---\r\ntitle: x\r\n---\r\n#a\r\n",
+  "#a #b\n",
+  "",
+  "\ufeff",
+  "\ufeff#a",
+  "text without newline #a",
+  "text\r\nwith crlf #a",
+  "```\nunclosed #a\n",
+  "---\ntags: [a]\n---\n```\ncode #a\n",
+  "%% #a\n",
+  "<!-- #a",
+  "---\ntags: [a]\n---",
+  "---\ntags: [a]\n---\n",
+  "#a/b/c #a/b #A/B/C/d #ab\n",
+  "---\ntags: [a/b, A/B/c, ab]\n---\n#a/x\n",
+  "#" + "a".repeat(190) + " #a/" + "b".repeat(190) + "\n",
+  "---\ntags: [x]\n---\n" + "#t ".repeat(50) + "\n",
+  "---\ntags: [old, OLD/child, keep]\n---\n#old #Old/Child #older\n",
+  "---\ntags: [caf\u00e9, cafe\u0301/x]\n---\n#CAF\u00c9 #cafe\u0301/y\n",
+  "#\u{1f600} #\u{1f600}/x \u{1f600}#t #t\u{1f600}\n",
+  "---\ntags: [\u0130, i\u0307]\n---\n#\u0130stanbul\n",
+];
+
+// The changes applied to every note: additions in each place and
+// normalisation, removals by tag and by pattern, and renames with and
+// without children.
+const TAG_OPS = [
+  { operation: "add", tags: ["new"] },
+  {
+    operation: "add",
+    tags: ["New_Tag", "a"],
+    location: "both",
+    position: "start",
+    normalization: "kebab",
+  },
+  { operation: "add", tags: ["x", "\u00e9t\u00e9"], location: "content" },
+  { operation: "add", tags: ["CamelCase9Z", "\u0130"], normalization: "lowercase" },
+  { operation: "remove", tags: ["a"] },
+  { operation: "remove", tags: ["b", "tags"], location: "frontmatter", includeChildren: true },
+  { operation: "remove", patterns: ["*"] },
+  { operation: "remove", tags: ["t"], patterns: ["b*", "*/c"], location: "content" },
+  { operation: "rename", oldTag: "a", newTag: "Renamed/Deep", includeChildren: true },
+  { operation: "rename", oldTag: "t", newTag: "u", location: "content" },
+  { operation: "rename", oldTag: "old", newTag: "new" },
+  { operation: "remove", tags: ["old"], includeChildren: true },
+  { operation: "rename", oldTag: "caf\u00e9", newTag: "new", includeChildren: true },
+  { operation: "rename", oldTag: "body", newTag: "b", location: "both" },
+  { operation: "add", tags: ["a"], location: "both", position: "end" },
+] as const;
+// The changes the generated Markdown and anchors get: the content ones, and
+// one of each kind for the anchors.
+const KIND_OPS: Record<TagKind, readonly number[] | undefined> = {
+  frontmatter: undefined,
+  markdown: [2, 6, 9],
+  anchors: [0, 4, 8],
+};
+
+// Inputs refused before the note is read, and normalisations, on one note.
+const TAG_INPUTS = [
+  { operation: "add", tags: [] },
+  { operation: "add", tags: ["#"] },
+  { operation: "add", tags: Array.from({ length: 101 }, (_, i) => `t${i}`) },
+  { operation: "add", tags: Array.from({ length: 100 }, (_, i) => `t${i}`) },
+  { operation: "remove" },
+  { operation: "remove", tags: [] },
+  { operation: "remove", patterns: ["**"] },
+  { operation: "remove", patterns: ["a b"] },
+  { operation: "remove", tags: ["a"], patterns: Array.from({ length: 101 }, () => "a*") },
+  { operation: "rename", oldTag: "", newTag: "x" },
+  { operation: "rename", newTag: "x" },
+  { operation: "rename", oldTag: "a", newTag: "" },
+  { operation: "rename", oldTag: "a", newTag: "b".repeat(201) },
+  { operation: "rename", oldTag: "a", newTag: "b".repeat(199), includeChildren: true },
+  { operation: "rename", oldTag: "a", newTag: "a" },
+  { operation: "rename", oldTag: "#a", newTag: "#z" },
+  { operation: "add", tags: ["#a"] },
+  { operation: "add", tags: ["A"] },
+  { operation: "add", tags: ["a", "a"], location: "both" },
+  { operation: "add", tags: ["n1", "N1"], location: "both" },
+  {
+    operation: "add",
+    tags: ["fooBar_Baz__Qux9Z", "a\u00c9", "\u00e0B\u01c5c"],
+    normalization: "kebab",
+  },
+  {
+    operation: "add",
+    tags: ["\u0130X", "\u03a3\u03a3"],
+    normalization: "lowercase",
+    location: "both",
+  },
+  { operation: "add", tags: ["new"], location: "content", position: "start" },
+  { operation: "remove", tags: ["A"], location: "both" },
+  { operation: "remove", patterns: ["#a*"] },
+] as const;
+
+function changeTagVectors() {
+  const results = (source: string, ops: readonly number[], inputs: readonly object[]) =>
+    ops.map((i) => {
+      try {
+        return [i, changeTags(source, inputs[i] as TagChange)];
+      } catch (error) {
+        return [i, writeFailure(error)];
+      }
+    });
+  const all = TAG_OPS.map((_, i) => i);
+  const notes: unknown[] = TAG_EDITS.map((source) => ({
+    source,
+    results: results(source, all, TAG_OPS),
+  }));
+  // The read side's notes are named by their index in its "notes" section
+  // rather than written out again.
+  tagCorpus.forEach(({ source, kind }, note) =>
+    notes.push({ note, results: results(source, KIND_OPS[kind] ?? all, TAG_OPS) }),
+  );
+  const inputs = ["---\ntags: [a]\n---\n#a #a/xx\n", "#a\n"].map((source) => ({
+    source,
+    results: results(
+      source,
+      TAG_INPUTS.map((_, i) => i),
+      TAG_INPUTS,
+    ),
+  }));
+  return { ops: TAG_OPS, notes, inputs: TAG_INPUTS, inputNotes: inputs };
+}
+
+/** A note of a plan vault; fixture is how a large one is written down. */
+type PlanNote = Note & { fixture?: Text };
+interface PlanVault {
+  notes: PlanNote[];
+  operations: VaultOperation[];
+}
+const repeated = (path: string, parts: [string, number][]): PlanNote => {
+  const r = repeatText(parts);
+  return { path, text: r.value, fixture: r.text };
+};
+
+function planVaults(): PlanVault[] {
+  const tag = (change: object, scope: object = {}): VaultOperation =>
+    ({ kind: "tags", change, ...scope }) as VaultOperation;
+  const rename = { operation: "rename", oldTag: "old", newTag: "new", includeChildren: true };
+  const vaults: PlanVault[] = [];
+  // mcp-operations.test.ts
+  vaults.push({
+    notes: [
+      {
+        path: "a.md",
+        text: "---\r\nkeep:  yes # comment\r\ntags: [old]\r\n---\r\nUNSENT A #old/child\r\n",
+      },
+      { path: "b.md", text: "UNSENT B #old\n`#old`\n" },
+      { path: "c.txt", text: "#old in plain text\n" },
+      { path: "drawing.excalidraw.md", text: "#old drawn\n" },
+      { path: "image.png", text: "#old not a note" },
+      { path: "sub/d.md", text: "#OLD/Child #older\n" },
+    ],
+    operations: [
+      tag(rename),
+      tag(rename, { folder: "sub" }),
+      tag({ operation: "remove", tags: ["old"] }, { paths: ["a.md", "b.md"] }),
+      tag({ operation: "add", tags: ["new"] }, { paths: ["b.md", "a.md"] }),
+      tag({ operation: "add", tags: ["old"] }, { paths: ["a.md"] }),
+      tag(rename, { paths: ["a.md"], folder: "sub" }),
+      tag(rename, { paths: ["a.md", "a.md"] }),
+      tag(rename, { paths: ["image.png"] }),
+      tag(rename, { paths: ["drawing.excalidraw.md"] }),
+      tag({ operation: "add", tags: ["#"] }, { paths: ["a.md"] }),
+      tag({ operation: "remove", patterns: ["*"] }),
+    ],
+  });
+  vaults.push({
+    notes: [
+      { path: "Project/A.md", text: "UNSENT A [B](B.md)\n" },
+      { path: "Project/B.md", text: "B\n" },
+      { path: "Index.md", text: '[[Project/A|label]] [A](Project/A.md "title")\n' },
+    ],
+    operations: [
+      { kind: "move", path: "Project/A.md", to: "Archive/A.md" },
+      { kind: "move", path: "Project/A.md", to: "Archive/A.md", updateLinks: false },
+      { kind: "move", path: "Project/A.md", to: "A.md" },
+      { kind: "move", path: "Project/A.md", to: "Project/A.md" },
+      { kind: "move", path: "Project/A.md", to: "Project/B.md" },
+      { kind: "move", path: "Project/A.md", to: "index.md" },
+      { kind: "move", path: "Project/A.md", to: "Archive/A.json" },
+      { kind: "move", path: "Project/B.md", to: "Archive/B.md" },
+      { kind: "delete", path: "Project/A.md" },
+      { kind: "delete", path: "Project/A.md", markBroken: true },
+      { kind: "delete", path: "Project/B.md", markBroken: true },
+      tag({ operation: "add", tags: ["moved"], location: "content" }, { folder: "Project" }),
+    ],
+  });
+  vaults.push({
+    notes: [
+      { path: "One/Old.md", text: "one\n" },
+      { path: "Two/Old.md", text: "two\n" },
+      { path: "Index.md", text: "[[Old]] [[One/Old]] [o](One/Old.md) `[[One/Old]]`\n" },
+      {
+        path: "notes/Old.md",
+        text: "[up](../Index.md) [[Index]] ![img](img/x.png) [gone](Future.md)\n",
+      },
+      { path: "notes/img/x.png", text: "png" },
+      { path: "other/Ref.md", text: "[x](../notes/Old.md#frag) [[notes/Old|alias]] [[Old]]\n" },
+    ],
+    operations: [
+      { kind: "move", path: "One/Old.md", to: "X/New.md" },
+      { kind: "move", path: "notes/Old.md", to: "archive/deep/Old.md" },
+      { kind: "move", path: "notes/Old.md", to: "Old.md" },
+      { kind: "delete", path: "notes/Old.md", markBroken: true },
+      { kind: "delete", path: "One/Old.md", markBroken: true },
+    ],
+  });
+  vaults.push({
+    notes: [
+      { path: "a.md", text: "#old" },
+      { path: "b.md", bytes: new Uint8Array([255]) },
+    ],
+    operations: [
+      tag(rename),
+      tag(rename, { paths: ["a.md"] }),
+      tag(rename, { paths: ["b.md"] }),
+      { kind: "move", path: "a.md", to: "c.md" },
+      { kind: "delete", path: "a.md" },
+      { kind: "delete", path: "a.md", markBroken: true },
+    ],
+  });
+  const many: PlanNote[] = [];
+  for (let i = 0; i < 480; i++)
+    many.push({ path: `n${String(i).padStart(3, "0")}.md`, text: "#t" });
+  for (let i = 0; i < 10; i++) many.push({ path: `sub/s${i}.md`, text: "#t [[n000]]" });
+  for (let i = 0; i < 33; i++)
+    many.push({ path: `big/b${String(i).padStart(2, "0")}.md`, text: "#t" });
+  vaults.push({
+    notes: many,
+    operations: [
+      tag({ operation: "rename", oldTag: "t", newTag: "u" }),
+      tag({ operation: "rename", oldTag: "t", newTag: "u" }, { folder: "sub" }),
+      tag({ operation: "rename", oldTag: "t", newTag: "u" }, { folder: "big" }),
+      tag({ operation: "rename", oldTag: "absent", newTag: "u" }, { folder: "big" }),
+      { kind: "move", path: "n000.md", to: "moved.md" },
+      { kind: "move", path: "n000.md", to: "moved.md", updateLinks: false },
+    ],
+  });
+  const heavy: PlanNote[] = [];
+  for (let i = 0; i < 9; i++)
+    heavy.push(
+      repeated(`h/${i}.md`, [
+        ["x", 1_000_000 - 3],
+        [" #t", 1],
+      ]),
+    );
+  heavy.push(
+    repeated("huge/x.md", [
+      ["#t", 1],
+      ["x", NOTE_BYTES - 1],
+    ]),
+  );
+  heavy.push(
+    repeated("limit/x.md", [
+      ["#t", 1],
+      ["x", NOTE_BYTES - 2],
+    ]),
+  );
+  vaults.push({
+    notes: heavy,
+    operations: [
+      tag({ operation: "rename", oldTag: "t", newTag: "u" }, { folder: "h" }),
+      tag(
+        { operation: "rename", oldTag: "t", newTag: "u" },
+        { paths: heavy.slice(0, 8).map((n) => n.path) },
+      ),
+      tag({ operation: "rename", oldTag: "t", newTag: "u" }, { folder: "huge" }),
+      tag({ operation: "rename", oldTag: "t", newTag: "u" }, { folder: "limit" }),
+    ],
+  });
+  vaults.push({
+    notes: [
+      repeated("a.md", [["#old ", 2000]]),
+      repeated("b.md", [["#old ", 2000]]),
+      repeated("c.md", [["#o ", 4097]]),
+      repeated("d.md", [["#p ", 700]]),
+    ],
+    operations: [
+      tag(rename),
+      tag({ operation: "rename", oldTag: "o", newTag: "q" }, { paths: ["c.md"] }),
+      tag({ operation: "remove", tags: ["p"] }, { paths: ["d.md"] }),
+      tag(
+        { operation: "add", tags: ["x"] },
+        { paths: Array.from({ length: 32 }, (_, i) => `${i}${"\u0001".repeat(100)}.md`) },
+      ),
+      tag(
+        { operation: "add", tags: ["x"] },
+        { paths: Array.from({ length: 33 }, (_, i) => `${i}.md`) },
+      ),
+    ],
+  });
+  return vaults;
+}
+
+async function planVectors() {
+  const out: unknown[] = [];
+  const same: unknown[] = [];
+  for (const vault of planVaults()) {
+    const root = await mkdtemp(join(tmpdir(), "trew-oracle-plan-"));
+    try {
+      const uid = new Map<string, number>();
+      for (const [i, note] of vault.notes.entries()) {
+        await mkdir(join(root, dirname(note.path)), { recursive: true });
+        await writeFile(join(root, note.path), note.bytes ?? note.text ?? "");
+        uid.set(note.path, i + 1);
+      }
+      const observer = new NodeVault(root, { observeOnly: true });
+      const operations: unknown[] = [];
+      for (const operation of vault.operations) {
+        let want: unknown;
+        try {
+          const preview = await previewOperation(observer, operation);
+          // Bases here are uids, which is what Trew measures a plan with.
+          const numbered = preview.changes.map((c) => ({ ...c, base: uid.get(c.path)! }));
+          want = {
+            changes: preview.changes,
+            ambiguousLinks: preview.ambiguousLinks,
+            size: Buffer.byteLength(JSON.stringify(numbered)),
+          };
+          // Variants of the small plans only: a plan of thousands of edits
+          // says nothing more about the comparison, at a great size.
+          if (numbered.length && JSON.stringify(numbered).length <= 4096)
+            same.push(...planVariants(numbered));
+        } catch (error) {
+          want = writeFailure(error);
+        }
+        operations.push({ operation, want });
+      }
+      out.push({
+        notes: vault.notes.map((n) => ({
+          path: n.path,
+          text: n.fixture ?? (n.bytes ? bytesText(n.bytes) : n.text),
+        })),
+        operations,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+  return { plans: out, samePlan: same };
+}
+
+/** A planned change with a uid for its base, as Trew writes one. */
+type Numbered = Omit<PlannedChange, "base"> & { base: number };
+
+/** A plan against altered copies of itself, and whether samePlan takes each. */
+function planVariants(plan: Numbered[]) {
+  const copy = (): Numbered[] => structuredClone(plan);
+  const variants: Numbered[][] = [copy(), copy().reverse()];
+  const edited = plan.findIndex((c) => c.edits.length > 0);
+  if (edited >= 0) {
+    const a = copy();
+    a[edited]!.edits[0]!.end += 1;
+    const b = copy();
+    b[edited]!.edits[0]!.text += "x";
+    const c = copy();
+    c[edited]!.edits[0]!.old = "";
+    const d = copy();
+    d[edited]!.edits = [];
+    variants.push(a, b, c, d);
+    if (plan[edited]!.edits.length > 1) {
+      const e = copy();
+      e[edited]!.edits.reverse();
+      variants.push(e);
+    }
+  }
+  const base = copy();
+  base[0]!.base += 1000;
+  const action = copy();
+  action[0]!.action = action[0]!.action === "edit" ? "delete" : "edit";
+  const to = copy();
+  to[0]!.to = to[0]!.to === undefined ? "Elsewhere.md" : undefined;
+  const extra = copy();
+  (extra[0] as unknown as Record<string, unknown>)["extra"] = 1;
+  variants.push(base, action, to, extra, copy().slice(1), [...copy(), ...copy().slice(0, 1)]);
+  const same = (a: Numbered[], b: Numbered[]) =>
+    samePlan(a as unknown as PlannedChange[], b as unknown as PlannedChange[]);
+  return variants.map((actual) => ({ expected: plan, actual, want: same(plan, actual) }));
+}
+
+// ---------------------------------------------------------------------------
 // Sweeps: every code point through the classes the ports depend on.
 
 function ranges(test: (c: number) => boolean): [number, number][] {
@@ -1808,6 +2651,8 @@ function sweeps() {
     .sort()
     .map((name) => [name, decodeString(`&${name};`)]);
   return {
+    lowercaseLetter: ranges((c) => /^\p{Ll}$/u.test(chr(c))),
+    uppercaseLetter: ranges((c) => /^\p{Lu}$/u.test(chr(c))),
     tagChar: ranges((c) => tagChar.test(chr(c))),
     tagLetter: ranges((c) => tagLetter.test(chr(c))),
     tagBoundary: ranges((c) => boundary.test(chr(c))),
@@ -1862,6 +2707,9 @@ const fixture: [string, unknown][] = [
   ["compare", await compareVectors()],
   ...Object.entries(tagVectors()),
   ...Object.entries(linkVectors()),
+  ["edits", await editVectors()],
+  ["changeTags", changeTagVectors()],
+  ...Object.entries(await planVectors()),
   ["sweeps", sweep],
 ];
 

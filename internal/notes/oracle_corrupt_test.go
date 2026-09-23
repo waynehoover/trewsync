@@ -13,6 +13,7 @@ import (
 // in one place, and requires the check to reject it. A check that passed a
 // damaged vector would pass anything, and TestOracle would prove nothing.
 func TestOracleDetectsCorruption(t *testing.T) {
+	tagOps := section[tagChangeJSON](t, "changeTags", "ops")
 	cases := []struct {
 		name  string
 		path  []string // the fixture section
@@ -82,6 +83,44 @@ func TestOracleDetectsCorruption(t *testing.T) {
 			decodeAnd(func(v changeLinksVector) error { return checkChangeLinks(v) })},
 		{"decodeString", []string{"decodeString"}, any1, set("want", "spoiled"),
 			decodeAnd(func(v decodeVector) error { return checkDecode(v) })},
+		{"edits", []string{"edits"}, wantHas("text"), setIn("want", "text", "spoiled"),
+			decodeAnd(func(v editVector) error { return checkEdit(v) })},
+		{"edits error", []string{"edits"}, wantHas("error"), setIn("want", "error", "spoiled"),
+			decodeAnd(func(v editVector) error { return checkEdit(v) })},
+		{"edits noop", []string{"edits"}, func(v any) bool { return field(field(v, "want"), "noop") == true },
+			setIn("want", "noop", false),
+			decodeAnd(func(v editVector) error { return checkEdit(v) })},
+		{"changeTags", []string{"changeTags", "notes"}, tagResultHas("edits"),
+			spoilTagResult("edits", func(want map[string]any) { first(want["edits"].([]any))["text"] = "spoiled" }),
+			decodeAnd(func(v changeTagsNote) error { return tagNoteCheck(string(*v.Source), v.Results, tagOps) })},
+		{"changeTags changed", []string{"changeTags", "notes"}, tagResultHas("changed"),
+			spoilTagResult("changed", func(want map[string]any) { want["changed"] = []any{"spoiled"} }),
+			decodeAnd(func(v changeTagsNote) error { return tagNoteCheck(string(*v.Source), v.Results, tagOps) })},
+		{"changeTags error", []string{"changeTags", "notes"}, tagResultHas("error"),
+			spoilTagResult("error", func(want map[string]any) { want["error"] = "spoiled" }),
+			decodeAnd(func(v changeTagsNote) error { return tagNoteCheck(string(*v.Source), v.Results, tagOps) })},
+		{"plans", []string{"plans"}, planHas(hasChanges),
+			spoilPlan(hasChanges, func(w map[string]any) { first(w["changes"].([]any))["path"] = "spoiled.md" }), checkPlans},
+		{"plans base", []string{"plans"}, planHas(hasChanges),
+			spoilPlan(hasChanges, func(w map[string]any) { first(w["changes"].([]any))["base"] = strings.Repeat("0", 64) }),
+			checkPlans},
+		{"plans edits", []string{"plans"}, planHas(hasEdits),
+			spoilPlan(hasEdits, func(w map[string]any) {
+				for _, c := range listIn(w, "changes") {
+					if e := listIn(c, "edits"); len(e) > 0 {
+						first(e)["end"] = 999999
+						return
+					}
+				}
+			}), checkPlans},
+		{"plans ambiguous", []string{"plans"}, planHas(hasKey("ambiguousLinks")),
+			spoilPlan(hasKey("ambiguousLinks"), func(w map[string]any) { w["ambiguousLinks"] = 99 }), checkPlans},
+		{"plans size", []string{"plans"}, planHas(hasKey("size")),
+			spoilPlan(hasKey("size"), func(w map[string]any) { w["size"] = 1 }), checkPlans},
+		{"plans error", []string{"plans"}, planHas(hasKey("error")),
+			spoilPlan(hasKey("error"), func(w map[string]any) { w["error"] = "spoiled" }), checkPlans},
+		{"samePlan", []string{"samePlan"}, any1, func(v any) { m := v.(map[string]any); m["want"] = m["want"] != true },
+			decodeAnd(func(v samePlanVector) error { return checkSamePlan(v) })},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -232,4 +271,78 @@ func spoilSearch(v any) {
 		}
 	}
 	panic(fmt.Sprintf("no match to spoil in %v", pages))
+}
+
+// tagResultHas finds a changeTags vector that writes out its source, one of
+// whose results has key: an error, or a list that is not empty; and
+// spoilTagResult spoils the first such result.
+func tagResultHas(key string) func(any) bool {
+	return func(v any) bool { return tagResult(v, key) != nil }
+}
+
+func spoilTagResult(key string, spoil func(map[string]any)) func(any) {
+	return func(v any) { spoil(tagResult(v, key)) }
+}
+
+func tagResult(v any, key string) map[string]any {
+	if field(v, "source") == nil {
+		return nil
+	}
+	for _, r := range listIn(v, "results") {
+		w, ok := r.([]any)[1].(map[string]any)
+		if !ok || w[key] == nil {
+			continue
+		}
+		if l, list := w[key].([]any); !list || len(l) > 0 {
+			return w
+		}
+	}
+	return nil
+}
+
+func hasChanges(w map[string]any) bool { return len(listIn(w, "changes")) > 0 }
+
+func hasEdits(w map[string]any) bool {
+	for _, c := range listIn(w, "changes") {
+		if len(listIn(c, "edits")) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKey(key string) func(map[string]any) bool {
+	return func(w map[string]any) bool { return w[key] != nil }
+}
+
+// planHas finds a plan vault with an operation whose answer pred accepts, and
+// spoilPlan spoils the first such answer.
+func planHas(pred func(map[string]any) bool) func(any) bool {
+	return func(v any) bool { return planWant(v, pred) != nil }
+}
+
+func spoilPlan(pred func(map[string]any) bool, spoil func(map[string]any)) func(any) {
+	return func(v any) { spoil(planWant(v, pred)) }
+}
+
+func planWant(v any, pred func(map[string]any) bool) map[string]any {
+	for _, o := range listIn(v, "operations") {
+		if w, ok := field(o, "want").(map[string]any); ok && pred(w) {
+			return w
+		}
+	}
+	return nil
+}
+
+func checkPlans(raw []byte) error {
+	var vault planVault
+	if err := json.Unmarshal(raw, &vault); err != nil {
+		return fmt.Errorf("%w: %v", errUndecodable, err)
+	}
+	for _, o := range vault.Operations {
+		if err := checkPlan(vault, o); err != nil {
+			return err
+		}
+	}
+	return nil
 }

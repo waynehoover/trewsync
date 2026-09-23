@@ -971,6 +971,9 @@ var sweepClasses = map[string]func(rune) bool{
 	"emojiModifier":        func(r rune) bool { return unicode.Is(emojiModifier, r) },
 	"cased":                func(r rune) bool { return cased(r) && !caseIgnorable(r) },
 	"ignorable":            caseIgnorable,
+	// kebabTag's \p{Ll} and \p{Lu}.
+	"lowercaseLetter": func(r rune) bool { return unicode.Is(unicode.Ll, r) },
+	"uppercaseLetter": func(r rune) bool { return unicode.Is(unicode.Lu, r) },
 }
 
 // privateUse reports whether r is a private-use character. Unicode gives
@@ -1238,6 +1241,7 @@ func oracleCases(t testing.TB) []oracleCase {
 	for i, v := range section[decodeVector](t, "decodeString") {
 		add(fmt.Sprintf("decodeString/%d", i), func() error { return checkDecode(v) })
 	}
+	writeOracleCases(t, add)
 	var sweeps map[string]json.RawMessage
 	if err := json.Unmarshal(loadFixture(t)["sweeps"], &sweeps); err != nil {
 		t.Fatal(err)
