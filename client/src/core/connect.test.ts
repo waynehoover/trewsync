@@ -4,18 +4,15 @@
  *
  * Anything that syncs waits for the backlog, because a pass that runs before
  * catch-up finishes sees a vault the server already has files for and uploads
- * the lot. `trew status` and the cursor probe in `trew rebase` do not
- * sync: they read the server's cursor out of the handshake and close. Making
- * them wait meant a device weeks behind unsealed and MAC checked every entry
- * of the backlog before printing one line.
+ * the lot. `trew status` does not sync: it reads the server's cursor out of
+ * the handshake and closes. Making it wait meant a device weeks behind checked
+ * every entry of the backlog before printing one line.
  */
 
 import { describe, expect, it, vi } from "vitest";
 
 import { Client, type ClientOptions } from "./client.ts";
 import { FakeSocket, ready, settle } from "./fake-socket.ts";
-import { TEST_DATA_KEY } from "./test-keys.ts";
-import { macEntry, sealPath } from "./crypto.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 /** A client on a socket that will say `ready` and never say `caught-up`. */
@@ -27,7 +24,6 @@ function clientOnFakeSocket(extra: Partial<ClientOptions> = {}): {
   const client = new Client({
     vault: new MemoryVault(),
     store: new MemoryIndexStore(),
-    dataKey: TEST_DATA_KEY,
     url: "ws://test",
     deviceId: "rig-device",
     token: "t",
@@ -124,26 +120,24 @@ describe("connecting only as far as the handshake (R1)", () => {
       socket.autoReply = (frame, s) => {
         if (frame["op"] === "applied") s.reply({ res: "applied", cursor: frame["applied"] });
       };
-      const batches = await Promise.all(
-        [1, 2].map(async (uid) => {
-          const facts = {
-            path: await sealPath(client.keys, `Folder ${uid}`),
+      const batches = [1, 2].map((uid) => ({
+        op: "batch",
+        from: uid,
+        to: uid,
+        entries: [
+          {
+            uid,
+            path: `Folder ${uid}`,
             size: 0,
             ctime: 1,
             mtime: 1,
             folder: true,
             deleted: false,
             chunks: [],
-            parent: "",
-          };
-          return {
-            op: "batch",
-            from: uid,
-            to: uid,
-            entries: [{ uid, ...facts, mac: await macEntry(client.keys, facts), device: "peer" }],
-          };
-        }),
-      );
+            device: "peer",
+          },
+        ],
+      }));
       for (const batch of batches) socket.raw(batch);
       await expect.poll(() => verifying).toBe(true);
       await new Promise((r) => setTimeout(r, 100));
@@ -173,21 +167,23 @@ describe("connecting only as far as the handshake (R1)", () => {
     try {
       await sayReady(socket, 2);
       await expect.poll(() => client.serverLimits?.cursor).toBe(2);
-      const facts = {
-        path: await sealPath(client.keys, "Remote folder"),
-        size: 0,
-        ctime: 1,
-        mtime: 1,
-        folder: true,
-        deleted: false,
-        chunks: [],
-        parent: "",
-      };
       socket.raw({
         op: "batch",
         from: 1,
         to: 1,
-        entries: [{ uid: 1, ...facts, mac: await macEntry(client.keys, facts), device: "peer" }],
+        entries: [
+          {
+            uid: 1,
+            path: "Remote folder",
+            size: 0,
+            ctime: 1,
+            mtime: 1,
+            folder: true,
+            deleted: false,
+            chunks: [],
+            device: "peer",
+          },
+        ],
       });
       await expect.poll(() => client.transport.appliedCursor).toBe(1);
       await new Promise((r) => setTimeout(r, 100));
@@ -202,15 +198,16 @@ describe("connecting only as far as the handshake (R1)", () => {
       await connecting.catch(() => undefined);
     }
   });
-  it("reports authenticated history loading before connect finishes", async () => {
+  it("reports history loading before connect finishes", async () => {
     const progress: { local: number; server: number }[] = [];
     const { socket, client } = clientOnFakeSocket({ onCatchUp: (at) => progress.push(at) });
     const connecting = client.connect();
     connecting.catch(() => undefined);
     try {
       await sayReady(socket, 4);
-      // Ready still has to unwrap the vault key; one event-loop tick is not
-      // enough to finish WebCrypto when the full suite is competing for CPU.
+      // Polled rather than read after one tick: the handshake is read on the
+      // transport's own turn, and one event-loop tick is not always enough
+      // when the full suite is competing for CPU.
       await expect.poll(() => client.serverLimits?.cursor).toBe(4);
       expect(progress, "a connected device still looks like a failed connection").toEqual([
         { local: 0, server: 4 },

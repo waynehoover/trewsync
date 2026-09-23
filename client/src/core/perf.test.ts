@@ -22,20 +22,22 @@
 
 import { describe, expect, it } from "vitest";
 import { chunkBytes, sizesFor, type ChunkSizes, NAME_BYTES } from "./chunk.ts";
-import { sealChunks } from "./crypto.ts";
-import { testKeys } from "./test-keys.ts";
+import { chunkNames } from "./digest.ts";
+import { encodeFrame } from "./frame.ts";
 
 const enc = new TextEncoder();
 
 /**
- * Bytes on the wire are measured by sealing for real, not estimated.
+ * Bytes on the wire are measured by framing for real, not estimated.
  *
- * Sealing compresses, so a plaintext length plus a constant would understate the
- * win and, worse, would stop tracking the thing being claimed. It costs a few
- * hundred milliseconds across this file and it means these numbers are the
- * numbers.
+ * Framing compresses, so a raw length plus a constant would understate the win
+ * and, worse, would stop tracking the thing being claimed. A body goes up as
+ * exactly the frame `encodeFrame` makes (plan/protocol.md, "Chunk bodies"), so
+ * these numbers are the numbers.
  */
-const KEY = await testKeys(new Uint8Array(32).fill(11));
+function framedBytes(chunks: readonly Uint8Array[]): number {
+  return chunks.reduce((n, c) => n + encodeFrame(c).length, 0);
+}
 
 /** Prose with enough variety to behave like real text. */
 function note(bytes: number, seed = 1): Uint8Array {
@@ -76,7 +78,7 @@ async function bytesOnWire(
       send.push(c.bytes);
     }
   }
-  for (const sealed of await sealChunks(KEY, send)) bytes += sealed.bytes.length;
+  bytes += framedBytes(send);
   return { bytes, changed, total };
 }
 
@@ -194,91 +196,63 @@ describe("what an edit costs", () => {
   });
 
   it("sends a full upload for less than the plaintext", async () => {
-    // The per-chunk overhead is 29 bytes, which at prose chunk sizes is
-    // about 11% on top. Compression more than pays for it, so a first sync
-    // moves fewer bytes than the vault contains. Measured at 67% of
-    // plaintext across a real vault's text.
+    // A frame costs one marker byte over its chunk, and deflate more than
+    // pays for that on prose, so a first sync moves fewer bytes than the
+    // vault contains.
     const data = note(512 * 1024);
     const sizes = sizesFor(data.length, true);
     const chunks = [...chunkBytes(data, sizes, true)].map((c) => c.bytes);
-    const sealed = await sealChunks(KEY, chunks);
-    const wire = sealed.reduce((n, c) => n + c.bytes.length, 0);
+    const wire = framedBytes(chunks);
     const ratio = wire / data.length;
     expect(ratio, `a full upload cost ${(ratio * 100).toFixed(0)}% of the plaintext`).toBeLessThan(
       1,
     );
   });
 
-  it("never costs more than 29 bytes a chunk, even on incompressible content", async () => {
+  it("never costs more than one byte a chunk, even on incompressible content", async () => {
     // The bound that has to hold whatever the content: an attachment full of
-    // already-compressed bytes must not grow beyond the marker, nonce and
-    // tag. LiveSync base64s binary chunks, which is a third on top of
-    // everything; sending bytes as bytes is what avoids that.
+    // already-compressed bytes goes raw, and must not grow beyond its marker.
+    // LiveSync base64s binary chunks, which is a third on top of everything;
+    // sending bytes as bytes is what avoids that.
     const size = 512 * 1024;
     const data = randomBytes(size);
     const chunks = [...chunkBytes(data, sizesFor(size, false), false)].map((c) => c.bytes);
-    const sealed = await sealChunks(KEY, chunks);
-    const wire = sealed.reduce((n, c) => n + c.bytes.length, 0);
-    expect(wire).toBe(size + 29 * chunks.length);
+    const wire = framedBytes(chunks);
+    expect(wire).toBe(size + chunks.length);
     expect((wire - size) / size).toBeLessThan(0.01);
   });
 });
 
 describe("cost per file, in operations", () => {
-  it("costs three crypto calls per chunk and no more", async () => {
-    // The driver of initial-sync time, and a number rather than a feeling:
-    // an HMAC for the nonce, the seal, and a SHA-256 for the name. Anything
-    // that adds a fourth doubles a large vault's first sync for a third more
-    // work, so the count is pinned.
-    const k = await testKeys(new Uint8Array(32).fill(3));
+  it("costs one digest per chunk and no other WebCrypto call", async () => {
+    // The driver of initial-sync time, and a number rather than a feeling: a
+    // SHA-256 for the name, and nothing else of WebCrypto's, since protocol 1
+    // seals nothing. Basalt paid three calls a chunk, an HMAC for the nonce,
+    // the seal and the digest; anything that brings a second one back
+    // doubles a large vault's first sync for no gain, so the count is pinned.
     const subtle = globalThis.crypto.subtle;
     const counts: Record<string, number> = {};
-    const wrap = <T extends keyof SubtleCrypto>(name: T) => {
+    const names = ["sign", "encrypt", "digest", "deriveKey", "deriveBits", "importKey"] as const;
+    const originals = Object.fromEntries(names.map((n) => [n, subtle[n]]));
+    for (const name of names) {
       const original = subtle[name] as (...a: unknown[]) => unknown;
-      return (...args: unknown[]) => {
+      (subtle as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => {
         const alg = args[0];
-        const label =
-          typeof alg === "string" ? alg : ((alg as { name: string })?.name ?? String(name));
-        counts[`${String(name)}:${label}`] = (counts[`${String(name)}:${label}`] ?? 0) + 1;
+        const label = typeof alg === "string" ? alg : ((alg as { name?: string })?.name ?? name);
+        counts[`${name}:${label}`] = (counts[`${name}:${label}`] ?? 0) + 1;
         return original.apply(subtle, args);
       };
-    };
-    const originals = { sign: subtle.sign, encrypt: subtle.encrypt, digest: subtle.digest };
-    (subtle as unknown as Record<string, unknown>).sign = wrap("sign");
-    (subtle as unknown as Record<string, unknown>).encrypt = wrap("encrypt");
-    (subtle as unknown as Record<string, unknown>).digest = wrap("digest");
+    }
     try {
-      await sealChunks(k, [enc.encode("one"), enc.encode("two"), enc.encode("three")]);
+      await chunkNames([enc.encode("one"), enc.encode("two"), enc.encode("three")]);
     } finally {
       Object.assign(subtle, originals);
     }
 
-    expect(counts["sign:HMAC"]).toBe(3);
-    expect(counts["encrypt:AES-GCM"]).toBe(3);
     expect(counts["digest:SHA-256"]).toBe(3);
-    expect(Object.values(counts).reduce((a, b) => a + b, 0)).toBe(9);
-  });
-
-  it("derives keys once, not once per chunk", async () => {
-    // 310,000 PBKDF2 iterations is a visible pause on a phone. Doing it per
-    // file would make a first sync unusable, and the only thing stopping
-    // that is that the key schedule is separate from sealing.
-    const k = await testKeys(new Uint8Array(32).fill(5));
-    const subtle = globalThis.crypto.subtle;
-    const original = subtle.deriveKey;
-    let derived = 0;
-    (subtle as unknown as Record<string, unknown>).deriveKey = (...args: unknown[]) => {
-      derived++;
-      return (original as (...a: unknown[]) => unknown).apply(subtle, args);
-    };
-    try {
-      await sealChunks(
-        k,
-        Array.from({ length: 20 }, (_, i) => enc.encode(`chunk ${i}`)),
-      );
-    } finally {
-      subtle.deriveKey = original;
-    }
-    expect(derived).toBe(0);
+    expect(
+      Object.values(counts).reduce((a, b) => a + b, 0),
+      JSON.stringify(counts),
+    ).toBe(3);
   });
 });

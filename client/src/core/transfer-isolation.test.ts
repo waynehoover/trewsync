@@ -3,13 +3,10 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { Client } from "./client.ts";
-import { sealPath } from "./crypto.ts";
-import { testWrapped } from "./test-keys.ts";
 import { TestServer } from "./test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 import { receiveCommitted } from "./test-async.ts";
 
-const secret = new Uint8Array(32).fill(61);
 let server: TestServer;
 const clients: Client[] = [];
 afterEach(async () => {
@@ -22,7 +19,7 @@ async function connect(name: string, vault = new MemoryVault()) {
     vault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(secret, await testWrapped(secret), name)),
+    ...(await server.deviceCredentials(name)),
     vaultId: "default",
     device: name,
     inspect: true,
@@ -40,9 +37,7 @@ it("isolates an unavailable chunk from healthy notes in the same download batch"
   await writer.vault.edit("a-damaged.md", "damaged note content");
   await writer.vault.edit("b-healthy.md", "healthy note content");
   await writer.client.engine.sync();
-  const history = await writer.client.transport.history(
-    await sealPath(writer.client.keys, "a-damaged.md"),
-  );
+  const history = await writer.client.transport.history("a-damaged.md");
   const chunk = history[0]!.chunks[0]!;
   const namespace = createHash("sha256").update("default").digest("hex");
   await rm(join(server.dataDir, "chunks", namespace, chunk.slice(0, 2), chunk));

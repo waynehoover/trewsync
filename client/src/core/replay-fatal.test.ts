@@ -1,35 +1,36 @@
 /**
- * A batch the engine cannot apply, an entry that fails its
- * authenticator above all, threw out of `acceptBatch`, which ended the
- * session, which the loop read as a dropped connection and retried. The
- * server sent the same batch, the engine threw the same error, and the loop
- * went round for ever with no `onFatal`, backing off to five minutes and
- * saying nothing a person could act on.
+ * A batch the engine cannot apply, an entry that contradicts itself above
+ * all, threw out of `acceptBatch`, which ended the session, which the loop
+ * read as a dropped connection and retried. The server sent the same batch,
+ * the engine threw the same error, and the loop went round for ever with no
+ * `onFatal`, backing off to five minutes and saying nothing a person could
+ * act on.
+ *
+ * Basalt's version of this test was seeded with an entry whose authenticator
+ * did not verify. Protocol 1 has none, so the entry here declares three bytes
+ * and names no chunks: a refusal that stands on its own (hazard 5 in
+ * plan/strip-ledger.md), and one only the engine makes, which is the case the
+ * loop has to stop on.
  */
 
 import { describe, expect, it } from "vitest";
 
 import { runForever } from "./client.ts";
-import { sealPath } from "./crypto.ts";
-import { TEST_DATA_KEY, testKeys } from "./test-keys.ts";
-import { FakeSocket, RIG_SECRET, ready } from "./fake-socket.ts";
+import { FakeSocket, ready } from "./fake-socket.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 describe("a batch no reconnection can get past", () => {
   it("stops after three identical failures, naming the cursor and the entry", async () => {
-    const keys = await testKeys(RIG_SECRET);
-    const forged = {
+    const contradictory = {
       uid: 1,
-      path: await sealPath(keys, "note.md"),
+      path: "note.md",
       size: 3,
       ctime: 1,
       mtime: 1,
       folder: false,
       deleted: false,
-      chunks: ["a".repeat(64)],
-      parent: "",
+      chunks: [],
       device: "other",
-      mac: "0".repeat(64),
     };
     const sockets: FakeSocket[] = [];
     let fatal: Error | undefined;
@@ -39,7 +40,6 @@ describe("a batch no reconnection can get past", () => {
       {
         vault: new MemoryVault(),
         store: new MemoryIndexStore(),
-        dataKey: TEST_DATA_KEY,
         url: "ws://test",
         deviceId: "rig-device",
         token: "t",
@@ -52,7 +52,7 @@ describe("a batch no reconnection can get past", () => {
           s.autoReply = (frame, socket) => {
             if (frame["op"] === "hello") {
               socket.reply(ready({ cursor: 1 }));
-              socket.raw({ op: "batch", from: 1, to: 1, entries: [forged] });
+              socket.raw({ op: "batch", from: 1, to: 1, entries: [contradictory] });
             }
           };
           setTimeout(() => s.open(), 0);
@@ -74,7 +74,7 @@ describe("a batch no reconnection can get past", () => {
     expect(fatal, `the loop went round ${sockets.length} times without stopping`).toBeDefined();
     expect(sockets.length).toBe(3);
     expect(fatal!.message).toMatch(/version 1/);
-    expect(fatal!.message).toMatch(/not authenticated/);
+    expect(fatal!.message).toMatch(/declares 3 bytes and names no chunks/);
     expect(fatal!.message).toMatch(/cursor 0/);
     expect(fatal!.message).toMatch(/3 times/);
     expect(fatal!.message).toMatch(/docs\/server\.md/);
@@ -90,7 +90,6 @@ describe("a batch no reconnection can get past", () => {
       {
         vault: new MemoryVault(),
         store: new MemoryIndexStore(),
-        dataKey: TEST_DATA_KEY,
         url: "ws://test",
         deviceId: "rig-device",
         token: "t",
