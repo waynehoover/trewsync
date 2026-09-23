@@ -1666,23 +1666,31 @@ export class PairingInterrupted extends ConnectionError {
  *    will connect with and the invite being redeemed, is on disk before a byte
  *    goes to the server. A crash anywhere after this leaves a pairing that can
  *    be finished, never a row on the server whose credential nobody holds.
- *  - **The server never reached.** A connection that never opened sent
- *    nothing, so nothing can have committed, and the pending pairing is
- *    removed: an unreachable server leaves the vault as unpaired as it was.
- *  - **Refused.** Any refusal writes nothing on the server and never spends
- *    the invite, so the pending pairing is removed too, and nothing is left
- *    saved after a refusal. The invite still works if it was ever good.
- *  - **No answer.** A connection that closed or timed out after the
- *    redemption went out may have committed it, so the pending pairing is
- *    kept and `PairingInterrupted` says so. Calling this again with it is the
- *    retry, with the same id and token.
+ *  - **The server never reached.** On a first attempt, a connection that
+ *    never opened sent nothing, so nothing can have committed, and the
+ *    pending pairing is removed: an unreachable server leaves the vault as
+ *    unpaired as it was.
+ *  - **Refused for good.** A refusal the server marks as one no retry changes
+ *    (`auth`, and the malformed-request codes) writes nothing and never
+ *    spends the invite, so the pending pairing is removed too, and nothing is
+ *    left saved after a refusal. The invite still works if it was ever good.
+ *  - **No answer, or not now.** A connection that closed or timed out after
+ *    the redemption went out may have committed it, and a `busy` or
+ *    `internal` answer says the server could not take it just now, so the
+ *    pending pairing is kept and `PairingInterrupted` says so. Calling this
+ *    again with it is the retry, with the same id and token.
  *  - **`redeemed`.** The pending pairing is replaced by the finished device,
  *    which holds no invite. If that save fails, the pending pairing is still
  *    on disk with the same credential, and the retry is answered `redeemed`
  *    again.
  *
- * Starting and resuming are the same call: a shell that finds a pending
- * pairing in its config passes it here as it is.
+ * Finishing a pending pairing a shell found on disk, or kept after
+ * `PairingInterrupted`, is the same call with `resuming` set, and it differs
+ * in one case: a server that cannot be reached keeps the pairing, because an
+ * earlier attempt with this very id and token may have been registered with
+ * its answer lost, and only the retry can find that out. Forgetting it then
+ * would throw away the only copy of a credential the server may hold, for an
+ * invite that is now spent.
  */
 export async function pairWithInvite(
   pending: PendingPairing,
@@ -1693,6 +1701,11 @@ export async function pairWithInvite(
     log?: ((message: string, ...rest: unknown[]) => void) | undefined;
     /** Called once the redemption has been sent, for a shell that reports progress. */
     onSent?: (() => void) | undefined;
+    /**
+     * Whether this pending pairing may have been sent before: the shell is
+     * finishing one it found on disk or kept after `PairingInterrupted`.
+     */
+    resuming?: boolean | undefined;
   } = {},
 ): Promise<DeviceConfig> {
   await store.save(pending);
@@ -1720,11 +1733,22 @@ export async function pairWithInvite(
     });
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
-    if (sent && !(error instanceof ProtocolError)) {
+    // Removed only when nothing this pairing ever sent can have registered a
+    // row: a refusal no retry changes, or a first attempt that never reached
+    // the server. Anything else keeps it for the retry that finds out.
+    const refusedForGood = error instanceof ProtocolError && !error.retryable;
+    const neverSent = !sent && opts.resuming !== true;
+    if (!refusedForGood && !neverSent) {
+      const why =
+        error instanceof ProtocolError
+          ? `the server could not take the pairing just now (${error.message})`
+          : sent
+            ? `the invite was sent and no answer came back (${error.message}), so whether the ` +
+              "server registered this device is not known"
+            : `the server could not be reached (${error.message}), and an earlier attempt may ` +
+              "have registered this device";
       throw new PairingInterrupted(
-        `the invite was sent and no answer came back (${error.message}), so whether the server ` +
-          "registered this device is not known. The pairing is kept, and trying again finishes " +
-          "it with the same credential.",
+        `${why}. The pairing is kept, and trying again finishes it with the same credential.`,
         pending,
       );
     }
