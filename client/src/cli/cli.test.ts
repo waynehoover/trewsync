@@ -633,15 +633,16 @@ describe("status", () => {
   it("does not call a vault up to date while work is outstanding", async () => {
     await fresh();
     const { a, b } = await twoDevices();
-    await write(a, "thing.md", "a file on a\n");
-    await cli("sync", "--dir", a);
-    await cli("sync", "--dir", b);
-
-    // The same name, a folder on a. b can never apply it: it holds the file.
-    await rm(join(a, "thing.md"));
-    await mkdir(join(a, "thing.md"), { recursive: true });
+    // A folder on a, and a file of the same name made on b before b ever
+    // syncs. b can never apply what is under a's folder: it holds the file.
+    //
+    // This used to be built by replacing a synced file with a folder of the
+    // same name on a. Protocol 1 refuses that at the server, as a collision
+    // with the file still live there, so it never reaches b; a is told so,
+    // and nothing is lost on either side.
     await write(a, "thing.md/inner.md", "inside\n");
-    for (let i = 0; i < 3; i++) await cli("sync", "--dir", a);
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    await writeFile(join(b, "thing.md"), "a file on b\n");
     for (let i = 0; i < 3; i++) await cli("sync", "--dir", b);
 
     const s = await cli("status", "--dir", b, "--json");
@@ -827,17 +828,32 @@ describe("a path the server will not hold (PLAN.md section 4.9)", () => {
     expect((await cli("pair", await inviteFrom(a), "--dir", b)).code).toBe(0);
     expect((await cli("sync", "--dir", b)).code).toBe(0);
     expect(await read(b, "fine.md")).toBe("a note that syncs\n");
+  }, 120_000);
 
-    // Renamed to something the server takes, it syncs, and the next status
-    // says nothing needs a person: the record follows the vault.
-    const { rename } = await import("node:fs/promises");
-    await rename(join(a, bad), join(a, "bell.md"));
+  /**
+   * The record is what the latest sync found, not the first: a path written
+   * off and then fixed leaves status once a sync has seen it go. Shown with a
+   * file over the server's size limit, fixed by shortening it, which keeps its
+   * name.
+   */
+  it("follows the vault: a path the next sync no longer refuses leaves status", async () => {
+    server = new TestServer();
+    server.extraArgs = ["-max-file", "64"];
+    await server.start();
+    const a = await firstDevice();
+    await write(a, "long.md", "x".repeat(200));
+    expect((await cli("sync", "--dir", a)).code).toBe(1);
+    const refused = await cli("status", "--dir", a, "--json");
+    expect(refused.code).toBe(1);
+    const attention = refused.json()["attention"] as Attention;
+    expect(attention.paths.map((p) => p.path)).toEqual(["long.md"]);
+    expect(attention.paths[0]!.why).toMatch(/64 bytes|at most 64/);
+
+    await write(a, "long.md", "short now\n");
     expect((await cli("sync", "--dir", a)).code).toBe(0);
     const clean = await cli("status", "--dir", a, "--json");
     expect(clean.code, clean.all).toBe(0);
     expect(clean.json()["attention"]).toMatchObject({ count: 0, paths: [] });
-    expect((await cli("sync", "--dir", b)).code).toBe(0);
-    expect(await read(b, "bell.md")).toBe("a note whose name the server refuses\n");
   }, 120_000);
 
   /**
