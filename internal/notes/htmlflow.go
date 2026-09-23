@@ -204,16 +204,21 @@ func (h htmlFlowParser) Open(parent ast.Node, reader text.Reader, pc parser.Cont
 	return node, parser.NoChildren
 }
 
-// listStartParser is goldmark's list parser with one of micromark's rules
-// added. micromark treats every container that starts while an indented code
-// block is still open (on the next line, or after blank lines, until a line
-// that is not indented) as interrupting it, and a list that interrupts may
-// not start empty, nor with an ordered number other than 1. CommonMark
-// applies that rule only to paragraphs, which goldmark does.
+// listStartParser is goldmark's list parser with micromark's rule for a list
+// that interrupts: it may not start empty, nor with an ordered number other
+// than a single 1. CommonMark and goldmark apply that rule to a list that
+// interrupts a paragraph in the same container. micromark applies it more
+// widely, and Basalt's answer is the specification:
+//
+//   - to a list that starts inside a container opened on the same line
+//     (">-" after a paragraph line is a quote holding the text "-", not an
+//     empty list);
+//   - to a list that starts while an indented code block is still open, on
+//     the next line or after blank lines, until a line that is not indented.
 type listStartParser struct{ parser.BlockParser }
 
 func (l listStartParser) Open(parent ast.Node, reader text.Reader, pc parser.Context) (ast.Node, parser.State) {
-	if line, _ := reader.PeekLine(); interruptsIndentedCode(parent, reader) {
+	if line, _ := reader.PeekLine(); interruptedFlow(parent, reader) {
 		if pos := pc.BlockOffset(); pos >= 0 && pos < len(line) && !listMayInterrupt(line[pos:]) {
 			return nil, parser.NoChildren
 		}
@@ -221,11 +226,12 @@ func (l listStartParser) Open(parent ast.Node, reader text.Reader, pc parser.Con
 	return l.BlockParser.Open(parent, reader, pc)
 }
 
-// interruptsIndentedCode reports whether the block about to open would be
-// the first thing after an indented code block, as micromark sees it: the
-// last block before this line, in the containers this line continued, is
-// indented code. Containers opened on this line are looked through.
-func interruptsIndentedCode(parent ast.Node, reader text.Reader) bool {
+// interruptedFlow reports whether a block opening on this line interrupts,
+// as micromark sees it: the last block before this line, in the containers
+// this line continued, is an indented code block, or a paragraph whose last
+// line is the line before. Containers opened on this line are looked
+// through.
+func interruptedFlow(parent ast.Node, reader text.Reader) bool {
 	_, seg := reader.PeekLine()
 	src := reader.Source()
 	if seg.Start < 0 || seg.Start > len(src) {
@@ -233,18 +239,25 @@ func interruptsIndentedCode(parent ast.Node, reader text.Reader) bool {
 	}
 	lineStart := bytes.LastIndexByte(src[:seg.Start], '\n') + 1
 	c := parent
+	var prev ast.Node
 	for c != nil && c.Kind() != ast.KindDocument && c.Pos() >= lineStart {
-		if prev := c.PreviousSibling(); prev != nil {
-			_, code := prev.(*ast.CodeBlock)
-			return code
+		if p := c.PreviousSibling(); p != nil {
+			prev = p
+			break
 		}
 		c = c.Parent()
 	}
-	if c == nil {
-		return false
+	if prev == nil && c != nil {
+		prev = c.LastChild()
 	}
-	_, code := c.LastChild().(*ast.CodeBlock)
-	return code
+	switch b := prev.(type) {
+	case *ast.CodeBlock:
+		return true
+	case *ast.Paragraph:
+		lines := b.Lines()
+		return lines.Len() > 0 && lines.At(lines.Len()-1).Stop >= lineStart
+	}
+	return false
 }
 
 // listMayInterrupt is whether a list item that starts s may interrupt: it is

@@ -447,6 +447,10 @@ func parseMDLinkDestination(block text.Reader, balanceMax int) ([]byte, byteRang
 	return line[:i], byteRange{offset, offset + i}, len(line[:i]) != 0
 }
 
+// parseMDLinkTitle is micromark's factoryTitle: from the opener to the first
+// closer not escaped by a backslash, over any number of lines. micromark:
+// a parenthesised title may hold an unescaped "(", which CommonMark and
+// goldmark refuse, so that "[r]: u (()" is a definition to Basalt.
 func parseMDLinkTitle(block text.Reader) ([]byte, bool) {
 	skipMDSpaces(block)
 	opener := block.Peek()
@@ -458,19 +462,31 @@ func parseMDLinkTitle(block text.Reader) ([]byte, bool) {
 		closer = ')'
 	}
 	block.Advance(1)
-	segments, found := block.FindClosure(opener, closer, mdLinkFindClosureOptions)
-	if found {
-		if segments.Len() == 1 {
-			return block.Value(segments.At(0)), true
+	return scanMDTitle(block, closer)
+}
+
+// scanMDTitle reads a title from just after its opener to its closer.
+func scanMDTitle(block text.Reader, closer byte) ([]byte, bool) {
+	var title []byte
+	for {
+		line, _ := block.PeekLine()
+		if line == nil {
+			return nil, false
 		}
-		var title []byte
-		for i := range segments.Len() {
-			s := segments.At(i)
-			title = append(title, block.Value(s)...)
+		for i := 0; i < len(line); i++ {
+			switch c := line[i]; {
+			case c == '\\' && i+1 < len(line) && (line[i+1] == closer || line[i+1] == '\\'):
+				title = append(title, c, line[i+1])
+				i++
+			case c == closer:
+				block.Advance(i + 1)
+				return title, true
+			default:
+				title = append(title, c)
+			}
 		}
-		return title, true
+		block.AdvanceLine()
 	}
-	return nil, false
 }
 
 // skipMDSpaces is block.SkipSpaces with micromark's idea of whitespace in a
@@ -657,7 +673,8 @@ func parseMDLinkReferenceDefinition(block text.Reader, pc parser.Context) (*ast.
 	if opener == '(' {
 		closer = ')'
 	}
-	segments, found = block.FindClosure(opener, closer, mdLinkFindClosureOptions)
+	// micromark: the title's own rules, not goldmark's FindClosure.
+	title, found := scanMDTitle(block, closer)
 	if !found {
 		if !isNewLine {
 			return nil, -1, -1
@@ -668,15 +685,6 @@ func parseMDLinkReferenceDefinition(block text.Reader, pc parser.Context) (*ast.
 		recordDefinition(pc, ref, startPos.Start, span)
 		block.AdvanceLine()
 		return ref, startLine, endLine + 1
-	}
-	var title []byte
-	if segments.Len() == 1 {
-		title = block.Value(segments.At(0))
-	} else {
-		for i := range segments.Len() {
-			s := segments.At(i)
-			title = append(title, block.Value(s)...)
-		}
 	}
 
 	line, _ = block.PeekLine()

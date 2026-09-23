@@ -158,6 +158,7 @@ func newMarkdownParser() parser.Parser {
 // markdownDocument is one parse of a note's body.
 type markdownDocument struct {
 	src    []byte // the body as goldmark saw it
+	orig   string // the body as it is
 	offset int    // where the body starts in the note, in bytes
 	root   ast.Node
 	record *markdownRecord
@@ -175,10 +176,18 @@ func parseMarkdown(source string, start int) *markdownDocument {
 		start += len("\ufeff")
 	}
 	src := []byte(source[start:])
-	// micromark ends a line at a lone CR; goldmark does not.
+	// micromark ends a line at a lone CR, and takes CRLF as one line ending;
+	// goldmark ends lines only at LF and reads the CR of a CRLF as a character
+	// of the line, so that "-\r\n" is not an empty list item to it. A lone CR
+	// becomes LF and the CR of a CRLF a space: one byte for one, so offsets
+	// are unchanged, and a trailing space is nothing to any block rule.
 	for i, c := range src {
-		if c == '\r' && (i+1 == len(src) || src[i+1] != '\n') {
-			src[i] = '\n'
+		if c == '\r' {
+			if i+1 < len(src) && src[i+1] == '\n' {
+				src[i] = ' '
+			} else {
+				src[i] = '\n'
+			}
 		}
 	}
 	rec := &markdownRecord{
@@ -190,7 +199,7 @@ func parseMarkdown(source string, start int) *markdownDocument {
 	pc := parser.NewContext()
 	pc.Set(markdownRecordKey, rec)
 	root := markdownParser.Parse(text.NewReader(src), parser.WithContext(pc))
-	return &markdownDocument{src: src, offset: start, root: root, record: rec}
+	return &markdownDocument{src: src, orig: source[start:], offset: start, root: root, record: rec}
 }
 
 // hidden returns the extents, in note byte offsets, of the nodes Basalt's
@@ -259,7 +268,7 @@ func (d *markdownDocument) whole(l linkRecord) byteRange {
 		return byteRange{-1, -1}
 	}
 	end := lineEnd(d.src, lines.At(lines.Len()-1))
-	for end < len(d.src) && (d.src[end] == ' ' || d.src[end] == '\t') {
+	for end < len(d.orig) && (d.orig[end] == ' ' || d.orig[end] == '\t') {
 		end++
 	}
 	return byteRange{l.whole.start, end}
