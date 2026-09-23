@@ -16,7 +16,6 @@ const scenes = [
   "pairing",
   "join",
   "join-confirm",
-  "setup",
   "invite",
   "server",
   "devices",

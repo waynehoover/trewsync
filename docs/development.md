@@ -289,9 +289,8 @@ published gallery. A failed layout check leaves a `.failed.png` for inspection.
 | Downloading changes | [View](assets/screenshots/downloading.png) | [View](assets/screenshots/downloading-dark.png) |
 | Plugin settings | [View](assets/screenshots/settings.png) | [View](assets/screenshots/settings-dark.png) |
 | Status indicator | [View](assets/screenshots/status.png) | [View](assets/screenshots/status-dark.png) |
-| Setup choices | [View](assets/screenshots/pairing.png) | [View](assets/screenshots/pairing-dark.png) |
-| First device | [View](assets/screenshots/setup.png) | [View](assets/screenshots/setup-dark.png) |
-| Join a vault | [View](assets/screenshots/join.png) | [View](assets/screenshots/join-dark.png) |
+| Pair this device | [View](assets/screenshots/pairing.png) | [View](assets/screenshots/pairing-dark.png) |
+| An invite pasted | [View](assets/screenshots/join.png) | [View](assets/screenshots/join-dark.png) |
 | Confirm merging existing files | [View](assets/screenshots/join-confirm.png) | [View](assets/screenshots/join-confirm-dark.png) |
 | QR invite and pairing code | [View](assets/screenshots/invite.png) | [View](assets/screenshots/invite-dark.png) |
 | Server address | [View](assets/screenshots/server.png) | [View](assets/screenshots/server-dark.png) |
@@ -308,9 +307,8 @@ Phone layout previews (desktop rendering with mobile styles):
 | Loading sync history | [View](assets/screenshots/loading-phone.png) | [View](assets/screenshots/loading-phone-dark.png) |
 | Uploading changes | [View](assets/screenshots/uploading-phone.png) | [View](assets/screenshots/uploading-phone-dark.png) |
 | Downloading changes | [View](assets/screenshots/downloading-phone.png) | [View](assets/screenshots/downloading-phone-dark.png) |
-| Setup choices | [View](assets/screenshots/pairing-phone.png) | [View](assets/screenshots/pairing-phone-dark.png) |
-| First device | [View](assets/screenshots/setup-phone.png) | [View](assets/screenshots/setup-phone-dark.png) |
-| Join a vault | [View](assets/screenshots/join-phone.png) | [View](assets/screenshots/join-phone-dark.png) |
+| Pair this device | [View](assets/screenshots/pairing-phone.png) | [View](assets/screenshots/pairing-phone-dark.png) |
+| An invite pasted | [View](assets/screenshots/join-phone.png) | [View](assets/screenshots/join-phone-dark.png) |
 | Confirm merging existing files | [View](assets/screenshots/join-confirm-phone.png) | [View](assets/screenshots/join-confirm-phone-dark.png) |
 | QR invite and pairing code | [View](assets/screenshots/invite-phone.png) | [View](assets/screenshots/invite-phone-dark.png) |
 | Server address | [View](assets/screenshots/server-phone.png) | [View](assets/screenshots/server-phone-dark.png) |
