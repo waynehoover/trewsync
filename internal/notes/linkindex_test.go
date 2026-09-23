@@ -119,10 +119,10 @@ func TestTheLinkKeysNarrowTheOraclePlansWithoutChangingThem(t *testing.T) {
 func TestTheLinkKeysNeverOmitABacklink(t *testing.T) {
 	folders := []string{"", "a/", "a/b/", "B/", "x y/"}
 	names := []string{"note", "Note", "ÉTÉ", "été", "Straße", "STRASSE", "İstanbul", "ΣΊΣΥΦΟΣ", "σίσυφος",
-		"x y", "x%y", "two.md", "hash#tag", "ſtar", "KelvinK"}
+		"x y", "x%y", "two.md", "hash#tag", "ſtar", "Kelvin\u212a"}
 	exts := []string{".md", ".txt", ".MD"}
 	nfd := func(s string) string {
-		return strings.NewReplacer("É", "É", "é", "é").Replace(s)
+		return strings.NewReplacer("É", "E\u0301", "é", "e\u0301").Replace(s)
 	}
 	ruledOut, asked := 0, 0
 	for seed := int64(1); seed <= 40; seed++ {
@@ -212,7 +212,7 @@ func TestEveryNoteChangeLinksWouldTouchHasATargetKey(t *testing.T) {
 		"[[Note]] and [[note]] and [[NOTE]]",
 		"[[a/Note]] [[../a/Note.md]] [t](../a/Note.md) [t](/a/Note.md)",
 		"[[STRASSE]] [[straße.md]] [t](../Stra%C3%9Fe.md)",
-		"[[ÉTÉ]] [[c/été]] [t](../c/%C3%89T%C3%89.txt#x)",
+		"[[E\u0301TE\u0301]] [[c/été]] [t](../c/%C3%89T%C3%89.txt#x)",
 		"[[two.md]] [[two]] [[d/two.md]] [t](../d/two.md.md)",
 		"[t](<../e/x y.md>) [[x y]] [[e/x y|alias]]",
 		"[t](../a/.%2e/a/Note.md) [t](c/../../a/Note.md)",
