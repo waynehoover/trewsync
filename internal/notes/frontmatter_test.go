@@ -140,6 +140,36 @@ func TestFrontmatterDivergences(t *testing.T) {
 			`tags=!!seq:""@1:7 [!!str:"a"@1:8] title=!!str:"Notes, *draft*"@2:8`, "a 11-12"},
 		{"a continuation line in a flow sequence", "tags: [a]\nb: [c\n  *d.e]\n",
 			`tags=!!seq:""@1:7 [!!str:"a"@1:8] b=!!seq:""@2:4 [!!str:"c *d.e"@2:5]`, "a 11-12"},
+
+		// Other lines that start with a tab.
+		{"a quoted line that starts with a tab", "a: \"x\n\ty\"\ntags: [x]\n",
+			`a=!!str:"x y"@1:4 tags=!!seq:""@3:7 [!!str:"x"@3:8]`, "invalid_frontmatter"},
+		{"a flow line that starts with a tab", "a: [x,\n\ty]\ntags: [x]\n",
+			`a=!!seq:""@1:4 [!!str:"x"@1:5] [!!str:"y"@2:2] tags=!!seq:""@3:7 [!!str:"x"@3:8]`, "invalid_frontmatter"},
+		{"a comment line indented with a tab", "tags:\n  - a\n\t# c\n",
+			`error: yaml: line 2: found a tab character that violates indentation`, "a 14-15"},
+		{"and with spaces first", "tags:\n  - a\n  \t# c\n",
+			`error: yaml: line 2: found a tab character that violates indentation`, "a 14-15"},
+		{"but not the line that ends a block scalar, both refuse", "a: |\n  x\n\t# c\ntags: [x]\n",
+			`error: yaml: line 3: found a tab character where an indentation space is expected`, "invalid_frontmatter"},
+		{"which a comment line between keeps apart", "tags:\n  - |\n    a\n  # m\n\t# c\n",
+			`tags=!!seq:""@2:3 [!!str:"a\n"@2:5]`, "a 14-22"},
+
+		// Comments against the token before them.
+		{"a comment against a quote", "tags: 'x'# c\n", `tags=!!str:"x"@1:7`, "invalid_frontmatter"},
+		{"against a closing bracket", "tags: [x]# c\n", `tags=!!seq:""@1:7 [!!str:"x"@1:8]`, "invalid_frontmatter"},
+		{"against a comma", "tags: [x,# c\n  y]\n",
+			`tags=!!seq:""@1:7 [!!str:"x"@1:8] [!!str:"y"@2:3]`, "invalid_frontmatter"},
+		{"against a quote that closes a later line", "a: \"b\n  c\"#d\ntags: [y]\n",
+			`a=!!str:"b c"@1:4 tags=!!seq:""@3:7 [!!str:"y"@3:8]`, "invalid_frontmatter"},
+
+		// Later documents.
+		{"a later document is not read", "a: 1\n--- b\ntags: [x]\n",
+			`error: yaml: line 3: mapping values are not allowed in this context`, ""},
+		{"nor one after a document end", "tags: [a]\n...\n\"x\n",
+			`error: yaml: line 3: found unexpected end of stream`, "a 11-12"},
+		{"a marker that starts the first document", "# c\n--- !!map\ntags: [a]\n--- b: c\n",
+			`error: yaml: line 4: mapping values are not allowed in this context`, "a 25-26"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -153,11 +183,14 @@ func TestFrontmatterDivergences(t *testing.T) {
 	}
 }
 
-// TestFrontmatterKnownDivergence records the one place the deep corpus found
-// where the port still answers otherwise than Basalt: npm yaml reads an
-// implicit key that runs over lines in a flow mapping, and yaml.v3 refuses
-// it, so the port refuses frontmatter Basalt read. It errs by refusing, so a
-// tool reports invalid_frontmatter rather than a wrong answer.
+// TestFrontmatterKnownDivergence records the places where the port still
+// answers otherwise than Basalt. The deep corpus found the first: npm yaml
+// reads an implicit key that runs over lines in a flow mapping, and yaml.v3
+// refuses it. The write side found the second: a document after a directive,
+// which npm yaml read by the schema the directive names (under "%YAML 1.1",
+// "yes" is a boolean), and which yaml.v3 refuses for "%YAML 1.2" and reads
+// otherwise for %TAG; the port refuses every such document. Each errs by
+// refusing, so a tool reports invalid_frontmatter rather than a wrong answer.
 func TestFrontmatterKnownDivergence(t *testing.T) {
 	body := "a: {x\n  y: z}\ntags: [t]\n"
 	if got := yamlAlone(body); got != `error: yaml: line 1: did not find expected ',' or '}'` {
@@ -165,6 +198,20 @@ func TestFrontmatterKnownDivergence(t *testing.T) {
 	}
 	if got := frontmatterAnswer("---\n" + body + "---\n"); got != "invalid_frontmatter" {
 		t.Errorf("got %q; Basalt read \"t 25-26\"", got)
+	}
+	for _, c := range []struct{ body, basalt string }{
+		{"%YAML 1.1\n--- !!map\ntags: yes\n", "invalid_frontmatter"},
+		{"%YAML 1.1\n--- !!map\ntags: [a]\n", "a 31-32"},
+		{"%YAML 1.2\n--- !!map\ntags: yes\n", "yes 30-33"},
+		{"%TAG ! tag:x,2000:\n--- !!map\ntags: [a]\n", "a 40-41"},
+	} {
+		if got := frontmatterAnswer("---\n" + c.body + "---\n"); got != "invalid_frontmatter" {
+			t.Errorf("%q: got %q; Basalt read %q, and the port refuses every document after a directive", c.body, got, c.basalt)
+		}
+	}
+	// A directive with no document after it npm yaml refused as well.
+	if got := frontmatterAnswer("---\n%YAML 1.1\n---\n"); got != "invalid_frontmatter" {
+		t.Errorf("a directive alone: got %q, Basalt invalid_frontmatter", got)
 	}
 }
 
