@@ -1948,10 +1948,10 @@ describe("saying what it is working on", () => {
       if (s.kind === "syncing" && s.path !== undefined) seen.push(s.path);
     });
 
-    // Incompressible and large enough that sealing it reliably outlasts the
-    // threshold. A compressible file seals in a few milliseconds and the
-    // state never fires, which made an earlier version of this pass or fail
-    // depending on how loaded the machine was.
+    // Incompressible and large enough that chunking, naming and sending it
+    // reliably outlasts the threshold. A compressible file is done in a few
+    // milliseconds and the state never fires, which made an earlier version
+    // of this pass or fail depending on how loaded the machine was.
     const big = new Uint8Array(24 * 1024 * 1024);
     for (let at = 0; at < big.length; at += 65536) {
       crypto.getRandomValues(big.subarray(at, Math.min(at + 65536, big.length)));
@@ -2047,7 +2047,7 @@ function holdIndexLoad(plugin: Testable, app: App) {
  *  A run inside `connect` used to survive `unlink`:
  * the shell was handed the client only once the handshake had succeeded, so
  * a vault unlinked during a slow handshake had nothing to close, and the
- * connection went on to complete with the old secret. The two tests this
+ * connection went on to complete with the old credential. The two tests this
  * replaces asserted that a counter had moved, which is not the property.
  */
 describe("unlinking during the handshake", () => {
@@ -2664,6 +2664,51 @@ describe("a pairing saved before it is sent", () => {
       rows.filter((d) => d.lastSeen === 0),
       "a row nothing connected under",
     ).toEqual([]);
+  }, 300_000);
+
+  /**
+   * The one way a row can still be left that nothing connects as: the vault is
+   * unlinked while its redemption is in flight. Unlink removes the pending
+   * pairing whatever the server did, so the words cannot be the ones for an
+   * empty disk, "nothing was registered", and the row they name is really
+   * there and really goes (the SPLIT half of main.test.ts:2433 in the strip
+   * ledger that survives: a pairing that may have left a row names it).
+   */
+  it("names the row an unlink during the redemption may leave, and it can be revoked", async () => {
+    await fresh();
+    const first = await load();
+    await startVault(first.plugin, "laptop");
+    await synced(first.plugin);
+    const invite = await anInvite();
+
+    const second = await load();
+    const spy = redeemAs(async function (this: Transport, args) {
+      const answer = await realRedeem.call(this, args);
+      await second.plugin.unlink();
+      return answer;
+    });
+    let failed: Error | undefined;
+    try {
+      failed = await second.plugin.pair(invite, "phone").then(
+        () => undefined,
+        (err: Error) => err,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(failed?.message, "the pairing succeeded").toMatch(/unlinked while it was being paired/);
+    expect(failed?.message).toMatch(/never connected/);
+    expect(failed?.message, "it said nothing was registered").not.toMatch(/Nothing was registered/);
+    expect(second.plugin.savedData).toBe(null);
+    expect(second.plugin.paired).toBe(false);
+    expect(second.plugin.currentState.kind).toBe("unpaired");
+
+    // And the row it names is really there, and really goes.
+    const rows = (await first.plugin.devices()).devices;
+    const orphan = rows.find((d) => d.lastSeen === 0);
+    expect(orphan, JSON.stringify(rows)).toBeDefined();
+    await first.plugin.revoke(orphan!.id);
+    expect((await first.plugin.devices()).devices).toHaveLength(1);
   }, 300_000);
 
   /**
@@ -4309,7 +4354,7 @@ describe("adding a device from the panel", () => {
       await expect(
         second.plugin.pair(invite, "phone"),
         "a pairing completed into a plugin that was gone",
-      ).rejects.toThrow(/no longer paired|unlinked while the invite/);
+      ).rejects.toThrow(/stopped before this pairing finished. It is saved/);
     } finally {
       delayed.mockRestore();
     }

@@ -50,6 +50,7 @@ import {
   type Deletion,
   type DeviceRow,
   type InviteRow,
+  type PairingRemains,
   type PairingStore,
   type Version,
 } from "../core/client.ts";
@@ -1848,11 +1849,7 @@ export default class TrewPlugin extends Plugin {
       // and is about to remove, and starting a loop on it would put the
       // pairing back (F23, R10).
       if (mine !== this.generation) {
-        throw new Error(
-          "this vault was unlinked while the invite was being redeemed. The device row it " +
-            "registered is on the server as a device that never connected; revoke it from " +
-            "another device, or with trew revoke on the server.",
-        );
+        throw retiredPairing(await whatTheDiskHolds(() => this.readConfig()), this.dataPath);
       }
       this.config = paired;
       this.start();
@@ -1880,24 +1877,27 @@ export default class TrewPlugin extends Plugin {
    *
    * Nothing is started or stopped for a run that has been retired while this
    * was asking the disk: `unlink` has waited for it and is about to remove
-   * what it finds (R10).
+   * what it finds (R10). What it says then is `retiredPairing`'s, because an
+   * empty disk after an unlink is not evidence that nothing was registered.
    */
   private async pairingDidNotFinish(err: Error, mine: number): Promise<Error> {
     const remains = await whatTheDiskHolds(() => this.readConfig());
+    // A run retired while this was in flight, by an unlink or an unload, is
+    // answered in its own words: what the disk holds is what the retirement
+    // left, not what the server said.
+    if (mine !== this.generation) return retiredPairing(remains, this.dataPath);
     const advice = adviseAfterPairing({ remains, surface: "panel", where: this.dataPath });
-    if (mine === this.generation) {
-      if (remains.kind === "pending" || remains.kind === "credential") {
-        this.config = remains.config;
-        this.start();
-      } else if (remains.kind === "unreadable") {
-        this.unreadable = remains.why;
-        this.setState({
-          kind: "stopped",
-          why: `${this.dataPath} could not be read: ${remains.why}`,
-        });
-      } else {
-        this.failedPairing = `The pairing did not finish: ${err.message}. ${advice}`;
-      }
+    if (remains.kind === "pending" || remains.kind === "credential") {
+      this.config = remains.config;
+      this.start();
+    } else if (remains.kind === "unreadable") {
+      this.unreadable = remains.why;
+      this.setState({
+        kind: "stopped",
+        why: `${this.dataPath} could not be read: ${remains.why}`,
+      });
+    } else {
+      this.failedPairing = `The pairing did not finish: ${err.message}. ${advice}`;
     }
     // A lost reply says so itself, in words that already carry its cause; the
     // counsellor's version of the same sentence would only repeat it.
@@ -2838,7 +2838,40 @@ async function proveConnects(config: DeviceConfig, timeoutMs: number): Promise<v
   }
 }
 
-/** Keep mobile keyboards from capitalizing or correcting addresses and keys. */
+/**
+ * What a pairing left when its run was retired under it, by an unlink or an
+ * unload, from what the disk holds afterwards.
+ *
+ * Not the counsellor's words for an empty disk, which say nothing was
+ * registered: an unlink removes the pending pairing whatever the server did
+ * with the redemption, so an empty disk here says nothing about the server,
+ * and a row the redemption registered is one nothing can connect as. An
+ * unload leaves the disk alone, and the next load takes it from there.
+ */
+function retiredPairing(remains: PairingRemains, where: string): Error {
+  switch (remains.kind) {
+    case "nothing":
+      return new Error(
+        "this vault was unlinked while it was being paired. If the invite had already gone " +
+          "out, the server may have registered this device: its row is then in the device " +
+          "list as a device that never connected, and another device can revoke it.",
+      );
+    case "pending":
+      return new Error(
+        "Trew stopped before this pairing finished. It is saved, and the next time Trew " +
+          "loads it finishes the pairing with the same credential.",
+      );
+    case "credential":
+      return new Error(
+        "Trew stopped before this pairing finished here. It is saved, and the next time " +
+          "Trew loads it connects as this device.",
+      );
+    default:
+      return new Error(adviseAfterPairing({ remains, surface: "panel", where }));
+  }
+}
+
+/** Keep mobile keyboards from capitalizing or correcting addresses and invites. */
 function literalInput(field: TextComponent, address = false): void {
   field.inputEl.setAttribute("autocapitalize", "none");
   field.inputEl.setAttribute("autocorrect", "off");
@@ -3953,7 +3986,7 @@ class TrewPanel {
               b.setDisabled(true);
               cancel.setDisabled(true);
               try {
-                await this.pairFromPanel(draft.key, draft.device, this.joinSkip, true);
+                await this.pairFromPanel(draft.invite, draft.device, this.joinSkip, true);
               } finally {
                 b.setDisabled(false);
                 cancel.setDisabled(false);
@@ -3984,7 +4017,7 @@ class TrewPanel {
       t.setPlaceholder("trew1i_...");
       t.inputEl.setAttribute("aria-label", "Invite");
       literalInput(t);
-      const value = this.joinDraft?.key ?? this.incomingInvite;
+      const value = this.joinDraft?.invite ?? this.incomingInvite;
       if (value !== undefined) t.setValue(value);
       t.onChange(() => showDestination());
       inviteField = t;
@@ -4182,20 +4215,20 @@ class TrewPanel {
     }
   }
 
-  private joinDraft: { key: string; device: string } | undefined;
+  private joinDraft: { invite: string; device: string } | undefined;
   private confirmMerge = false;
 
   /** Confirmation is a panel step; it never leaves a pairing request waiting. */
   private async pairFromPanel(
-    key: string,
+    invite: string,
     device: string,
     ignore: readonly string[] = this.joinSkip,
     mergeConfirmed = false,
   ): Promise<void> {
     if (this.closed) return;
-    this.joinDraft = { key, device };
+    this.joinDraft = { invite, device };
     try {
-      await this.plugin.pair(key, device, mergeConfirmed, ignore);
+      await this.plugin.pair(invite, device, mergeConfirmed, ignore);
       this.joinDraft = undefined;
       this.confirmMerge = false;
       new Notice("Paired. Trew is connecting.");

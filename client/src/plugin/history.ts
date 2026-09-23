@@ -177,13 +177,13 @@ export class HistoryModal extends Modal {
       const moveFocus = this.moreEl.ownerDocument.activeElement === this.moreEl;
       this.versions.push(...page);
       // A rename does not end a note's history (Codex-06). History matches one
-      // exact sealed path, so a note renamed today used to have a history that
+      // exact path, so a note renamed today used to have a history that
       // started today, however many months of it the server was still holding
-      // under the old name. The rename is signed with the entry that carries
-      // it, so the older name is authenticated, and paging continues under it
-      // bounded by that version's own uid: a name reused for something else
-      // later cannot be pulled in, because everything older is what is asked
-      // for and everything newer is refused.
+      // under the old name. The rename's entry names the older path, and
+      // paging continues under it bounded by that version's own uid: a name
+      // reused for something else later cannot be pulled in, because
+      // everything older is what is asked for and everything newer is
+      // refused.
       const oldest = this.versions.at(-1);
       if (this.exhausted && oldest?.previousPath !== undefined) {
         this.pagingName = oldest.previousPath;

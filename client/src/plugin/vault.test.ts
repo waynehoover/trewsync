@@ -99,13 +99,13 @@ describe("listing", () => {
   /**
    * The config folder is "typically `.obsidian` but it could be different",
    * says the API, and that folder holds this plugin's `data.json`, and that
-   * file holds the root secret. Hardcoding the usual name would mean a vault
-   * with a custom one uploaded its own key.
+   * file holds this device's credential. Hardcoding the usual name would mean
+   * a vault with a custom one uploaded its own token.
    */
   it("leaves alone whatever Obsidian calls its config folder", async () => {
     adapter.indexHidesDotfiles = false; // As above: the filter is what is under test.
     const odd = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".my-config");
-    adapter.seed(".my-config/plugins/trew/data.json", "the root secret lives here");
+    adapter.seed(".my-config/plugins/trew/data.json", "this device's credential lives here");
     adapter.seed("real.md", "x");
     expect((await odd.list()).map((f) => f.path)).toEqual(["real.md"]);
 
@@ -117,7 +117,7 @@ describe("listing", () => {
 
   it("refuses a config folder that is not a plain name", async () => {
     // Anything else means the exclusion would not match what it should, and
-    // a silently wrong exclusion is how the secret gets uploaded.
+    // a silently wrong exclusion is how the credential gets uploaded.
     for (const bad of ["", "/", "a/b"]) {
       expect(
         () => new ObsidianVault(asVault(new FakeVaultIndex(adapter)), bad),
@@ -274,9 +274,8 @@ describe("deleting", () => {
 
 describe("paths from elsewhere", () => {
   /**
-   * Paths arrive from the server, sealed by another device. The seal proves
-   * they came from someone holding the vault key; it does not prove that
-   * device is well, and a bug on it is enough.
+   * Paths arrive from the server, written by another device or by the server
+   * itself. Nothing proves that either is well, and a bug on one is enough.
    */
   it("refuses to write outside the vault", async () => {
     for (const path of [
@@ -600,8 +599,9 @@ describe("reading a file through its resource URL", () => {
   });
 
   // The failure that would otherwise be silent: a handler ignoring Range and
-  // answering with the whole file. Those bytes would be sealed and refused by
-  // the server for not matching their name, which is a fatal protocol error.
+  // answering with the whole file. Those bytes would be sent under a chunk
+  // name they do not hash to, and refused by the server for not matching it,
+  // which ends the upload.
   // Caught here, it is a platform that cannot stream.
   it("refuses a vault that ignores the range rather than sending the wrong bytes", async () => {
     const vault = streaming(body(100_000), { honourRange: false });
@@ -1062,7 +1062,7 @@ describe("the index, interrupted", () => {
 
 /**
  * A ranged read that came back short was handed on as if
- * it were the range, sealed as a chunk it was not, and refused much later by
+ * it were the range, sent as a chunk it was not, and refused much later by
  * name.
  */
 describe("a ranged read that comes back short", () => {
