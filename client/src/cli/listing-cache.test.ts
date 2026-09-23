@@ -83,6 +83,26 @@ it("refreshes only the edited file between authoritative scans", async () => {
   );
 });
 
+/**
+ * The watcher names the file the way the disk does, and the cache is keyed by
+ * the name the vault reports. A no-break space is the difference between the
+ * two on every filesystem, and an event that missed the cache would be a full
+ * scan per keystroke; one that hit a key the vault never reports would refresh
+ * nothing (cli/no-break-space.test.ts).
+ */
+it("refreshes a no-break-space note under the name it reports", async () => {
+  const disk = "notes/a\u00A0b.md";
+  await writeFile(join(root, disk), "before");
+  const vault = await watched();
+  await writeFile(join(root, disk), "the edited note");
+  watching.notify!("change", disk);
+  const listed = await vault.list();
+  expect(listed.find((entry) => entry.path === "notes/a b.md")?.size).toBe(15);
+  expect(listed.some((entry) => entry.path === disk)).toBe(false);
+  expect(vi.mocked(stat).mock.calls).toHaveLength(0);
+  expect(vi.mocked(lstat).mock.calls.map(([path]) => String(path))).toEqual([join(root, disk)]);
+});
+
 it("fully scans without a watcher and after it stops", async () => {
   const vault = new NodeVault(root);
   await vault.list();

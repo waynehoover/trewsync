@@ -36,6 +36,7 @@ import {
   ignoredHereError,
   isNeverSynced,
   neverSync,
+  obsidianSpaces,
   splitName,
 } from "../core/paths.ts";
 import { composite, seam } from "../core/seam.ts";
@@ -215,6 +216,9 @@ export interface NodeVaultOptions {
    *
    * One name, not a path: it is applied segment by segment, because that is
    * how a filesystem files a path.
+   *
+   * Obsidian's no-break spaces are folded on top of whatever this is, and are
+   * never re-spelled on the disk (`reported` below).
    */
   readonly normalForm?: (name: string) => string;
 }
@@ -511,8 +515,23 @@ export async function refuseOutsideVaultAt(vault: string, full: string): Promise
 export class NodeVault implements Vault {
   private readonly root: string;
   private readonly ignore: Set<string>;
-  /** How this vault spells one name. NFC everywhere but a test. */
+  /** How this vault spells one name on the disk. NFC everywhere but a test. */
   private readonly normal: (name: string) => string;
+  /**
+   * How this vault names one name to the engine: the normal form, with
+   * U+00A0 and U+202F as an ordinary space (PLAN.md section 4.1).
+   *
+   * The plugin's keyspace, because `normalizePath` does the same and the
+   * server refuses the other spelling: without it, a note named with a
+   * no-break space on this disk was refused on the way up, and the same note
+   * arriving from Obsidian became a second file with a plain space beside it.
+   *
+   * Two functions rather than one, because only `normal` is a spelling the
+   * disk is put into. A no-break space stays in the file's name, as Obsidian
+   * leaves it, and `diskName` carries the difference so that reads, writes
+   * and removals still land on the real file (`ObsidianVault.actualName`).
+   */
+  private readonly reported: (name: string) => string;
   /** Whether this vault may write while listing. See NodeVaultOptions. */
   private readonly observeOnly: boolean;
   private readonly listingWatchers = new Set<FSWatcher>();
@@ -547,18 +566,22 @@ export class NodeVault implements Vault {
   constructor(root: string, opts: NodeVaultOptions = {}) {
     this.root = resolve(root);
     this.observeOnly = opts.observeOnly ?? false;
-    this.normal = opts.normalForm ?? canonicalSpelling;
+    const normal = opts.normalForm ?? canonicalSpelling;
+    this.normal = normal;
+    this.reported = (name) => obsidianSpaces(normal(name));
     // NFC, because everything this is compared against is NFC now. `list`
     // folds the disk's spelling before asking `isNeverSynced`, and a Mac shell
     // hands out NFD: a name tab-completed off the disk and passed to
     // `--ignore` stopped matching the moment that fold landed, so a folder
     // somebody had explicitly kept off the server started syncing on the next
     // pass, with nothing said. Same for `--config-dir`.
-    const configDir = this.normal(configFolderName(opts.configDir ?? DEFAULT_CONFIG_DIR));
+    // And with Obsidian's spaces, for the same reason: the names it is compared
+    // against are the ones `list` reports.
+    const configDir = this.reported(configFolderName(opts.configDir ?? DEFAULT_CONFIG_DIR));
     this.ignore = new Set([
       ...NEVER_SYNC,
       configDir,
-      ...(opts.alsoIgnore ?? []).map((name) => this.normal(name)),
+      ...(opts.alsoIgnore ?? []).map((name) => this.reported(name)),
     ]);
     this.ledger = new DisplacedLedger(new NodeDisplacedFiles(this.root), (m) =>
       console.warn(`trew: ${m}`),
@@ -582,11 +605,11 @@ export class NodeVault implements Vault {
     });
   }
 
-  /** A whole path in this vault's normal form, one segment at a time. */
+  /** A whole path as this vault reports it, one segment at a time. */
   private normalPath(path: string): string {
     return path
       .split("/")
-      .map((part) => this.normal(part))
+      .map((part) => this.reported(part))
       .join("/");
   }
 
@@ -780,7 +803,7 @@ export class NodeVault implements Vault {
         throw new CheckedPathError("ambiguous_path", "the path has ambiguous spellings on disk");
       }
       const name = names[0] ?? part;
-      canonical.push(this.normal(name));
+      canonical.push(this.reported(name));
       const parent = full;
       full = join(full, name);
       try {
@@ -985,13 +1008,14 @@ export class NodeVault implements Vault {
   }
 
   /**
-   * The disk's own spelling of each name whose NFC form differs from it.
+   * The disk's own spelling of each name whose reported form differs from it.
    *
-   * Keyed by the NFC vault-relative path of the entry, holding the name the
-   * disk uses for its last segment. Read by `absolute`, so a path the engine
-   * names in NFC still reaches the file on a disk that keeps the two
-   * spellings apart. Empty on a vault whose names are all NFC already, which
-   * is every vault that never met a Mac.
+   * Keyed by the reported vault-relative path of the entry, holding the name
+   * the disk uses for its last segment. Read by `absolute`, so a path the
+   * engine names in NFC, with plain spaces, still reaches the file on a disk
+   * that keeps the two spellings apart or whose name has a no-break space in
+   * it. Empty on a vault whose names are all reported as they are spelled,
+   * which is every vault that never met a Mac or a no-break space.
    */
   private readonly diskName = new Map<string, string>();
 
@@ -1067,14 +1091,23 @@ export class NodeVault implements Vault {
       throw err;
     }
     this.spellingsKnown.add(dir);
-    const seen = new Set<string>();
+    // Grouped before anything is mapped, as `list` groups them. Names already
+    // in reported form used to be skipped before they were counted, so a
+    // directory holding `a b.md` and its no-break twin mapped the plain name
+    // to the twin, and a write to `a b.md` landed on the note that is not
+    // called that. The same held for NFC beside NFD on a disk that keeps them
+    // apart; the no-break space makes it reachable on every disk.
+    const claims = new Map<string, string[]>();
     for (const name of names) {
-      const normal = this.normal(name);
-      if (normal === name) continue;
+      const normal = this.reported(name);
+      const group = claims.get(normal);
+      if (group) group.push(name);
+      else claims.set(normal, [name]);
+    }
+    for (const [normal, group] of claims) {
       const key = dir ? `${dir}/${normal}` : normal;
-      if (seen.has(normal)) this.diskName.delete(key);
-      else if (!this.diskName.has(key)) this.diskName.set(key, name);
-      seen.add(normal);
+      if (group.length > 1) this.diskName.delete(key);
+      else if (group[0] !== normal && !this.diskName.has(key)) this.diskName.set(key, group[0]!);
     }
   }
 
@@ -1144,7 +1177,7 @@ export class NodeVault implements Vault {
    */
   private async normalizeName(
     dir: string,
-    entry: { name: string; disk: string },
+    entry: { name: string; disk: string; spelled: string },
     path: string,
   ): Promise<void> {
     if (this.normalized.has(path)) return;
@@ -1173,8 +1206,9 @@ export class NodeVault implements Vault {
       // checked and then renamed, which narrows the window rather than
       // closing it, and a folder appearing under a normalised name during a
       // scan is not a thing an editor does.
+      // `spelled`, not the reported name: a no-break space stays on the disk.
       const from = join(dir, entry.disk);
-      const to = join(dir, entry.name);
+      const to = join(dir, entry.spelled);
       const source = await lstat(from);
       const sameFileAt = async (): Promise<boolean> => {
         const there = await lstat(to).catch(() => undefined);
@@ -1233,7 +1267,7 @@ export class NodeVault implements Vault {
           // staging under `preserved.`, which the next scan counts into
           // `stranded` and `status` prints, so it is not lost with the throw.
           void err;
-          this.ambiguousPaths.push({ path, spellings: [entry.name, wasSpelled] });
+          this.ambiguousPaths.push({ path, spellings: [entry.spelled, wasSpelled] });
         }
       }
     } catch {
@@ -1256,11 +1290,11 @@ export class NodeVault implements Vault {
    */
   private finishNormalising(
     path: string,
-    entry: { name: string; disk: string },
+    entry: { name: string; disk: string; spelled: string },
     dir: string,
   ): void {
     this.normalized.add(path);
-    entry.disk = entry.name;
+    entry.disk = entry.spelled;
     this.unflushed.add(dir);
   }
 
@@ -1548,6 +1582,11 @@ export class NodeVault implements Vault {
       // happen the disk's spelling is remembered instead, so reads and writes
       // still land on the file (cli/vault.test.ts, "a name the disk spells in
       // NFD"; cli/vault-spelling.test.ts; cli/normalization.test.ts).
+      //
+      // A no-break space is reported as a plain one, as the plugin reports it,
+      // and is only ever mapped, never re-spelled: `reported` is the name the
+      // engine sees, `spelled` the one the disk is put into
+      // (cli/no-break-space.test.ts).
       this.spellingsKnown.add(prefix);
       // Displaced versions the scan meets on its way past (R46). Not listed,
       // because they are not notes and syncing one would be publishing a
@@ -1561,7 +1600,12 @@ export class NodeVault implements Vault {
         }
       }
       const found = items
-        .map((item) => ({ item, name: this.normal(item.name), disk: item.name }))
+        .map((item) => ({
+          item,
+          name: this.reported(item.name),
+          disk: item.name,
+          spelled: this.normal(item.name),
+        }))
         .filter(
           ({ item, name }) =>
             !this.neverSynced(prefix ? `${prefix}/${name}` : name) &&
@@ -1582,7 +1626,10 @@ export class NodeVault implements Vault {
         });
 
       // A disk that keeps the two spellings apart can hold both, and then
-      // there is no right answer to which one syncs.
+      // there is no right answer to which one syncs. Every disk can hold a
+      // plain space beside a no-break one, and the plugin blocks that pair the
+      // same way (plugin/vault.test.ts, "two names the plugin cannot hold
+      // apart"), so both files stay where they are and neither is uploaded.
       //
       // It used to throw, which stopped the whole vault: one ambiguous pair
       // and four thousand other notes went nowhere, including the ones a
@@ -1623,7 +1670,7 @@ export class NodeVault implements Vault {
           continue;
         }
         const only = group[0]!;
-        if (!this.observeOnly && only.disk !== name && !rawNames.has(name)) {
+        if (!this.observeOnly && only.disk !== only.spelled && !rawNames.has(only.spelled)) {
           await this.normalizeName(dir, only, path);
         }
         if (only.disk !== name) this.diskName.set(path, only.disk);
@@ -2269,7 +2316,7 @@ export class NodeVault implements Vault {
       if (digest !== undefined && expect !== undefined && digest === expect.contentId) {
         // The version the pass decided to delete. It goes where a deletion
         // goes, which is the trash, under the name it had.
-        await this.intoTrash(path, aside);
+        await this.intoTrash(full, aside);
         return { landed: true };
       }
       // Something else, so it is not deleted at all. It comes back out under a
@@ -2334,19 +2381,23 @@ export class NodeVault implements Vault {
       throw err;
     }
 
-    await this.intoTrash(path, full);
+    await this.intoTrash(full, full);
   }
 
   /**
-   * Moves `from` into the trash under the name `path` had.
+   * Moves `from` into the trash under the name the file at `full` had.
    *
    * The two are separate because `removeExpecting` disposes of a note that is
    * sitting under a temporary name by then, and the trash entry has to carry
    * the note's own name rather than the one it was parked under. A person
    * looking for the note they deleted searches for `doomed.md`.
+   *
+   * The disk's name, not the engine's: a note named with a no-break space
+   * goes into the trash under that name, as the plugin's `trashLocal` of the
+   * real name puts it there.
    */
-  private async intoTrash(path: string, from: string): Promise<void> {
-    const target = await this.freeTrashPath(path);
+  private async intoTrash(full: string, from: string): Promise<void> {
+    const target = await this.freeTrashPath(relative(this.root, full).split(sep).join("/"));
     // The destination is checked too (F24).
     //
     // The source's parents were validated and the trash path was then built
@@ -2424,7 +2475,8 @@ export class NodeVault implements Vault {
    * folded to NFC whatever the disk does: HFS+ normalises and APFS does
    * not, and a note that syncs between the two is one file on one and two
    * on the other, so treating them as one everywhere is the side that keeps
-   * both copies.
+   * both copies. Obsidian's no-break spaces are folded too, which is what
+   * the plugin's `canonical` does through `normalizePath`.
    */
   canonical(path: string): string {
     const normal = this.normalPath(path);

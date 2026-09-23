@@ -128,6 +128,25 @@ export function canonicalSpelling(path: string): string {
 }
 
 /**
+ * A name with the two no-break spaces Obsidian turns into an ordinary one.
+ *
+ * `normalizePath` replaces U+00A0 and U+202F with a space before it does
+ * anything else (plugin/vault.ts), so the plugin can only ever name such a
+ * file with the plain space, and the server refuses the other spelling
+ * (PLAN.md section 4.1). The headless vault applies this on top of its normal
+ * form so the two clients report one path for one file.
+ *
+ * Not part of `canonicalSpelling`, and the difference is what happens on the
+ * disk. NFD against NFC is one name spelled two ways, and the headless vault
+ * renames the disk into NFC. A no-break space is a character somebody chose,
+ * and it stays in the file's name: only what the engine is told changes, and
+ * reads and writes are mapped back to the real name, as the plugin does.
+ */
+export function obsidianSpaces(name: string): string {
+  return name.replace(/[\u00a0\u202f]/gu, " ");
+}
+
+/**
  * A path as a filesystem that folds case and normalisation would file it.
  *
  * Not the same question as string equality, and the difference loses notes.
