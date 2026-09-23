@@ -30,7 +30,7 @@ Ported from Basalt's TypeScript MCP (`basalt:client/src/cli/mcp-tools.ts` and fr
 
 ## Authentication and authorship
 
-`telimus mcp-token --label "Claude on Mac" [--scope read|write] [--key-out FILE]` prints or writes a 32-byte base64url token once and stores `{id, token_hash, label, scope, created_at}`. `telimus mcp-token --list` and `--revoke ID`. The token's `id` is the first eight hex characters of its hash, as in Basalt.
+`telimus mcp-token --label "Claude on Mac" [--scope read|write] [--key-out FILE]` prints or writes a 32-byte base64url token once and stores `{id, token_hash, label, scope, created_at}`. `telimus mcp-token --list` and `--revoke ID`. The token's `id` is generated and collision-resistant (PLAN §2.3); the first eight hex characters of its hash are a display fingerprint only, never an identity. (An earlier revision said the id was the fingerprint, as in Basalt; that contradicted PLAN §2.3 and this document's own later section, and was corrected on 2026-09-22.)
 
 Each token has an author row named after the label. It is **not** a `devices` row with an `mcp:` id, because `ValidDeviceID` accepts base64url, which has no colon (`basalt:server/internal/store/store.go:2595`). Author rows carry their own `kind`, and must not present as offline sync peers whose applied checkpoints other devices wait on. Writes carry that device label; conflict copies made by other devices' engines read `(Conflicted copy Claude on Mac 202609171130)`. Revoking the token deletes the row.
 
@@ -116,13 +116,13 @@ Without `uid`, reads the head (`nocontent` for a folder or deletion → `not_fou
 
 ## Mutation tools
 
-Registered for `write`-scope tokens only. Common result:
+Registered for `write`-scope tokens only. Common result, per PLAN §4.3 and §4.8:
 
 ```json
-{"applied": true, "path": "…", "uid": 1234, "previousUid": 1200, "size": 5120, "noop": false}
+{"committed": true, "opId": "…", "entries": [{"path": "…", "uid": 1234, "previousUid": 1200, "kind": "note", "size": 5120}], "noop": false}
 ```
 
-or `{"applied": false, "path": "…", "error": {"code": "stale", "message": "…", "currentUid": 1233}}`. `noop: true` with `uid == previousUid` when the computed bytes equal the current bytes; nothing is written.
+or `{"committed": false, "error": {"code": "stale", "message": "…", "path": "…", "currentUid": 1233}}`. `noop: true` when the computed bytes equal the current bytes: nothing is written, and the preconditions are still revalidated at the commit boundary (PLAN §4.3). `previousUid` is `null` for a genuine create. `committed` means durable, not delivered (PLAN §4.8). (An earlier revision used `applied`, Basalt's word; PLAN's shape is the one to implement.)
 
 The write procedure is PLAN §4.3. Steps that matter for tests: bodies are stored and fsynced before the append; the append is the same `AppendCurrent` a device uses, under the same `commitMu`; the reply follows the commit; the broadcast follows the commit.
 
@@ -172,7 +172,7 @@ Without `changes`, every operation tool returns:
  "instructions": "Pass these changes back unchanged to apply."}
 ```
 
-`PlannedChange = {path, base: uid, action: "edit"|"move"|"delete", to?: path, edits: [{start, end, old, text}] ≤ 4096}` with `start`/`end` as UTF-16 code-unit offsets into the source, ≤ 32 changes, ≤ 64 KiB encoded. With `changes`, the server recomputes the plan against the current heads and refuses with `plan_changed` unless the normalized plans are equal; then applies all changes in one `AppendMany` transaction with per-entry `base`. Any `stale` inside the batch aborts the whole batch and reports which paths moved.
+`PlannedChange = {path, base: uid, action: "edit"|"move"|"delete", to?: path, edits: [{start, end, old, text}] ≤ 4096}` with `start`/`end` as UTF-16 code-unit offsets into the source, ≤ 32 changes, ≤ 64 KiB encoded. With `changes`, the server recomputes the plan against the current heads and refuses with `plan_changed` unless the normalized plans are equal; then applies all changes as one `CommitOperation` (PLAN §4.3: all or nothing, not `AppendMany`, which is deliberately partial) with per-entry `base`. Any `stale` inside the operation aborts all of it and reports which paths moved.
 
 Scan bounds for previews over a folder or the vault: 512 notes and 8 MiB of text per call (`scan_incomplete`), or use the link and tag indexes when present.
 

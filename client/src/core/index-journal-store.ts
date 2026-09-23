@@ -295,7 +295,9 @@ export class JournalIndexStore implements IndexStore {
       // Replay is total over damaged records and not over a snapshot that is
       // not a state at all. Older is safe; a crash here would leave a device
       // unable to start over an index it could simply have ignored.
-      this.say(`the index journal could not be replayed (${err}); using the snapshot alone.`);
+      this.say(
+        `the index journal could not be replayed (${String(err)}); using the snapshot alone.`,
+      );
       this.settle(snapshotState, seq, 0);
       this.mustSnapshot = true;
       return snapshotState;

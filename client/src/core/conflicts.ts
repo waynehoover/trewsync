@@ -100,7 +100,8 @@ export async function resolveConflict(
     firstFreeName(conflictCopyPath(path, "review", new Date()), (p) => vault.exists(p));
   if (choice !== "original") {
     const bytes =
-      choice === "edited" ? new TextEncoder().encode(edited!) : await vault.read(review.copy);
+      // `edited` is defined whenever the choice is "edited": refused above otherwise.
+      choice === "edited" ? new TextEncoder().encode(edited) : await vault.read(review.copy);
     // The read above may have raced an editor after the comparison.
     if (choice === "copy" && (await plainDigest(bytes)) !== review.preserved.digest)
       throw new Error("The conflict copy changed. Refresh the comparison.");

@@ -9,7 +9,8 @@ work recorded as resolved or deliberately declined, not a fresh readiness audit.
 Telimus is forked from Basalt Sync (github.com/waynehoover/basalt-sync, commit
 664a963). Every ID below, and the review files it links, comes from Basalt's
 history and is kept verbatim, so names, versions and paths in them are
-Basalt's.
+Basalt's. The F section at the end is the one addition: those IDs were
+defined only in Basalt's commit messages, and it was reconstructed from them.
 
 For 0.7.1, see the [September 9 review](reviews/0.7.1.md) and
 [September 10 fixes and verification](reviews/0.7.1-fixes.md). For 0.8.3, see
@@ -276,3 +277,38 @@ Node 22. Two release-automation defects were also corrected:
 workflow's publication commands and four real Go builds in a temporary Git
 repository. The latest-release check and three clean-build checks failed before
 these workflow fixes and passed afterward.
+
+## F: the 2026-09-05 follow-up review
+
+Defined in Basalt's commit messages rather than in this file until the fork, which left 125 citations
+in 43 source files pointing at nothing. Reconstructed on 2026-09-22 from the commits that fixed each one;
+the hash is the Basalt commit, whose message has the full account.
+
+- **F01** Check the file is still the one the pass decided about (`ee632f3`)
+- **F02** Get the recovery key out before the step that erases it (`7fc605b`)
+- **F03** Show the rotation's candidate key before the request that commits it (`337a7a9`)
+- **F04** `-backup` is what authorises the one command that destroys something no device holds a copy of, and what it checked was two maximum uids. (`9cd082b`)
+- **F05** A chunk is visible when it is renamed into place and durable when its directory is flushed, and those are two different moments. (`9cd082b`)
+- **F06** A backup locked the source and nothing else, so it would replace the database of a directory something was using as a live store: reproduced by holding both of a destination's locks and watching it be overwritten anyway. (`f259331`)
+- **F07** The vault lock could be handed to two processes three ways. (`f259331`)
+- **F08** `history`, `deleted`, `devices`, `invite`, `uninvite` and `status` do not take the vault's lock, and should not: holding it would make `status` refuse exactly while a watcher is running, which is when somebody asks. (`d7682e3`)
+- **F09** Replay stopping at a damaged record was reported and then forgotten. (`d7682e3`)
+- **F10** A signature says who wrote an entry, not which note it belongs to. (`d8b9a84`)
+- **F11** The threat model said withholding was the whole of what a server can still do, and that no note is altered. (`d8b9a84`)
+- **F12** `list` decides a normalised name is free from the directory listing, and a listing is a moment ago. (`bf7df34`)
+- **F13** The cross-filesystem fallback copied, read the copy back, and removed the original. (`bf7df34`)
+- **F14** `entries["__proto__"] = e` does not add a key. (`d588bf5`)
+- **F15** `settle` resolves for a vault that is retrying or has written a path off, and `restoreAndSend` ignored what it returned, so a restored note was reported as sent to the other devices while its upload sat queued. (`d588bf5`)
+- **F16** `Client.sync` swallows exceptions on purpose, because most of its callers are event handlers with nothing useful to do with one. (`c2d76c0`)
+- **F17** `JSON.parse` was wrapped in a try, so a frame that is not JSON ends the session cleanly. (`c2d76c0`)
+- **F18** Hashes are checked alongside the bodies still arriving, which is what makes a fetch of two thousand bodies affordable, and nothing looked at them until every body had been received. (`c2d76c0`)
+- **F19** `DerivedAuth` checks the served vault, and that was taken to be the whole of the rule. (`5b57ce2`)
+- **F20** `Entry.Validate` returned for a folder or a deletion before it looked at `Mac` and `Parent`, so both kinds were committed with an empty authenticator and a malformed parent. (`5b57ce2`)
+- **F21** The deleted list was capped with no way past the cap, and both clients tried to get past it anyway: the panel doubled the limit it asked for and the CLI told people to raise `--limit`. (`d55d7ab`)
+- **F22** A crash between the plugin's index removals leaves whatever is still there. (`ff4a514`)
+- **F23** Redeeming an invite is a round trip, and Obsidian can disable a plugin while one is in flight. (`72d1edf`)
+- **F24** A note's own path was validated and the internal directories were not. (`72d1edf`)
+- **F25** `create` stages under the vault's own `.basalt/tmp` and hard-links into place, which is what makes it exclusive. (`72d1edf`)
+- **F26** `rebase --json` returned zero unconditionally while the text branch called `exitCodeFor`, so an incomplete replay was a failure interactively and a success in automation: exactly the difference a cron job cannot see. (`ff4a514`)
+- **F27** `status` read the index and the server's cursor. (`72d1edf`)
+- **F28** Two things a server could make a device do without limit. (`d55d7ab`)

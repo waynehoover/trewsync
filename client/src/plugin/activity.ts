@@ -39,23 +39,24 @@ export class ActivityLog {
       if (!stat || stat.size > 3 * 1024 * 1024) throw new Error("Invalid activity log size");
       const data: unknown = JSON.parse(await this.adapter.read(this.path));
       if (!Array.isArray(data) || data.length > LIMIT) throw new Error("Invalid activity log");
-      this.events = data.map((event) => {
+      this.events = (data as unknown[]).map((raw): Activity => {
+        if (!raw || typeof raw !== "object") throw new Error("Invalid activity entry");
+        const event = raw as Record<string, unknown>;
+        const { at, action, path, copy } = event;
         if (
-          !event ||
-          typeof event !== "object" ||
-          !Number.isFinite(event.at) ||
-          !Object.hasOwn(ACTIONS, event.action) ||
-          [event.path, event.copy].some(
-            (p) => p !== undefined && (typeof p !== "string" || p.length > 4096),
-          )
+          typeof at !== "number" ||
+          !Number.isFinite(at) ||
+          typeof action !== "string" ||
+          !Object.hasOwn(ACTIONS, action) ||
+          [path, copy].some((p) => p !== undefined && (typeof p !== "string" || p.length > 4096))
         )
           throw new Error("Invalid activity entry");
         // Only the allowlisted fields can reach display or export, even from a modified file.
         return {
-          at: event.at,
-          action: event.action,
-          ...(event.path ? { path: event.path } : {}),
-          ...(event.copy ? { copy: event.copy } : {}),
+          at,
+          action: action as ActivityAction,
+          ...(typeof path === "string" && path ? { path } : {}),
+          ...(typeof copy === "string" && copy ? { copy } : {}),
         };
       });
     } catch {

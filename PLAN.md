@@ -304,8 +304,8 @@ The server is trusted with everything. That is the decision, and it is the right
 
 **Requirements, not advice:**
 
-- The data volume sits on encrypted storage (LUKS, FileVault, ZFS native). Document where the key lives and how an unattended restart unlocks it.
-- Backups are encrypted, **including backups that stay on the same box**. `telimus backup` refuses to write outside the data directory without `--plaintext-ok`, or takes `--encrypt-to <age recipient>`. A backup on the homelab is still a backup another process can read.
+- The data volume sits on encrypted storage (LUKS, FileVault, ZFS native). Document where the key lives and how an unattended restart unlocks it. **Owner's decision, 2026-09-22:** the homelab volume is not encrypted and that is accepted; `docs/threat-model.md` S1 records it as an accepted risk with what it costs.
+- Backups are encrypted, **including backups that stay on the same box**. `telimus backup` refuses to write outside the data directory without `--plaintext-ok`, or takes `--encrypt-to <age recipient>`. A backup on the homelab is still a backup another process can read. **Deferred by the owner, 2026-09-22:** no Telimus backup destination yet. The restore rehearsal in M5.5 still runs locally, because rule 11 is about recovery, not about where copies live.
 - The restore rehearsal (M5.5) exercises the encrypted path, not a plaintext shortcut.
 - Chunk names and paths are sensitive metadata: not in metrics labels, not on unauthenticated endpoints, not in public manifests.
 
@@ -486,6 +486,8 @@ Tasks:
 
 Done when: a TypeScript client pairs, uploads raw and deflated notes, fetches them through Go, repairs a missing body, renames, races a conditional write, and reconnects without losing stream continuity. Fixtures run in both language suites, and a deliberately corrupted vector fails on the consuming side.
 
+**Progress, 2026-09-22.** Tasks 1 to 3 and 6 are done for the pure contract: `scripts/protocol-vectors.py` is a third implementation that writes the vectors, and `internal/paths`, `internal/frame`, `internal/invite` and `client/src/core/{path-policy,fold,frame,invite-string}.ts` consume them, each with a corrupted-vector test. `plan/protocol.md` records every rule the fixtures enforce and settles the three redemption conflicts. Task 5 (the Go chunker) and task 4 (transcripts) are in progress with the M1 work, and the slice's done-when is met when the server and client flips land together.
+
 ### M1. Server: plaintext protocol 1 (L, lane A, after M0.5)
 
 Goal: `telimus serve` speaks [plan/protocol.md](plan/protocol.md). Go tests green, and the M0.5 slice keeps passing continuously. M1 is no longer validated Go-only, because a real TypeScript counterparty exists from M0.5 onward.
@@ -506,6 +508,8 @@ Tasks, in order:
 12. **backup/verify/purge.** `backup.go` drops the `nomac` inheritance and the token copy, and carries operations, pins, and audit rows. `verify -deep` also checks `Σ sizes == size`. `purge` implements the pinned survivor set of §4.5, with `--dry-run` and a preview that uses the same survivor calculation as execution.
 
 Done when: `go test -race ./...` green; the M0.5 TypeScript client pairs from an invite, puts a two-chunk note with one deflated body, fetches it back, renames it with `prevBase`, gets `stale` on a raced put, sees `badpath` for `.obsidian/app.json`; a revoked device's live session stops receiving within the revoke reply; and `telimus cat` prints a note the plugin wrote.
+
+**Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "Protocol and store (M0.5, M1)". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
 
 ### M2. TypeScript: core, plugin, and headless client without encryption (L, lane B, parallel with M1 after M0.5)
 
@@ -530,6 +534,8 @@ Tasks:
 
 Done when: two plugin instances in two scratch vaults and one headless client pair from invites, converge on the M1 server, keep both sides of a conflict, restore a deleted note, surface a refused path, and `scripts/check.sh` exits 0.
 
+**Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "Plugin and headless client (M2, M3)". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
+
 ### M3. First real acceptance (S)
 
 Pair the Mac test vault and the Pixel against a local `telimus serve` over Tailscale. Exercise pairing, edits both ways, an attachment, a conflict, history compare, deleted-note restore, a refused path, revoke while the other device is connected, and re-pair. Write `docs/server.md` and `docs/plugin.md` from Basalt's, minus keys. Not the homelab yet.
@@ -540,7 +546,7 @@ Goal: `telimus serve --mcp` answers the read half of [plan/mcp-tools.md](plan/mc
 
 Tasks:
 
-1. **SDK, or not.** Add `github.com/modelcontextprotocol/go-sdk` at its latest tagged release, use its streamable HTTP handler in stateless mode, mount at `/mcp` behind auth middleware, and record the pin in `docs/development.md`. **Evaluate hand-rolling first.** `asciimoo/hister` serves MCP from 854 lines of plain JSON-RPC with no SDK dependency at all (`server/mcp.go`; its `go.mod` has no `modelcontextprotocol` entry). Given that the tool surface here is fixed, the transport is one HTTP path, and the SDK's API is still moving, a hand-rolled handler may be the smaller long-term cost. Decide in M4 with the reason written down.
+1. **SDK, or not.** Add `github.com/modelcontextprotocol/go-sdk` at its latest tagged release, use its streamable HTTP handler in stateless mode, mount at `/mcp` behind auth middleware, and record the pin in `docs/development.md`. **Evaluate hand-rolling first.** `asciimoo/hister` serves MCP from 854 lines of plain JSON-RPC with no SDK dependency at all (`server/mcp.go`; its `go.mod` has no `modelcontextprotocol` entry). Given that the tool surface here is fixed, the transport is one HTTP path, and the SDK's API is still moving, a hand-rolled handler may be the smaller long-term cost. Decide in M4 with the reason written down. **Decided 2026-09-22: hand-rolled server, SDK client in the tests.** The server speaks MCP's streamable HTTP itself: stateless `POST /mcp` with `application/json` replies, `GET` and `DELETE` answered 405, the protocol version negotiated from the client's request among 2025-06-18, 2025-11-25 and 2026-07-28 (answering with the client's version when supported, else the newest). The go-sdk (v1.8.0, 2026-09-14, which speaks every version from 2024-11-05 to 2026-07-28) is a **test-only** dependency: its client drives the handler in the M4 and M5 tests at every protocol version it supports, so interoperability is proven by an implementation that is not ours. Linking its `mcp` package into the server would pull in `golang.org/x/oauth2`, `google/jsonschema-go`, segmentio's assembly-accelerated JSON and base64, `uritemplate` and `x/time/rate`, plus a 12,000-line streamable transport, for three JSON-RPC methods (`initialize`, `tools/list`, `tools/call`) and one notification; test-only imports never reach the binary. Recorded in `docs/development.md`.
 2. **Auth.** Middleware: `Authorization: Bearer <43 base64url chars>`, constant-time compare against `mcp_tokens.token_hash`, 401 with `WWW-Authenticate: Bearer realm="telimus"`, update `last_used` at most once a minute. Origin header must equal an `--allow-origin` value or be absent (non-browser clients). Body limit 8 MiB, response limit 1 MiB, 32 concurrent requests, 429 with `Retry-After: 1` beyond.
 3. **notes package.** `Assemble(store, chunks, vault, uid) ([]byte, error)`, `IsText(path)`, `Page(text, startLine, maxLines, budget)`, the opaque cursor codec, `CompareLines` (LCS with the 1e6 cell cap and `coarse` fallback). Port from `basalt:client/src/cli/mcp-read.ts`, `mcp-inspect.ts`.
 4. **search package, asynchronous.** Per §2.5: an index worker driven by a durable `indexed_through_uid`, never inside the commit transaction. Generational rebuild (capture head, build, replay, verify, switch) with the previous generation queryable meanwhile. Corruption detectable independently of `index_version`. Tag parser ported from `basalt:client/src/cli/mcp-markdown.ts` (frontmatter YAML `tags` scalar or sequence, inline `#tags` outside code, HTML, `%%` comments, links; NFC-fold and lowercase for matching), using `goldmark` for structure and `gopkg.in/yaml.v3` node positions for source ranges. **A parse failure limits tag extraction and is reported; it never rejects a sync entry.**
@@ -553,6 +559,8 @@ Tasks:
 11. **tests.** Go tests with the SDK's client over an in-process handler: every tool, every bound, pagination continuity across a concurrent commit and across a rename, 401/403/413/429, a token revoked mid-session losing at the commit boundary, an expired token, a write attempted with a read token by hand-built request. An index test that corrupts the index with a matching `index_version` and proves the corruption is still detected. A rebuild that runs while device writes continue. **Injection fixtures:** notes containing instruction-shaped text, envelope-imitating framing, control characters and lone surrogates, asserted to arrive under `untrusted_content`, normalised, and never in `trusted`.
 
 Done when: Claude Code configured with the URL and token lists, reads, searches, and compares versions of a scratch vault while a plugin edits it; search matches the reference literal scan over the corpus; a concurrent rename produces no ghost row; and a note full of instruction-shaped text comes back under `untrusted_content` with the warning attached.
+
+**Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "MCP (M4, M5, plan/mcp-tools.md)". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
 
 ### M5. MCP write tools and the crash matrix (L, lane C)
 
@@ -575,6 +583,8 @@ Tasks:
 
 Done when: one stale slot, a changed namespace, a new backlink, a revoked actor, or an injected storage error leaves **zero** entries committed for that operation; SIGKILL after append yields exactly one discoverable result on retry; a fresh witness device sees exactly the committed state; the year-old before-image survives an immediate purge; and a day of real use on a scratch vault has produced no unexplained conflict copy.
 
+**Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "MCP (M4, M5, plan/mcp-tools.md)" and "Retention and history". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
+
 ### M5.5. Operational acceptance and restore rehearsal (M, after M5)
 
 Goal: the maintainer can tell a healthy vault from a quiet failure, recover from a failed server, and explain every agent mutation. **No milestone that mutates real notes starts before its recovery path has actually been exercised**, which is rule 11 applied to the project rather than to a document.
@@ -593,6 +603,8 @@ Tasks:
 
 Done when: each fault produces an actionable status, preserves acknowledged content, and has a tested recovery path; `telimus doctor` reports every injected fault correctly and exits non-zero; and the operator has personally performed a restore rather than read about one.
 
+**Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "Retention and history". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
+
 
 ### M9. Packaging, docs, release (M, can start after M3)
 
@@ -605,9 +617,14 @@ Done when: each fault produces an actionable status, preserves acknowledged cont
 - Docs, few files, plain: `README.md`, `docs/server.md`, `docs/plugin.md`, `docs/agent.md` (MCP setup, token handling, scopes, what the agent can and cannot do, and the plain statement that a token reads the whole vault), `docs/client.md` (headless), `docs/operations.md` (M5.5), `docs/design.md` (rules, threat model rewritten for a trusted server, conflicts, MCP principles), `docs/protocol.md`, `docs/development.md`, `docs/compared.md` (add "built-in agent" and "no encryption" rows honestly), `llm.md`.
 - **`README.md` written to the shape that works.** Modelled on `asciimoo/hister`, which reached 4,900 stars in eight months as a self-hosted Go binary with the same audience: one bold line of value ("Your own Obsidian sync, with an agent inside it"); a link row of Demo · Download · Quickstart · Docs; a screenshot before any prose; a numbered quickstart that reaches first success in about five steps and is honest about friction ("keep this terminal open"); eight **bold-led** feature bullets; a standalone **Privacy** section; a **Why this?** section; then development, community and licence. Add `CHANGELOG.md`, `CONTRIBUTING.md` and `SECURITY.md` at the root.
 - **The Privacy section is not optional and it goes in the README.** This project *removed* end-to-end encryption, so the honest account in §3.6 is exactly what a prospective user most needs before installing, and burying it in `docs/design.md` would be a form of misrepresentation. State plainly: the server reads your notes, that is what makes the agent possible; the data volume must be encrypted; backups must be encrypted; an MCP token reads the whole vault and its results reach your model provider. `hister` does this well and it costs them nothing.
+- **The directory review, measured 2026-09-22.** `eslint-plugin-obsidianmd` 0.4.2's `recommended` config (which includes typescript-eslint's type-checked rules) over the plugin bundle's sources (`client/src/plugin` and `client/src/core`, tests excluded) found **42 errors and 60 warnings**. 20 errors, in files the M2 strip does not rewrite, were fixed then. The other 22 are in files M2 rewrites (`main.ts` 9, `engine.ts` 4, `transport.ts` 4, `pairing.ts` 2, `client.ts` 1) and are fixed with it; five of `main.ts`'s are `no-unsupported-api` on `registerCliHandler` (1.12.2) and `SettingGroup` (1.11.0), which are feature-detected with `typeof`, so they take a described disable, not a code change. The warnings are mostly `prefer-window-timers` (29) and `no-global-this` (13). The gate goes into `scripts/check.sh` and CI as soon as the M2 strip lands, failing on any error.
 - `docs/research.md` credits: Basalt itself, LiveSync for chunking, obsidian-mcp for the tool scope, the go-sdk, and `asciimoo/hister` for the untrusted-content envelope (§4.10), the `doctor` command, and the packaging and README shape.
 
+**Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "Packaging (M9)". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
+
 ### M10. Cutover: rehearse, inventory, cut, keep the way back (M, after M5.5 and M9)
+
+A concrete runbook for the setup that exists today, with the owner's open questions, is [plan/cutover.md](plan/cutover.md) (drafted 2026-09-22; nothing in it runs against the live vault without the owner's go-ahead at the time).
 
 The earlier version of this milestone was seven steps ending in "verify counts". Counts do not prove equal paths or equal bytes, a server backup cannot show that an unsynced local edit survived, and because the plugin id changes, both plugins can sit installed on the same vault, the one arrangement the scope refusals forbid.
 
