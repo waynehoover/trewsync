@@ -195,7 +195,7 @@ describe("a server restored from a backup its devices have moved past", () => {
       // on the strength of the history that was replaced (rules 3 and 6).
       expect(notes.get("note-2.md")).toBe("BACKED UP 2\n");
       // Notes the backup and the device agree on are agreement, not conflict
-      // copies: only the one note changed on both sides gets a copy.
+      // copies: only the note that differs between them gets a copy.
       const copies = [...notes].filter(([path]) => path.includes("Conflicted copy"));
       expect(copies.length, "the edited note was not kept both ways").toBeGreaterThan(0);
       for (const [path, body] of copies) {

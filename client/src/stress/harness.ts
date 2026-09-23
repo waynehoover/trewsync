@@ -51,9 +51,10 @@ export async function device(
  * Pairs `dir` as the device `name`, with a fresh invite from `server`.
  *
  * The pending pairing is saved before the redemption is sent and replaced by
- * the finished one on `redeemed`, as `pairWithInvite` does for the shells; a
- * refusal removes it, so a pairing that failed leaves nothing behind that a
- * later `reopen` could mistake for a device.
+ * the finished one on `redeemed`, as `pairWithInvite` does for the shells. A
+ * refusal removes it, and one whose answer never came stays a pending pairing,
+ * which `credentialsFor` refuses, so nothing a failed pairing leaves behind can
+ * pass for a device when `reopen` reads it.
  */
 export async function pair(server: TestServer, name: string, dir: string): Promise<DeviceConfig> {
   const pending = startPairing(parseInvite(await server.invite()), name);
@@ -191,6 +192,9 @@ export async function settle(devices: Device[], rounds = 6): Promise<void> {
 
 export async function tidy(open: Client[], dirs: string[], server?: TestServer): Promise<void> {
   while (open.length) open.pop()!.close();
+  // Stopped before any directory goes, because one of them may be the one it
+  // is serving: a restore points a server at a backup made in a test's dirs.
+  if (server) await server.stop();
   while (dirs.length) await removeTree(dirs.pop()!);
   if (server) await server.cleanup();
 }
