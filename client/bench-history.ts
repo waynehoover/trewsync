@@ -3,15 +3,13 @@
 import { Client } from "./src/core/client.ts";
 import { MemoryVault, MemoryIndexStore } from "./src/core/vault.ts";
 import { TestServer, cleanupBinary } from "./src/core/test-server.ts";
-import { testWrapped } from "./src/core/test-keys.ts";
+import { PROTO } from "./src/core/transport.ts";
 const count = Number(process.env["TREW_BENCH_HISTORY"] ?? 1000);
 if (!Number.isSafeInteger(count) || count < 1) throw new Error("Invalid history count");
 const server = new TestServer();
 const clients: Client[] = [];
 try {
   await server.start();
-  const secret = new Uint8Array(32).fill(67),
-    wrapped = await testWrapped(secret);
   const device = async (name: string) => {
     const vault = new MemoryVault();
     const client = new Client({
@@ -22,7 +20,7 @@ try {
       device: name,
       inspect: true,
       coalesceWrites: false,
-      ...(await server.deviceCredentials(secret, wrapped, name)),
+      ...(await server.deviceCredentials(name)),
     });
     clients.push(client);
     return { client, vault };
@@ -53,7 +51,7 @@ try {
     JSON.stringify(
       {
         runtime: process.version,
-        protocol: 7,
+        protocol: PROTO,
         historyEntries: count,
         currentFiles: 1,
         samples,

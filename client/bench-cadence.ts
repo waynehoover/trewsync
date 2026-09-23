@@ -1,14 +1,13 @@
 /**
  * Saved edit -> matching bytes on another client, with production timers.
  * Run: bun run bench:cadence
- * Real Go server and crypto; in-memory vaults, loopback, simulated plugin events.
+ * Real Go server; in-memory vaults, loopback, simulated plugin events.
  * This measures scheduling, not phone filesystem or official Sync performance.
  */
 import { execFileSync } from "node:child_process";
 import { arch, cpus, platform } from "node:os";
 import { Client, SYNC_EVENT_DELAY_MS } from "./src/core/client.ts";
 import { TestServer, cleanupBinary, until } from "./src/core/test-server.ts";
-import { testWrapped } from "./src/core/test-keys.ts";
 import { MemoryIndexStore, MemoryVault } from "./src/core/vault.ts";
 
 class PluginEvents extends MemoryVault {
@@ -58,8 +57,6 @@ if (!Number.isSafeInteger(baselineNotes) || baselineNotes < 0)
   throw new Error("Invalid TREW_BENCH_NOTES");
 try {
   await server.start();
-  const secret = new Uint8Array(32).fill(95);
-  const wrapped = await testWrapped(secret);
   const av = new PluginEvents();
   const bv = new PluginEvents();
   for (let i = 0; i < baselineNotes; i++)
@@ -77,7 +74,7 @@ try {
       onPass: () => {
         passes[device] = (passes[device] ?? 0) + 1;
       },
-      ...(await server.deviceCredentials(secret, wrapped, device)),
+      ...(await server.deviceCredentials(device)),
     });
     clients.push(client);
     await client.connect();
