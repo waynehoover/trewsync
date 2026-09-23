@@ -17,8 +17,9 @@ import (
 // the TypeScript client reads the same file (PLAN.md M0.5 task 6).
 type contract struct {
 	Constants struct {
-		StagingMark  string `json:"stagingMark"`
-		MaxPathBytes int    `json:"maxPathBytes"`
+		StagingMark     string `json:"stagingMark"`
+		MaxPathBytes    int    `json:"maxPathBytes"`
+		MaxSegmentBytes int    `json:"maxSegmentBytes"`
 	} `json:"constants"`
 	Fold struct {
 		UnicodeVersion string `json:"unicodeVersion"`
@@ -92,6 +93,9 @@ func TestTheConstantsAreTheContracts(t *testing.T) {
 	c := load(t)
 	if StagingMark != c.Constants.StagingMark {
 		t.Errorf("StagingMark is %q and the contract says %q", StagingMark, c.Constants.StagingMark)
+	}
+	if MaxSegmentBytes != c.Constants.MaxSegmentBytes {
+		t.Errorf("MaxSegmentBytes is %d and the contract says %d", MaxSegmentBytes, c.Constants.MaxSegmentBytes)
 	}
 	if MaxPathBytes != c.Constants.MaxPathBytes {
 		t.Errorf("MaxPathBytes is %d and the contract says %d", MaxPathBytes, c.Constants.MaxPathBytes)

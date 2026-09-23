@@ -134,7 +134,7 @@ export function decodeRecord(line: string): { seq: number; delta: JournalDelta }
   if (delta === null || typeof delta !== "object" || Array.isArray(delta)) {
     return { why: "unparsable" };
   }
-  return { seq, delta: delta as JournalDelta };
+  return { seq, delta };
 }
 
 /** Whether decodeRecord answered with a record or with a reason it could not. */
@@ -417,7 +417,7 @@ function sameJSONValue(before: unknown, after: unknown): boolean {
     );
   }
   if (Array.isArray(after)) return false;
-  const prototype = Object.getPrototypeOf(after);
+  const prototype: unknown = Object.getPrototypeOf(after);
   if (prototype !== Object.prototype && prototype !== null) return false;
   const keys = Object.keys(before);
   const nextKeys = Object.keys(after);

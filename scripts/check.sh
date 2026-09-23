@@ -77,6 +77,11 @@ gofmt_clean() {
 # ---- server ----------------------------------------------------------------
 run "gofmt" "" gofmt_clean
 run "vet" "" go vet ./...
+# The contract's vectors and fold tables are generated (scripts/protocol-vectors.py).
+# Both languages test against them, so a hand edit or a forgotten regeneration
+# would pass both suites while no longer being the reference's answer.
+run "the protocol vectors are what the reference writes" "" \
+  uv run --no-project --python 3.13 scripts/protocol-vectors.py --check
 # Tests also read repository docs outside the Go module; the Go result cache
 # does not track those inputs. Always execute the release gate's server tests.
 run "test" "" go test -race -count=1 ./...

@@ -1,0 +1,3639 @@
+{
+  "note": [
+    "Content-defined chunk boundaries, pinned across the language boundary (PLAN M0.5 task 5).",
+    "",
+    "A chunk's name is the SHA-256 of its raw bytes, so Go's chunker in internal/notes has to cut",
+    "every input exactly where chunkBytes in client/src/core/chunk.ts cuts it. One byte off and the",
+    "server and a device store the same note as different chunks, and nothing reports it: both",
+    "sides still converge, they just stop deduplicating against each other.",
+    "",
+    "Each language checks the other's output. corpusA is cut by TypeScript and checked by Go;",
+    "corpusB is cut by Go and checked by TypeScript. Each side also checks that its own corpus is",
+    "still what its code cuts today, and that a corrupted vector fails its check.",
+    "",
+    "An entry describes its input with a generator (see generators) instead of carrying the bytes,",
+    "and records the input's SHA-256, so that two generators disagreeing is reported as that and",
+    "not as a chunker bug. sizes are explicit: min, avg and max exactly as chunkBytes takes them.",
+    "cuts are the end offsets of the chunks, in order; names are the lowercase hex SHA-256 of each",
+    "chunk's bytes.",
+    "",
+    "sizesForV1 and isTextPath are written by hand and checked by both languages. The two corpus",
+    "sections are written by their generators. Both writers keep the whole file in the format",
+    "JSON.stringify(value, null, 2) produces, which the TypeScript test checks, so regenerating one",
+    "half never shows up as a change to the other."
+  ],
+  "generators": {
+    "sha256-ctr": "SHA-256(utf8(seed) || counter as a 32-bit big-endian integer) for counter 0, 1, 2, ..., concatenated and truncated to length bytes.",
+    "repeat": "utf8(text), or the bytes hex spells, repeated and truncated to length bytes. Truncation may cut a character.",
+    "mixed": "Draws from pieces until at least length bytes are written, then truncates to length. Each draw reads the next two bytes of the sha256-ctr stream for seed as a big-endian 16-bit integer v and appends utf8(pieces[v % pieces.length])."
+  },
+  "corpusA": {
+    "producedBy": "TypeScript: chunkBytes in client/src/core/chunk.ts",
+    "regenerate": "cd client && bun run src/core/chunk-fixtures.run.ts",
+    "checkedBy": "Go: go test ./internal/notes -run TestChunkFixtures",
+    "entries": [
+      {
+        "name": "a-empty",
+        "why": "No bytes and no chunks: a file has chunks if and only if it has content.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 0,
+          "seed": "corpus A tiny"
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "cuts": [],
+        "names": []
+      },
+      {
+        "name": "a-one-byte",
+        "why": "One byte, one chunk.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 1,
+          "seed": "corpus A tiny"
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "4c94485e0c21ae6c41ce1dfe7b6bfaceea5ab68e40a2476f50208e526f506080",
+        "cuts": [
+          1
+        ],
+        "names": [
+          "4c94485e0c21ae6c41ce1dfe7b6bfaceea5ab68e40a2476f50208e526f506080"
+        ]
+      },
+      {
+        "name": "a-window-minus-one",
+        "why": "One byte short of a full window, at text sizes: the remainder is the only chunk.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 47,
+          "seed": "corpus A tiny"
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "ecd67f2706e479a2efccd7a6bb40dd270a98cf3491f2cfe5118f8594e7198713",
+        "cuts": [
+          47
+        ],
+        "names": [
+          "ecd67f2706e479a2efccd7a6bb40dd270a98cf3491f2cfe5118f8594e7198713"
+        ]
+      },
+      {
+        "name": "a-window",
+        "why": "Exactly one window.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 48,
+          "seed": "corpus A tiny"
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "bb5efee11295cac885ac320948678ce926cf44a9f88287a1ad240634ce29b0c4",
+        "cuts": [
+          48
+        ],
+        "names": [
+          "bb5efee11295cac885ac320948678ce926cf44a9f88287a1ad240634ce29b0c4"
+        ]
+      },
+      {
+        "name": "a-window-plus-one",
+        "why": "One byte past a window, the first byte that rolls.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 49,
+          "seed": "corpus A tiny"
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "1ef6c29e2c063ed16db36c956872e7aabb32c3c31343c355820360bd7b7181ba",
+        "cuts": [
+          49
+        ],
+        "names": [
+          "1ef6c29e2c063ed16db36c956872e7aabb32c3c31343c355820360bd7b7181ba"
+        ]
+      },
+      {
+        "name": "a-fill-phase-only",
+        "why": "A maximum under the window, so every cut is decided while the hash is still filling and it never rolls.",
+        "generator": {
+          "kind": "mixed",
+          "length": 49,
+          "seed": "corpus A fill",
+          "pieces": [
+            "the ",
+            "note ",
+            "vault ",
+            "sync ",
+            "chunk ",
+            "edit ",
+            "and ",
+            "of ",
+            "a ",
+            "is ",
+            "café ",
+            "café ",
+            "naïve ",
+            "über ",
+            "straße ",
+            "Ωμέγα ",
+            "жизнь ",
+            "łódź ",
+            "日本語",
+            "のノート",
+            "東京 ",
+            "中文 ",
+            "€",
+            "﻿",
+            "한국어 ",
+            "🗿",
+            "😀 ",
+            "𝄞",
+            "🧪",
+            "👩‍💻 ",
+            ". ",
+            ", ",
+            "# ",
+            "- [ ] ",
+            "**",
+            "`",
+            "\n",
+            "\r\n",
+            "\n\n",
+            "\t"
+          ]
+        },
+        "sizes": {
+          "min": 2,
+          "avg": 5,
+          "max": 40
+        },
+        "isUtf8": true,
+        "inputSha256": "fd338eb1c0964321e9974a8cbfb8c37371ec110e3fe4ab92e78caca8f3ebb294",
+        "cuts": [
+          12,
+          21,
+          23,
+          24,
+          30,
+          36,
+          39,
+          48,
+          49
+        ],
+        "names": [
+          "9ea7810f8a6298ccf0b6f3affbd56d03987df9e5d48e23a0a1cbbd17cdc81af4",
+          "f541c0113ba4a26608896b336a7af9c0d1810225a72ad41723770cca1601561a",
+          "32b3759b686eff6ba58c397644bf1f5f8c05d303f1e6bab319a16e7d718c159c",
+          "19753a9b7681b36104c1f79dfc8a6a1eccc088b8c7d2903a446d81694d2fb3a9",
+          "b73a9cebbd21b5490ee5dce7ed4904a8ab7585a10d99b4081096be2aa8b40c5f",
+          "c9c5f8cc5baac292828cb749959919e29364d06f215f42ccba9a9bb116a021af",
+          "7a8d067d39df262ae963939a2e6777b7aadcdcd1202fc68dc9ad426d36d89a27",
+          "710fe2501862361284dfcc8e7a3029d954723ac489918dc855491739db90c000",
+          "30a5bfa58e128af9e5a4955725d8ad26d4d574a537b58b7dc6d357acad578572"
+        ]
+      },
+      {
+        "name": "a-window-edge",
+        "why": "Boundaries tested at 48 bytes, the last unrolled hash, and from 49, the first rolled one.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 600,
+          "seed": "corpus A edge"
+        },
+        "sizes": {
+          "min": 48,
+          "avg": 2,
+          "max": 60
+        },
+        "isUtf8": false,
+        "inputSha256": "9549901c26f92f70958f22e3bd0eba7aeb38dde932f0f7fcc20e904e3a84a1a8",
+        "cuts": [
+          52,
+          103,
+          155,
+          206,
+          259,
+          310,
+          358,
+          406,
+          454,
+          502,
+          551,
+          600
+        ],
+        "names": [
+          "14966323fc626c3bd7eee130061237147f2da3deae74206359e13e9fd0ca8895",
+          "36d59aa24cbfa8a7dc8d3434901d85d6bd776ab9a059ce7ab845e52dd7d808e5",
+          "15fb6f1c05e24dbea046cea3d036413d3a24069c8ed3426ec3c5cce475f0d869",
+          "ef9196f62fc63402f3d0fb0dd4018150a717f084ba6236a2df3097485d9f48df",
+          "5d3df54f54d3e6561716d705e63d53a19787a17a8cb281dfbabfedadd5fdb30c",
+          "7cde53eeb4043359d7c46d457522aa83e6ef9fce4a1d138a79ef1a3b1f28d817",
+          "d648b4bce81d3a0e06f4317e29509ed18ce2fdbb2ca5613385b471f12b662de3",
+          "8ec8f7dd875230b0e5e3f8ff31b3a9b3586f143428c1bc76ab9df242a1527f13",
+          "daf5033a92d529f0e8599cbef59fc4b547bc52c2346043fb0f608cc9527da119",
+          "8e6ee674be16d0060b9e1803f2076def6f9349e1fc0e4c46bc71c5af4711a5e5",
+          "bc3b95a1ff8f114f4584862a8561bcaa3ceb4bebf86db82be3cfaf6880c3ba1c",
+          "32e3d7e22d8599bab6f9e908bf04b80ccfba9b7c7feb2b6f5b8167b2b09a03e6"
+        ]
+      },
+      {
+        "name": "a-rewind-retests-carried-bytes",
+        "why": "A minimum under four with dense multi-byte text: bytes a trim gives back are hashed again, and tested again, as the next chunk opens.",
+        "generator": {
+          "kind": "mixed",
+          "length": 80,
+          "seed": "corpus A rewind",
+          "pieces": [
+            "🗿",
+            "𝄞",
+            "😀",
+            "日",
+            "本",
+            "é",
+            "ж",
+            "a",
+            " "
+          ]
+        },
+        "sizes": {
+          "min": 1,
+          "avg": 3,
+          "max": 9
+        },
+        "isUtf8": true,
+        "inputSha256": "a189d3421902c64bdd325b82c5cf024dfa61fd2736c6ca6a33a9099d5bdf7fd7",
+        "cuts": [
+          3,
+          4,
+          5,
+          10,
+          13,
+          21,
+          22,
+          27,
+          31,
+          32,
+          33,
+          37,
+          38,
+          39,
+          45,
+          51,
+          58,
+          61,
+          66,
+          70,
+          75,
+          76,
+          77,
+          80
+        ],
+        "names": [
+          "85217f7aff77841438439fb3e7cf37bb3062fb026453c7692247d3a5641a0115",
+          "d4b0c0a4a8cc6c257aed34d16d39dd3c2d3539ed67fd4badd40aef16c1591715",
+          "ca41841c5c98e34f4a3ae83d9220940395301a9616f69d6672b04ea322f28eb0",
+          "fa3d64622423a96fbfc8f82e2bf152c0cc550b3d05ea554b86984afa6268abda",
+          "b18ad8e8b3185ee4e488c2ed68479dadf05730190b59c4bf10bb8632c27057c8",
+          "3dc10fcb5d53698e478607ba347008f9270c76af43dba14b68b6206109baa20e",
+          "d4b0c0a4a8cc6c257aed34d16d39dd3c2d3539ed67fd4badd40aef16c1591715",
+          "897a19c3cb131ee846ace42e04612099c4938d0d1acf43eb7666ba1b4f5a4781",
+          "f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9",
+          "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "36a9e7f1c95b82ffb99743e0c5c4ce95d83c9a430aac59f84ef3cbfab6145068",
+          "f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9",
+          "d4b0c0a4a8cc6c257aed34d16d39dd3c2d3539ed67fd4badd40aef16c1591715",
+          "ca41841c5c98e34f4a3ae83d9220940395301a9616f69d6672b04ea322f28eb0",
+          "cf2abf0c5be326cb922a70f8163f91079c4d9aa8655c60ead89ad545c9de2e92",
+          "cf2abf0c5be326cb922a70f8163f91079c4d9aa8655c60ead89ad545c9de2e92",
+          "c86ecc274843cdebc1340114311913ce6a5329ae992bc2b983b82543b4ce9e21",
+          "b18ad8e8b3185ee4e488c2ed68479dadf05730190b59c4bf10bb8632c27057c8",
+          "572df39be200b93dbef1b75f22ff5b9500d4e2792daac808126d313ff56de51b",
+          "f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9",
+          "c4f8c8d3f3751dba4ff9ed4408f091d6c2a4eea8728376f603fb85fb2a6a9fa4",
+          "d4b0c0a4a8cc6c257aed34d16d39dd3c2d3539ed67fd4badd40aef16c1591715",
+          "ca41841c5c98e34f4a3ae83d9220940395301a9616f69d6672b04ea322f28eb0",
+          "b38af6aef10b9620ceb4fe55a4aaf8def5e4d9bd99bd1ebff06a0d44220546a2"
+        ]
+      },
+      {
+        "name": "a-text-floor-sizes",
+        "why": "Multilingual prose at the floor text sizes, which textSizesFor gives a 20 KB note.",
+        "generator": {
+          "kind": "mixed",
+          "length": 20000,
+          "seed": "corpus A prose",
+          "pieces": [
+            "the ",
+            "note ",
+            "vault ",
+            "sync ",
+            "chunk ",
+            "edit ",
+            "and ",
+            "of ",
+            "a ",
+            "is ",
+            "café ",
+            "café ",
+            "naïve ",
+            "über ",
+            "straße ",
+            "Ωμέγα ",
+            "жизнь ",
+            "łódź ",
+            "日本語",
+            "のノート",
+            "東京 ",
+            "中文 ",
+            "€",
+            "﻿",
+            "한국어 ",
+            "🗿",
+            "😀 ",
+            "𝄞",
+            "🧪",
+            "👩‍💻 ",
+            ". ",
+            ", ",
+            "# ",
+            "- [ ] ",
+            "**",
+            "`",
+            "\n",
+            "\r\n",
+            "\n\n",
+            "\t"
+          ]
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "2c29776f0f2316aff4847017d9f11c1b90f3d67b24a5929ddebc06f3578d1138",
+        "cuts": [
+          3827,
+          4988,
+          6402,
+          7785,
+          9177,
+          10706,
+          11266,
+          12602,
+          13182,
+          15157,
+          18287,
+          20000
+        ],
+        "names": [
+          "b7664da9836257dc3881dca52546ffeec189dc4af9ea49c186877c08d82d422e",
+          "d27e3845b53be17b66d00a96e84b5608d2b7f0956a0aff849c26e03d88a33f24",
+          "dcfa8229387349ba0e5f34912322e17b871f61dfd780e63bdba6e5b3fee28b59",
+          "4cda97592ce8bfb2c9f205ca81d0cd10f0e5d01a637251fa9f84a766f2fb03d8",
+          "dc6ff431eb531cebe3f81ae3f79b13900a314247d27ce1247af76d2419f7108d",
+          "d9c5d43931b7f4ef9c06ff6d8875ddcc0a910b39f187e82272ecb0395424ce65",
+          "ceb464fe375257e85c60b7dccdf6d69d9df371feaeaf23c3f632c3f9cb780aa8",
+          "4416a457decd6a3baeb69da17b88bc8729ee1117a58262fdf293800321912b1d",
+          "657b863802b0998d9162815c894d8c2381f75e0a6dc3aec159b6d06b64c66080",
+          "a7e13acbb7232d946858a05e4562b7eea4f8d6b9b059acf473e9717f203bc614",
+          "389097fd7508fa399e08266cdcd20f9826587757338ffd860760497b38b9e0dc",
+          "3b0dd26047da3246e515e28bc4060093c4d5b3e7f8944039f60ebe29774e72ce"
+        ]
+      },
+      {
+        "name": "a-text-scaled-1536",
+        "why": "Text sizes scaled to a 40 KB note: an average of 1536, which is not a power of two.",
+        "generator": {
+          "kind": "mixed",
+          "length": 40000,
+          "seed": "corpus A scaled",
+          "pieces": [
+            "the ",
+            "note ",
+            "vault ",
+            "sync ",
+            "chunk ",
+            "edit ",
+            "and ",
+            "of ",
+            "a ",
+            "is ",
+            "café ",
+            "café ",
+            "naïve ",
+            "über ",
+            "straße ",
+            "Ωμέγα ",
+            "жизнь ",
+            "łódź ",
+            "日本語",
+            "のノート",
+            "東京 ",
+            "中文 ",
+            "€",
+            "﻿",
+            "한국어 ",
+            "🗿",
+            "😀 ",
+            "𝄞",
+            "🧪",
+            "👩‍💻 ",
+            ". ",
+            ", ",
+            "# ",
+            "- [ ] ",
+            "**",
+            "`",
+            "\n",
+            "\r\n",
+            "\n\n",
+            "\t"
+          ]
+        },
+        "sizes": {
+          "min": 768,
+          "avg": 1536,
+          "max": 6144
+        },
+        "isUtf8": true,
+        "inputSha256": "1a74a832fa06cfe4766defe8439714b4bea024e18a5dac5225b89259fb959098",
+        "cuts": [
+          1243,
+          3465,
+          4354,
+          5364,
+          7737,
+          11371,
+          12945,
+          14022,
+          20166,
+          21138,
+          25400,
+          28430,
+          33041,
+          34393,
+          37158,
+          38168,
+          40000
+        ],
+        "names": [
+          "75af5d889090c86ca0730a82b1d03a362831281a35f7791bc2a4901748d2b2bf",
+          "bc68f9be772b7babb7f88e144e2748c19bca2c1491323038783519441648471a",
+          "84857dffa16dbca4c2655924430bd8f867d42a2afb68520cae8cb23f0ba9dec1",
+          "0f8b917221ea2e36fd7b475d0b82ebe473f307d225ba8e5cff4cb359a53f657a",
+          "0cb6e1aa195d9223982f61157f764e98577ea7691f4425c58cf3c296ef2aee66",
+          "1ab923e2b6b0a270083db94478b8d041dc74d0c4c2d3e5b2ee15f386c53ed94a",
+          "8f69793bca97e348adb51aa6f224c59fbcb877a9c6a85a73e4cda8aeda8995d1",
+          "5d56058729d3cf0cf41ca69095743b9dcba77e79fb1ed0bb345f28bc8916fd76",
+          "a545287b59f79e12a1dccee4439c098d138d6ddb63257f0b0ebd8b3745642cab",
+          "8ffa83d06ee7604cfe07a763f668ee2d418a2bd77733764fd9e96a284941c729",
+          "16ea14a71a5c24060f2274aaf9232de33c5506fe7143f4852dc58cbefaa7af29",
+          "ee293f27addd56538df3495932158dc10e7217f41bc04255aab5237708296fa6",
+          "ea7e315280d3c2680db85ec58ca77419d0413fc1b60ee23fe4a316eb98a77f5d",
+          "87e74e70947faec6f6c73bcba10c4b1b75d985340db49b981350f1065ff86e6c",
+          "1f7bcc0d09ff5da8bcf1f42059f977997b8c97ba66c13dbbe84912116b4393dc",
+          "28e70b68776cdbeccd520736edd1cba57ee44fd0864e990bea498ba5d7aea29d",
+          "8f49e501a45a96ff7ffede30a19a074924f39b532c5c8a4b39f35add3684c8a3"
+        ]
+      },
+      {
+        "name": "a-text-scaled-3072",
+        "why": "Text sizes scaled to a 130 KB note.",
+        "generator": {
+          "kind": "mixed",
+          "length": 130000,
+          "seed": "corpus A long note",
+          "pieces": [
+            "the ",
+            "note ",
+            "vault ",
+            "sync ",
+            "chunk ",
+            "edit ",
+            "and ",
+            "of ",
+            "a ",
+            "is ",
+            "café ",
+            "café ",
+            "naïve ",
+            "über ",
+            "straße ",
+            "Ωμέγα ",
+            "жизнь ",
+            "łódź ",
+            "日本語",
+            "のノート",
+            "東京 ",
+            "中文 ",
+            "€",
+            "﻿",
+            "한국어 ",
+            "🗿",
+            "😀 ",
+            "𝄞",
+            "🧪",
+            "👩‍💻 ",
+            ". ",
+            ", ",
+            "# ",
+            "- [ ] ",
+            "**",
+            "`",
+            "\n",
+            "\r\n",
+            "\n\n",
+            "\t"
+          ]
+        },
+        "sizes": {
+          "min": 1536,
+          "avg": 3072,
+          "max": 12288
+        },
+        "isUtf8": true,
+        "inputSha256": "0fd6335d5e988f83819717c866838603862be2b3de6a65454da1e725c13e3040",
+        "cuts": [
+          4810,
+          10752,
+          16895,
+          23737,
+          26553,
+          30589,
+          32832,
+          35579,
+          43705,
+          45697,
+          49266,
+          52449,
+          57763,
+          66979,
+          79267,
+          80813,
+          84285,
+          92403,
+          97480,
+          101097,
+          106533,
+          109241,
+          112181,
+          119294,
+          130000
+        ],
+        "names": [
+          "9da1dadc79f1231a89f386a997854dccf2d166a4817d00fd589db6bbcbb6ca37",
+          "81b2e563b26d745b7a822eb1bff05ecb9c1dd03066a4c6a049e3bf0e51382a45",
+          "ca9612e339294ee6cce9d3ad3c431d920e730480b67b52fa732855221c7da358",
+          "7d7b63f3cad19ea3a59dce4bfdecc5e685b697be316a239bf9aaab2a03c52ffa",
+          "21953371007e4f2a3989531076cf5c78e670ca27dd8ef9cc3dac75ca77e414f6",
+          "2af07c7c40f795edbd5ca94d4f756b3b9fa3249c8b6a58e4bd5c521398ebd75e",
+          "957198741223fb556c7f62cc78fde65057e15b9218109e45d4a8583456db9b2d",
+          "dd5e75615da71e3d173b93adb01635cc5447d5e2053ad32ff891c5be1a96fdd4",
+          "9fd1adcff0f06fc90a1abee60bb41d4eed87a86a3ad13e8e68589cd50f1b9ae7",
+          "a7799731c6d2970d38969f0ce50a1fa8fa7027a3cd66c2cbb699e01d5c724972",
+          "50da4e2c62bfc5652fb6c6687efde8c3ba786d145f1630a1ab5017526aecffc5",
+          "8729c06164c592b3ce9be6dce124ed929708e826cad935ad3b87e0643212b785",
+          "89875287ba5f65174e743ce45341e52fc04410e9c0bbb3ea74341c588344590f",
+          "25b6e9602816d434dbdede8351fdb5dc68f4f105c3713907a246cbde03f890bc",
+          "003adb8d45b016162b873fdac791fef5fc4c9edff50831369aeca139f4a1e703",
+          "9d12a09ba4c66ca8f7bbe25ddfc509ee6bff14721b1df9b07dd14b0126056e4f",
+          "41ab2528aa0b1bdba456e39ca90f5897dc87d41bae88a3831e4d6a05deb8d2e8",
+          "6752498074adc5e2e6f6a5b9845d3e69f5e722e28020147ae5eb55ed2947e12c",
+          "c7a6ae90d6b696beff2dea0c15807305b96167205a9f3ee6fad8a521a1067332",
+          "3cc2a331bb8aaa5b07ae7d917c621b22bb45c3fd18bd42cd40ffdc9351eaf383",
+          "0131efa1c62d7dddcdedf5b0412df36d638e0239ce5cb487664fea197ed4d250",
+          "2bea108f0baa2db9c3f74bf09bfef79c79fd91e1ed3d61b41ba4de5d00ca9baa",
+          "1402e6fa857d532cd4e56ad162d1104e11a5a078bc6b66b83342fc4cd9b4e706",
+          "1868f126f06b9c44618b805b5eccba249db8da9119fe2856522bf37e6268a9cb",
+          "09c6f787e4b9b60c53bdf755ebe8f23aa77bbfbb3b4b46d1ab8eaecf9503bccf"
+        ]
+      },
+      {
+        "name": "a-one-long-line",
+        "why": "30 KB of multilingual text with no line break anywhere in it.",
+        "generator": {
+          "kind": "mixed",
+          "length": 30000,
+          "seed": "corpus A one line",
+          "pieces": [
+            "the ",
+            "note ",
+            "vault ",
+            "sync ",
+            "chunk ",
+            "edit ",
+            "and ",
+            "of ",
+            "a ",
+            "is ",
+            "café ",
+            "café ",
+            "naïve ",
+            "über ",
+            "straße ",
+            "Ωμέγα ",
+            "жизнь ",
+            "łódź ",
+            "日本語",
+            "のノート",
+            "東京 ",
+            "中文 ",
+            "€",
+            "﻿",
+            "한국어 ",
+            "🗿",
+            "😀 ",
+            "𝄞",
+            "🧪",
+            "👩‍💻 ",
+            ". ",
+            ", ",
+            "# ",
+            "- [ ] ",
+            "**",
+            "`"
+          ]
+        },
+        "sizes": {
+          "min": 768,
+          "avg": 1536,
+          "max": 6144
+        },
+        "isUtf8": true,
+        "inputSha256": "97c4a9aa0c179384a332f89e8637b8d646960099bcf9b74fe19aeeec2089fb9f",
+        "cuts": [
+          3053,
+          4219,
+          6260,
+          7297,
+          8339,
+          11810,
+          14473,
+          16821,
+          18722,
+          20267,
+          21141,
+          24639,
+          27234,
+          28180,
+          29046,
+          30000
+        ],
+        "names": [
+          "1c0af52212ae994b062a8c35e4988b2b3b0517ef2aaf3f6fbd979ab7252ba078",
+          "cfacce2b24ffee9e845b5ec4113b5e48cad63a535fbfbb82dd157bdab9255080",
+          "a1d6af9396530f3f537aebfb9ad584529bda2f2d4062fc2ba3ff0236b10a39a2",
+          "399d1530f5c297e0c0e8915ffdecf4a8be65353e388dcb6e944f8ec673b163ee",
+          "36590d0574f620c65238c3fd0a0853548733a8e3515523893a1182a7cc031ff1",
+          "5964f610ca5061979df155a96eaf6f287c3263b3b3261daed5879e933b434c52",
+          "71adf6c174917fd7685729e55b9957cf4e2e1d11e429be3bf343ed16c7c4ec84",
+          "878a6ae4aab760c3b8f715e741b0bde886c34e40f6e9a3cbee1c9e5064943fcf",
+          "ee785843e834816f1d974b49394a299e3fa28b6a20532125a6f4d9911feb96e0",
+          "2cc6da00fbb499eab99f445676223c62200e1a1029fae3c11b24561b96f9dfeb",
+          "9c1b0e3275712d686175be356751bd4e039ea9a761976120714c86820d93385d",
+          "baeda32950441c25ace734a96c20a484f2ea5b0a3a7110ffbf1188ce8afe8e16",
+          "3eaf5af3af9e9052b74ff890ec3d0195a948bb10d1cae5a850bafdb56d87bc12",
+          "02becf076d5d045ac93e18c964fbcd2d4f75932bc4b209dd2f2a93c2ffababe7",
+          "7b24e166cd63df5d6ae9acd9b3081f544fba2902b90ef2456884f51ca7581f99",
+          "4d118b097c7481a9948c5830b65c05fe367f76f0aa8364db9ece287c0b09b369"
+        ]
+      },
+      {
+        "name": "a-text-on-the-byte-path",
+        "why": "Multilingual text with isUtf8 false: cuts may split a character, and have to split it in the same place.",
+        "generator": {
+          "kind": "mixed",
+          "length": 12000,
+          "seed": "corpus A bytes",
+          "pieces": [
+            "the ",
+            "note ",
+            "vault ",
+            "sync ",
+            "chunk ",
+            "edit ",
+            "and ",
+            "of ",
+            "a ",
+            "is ",
+            "café ",
+            "café ",
+            "naïve ",
+            "über ",
+            "straße ",
+            "Ωμέγα ",
+            "жизнь ",
+            "łódź ",
+            "日本語",
+            "のノート",
+            "東京 ",
+            "中文 ",
+            "€",
+            "﻿",
+            "한국어 ",
+            "🗿",
+            "😀 ",
+            "𝄞",
+            "🧪",
+            "👩‍💻 ",
+            ". ",
+            ", ",
+            "# ",
+            "- [ ] ",
+            "**",
+            "`",
+            "\n",
+            "\r\n",
+            "\n\n",
+            "\t"
+          ]
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": false,
+        "inputSha256": "1b9397d4f8fd1728fc10e0610449e5e81384ed76705ff5e61a68a2edb794ad77",
+        "cuts": [
+          1689,
+          2203,
+          3604,
+          4689,
+          5691,
+          6393,
+          7872,
+          10106,
+          10672,
+          12000
+        ],
+        "names": [
+          "6076202d1ecffd44bdcae51562f9a63f97188a7e565397285a0aaecb668a8571",
+          "2e0d58a278298e843904e82a8351862d8e2670a1bc1150976167ac4226f26d56",
+          "b91c73137635b5d4791f1b319b5477bdea8c84414c5ca29220f720c7a41efdcf",
+          "528768c4a86ec4525e4afa1ab554e5e3955d143375eee38f973126daf60b4e73",
+          "1e5ba7379ba38cca75d2595af855e46c6fdc1d510097361c59936e032a8dc7c3",
+          "6294135de837c9323bcdf93a0099d2ed34c3b2177db6d9dfbdd748bf728b7ca0",
+          "6d21c217fd6a1477800648d47ed06ff1a3047f7349c6e02060bb79053b9a2423",
+          "cefdb454c8a443a3823be34ded00a97762b8e8987cd04460ff2d63316a3e7fb6",
+          "6bf3b9db05a33999340a19a47c95e0c22c30431db00ee5c5f2c3e53a56bec25e",
+          "2f99fa095c5eb791950b49b9ca4109d91a2670d6cd1ddc8bbeb8dd8651c1b9e8"
+        ]
+      },
+      {
+        "name": "a-binary",
+        "why": "Incompressible bytes at binary sizes.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 3145735,
+          "seed": "corpus A attachment"
+        },
+        "sizes": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        },
+        "isUtf8": false,
+        "inputSha256": "aa888cf06d73f37b30aabd7a092a48332f4b8bd58f7ac7fa82e6a2e5956c37e5",
+        "cuts": [
+          132885,
+          270395,
+          515815,
+          824040,
+          1563021,
+          1968474,
+          2232056,
+          2960729,
+          3138674,
+          3145735
+        ],
+        "names": [
+          "38f3c3a66d5bfced1cb48cf7d7d11a3f631650b0bbfca097b335b53a2515c87c",
+          "d2208aaac8607a74a0bd2ac022d885edab2968a865c4ea90e0e3909f1b0e0def",
+          "51b54973e859a660140209b7c8026b5aa652326b6cbd3d3b319c633365b0d581",
+          "630f97fc246b4acb11330241adc368896aeb87bfad45b74d0168b5962e674bad",
+          "a8f2fa435fe93af7b4ccb13a78bd6407e5059bae35a4550fb5b5cfdd7f74b896",
+          "32b742ccdda1221a5c8a1b1ee267585fbccc31100981f38fdd15c0274dcce5e3",
+          "fd8e1d0fe0abada88ffd0b4ac1f77df764bc5021a0836f49d2c7e5e33ffa90fa",
+          "864014118212dc57c5e6f990aa0f11f79221082ab532c8dfe4b5d518ca1c8d60",
+          "c35e25cc04e26c09ae1f45f3ae632c87a05d1124fecb31b281f1e56456a8c255",
+          "8184eec89f09dcc2a4d54ea7eadceb4578f20f919e0610c69bfb0c590e1c5565"
+        ]
+      },
+      {
+        "name": "a-binary-on-the-utf8-path",
+        "why": "Arbitrary bytes at binary sizes with isUtf8 true, as a .md holding anything at all is chunked: malformed input decides every trim.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 2097153,
+          "seed": "corpus A odd note"
+        },
+        "sizes": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        },
+        "isUtf8": true,
+        "inputSha256": "c13d89845ac372c45f2018ff58d2aa55c6e60febaba609cb5145b7196b246dc2",
+        "cuts": [
+          581785,
+          1039275,
+          1249109,
+          1651875,
+          1881762,
+          2097153
+        ],
+        "names": [
+          "9e45f4db40cd4b327ad3b5a7bd49db125b4cfc1df1864b928379c0b0e5e3c447",
+          "2c6ab07d75dac5b01320932e56604f69f15d85abfbf2cb45125e9ba8a37084c1",
+          "785d389bec53fd181855d96d9e647267a6f872c34e22e62ac975fc695a197a3d",
+          "4971c1bf70138eb4f2b7570159abf02a349dd974d78b4d3f86001d064d44c06d",
+          "a2b112e9d42fb1d68537f90a20379219daa273702edbe913f5c10d94239172d7",
+          "6476b9ef4e1ea25e5950eb8830b7524429205683673f152cf0fd04aa99126803"
+        ]
+      },
+      {
+        "name": "a-text-over-4-mib",
+        "why": "A text file over TEXT_AS_BINARY_ABOVE takes binary sizes and keeps the UTF-8 rule, as the engine chunks it.",
+        "generator": {
+          "kind": "mixed",
+          "length": 4198401,
+          "seed": "corpus A huge note",
+          "pieces": [
+            "the ",
+            "note ",
+            "vault ",
+            "sync ",
+            "chunk ",
+            "edit ",
+            "and ",
+            "of ",
+            "a ",
+            "is ",
+            "café ",
+            "café ",
+            "naïve ",
+            "über ",
+            "straße ",
+            "Ωμέγα ",
+            "жизнь ",
+            "łódź ",
+            "日本語",
+            "のノート",
+            "東京 ",
+            "中文 ",
+            "€",
+            "﻿",
+            "한국어 ",
+            "🗿",
+            "😀 ",
+            "𝄞",
+            "🧪",
+            "👩‍💻 ",
+            ". ",
+            ", ",
+            "# ",
+            "- [ ] ",
+            "**",
+            "`",
+            "\n",
+            "\r\n",
+            "\n\n",
+            "\t"
+          ]
+        },
+        "sizes": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        },
+        "isUtf8": true,
+        "inputSha256": "5222eb93862aa6709f2fc18ab7ecf5cf26234b4754be5b96e41c207f781d43bb",
+        "cuts": [
+          282290,
+          447007,
+          866224,
+          1780167,
+          1967666,
+          2615515,
+          3235025,
+          3639938,
+          4091775,
+          4198401
+        ],
+        "names": [
+          "75469824b16f2bab74995766dd4faf195421de55633af2b5570e1749dff590b4",
+          "39a1c706e678fd323a153d224004859fd2221e9e1b774aea4a5b0e7373a5260c",
+          "7f9eec20ee1ae6a0bd8567cb5a6bb7a00f65080f30a97dc5d57e0037d0df5ce5",
+          "aa7006c04e540009cfbd61c7bc2acc79788d5e19b1943f5e57547f22e02c1997",
+          "6e30f53965c5061786535c128e1b4f1af34ea714c51b230a20a2b599c216be68",
+          "c199d19130d99cc7e36709793ae91df0b5940390211e222b6b8a7a7c5a8bed5a",
+          "e4ed43e1f0066007f897f3c7a3f6c2759d83141ec2fd70e013baab07ef172b29",
+          "b847f6046e05b90d2a41fa24fb14bb78d23078bc6ff4c7d21ee868b8c5303382",
+          "bf06a27831e6e7c630cfdd5f6775be8c55ee0b004d1643fcdc30bb5014085637",
+          "1130b3221c4dfdeea17751dd9165078b055c3e7c7b8baca442f4018b936b21a2"
+        ]
+      },
+      {
+        "name": "a-at-max-text",
+        "why": "Input exactly at max, with no boundary in it: one forced cut at the very end and no empty chunk after it.",
+        "generator": {
+          "kind": "repeat",
+          "length": 4096,
+          "text": "a"
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "c93eee2d0db02f10acc7460d9576e122dcf8cd53c4bf8dfcae1b3e74ebcfff5a",
+        "cuts": [
+          4096
+        ],
+        "names": [
+          "c93eee2d0db02f10acc7460d9576e122dcf8cd53c4bf8dfcae1b3e74ebcfff5a"
+        ]
+      },
+      {
+        "name": "a-max-plus-one-text",
+        "why": "One byte over max: a forced cut, then a one-byte remainder.",
+        "generator": {
+          "kind": "repeat",
+          "length": 4097,
+          "text": "a"
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "4e369b5618643c3abddd027b650bfa54810be3b418028a7c9d82299a59d008e8",
+        "cuts": [
+          4096,
+          4097
+        ],
+        "names": [
+          "c93eee2d0db02f10acc7460d9576e122dcf8cd53c4bf8dfcae1b3e74ebcfff5a",
+          "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+        ]
+      },
+      {
+        "name": "a-at-max-ends-on-a-lead-byte",
+        "why": "Input exactly at max whose last byte opens a four-byte character: the forced cut backs off it, and it is the remainder.",
+        "generator": {
+          "kind": "repeat",
+          "length": 4096,
+          "text": "🗿a"
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "d645ff62ebf1e5f8fc0bbb3dfc4f10ddc7ef6fe28bf86da3b0c856d293ef9114",
+        "cuts": [
+          4095,
+          4096
+        ],
+        "names": [
+          "8bd2bbf2ec3e7adbc9dea7e0a4e8522fd12a0e6f1ba3a5d4b75959642b24cc0e",
+          "fde502858306c235a3121e42326b53228b7ef4690eeed92a2b2eafe73c03a3ef"
+        ]
+      },
+      {
+        "name": "a-at-max-binary",
+        "why": "A raw chunk of exactly chunkMax, which protocol 1 allows: the marker byte goes on top.",
+        "generator": {
+          "kind": "repeat",
+          "length": 1048576,
+          "text": "z"
+        },
+        "sizes": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        },
+        "isUtf8": false,
+        "inputSha256": "3ac3338d67611f3edb444a8f730d5e3a6559d4640e7b1a2d5fa58bafbda3254a",
+        "cuts": [
+          1048576
+        ],
+        "names": [
+          "3ac3338d67611f3edb444a8f730d5e3a6559d4640e7b1a2d5fa58bafbda3254a"
+        ]
+      },
+      {
+        "name": "a-max-plus-one-binary",
+        "why": "One byte over chunkMax.",
+        "generator": {
+          "kind": "repeat",
+          "length": 1048577,
+          "text": "z"
+        },
+        "sizes": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        },
+        "isUtf8": false,
+        "inputSha256": "30e6be021fa7a25926b73623f17fa762cd9a30531b90a917a742b1a22e0d6777",
+        "cuts": [
+          1048576,
+          1048577
+        ],
+        "names": [
+          "3ac3338d67611f3edb444a8f730d5e3a6559d4640e7b1a2d5fa58bafbda3254a",
+          "594e519ae499312b29433b7dd8a97ff068defcba9755b6d5d00e84c524d67b06"
+        ]
+      },
+      {
+        "name": "a-forced-into-4-byte-chars-192",
+        "why": "Every cut forced, as under a 192-byte ceiling: the first lands one byte into a four-byte character, the rest two.",
+        "generator": {
+          "kind": "repeat",
+          "length": 1500,
+          "text": "a🗿"
+        },
+        "sizes": {
+          "min": 192,
+          "avg": 192,
+          "max": 192
+        },
+        "isUtf8": true,
+        "inputSha256": "fd49c33dbd3cfc151b1120d8d1a63c69cfe44ac11b4eaf63067a1ea65aaca4c3",
+        "cuts": [
+          191,
+          381,
+          571,
+          761,
+          951,
+          1141,
+          1331,
+          1500
+        ],
+        "names": [
+          "3d84fcc49374a415e9a32696aa431514310de3a34c09c8c86a76cb37a247f763",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "b551d8ec305d029d4ebafc6b730e9c150ef23c92ec884620a4c4abea057a8871"
+        ]
+      },
+      {
+        "name": "a-forced-into-4-byte-chars-193",
+        "why": "Every cut forced at 193: the first lands two bytes into a four-byte character, the rest three.",
+        "generator": {
+          "kind": "repeat",
+          "length": 1500,
+          "text": "a🗿"
+        },
+        "sizes": {
+          "min": 193,
+          "avg": 193,
+          "max": 193
+        },
+        "isUtf8": true,
+        "inputSha256": "fd49c33dbd3cfc151b1120d8d1a63c69cfe44ac11b4eaf63067a1ea65aaca4c3",
+        "cuts": [
+          191,
+          381,
+          571,
+          761,
+          951,
+          1141,
+          1331,
+          1500
+        ],
+        "names": [
+          "3d84fcc49374a415e9a32696aa431514310de3a34c09c8c86a76cb37a247f763",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "9351dde00af024f6f691f25e0127833ddce7a5ee81a9b0e38439286ea2b945f1",
+          "b551d8ec305d029d4ebafc6b730e9c150ef23c92ec884620a4c4abea057a8871"
+        ]
+      },
+      {
+        "name": "a-forced-into-mixed-text",
+        "why": "Every cut forced at 192 through multilingual text, landing in characters of every width.",
+        "generator": {
+          "kind": "mixed",
+          "length": 3000,
+          "seed": "corpus A forced",
+          "pieces": [
+            "the ",
+            "note ",
+            "vault ",
+            "sync ",
+            "chunk ",
+            "edit ",
+            "and ",
+            "of ",
+            "a ",
+            "is ",
+            "café ",
+            "café ",
+            "naïve ",
+            "über ",
+            "straße ",
+            "Ωμέγα ",
+            "жизнь ",
+            "łódź ",
+            "日本語",
+            "のノート",
+            "東京 ",
+            "中文 ",
+            "€",
+            "﻿",
+            "한국어 ",
+            "🗿",
+            "😀 ",
+            "𝄞",
+            "🧪",
+            "👩‍💻 ",
+            ". ",
+            ", ",
+            "# ",
+            "- [ ] ",
+            "**",
+            "`",
+            "\n",
+            "\r\n",
+            "\n\n",
+            "\t"
+          ]
+        },
+        "sizes": {
+          "min": 192,
+          "avg": 192,
+          "max": 192
+        },
+        "isUtf8": true,
+        "inputSha256": "8a1d1723cae259bde39982c42ab36fe3a769985abab51c339020334a5a025f56",
+        "cuts": [
+          192,
+          381,
+          570,
+          762,
+          953,
+          1145,
+          1337,
+          1529,
+          1721,
+          1911,
+          2103,
+          2293,
+          2485,
+          2677,
+          2869,
+          3000
+        ],
+        "names": [
+          "937230f72176cf967f407d0a7ed7ee1d748cd9dc656344c8c6361719d33e4277",
+          "11033e7de2165cee09e7dbd99d4879119935012d7b47f8f5ddbec7d85001fb05",
+          "6aaac59bc0fcf853a855d43f4f85580270669f3f400996881733145181c6f93f",
+          "105380561a8394f535785c32714d999b99873e7c37ef8f41e67ffe66776b93b5",
+          "c4451d1d7c447bf33d9e9d4c524adbbf2450a0b78a7a462ab3a7d0a46277253c",
+          "17a1a4525e60b55267ea584c62444b2d714692e8ba2f58320eea73b5cd189926",
+          "4c786362fae5c24a5841ef4cd1ce2e5942d56f09feaf51e00dfceaadc639bdb4",
+          "7e8f3dc42ddb1e23ae1114e3e858ec3084406a857f626666aa9fa5fde8b5cf62",
+          "6ef095016b7761363e3cf2fdec2dcc734e9368e6dae1b843e9909040b21ee404",
+          "87db74f8dea1135423050b032de8b71f591790d385ff870301ec19ba6d2a5e70",
+          "e403a8597b39258c4d6c86e88e1f29d5c0a86786b279657e1714b4daea57b62d",
+          "7148d2aedafa57f2df26ac70ff53aaddc0b51837204ea889a394c1aa42b27df0",
+          "50a2232f6058adbc0236c2bb4c9fed5557e33f0bb749efb68434896bfc1f0c12",
+          "92bf083b4d42881fe08341544b8c633a9931625e58d7b375f058bd7966cd5320",
+          "9235af6fa31e58bae0bc1bd6cdde1addbd76c88c72c67983695701cef24a2f32",
+          "6ce9e80804212e0963208b577c6fc58d398fe50540729b4474e2ee034c7cd6c9"
+        ]
+      },
+      {
+        "name": "a-remainder-ends-mid-character",
+        "why": "The input ends one byte into a three-byte character. The last chunk is the remainder and is never trimmed.",
+        "generator": {
+          "kind": "repeat",
+          "length": 1000,
+          "text": "日本語"
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "d69d4883366d012342f78f45d36755a5b1b52ba1119bcb90df33e1bf2da0a941",
+        "cuts": [
+          1000
+        ],
+        "names": [
+          "d69d4883366d012342f78f45d36755a5b1b52ba1119bcb90df33e1bf2da0a941"
+        ]
+      },
+      {
+        "name": "a-malformed-continuation-run",
+        "why": "Nothing but continuation bytes on the UTF-8 path: no lead byte in sight, so nothing is ever trimmed.",
+        "generator": {
+          "kind": "repeat",
+          "length": 400,
+          "hex": "80"
+        },
+        "sizes": {
+          "min": 8,
+          "avg": 16,
+          "max": 64
+        },
+        "isUtf8": true,
+        "inputSha256": "00a939016c88011cbf04ed7a3e3351a0ae0e93084846cee55537ad8f260d98d3",
+        "cuts": [
+          64,
+          128,
+          192,
+          256,
+          320,
+          384,
+          400
+        ],
+        "names": [
+          "1df1b7ce1fd8fcbe20cde61646875e54fe38d8945ea7911afd59e025cc520a68",
+          "1df1b7ce1fd8fcbe20cde61646875e54fe38d8945ea7911afd59e025cc520a68",
+          "1df1b7ce1fd8fcbe20cde61646875e54fe38d8945ea7911afd59e025cc520a68",
+          "1df1b7ce1fd8fcbe20cde61646875e54fe38d8945ea7911afd59e025cc520a68",
+          "1df1b7ce1fd8fcbe20cde61646875e54fe38d8945ea7911afd59e025cc520a68",
+          "1df1b7ce1fd8fcbe20cde61646875e54fe38d8945ea7911afd59e025cc520a68",
+          "4e972baaee2ad54f78153134ef6484cd1a8e383d21582a21a481d4d214161916"
+        ]
+      },
+      {
+        "name": "a-malformed-truncated-leads",
+        "why": "Four-byte leads promising more than follows, back to back.",
+        "generator": {
+          "kind": "repeat",
+          "length": 400,
+          "hex": "f080"
+        },
+        "sizes": {
+          "min": 8,
+          "avg": 16,
+          "max": 64
+        },
+        "isUtf8": true,
+        "inputSha256": "dfb8a16715503aa6eadc92c03f6567d7773ed96e97be38115e403c8b0bfd2980",
+        "cuts": [
+          62,
+          124,
+          186,
+          248,
+          310,
+          372,
+          400
+        ],
+        "names": [
+          "5147c2ce75ed5136775a375c32fd19ef60d92f49cc101c16f6972693d56f6ae9",
+          "5147c2ce75ed5136775a375c32fd19ef60d92f49cc101c16f6972693d56f6ae9",
+          "5147c2ce75ed5136775a375c32fd19ef60d92f49cc101c16f6972693d56f6ae9",
+          "5147c2ce75ed5136775a375c32fd19ef60d92f49cc101c16f6972693d56f6ae9",
+          "5147c2ce75ed5136775a375c32fd19ef60d92f49cc101c16f6972693d56f6ae9",
+          "5147c2ce75ed5136775a375c32fd19ef60d92f49cc101c16f6972693d56f6ae9",
+          "2514f86c5df9254a37c96f3c160517e8ae703316fcf4716afe125e530902b823"
+        ]
+      },
+      {
+        "name": "a-malformed-every-byte",
+        "why": "Every byte value in turn, which is every malformed shape there is.",
+        "generator": {
+          "kind": "repeat",
+          "length": 512,
+          "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+        },
+        "sizes": {
+          "min": 8,
+          "avg": 16,
+          "max": 64
+        },
+        "isUtf8": true,
+        "inputSha256": "110009dcee21620b166f3abfecb5eff7a873be729d1c2d53822e7acc5f34eb9b",
+        "cuts": [
+          34,
+          65,
+          98,
+          129,
+          162,
+          192,
+          225,
+          258,
+          289,
+          322,
+          353,
+          386,
+          417,
+          449,
+          481,
+          512
+        ],
+        "names": [
+          "14cdbf171499f86bd18b262243d669067efbdbb5431a48289cf02f2b5448b3d4",
+          "2b46b3d4eb15104f0ecf61553ecf2c026fc66c3204ec8e512f257c3e4c6da3c7",
+          "386869403881da41dda28ed6105a984617958a739345bd8c65138441e3a371df",
+          "2da784814e5ce6fe3eb0b0832bfb7ba39fe1b18b52b4c49f94f8f727e74d6ed7",
+          "86d7f03f3137b268e7d301c32a4560935405be8ff8624f60602174586bea8f70",
+          "b07536591a36c390a3254d89322a84c15032aa8121102124d332f4b13907917b",
+          "266d0e4fee77a0d13adf51325461e387f2dfa5dae66e8f88be2d7916c4569086",
+          "b6b1dbf06953f42ffca7560af756d64619cf20fd3799e412fe8b776fc6f9d693",
+          "c67a5195d5ac26b9c9ac780415802fead48ad86fdbe1f1451bc3a407a96f515f",
+          "c05c2a856d202c147142f3652dde4edb2ecccfe410c14ad807f06fe782fd11d9",
+          "1d0ca820eab223d4112792641668a00949d55e806eca717e8b79636dc4f44d46",
+          "068931485ff64ee9ca9f72a0182380cfefe4be2b4f94c1dbd53be0161ed1ff22",
+          "60a1e05c4bb774e3332c3164f8f9f1d9bae79f1bf27f59706cf7ce801477de61",
+          "cbc32f41bbb1b704b200067859a90d4c4376e0e34b4669d4120617e555e01e20",
+          "5e6ff0b53ca19cd63f82829f02a275d3911a14f4b1c58c684982dd3e2f53b0a8",
+          "63e584ee5bf63aca5024c6c10a1850481d102b3e18821e01904104d115b2ef65"
+        ]
+      },
+      {
+        "name": "a-malformed-lead-classes",
+        "why": "Overlong leads, 0xF5 read as a four-byte lead, 0xF8 and 0xFF read as single bytes, an encoded surrogate: classified as chunk.ts classifies them.",
+        "generator": {
+          "kind": "repeat",
+          "length": 300,
+          "hex": "c0afe080aff58080f888c1ffeda080"
+        },
+        "sizes": {
+          "min": 8,
+          "avg": 16,
+          "max": 64
+        },
+        "isUtf8": true,
+        "inputSha256": "20432aff9fc7e5043a5332b77996329505c1062b50affe4945001df30a58f700",
+        "cuts": [
+          20,
+          35,
+          50,
+          65,
+          80,
+          95,
+          110,
+          125,
+          140,
+          155,
+          170,
+          185,
+          200,
+          215,
+          230,
+          245,
+          260,
+          275,
+          290,
+          300
+        ],
+        "names": [
+          "f2615730bb855bfcbc0f927185c4b3a5277a093fca0e44026d29603c95e1c448",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "4bbbef6f64d209aa1d9b8855c332b3e2f2cc69931df8ac543ea0c453f61105cc",
+          "908e91c163bc87b783851bfaeb27367155a295996f5699956a6487efb7670696"
+        ]
+      }
+    ]
+  },
+  "corpusB": {
+    "producedBy": "Go: ChunkBytes in internal/notes/chunk.go",
+    "regenerate": "go test ./internal/notes -run TestChunkFixtures -update",
+    "checkedBy": "TypeScript: cd client && bunx vitest run src/core/chunk-fixtures.test.ts",
+    "entries": [
+      {
+        "name": "b-empty",
+        "why": "No bytes and no chunks.",
+        "generator": {
+          "kind": "mixed",
+          "length": 0,
+          "seed": "corpus B tiny",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "cuts": [],
+        "names": []
+      },
+      {
+        "name": "b-one-byte",
+        "why": "One byte of text, which may be the first byte of a longer character.",
+        "generator": {
+          "kind": "mixed",
+          "length": 1,
+          "seed": "corpus B tiny",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "2b4c342f5433ebe591a1da77e013d1b72475562d48578dca8b84bac6651c3cb9",
+        "cuts": [
+          1
+        ],
+        "names": [
+          "2b4c342f5433ebe591a1da77e013d1b72475562d48578dca8b84bac6651c3cb9"
+        ]
+      },
+      {
+        "name": "b-window-minus-one",
+        "why": "One byte short of a full window.",
+        "generator": {
+          "kind": "mixed",
+          "length": 47,
+          "seed": "corpus B tiny",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "311cdabde27f060d83aca3e7b21ded5fe123f49d68f68a11ce8690ed01c3be4d",
+        "cuts": [
+          47
+        ],
+        "names": [
+          "311cdabde27f060d83aca3e7b21ded5fe123f49d68f68a11ce8690ed01c3be4d"
+        ]
+      },
+      {
+        "name": "b-window",
+        "why": "Exactly one window.",
+        "generator": {
+          "kind": "mixed",
+          "length": 48,
+          "seed": "corpus B tiny",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "d48b64ac3cd1fbe11b05a06a70881514b7da65b7d33d60c16147db6bdb8671d5",
+        "cuts": [
+          48
+        ],
+        "names": [
+          "d48b64ac3cd1fbe11b05a06a70881514b7da65b7d33d60c16147db6bdb8671d5"
+        ]
+      },
+      {
+        "name": "b-window-plus-one",
+        "why": "One byte past a window, the first that rolls.",
+        "generator": {
+          "kind": "mixed",
+          "length": 49,
+          "seed": "corpus B tiny",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "fdd0b75303223efe84a3c71502f6e19bc255fe3cc1d3ac7906634445ca4bafc6",
+        "cuts": [
+          49
+        ],
+        "names": [
+          "fdd0b75303223efe84a3c71502f6e19bc255fe3cc1d3ac7906634445ca4bafc6"
+        ]
+      },
+      {
+        "name": "b-fill-phase-only",
+        "why": "A maximum under the window over incompressible bytes: every cut decided while the hash is filling.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 48,
+          "seed": "corpus B fill"
+        },
+        "sizes": {
+          "min": 1,
+          "avg": 4,
+          "max": 30
+        },
+        "isUtf8": false,
+        "inputSha256": "8492d355ebabf6331da6f0ec52538a2642fb992332538daebee2dc83b14e659e",
+        "cuts": [
+          5,
+          12,
+          13,
+          14,
+          18,
+          19,
+          23,
+          24,
+          26,
+          27,
+          29,
+          35,
+          42,
+          43,
+          47,
+          48
+        ],
+        "names": [
+          "b20c4c5d31a3588bcd4d4ff56d08376c60dcc057f703afad629e9e019ae759d5",
+          "bb969ed0ebb871716d5ecee33c7ad99264a395a9bb826d9186db5eff47751a7f",
+          "e9b0c031f0493d3fd6b0b668260c79e7efe734bfd4b4115f9d82bc3be609c294",
+          "d4f09e5c5af99a24c7e304ca7997d26cb00901697de08a49be0d46ab5839b614",
+          "4d4c635e04b525691bfab3b74ce8040150ba3b3a8d07dcf403f9418be1ea0395",
+          "1f18d650d205d71d934c3646ff5fac1c096ba52eba4cf758b865364f4167d3cd",
+          "f463eee86aa3b38fb9225515aa01d034a36fcba4829f5082e193a7c61f2fcba3",
+          "27abdeddfe8503496adeb623466caa47da5f63abd2bc6fa19f6cfcb73ecfed70",
+          "de14826eade876b2b36e04d2eb9aba9b59861c0449a385af5e28e743729bfcb8",
+          "fd9528b920d6d3956e9e16114523e1889c751e8c1e040182116d4c906b43f558",
+          "efb092d7a99c3357d46935ff360e2499f6e3471c4e1ebadea0ba24d55cab31e8",
+          "e6a3b18cda1d5033c23dc8b59bcc04f4bbf526505df73649a03db5a6a24b3f1e",
+          "be3df19651ce37b06b82e9ef37a4e05a03c72112f858bb16802db379938c1781",
+          "f3df1f9c358ae8eceb8fce7c00614288d113ad55315f4ebb909774a7daadfc84",
+          "95203ec80543ed30b23954c9a0b800ed644c88230c6639cd37ed480808d8f699",
+          "d52022534fa2dba3bb8a45809c425f42a5dd8786ef8d206fcff19c1fd66725b4"
+        ]
+      },
+      {
+        "name": "b-window-edge",
+        "why": "Boundaries tested at 47 and 48 bytes, before the roll, and from 49, after it, in text that is trimmed too.",
+        "generator": {
+          "kind": "mixed",
+          "length": 700,
+          "seed": "corpus B edge",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 47,
+          "avg": 2,
+          "max": 55
+        },
+        "isUtf8": true,
+        "inputSha256": "b28ca088357376ee093b6e4be67930bd60d242e029cdd4969300baf94b4f1216",
+        "cuts": [
+          46,
+          94,
+          141,
+          188,
+          234,
+          281,
+          330,
+          376,
+          422,
+          469,
+          515,
+          562,
+          607,
+          652,
+          700
+        ],
+        "names": [
+          "fb2dcf043198f53673ca4f387d0c6b61a1155bc64faf7c3929eea2c44c90a1f1",
+          "9c98a4deae2128b78dc1cd6d699bc4a02830c20a7fda47d2bdc12d8cb622915d",
+          "659afddacc0cfbf81273e78d64a3ba5c2f62de6cd85e4f9e006e95acad1f4422",
+          "eeb0bf5a4a8d35cd3b6a59d5019cfe424c67ae4f8b9be409161b1ed580e8febb",
+          "a4e6b035c36d23fd86c625aa8e01dfee3704c33c347b7733d013ce56d5740e4c",
+          "1d5deebb230920a6504258911d77c93e0882b27fda03c093d742fd2a291fc90d",
+          "10a3c3e72d658cf122e2a1a38a570ebeca4d6af907b4f86831039b07cd1870fb",
+          "999b0148fb221bd81c79eec70f5b3caf2ee784a4ab225cb25d07afb12a47e7ca",
+          "cd11661309f0ba4580912029c3d79a0b97f01f00ad77c3207d879ed8cd3e2aa3",
+          "6da249b9ac4fd37bfa72cf168512c36ee593b8ec0a587553402c1ff682a68e15",
+          "7e5c164ca67235ccf956d8a6c3b1b5419b1b8ad3b1e968616eec2b62ae36f453",
+          "45a67d3402a7a9bb5f6e0e35dd683676a8fac1c3a66f71e4f28c70f1c9be9464",
+          "ed0bdf33a956652f10e7bd144a7c3f9e22fe6cb865d11dc1b3875e5beaa82b91",
+          "d75470890783457e54b110c02ff2fec53264df6182a9c320f4c3cbad93daade0",
+          "b8741c1711ad441bab9c1fa0236ab1ed1a67bbce47de366703fa6dd18c52fe9d"
+        ]
+      },
+      {
+        "name": "b-rewind-retests-carried-bytes",
+        "why": "A minimum under four with dense multi-byte text: trimmed bytes are hashed and tested again as the next chunk opens.",
+        "generator": {
+          "kind": "mixed",
+          "length": 70,
+          "seed": "corpus B rewind",
+          "pieces": [
+            "𓂀",
+            "🀄",
+            "😀",
+            "中",
+            "ह",
+            "ж",
+            "é",
+            "b",
+            " "
+          ]
+        },
+        "sizes": {
+          "min": 1,
+          "avg": 2,
+          "max": 7
+        },
+        "isUtf8": true,
+        "inputSha256": "32adfeb29a2be655ba0219539908e5c9f77b7ae7fbfd65b8c95c26c5147d33ea",
+        "cuts": [
+          2,
+          4,
+          5,
+          6,
+          8,
+          10,
+          11,
+          12,
+          14,
+          16,
+          18,
+          20,
+          22,
+          24,
+          26,
+          28,
+          30,
+          34,
+          36,
+          38,
+          39,
+          40,
+          45,
+          48,
+          50,
+          54,
+          56,
+          58,
+          60,
+          62,
+          64,
+          67,
+          69,
+          70
+        ],
+        "names": [
+          "3c1c36c746e9b9106e77cfc2ede3374d38a883e23fbcd3b20023e326008c5434",
+          "2e394f6d9bb41a558c7da1d161c0c8da474e5331a9802c11ccfad078d8c17497",
+          "ae3f4619b0413d70d3004b9131c3752153074e45725be13b9a148978895e359e",
+          "9e8e8c37a53bac77a653d590b783b2508e8ed2fed040a278bf4f4703bbd5d82d",
+          "3c1c36c746e9b9106e77cfc2ede3374d38a883e23fbcd3b20023e326008c5434",
+          "3bbf035d1a3407419d8097157ea6ccbe2483ab8d1750947dd32992d912af6e2b",
+          "ae3f4619b0413d70d3004b9131c3752153074e45725be13b9a148978895e359e",
+          "9e8e8c37a53bac77a653d590b783b2508e8ed2fed040a278bf4f4703bbd5d82d",
+          "a1d119904a09c2a409bfe36881192326aa4aa5969b555421a3aa455fdee1df3b",
+          "7529d4e6ceb037815e2664a7277abb404b02f0bf9ddbf5c11658f52448221cba",
+          "a1d119904a09c2a409bfe36881192326aa4aa5969b555421a3aa455fdee1df3b",
+          "7529d4e6ceb037815e2664a7277abb404b02f0bf9ddbf5c11658f52448221cba",
+          "3c1c36c746e9b9106e77cfc2ede3374d38a883e23fbcd3b20023e326008c5434",
+          "3bbf035d1a3407419d8097157ea6ccbe2483ab8d1750947dd32992d912af6e2b",
+          "3c1c36c746e9b9106e77cfc2ede3374d38a883e23fbcd3b20023e326008c5434",
+          "2e394f6d9bb41a558c7da1d161c0c8da474e5331a9802c11ccfad078d8c17497",
+          "a1d119904a09c2a409bfe36881192326aa4aa5969b555421a3aa455fdee1df3b",
+          "23171a0d3ff59f90d091c0056595058019815fc973609bff46dd0c43440d27ab",
+          "3c1c36c746e9b9106e77cfc2ede3374d38a883e23fbcd3b20023e326008c5434",
+          "2e394f6d9bb41a558c7da1d161c0c8da474e5331a9802c11ccfad078d8c17497",
+          "ae3f4619b0413d70d3004b9131c3752153074e45725be13b9a148978895e359e",
+          "9e8e8c37a53bac77a653d590b783b2508e8ed2fed040a278bf4f4703bbd5d82d",
+          "234851fa70e4d34abb9114b22d46846eaad247eda0b9f6ceb6d6aaa687648b41",
+          "a567bdaa11367f260f0708391f4d10766b5962f565d9e432f17981a3584fe1e2",
+          "3c1c36c746e9b9106e77cfc2ede3374d38a883e23fbcd3b20023e326008c5434",
+          "4fe48fac11e30521885ccb4b0020c76b7ea8b856ed897f5a00546799d6b26b77",
+          "3c1c36c746e9b9106e77cfc2ede3374d38a883e23fbcd3b20023e326008c5434",
+          "2e394f6d9bb41a558c7da1d161c0c8da474e5331a9802c11ccfad078d8c17497",
+          "3c1c36c746e9b9106e77cfc2ede3374d38a883e23fbcd3b20023e326008c5434",
+          "2e394f6d9bb41a558c7da1d161c0c8da474e5331a9802c11ccfad078d8c17497",
+          "3c1c36c746e9b9106e77cfc2ede3374d38a883e23fbcd3b20023e326008c5434",
+          "9272054ddae614c8a7b06d8fc18a71f48eb01f5090900aa28f8c20f9437802df",
+          "a1d119904a09c2a409bfe36881192326aa4aa5969b555421a3aa455fdee1df3b",
+          "a5ab782c805e8bfbe34cb65742a0471cf5a53a97f0a1160ab6cccbb64c9131ce"
+        ]
+      },
+      {
+        "name": "b-text-floor-sizes",
+        "why": "Multilingual prose at the floor text sizes, which TextSizesFor gives a 9 KB note.",
+        "generator": {
+          "kind": "mixed",
+          "length": 9000,
+          "seed": "corpus B prose",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "fb264ecb23d986d1d7fb49298c8a2a6a1978c1ff209326ee7bec2dd78769d693",
+        "cuts": [
+          600,
+          1302,
+          5397,
+          7509,
+          9000
+        ],
+        "names": [
+          "c67b96ffbcb404e7fbfa66779f4a35874682c1e9325cbb1164ee3dd7808978c7",
+          "586ecf4b2b13f08137394947356c34aa9551fba7eed987806425d1697e21de7f",
+          "40fc85ccebfc931a44f530356dc0873bdaa1ac1f105f94e4ab05f827b96c169f",
+          "9b90f79eee012ffd8e7ee7b4570e50f19d7962b7d834ae4f337b6018f9b0fd4f",
+          "022dc512e2a2faae15cde6fb46ba4891af484ea3a0e0075c0a6efcc48dd0d105"
+        ]
+      },
+      {
+        "name": "b-text-rounds-down-at-50175",
+        "why": "Text sizes for 50175 bytes, where the average's quotient is just under 3.5: 1536.",
+        "generator": {
+          "kind": "mixed",
+          "length": 50175,
+          "seed": "corpus B rounding",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 768,
+          "avg": 1536,
+          "max": 6144
+        },
+        "isUtf8": true,
+        "inputSha256": "8fa7ad5f922d6f1ee0a677a337525bd8506e6a69a7c7b25a071b578e2c44ceca",
+        "cuts": [
+          875,
+          7019,
+          8001,
+          10784,
+          13587,
+          14361,
+          16525,
+          17317,
+          19574,
+          21570,
+          23888,
+          26200,
+          30042,
+          31296,
+          32455,
+          33959,
+          35776,
+          37656,
+          39424,
+          40492,
+          44309,
+          48768,
+          49946,
+          50175
+        ],
+        "names": [
+          "1f80a889fad56402f18b7e81671893afde4d5a5577c2c019c4cccfe29093cc88",
+          "4e208e0f9e3e460852b348ebc03f6ba7b6155098f86256dd265c1b71650b2dee",
+          "6d2691793b466e8d746ae94cc0ee872a75671d6e67ae013e5fa45fefd07b18d9",
+          "902ac4848acb7257e20f5ffb2d0abf0077b90e5f6f4528a8e5b07367834f83d0",
+          "3d191975486016c1a21c321365bdd891cd9371ca354c7f3556a990bf7e6a4a6e",
+          "6eaafdff02bf091e43c03d7b13f696c41f06e287a98fe1a381d9fc8704961a7f",
+          "21988e0ba273bc6c5bce127bd2a7c9f8cb493fc865ac22e1cd3a994055b927c2",
+          "21db29e737dce1b9d0189538dab49b12296b4253aab32fa0de1e33343b1ba3db",
+          "0d5adaf49bcc40aaf88e551f8995bd19c14c5096b942cbfd9301f97c6006ecec",
+          "8dd8912ee8851c973616c06002cafcb8896c64916620212fcb7c4f087b50bc83",
+          "2a6b3d3e3f394d8c8ee1ac6f90ebd9848b357340f0a4233793057ff75692615f",
+          "7585d1c3d0615fb2e9f6dfa82f692c8c6a0a323821aedede9c00bdf5afe7ee1a",
+          "dc2af55150ab66f237ead6574858c7c3bf9f0cc64b3ca3cf3d029b7f287513f9",
+          "6d40b8d6a21f7cddb3aee2bc3180f047607cc08a6ab32eb908f8ee08f3313af8",
+          "f3ecfcb872cf5afb072df5b5c25efce9b7127338a5d5276bb68557436b872547",
+          "826ae794dcd8b13606b0c872dc99e2653cab4f9c2a30eb0436d5b1dad1cf9eb2",
+          "72f23f2777d9d99950915ba6b45a12a0e2ffe17f2d2c39cf8ab10121cb3f4593",
+          "1d54609b0203afd22e93c4a4a91c046f950e9e545659479f86714427d1897bd5",
+          "0b891a6a268f8f8368f3dff3fac67fa43377dd3c4044772fbc2984291da5797f",
+          "25a430396ae088c2c6f5fa7cfec76f6b27655a2f76aeb783add06921ff811571",
+          "853c70bdfc50e48483a566f956b14c3bf5cdbd260c5e0ed5913284e02d1f3e2d",
+          "96baa2d87057e2c9d0e8973cd96b529dbc15cf2967c28858d2150dea24e04be2",
+          "52895f83af5f4cf853550bae1544fcf77c8b99f5f7270f5d8f6816ab2fb3b974",
+          "e17b512467bf7beffa2e86cfe9215e4e9af764ff0db4e4958729442217587f18"
+        ]
+      },
+      {
+        "name": "b-text-rounds-up-at-50176",
+        "why": "Text sizes for 50176 bytes, where the quotient is exactly 3.5 and rounds up: 2048.",
+        "generator": {
+          "kind": "mixed",
+          "length": 50176,
+          "seed": "corpus B rounding",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 1024,
+          "avg": 2048,
+          "max": 8192
+        },
+        "isUtf8": true,
+        "inputSha256": "5188447b0dbc97b7537d07c8edfb4f57d980d2ffe23d1594ca2489ac90d634f0",
+        "cuts": [
+          1508,
+          5245,
+          10376,
+          12735,
+          14683,
+          17317,
+          21570,
+          22679,
+          24187,
+          26034,
+          27147,
+          29191,
+          31682,
+          33271,
+          35776,
+          37697,
+          39424,
+          40492,
+          43952,
+          46721,
+          49946,
+          50176
+        ],
+        "names": [
+          "e76e0324f67ba89aa7941806c2bf72b9b18bea5d055cbf0e3ca6a73fc5e4532e",
+          "9591977ff8fc8345a93118d1e6315e76914608bfa8ee8c8594b2864e48151457",
+          "8c4a09f5d1da9b958bf8888ae0b090cf5c0a18dcf2544f0af846e31f71acaea1",
+          "2282b97dd85e13378f56fc7e9de4974cc8c4937980b5dd91488f6ad36b6f7953",
+          "5124620fbe1497be1b2e40d5040d912e96c06a2e28fa9b495670d5daf02e5935",
+          "2b3ed2d62a750125b2fe4bd807d531336a7924fad5df255b36c217a391fb6b4e",
+          "6cbfc7e95fde658cb9a22d1f9431e80d72c5dd17b1d8a276970be9ae7047f51b",
+          "8ebb664a920c8b52d2d697f68f8e536991719db5b153a3b6a7934de4436c81ff",
+          "07650bda2593440ed8d205227506b7157660e60ebd165f2eed12deb21e16c067",
+          "2c19085ad119b058ddcb2d8bdede2b4681b163d7a2a60e4277d6f2ffaa1f6955",
+          "c27bce8c8706964d0e7c81de6116c368b7d2b39e9a0edefea3d653269da42168",
+          "b5da77f551fd3aae04adc034fa13f2719235722de183fb535116143bf96f3ee9",
+          "f50fd00207eda78f014fdb09f32edcaa16e93a38ed810370b857f29558416a61",
+          "bb5bc1bcbe064081e0af33762d82f73fa4893449b59a35ce76ccd7cb9618f441",
+          "b2203e415d3f0cf940b2b37386ee2e1ea083c421dcd611243f6b47efff272519",
+          "f064f96b314b945385c14b99d5cae91989e93f3d66f766368c6b2af6fefa1dcc",
+          "a81999967d768d09cd04f9294c653b75706abe110ff5c3b89d23204e0a7a9a0e",
+          "25a430396ae088c2c6f5fa7cfec76f6b27655a2f76aeb783add06921ff811571",
+          "2255f6a698d7823b3b275fc7446d091f1ed8b1c36c2cfdc87603470a32fc7646",
+          "6395e9dd4e28f367815cf293eb3be943e9dcc92210bdcf0d2f4eff75ae3483ea",
+          "b2d28c7e84023143bf11dabe14acddba378040328b0ebad9e75282f314ffeecf",
+          "d71e7bd5bf3c6195fa9e0f8f58bd616741a05719886ddd35ec9983f485a9b34b"
+        ]
+      },
+      {
+        "name": "b-text-scaled-2560",
+        "why": "Text sizes scaled to a 100 KB note.",
+        "generator": {
+          "kind": "mixed",
+          "length": 100000,
+          "seed": "corpus B long note",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 1280,
+          "avg": 2560,
+          "max": 10240
+        },
+        "isUtf8": true,
+        "inputSha256": "4e1094c8cbbd05d61949483bfe94ae52595fe086f94a267db84fa009c8441dbc",
+        "cuts": [
+          1721,
+          9462,
+          12590,
+          14743,
+          17447,
+          22333,
+          23866,
+          30033,
+          34036,
+          39481,
+          49721,
+          51092,
+          54313,
+          57846,
+          62724,
+          64493,
+          70422,
+          72966,
+          79960,
+          81826,
+          84852,
+          91101,
+          95794,
+          98839,
+          100000
+        ],
+        "names": [
+          "20ae93ec244b50f85196c6165129a449dfde04ba829d7a5dec66162253d49757",
+          "c7dad1aeecbec27fe6149904b6b18ef3852d23173fb34bd970640c868f2c73bc",
+          "1585b83b0b471d2a953564698ee22a62721acbe165257ffeaec26ed80e4ad269",
+          "3c5fcd1c3199e3b6a6ccb0561b91790ddf8e9999db4cbb4183305c2b7bc9145a",
+          "aee064f9457408585f50add1e94c4325ab36cdad13ba946495bb7f0912505215",
+          "201abfa454c4e13204894cd6145ee1e35043da33cfb88b80d9fd13761c1e5189",
+          "82ef72d55c8705abc1c7e5f0f12ef2abfb4f678b403581411a607e3b4c54ebd7",
+          "f0df7d04b01f9a3f2cda22463fe2fae6fc8d9e2b45121ed779b7bdd3fb57e113",
+          "865fde40128d524b0d12b9addddca43af15c13ae47e2ef1a683f5f59950d4315",
+          "f9d928eb0ef45d8de21eb64c03577f0a511f73f814aac6a1ceef706ae27de57f",
+          "fdb57f200265f7197196562692fa817f50e7ded523923546bbd4e81901b8847b",
+          "67b82b252c7af97ddb63fbb2500c7ce90924494173e19fac1c5257aa00e48153",
+          "6cad18c2f47e80502c95e34b3c6f6b3daf33922d5bd5bf93bdc438dbbd363f30",
+          "ca78ed2187b38439826a1e6ae2629112aff32223544c51d9bc8b7a4a8d710f17",
+          "579243d2ef782f4365ceb39c3043c312122c54afe8eae24810edcf936f256c33",
+          "6d472bc5bfa53170717a7e8f781300fe7c6892ea0543b9fb82baa5109c9dc45c",
+          "c55878e8b36522dda85846d4a5e4a510bc878e6922e867c3f7db4bd1dde644fe",
+          "69a4db51d31a5d66a9013250a1043e9bbf06ab57d727042e72a6638da08fa677",
+          "717fa4ff098e21d3ba8327e0ab76ed6a2eb88f7426997068a1977be43dfaa12f",
+          "d4e1feddfe7ec7c025138fb2c31ddbda0c1f5325c10c3b7d6690836457c97d9a",
+          "cdd13fd801464f83ad4f154af2b026a484f7189d2a43f1ef0b750092625ce40d",
+          "5fa742a6b707f1074c5db82ebe10c40f3a1ba34e916f4f6fc73a78f14002ee6f",
+          "bfbebf4e5a35665bd82d04fdccf6a3298a4a276b4500e5dccc4e31a0081e6b26",
+          "2487ad71855f8ca24dbec9b663fa6158b705c5ce982957cc4cd3a478806c2aa4",
+          "21934c81fce37b0e0ebc8f6679de8547f457eb4da8ab658ec83e86daaaec4d47"
+        ]
+      },
+      {
+        "name": "b-one-long-line",
+        "why": "26 KB of multilingual text with no line break in it.",
+        "generator": {
+          "kind": "mixed",
+          "length": 26000,
+          "seed": "corpus B one line",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 768,
+          "avg": 1536,
+          "max": 6144
+        },
+        "isUtf8": true,
+        "inputSha256": "774e8bc25cae69850d602f83cd30eec7ac71e3434d46b27362bb15f62dce1ac2",
+        "cuts": [
+          1889,
+          2742,
+          4809,
+          5841,
+          11985,
+          14227,
+          18256,
+          21739,
+          23704,
+          24927,
+          26000
+        ],
+        "names": [
+          "91bfb19e68da93e28b07625fb46e64e9bf3424ece69f1a474d1b99d06872b62f",
+          "f5aa4906a452084f8b413e7939e56958508bf130fddf6fa23600175a907fddd7",
+          "2b241791aa425e9f2099072cc1305be37c36bbb256b51b151209094f3563ecdb",
+          "6c6a6bcb7e8d62b5bf54092113d4161cfca5b2c550c1e636da603d056f92c4cc",
+          "b825d72aae5c129f7ea3f0666c9eae9e49b12deec98ef3e7b3a0bee20693f9f7",
+          "28d970a0dad0be5099562089334afec23ed28fdb5fc8237f10bb7081c6b78f59",
+          "3a315454391fe0e289f584153e3aad33721e4dfb30a093736caa29e2b4032f95",
+          "b3263263b3112a507473c8100a4009890544fc33024b0ae1fc8df0c4df2c846d",
+          "36c35ecc302a60f7b15a621f86e464d811c5e5066b6992469537b244429464a1",
+          "60e737e0938528df59a8dc8ea1eedaf6e8ca5637a10bf830c962ae57952f282d",
+          "61be730909aca2ef3c65f35a584e2ab00d91e920f2c161d02f62b1006782efab"
+        ]
+      },
+      {
+        "name": "b-text-on-the-byte-path",
+        "why": "Multilingual text with isUtf8 false: a cut may split a character, in the same place on both sides.",
+        "generator": {
+          "kind": "mixed",
+          "length": 10000,
+          "seed": "corpus B bytes",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": false,
+        "inputSha256": "b23935ea4f27c9497d96ab5a4c3e683799856234064250697297cab4fddf8e39",
+        "cuts": [
+          1042,
+          2335,
+          2888,
+          4114,
+          4908,
+          5700,
+          6228,
+          10000
+        ],
+        "names": [
+          "8a947c3b2b351b43059070a7c5ac82c13a420b046333d669b91ea496e9170a4f",
+          "0ee14d65ee4ef7482e63539477b7c68231d26fda14497e9af97095ce200bbdac",
+          "690dcc1d4a55047781ff3269f8fbc48ffeb7cc5870bef8ffd139824f64dcc3eb",
+          "315327055db4a165962cb78c255f67bd74263eaa4b333016f393420f00c4f166",
+          "9e76b9bc6291dc60cbcb6dc799151fed864a3ba9611a24f334df2c6e4ee5d4d9",
+          "e808c5d163d8b2dcc435abd0b6bc66966bdf924007da8df8f505c41476b731a8",
+          "7fa216a03a149f50e22bb255e800fb2eefb827bc19490df632893290fbeaa07f",
+          "94a1959e495771d051961e90f9e84ccd13c3d8d381b8f6edfd80613f606c74ef"
+        ]
+      },
+      {
+        "name": "b-binary",
+        "why": "Incompressible bytes at binary sizes.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 2621440,
+          "seed": "corpus B attachment"
+        },
+        "sizes": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        },
+        "isUtf8": false,
+        "inputSha256": "698ae90d6b12dd5197f5986937eaf6f5b7e5d0cf4cdc00c0e9a4b90dcf7d964a",
+        "cuts": [
+          231909,
+          545424,
+          1594000,
+          2139584,
+          2328346,
+          2506011,
+          2621440
+        ],
+        "names": [
+          "162bd09afaf820954a992f6283786d628bda7dde73cff8d62fc8edb4276ac76b",
+          "55c4fa258859988bb5c2509ae3d7a29648017b7288e9cda87788415840616d25",
+          "a63d516d1ef002a98a2f626e9e6d13fb462eb98974b4aed7fb3d89a34a42c309",
+          "a83c3a93177a8e819af9aaf3d08c6b70635f0d35e9b866d985328fc09306d638",
+          "8ef740274010ceea8353be0a5369b6218621dae3c9ee67f0dc24f4136eabcd3e",
+          "11e1af62ad0ab79662636f4d7ecf40dae865e84a03e73514ea92bc09822631d1",
+          "9e520dd61f29ffda5960f989f0c270919347d6b5bd389aa1249df083a866f2af"
+        ]
+      },
+      {
+        "name": "b-binary-on-the-utf8-path",
+        "why": "Arbitrary bytes at binary sizes with isUtf8 true: malformed input decides every trim.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 1572867,
+          "seed": "corpus B odd note"
+        },
+        "sizes": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        },
+        "isUtf8": true,
+        "inputSha256": "4190de999a9ccd8a327483f5b226bdca5c40dbb01b3692219ebb5cb78d304f68",
+        "cuts": [
+          393297,
+          1087414,
+          1503647,
+          1572867
+        ],
+        "names": [
+          "a01b088b3e91ed599be18b63e78cc4b3eff084d2141b1eab4d629abadb112e09",
+          "c93f7a54643bb0965df43b86cea3e3a1ef755c9571882bc4f1e2364a74db4e89",
+          "8c86f3e46414dc83f9e47d0f40cc88c719680f3428eb88e1648f817c87b46dc7",
+          "0d9cf300559a28e524b73d8eb51b36ae24cf0a68c436a414900b4c79a1302dbb"
+        ]
+      },
+      {
+        "name": "b-text-over-4-mib",
+        "why": "A .md over TEXT_AS_BINARY_ABOVE holding arbitrary bytes: binary sizes, UTF-8 rule kept, as the engine chunks it.",
+        "generator": {
+          "kind": "sha256-ctr",
+          "length": 4194305,
+          "seed": "corpus B huge note"
+        },
+        "sizes": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        },
+        "isUtf8": true,
+        "inputSha256": "30c158a05025c0032c8191a968892c07164159c7b0540b6bc0b5cb700dc9cfbd",
+        "cuts": [
+          472666,
+          1521241,
+          1997103,
+          2201977,
+          2564825,
+          2772522,
+          2983089,
+          3145647,
+          3605331,
+          4028624,
+          4194305
+        ],
+        "names": [
+          "20b59afdf19521c9eeff284ded0bf9d05122d7334069d98338a9990cde8df2ec",
+          "60343a41b5296c7ea27ea38e4319ae2c7491ad99afab9cd24f86e0f34bf8fbe1",
+          "01e891afc4f7cacf854ed35082d550b5aae50adf78be5597868c14a80d3f4e98",
+          "1416c54c70304697a242f1940295691cf7ba197f98e6a6f30dcceda9fc1f8669",
+          "f1cc0601f3d05af7946317aa5fabbcd9e8eb15c4da63fc68cb8497cb970aaf19",
+          "d264332ae454f233f763b292c3fa1742f471417903db660a2683472733adf98e",
+          "d9c85602420d7f033244a5bdfffa61b03bc6fcb6f446e3ea1cf14d413defc04e",
+          "4a80b96fee41430a250509d64bff7bd0f559e2efceb5d1da239e1444cb50e364",
+          "1cefad20dd04ca1579f839b3f337720eb8b36746d41ebdb81b4922ae71e56895",
+          "58f36181b6999b803d77b77f696d93d6e4766ac786f85631886420cb917cbded",
+          "d20a0bfdc6360269082d73c807abeea58fafa2b34a00a88f928929becd41e003"
+        ]
+      },
+      {
+        "name": "b-at-max-scaled-text",
+        "why": "Input exactly at a scaled maximum of 6144, with no boundary in it: one forced cut at the end.",
+        "generator": {
+          "kind": "repeat",
+          "length": 6144,
+          "text": "x"
+        },
+        "sizes": {
+          "min": 768,
+          "avg": 1536,
+          "max": 6144
+        },
+        "isUtf8": true,
+        "inputSha256": "99965159481c9d56c4ce56534a984f0f97607d44197fbc1c7d9c4f499566999b",
+        "cuts": [
+          6144
+        ],
+        "names": [
+          "99965159481c9d56c4ce56534a984f0f97607d44197fbc1c7d9c4f499566999b"
+        ]
+      },
+      {
+        "name": "b-max-plus-one-scaled-text",
+        "why": "One byte over that maximum.",
+        "generator": {
+          "kind": "repeat",
+          "length": 6145,
+          "text": "x"
+        },
+        "sizes": {
+          "min": 768,
+          "avg": 1536,
+          "max": 6144
+        },
+        "isUtf8": true,
+        "inputSha256": "c8aec9c5cbf859d404c79c34f8000da05947114956ef788551c8cbe703c2a3b2",
+        "cuts": [
+          6144,
+          6145
+        ],
+        "names": [
+          "99965159481c9d56c4ce56534a984f0f97607d44197fbc1c7d9c4f499566999b",
+          "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
+        ]
+      },
+      {
+        "name": "b-at-max-ends-in-a-character",
+        "why": "Input exactly at max ending three bytes into a four-byte character: the forced cut backs off, and the three bytes are the remainder.",
+        "generator": {
+          "kind": "repeat",
+          "length": 6144,
+          "text": "b😀"
+        },
+        "sizes": {
+          "min": 768,
+          "avg": 1536,
+          "max": 6144
+        },
+        "isUtf8": true,
+        "inputSha256": "f775949d9830d0b96561bab8c17b262e6be5a8ea6d4405e52312d737496b8580",
+        "cuts": [
+          6141,
+          6144
+        ],
+        "names": [
+          "6cafa71331617ab1f541e268d67812d65e1544983cda6e4adefea275199696b6",
+          "b38af6aef10b9620ceb4fe55a4aaf8def5e4d9bd99bd1ebff06a0d44220546a2"
+        ]
+      },
+      {
+        "name": "b-at-max-binary",
+        "why": "A raw chunk of exactly chunkMax: zero bytes, whose hash is zero, never end a chunk early.",
+        "generator": {
+          "kind": "repeat",
+          "length": 1048576,
+          "hex": "00"
+        },
+        "sizes": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        },
+        "isUtf8": false,
+        "inputSha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+        "cuts": [
+          1048576
+        ],
+        "names": [
+          "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58"
+        ]
+      },
+      {
+        "name": "b-max-plus-one-binary",
+        "why": "One byte over chunkMax.",
+        "generator": {
+          "kind": "repeat",
+          "length": 1048577,
+          "hex": "00"
+        },
+        "sizes": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        },
+        "isUtf8": false,
+        "inputSha256": "2cb74edba754a81d121c9db6833704a8e7d417e5b13d1a19f4a52f007d644264",
+        "cuts": [
+          1048576,
+          1048577
+        ],
+        "names": [
+          "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+          "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+        ]
+      },
+      {
+        "name": "b-forced-one-byte-into-4-byte-chars",
+        "why": "Every cut forced at 193 through four-byte characters: each lands one byte into one.",
+        "generator": {
+          "kind": "repeat",
+          "length": 1000,
+          "text": "𓂀"
+        },
+        "sizes": {
+          "min": 193,
+          "avg": 193,
+          "max": 193
+        },
+        "isUtf8": true,
+        "inputSha256": "5363a7a28405ad540cccddcf6784bb5e3faa14168461cc9743dbc87b618b4fd2",
+        "cuts": [
+          192,
+          384,
+          576,
+          768,
+          960,
+          1000
+        ],
+        "names": [
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "5ac0fb1127bb17b08325b65e193005d9267d4023207e95376099de77fd74f73f"
+        ]
+      },
+      {
+        "name": "b-forced-two-bytes-into-4-byte-chars",
+        "why": "Forced at 194: each lands two bytes into a four-byte character.",
+        "generator": {
+          "kind": "repeat",
+          "length": 1000,
+          "text": "𓂀"
+        },
+        "sizes": {
+          "min": 194,
+          "avg": 194,
+          "max": 194
+        },
+        "isUtf8": true,
+        "inputSha256": "5363a7a28405ad540cccddcf6784bb5e3faa14168461cc9743dbc87b618b4fd2",
+        "cuts": [
+          192,
+          384,
+          576,
+          768,
+          960,
+          1000
+        ],
+        "names": [
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "5ac0fb1127bb17b08325b65e193005d9267d4023207e95376099de77fd74f73f"
+        ]
+      },
+      {
+        "name": "b-forced-three-bytes-into-4-byte-chars",
+        "why": "Forced at 195: each lands three bytes into a four-byte character.",
+        "generator": {
+          "kind": "repeat",
+          "length": 1000,
+          "text": "𓂀"
+        },
+        "sizes": {
+          "min": 195,
+          "avg": 195,
+          "max": 195
+        },
+        "isUtf8": true,
+        "inputSha256": "5363a7a28405ad540cccddcf6784bb5e3faa14168461cc9743dbc87b618b4fd2",
+        "cuts": [
+          192,
+          384,
+          576,
+          768,
+          960,
+          1000
+        ],
+        "names": [
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "3d86ca0c741d4386d2d3857fb886c011dd8f3e77a34aa960662b54aa3efc910a",
+          "5ac0fb1127bb17b08325b65e193005d9267d4023207e95376099de77fd74f73f"
+        ]
+      },
+      {
+        "name": "b-forced-into-mixed-text",
+        "why": "Every cut forced at 192 through multilingual text, landing in characters of every width.",
+        "generator": {
+          "kind": "mixed",
+          "length": 3000,
+          "seed": "corpus B forced",
+          "pieces": [
+            "lorem ",
+            "ipsum ",
+            "dolor ",
+            "sit ",
+            "amet ",
+            "[[a link]] ",
+            "#tag ",
+            "> ",
+            "<br>",
+            "&amp; ",
+            "|",
+            "Ελληνικά ",
+            "русский ",
+            "עברית ",
+            "العربية ",
+            "Türkçe ",
+            "tiếng Việt ",
+            "ﬁ",
+            "¶",
+            "中文字符",
+            "한국어",
+            "हिन्दी ",
+            "ไทย ",
+            "…",
+            " ",
+            "😀",
+            "🏳️‍🌈",
+            "𝕏",
+            "🀄",
+            "🇯🇵",
+            "𓂀 ",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\t",
+            "  "
+          ]
+        },
+        "sizes": {
+          "min": 192,
+          "avg": 192,
+          "max": 192
+        },
+        "isUtf8": true,
+        "inputSha256": "bb1e9ca37e7ae4112ab5a894784f67825005920109cdb6ef34eb22a77853db6d",
+        "cuts": [
+          192,
+          384,
+          575,
+          767,
+          958,
+          1150,
+          1342,
+          1534,
+          1725,
+          1917,
+          2108,
+          2298,
+          2489,
+          2681,
+          2873,
+          3000
+        ],
+        "names": [
+          "f12798f16faee78dd67215d06e95c1a0769bd965cc7e1caba18c7a21aa0866d3",
+          "d5c9acdbee1f9eb5567b3272ff87e8ec22cda4793e259c772508b7f3871310ca",
+          "64c9c532542be0b8c9a8833b477c09933a487ab08d89f09985c8a557e03295b9",
+          "08ceb73d59e84ea24a4d25b42434473abb20f352303a37993d17810c002c3132",
+          "248c22f70dbb389af2b506c58ddec7c60373ea78b073241e12576b4bc1ff3a92",
+          "7b986ae68b4f69bff2f5099a4b8a2b1541e3290b4076d2354c5cfc5f433e1922",
+          "aa6d808c19389cace48f011de4e3b0aed7d38a48c1c3b360c07d8be6b0578784",
+          "08e238d7b7d16991274123b298c589889c00a0ae56e0f4fe772582a82efeac08",
+          "0669d0fdd1e510c7e4266abbc369e9716686596844e98d14453c0d7d33c0153b",
+          "26d33760fd6ccda7d603c952e9bf31a6263ca8b3f13a4f3e985583719b45887e",
+          "36b2f41a09e82556334d331bd8212835a38baf35e03f0ad6fe07b04c25c4e2e3",
+          "176e3c9db9e5db6fcb24df0c09636131a2995d753ce0c9ebd87d957bae0e0aca",
+          "d37db2cc29541983d217f16bffb5f3569f5e7ae03151d16b62f9aae7221aaac5",
+          "3557ddf31df5ad3b4567779af6f3fab8686181d0842a9f373c19ee65f898a733",
+          "c2778337615abcc1625efbe61d4a51248b7a956e04ee589810838056f70887a3",
+          "52cbb413cf6e56f6d3e3f80205a39cab6f8ffe9022c0ac002c3eafc65978b867"
+        ]
+      },
+      {
+        "name": "b-remainder-ends-mid-character",
+        "why": "The input ends two bytes into a four-byte character. The last chunk is the remainder and is never trimmed.",
+        "generator": {
+          "kind": "repeat",
+          "length": 1002,
+          "text": "𓂀"
+        },
+        "sizes": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        },
+        "isUtf8": true,
+        "inputSha256": "61501def62914c6126b6d5be398bbda77c34d3cfba9545cc5bc9b605b4af666b",
+        "cuts": [
+          1002
+        ],
+        "names": [
+          "61501def62914c6126b6d5be398bbda77c34d3cfba9545cc5bc9b605b4af666b"
+        ]
+      },
+      {
+        "name": "b-malformed-surrogates",
+        "why": "Encoded surrogates on the UTF-8 path: three-byte shapes to the trim.",
+        "generator": {
+          "kind": "repeat",
+          "length": 150,
+          "hex": "eda080edbfbf"
+        },
+        "sizes": {
+          "min": 5,
+          "avg": 9,
+          "max": 40
+        },
+        "isUtf8": true,
+        "inputSha256": "720afebd67ce3b39aaf49d5300159f0b636bf7daa1a9b1d4cc41f0e227880556",
+        "cuts": [
+          6,
+          12,
+          18,
+          24,
+          30,
+          36,
+          42,
+          48,
+          54,
+          60,
+          66,
+          72,
+          78,
+          84,
+          90,
+          96,
+          102,
+          108,
+          114,
+          120,
+          126,
+          132,
+          138,
+          144,
+          150
+        ],
+        "names": [
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521",
+          "d4163c079e3ba446ba35a89ad321f2a294340eff07a1e032b3da37ffbba35521"
+        ]
+      },
+      {
+        "name": "b-malformed-long-leads",
+        "why": "The five- and six-byte leads of old UTF-8, 0xF8 and 0xFC, which the trim reads as single bytes.",
+        "generator": {
+          "kind": "repeat",
+          "length": 220,
+          "hex": "f888808080fc8480808080"
+        },
+        "sizes": {
+          "min": 5,
+          "avg": 9,
+          "max": 40
+        },
+        "isUtf8": true,
+        "inputSha256": "c4018b204a38e4fea0cdd559439030aa04b12a0e94a3eb36025fd8921a57fa97",
+        "cuts": [
+          10,
+          28,
+          46,
+          62,
+          67,
+          72,
+          90,
+          106,
+          111,
+          116,
+          134,
+          150,
+          155,
+          160,
+          178,
+          194,
+          199,
+          204,
+          220
+        ],
+        "names": [
+          "7b0f6dcda3f0cf5467bcff81b28375ff1820604ee42a00151ce165a84ae0780f",
+          "02576df44d8392ba172f684084d085f31743a5dbdddedf73981922f79cf505fa",
+          "fb16397b8005827c75f1d66ac91a7c3f1ca1a01fba4bc6f50a7edc9d766d9058",
+          "9565b558c38ec7275c9f1825225338043f7cb2e708fba90b6868019f1c407065",
+          "94351cbd7c59bbdb0db9843b8469f227696680a2a0e96f618937f5e09eebb547",
+          "e82e9bbbf04ed95789bc92231f43a45da250a6a913808ff08ddb1e4fb1d67da3",
+          "fb16397b8005827c75f1d66ac91a7c3f1ca1a01fba4bc6f50a7edc9d766d9058",
+          "9565b558c38ec7275c9f1825225338043f7cb2e708fba90b6868019f1c407065",
+          "94351cbd7c59bbdb0db9843b8469f227696680a2a0e96f618937f5e09eebb547",
+          "e82e9bbbf04ed95789bc92231f43a45da250a6a913808ff08ddb1e4fb1d67da3",
+          "fb16397b8005827c75f1d66ac91a7c3f1ca1a01fba4bc6f50a7edc9d766d9058",
+          "9565b558c38ec7275c9f1825225338043f7cb2e708fba90b6868019f1c407065",
+          "94351cbd7c59bbdb0db9843b8469f227696680a2a0e96f618937f5e09eebb547",
+          "e82e9bbbf04ed95789bc92231f43a45da250a6a913808ff08ddb1e4fb1d67da3",
+          "fb16397b8005827c75f1d66ac91a7c3f1ca1a01fba4bc6f50a7edc9d766d9058",
+          "9565b558c38ec7275c9f1825225338043f7cb2e708fba90b6868019f1c407065",
+          "94351cbd7c59bbdb0db9843b8469f227696680a2a0e96f618937f5e09eebb547",
+          "e82e9bbbf04ed95789bc92231f43a45da250a6a913808ff08ddb1e4fb1d67da3",
+          "269711efced12c94747a6bf145c465bdc4da955fe39bd30f8e31b166df82b4ff"
+        ]
+      },
+      {
+        "name": "b-malformed-truncations",
+        "why": "Two-, three- and four-byte characters each missing their last byte, between ASCII.",
+        "generator": {
+          "kind": "repeat",
+          "length": 210,
+          "hex": "c3e282f09f9841"
+        },
+        "sizes": {
+          "min": 5,
+          "avg": 9,
+          "max": 40
+        },
+        "isUtf8": true,
+        "inputSha256": "49e401ac7b806375da90afc4c22e1ec784c0ab1d02d1bb158800de765b153607",
+        "cuts": [
+          7,
+          14,
+          21,
+          28,
+          35,
+          42,
+          49,
+          56,
+          63,
+          70,
+          77,
+          84,
+          91,
+          98,
+          105,
+          112,
+          119,
+          126,
+          133,
+          140,
+          147,
+          154,
+          161,
+          168,
+          175,
+          182,
+          189,
+          196,
+          203,
+          210
+        ],
+        "names": [
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af",
+          "8198f03fd1f216e877e653ae0f275148a87cc19e193d6b6bb52435a1080133af"
+        ]
+      }
+    ]
+  },
+  "sizesForV1": {
+    "note": [
+      "Chunk sizes under the protocol 1 rule, which Go's SizesFor implements.",
+      "",
+      "base is textSizesFor(size) for text below TEXT_AS_BINARY_ABOVE (4 MiB), otherwise BINARY_SIZES.",
+      "max = min(base.max, serverChunkMax), with nothing reserved below the ceiling: chunkMax bounds",
+      "raw bytes, and a body frame's marker byte sits on top of it (plan/protocol.md, Chunk bodies).",
+      "max is then raised to at least WINDOW * 4 = 192, and min and avg are clamped to max. A",
+      "serverChunkMax of 0 or less means the server has not said, and stands for BINARY_SIZES.max.",
+      "",
+      "TypeScript's sizesFor still subtracts SEAL_OVERHEAD, because the client stays end-to-end",
+      "encrypted until the M2 strip and changing its ceiling before then would break it. Until then",
+      "its test checks these cases against sizesFor with the overhead handed back; PLAN M2 task 2",
+      "removes the overhead and checks sizesFor against them directly.",
+      "",
+      "The expected values were computed from this statement of the rule, not from either",
+      "implementation."
+    ],
+    "cases": [
+      {
+        "name": "a small text note",
+        "size": 1000,
+        "isText": true,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        }
+      },
+      {
+        "name": "an empty text file takes the floor sizes",
+        "size": 0,
+        "isText": true,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        }
+      },
+      {
+        "name": "a one-byte text file takes the floor sizes",
+        "size": 1,
+        "isText": true,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        }
+      },
+      {
+        "name": "text at 64 KiB scales to a 2 KiB average",
+        "size": 65536,
+        "isText": true,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 1024,
+          "avg": 2048,
+          "max": 8192
+        }
+      },
+      {
+        "name": "text at 25600 bytes: the quotient is exactly 2.5 and rounds up",
+        "size": 25600,
+        "isText": true,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 768,
+          "avg": 1536,
+          "max": 6144
+        }
+      },
+      {
+        "name": "text at 50175 bytes: the quotient is just under 3.5 and rounds down",
+        "size": 50175,
+        "isText": true,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 768,
+          "avg": 1536,
+          "max": 6144
+        }
+      },
+      {
+        "name": "text at 50176 bytes: the quotient is exactly 3.5 and rounds up",
+        "size": 50176,
+        "isText": true,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 1024,
+          "avg": 2048,
+          "max": 8192
+        }
+      },
+      {
+        "name": "text at 1 MiB scales to an 8 KiB average",
+        "size": 1048576,
+        "isText": true,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 4096,
+          "avg": 8192,
+          "max": 32768
+        }
+      },
+      {
+        "name": "text one byte under the binary threshold is still text",
+        "size": 4194303,
+        "isText": true,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 8192,
+          "avg": 16384,
+          "max": 65536
+        }
+      },
+      {
+        "name": "text at exactly the threshold is chunked as binary",
+        "size": 4194304,
+        "isText": true,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        }
+      },
+      {
+        "name": "a 1 GiB text file is chunked as binary",
+        "size": 1073741824,
+        "isText": true,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        }
+      },
+      {
+        "name": "binary at the default ceiling keeps the whole MiB, with nothing reserved",
+        "size": 10485760,
+        "isText": false,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        }
+      },
+      {
+        "name": "a small binary file still takes binary sizes",
+        "size": 1000,
+        "isText": false,
+        "serverChunkMax": 1048576,
+        "expected": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        }
+      },
+      {
+        "name": "a ceiling of 0 means the server has not said",
+        "size": 10485760,
+        "isText": false,
+        "serverChunkMax": 0,
+        "expected": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        }
+      },
+      {
+        "name": "a negative ceiling means the server has not said",
+        "size": 1000,
+        "isText": true,
+        "serverChunkMax": -1,
+        "expected": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        }
+      },
+      {
+        "name": "a ceiling larger than the table maximum is not reached for",
+        "size": 10485760,
+        "isText": false,
+        "serverChunkMax": 67108864,
+        "expected": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 1048576
+        }
+      },
+      {
+        "name": "a ceiling below the binary maximum becomes the maximum",
+        "size": 10485760,
+        "isText": false,
+        "serverChunkMax": 262144,
+        "expected": {
+          "min": 131072,
+          "avg": 262144,
+          "max": 262144
+        }
+      },
+      {
+        "name": "a ceiling below the binary average clamps the average",
+        "size": 10485760,
+        "isText": false,
+        "serverChunkMax": 200000,
+        "expected": {
+          "min": 131072,
+          "avg": 200000,
+          "max": 200000
+        }
+      },
+      {
+        "name": "a ceiling below the binary minimum clamps all three",
+        "size": 10485760,
+        "isText": false,
+        "serverChunkMax": 65536,
+        "expected": {
+          "min": 65536,
+          "avg": 65536,
+          "max": 65536
+        }
+      },
+      {
+        "name": "a text ceiling exactly at the table maximum is not reduced",
+        "size": 1000,
+        "isText": true,
+        "serverChunkMax": 4096,
+        "expected": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4096
+        }
+      },
+      {
+        "name": "a text ceiling one under the table maximum",
+        "size": 1000,
+        "isText": true,
+        "serverChunkMax": 4095,
+        "expected": {
+          "min": 512,
+          "avg": 1024,
+          "max": 4095
+        }
+      },
+      {
+        "name": "scaled text under a smaller ceiling keeps its minimum and average",
+        "size": 3145728,
+        "isText": true,
+        "serverChunkMax": 32768,
+        "expected": {
+          "min": 7168,
+          "avg": 14336,
+          "max": 32768
+        }
+      },
+      {
+        "name": "a ceiling under a window's worth is raised to 192",
+        "size": 10485760,
+        "isText": false,
+        "serverChunkMax": 8,
+        "expected": {
+          "min": 192,
+          "avg": 192,
+          "max": 192
+        }
+      },
+      {
+        "name": "a ceiling of 191 is raised to 192",
+        "size": 1000,
+        "isText": true,
+        "serverChunkMax": 191,
+        "expected": {
+          "min": 192,
+          "avg": 192,
+          "max": 192
+        }
+      },
+      {
+        "name": "a ceiling of exactly 192 stays",
+        "size": 1000,
+        "isText": true,
+        "serverChunkMax": 192,
+        "expected": {
+          "min": 192,
+          "avg": 192,
+          "max": 192
+        }
+      },
+      {
+        "name": "a ceiling of 193 is honoured",
+        "size": 10485760,
+        "isText": false,
+        "serverChunkMax": 193,
+        "expected": {
+          "min": 193,
+          "avg": 193,
+          "max": 193
+        }
+      }
+    ]
+  },
+  "isTextPath": {
+    "note": [
+      "Whether a path is chunked as text: looksLikeText in chunk.ts, IsTextPath in internal/notes.",
+      "The extension is everything after the last dot anywhere in the path, lowercased, and looked",
+      "up in textExtensions. Go lowercases ASCII only, which agrees with toLowerCase on every path",
+      "these extensions can match. strings.ToLower would not: it maps U+0130 to a plain i, which the",
+      "refs.BİB case catches. textExtensions is the whole list, and both sides compare their own",
+      "list against it, so an extension added on one side only fails a test."
+    ],
+    "textExtensions": [
+      "md",
+      "txt",
+      "canvas",
+      "json",
+      "csv",
+      "yml",
+      "yaml",
+      "base",
+      "xml",
+      "html",
+      "css",
+      "js",
+      "ts",
+      "svg",
+      "bib",
+      "tex"
+    ],
+    "cases": [
+      {
+        "path": "note.md",
+        "isText": true
+      },
+      {
+        "path": "Notes/A Note.MD",
+        "isText": true
+      },
+      {
+        "path": "NOTE.TXT",
+        "isText": true
+      },
+      {
+        "path": "a.Md",
+        "isText": true
+      },
+      {
+        "path": "x.mD",
+        "isText": true
+      },
+      {
+        "path": "drawing.canvas",
+        "isText": true
+      },
+      {
+        "path": "data.JSON",
+        "isText": true
+      },
+      {
+        "path": "table.csv",
+        "isText": true
+      },
+      {
+        "path": "config.yml",
+        "isText": true
+      },
+      {
+        "path": "config.YAML",
+        "isText": true
+      },
+      {
+        "path": "Tasks.base",
+        "isText": true
+      },
+      {
+        "path": "feed.xml",
+        "isText": true
+      },
+      {
+        "path": "page.html",
+        "isText": true
+      },
+      {
+        "path": "styles.css",
+        "isText": true
+      },
+      {
+        "path": "script.js",
+        "isText": true
+      },
+      {
+        "path": "types.ts",
+        "isText": true
+      },
+      {
+        "path": "figure.SVG",
+        "isText": true
+      },
+      {
+        "path": "refs.bib",
+        "isText": true
+      },
+      {
+        "path": "paper.tex",
+        "isText": true
+      },
+      {
+        "path": "folder/.md",
+        "isText": true
+      },
+      {
+        "path": ".txt",
+        "isText": true
+      },
+      {
+        "path": "..md",
+        "isText": true
+      },
+      {
+        "path": "photo.png",
+        "isText": false
+      },
+      {
+        "path": "video.mp4",
+        "isText": false
+      },
+      {
+        "path": "no-extension",
+        "isText": false
+      },
+      {
+        "path": "archive.tar.gz",
+        "isText": false
+      },
+      {
+        "path": "notes.md.bak",
+        "isText": false
+      },
+      {
+        "path": "page.htm",
+        "isText": false
+      },
+      {
+        "path": "readme.markdown",
+        "isText": false
+      },
+      {
+        "path": "folder.md/readme",
+        "isText": false
+      },
+      {
+        "path": "trailing.",
+        "isText": false
+      },
+      {
+        "path": "",
+        "isText": false
+      },
+      {
+        "path": ".",
+        "isText": false
+      },
+      {
+        "path": "refs.BİB",
+        "isText": false
+      },
+      {
+        "path": "note.ＭＤ",
+        "isText": false
+      }
+    ]
+  }
+}

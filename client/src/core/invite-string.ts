@@ -56,7 +56,7 @@ function checkUrl(url: string): void {
 
 function checkVault(vault: string): void {
   const bytes = enc.encode(vault).length;
-  // eslint-disable-next-line no-control-regex
+  // eslint-disable-next-line no-control-regex -- control characters are what this refuses
   if (vault === "" || bytes > MAX_VAULT_NAME_BYTES || /[\x00-\x1f\x7f]/.test(vault)) {
     throw new Error(
       `the vault name is empty, over ${MAX_VAULT_NAME_BYTES} bytes, or has a control character`,
