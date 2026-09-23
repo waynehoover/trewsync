@@ -46,7 +46,9 @@ var errRevokedAtCommit = &ToolError{Code: "read_only", Message: "this token was 
 // 2.3 and 4.3, step 4). A token revoked after its call was dispatched loses
 // here, and fn never runs. It is the only way a tool reaches a mutation, so a
 // write tool cannot commit without this check; M5's CommitOperation runs
-// inside it.
+// inside it. TestOnlyTheCommitBoundaryReachesAMutation holds the package to
+// that: it fails on any store, server or chunk store method reached outside
+// a commit callback that is not on its list of reads.
 func (c *call) commit(fn func() error) error {
 	return c.h.srv.UnderCommitLock(func() error {
 		tok, err := c.h.current(c.cred, c.h.now())

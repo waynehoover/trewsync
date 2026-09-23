@@ -507,7 +507,12 @@ tool the scope does not allow is `read_only`, whatever the client was shown),
 before every reply (a token revoked while its request ran loses, and the
 result is never sent), and for a write under the commit lock
 (`call.commit`, the only path from a tool to a mutation, which M5's
-`CommitOperation` will run inside). Replies over 1 MiB are replaced by
+`CommitOperation` will run inside). That path is a build check, not a
+convention: `TestOnlyTheCommitBoundaryReachesAMutation` reads the package's
+source and fails on any method of the store, the server or the chunk store
+reached outside a `commit` callback unless it is on a short list of reads, so
+a method added later, `CommitOperation` included, is held to the boundary
+until someone lists it as a read. Replies over 1 MiB are replaced by
 `result_too_large` before anything is written.
 
 **The envelope.** Server facts go under `trusted`: uids, sizes, counts, times,
