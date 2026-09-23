@@ -168,7 +168,11 @@ export async function previewOperation(vault: NodeVault, operation: VaultOperati
       "Inspect every exact old-to-new span. To apply, resubmit the same operation with these changes, including every base. New or changed affected notes invalidate the plan.",
   };
 }
-function samePlan(expected: readonly PlannedChange[], actual: readonly PlannedChange[]): boolean {
+/** Exported for the Go port's oracle (mcp-oracle.run.ts); behaviour unchanged. */
+export function samePlan(
+  expected: readonly PlannedChange[],
+  actual: readonly PlannedChange[],
+): boolean {
   const normalized = (changes: readonly PlannedChange[]) =>
     changes
       .map((change) => ({

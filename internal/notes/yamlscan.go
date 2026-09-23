@@ -5,8 +5,9 @@ import "strings"
 // scanYAML is a pass over frontmatter, before yaml.v3 sees it, for the
 // places where npm yaml refuses text libyaml would accept once prepared, or
 // reads text libyaml would read differently. It reports whether the
-// frontmatter must be refused, and where its anchor and alias names are. The
-// oracle found each rule; frontmatter_test.go has a case for every one.
+// frontmatter must be refused, where its anchor and alias names are, and which
+// of its comment lines prepareYAML must untab. The oracle found each rule;
+// frontmatter_test.go has a case for every one.
 //
 // Anchor and alias names. libyaml reads a name as letters, digits, "_" and "-"
 // only; npm yaml, as YAML allows, reads up to a space or a flow indicator, and
@@ -27,6 +28,18 @@ import "strings"
 //   - inside a quoted scalar that runs over several lines, when it starts
 //     with the tab.
 //
+// Other lines that start with a tab. npm yaml refuses a line of a quoted
+// scalar, or a line with content in a flow collection, that starts with a
+// tab, and libyaml reads both. It reads a comment line whose indentation
+// holds a tab as a comment, where libyaml refuses the tab; prepareYAML turns
+// those tabs into spaces (the untab lines), except on the line that ends a
+// block scalar, which npm yaml refuses: it takes a tab there for the
+// scalar's own, too little indented.
+//
+// Comments. npm yaml refuses a comment that no space or tab separates from
+// the token before it: after a quoted scalar, or after a flow indicator.
+// libyaml reads it.
+//
 // Quoted scalars, plain scalars, comments and block scalars are skipped, so
 // text inside them is not taken for a property. A plain scalar is skipped to
 // the ": " that makes it a key, a comment, or in a flow collection a flow
@@ -34,7 +47,7 @@ import "strings"
 // are indented more than its parent node continue it. Anything this misreads
 // fails safe: a property it misses is refused by libyaml, and a name it takes
 // from inside a scalar is refused by renamesVerified.
-func scanYAML(s string) (names []byteRange, refused bool) {
+func scanYAML(s string) (names []byteRange, untab []int, refused bool) {
 	lines := strings.SplitAfter(s, "\n")
 	var quote byte     // the quote of a scalar that runs past its line
 	block := -1        // the header indentation of a block scalar being skipped
@@ -44,7 +57,8 @@ func scanYAML(s string) (names []byteRange, refused bool) {
 	flowPlain := false // a plain scalar in a flow collection ran to the end of its line
 	key := -1          // the indentation of a key whose value has not begun
 	valuePending, pendingIndent := false, 0
-	next := 0 // where the next line starts in s
+	closed := -1 // where a token ends that a comment must not touch
+	next := 0    // where the next line starts in s
 	for n, raw := range lines {
 		at := next
 		next += len(raw)
@@ -52,7 +66,13 @@ func scanYAML(s string) (names []byteRange, refused bool) {
 		lead := len(line) - len(strings.TrimLeft(line, " "))
 		blank := strings.Trim(line, " \t") == ""
 		tabbed := blank && strings.Contains(line, "\t")
+		indentTab := strings.Contains(line[:len(line)-len(strings.TrimLeft(line, " \t"))], "\t")
+		comment := !blank && strings.TrimLeft(line, " \t")[0] == '#'
 		start := 0
+		closed = -1
+		if quote == 0 && len(flow) > 0 && !blank && !comment && line[0] == '\t' {
+			return nil, nil, true
+		}
 		if open >= 0 && !blank {
 			if lead > open && line[lead] != '#' {
 				// A line that continues the plain scalar is text, not nodes;
@@ -77,20 +97,20 @@ func scanYAML(s string) (names []byteRange, refused bool) {
 					// npm yaml refuses an implicit key in a flow sequence
 					// that runs over lines, and libyaml can read its colon
 					// as part of the scalar.
-					return nil, true
+					return nil, nil, true
 				}
 				flowPlain = start == len(line)
 			}
 		}
 		if quote != 0 {
-			if tabbed && line[0] == '\t' {
-				return nil, true
+			if line != "" && line[0] == '\t' {
+				return nil, nil, true
 			}
 			end := closeQuote(line, 0, quote)
 			if end < 0 {
 				continue
 			}
-			quote, start = 0, end+1
+			quote, start, closed = 0, end+1, end+1
 		} else if block >= 0 {
 			if blank {
 				if tabbed {
@@ -99,7 +119,7 @@ func scanYAML(s string) (names []byteRange, refused bool) {
 						c = nextIndent(lines[n+1:])
 					}
 					if c <= block || lead < c {
-						return nil, true
+						return nil, nil, true
 					}
 				}
 				continue
@@ -110,14 +130,20 @@ func scanYAML(s string) (names []byteRange, refused bool) {
 				}
 				continue
 			}
+			if indentTab {
+				return nil, nil, true
+			}
 			block, content = -1, -1
 		}
 		if blank {
 			if tabbed && valuePending && siblingFollows(lines[n+1:], pendingIndent) {
-				return nil, true
+				return nil, nil, true
 			}
 			valuePending = false
 			continue
+		}
+		if comment && indentTab && start == 0 && len(flow) == 0 {
+			untab = append(untab, n)
 		}
 		after := -1  // where the node that properties precede begins
 		parent := -1 // where the last node begun that is not a property begins
@@ -126,11 +152,15 @@ func scanYAML(s string) (names []byteRange, refused bool) {
 		}
 		for i := start; i < len(line); i++ {
 			c := line[i]
+			if c == '#' && i == closed {
+				return nil, nil, true
+			}
 			if len(flow) > 0 && strings.IndexByte("[]{}", c) >= 0 {
 				if c == '[' || c == '{' {
 					flow = append(flow, c)
 				} else {
 					flow = flow[:len(flow)-1]
+					closed = i + 1
 				}
 				continue
 			}
@@ -144,6 +174,9 @@ func scanYAML(s string) (names []byteRange, refused bool) {
 			case ' ', '\t':
 				// Separation before the node.
 			case '#':
+				if i > 0 && line[i-1] != ' ' && line[i-1] != '\t' {
+					return nil, nil, true // directly after "[", "{" or ","
+				}
 				i = len(line)
 			case '"', '\'':
 				parent = i
@@ -152,7 +185,7 @@ func scanYAML(s string) (names []byteRange, refused bool) {
 					quote = c
 					i = len(line)
 				} else {
-					i = end
+					i, closed = end, end+1
 				}
 			case '|', '>':
 				block, content = lead, -1
@@ -166,7 +199,7 @@ func scanYAML(s string) (names []byteRange, refused bool) {
 				end := propertyEnd(line, i)
 				if c != '!' {
 					if end > i+1 && line[end-1] == ':' {
-						return nil, true
+						return nil, nil, true
 					}
 					names = append(names, byteRange{at + i + 1, at + end})
 				}
@@ -206,7 +239,7 @@ func scanYAML(s string) (names []byteRange, refused bool) {
 			}
 		}
 	}
-	return names, false
+	return names, untab, false
 }
 
 // plainEnd is where a plain scalar that starts at line[i] ends on its line:

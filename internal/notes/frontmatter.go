@@ -47,11 +47,19 @@ import (
 //     to npm yaml and text to libyaml, which matters only for a tags item
 //     (frontmatterTags); npm yaml refuses an implicit key over lines in a
 //     flow sequence (scanYAML).
+//   - Later documents. npm yaml, with its logging silenced as Basalt had it,
+//     reads the first document and says nothing about the rest; libyaml's
+//     scanner reads on into the next one and refuses what it cannot
+//     tokenize there. Only the first document is given to it (firstDocument).
+//     The write side found this: a tags property added after "--- b" is in a
+//     second document.
 //
-// One difference remains, found by the deep corpus: npm yaml reads an
-// implicit key over lines in a flow mapping ("{x\n  y: z}") and libyaml
-// refuses it, so such frontmatter is refused here and was read by Basalt.
-// frontmatter_test.go records it.
+// Two differences remain, and each refuses frontmatter Basalt read. The deep
+// corpus found the first: npm yaml reads an implicit key over lines in a flow
+// mapping ("{x\n  y: z}") and libyaml refuses it. The write side found the
+// second: a document after a directive ("%YAML 1.2", "%TAG"), which npm yaml
+// read by the schema the directive names and this port refuses
+// (firstDocument). frontmatter_test.go records both.
 
 // yamlPlaceholderBase is where the substitute characters are taken from:
 // the top of plane 16, private use, and never legitimately in frontmatter.
@@ -90,7 +98,7 @@ func yamlSubstitute(text string, i int, r rune) bool {
 }
 
 func prepareYAML(text string) (*yamlText, bool) {
-	names, refused := scanYAML(text)
+	names, untab, refused := scanYAML(text)
 	if refused {
 		return nil, false
 	}
@@ -131,7 +139,15 @@ func prepareYAML(text string) (*yamlText, bool) {
 	// not see a blank line.
 	// libyaml also refuses a tab in the space after a "-", "?" or ":"
 	// indicator that starts a line, which npm yaml takes as separation.
+	// So is a comment line whose indentation holds a tab where scanYAML
+	// found npm yaml reading a comment (untab): the tabs before its "#"
+	// become spaces.
 	lines := strings.SplitAfter(b.String(), "\n")
+	for _, n := range untab {
+		l := lines[n]
+		lead := len(l) - len(strings.TrimLeft(l, " \t"))
+		lines[n] = strings.Repeat(" ", lead) + l[lead:]
+	}
 	for i, l := range lines {
 		if !strings.Contains(l, "\t") {
 			continue
@@ -574,6 +590,50 @@ func (y *yamlText) props(at int) (tag, anchor string, start int) {
 
 var unknownAnchor = regexp.MustCompile(`unknown anchor '([^']*)' referenced`)
 
+// firstDocument is frontmatter's first YAML document: the text before the
+// line that starts a second one, a "---" marker once the first has begun
+// (with content or a marker of its own), or that ends the first, a "..."
+// marker after it has begun. A marker is three dashes or dots at the start of
+// a line, followed by a space, a tab or the end of the line. Comment lines,
+// blank lines and directives come before a document without beginning it.
+//
+// It is false for a document that follows a directive, which is refused:
+// npm yaml read "%YAML 1.1" as a request for YAML 1.1's schema, in which
+// "yes" is a boolean, and yaml.v3 refuses "%YAML 1.2" and reads %TAG
+// handles its own way. Frontmatter that needs a directive is refused rather
+// than read by a schema this port does not model (TestFrontmatterKnownDivergence).
+func firstDocument(text string) (string, bool) {
+	begun, directive := false, false
+	for at := 0; at < len(text); {
+		end := len(text)
+		if nl := strings.IndexByte(text[at:], '\n'); nl >= 0 {
+			end = at + nl + 1
+		}
+		line := strings.TrimRight(text[at:end], "\r\n")
+		marker := func(m string) bool {
+			return strings.HasPrefix(line, m) && (len(line) == 3 || line[3] == ' ' || line[3] == '\t')
+		}
+		switch trimmed := strings.TrimLeft(line, " \t"); {
+		case marker("---"):
+			if begun {
+				return text[:at], !directive
+			}
+			begun = true
+		case marker("..."):
+			if begun {
+				return text[:at], !directive
+			}
+		case trimmed == "", trimmed[0] == '#':
+		case !begun && line[0] == '%':
+			directive = true
+		default:
+			begun = true
+		}
+		at = end
+	}
+	return text, !(directive && begun)
+}
+
 // parseFrontmatterYAML parses text, or reports false wherever npm yaml would
 // have reported an error or a warning.
 //
@@ -583,6 +643,10 @@ var unknownAnchor = regexp.MustCompile(`unknown anchor '([^']*)' referenced`)
 // replaced by a null scalar of the same width, remembered, and the text
 // parsed again, so a tags property that is one still counts as an alias.
 func parseFrontmatterYAML(text string) (*yamlDoc, bool) {
+	text, ok := firstDocument(text)
+	if !ok {
+		return nil, false
+	}
 	y, ok := prepareYAML(text)
 	if !ok {
 		return nil, false
@@ -690,10 +754,11 @@ func yamlEqual(a, b yamlValue) bool {
 	return a.str == b.str
 }
 
-// tagsNode is the value of the root mapping's tags property, or nil.
-func (d *yamlDoc) tagsNode() *yaml.Node {
+// tagsProperty is the root mapping's tags property, its key and its value, or
+// two nils.
+func (d *yamlDoc) tagsProperty() (key, value *yaml.Node) {
 	if d.root == nil || d.root.Kind != yaml.MappingNode {
-		return nil
+		return nil, nil
 	}
 	for i := 0; i+1 < len(d.root.Content); i += 2 {
 		k := d.root.Content[i]
@@ -701,45 +766,59 @@ func (d *yamlDoc) tagsNode() *yaml.Node {
 			continue
 		}
 		if v, ok := d.scalar(k); ok && v.kind == "string" && v.str == "tags" {
-			return d.root.Content[i+1]
+			return k, d.root.Content[i+1]
 		}
 	}
-	return nil
+	return nil, nil
+}
+
+// frontTags is what Basalt's frontTags read from a note's frontmatter: the
+// tags, and for an edit, the parsed frontmatter and its tags property (nil
+// when there is no frontmatter, or no such property).
+type frontTags struct {
+	tags      []tagOcc
+	doc       *yamlDoc
+	key, node *yaml.Node
 }
 
 // frontmatterTags is Basalt's frontTags over byte offsets.
 func frontmatterTags(source string, f frame) ([]tagOcc, error) {
+	ft, err := readFrontTags(source, f)
+	return ft.tags, err
+}
+
+func readFrontTags(source string, f frame) (frontTags, error) {
 	if !f.present {
-		return nil, nil
+		return frontTags{}, nil
 	}
 	d, ok := parseFrontmatterYAML(source[f.start:f.end])
 	if !ok || (d.root != nil && d.root.Kind != yaml.MappingNode) {
-		return nil, refuse("invalid_frontmatter", "frontmatter must be an unambiguous YAML mapping")
+		return frontTags{}, refuse("invalid_frontmatter", "frontmatter must be an unambiguous YAML mapping")
 	}
-	node := d.tagsNode()
+	key, node := d.tagsProperty()
 	if node == nil {
-		return nil, nil
+		return frontTags{doc: d}, nil
 	}
 	items := []*yaml.Node{node}
 	if node.Kind == yaml.SequenceNode {
 		items = node.Content
 	}
 	if (node.Kind == yaml.ScalarNode || node.Kind == yaml.SequenceNode) && node.Anchor != "" {
-		return nil, refuse("invalid_frontmatter", "an anchored tags property needs an explicit note edit")
+		return frontTags{}, refuse("invalid_frontmatter", "an anchored tags property needs an explicit note edit")
 	}
 	var found []tagOcc
 	for _, item := range items {
 		if item.Kind != yaml.ScalarNode || item.Anchor != "" || d.text.isAlias(item) {
-			return nil, invalidTagsProperty()
+			return frontTags{}, invalidTagsProperty()
 		}
 		if node.Style&yaml.FlowStyle != 0 && item.Style&^yaml.TaggedStyle == 0 && strings.HasSuffix(item.Value, ":") {
 			// A colon before a flow indicator ("[a:]") is a key to npm yaml,
 			// which makes the item a mapping, and text to libyaml.
-			return nil, invalidTagsProperty()
+			return frontTags{}, invalidTagsProperty()
 		}
 		v, ok := d.scalar(item)
 		if !ok || (v.kind != "null" && v.kind != "string") {
-			return nil, invalidTagsProperty()
+			return frontTags{}, invalidTagsProperty()
 		}
 		if v.kind == "null" {
 			continue
@@ -748,12 +827,12 @@ func frontmatterTags(source string, f frame) ([]tagOcc, error) {
 		for _, value := range splitTags(v.str) {
 			tag, err := ValidateTag(value)
 			if err != nil {
-				return nil, err
+				return frontTags{}, err
 			}
 			found = append(found, tagOcc{Tag: tag, start: f.start + start, end: f.start + end, location: "frontmatter"})
 		}
 	}
-	return found, nil
+	return frontTags{tags: found, doc: d, key: key, node: node}, nil
 }
 
 func invalidTagsProperty() error {
