@@ -8,7 +8,7 @@ import (
 	"github.com/waynehoover/trew/internal/store"
 )
 
-// `trew verify -deep` names a version whose declared size its chunks do not
+// `trewd verify -deep` names a version whose declared size its chunks do not
 // hold, and fails; a shallow verify does not open the bodies and passes.
 func TestVerifyDeepNamesAVersionOfTheWrongSize(t *testing.T) {
 	dir := seeded(t)

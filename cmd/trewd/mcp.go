@@ -117,7 +117,7 @@ func logMCP(log *slog.Logger, st *store.Store, vault, addr string) {
 	}
 	if len(tokens) == 0 {
 		log.Info("serving MCP at /mcp with no token yet, so every request is refused",
-			"hint", "`trew mcp-token -label NAME` mints one, read scope by default")
+			"hint", "`trewd mcp-token -label NAME` mints one, read scope by default")
 		return
 	}
 	log.Info("serving MCP at /mcp", "tokens", len(tokens))

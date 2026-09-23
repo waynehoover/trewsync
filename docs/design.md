@@ -2,7 +2,7 @@
 
 [Developer documentation](development.md) · [Plain-language privacy guide](security.md)
 
-Trew serves one person's trusted devices through one server. The product
+TrewSync serves one person's trusted devices through one server. The product
 priorities are preserving notes, keeping deployment small, and reducing repeat
 transfers. This is an engineering reference, not a setup guide.
 
@@ -285,7 +285,7 @@ scope. These are scope decisions, not claims that alternatives cannot solve them
 | NFS, SMB, or other network filesystems | Unsupported. |
 | A vault spanning several mounts | Outside the tested setup. |
 | Another sync tool on the same local vault | Unsupported. |
-| Two Trew writers to one local vault | Unsupported; CLI exclusion enforces one CLI writer. |
+| Two TrewSync writers to one local vault | Unsupported; CLI exclusion enforces one CLI writer. |
 
 Editing on separate devices is supported. Running the plugin and CLI against
 the same local directory is a different case and must be avoided. Filesystem
@@ -307,7 +307,7 @@ beyond the notes themselves:
 
 - **Writer authenticity is gone.** Basalt's entry authenticator, a MAC under a
   key the server never had, let a device refuse content the server made up.
-  Trew has none. SHA-256 chunk names give consistency, not authorship: devices
+  TrewSync has none. SHA-256 chunk names give consistency, not authorship: devices
   trust the server's word about what a note says and which device wrote it.
 - **Chunk names are a presence oracle.** A name is the SHA-256 of plaintext, so
   anyone holding a chunk inventory can confirm guessed content. Names must
@@ -326,7 +326,7 @@ backup protects against some operational failures; it does not prove freshness.
 ### What a stranger on the port learns
 
 Unauthenticated callers can reach health, the initial handshake, and protocol
-refusals. These can reveal that Trew is present, supported protocol numbers,
+refusals. These can reveal that TrewSync is present, supported protocol numbers,
 and a bounded readiness reason. They do not include vault contents, paths, or
 the server release. The release is advertised after authentication.
 
@@ -353,11 +353,11 @@ These are random keys, not user-chosen passwords.
 | MCP bearer token | Owner and configured MCP client; serving device stores only its hash | Authenticate to one device's HTTP MCP endpoint in its launch mode. |
 
 There is no vault key, root secret or recovery key. Administration beyond what
-a device can do is shell access to the server's data directory: `trew invite`,
-`trew devices`, `trew revoke` and `trew uninvite` there go through the running
+a device can do is shell access to the server's data directory: `trewd invite`,
+`trewd devices`, `trewd revoke` and `trewd uninvite` there go through the running
 server's private control socket, so a revoke from the host takes effect in the
 server at once. Losing every device loses no synced note, because the notes and
-their history are on the server; `trew invite` pairs a new device.
+their history are on the server; `trewd invite` pairs a new device.
 
 The MCP token is independently random, not derived from the device's token.
 Its hash lives in unsynced `.trew` state. Rotating or revoking it does not
@@ -373,7 +373,7 @@ A device **can issue an invite and thereby add another device**. Device and
 invite listings make that authority visible; they do not prevent a compromised
 authorized device from using it. Any device can revoke any device, itself and
 the last one included; the way back into a vault with no devices is
-`trew invite` on the server.
+`trewd invite` on the server.
 
 CLI read-only mode restricts ordinary sync behavior. It does not change the
 server credential or prevent explicit repair and administration requests.
@@ -390,7 +390,7 @@ are in [Security and privacy](security.md).
 
 Read everything it already synced. Revocation stops a device receiving and
 writing at once; it does not erase local notes, which are ordinary readable
-files, and nothing in Trew can. A restore from a backup taken before the
+files, and nothing in TrewSync can. A restore from a backup taken before the
 revocation brings the device's row back, so revoke it again after restoring.
 
 ## Provenance

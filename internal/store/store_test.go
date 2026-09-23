@@ -1091,7 +1091,7 @@ func TestEntriesAndChunksSurviveAReopen(t *testing.T) {
 // Rule 7: a status describes the vault, not what was convenient to count.
 //
 // Purge keeps the newest version per path, which for a deleted note is the
-// deletion record itself, so the content behind it goes. `trew stats` went
+// deletion record itself, so the content behind it goes. `trewd stats` went
 // on reporting "deleted and still recoverable" over exactly those, which is
 // telling somebody their note is safe when nothing can bring it back. The
 // client already told the truth here; the server did not.
@@ -1236,7 +1236,7 @@ func TestADeletionIsStillListedWhenThePathWasReusedAfterARename(t *testing.T) {
 // Its query joined entries to their chunk rows, so an entry whose chunk rows are
 // gone had nothing to join to and was never examined. An entry declaring a size
 // with no chunks behind it is a note that reads as empty rather than as an
-// error, and `trew verify` called the vault clean.
+// error, and `trewd verify` called the vault clean.
 func TestVerifyNoticesAnEntryWhoseChunksAreGone(t *testing.T) {
 	h := newTestStore(t)
 	e := h.file(t, "note.md", "the content of a note")
@@ -1530,7 +1530,7 @@ func TestATruncatedChunkListIsRefused(t *testing.T) {
 
 // And a count of -1 is not special. Basalt's migration left -1 on rows written
 // before the column existed, and its reader took that as "unknown" and served
-// them. Trew has no such rows, since its schema has had the column from the
+// them. TrewSync has no such rows, since its schema has had the column from the
 // first, so -1 is only a count that disagrees with the chunk rows, and it is
 // refused like any other: an entry that cannot say how many chunks it has
 // cannot prove it was stored whole.

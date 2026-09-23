@@ -42,7 +42,7 @@ case "$1 $2" in
   'image rm') exit 0 ;;
   'run --rm')
     printf 'Pulling image from the registry\n' >&2
-    printf 'trew %s linux/test go-test\n' "$TREW_VERIFY_SERVER_VERSION"
+    printf 'trewd %s linux/test go-test\n' "$TREW_VERIFY_SERVER_VERSION"
     ;;
   *) exit 2 ;;
 esac
@@ -72,7 +72,7 @@ chmod +x "$scratch/bin/gh" "$scratch/bin/docker" "$scratch/bin/npm"
 export PATH="$scratch/bin:$PATH"
 
 plugin_assets=(main.js manifest.json styles.css)
-server_assets=(trew-linux-amd64 trew-linux-arm64 trew-darwin-amd64 trew-darwin-arm64)
+server_assets=(trewd-linux-amd64 trewd-linux-arm64 trewd-darwin-amd64 trewd-darwin-arm64)
 fixture() {
   local asset
   rm -f "$scratch/assets/"*

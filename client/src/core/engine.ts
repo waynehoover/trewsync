@@ -205,9 +205,9 @@ export function refuseIfBehind(serverCursor: number, ownCursor: number): void {
  * the button that does it.
  */
 export const REJOIN_ADVICE =
-  "A restore through trew backup starts a new epoch and needs nothing from here; this is a " +
+  "A restore through trewd backup starts a new epoch and needs nothing from here; this is a " +
   "data directory copied back behind the server's back. To rejoin it and keep what only this " +
-  "device holds, back the server up, then press Rejoin this server in the Trew panel, or unlink " +
+  "device holds, back the server up, then press Rejoin this server in the TrewSync panel, or unlink " +
   "this device and pair it again with a new invite. Either resets the merge base, so the next " +
   "edit made on two devices at once makes conflict copies instead of merging.";
 
@@ -431,7 +431,7 @@ export interface SyncOptions {
  * is the whole of what a device can see. A body belonging to a version this
  * device never had is not on this disk and is not in this index: there is
  * nothing here that could notice it is gone, let alone supply it. The
- * authoritative list of what a vault is still missing comes from `trew
+ * authoritative list of what a vault is still missing comes from `trewd
  * verify` on the server, and both shells say so rather than implying that a
  * clean repair means a whole vault.
  */
@@ -1316,7 +1316,7 @@ export class Engine {
 
     // The spelling the sender used, and the one this device files it under.
     // They differ only when a peer spells a name in a Unicode normal form
-    // that is not NFC, which the server refuses, so for a Trew server they
+    // that is not NFC, which the server refuses, so for a TrewSync server they
     // are always the same; the fold is kept because it is the one place a
     // path off the wire becomes an identity here.
     const wires = batch.entries.map((e) => e.path);
@@ -3103,7 +3103,7 @@ export class Engine {
    * Sends the server bodies it has lost, without writing a version (I14).
    *
    * A body can go missing while every row stays exactly as it was: a disk rots
-   * one and `trew verify` quarantines it, or a restore brings back a
+   * one and `trewd verify` quarantines it, or a restore brings back a
    * database and a chunk tree of slightly different ages. Every device that
    * wants that version then downloads for ever, which presents as a sync that
    * never finishes rather than as an error anybody can act on.
@@ -3125,7 +3125,7 @@ export class Engine {
    * in this index: nothing here could notice it is gone. `couldNotOffer` is the
    * one kind of "cannot help" a device can see for itself, a note whose local
    * copy has moved on from what the server acknowledged. The authoritative list
-   * of what a vault still lacks is `trew verify` on the server, and both
+   * of what a vault still lacks is `trewd verify` on the server, and both
    * shells say so, because a clean repair here is not the same claim as a whole
    * vault and reporting it as one would be the comfortable lie.
    */

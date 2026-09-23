@@ -16,7 +16,7 @@ import (
 
 // The escape hatch: a note's bytes straight out of the store, with no device
 // and no client (PLAN.md M1). Basalt could not have one, because what it held
-// was ciphertext; Trew holds the notes in the clear, and the day every
+// was ciphertext; TrewSync holds the notes in the clear, and the day every
 // device is broken is the day somebody needs to read one from the server.
 //
 // Both commands read the store directly, read-only, under the shared data lock,
@@ -38,7 +38,7 @@ func readVersion(st *store.Store, vault string, e store.Entry) ([]byte, error) {
 	for i, name := range e.Chunks {
 		body, err := st.Chunks().Get(vault, name)
 		if err != nil {
-			return nil, fmt.Errorf("uid %d of %q: chunk %d of %d (%s): %w; `trew verify -deep` says "+
+			return nil, fmt.Errorf("uid %d of %q: chunk %d of %d (%s): %w; `trewd verify -deep` says "+
 				"what else is affected", e.UID, e.Path, i+1, len(e.Chunks), name, err)
 		}
 		out = append(out, body...)
@@ -134,7 +134,7 @@ func cmdCat(args []string, out io.Writer) error {
 func versionsHint(st *store.Store, vault, path string) string {
 	history, err := st.HistoryForPath(vault, path, 0, 20)
 	if err != nil {
-		return "`trew cat -path P -uid N` prints an earlier version"
+		return "`trewd cat -path P -uid N` prints an earlier version"
 	}
 	var uids []string
 	for _, e := range history {

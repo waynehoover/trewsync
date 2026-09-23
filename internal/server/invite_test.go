@@ -66,7 +66,7 @@ func tokenOf(t *testing.T, inv wire.Invited) []byte {
 // It was the one authority on a vault that nothing could see: a string issued
 // on a stolen laptop was invisible until somebody redeemed it. Basalt listed
 // the redemption identifier itself, which was safe only because redeeming also
-// needed a key that never reached the server; a Trew token is the whole
+// needed a key that never reached the server; a TrewSync token is the whole
 // credential, so the listing carries an id minted beside it, and this proves
 // field by field that nothing listed redeems.
 func TestOutstandingInvitesAreVisibleAndCarryNothingThatRedeems(t *testing.T) {

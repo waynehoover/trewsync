@@ -2,13 +2,13 @@
 
 [Documentation](index.md) · [Plugin guide](plugin.md)
 
-Trew is designed for one person's trusted devices and a server they control.
+TrewSync is designed for one person's trusted devices and a server they control.
 **The server can read your notes.** It stores their contents, their filenames
 and every earlier version in plaintext. That is deliberate: it is what lets the
 server check everything it holds, hand a note back with nothing but the server
-itself (`trew cat`), and host the planned built-in agent that reads and edits
+itself (`trewd cat`), and host the planned built-in agent that reads and edits
 the same notes. There is no end-to-end encryption. If you need a server that
-cannot read what it stores, Trew is the wrong tool.
+cannot read what it stores, TrewSync is the wrong tool.
 
 ## What the server holds
 
@@ -53,7 +53,7 @@ whoever holds it can add their own device, so hand it over privately, and
 cancel one you no longer need under **Devices** or with `trew uninvite`.
 
 There is no recovery key. Your notes and their history live on the server, so
-losing every device loses no synced note: run `trew invite` on the server to
+losing every device loses no synced note: run `trewd invite` on the server to
 pair a new one. That also means shell access to the server host is access to
 the vault.
 
@@ -64,8 +64,8 @@ state can connect as the device until you revoke it.
 ## If a device is lost or stolen
 
 1. Open **Manage this vault → Devices** on another paired device and revoke
-   the missing device. On the server, `trew devices` lists devices and
-   `trew revoke -data DIR DEVICE_ID` does the same.
+   the missing device. On the server, `trewd devices` lists devices and
+   `trewd revoke -data DIR DEVICE_ID` does the same.
 2. Review the device list and outstanding invites. Revoke unfamiliar devices
    and cancel invites you no longer trust.
 
@@ -73,22 +73,22 @@ Revoking stops the device receiving and sending changes at once, and cancels
 the invites it had created, so an invite made on a stolen laptop cannot add
 the thief's next device. It cannot un-read anything: the device keeps every
 note it had already synced, in plaintext, and whoever holds it can read them.
-You may revoke the last device; `trew invite` on the server is the way back.
+You may revoke the last device; `trewd invite` on the server is the way back.
 
 If you later restore the server from a backup taken before the revocation, the
 revoked device is in the restored device list again. Revoke it again after the
 restore.
 
-## What Trew does not protect against
+## What TrewSync does not protect against
 
 - **A compromised server host.** It holds every note readable, by design.
 - **The server's word.** Devices trust the server about what a note says and
-  about which device wrote a version. Basalt Sync, which Trew is forked from,
+  about which device wrote a version. Basalt Sync, which TrewSync is forked from,
   authenticated every entry under a key the server never had, so a device could
-  refuse a note the server made up; Trew has no such check. The server can
+  refuse a note the server made up; TrewSync has no such check. The server can
   also withhold updates or replay an older version.
 - **A paired device.** Every paired device is trusted to change any note and to
-  invite other devices. Trew is not a system for sharing notes with people you
+  invite other devices. TrewSync is not a system for sharing notes with people you
   do not trust. The CLI's read-only mode controls that client's sync behavior;
   it is not a restricted server credential.
 
@@ -107,7 +107,7 @@ TLS on the serving machine and restricts reachability to the tailnet and its
 network policy. The MCP bearer remains mandatory. A **Cloudflare Tunnel exposes
 plaintext notes to Cloudflare's TLS termination**. If you choose that arrangement,
 put an identity check such as Cloudflare Access in front of it and keep MCP's
-own bearer check. Forwarded identity or IP headers never authenticate to Trew.
+own bearer check. Forwarded identity or IP headers never authenticate to TrewSync.
 
 Generate the separate random credential with `trew mcp-token`. Keep it in the
 client's authentication configuration, outside the notes it can read. With

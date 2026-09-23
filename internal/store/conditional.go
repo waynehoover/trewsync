@@ -20,7 +20,7 @@ const notRetiredByRename = `NOT EXISTS (
 // arguments survivorArgs builds, so the preview cannot promise what the purge
 // does not free.
 //
-// baseSurvivorUIDs is what Basalt and a device-only Trew keep: current paths
+// baseSurvivorUIDs is what Basalt and a device-only TrewSync keep: current paths
 // and rename retirements. Deleted also needs the latest rename and, for a
 // reused name, its predecessor after that rename: removing this evidence makes
 // a genuine deletion look like a legacy rename's tail. A retained predecessor

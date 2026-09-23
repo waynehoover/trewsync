@@ -129,7 +129,7 @@ async function vaultDir(name: string): Promise<string> {
 }
 
 /**
- * A fresh server and its first device, paired from the invite `trew serve`
+ * A fresh server and its first device, paired from the invite `trewd serve`
  * wrote to `<data>/first-invite`, which is how a first device pairs.
  */
 async function paired(name = "a"): Promise<string> {
@@ -269,7 +269,7 @@ describe("where an invite can come from (I12)", () => {
 
 /**
  * F26, where `trew rebase` used to answer it. A server restored through
- * `trew backup` starts a new epoch, and a device that meets it forgets what it
+ * `trewd backup` starts a new epoch, and a device that meets it forgets what it
  * believed was synced and reads the replay as a fresh listing (PLAN.md section
  * 2.8): the same content agrees, what only the device holds is sent again, and
  * nothing is deleted. That now happens inside an ordinary sync, and what F26

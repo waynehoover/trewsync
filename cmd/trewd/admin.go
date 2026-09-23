@@ -68,13 +68,13 @@ func (o *operator) Handle(_ context.Context, req control.Request) control.Reply 
 	case "revoke":
 		if !store.ValidDeviceID(req.DeviceID) {
 			return control.Refused(control.CodeBadRequest, fmt.Sprintf(
-				"%q is not a device id; `trew devices` lists them", req.DeviceID))
+				"%q is not a device id; `trewd devices` lists them", req.DeviceID))
 		}
 		rev, err := o.srv.OperatorRevoke(o.vault, req.DeviceID)
 		switch {
 		case errors.Is(err, store.ErrUnknownDevice):
 			return control.Refused(control.CodeNoDevice, fmt.Sprintf(
-				"vault %q has no device %q; `trew devices` lists the ones it has", o.vault, req.DeviceID))
+				"vault %q has no device %q; `trewd devices` lists the ones it has", o.vault, req.DeviceID))
 		case err != nil:
 			return control.Refused(control.CodeInternal, err.Error())
 		}
@@ -87,7 +87,7 @@ func (o *operator) Handle(_ context.Context, req control.Request) control.Reply 
 		case errors.Is(err, store.ErrNoInvite):
 			return control.Refused(control.CodeNoInvite, fmt.Sprintf(
 				"vault %q has no outstanding invite %q: it may have expired, or been redeemed, in which "+
-					"case it is a device now; `trew devices` lists both", o.vault, req.Invite))
+					"case it is a device now; `trewd devices` lists both", o.vault, req.Invite))
 		case err != nil:
 			return control.Refused(control.CodeInternal, err.Error())
 		}
@@ -110,13 +110,13 @@ func (o *operator) Handle(_ context.Context, req control.Request) control.Reply 
 	case "mcp-revoke":
 		if !store.ValidMCPTokenID(req.TokenID) {
 			return control.Refused(control.CodeBadRequest, fmt.Sprintf(
-				"%q is not an MCP token id; `trew mcp-token -list` lists them", req.TokenID))
+				"%q is not an MCP token id; `trewd mcp-token -list` lists them", req.TokenID))
 		}
 		err := o.srv.OperatorRevokeMCPToken(o.vault, req.TokenID)
 		switch {
 		case errors.Is(err, store.ErrUnknownMCPToken):
 			return control.Refused(control.CodeNoToken, fmt.Sprintf(
-				"vault %q has no MCP token %q; `trew mcp-token -list` lists the ones it has", o.vault, req.TokenID))
+				"vault %q has no MCP token %q; `trewd mcp-token -list` lists the ones it has", o.vault, req.TokenID))
 		case err != nil:
 			return control.Refused(control.CodeInternal, err.Error())
 		}
@@ -331,7 +331,7 @@ func cmdInvite(args []string, out io.Writer) error {
 		return err
 	}
 	inv := reply.Invited
-	when := "does not expire; `trew uninvite " + inv.Invite + "` cancels it"
+	when := "does not expire; `trewd uninvite " + inv.Invite + "` cancels it"
 	if inv.ExpiresAt != nil {
 		when = "expires at " + time.UnixMilli(*inv.ExpiresAt).UTC().Format(time.RFC3339)
 	}
@@ -424,7 +424,7 @@ func cmdRevoke(args []string, out io.Writer) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("revoke takes one device id; `trew devices` lists them")
+		return errors.New("revoke takes one device id; `trewd devices` lists them")
 	}
 	reply, err := administer(*dataDir, *vault, "revoke", control.Request{Op: "revoke", DeviceID: fs.Arg(0)})
 	if err != nil {
@@ -439,7 +439,7 @@ func cmdRevoke(args []string, out io.Writer) error {
 	return nil
 }
 
-// cmdUninvite cancels an outstanding invite by the id `trew devices` lists.
+// cmdUninvite cancels an outstanding invite by the id `trewd devices` lists.
 func cmdUninvite(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("uninvite", flag.ContinueOnError)
 	dataDir, vault := adminFlags(fs)
@@ -447,7 +447,7 @@ func cmdUninvite(args []string, out io.Writer) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("uninvite takes one invite id; `trew devices` lists them")
+		return errors.New("uninvite takes one invite id; `trewd devices` lists them")
 	}
 	reply, err := administer(*dataDir, *vault, "uninvite", control.Request{Op: "uninvite", Invite: fs.Arg(0)})
 	if err != nil {

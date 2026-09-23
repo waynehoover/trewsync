@@ -3,7 +3,7 @@
 [Documentation](index.md) · [CLI quick start](../client/README.md)
 
 This page covers the headless client, the `trew-sync` npm package, whose
-command is `trew`. The server's binary has the same name; its commands are in
+command is `trew`. The server's command is `trewd`, and its commands are in
 the [server reference](server-reference.md). The client operates on a local
 vault. Commands use the current directory unless `--dir` is set. Run
 `trew --help` for the installed version's usage.
@@ -69,7 +69,7 @@ credential id and output path.
 An invite is a single-use `trew1i_` string carrying the server's address and
 the vault's name, so `pair` needs nothing else. It works once and expires after
 one hour by default; `invite --ttl` can ask for less, and the server makes one
-that never expires only through `trew invite -ttl 0` on its own host.
+that never expires only through `trewd invite -ttl 0` on its own host.
 
 `pair` saves the pairing before sending it. If the reply is lost, running the
 same `pair` again in that directory finishes it as the same device, even after
@@ -81,7 +81,7 @@ invite) leaves nothing saved.
 Any paired device can revoke any device, including itself and the last one,
 and cancel any outstanding invite. Revoking stops that device receiving and
 sending at once and cancels the invites it created. It does not erase the
-device's local notes. When no paired device is left, `trew invite` on the
+device's local notes. When no paired device is left, `trewd invite` on the
 server host pairs a new one; see the [server reference](server-reference.md).
 These commands target the directory's saved server address. See
 [Security and privacy](security.md).
@@ -287,7 +287,7 @@ complete base, its action and exact source edits. Offsets count JavaScript UTF-1
 code units; `old` and `text` carry the actual removed and inserted text.
 
 To apply, resubmit the same tool arguments with the complete returned `changes`
-array. Trew recomputes the operation and refuses `plan_changed` if an affected
+array. TrewSync recomputes the operation and refuses `plan_changed` if an affected
 note, base or edit differs, including a new affected note. Inspect a new preview
 and reconsider before retrying. Never replace bases automatically.
 
@@ -302,7 +302,7 @@ every required before-image before changing any original. It rechecks bases befo
 publication and before each file. A later race or I/O failure stops the batch.
 Inspect every `results` row, including `attempted`, `applied`, `durable`,
 `beforeImage` and `preserved`; `complete:false` can accompany completed local
-changes. Trew does not roll those changes back over other writers.
+changes. TrewSync does not roll those changes back over other writers.
 
 A move creates and verifies the destination, updates approved backlinks, then
 retires the source last. It is a recoverable copy and deletion, not an atomic
@@ -445,5 +445,5 @@ material until you have inspected the retained files. Use `unlink` to remove a
 pairing; do not treat deleting state as routine repair.
 
 Supported local macOS and Linux setups release CLI exclusion when the process
-exits. Where Trew reports a fallback, `unlock` refuses a running local holder.
+exits. Where TrewSync reports a fallback, `unlock` refuses a running local holder.
 Neither manual recovery nor `--force` makes a shared network filesystem supported.

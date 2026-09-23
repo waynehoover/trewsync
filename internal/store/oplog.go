@@ -1034,7 +1034,7 @@ func checkPath(p string) error { return Entry{Path: p}.CheckPaths() }
 
 // checkKey is an idempotency key's shape: empty for none, or text with no
 // control characters. Not a name, but held to the same rule, because it lands
-// in the audit and a newline in it would forge a line of `trew audit`.
+// in the audit and a newline in it would forge a line of `trewd audit`.
 func checkKey(key string) error {
 	if key == "" {
 		return nil

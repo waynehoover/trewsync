@@ -1,8 +1,8 @@
-# Trew Sync
+# TrewSync
 
 > Self-hosted vault sync with full version history, on a server you run.
 
-Trew syncs notes and attachments through a server the user controls. The server
+TrewSync syncs notes and attachments through a server the user controls. The server
 holds notes and their history in plaintext; there is no end-to-end encryption.
 The supported client environment is macOS, Linux, and Android with local
 storage; Android sync runs in the foreground. The CLI is experimental. Settings

@@ -1,4 +1,4 @@
-// Package wire is the Trew protocol's message shapes and nothing else.
+// Package wire is the TrewSync protocol's message shapes and nothing else.
 //
 // It holds no state, opens no connection and knows no policy, so the whole
 // vocabulary can be exercised without a server. That separation is deliberate:

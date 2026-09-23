@@ -153,7 +153,7 @@ describe("a server restored from a backup its devices have moved past", () => {
     const onA = await fingerprint(a.dir);
     const onB = await fingerprint(b.dir);
 
-    // The restore, as `trew backup` says to do one: the server pointed at the
+    // The restore, as `trewd backup` says to do one: the server pointed at the
     // backup, at the same address. The devices table is in the backup, so
     // both devices reconnect with the credentials they hold, and the backup
     // has an epoch of its own, which is how they are told their cursors

@@ -1,5 +1,5 @@
 /**
- * A real `cmd/trew` for tests to talk to.
+ * A real `cmd/trewd` for tests to talk to.
  *
  * Not a mock and not a fixture in the usual sense: it builds the Go binary and
  * runs it. Imported by the test files rather than living in one of them, because
@@ -45,8 +45,8 @@ export function serverBinary(): Promise<string> {
   if (shared) return Promise.resolve(shared);
   built ??= (async () => {
     buildDir = await mkdtemp(join(tmpdir(), "trew-bin-"));
-    const binary = join(buildDir, "trew");
-    await run("go", ["build", "-o", binary, "./cmd/trew"], {
+    const binary = join(buildDir, "trewd");
+    await run("go", ["build", "-o", binary, "./cmd/trewd"], {
       cwd: GO_DIR,
       env: { ...process.env, CGO_ENABLED: "0" },
     });
@@ -198,7 +198,7 @@ export class TestServer {
     let banner = "";
     const output = (data: Buffer) => {
       banner += data.toString();
-      if (/^trew .* listening on /m.test(banner)) listening.resolve();
+      if (/^trewd .* listening on /m.test(banner)) listening.resolve();
     };
     const exited = (code: number | null) =>
       listening.reject(new Error(`server exited with ${code}: ${this.stderr.join("")}`));
@@ -239,7 +239,7 @@ export class TestServer {
   }
 
   /**
-   * A fresh invite for this server's vault, minted by `trew invite` through
+   * A fresh invite for this server's vault, minted by `trewd invite` through
    * the running server's control socket, exactly as an operator mints one.
    *
    * `ttl` is the command's own flag, a Go duration such as `1h` or `0` for an
@@ -252,7 +252,7 @@ export class TestServer {
       ...(opts.label !== undefined ? ["-label", opts.label] : []),
     );
     const found = /trew1i_[A-Za-z0-9_-]+/.exec(out);
-    if (!found) throw new Error(`trew invite printed no invite: ${out}`);
+    if (!found) throw new Error(`trewd invite printed no invite: ${out}`);
     return found[0];
   }
 
@@ -274,7 +274,7 @@ export class TestServer {
    *
    * Every test that connects goes through here, because a hello has to name a
    * row that exists. It pairs the way a device does: an invite minted with
-   * `trew invite`, then a redemption carrying a fresh id and a fresh 32-byte
+   * `trewd invite`, then a redemption carrying a fresh id and a fresh 32-byte
    * token (plan/protocol.md, "Invite redemption"). Doing it in one place is
    * what keeps two dozen test files from each having their own idea of how a
    * device comes to exist, which is how a harness ends up testing a server

@@ -939,7 +939,7 @@ export class Client {
   /**
    * Sends the server bodies it has lost, writing no version (I14).
    *
-   * What `trew verify` finds and nothing could previously fix: a chunk the
+   * What `trewd verify` finds and nothing could previously fix: a chunk the
    * disk rotted and the server quarantined, or one a restore left behind. Every
    * device that wants that version downloads for ever, and no ordinary pass
    * repairs it, because a device whose copy has not changed is correct to
@@ -1222,7 +1222,7 @@ export class Client {
    * not notice, because nothing on a live session is re-checked.
    *
    * A device may revoke another, may revoke itself, and may revoke the last
-   * one: the way back into a vault with no devices is `trew invite` on the
+   * one: the way back into a vault with no devices is `trewd invite` on the
    * server, and nothing a device holds is needed for it.
    *
    * What this does **not** do is un-read what that device already read: every
@@ -1851,7 +1851,7 @@ export function adviseAfterPairing(what: {
       return cli
         ? `This device is paired with the vault and ${where} holds its credential; ` +
             `run trew sync here to finish, or trew unlink to start again.`
-        : `This device is paired with the vault; Trew will connect as it on the next attempt.`;
+        : `This device is paired with the vault; TrewSync will connect as it on the next attempt.`;
     case "pending":
       return cli
         ? `The invite was sent and no answer came back, so whether the server registered this ` +
@@ -1859,7 +1859,7 @@ export function adviseAfterPairing(what: {
             `finish it with the same credential, which works even after the invite has expired ` +
             `if the server did register it.`
         : `The invite was sent and no answer came back, so whether the server registered this ` +
-            `device is not known. Trew will finish the pairing with the same credential the ` +
+            `device is not known. TrewSync will finish the pairing with the same credential the ` +
             `next time it connects.`;
     case "unreadable":
       return (

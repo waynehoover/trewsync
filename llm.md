@@ -1,13 +1,13 @@
-# Install Trew with an agent
+# Install TrewSync with an agent
 
-> Follow this runbook to install the Trew server and Obsidian plugin, pair the
+> Follow this runbook to install the TrewSync server and Obsidian plugin, pair the
 > user's devices, and verify sync. Continue through the steps you can complete;
 > report any missing access or unfinished verification precisely.
 
-Trew is self-hosted Obsidian sync with version history. The server holds the
+TrewSync is self-hosted Obsidian sync with version history. The server holds the
 notes in plaintext: there is no end-to-end encryption, so the server host, its
 disk and its backups can read every note. Tell the user this before installing
-if they have not already chosen Trew knowing it. The plugin runs on macOS,
+if they have not already chosen TrewSync knowing it. The plugin runs on macOS,
 Linux, and Android with local vault storage. iOS is untested; Windows is
 unsupported. Android sync requires Obsidian in the foreground. The CLI is
 experimental and optional.
@@ -25,9 +25,9 @@ before asking questions. Collect only missing information:
 
 | Input | What to establish |
 |---|---|
-| Server | Existing Trew endpoint, or the host and authorized access for a new installation. Check OS, architecture, local disk, Docker/Compose or service manager, and free port 3003. |
+| Server | Existing TrewSync endpoint, or the host and authorized access for a new installation. Check OS, architecture, local disk, Docker/Compose or service manager, and free port 3003. |
 | Vault | Exact local path and device, Obsidian version, and configuration folder (normally `.obsidian`). Do not infer the intended vault from whichever one is open. |
-| Existing sync | Whether this vault already uses Trew or another sync service. Reuse an existing Trew pairing. For another service, let outstanding sync finish, preserve a backup, and agree on the switch before enabling Trew. |
+| Existing sync | Whether this vault already uses TrewSync or another sync service. Reuse an existing TrewSync pairing. For another service, let outstanding sync finish, preserve a backup, and agree on the switch before enabling TrewSync. |
 | Secure connection | Existing HTTPS proxy/domain, or Tailscale on the server and devices. Prefer what is already configured. Ask for the user's choice if neither exists. |
 | Storage | Whether the server's data volume and the backup destination sit on encrypted storage. Both hold every note in plaintext; record what the user decides. |
 | Backup | An available separate disk or off-host destination, and an existing scheduler if any. |
@@ -42,9 +42,9 @@ endpoint, versions, and completed steps. On a retry, inspect current state and
 resume. Do not delete an existing volume, pairing, or recovery file to make the
 instructions run again. Back up existing notes before the first sync.
 
-A Basalt Sync vault does not move over by pairing: Trew and Basalt speak
+A Basalt Sync vault does not move over by pairing: TrewSync and Basalt speak
 different protocols, and a Basalt invite or recovery key does not pair with
-Trew. Moving from Basalt is a fresh pairing against a new Trew server, done on a
+TrewSync. Moving from Basalt is a fresh pairing against a new TrewSync server, done on a
 rehearsed copy first; agree that plan with the user before touching the live
 vault.
 
@@ -111,8 +111,8 @@ Once the configuration and compatible image pin are verified, start it:
 
 ```bash
 docker compose up -d
-docker compose exec trew /trew version
-docker compose exec trew /trew health
+docker compose exec trew /trewd version
+docker compose exec trew /trewd health
 ```
 
 If the directory or container name already exists, inspect it and reuse the
@@ -128,7 +128,7 @@ from that release's `SHA256SUMS` before running it. Use a dedicated writable
 local data directory and bind `127.0.0.1:3003`.
 
 For Linux persistence, follow [binary installation](docs/server.md#a-binary):
-create the service account and data directory, then use `trew service` to
+create the service account and data directory, then use `trewd service` to
 print the unit and installation instructions. Apply those instructions through
 the available authorized service manager. The command only prints; it does not
 install or start the service. On macOS, use an appropriate existing service
@@ -139,7 +139,7 @@ subsequent maintenance commands.
 
 ## 4. Establish the secure endpoint
 
-Run Trew behind Tailscale Serve or an HTTPS reverse proxy. It does not provide
+Run TrewSync behind Tailscale Serve or an HTTPS reverse proxy. It does not provide
 TLS itself; keep its own HTTP/WebSocket port private. Recommend Tailscale Serve
 for a new personal homelab, or preserve the user's existing HTTPS proxy.
 
@@ -153,14 +153,14 @@ for a new personal homelab, or preserve the user's existing HTTPS proxy.
 - **Existing domain and proxy:** configure Caddy or the user's existing proxy
   to forward WebSockets to `127.0.0.1:3003`. Preserve unrelated sites. For a new
   Caddy site, the [secure access guide](docs/server.md#caddy) gives the configuration.
-  A containerized proxy needs a shared private network to reach the Trew
+  A containerized proxy needs a shared private network to reach the TrewSync
   container; its own loopback does not reach the host.
   Validate configuration and certificates before using it.
 
 Check the public endpoint's `/health` over HTTPS from a client device, in
 addition to the server-local health check. Do not disable certificate
 verification to make the check pass. If authentication at the proxy prevents
-normal Trew WebSocket connections, resolve that configuration before pairing.
+normal TrewSync WebSocket connections, resolve that configuration before pairing.
 Plain `ws://` is only for an explicitly local test on loopback.
 
 The first device pairs from an invite, a `trew1i_` string that carries a
@@ -171,13 +171,13 @@ invite on the server host, naming that endpoint, into a permission-restricted
 file rather than the conversation:
 
 ```bash
-(umask 077 && docker compose exec -T trew /trew invite -url wss://actual-hostname \
+(umask 077 && docker compose exec -T trew /trewd invite -url wss://actual-hostname \
   > /private/path/first-invite.txt)
 ```
 
 The file holds a line saying when the invite expires and the invite itself, the
 line starting `trew1i_`. For a binary installation, run
-`trew invite -data /path/to/trew-data -url wss://actual-hostname -out /private/path/first-invite.txt`
+`trewd invite -data /path/to/trew-data -url wss://actual-hostname -out /private/path/first-invite.txt`
 as the service account, which writes only the invite, mode 0600. Either way
 the command goes through the running server. A server with no devices also
 writes an invite to `first-invite` in its data directory at startup and logs
@@ -192,12 +192,12 @@ On each accessible device:
 
 1. Resolve the intended vault and configuration folder. Preserve an existing
    plugin directory before an upgrade, including its state and credentials.
-2. Disable a running Trew plugin before replacing its files. Copy the three
+2. Disable a running TrewSync plugin before replacing its files. Copy the three
    verified release assets into `<vault>/<config-folder>/plugins/trew-sync/`.
    Update only `main.js`, `manifest.json`, and `styles.css`; keep all other files.
-3. Reload Obsidian's plugin discovery, enable **Trew Sync**, and check the
+3. Reload Obsidian's plugin discovery, enable **TrewSync**, and check the
    installed version. Leave unrelated plugins and settings intact.
-4. Open Trew's panel and inspect its actual pairing or sync state.
+4. Open TrewSync's panel and inspect its actual pairing or sync state.
 
 On desktop, check `obsidian help` for supported automation commands. When
 available, these commands target a specific open vault:
@@ -214,7 +214,7 @@ Use the listed command IDs to open the panel or trigger sync. New manually
 copied files may require an app reload before they are discoverable. Enable
 community plugins if needed, accounting for any existing disabled plugins.
 `plugin:install` searches the community directory; it is not a substitute for
-manual release installation while Trew is outside that directory.
+manual release installation while TrewSync is outside that directory.
 
 Use app automation when available. If Obsidian or Android is inaccessible,
 prepare the verified files and give the user just the remaining install/enable
@@ -225,7 +225,7 @@ installed CLI's help describe available capabilities.
 ## 6. Pair each device
 
 Interact with the actual panel through available app controls. There is no
-documented Trew CLI command that writes the plugin's pairing state. Do not
+documented TrewSync CLI command that writes the plugin's pairing state. Do not
 manufacture `data.json`, copy another device's credentials, or run the headless
 client against the plugin's vault as a shortcut.
 
@@ -234,7 +234,7 @@ server (and the vault, if it is not `default`) that the panel says it points
 to. **Pair** becomes available once the panel can read the invite. A device
 name is suggested and can be changed under **More options**. There is no
 recovery key to save: the notes and their history stay on the server, and
-`trew invite` on the server pairs a replacement whenever one is needed. Wait
+`trewd invite` on the server pairs a replacement whenever one is needed. Wait
 for pairing and sync to finish.
 
 **Additional device:** an empty local vault downloads the synced files directly.
@@ -251,7 +251,7 @@ after one hour by default. Create one per device.
 
 If **Review your first sync** appears, review the upload, download, and
 preserved-copy counts before choosing **Continue sync**. **Pause sync** keeps
-the first sync paused; resume from the Trew menu when ready.
+the first sync paused; resume from the TrewSync menu when ready.
 
 If pairing is interrupted, inspect the panel and saved state before retrying.
 A device saves its pairing before sending it, so one whose reply was lost is
@@ -276,7 +276,7 @@ asks to remove it.
    sync or recovery error. Inspect reasons for ignored or oversized files.
 3. Create a uniquely named small Markdown note on device A. Wait for sync and
    read back the same content on device B.
-4. Edit that note on B and confirm A receives the edit. Open its Trew version
+4. Edit that note on B and confirm A receives the edit. Open its TrewSync version
    history and confirm the earlier version is present.
 5. Restore that earlier version. Verify the restored content appears as a
    separate copy while the current note remains intact.
@@ -357,7 +357,7 @@ agent on the Mac, configure the Mac's MCP client and use stdio when it supports 
 
 ## Working from development source
 
-This source tree speaks protocol 1, Trew's own. Basalt's releases speak its
+This source tree speaks protocol 1, TrewSync's own. Basalt's releases speak its
 protocol 7, and the two refuse each other at the handshake, naming both
 numbers. For source builds, build the server and clients from the same
 checkout. Keep existing data and credentials, and verify the reported protocol

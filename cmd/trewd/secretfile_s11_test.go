@@ -8,7 +8,7 @@ import (
 )
 
 // S11: a file holding a credential is written atomically, durably, at 0600,
-// and verified. Basalt's was the auth token; Trew writes the first device's
+// and verified. Basalt's was the auth token; TrewSync writes the first device's
 // invite (and, with `-out`, any invite), which adds a device to the vault, so
 // the writer and its two tests stay (plan/strip-ledger.md, unique guarantee
 // 11). The third test, the token copied into a backup, went with the token.

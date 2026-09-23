@@ -43,7 +43,7 @@ import { FrameError, decodeFrame, encodeFrame } from "./frame.ts";
 /**
  * The protocol version this client speaks. A mismatch is refused, not negotiated.
  *
- * Version 1 of Trew's protocol (plan/protocol.md): Basalt's protocol 7 with
+ * Version 1 of TrewSync's protocol (plan/protocol.md): Basalt's protocol 7 with
  * the encryption taken out. Paths and bodies are plaintext, a device connects
  * with a random token of its own, and a new device joins by redeeming an
  * invite. Upgrade the server and all clients together; there is no fallback.
@@ -2099,7 +2099,7 @@ export class Transport {
    * The server makes the token and answers with it once, with the invite's id
    * and when it stops working. `ttlMs` of zero or absent is the server's
    * default of an hour, and anything above an hour is clamped to it; an invite
-   * that never expires is made only with `trew invite -ttl 0` on the server.
+   * that never expires is made only with `trewd invite -ttl 0` on the server.
    */
   async invite(args: { ttlMs?: number; label?: string } = {}): Promise<MintedInvite> {
     const reply = await this.request(
@@ -2262,7 +2262,7 @@ export class Transport {
    * The reply means both, in that order, and the ordering is the guarantee:
    * see plan/protocol.md, "Devices and invites". Revoking a device also
    * cancels the invites it issued, and the last device may be revoked: the way
-   * back is `trew invite` on the server.
+   * back is `trewd invite` on the server.
    *
    * `self` says the row removed was this session's own, in which case this is
    * the last frame on the connection.

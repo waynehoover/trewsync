@@ -262,11 +262,11 @@ func assertBackupMetaAgrees(t *testing.T, dir string, want seededVault) {
 
 func buildBinary(t *testing.T) string {
 	t.Helper()
-	out := filepath.Join(t.TempDir(), "trew")
-	cmd := exec.Command("go", "build", "-o", out, "./cmd/trew")
+	out := filepath.Join(t.TempDir(), "trewd")
+	cmd := exec.Command("go", "build", "-o", out, "./cmd/trewd")
 	cmd.Dir = repoServerDir(t)
 	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("building trew: %v\n%s", err, b)
+		t.Fatalf("building trewd: %v\n%s", err, b)
 	}
 	return out
 }
@@ -279,7 +279,7 @@ func repoServerDir(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The test runs in cmd/trew.
+	// The test runs in cmd/trewd.
 	return filepath.Dir(filepath.Dir(wd))
 }
 
@@ -288,7 +288,7 @@ func runBinary(t *testing.T, binary string, args ...string) string {
 	cmd := exec.Command(binary, args...)
 	b, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("trew %s: %v\n%s", strings.Join(args, " "), err, b)
+		t.Fatalf("trewd %s: %v\n%s", strings.Join(args, " "), err, b)
 	}
 	return string(b)
 }

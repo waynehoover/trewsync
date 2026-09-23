@@ -58,7 +58,7 @@ check_release() { # check_release <tag> <what>
   local required=() asset
   case "$what" in
     plugin) required=(main.js manifest.json styles.css) ;;
-    server) required=(trew-linux-amd64 trew-linux-arm64 trew-darwin-amd64 trew-darwin-arm64) ;;
+    server) required=(trewd-linux-amd64 trewd-linux-arm64 trewd-darwin-amd64 trewd-darwin-arm64) ;;
   esac
   printf '\n== %s, from the %s release\n' "$what" "$tag"
   mkdir -p "$dir"
