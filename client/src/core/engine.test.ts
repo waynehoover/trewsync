@@ -7,7 +7,7 @@
  * Agreement is not the property. Not losing an edit is.
  *
  * So the assertions here are about edits, by name, and where they ended up. The
- * vaults are in memory and everything else is real: real sealing, real chunking,
+ * vaults are in memory and everything else is real: real chunking, real framing,
  * a real WebSocket, a real Go server writing real SQLite.
  */
 
@@ -17,32 +17,24 @@ import { deferred, receiveCommitted } from "./test-async.ts";
 import {
   Engine,
   OWN_LIMITS,
-  SEAL_WINDOW,
   answeredVersion,
   boundedBy,
   contentId,
   refuseIfBehind,
-  sealedNames,
   type SyncReport,
 } from "./engine.ts";
 import { chunkBytes, sizesFor } from "./chunk.ts";
-import { macEntry, sealChunks, sealPath, type Schedule } from "./crypto.ts";
-import { TEST_DATA_KEY, otherVaultKeys, testKeys, testWrapped } from "./test-keys.ts";
-import { ConnectionError, ProtocolError, Transport, type WireEntry } from "./transport.ts";
-import { FakeSocket, engineOnFakeSocket, ready, settle } from "./fake-socket.ts";
+import { NAME_WINDOW, chunkName, chunkNames } from "./digest.ts";
+import { decodeFrame } from "./frame.ts";
+import { ConnectionError, LOCAL_MAX_CHUNK_BYTES, ProtocolError, Transport } from "./transport.ts";
+import { engineOnFakeSocket, settleUntil } from "./fake-socket.ts";
 import { MemoryIndexStore, MemoryVault, type FileStat, type Times } from "./vault.ts";
 import { firstFreeName, ignoredHereError, neverSync } from "./paths.ts";
 import type { IndexEntry } from "./index-state.ts";
 import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
 
-const SECRET = new Uint8Array(32).fill(33);
-let keys: Schedule;
-let wrapped: string;
-
 beforeAll(async () => {
   await serverBinary();
-  keys = await testKeys(SECRET);
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 
 afterAll(async () => {
@@ -97,7 +89,7 @@ class Device {
       transport: this.transport,
       device: this.name,
       vaultId: "default",
-      ...(await server.deviceCredentials(SECRET, wrapped, this.name)),
+      ...(await server.deviceCredentials(this.name)),
       // A clock the test advances, so the size-scaled write debounce does
       // not decide when a sync may happen.
       now: () => (this.clock += this.step),
@@ -342,51 +334,6 @@ async function convergeBoth(a: Device, b: Device, rounds = 5): Promise<void> {
   await receiveCommitted(b.transport);
   await b.engine.sync();
 }
-
-/**
- * The vault's keys come from the data key `ready` carries, and every
- * vault has one. A `ready` without it used to mean "derive your content keys
- * from the root instead", which is a schedule no other device on the vault
- * uses: this device would seal every note under keys nothing else can open,
- * and both ends would report success. So the absence is refused rather than
- * accommodated, the session ends, and the engine never reaches the state
- * where it has keys to seal with.
- *
- * A fake socket rather than the real server, because the real server cannot
- * make this mistake and this is about what happens when something does.
- */
-describe("a server that answers ready with no data key", () => {
-  it("ends the session and derives nothing", async () => {
-    const socket = new FakeSocket();
-    const transport = new Transport("ws://test", {
-      onBatch: () => {},
-      socketFactory: () => socket,
-      timeoutMs: 2000,
-    });
-    const engine = new Engine({
-      vault: new MemoryVault(),
-      store: new MemoryIndexStore(),
-      dataKey: TEST_DATA_KEY,
-      transport,
-      device: "d",
-      vaultId: "default",
-      deviceId: "rig-device",
-      token: "t",
-    });
-    const connecting = transport.connect();
-    socket.open();
-    await connecting;
-
-    const started = engine.start();
-    await settle();
-    const { wrapped: _none, ...withoutKey } = ready({ cursor: 0 });
-    socket.reply(withoutKey);
-    await expect(started).rejects.toThrow(/no wrapped data key/);
-    expect(transport.isClosed, "carried on without the vault's keys").toBe(true);
-    // And nothing can be sealed: there is no schedule to fall back to.
-    expect(() => engine.vaultKeys).toThrow(/handshake/);
-  });
-});
 
 describe("one device", () => {
   it("uploads what is in the vault and says what it sent", async () => {
@@ -676,9 +623,8 @@ describe("a big file edited on the other device", () => {
   /**
    * The receiver already holds almost all of it.
    *
-   * Chunk names are hashes of ciphertext and sealing is deterministic, so a
-   * name the receiver's own index lists is a body the receiver can make from
-   * its own disk. Editing one paragraph of a large attachment renames one
+   * Chunk names are hashes of the raw bytes, so a name the receiver's own
+   * index lists is a body the receiver can make from its own disk. Editing one paragraph of a large attachment renames one
    * chunk and leaves the rest alone; downloading all of it again is the whole
    * of what a person on a phone connection would feel.
    */
@@ -742,8 +688,8 @@ describe("concurrent edits, which is where notes get lost", () => {
     await a.vault.edit("note.md", onA);
     await b.vault.edit("note.md", onB);
 
-    // The frame arrived before the ack, but its async authentication/path
-    // decryption has not completed. Hold precisely that boundary.
+    // The frame arrived before the ack, but the engine has not finished
+    // accepting it. Hold precisely that boundary.
     let release!: () => void;
     let entered = false;
     const gate = new Promise<void>((r) => (release = r));
@@ -815,7 +761,7 @@ describe("concurrent edits, which is where notes get lost", () => {
 
     // What the index wrote down about the file it has just written, against
     // the file. These two are what `needsRehash` compares a later stat with,
-    // so a wrong size or a wrong timestamp is a note read, chunked and sealed
+    // so a wrong size or a wrong timestamp is a note read, chunked and named
     // again on the very next pass to discover that nothing had changed.
     const stat = (await a.vault.stat("note.md"))!;
     const stored = (await a.store.load())!.entries["note.md"] as {
@@ -988,6 +934,13 @@ describe("concurrent edits, which is where notes get lost", () => {
  * filesystem that folds case. The list of writes was cleared just before the
  * final fill, but a full inbox is filled part way through the loop, so the
  * writes from that earlier fill were forgotten by the time the deletes ran.
+ *
+ * The rename is reported, the way the plugin reports one, so it travels as a
+ * single move. Under protocol 1 that is the only way a case-only rename can
+ * reach the server at all: a create of `NOTE.md` beside a live `Note.md` is a
+ * collision, and only a move whose two names fold alike is always allowed
+ * (plan/protocol.md, "Paths"). What happens to a rename nobody reported is the
+ * case after this one.
  */
 describe("a case-only rename on a receiving device", () => {
   async function scenario(others: number): Promise<{ b: Device; report: SyncReport }> {
@@ -1004,12 +957,16 @@ describe("a case-only rename on a receiving device", () => {
     expect(b.vault.text("Note.md")).toBe("the only copy of this text\n");
 
     // A renames Note.md to NOTE.md, case only, and edits every other file.
+    const bytes = await a.vault.read("Note.md");
     await a.vault.remove("Note.md");
-    await a.vault.edit("NOTE.md", "the only copy of this text\n");
+    await a.vault.write("NOTE.md", bytes, { mtime: 2000, ctime: 1000 });
+    a.engine.noteRename("Note.md", "NOTE.md");
     for (let i = 0; i < others; i++) {
       await a.vault.edit(`n${String(i).padStart(3, "0")}.md`, `v2 ${i}\n`);
     }
-    await a.settle();
+    const sent = await a.settle();
+    // Not refused: the move is the one write of the new name the server takes.
+    expect(sent.skippedPaths, JSON.stringify(sent.needsAttention)).toEqual([]);
     await receiveCommitted(b.transport);
 
     const report = await b.engine.sync();
@@ -1031,6 +988,60 @@ describe("a case-only rename on a receiving device", () => {
     );
     expect(report.deletedLocally).toBe(0);
   }, 240_000);
+
+  /**
+   * A case-only rename nothing reported: every rename the headless client
+   * makes, which finds them by scanning, and any the plugin was not told of.
+   * This is a data-loss bug, found by this conversion and reported with it,
+   * and pinned here rather than asserted as right, so that the fix fails this
+   * test and is read (the F11 and C-D1 pins below are the same arrangement).
+   *
+   * The scan sees a deletion of `Note.md` and a create of `NOTE.md`, and both
+   * go up in one putmany. The server refuses the create as a `collision` with
+   * the live `Note.md`, which is the path the same batch deletes: it judges
+   * each entry of a putmany against the store as it stood before the batch,
+   * so no order of the two entries gets past it. The deletion commits, and
+   * every other device applies it. The renaming device writes the new name
+   * off for good, citing a live file that no longer exists, and does not try
+   * again until the file changes. The note is on one device, stranded, and on
+   * no other device and not on the server (rule 3).
+   */
+  it("strands the new name when the rename is found by a scan (a pinned bug)", async () => {
+    await fresh();
+    const a = await device("a", undefined, new FoldingVault());
+    const b = await device("b", undefined, new FoldingVault());
+    const text = "the only copy of this text\n";
+
+    await a.vault.edit("Note.md", text);
+    await convergeBoth(a, b);
+    expect(b.vault.text("Note.md")).toBe(text);
+
+    // Renamed on disk, and nothing tells the engine.
+    await a.vault.remove("Note.md");
+    await a.vault.edit("NOTE.md", text);
+    const sent = await a.settle();
+    await receiveCommitted(b.transport);
+    const received = await b.engine.sync();
+
+    // What must stay true whatever the fix: the device that renamed it still
+    // has the note.
+    expect(a.vault.text("NOTE.md")).toBe(text);
+
+    // What is wrong, pinned. The new name was written off for a collision
+    // with a path that is no longer live...
+    expect(sent.skippedPaths).toContain("NOTE.md");
+    const why = sent.needsAttention.find((n) => n.path === "NOTE.md")?.why ?? "";
+    expect(why).toMatch(/^collision: /);
+    expect(why).toMatch(/Note\.md/);
+    // ...the server never received it...
+    await expect(
+      server.cli("cat", "-path", "NOTE.md"),
+      "the renamed note reached the server, which is the fix landing: assert it is on every device",
+    ).rejects.toThrow(/has never held/);
+    // ...and the other device deleted the only other copy.
+    expect(received.deletedLocally, "the other device kept the note: update this pin").toBe(1);
+    expect(b.vault.paths().filter((p) => p.toLowerCase() === "note.md")).toEqual([]);
+  }, 240_000);
 });
 
 /**
@@ -1039,6 +1050,9 @@ describe("a case-only rename on a receiving device", () => {
  * note, which is the right side to err on, and on a vault that does hold both
  * spellings apart it never converges: the deletion is refused on every pass,
  * for ever, and the report said nothing at all about it.
+ *
+ * The rename is reported, so it travels as the one move a protocol 1 server
+ * takes for a case-only rename (see the describe above).
  */
 describe("a case-only rename onto a vault that cannot say what one file is (C-D1)", () => {
   it("says so, rather than repeating a clean pass for ever", async () => {
@@ -1051,8 +1065,10 @@ describe("a case-only rename onto a vault that cannot say what one file is (C-D1
     await convergeBoth(a, b);
     expect(b.vault.text("Note.md")).toBe("the only copy of this text\n");
 
+    const bytes = await a.vault.read("Note.md");
     await a.vault.remove("Note.md");
-    await a.vault.edit("NOTE.md", "the only copy of this text\n");
+    await a.vault.write("NOTE.md", bytes, { mtime: 2000, ctime: 1000 });
+    a.engine.noteRename("Note.md", "NOTE.md");
     await a.settle();
     await receiveCommitted(b.transport);
 
@@ -1065,15 +1081,23 @@ describe("a case-only rename onto a vault that cannot say what one file is (C-D1
     expect(report.blocked, "the refusal was silent").toBeGreaterThan(0);
     expect(report.inTheWay.map((w) => w.path)).toContain("Note.md");
 
-    // What the count is warning about. This vault holds both spellings, so
+    // What the count was warning about. This vault holds both spellings, so
     // the next pass finds the old one with no entry behind it and sends it
-    // back up as a note of its own: the rename undone for every device, and
-    // on one that does fold case the two are then blocked for ever. Pinned
-    // rather than asserted as right, so that fixing it fails here and is
-    // read.
+    // back up as a note of its own, which in Basalt undid the rename for
+    // every device. Protocol 1 refuses that upload as a collision with the
+    // live NOTE.md, so the rename stands everywhere and the old spelling is
+    // named on this device as the one to deal with. Both files are still
+    // here: the refusal is of the upload, not of anything on disk.
     const again = await b.engine.sync();
-    expect(again.uploaded).toBe(1);
+    expect(again.uploaded, "the old spelling went back up as a note of its own").toBe(0);
+    expect(again.skippedPaths).toContain("Note.md");
+    expect(again.needsAttention.find((n) => n.path === "Note.md")?.why ?? "").toMatch(
+      /^collision: /,
+    );
     expect(b.vault.paths().sort()).toEqual(["NOTE.md", "Note.md"]);
+    expect(b.vault.text("Note.md")).toBe("the only copy of this text\n");
+    await expect(server.cli("cat", "-path", "Note.md")).rejects.toThrow(/deleted or renamed/);
+    expect(await server.cli("cat", "-path", "NOTE.md")).toBe("the only copy of this text\n");
   }, 240_000);
 });
 
@@ -1380,54 +1404,73 @@ describe("folders and renames", () => {
 });
 
 /**
- * Two distinct paths on the server that one disk files as a
- * single name. Writing the second replaced the first, both were recorded as
- * synced, and the next scan reported the first deleted to every device.
+ * Two notes whose names differ only by case, where one disk files them as one.
+ *
+ * In Basalt the server took both, and the question was what a disk that folds
+ * case did with two distinct paths it files as a single name: writing the
+ * second replaced the first, both were recorded as synced, and the next scan
+ * reported the first deleted to every device. That receiving side is still
+ * guarded, and is tested against a server that sends both anyway
+ * (inbound.test.ts, "two aliases of one file arriving in different fills").
+ *
+ * A protocol 1 server refuses the second as a `collision` (PLAN.md section
+ * 4.1), so against a real one the question moves to the device that wrote
+ * them: the refused note stays on its disk, is named with the server's
+ * reason, and goes through once somebody renames it.
  */
 describe("two notes the receiving disk cannot hold apart", () => {
-  async function aliased(first: string, second: string): Promise<void> {
+  it("refuses the second of two names that differ only by case, and keeps both", async () => {
     await fresh();
     const a = await device("a");
     const b = await device("b", undefined, new AliasingVault());
+    const first = "Note.md";
+    const second = "note.md";
 
     await a.vault.edit(first, `the ${first} text\n`);
     await a.vault.edit(second, `the ${second} text\n`);
-    await a.settle();
-    await receiveCommitted(b.transport);
+    const sent = await a.settle();
 
+    // Exactly one of the two is written off, with the server's reason, which
+    // names the one it collides with.
+    const refused = sent.skippedPaths.filter((p) => p === first || p === second);
+    expect(refused, JSON.stringify(sent.needsAttention)).toHaveLength(1);
+    const lost = refused[0]!;
+    const kept = lost === first ? second : first;
+    const why = sent.needsAttention.find((n) => n.path === lost)?.why ?? "";
+    expect(why).toMatch(/^collision: /);
+    expect(why).toContain(`"${kept}"`);
+
+    await receiveCommitted(b.transport);
     const report = await b.engine.sync();
-    // Neither is written, both are named, and nothing is called synced.
-    expect(report.blocked).toBe(2);
-    expect(report.inTheWay.map((w) => w.path).sort()).toEqual([first, second].sort());
-    for (const w of report.inTheWay) expect([first, second]).toContain(w.blockedBy);
-    expect(b.vault.paths()).toEqual([]);
+    // Only the one the server holds reached b, and nothing is in its way.
+    expect(report.blocked).toBe(0);
+    expect(b.vault.snapshot()).toEqual({ [kept]: `the ${kept} text\n` });
 
     // The property: the device that has both still has both, whatever b did.
     await convergeBoth(a, b, 4);
     expect(a.vault.text(first), `a lost ${first}`).toBe(`the ${first} text\n`);
     expect(a.vault.text(second), `a lost ${second}`).toBe(`the ${second} text\n`);
 
-    // Renaming one on the device that has both clears it, and both arrive.
-    const bytes = await a.vault.read(second);
-    await a.vault.remove(second);
+    // Renaming the refused one on the device that has both clears it, and
+    // both arrive.
+    const bytes = await a.vault.read(lost);
+    await a.vault.remove(lost);
     await a.vault.write("renamed.md", bytes, { mtime: 3000, ctime: 3000 });
-    a.engine.noteRename(second, "renamed.md");
+    a.engine.noteRename(lost, "renamed.md");
     await convergeBoth(a, b, 6);
-    expect(b.vault.text(first)).toBe(`the ${first} text\n`);
-    expect(b.vault.text("renamed.md")).toBe(`the ${second} text\n`);
-  }
-
-  it("refuses two names that differ only by case, and names both", async () => {
-    await aliased("Note.md", "note.md");
+    expect(b.vault.text(kept)).toBe(`the ${kept} text\n`);
+    expect(b.vault.text("renamed.md")).toBe(`the ${lost} text\n`);
+    expect((await a.engine.sync()).skippedPaths, "the rename left a refusal behind").toEqual([]);
   }, 240_000);
 
   // The pair that used to be here, `café.md` in NFC against the same name in
   // NFD, is not two names. It is one name spelled two ways, and refusing it
   // named two strings nobody can tell apart and never cleared, because there
-  // was nothing for a person to rename. It is now folded at the wire and the
-  // test for it is below, under "one name a peer spells in another normal
-  // form". Case stays here: `Note.md` and `note.md` are two names a person
-  // chose between, and a disk that folds them really can only hold one.
+  // was nothing for a person to rename. It is folded at the wire, a protocol
+  // 1 server refuses the NFD spelling outright, and the test for the fold is
+  // below, under "one name a peer spells in another normal form". Case stays
+  // here: `Note.md` and `note.md` are two names a person chose between, and a
+  // disk that folds them really can only hold one.
 
   it("still lets a case-only rename through", async () => {
     await fresh();
@@ -1446,125 +1489,229 @@ describe("two notes the receiving disk cannot hold apart", () => {
 });
 
 /**
- * A path the server holds in a Unicode normal form no
- * current client produces, which is every accented name a Mac running a
- * client older than the NFC rule ever uploaded.
+ * A path the server holds in a Unicode normal form no current client
+ * produces, which is every accented name a Mac running a client older than
+ * the NFC rule ever uploaded to a Basalt server.
+ *
+ * A protocol 1 server refuses such a path at the put (`nfc`, plan/protocol.md,
+ * "Paths"), and a device joins Trew by pairing fresh rather than inheriting a
+ * Basalt history, so a Trew server never holds one. The engine still files a
+ * name off the wire under its NFC spelling, because that is the one place a
+ * path from the wire becomes an identity here, and two checks are cheaper than
+ * one recovery (PLAN.md section 4.1). So these cases are played by a server
+ * that does hold one, on a fake socket, and what they pin is that the fold
+ * makes one note of it: never two notes a person cannot tell apart, and never
+ * a deletion or an edit sent under a name the server does not have.
  *
  * Folded here rather than left alone, because the alternative was measured:
- * the device wrote the note under its NFC name, found a name the index did
- * not know, uploaded it as a second note, and then had both spellings on the
- * server for ever, reporting `blocked: 1` on every pass and naming two
- * strings a person cannot tell apart. That is verbatim the failure
- * normalising was added to prevent.
+ * the device wrote the note under its NFC name, found a name the index did not
+ * know, uploaded it as a second note, and then had both spellings on the
+ * server for ever, reporting `blocked: 1` on every pass and naming two strings
+ * a person cannot tell apart. That is verbatim the failure normalising was
+ * added to prevent.
  *
  * What the device owes the server afterwards is a rename, not an upload, and
- * `prev` is how a rename travels: one entry, no bodies, because the chunks
- * are already there.
+ * `prev` is how a rename travels: one entry, no bodies, because the chunks are
+ * already there.
  */
 describe("one name a peer spells in another normal form", () => {
   const NFC = "caf\u00e9.md";
   const NFD = "cafe\u0301.md";
 
-  it("is the same file, and the correction travels as a rename", async () => {
-    await fresh();
-    // A plain MemoryVault hands out whatever spelling it was given, which is
-    // what the headless client did before it normalised: on a Mac, NFD.
-    const old = await device("old");
-    await old.vault.edit(NFD, "from the old client\n");
-    await old.engine.sync();
-    old.close();
+  /** A version of a file as a server lists it, with its body served. */
+  async function version(
+    uid: number,
+    path: string,
+    text: string,
+    bodies: Map<string, Uint8Array>,
+    over: { prev?: string } = {},
+  ) {
+    const raw = new TextEncoder().encode(text);
+    const name = await chunkName(raw);
+    bodies.set(name, raw);
+    return {
+      uid,
+      path,
+      size: raw.length,
+      ctime: 1000,
+      mtime: 1000,
+      folder: false,
+      deleted: false,
+      chunks: [name],
+      device: "old",
+      ...over,
+    };
+  }
 
-    // A current device pairs into that vault. Its own keyspace is NFC, so
-    // the note has to land on the NFC name and stay one note.
-    const now = await device("now", undefined, new CaseKeepingVault());
-    const report = await now.settle(6);
+  /**
+   * A device on a server that already holds `history`, which serves every
+   * body it holds and takes every write, recording each entry it was sent.
+   */
+  async function onServerHolding(
+    history: Record<string, unknown>[],
+    bodies: Map<string, Uint8Array>,
+  ) {
+    const rig = await engineOnFakeSocket({}, { vault: new CaseKeepingVault() });
+    let uid = history.length;
+    const written: Record<string, unknown>[] = [];
+    rig.socket.autoReply = (frame, s) => {
+      if (frame["op"] === "fetch") {
+        s.bodies(...(frame["chunks"] as string[]).map((n) => bodies.get(n)!));
+      } else if (frame["op"] === "putmany") {
+        // Every chunk is one it already holds: these writes are renames and
+        // deletions of content it served.
+        const entries = frame["entries"] as Record<string, unknown>[];
+        written.push(...entries);
+        s.reply({ res: "acks", results: entries.map(() => ({ uid: ++uid })) });
+      } else if (frame["op"] === "put") {
+        written.push(frame);
+        s.reply({ res: "have", uid: ++uid });
+      } else if (frame["op"] === "applied") {
+        s.reply({ res: "applied", cursor: frame["applied"] });
+      } else if (frame["op"] === "ping") {
+        s.raw({ res: "pong" });
+      }
+    };
+    rig.socket.raw({ op: "batch", from: 1, to: history.length, entries: history });
+    await settleUntil("the history to be taken", () => rig.engine.status().cursor === uid);
+    return { ...rig, written };
+  }
+
+  it("is the same file, and the correction travels as a rename", async () => {
+    const bodies = new Map<string, Uint8Array>();
+    const old = await version(1, NFD, "from the old client\n", bodies);
+    const now = await onServerHolding([old], bodies);
+
+    // This device's own keyspace is NFC, so the note has to land on the NFC
+    // name and stay one note.
+    let report!: SyncReport;
+    for (let i = 0; i < 4; i++) report = await now.engine.sync({ coalesceWrites: false });
     expect(report.blocked, `blocked: ${JSON.stringify(report.inTheWay)}`).toBe(0);
     expect(now.vault.paths()).toEqual([NFC]);
     expect(now.vault.text(NFC)).toBe("from the old client\n");
 
+    // And it went back as a rename rather than as a second note: one entry,
+    // from the server's spelling to this device's, naming the chunks the
+    // server already has, and not one body sent.
+    const renames = now.written.filter((e) => (e["meta"] as { prev?: string }).prev);
+    expect(renames, JSON.stringify(now.written)).toHaveLength(1);
+    expect(renames[0]).toMatchObject({ path: NFC, meta: { prev: NFD }, chunks: old.chunks });
+    expect(now.written, "the note went up a second time").toHaveLength(1);
+    expect(now.socket.sentBinary).toEqual([]);
+
     // Rule 10: the property is not that this device is quiet, it is that the
-    // vault ends up holding one note. A third device pairing in afterwards
-    // sees the rename in its backlog and gets one file, not two.
-    const later = await device("later", undefined, new CaseKeepingVault());
-    const theirs = await later.settle(6);
+    // vault ends up holding one note. A third device reading that history,
+    // the version and then the rename, gets one file, not two.
+    const later = await onServerHolding(
+      [old, { ...old, uid: 2, path: NFC, prev: NFD, device: "now" }],
+      bodies,
+    );
+    let theirs!: SyncReport;
+    for (let i = 0; i < 4; i++) theirs = await later.engine.sync({ coalesceWrites: false });
     expect(theirs.blocked, `blocked: ${JSON.stringify(theirs.inTheWay)}`).toBe(0);
     expect(later.vault.paths()).toEqual([NFC]);
     expect(later.vault.text(NFC)).toBe("from the old client\n");
-
-    // And it travelled as a rename rather than as a second note: an entry
-    // carrying `prev`, with no chunk of its own.
-    const renames = later.batches
-      .flatMap((b) => b.entries as { prev?: string; names?: unknown[] }[])
-      .filter((e) => e.prev);
-    expect(renames.length, "the correction did not travel as a rename").toBe(1);
-  }, 240_000);
+  });
 
   it("folds every segment, so a note under an NFD folder lands once", async () => {
-    await fresh();
-    const old = await device("old");
-    await old.vault.edit("Note\u0301s/cafe\u0301.md", "in a folder\n");
-    await old.engine.sync();
-    old.close();
+    const bodies = new Map<string, Uint8Array>();
+    const folder = {
+      uid: 1,
+      path: "Note\u0301s",
+      size: 0,
+      ctime: 1000,
+      mtime: 1000,
+      folder: true,
+      deleted: false,
+      chunks: [],
+      device: "old",
+    };
+    const file = await version(2, "Note\u0301s/cafe\u0301.md", "in a folder\n", bodies);
+    const now = await onServerHolding([folder, file], bodies);
 
-    const now = await device("now", undefined, new CaseKeepingVault());
-    const report = await now.settle(6);
+    let report!: SyncReport;
+    for (let i = 0; i < 4; i++) report = await now.engine.sync({ coalesceWrites: false });
     expect(report.blocked, `blocked: ${JSON.stringify(report.inTheWay)}`).toBe(0);
     expect(now.vault.paths()).toEqual(["Not\u00e9s/caf\u00e9.md"]);
     expect(now.vault.text("Not\u00e9s/caf\u00e9.md")).toBe("in a folder\n");
-  }, 240_000);
+  });
 
   it("deletes the note the server has, not a name it has never heard of", async () => {
-    await fresh();
-    const old = await device("old");
-    await old.vault.edit(NFD, "to be deleted\n");
-    await old.engine.sync();
-    old.close();
-
-    const now = await device("now", undefined, new CaseKeepingVault());
-    await now.engine.sync();
+    const bodies = new Map<string, Uint8Array>();
+    const now = await onServerHolding([await version(1, NFD, "to be deleted\n", bodies)], bodies);
+    await now.engine.sync({ coalesceWrites: false });
     expect(now.vault.paths(), "the note did not arrive").toEqual([NFC]);
+
     // Deleted before this device has told the server which name it uses. A
     // deletion sent under a name the server never had deletes nothing, and
     // the note comes back to life on every other device.
+    const before = now.written.length;
     await now.vault.remove(NFC);
-    await now.settle(6);
-
-    const watcher = await device("watcher", undefined, new CaseKeepingVault());
-    await watcher.settle(6);
-    expect(watcher.vault.paths(), "the deletion did not travel").toEqual([]);
+    for (let i = 0; i < 4; i++) await now.engine.sync({ coalesceWrites: false });
 
     // Rule 10: the property is which note the server was told to delete, not
-    // whether a device running this code happened to agree. A deletion under
-    // a name the server has never had leaves the note alive there, and every
-    // device that has not folded it keeps it.
-    const wire = await sealPath(keys, NFD);
-    const deletions = watcher.batches
-      .flatMap((b) => b.entries as { path: string; deleted?: boolean }[])
-      .filter((e) => e.deleted);
-    expect(
-      deletions.map((e) => e.path),
-      "the deletion did not name the path the server holds",
-    ).toContain(wire);
-  }, 240_000);
+    // whether a device running this code happened to agree.
+    const deletions = now.written
+      .slice(before)
+      .filter((e) => (e["meta"] as { deleted?: boolean }).deleted);
+    expect(deletions.length, JSON.stringify(now.written)).toBeGreaterThan(0);
+    for (const d of deletions) {
+      expect(d["path"], "the deletion did not name the path the server holds").toBe(NFD);
+    }
+    expect(now.vault.paths()).toEqual([]);
+  });
 
   it("carries an edit back under the name the server already has", async () => {
-    await fresh();
-    const old = await device("old");
-    await old.vault.edit(NFD, "first\n");
-    await old.engine.sync();
-    old.close();
+    const bodies = new Map<string, Uint8Array>();
+    const now = await onServerHolding([await version(1, NFD, "first\n", bodies)], bodies);
+    for (let i = 0; i < 4; i++) await now.engine.sync({ coalesceWrites: false });
+    expect(now.vault.snapshot()).toEqual({ [NFC]: "first\n" });
+    // The correction has gone by now, as the rename above: the server's name
+    // for the note is this device's spelling from uid 2, which is the uid
+    // this fake gives the first write after its one-version history.
+    expect(now.written).toHaveLength(1);
+    expect(now.written[0]).toMatchObject({ path: NFC, meta: { prev: NFD }, base: 0, prevBase: 1 });
 
-    const a = await device("a", undefined, new CaseKeepingVault());
-    await a.settle(6);
-    await a.vault.edit(NFC, "second\n");
-    const mine = await a.settle(6);
+    // The edit's body is new, so the server asks for it.
+    now.socket.autoReply = ((reply) => (frame, s) => {
+      if (frame["op"] === "putmany") {
+        const entries = frame["entries"] as { chunks: string[] }[];
+        const missing = entries.flatMap((e) => e.chunks).filter((n) => !bodies.has(n));
+        if (missing.length > 0) {
+          now.written.push(...(entries as unknown as Record<string, unknown>[]));
+          s.reply({ res: "want", chunks: missing });
+          setTimeout(
+            () => s.reply({ res: "acks", results: entries.map((_, i) => ({ uid: 10 + i })) }),
+            20,
+          );
+          return;
+        }
+      }
+      reply?.(frame, s);
+    })(now.socket.autoReply);
+
+    const before = now.written.length;
+    await now.vault.edit(NFC, "second\n", 9_000_000);
+    let mine!: SyncReport;
+    for (let i = 0; i < 4; i++) mine = await now.engine.sync({ coalesceWrites: false });
     expect(mine.blocked).toBe(0);
+    expect(now.vault.snapshot()).toEqual({ [NFC]: "second\n" });
 
-    const b = await device("b", undefined, new CaseKeepingVault());
-    const theirs = await b.settle(6);
-    expect(theirs.blocked, `blocked: ${JSON.stringify(theirs.inTheWay)}`).toBe(0);
-    expect(b.vault.snapshot()).toEqual({ [NFC]: "second\n" });
-  }, 240_000);
+    // One write carries the edit, and it is written on top of the version the
+    // server holds, under the name the server holds it by, never as a second
+    // note with a name of its own beside it.
+    const edits = now.written.slice(before);
+    expect(edits, JSON.stringify(edits)).toHaveLength(1);
+    expect(edits[0]).toMatchObject({ path: NFC, base: 2 });
+    expect("prev" in (edits[0]!["meta"] as object), "the edit was sent as a second rename").toBe(
+      false,
+    );
+    // And the one body that went up is the edit's.
+    const sent = now.socket.sentBinary.map((f) =>
+      new TextDecoder().decode(decodeFrame(f, LOCAL_MAX_CHUNK_BYTES)),
+    );
+    expect(sent).toEqual(["second\n"]);
+  });
 });
 
 /**
@@ -2063,7 +2210,7 @@ describe("a pass that ended early", () => {
     engine.outbox.push({
       path: "left-over.md",
       size: 0,
-      entry: { path: "sealed", meta: { size: 0, ctime: 0, mtime: 0, folder: true }, names: [] },
+      entry: { path: "left-over", meta: { size: 0, ctime: 0, mtime: 0, folder: true }, names: [] },
       bodyOf: async () => new Uint8Array(0),
       commit: () => {
         committed = true;
@@ -2260,31 +2407,26 @@ async function entryCount(d: Device): Promise<number> {
 
 describe("what a large attachment costs to send", () => {
   /**
-   * A put used to take every sealed chunk of a file at once, so a 256 MiB
-   * attachment, which is the size the server advertises it will take, meant
-   * 512 MiB live: the file and a sealed copy of it. Measured rather than
+   * A put used to take every chunk of a file at once, so a 256 MiB attachment,
+   * which is the size the server advertises it will take, meant twice that
+   * live: the file and a copy of it for the wire. Measured rather than
    * guessed, and on a phone that is not a spike but the end of the process.
    *
    * The names still have to be known before the put is sent, so the file is
-   * chunked and sealed in full either way. Two things changed. The sealed
-   * bytes are dropped above a threshold, and a wanted chunk is sealed again
-   * from the file, which is deterministic and so gives the same bytes. And
-   * the sealing itself now runs a bounded window at a time, so a sealed copy
-   * of the whole file is never live even for the moment it takes to learn the
-   * names. Measured through a whole sync of one 64 MiB attachment: 816 MB
-   * peak resident became 522 MB, and no slower.
-   *
-   * This counts how many sealed bodies are alive when the server asks for one
-   * rather than trying to read the heap, because the heap is the runtime's
-   * business and the count is the property.
+   * chunked and named in full either way. What changed is that a vault that
+   * can read a file in blocks and ranges is never asked for the whole of it:
+   * the file is read once to cut and name it, a chunk at a time, and a chunk
+   * the server wants is read back from the disk and hashed again before it
+   * goes, framed as it is sent. Basalt sealed the chunk a second time here;
+   * protocol 1 has nothing to seal, so the check is the hash.
    */
   /**
-   * Windowing must change nothing but the memory. If the names differed from
-   * what sealing everything at once produces, a file would go up under names
+   * Windowing must change nothing but the time. If the names differed from
+   * what naming each chunk on its own produces, a file would go up under names
    * no other device agrees with, and every one of them would download it
    * again for ever.
    */
-  it("names a file the same whatever window it is sealed in", async () => {
+  it("names a file the same whatever window it is named in", async () => {
     // Comfortably more than one window. Content-defined chunking on random
     // bytes gives a count that varies run to run, so a file sized to land
     // near the window boundary makes this test flaky rather than wrong.
@@ -2294,18 +2436,19 @@ describe("what a large attachment costs to send", () => {
     }
     const pieces = [...chunkBytes(big, sizesFor(big.length, false), false)].map((c) => c.bytes);
     expect(pieces.length, "the test file is too small to have windows at all").toBeGreaterThan(
-      SEAL_WINDOW * 2,
+      NAME_WINDOW * 2,
     );
 
-    const together = (await sealChunks(keys, pieces)).map((c) => c.name);
-    for (const window of [1, 3, SEAL_WINDOW, pieces.length * 2]) {
-      expect(await sealedNames(keys, pieces, window), `window ${window}`).toEqual(together);
+    const oneByOne: string[] = [];
+    for (const piece of pieces) oneByOne.push(await chunkName(piece));
+    for (const window of [1, 3, NAME_WINDOW, pieces.length * 2]) {
+      expect(await chunkNames(pieces, window), `window ${window}`).toEqual(oneByOne);
     }
   });
 
   /**
    * The server refuses an oversized file at the put, which is correct and far
-   * too late: by then the client has read it, chunked it and sealed it, and
+   * too late: by then the client has read it, chunked it and named it, and
    * preparing a file costs several times its own size in memory. A file just
    * over the limit therefore cost the most memory of anything in the vault in
    * order to produce an error its size alone predicted.
@@ -2353,7 +2496,6 @@ describe("what a large attachment costs to send", () => {
    */
   it("names a streamed file exactly as a held one", async () => {
     const { chunkBytes, chunkStream, sizesFor } = await import("./chunk.ts");
-    const { sealChunks } = await import("./crypto.ts");
 
     const bytes = new Uint8Array(9 * 1024 * 1024);
     for (let at = 0; at < bytes.length; at += 65536) {
@@ -2361,12 +2503,7 @@ describe("what a large attachment costs to send", () => {
     }
     const sizes = sizesFor(bytes.length, false);
 
-    const held = (
-      await sealChunks(
-        keys,
-        [...chunkBytes(bytes, sizes, false)].map((c) => c.bytes),
-      )
-    ).map((c) => c.name);
+    const held = await chunkNames([...chunkBytes(bytes, sizes, false)].map((c) => c.bytes));
 
     async function* blocks(size: number) {
       for (let at = 0; at < bytes.length; at += size) {
@@ -2381,7 +2518,7 @@ describe("what a large attachment costs to send", () => {
       const streamed: string[] = [];
       const spans: number[] = [];
       for await (const piece of chunkStream(blocks(blockSize), sizes, false)) {
-        streamed.push((await sealChunks(keys, [piece.bytes]))[0]!.name);
+        streamed.push(await chunkName(piece.bytes));
         spans.push(piece.offset);
       }
       expect(streamed, `block size ${blockSize}`).toEqual(held);
@@ -2391,28 +2528,78 @@ describe("what a large attachment costs to send", () => {
     }
   });
 
-  it("does not hold a sealed copy of the whole file", async () => {
+  /**
+   * A memory vault that can hand a file out in blocks and ranges, the way the
+   * headless client's disk can, and says how much of a file it was ever asked
+   * for at once.
+   */
+  class StreamingVault extends MemoryVault {
+    /** Whole-file reads, by path. */
+    readonly wholeReads = new Map<string, number>();
+    /** The ranges read back, as [start, end]. */
+    readonly ranges: [number, number][] = [];
+    /** The most bytes any one read handed out. */
+    widest = 0;
+
+    override async read(path: string): Promise<Uint8Array> {
+      this.wholeReads.set(path, (this.wholeReads.get(path) ?? 0) + 1);
+      return super.read(path);
+    }
+    async *readBlocks(path: string, blockSize = 64 * 1024): AsyncIterable<Uint8Array> {
+      const bytes = await super.read(path);
+      for (let at = 0; at < bytes.length; at += blockSize) {
+        const block = bytes.slice(at, Math.min(at + blockSize, bytes.length));
+        this.widest = Math.max(this.widest, block.length);
+        yield block;
+      }
+    }
+    async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
+      const range = (await super.read(path)).slice(start, end);
+      this.ranges.push([start, end]);
+      this.widest = Math.max(this.widest, range.length);
+      return range;
+    }
+  }
+
+  it("does not hold a copy of the whole file", async () => {
     await fresh();
     const said: string[] = [];
-    const a = await device("a", (m: string, ...r: unknown[]) =>
-      said.push(m + " " + r.map(String).join(" ")),
+    const vault = new StreamingVault();
+    const a = await device(
+      "a",
+      (m: string, ...r: unknown[]) => said.push(m + " " + r.map(String).join(" ")),
+      vault,
     );
 
-    // Incompressible, so the sealed bytes are the size of the file rather
-    // than of a run-length encoding of it.
+    // Incompressible, so the frames are the size of the file rather than of a
+    // run-length encoding of it, and over the size a file is held whole.
     const big = new Uint8Array(12 * 1024 * 1024);
     for (let at = 0; at < big.length; at += 65536) {
       crypto.getRandomValues(big.subarray(at, Math.min(at + 65536, big.length)));
     }
-    await a.vault.write("attachment.bin", big, { mtime: 1000, ctime: 1000 });
+    await vault.write("attachment.bin", big, { mtime: 1000, ctime: 1000 });
 
     const report = await a.engine.sync();
     expect(report.uploaded, said.join(" | ")).toBe(1);
     expect(report.chunksSent, "a 12 MiB attachment came out as one chunk").toBeGreaterThan(1);
 
-    // And it arrives intact, which is the thing re-sealing could break: the
-    // second seal has to be byte for byte the first, or the server refuses
-    // the body against the name it asked for.
+    // The property: the file was never in hand as one buffer. It was cut and
+    // named from blocks, and each body that went up was read back by range,
+    // one chunk at a time, and only for the chunks the server asked for.
+    expect(vault.wholeReads.get("attachment.bin") ?? 0, "the whole file was read at once").toBe(0);
+    expect(vault.ranges.length, "the bodies were not read back by range").toBe(report.chunksSent);
+    expect(vault.widest, "a read handed out more than one chunk").toBeLessThanOrEqual(
+      LOCAL_MAX_CHUNK_BYTES,
+    );
+    // And every byte of it went up once: the ranges tile the file.
+    const covered = [...vault.ranges].sort((x, y) => x[0] - y[0]);
+    expect(covered[0]![0]).toBe(0);
+    for (let i = 1; i < covered.length; i++) expect(covered[i]![0]).toBe(covered[i - 1]![1]);
+    expect(covered.at(-1)![1]).toBe(big.length);
+
+    // And it arrives intact, which is the thing reading it back could break:
+    // each range has to be byte for byte the chunk that was named, or the
+    // server refuses the body against the name it asked for.
     const b = await device("b");
     await b.settle(6);
     const got = await b.vault.read("attachment.bin");
@@ -2422,15 +2609,18 @@ describe("what a large attachment costs to send", () => {
     );
   }, 300_000);
 
-  /** A note keeps its sealed chunks, because re-sealing one saves nothing. */
-  it("still sends a small file without sealing it twice", async () => {
+  /** A note is held while it is sent, because reading it twice saves nothing. */
+  it("still sends a small file from the bytes it named", async () => {
     await fresh();
-    const a = await device("a");
-    await a.vault.edit("note.md", "a note, which is what almost every file is\n");
+    const vault = new StreamingVault();
+    const a = await device("a", undefined, vault);
+    await vault.edit("note.md", "a note, which is what almost every file is\n");
     // One pass, because Device.settle returns the last of several and the
     // last one is by construction the one with nothing left to do.
     const report = await a.engine.sync();
     expect(report.uploaded).toBe(1);
+    // Under the streaming threshold, so no range was read back for it.
+    expect(vault.ranges).toEqual([]);
 
     const b = await device("b");
     await b.settle(4);
@@ -2553,11 +2743,12 @@ describe("large files", () => {
 /**
  * What the client refuses to be told by the server it is talking to.
  *
- * Everything the engine acts on beyond the chunk bodies and the sealed path
- * arrives in the clear and unauthenticated: `size`, `deleted`, `folder` and the
- * chunk list. The server holds every sealed path in the vault, so it can name
- * any file. These are the invariants the protocol doc already states and the
- * client was not checking on the way in.
+ * Everything the engine acts on arrives from the server and is the server's
+ * word: the path, `size`, `deleted`, `folder` and the chunk list. Protocol 1
+ * carries no writer authenticity (PLAN.md section 3.6), so a device takes that
+ * word about who wrote an entry; what it does not take is an entry that
+ * contradicts itself. These are the invariants the protocol doc already states
+ * and the client was not checking on the way in.
  *
  * `docs/protocol.md`: "a file declaring a size names at least one chunk, since a
  * size with no chunks is byte-identical on the wire to an empty note." That was
@@ -2566,33 +2757,15 @@ describe("large files", () => {
  * assembly was written straight over the file. Through `write`, not `remove`, so
  * there was no trash copy either, and the emptied note then propagated to every
  * peer as an ordinary edit.
- */
-/**
- * A forged entry, signed the way a key holder signs.
  *
- * These tests are about the checks *behind* the authenticator: a writer that
- * holds the key and still emits something contradictory, which is a bug rather
- * than an attack, and which a corrupt row reproduces exactly. Without a valid
- * mac they would be refused one step earlier and prove nothing about the checks
- * they are named for.
+ * A writer's bug does this as readily as a hostile server, and a corrupt row
+ * reproduces it exactly, which is why these are refused rather than trusted.
+ *
+ * Basalt's version of this group opened with three refusals of entries whose
+ * authenticator was missing, forged, or did not cover the fields as they
+ * arrived (plan/strip-ledger.md, engine.test.ts:2628, :2656, :2682). Protocol 1
+ * has no authenticator, so they went with it.
  */
-async function signed(e: Omit<WireEntry, "mac">): Promise<WireEntry> {
-  return {
-    ...e,
-    mac: await macEntry(keys, {
-      path: e.path,
-      size: e.size,
-      ctime: e.ctime,
-      mtime: e.mtime,
-      folder: e.folder,
-      deleted: e.deleted,
-      prev: e.prev,
-      chunks: e.chunks,
-      parent: e.parent ?? "",
-    }),
-  };
-}
-
 describe("a batch that contradicts itself", () => {
   let server: TestServer;
   let a: Device;
@@ -2602,8 +2775,8 @@ describe("a batch that contradicts itself", () => {
     if (server) await server.cleanup();
   });
 
-  /** One device holding one synced note, and that note's sealed path. */
-  async function synced(): Promise<{ path: string; sealed: string; before: Uint8Array }> {
+  /** One device holding one synced note. */
+  async function synced(): Promise<{ path: string; before: Uint8Array }> {
     server = new TestServer();
     await server.start();
     a = new Device("a");
@@ -2614,19 +2787,42 @@ describe("a batch that contradicts itself", () => {
     await a.vault.write(path, before, { mtime: a.clock, ctime: a.clock });
     await a.engine.sync();
     expect(await a.vault.read(path)).toEqual(before);
-    return { path, sealed: await sealPath(keys, path), before };
+    return { path, before };
   }
 
-  /**
-   * The envelope itself. Everything above tests a check behind it; this tests
-   * that a server which does not hold the key cannot get past it at all.
-   *
-   * Before the entry authenticator each of these worked: the bytes of a file were sealed
-   * and nothing else was, and the server holds every sealed path in the vault,
-   * so it could name any file and say anything about it.
-   */
-  it("refuses an entry carrying no authenticator", async () => {
-    const { path, sealed, before } = await synced();
+  /** A chunk name of the right shape, so the check a case is about is the one that fires. */
+  const someChunk = "c".repeat(64);
+
+  it("refuses a size with no chunks, rather than emptying the note", async () => {
+    const { path, before } = await synced();
+    const uid = 1_000_000;
+
+    await expect(
+      a.engine.acceptBatch({
+        from: uid,
+        to: uid,
+        entries: [
+          {
+            uid,
+            path,
+            size: before.length,
+            ctime: 0,
+            mtime: a.clock + 1000,
+            folder: false,
+            deleted: false,
+            chunks: [],
+            device: "b",
+          },
+        ],
+      }),
+    ).rejects.toThrow(/declares \d+ bytes and names no chunks/);
+
+    // And the note is still there. A refusal that already wrote is not one.
+    expect(await a.vault.read(path)).toEqual(before);
+  });
+
+  it("refuses chunks on an entry that says it is a deletion", async () => {
+    const { path } = await synced();
     const uid = 1_000_000;
     await expect(
       a.engine.acceptBatch({
@@ -2635,165 +2831,54 @@ describe("a batch that contradicts itself", () => {
         entries: [
           {
             uid,
-            path: sealed,
-            size: 0,
-            ctime: 0,
-            mtime: a.clock + 1000,
-            folder: false,
-            deleted: true,
-            chunks: [],
-            device: "b",
-            parent: "",
-            mac: "",
-          },
-        ],
-      }),
-    ).rejects.toThrow(/not authenticated by this vault's key/);
-    await a.engine.sync();
-    expect(await a.vault.read(path)).toEqual(before);
-  });
-
-  it("refuses a deletion the server invented for a file it can name", async () => {
-    const { path, sealed, before } = await synced();
-    const uid = 1_000_000;
-    // A well-formed mac, from a key this vault does not use.
-    const stranger = await otherVaultKeys(3);
-    const facts = {
-      path: sealed,
-      size: 0,
-      ctime: 0,
-      mtime: a.clock + 1000,
-      folder: false,
-      deleted: true,
-      chunks: [] as string[],
-      parent: "",
-    };
-    await expect(
-      a.engine.acceptBatch({
-        from: uid,
-        to: uid,
-        entries: [{ uid, device: "b", ...facts, mac: await macEntry(stranger, facts) }],
-      }),
-    ).rejects.toThrow(/not authenticated by this vault's key/);
-    await a.engine.sync();
-    expect(await a.vault.read(path)).toEqual(before);
-  });
-
-  it("refuses an entry whose fields were edited after it was signed", async () => {
-    const { path, sealed, before } = await synced();
-    const uid = 1_000_000;
-    // Signed honestly as a small edit, then altered into a deletion.
-    const honest = {
-      path: sealed,
-      size: 0,
-      ctime: 0,
-      mtime: a.clock + 1000,
-      folder: false,
-      deleted: false,
-      chunks: [] as string[],
-      parent: "",
-    };
-    const mac = await macEntry(keys, honest);
-    await expect(
-      a.engine.acceptBatch({
-        from: uid,
-        to: uid,
-        entries: [{ uid, device: "b", ...honest, deleted: true, mac }],
-      }),
-    ).rejects.toThrow(/not authenticated by this vault's key/);
-    await a.engine.sync();
-    expect(await a.vault.read(path)).toEqual(before);
-  });
-
-  it("refuses a size with no chunks, rather than emptying the note", async () => {
-    const { path, sealed, before } = await synced();
-    const uid = 1_000_000;
-
-    await expect(
-      a.engine.acceptBatch({
-        from: uid,
-        to: uid,
-        entries: [
-          await signed({
-            uid,
-            path: sealed,
-            size: before.length,
-            ctime: 0,
-            mtime: a.clock + 1000,
-            folder: false,
-            deleted: false,
-            chunks: [],
-            device: "b",
-            parent: "",
-          }),
-        ],
-      }),
-    ).rejects.toThrow(/size|chunk/i);
-
-    // And the note is still there. A refusal that already wrote is not one.
-    expect(await a.vault.read(path)).toEqual(before);
-  });
-
-  it("refuses chunks on an entry that says it is a deletion", async () => {
-    const { sealed } = await synced();
-    const uid = 1_000_000;
-    await expect(
-      a.engine.acceptBatch({
-        from: uid,
-        to: uid,
-        entries: [
-          await signed({
-            uid,
-            path: sealed,
+            path,
             size: 0,
             ctime: 0,
             mtime: a.clock,
             folder: false,
             deleted: true,
-            chunks: ["deadbeef"],
+            chunks: [someChunk],
             device: "b",
-            parent: "",
-          }),
+          },
         ],
       }),
-    ).rejects.toThrow(/chunk/i);
+    ).rejects.toThrow(/is a deletion and names 1 chunks/);
   });
 
   it("refuses chunks on an entry that says it is a folder", async () => {
-    const { sealed } = await synced();
+    const { path } = await synced();
     const uid = 1_000_000;
     await expect(
       a.engine.acceptBatch({
         from: uid,
         to: uid,
         entries: [
-          await signed({
+          {
             uid,
-            path: sealed,
+            path,
             size: 0,
             ctime: 0,
             mtime: a.clock,
             folder: true,
             deleted: false,
-            chunks: ["deadbeef"],
+            chunks: [someChunk],
             device: "b",
-            parent: "",
-          }),
+          },
         ],
       }),
-    ).rejects.toThrow(/chunk/i);
+    ).rejects.toThrow(/is a folder and names 1 chunks/);
   });
 
   /**
-   * The attack the arrival check cannot see: a chunk list that is internally
-   * consistent and belongs to a different file. Every chunk authenticates,
-   * because every chunk is authentic; nothing binds one to the file it was cut
-   * from. What catches it is that the bytes do not add up to the size the
-   * entry declares, and the declared size is a count of the bytes that were
-   * chunked rather than a stat, so that comparison is exact.
+   * The substitution the arrival check cannot see: a chunk list that is
+   * internally consistent and belongs to a different file. Every chunk hashes
+   * to its name, because every chunk is real; nothing binds one to the file it
+   * was cut from. What catches it is that the bytes do not add up to the size
+   * the entry declares, and the declared size is a count of the bytes that
+   * were chunked rather than a stat, so that comparison is exact.
    */
   it("refuses a chunk list belonging to another file", async () => {
-    const { path, sealed, before } = await synced();
+    const { path, before } = await synced();
 
     const other = "Notes/other.md";
     await a.vault.write(other, new TextEncoder().encode("a different length entirely, longer\n"), {
@@ -2811,9 +2896,9 @@ describe("a batch that contradicts itself", () => {
       from: uid,
       to: uid,
       entries: [
-        await signed({
+        {
           uid,
-          path: sealed,
+          path,
           // The size of the file being overwritten, with the chunks of
           // the one being substituted in.
           size: before.length,
@@ -2823,8 +2908,7 @@ describe("a batch that contradicts itself", () => {
           deleted: false,
           chunks: [...otherChunks],
           device: "b",
-          parent: "",
-        }),
+        },
       ],
     });
 
@@ -2837,26 +2921,29 @@ describe("a batch that contradicts itself", () => {
   /**
    * A batch is one unit. Applied entry by entry, everything before a failure
    * stayed, `save()` persisted it, and `deleteLocal` needs no server to act on
-   * it later: a forged deletion followed by an entry sealed under another
-   * vault's key landed the deletion while the session died looking like a
-   * misconfiguration.
+   * it later: a deletion followed by an entry the engine refused landed the
+   * deletion while the session died looking like a misconfiguration.
+   *
+   * The later entry used to be one sealed under another vault's key, which
+   * protocol 1 cannot express. It is an entry that contradicts itself instead,
+   * a refusal that stands on its own (hazard 5 in plan/strip-ledger.md), and
+   * the rejection is matched to it so the case cannot pass on some other
+   * failure while the deletion in front goes unexamined.
    */
-  it("applies nothing from a batch whose later entry is not ours", async () => {
-    const { path, sealed, before } = await synced();
+  it("applies nothing from a batch whose later entry contradicts itself", async () => {
+    const { path, before } = await synced();
     const uid = 1_000_000;
-
-    // A second vault's key, so its sealed path cannot be opened by this one.
-    const stranger = await otherVaultKeys(9);
-    const foreign = await sealPath(stranger, "Notes/theirs.md");
 
     await expect(
       a.engine.acceptBatch({
         from: uid,
         to: uid + 1,
         entries: [
-          await signed({
+          // A well-formed deletion of the synced note, which on its own would
+          // be applied.
+          {
             uid,
-            path: sealed,
+            path,
             size: 0,
             ctime: 0,
             mtime: a.clock + 1000,
@@ -2864,40 +2951,39 @@ describe("a batch that contradicts itself", () => {
             deleted: true,
             chunks: [],
             device: "b",
-            parent: "",
-          }),
-          await signed({
+          },
+          {
             uid: uid + 1,
-            path: foreign,
+            path: "Notes/theirs.md",
             size: 0,
             ctime: 0,
             mtime: a.clock + 1000,
-            folder: false,
-            deleted: false,
+            folder: true,
+            deleted: true,
             chunks: [],
             device: "b",
-            parent: "",
-          }),
+          },
         ],
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/is both a folder and a deletion/);
 
-    // The forged deletion in front of it must not survive the refusal.
+    // The deletion in front of it must not survive the refusal.
     await a.engine.sync();
     expect(await a.vault.read(path)).toEqual(before);
+    expect(a.engine.status().pending, "the refused batch left work behind").toBe(0);
   });
 
   it("still accepts an ordinary empty note, which is a size of zero and no chunks", async () => {
-    const { sealed } = await synced();
+    const { path } = await synced();
     const uid = 1_000_000;
     await expect(
       a.engine.acceptBatch({
         from: uid,
         to: uid,
         entries: [
-          await signed({
+          {
             uid,
-            path: sealed,
+            path,
             size: 0,
             ctime: 0,
             mtime: a.clock + 1000,
@@ -2905,8 +2991,7 @@ describe("a batch that contradicts itself", () => {
             deleted: false,
             chunks: [],
             device: "b",
-            parent: "",
-          }),
+          },
         ],
       }),
     ).resolves.toBeUndefined();
@@ -2946,7 +3031,7 @@ describe("bounds taken from the party they exist to bound", () => {
    * `assemble` reads its ceiling through `boundedBy`; the pre-check in
    * `reconcile` read the server's raw number and gated on `> 0`. Against a
    * server advertising `perFileMax: 0` that guard was simply off, so this
-   * device would read, chunk and seal a file no server anywhere will store,
+   * device would read, chunk and name a file no server anywhere will store,
    * which on a phone is the end of the process rather than a wasted pass.
    */
   it("refuses an outbound file over this device's ceiling when the server names none", async () => {
@@ -2988,10 +3073,16 @@ describe("a server that is behind this device", () => {
    * The refusal used to end at the diagnosis, and the recovery lived in
    * docs/server.md. The person reading this is looking at a vault that has
    * stopped syncing, on a phone as often as not; an error string is the only
-   * UI they have. Both ways back are named, and the cost of the blunt one
-   * with them, because re-pairing resets the merge base.
+   * UI they have. Both ways back are named, and the cost of them, because
+   * either resets the merge base.
+   *
+   * Basalt's first way back was `trew rebase --backup-taken`, which the
+   * headless client no longer has: a restore through `trew backup` starts a
+   * new epoch, the server replays the vault, and nothing is asked of the
+   * device, so what is left to recover from here is a data directory copied
+   * back behind the server's back, and the refusal says that too.
    */
-  it("names both recoveries, and what the blunt one costs", () => {
+  it("names both recoveries, and what they cost", () => {
     let thrown: unknown;
     try {
       refuseIfBehind(5, 9);
@@ -2999,8 +3090,9 @@ describe("a server that is behind this device", () => {
       thrown = err;
     }
     const message = (thrown as Error).message;
-    expect(message).toContain("trew rebase --backup-taken");
     expect(message).toContain("Rejoin this server");
+    expect(message).toMatch(/pair it again with a new invite/);
+    expect(message).toMatch(/new epoch/);
     expect(message).toMatch(/conflict copies instead of merging/);
     expect(message, "the recovery pushed the numbers out of the refusal").toMatch(/5.*9|9.*5/);
   });
@@ -3040,7 +3132,7 @@ describe("a server that is behind this device", () => {
 /**
  * A move should not put the file back on the wire.
  *
- * Chunk names are hashes of ciphertext, so moving a file costs the sender
+ * Chunk names are hashes of the raw bytes, so moving a file costs the sender
  * nothing: the server already holds every chunk and only metadata travels. The
  * receiver had no such luck and downloaded the whole file back, under a name it
  * was already storing the identical bytes under. Moving one folder of
@@ -3346,10 +3438,15 @@ describe("a written-off file that somebody has since fixed", () => {
  *
  * The describe above hands a folding disk two notes another device already
  * holds. Here each device writes one: `Note.md` where the disk keeps case
- * apart, `note.md` where it does not. To the server they are two files, to the
- * folding disk one, and the arriving one must not land on top of the note that
- * device wrote. Rule 10: the property is that both texts survive, not that the
- * two devices agree.
+ * apart, `note.md` where it does not. The arriving one must not land on top of
+ * the note that device wrote. Rule 10: the property is that both texts
+ * survive, not that the two devices agree.
+ *
+ * In Basalt the server held both, so the device that keeps case apart ended
+ * up with both. A protocol 1 server takes whichever arrives first and refuses
+ * the other as a `collision` (PLAN.md section 4.1), so each text survives on
+ * the device that wrote it, and the refused one is named there, with the
+ * server's reason, beside the one in its way.
  */
 describe("two notes that differ only by case, one written on each device", () => {
   it("keeps the folding device's own note and both texts survive", async () => {
@@ -3359,33 +3456,40 @@ describe("two notes that differ only by case, one written on each device", () =>
 
     await linux.vault.edit("Note.md", "written on linux\n");
     await mac.vault.edit("note.md", "written on the mac\n");
+    // Linux syncs first in every round, so its spelling is the one the
+    // server takes.
     await convergeBoth(linux, mac, 4);
     const report = await mac.engine.sync();
 
     // The Mac's note is untouched, and nothing it holds was replaced.
     expect(mac.vault.text("note.md")).toBe("written on the mac\n");
     expect(mac.vault.paths()).toEqual(["note.md"]);
-    // The Linux text exists on the device that wrote it and on the one that
-    // can hold both, which also received the Mac's note.
-    expect(linux.vault.snapshot()).toEqual({
-      "Note.md": "written on linux\n",
-      "note.md": "written on the mac\n",
-    });
+    // The Linux text is on the device that wrote it and on the server; the
+    // Mac's never reached either, because the server refused it.
+    expect(linux.vault.snapshot()).toEqual({ "Note.md": "written on linux\n" });
+    expect(await server.cli("cat", "-path", "Note.md")).toBe("written on linux\n");
+    await expect(server.cli("cat", "-path", "note.md")).rejects.toThrow(/has never held/);
     // And the Mac says so, naming the file in the way, every pass until a
-    // person renames one of them.
+    // person renames one of them...
     expect(report.blocked).toBe(1);
     expect(report.inTheWay).toEqual([{ path: "Note.md", blockedBy: "note.md" }]);
+    // ...and naming its own note as the one the server would not take.
+    expect(report.skippedPaths).toEqual(["note.md"]);
     // The four maps are untouched and the one list a person reads is built
     // from them, with the sentence rather than the category. Both surfaces
     // print this and neither invents its own words for it any more.
-    expect(report.needsAttention).toEqual([
-      {
-        path: "Note.md",
-        why:
-          '"note.md" is a file here and a folder on another device. ' +
-          "Rename one of them, on whichever device meant the other thing.",
-      },
-    ]);
+    expect(report.needsAttention).toHaveLength(2);
+    expect(report.needsAttention[0]).toEqual({
+      path: "Note.md",
+      why:
+        '"note.md" is a file here and a folder on another device. ' +
+        "Rename one of them, on whichever device meant the other thing.",
+    });
+    const refused = report.needsAttention[1]!;
+    expect(refused.path).toBe("note.md");
+    expect(refused.why).toMatch(/^collision: /);
+    expect(refused.why).toContain('"Note.md"');
+    expect(refused.why).toMatch(/Rename one of the two\.$/);
   }, 240_000);
 });
 
