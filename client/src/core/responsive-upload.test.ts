@@ -3,7 +3,6 @@ import { Client } from "./client.ts";
 import type { SocketLike } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 import { TestServer } from "./test-server.ts";
-import { testWrapped } from "./test-keys.ts";
 import { deferred, receiveCommitted, within } from "./test-async.ts";
 
 const clients: Client[] = [];
@@ -16,8 +15,6 @@ afterEach(async () => {
 async function pair() {
   server = new TestServer();
   await server.start();
-  const secret = new Uint8Array(32).fill(83),
-    wrapped = await testWrapped(secret);
   const vault = new MemoryVault(),
     peerVault = new MemoryVault();
   const sockets: WebSocket[] = [];
@@ -31,7 +28,7 @@ async function pair() {
     vault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(secret, wrapped, "writer")),
+    ...(await server.deviceCredentials("writer")),
     vaultId: "default",
     device: "writer",
     inspect: true,
@@ -83,7 +80,7 @@ async function pair() {
     vault: peerVault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(secret, wrapped, "peer")),
+    ...(await server.deviceCredentials("peer")),
     vaultId: "default",
     device: "peer",
     inspect: true,

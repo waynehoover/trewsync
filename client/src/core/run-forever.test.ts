@@ -11,17 +11,13 @@ import { nextTurn } from "./test-async.ts";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client, runForever, type ClientOptions } from "./client.ts";
-import { testWrapped } from "./test-keys.ts";
 import type { SyncReport } from "./engine.ts";
 import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
 import { ConnectionError } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault, type Times } from "./vault.ts";
 
-const SECRET = new Uint8Array(32).fill(21);
-let wrapped: string;
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 afterAll(async () => {
   await cleanupBinary();
@@ -75,7 +71,7 @@ async function options(
     vault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(SECRET, wrapped)),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device: name,
     timeoutMs: 20_000,
@@ -356,9 +352,10 @@ describe("what the loop does with a refusal (I2)", () => {
   it("comes back after the server restarts, rather than stopping", async () => {
     server = new TestServer();
     await server.start();
-    // Claimed first by a throwaway client, so the loop below authenticates
-    // with the derived key on every connection, as a shell does once its
-    // bootstrap is spent. Options are built once and reused by the loop.
+    // A throwaway device has used the vault first, so the loop below joins
+    // one that is already in use. Options are built once and reused by the
+    // loop, as a shell's stored config is, so every connection it makes
+    // presents the same device token.
     const warm = await connected("warm", new MemoryVault());
     await warm.close();
     const vault = new MemoryVault();

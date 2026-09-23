@@ -50,6 +50,11 @@ export const corpus: [string, (s: Record<string, unknown>) => unknown, RegExp][]
   ["a negative cursor", (s) => ({ ...s, cursor: -1 }), /cursor is -1/],
   ["a fractional cursor", (s) => ({ ...s, cursor: 1.5 }), /cursor is 1.5/],
   ["a cursor that is a string", (s) => ({ ...s, cursor: "12" }), /cursor is "12"/],
+  // The epoch is the server's own opaque string (PLAN.md section 2.8), and one
+  // that is not a string is not one the server ever sent.
+  ["an epoch that is a number", (s) => ({ ...s, epoch: 7 }), /epoch is 7, not the server's epoch/],
+  ["an empty epoch", (s) => ({ ...s, epoch: "" }), /epoch is "", not the server's epoch/],
+  ["an epoch that is null", (s) => ({ ...s, epoch: null }), /epoch is null, not the server's/],
   ["entries as a list", (s) => ({ ...s, entries: [] }), /entries is not an object/],
   [
     "an entry that is a number",
@@ -126,6 +131,17 @@ describe("what a saved index must look like", () => {
     expect(validateStoredState(undefined)).toBeUndefined();
   });
 
+  it("keeps the epoch its cursor was read under, and invents none", () => {
+    // Absent is a real state: an index written before the first `ready`,
+    // which the hello reads as "take the cursor as it is". An epoch made up
+    // here would be a replay of the whole vault that nobody asked for.
+    const without = validateStoredState(good())!;
+    expect("epoch" in without, "an index with no epoch came back with one").toBe(false);
+    const withEpoch = validateStoredState({ ...good(), epoch: "store-epoch-1" })!;
+    expect(withEpoch.epoch).toBe("store-epoch-1");
+    expect(withEpoch.cursor).toBe(good().cursor);
+  });
+
   for (const [what, mutate, words] of corpus) {
     it(`refuses ${what}, naming the field`, () => {
       const raw = mutate(good() as unknown as Record<string, unknown>);
@@ -147,7 +163,6 @@ describe("what a saved index must look like", () => {
     const engine = new Engine({
       vault: new MemoryVault(),
       store,
-      dataKey: new Uint8Array(32).fill(1),
       transport,
       device: "d",
       vaultId: "v",

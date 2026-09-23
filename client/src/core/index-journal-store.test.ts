@@ -176,6 +176,44 @@ describe("an ordinary sequence of passes", () => {
   });
 });
 
+/**
+ * The store epoch (PLAN.md section 2.8) has to come back from disk exactly as
+ * it went, by whichever route it went: a hello sends the stored epoch with the
+ * stored cursor, and a cursor reloaded without its epoch is taken as it is by
+ * a server whose history may have been replaced since.
+ */
+describe("the store epoch", () => {
+  it("survives a snapshot and a journal replay, and an absent one stays absent", async () => {
+    const files = new FakeFiles();
+    const store = new JournalIndexStore(files);
+    await store.load();
+
+    await store.save(state({ cursor: 1 }));
+    const bare = (await new JournalIndexStore(files).load())!;
+    expect("epoch" in bare, "an index saved with no epoch came back with one").toBe(false);
+
+    // Through the log: the first save wrote the snapshot, so this is a record.
+    await store.save(state({ cursor: 2, epoch: "first" }));
+    expect(files.appends, "the epoch did not go through the journal").toBe(1);
+    expect(files.log).toContain('"epoch":"first"');
+    expect(await new JournalIndexStore(files).load()).toEqual(state({ cursor: 2, epoch: "first" }));
+
+    // Through a snapshot: a fresh store that must snapshot on its first save.
+    const snapshotting = new JournalIndexStore(files, {
+      policy: { fractionOfSnapshot: 0, maxRecords: 1, minBytes: 0 },
+    });
+    await snapshotting.load();
+    const snapshotsBefore = files.snapshots;
+    await snapshotting.save(state({ cursor: 0, epoch: "second" }));
+    expect(files.snapshots, "the save did not write a snapshot").toBe(snapshotsBefore + 1);
+    expect(files.snapshot).toContain('"epoch":"second"');
+    expect(files.log, "the log was not truncated behind the snapshot").toBe("");
+    expect(await new JournalIndexStore(files).load()).toEqual(
+      state({ cursor: 0, epoch: "second" }),
+    );
+  });
+});
+
 describe("an append that did not land whole", () => {
   it("raises rather than leaving a record the next load will silently drop", async () => {
     // A short append is the one damage this format cannot see for itself at

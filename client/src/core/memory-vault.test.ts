@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { plainDigest } from "./crypto.ts";
+import { plainDigest } from "./digest.ts";
 import { MemoryVault } from "./vault.ts";
 
 const enc = new TextEncoder();

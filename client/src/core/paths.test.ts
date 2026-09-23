@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { configFolderName, foldsTogether, isNeverSynced, spellOut, splitName } from "./paths.ts";
+import { fold } from "./fold.ts";
+import {
+  configFolderName,
+  foldPath,
+  foldsTogether,
+  isNeverSynced,
+  spellOut,
+  splitName,
+} from "./paths.ts";
 
 const none: ReadonlySet<string> = new Set();
 
@@ -86,6 +94,22 @@ describe("folding two paths together", () => {
   it("folds case and Unicode normalisation", () => {
     expect(foldsTogether("Note.md", "note.md")).toBe(true);
     expect(foldsTogether("a/Caf\u00e9.md", "a/Cafe\u0301.md")).toBe(true);
+  });
+
+  /**
+   * The protocol's fold is full case folding (plan/protocol.md, "Paths"), and
+   * the full half is what simple folding and `toLowerCase` both miss: the
+   * sharp s folds to two letters, so these are one file to the server, and a
+   * disk that folds case would hold them as one. A fold that kept them apart
+   * would upload a second note the server then refuses as a collision.
+   */
+  it("folds the way the protocol does, including a letter that folds to two", () => {
+    expect(foldsTogether("Stra\u00dfe.md", "STRASSE.md")).toBe(true);
+    expect(foldPath("Stra\u00dfe.md")).toBe("strasse.md");
+    expect(foldPath("Stra\u00dfe.md")).toBe(fold("Stra\u00dfe.md"));
+    // Dotted capital I, where Go and JavaScript lower-case differently and
+    // neither runtime's answer is the specification.
+    expect(foldsTogether("\u0130.md", "i\u0307.md")).toBe(true);
   });
 
   it("keeps two real files apart", () => {
