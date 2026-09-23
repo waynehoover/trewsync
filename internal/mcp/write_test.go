@@ -312,6 +312,54 @@ func TestSeventeenCompetingEditsOneSucceedsSixteenAreStale(t *testing.T) {
 	}
 }
 
+// An edit whose note another commit moves while the tool reads it is stale,
+// with the note's new uid, and never not_found: the note did not go anywhere.
+// The tool read the path's head and then its entry, and a commit landing
+// between the two made a note that had moved on read as one that was gone,
+// which the seventeen edits above met in 30 of 40 runs under the race
+// detector. Ten rounds of them here, each from the head the last one left.
+func TestEditsRacingACommitAreStaleNeverNotFound(t *testing.T) {
+	r := newRig(t, withLimits(Limits{InFlight: 64, TokenInFlight: 32, TokenBurst: 1000, TokenRate: 1000}))
+	a := r.writer("agent")
+	r.write("race.md", "the line\n")
+	epoch := r.epoch()
+	for round := 1; round <= 10; round++ {
+		base := r.head("race.md")
+		var wg sync.WaitGroup
+		results := make([]envelope, 17)
+		for i := range results {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				results[i] = invoke(t, a.cs, "edit_note", map[string]any{"path": "race.md", "base": base, "epoch": epoch,
+					"edits": []any{map[string]any{"old": "line", "new": fmt.Sprintf("line %d.%d", round, i)}}})
+			}(i)
+		}
+		wg.Wait()
+		won := 0
+		for _, e := range results {
+			var f struct {
+				Error struct {
+					CurrentUID int64 `json:"currentUid"`
+				} `json:"error"`
+			}
+			switch {
+			case !e.isError:
+				won++
+			case e.errorCode() == "stale":
+				if e.trusted(t, &f); f.Error.CurrentUID <= base {
+					t.Fatalf("round %d: stale with currentUid %d, not the head after %d: %s", round, f.Error.CurrentUID, base, e.raw)
+				}
+			default:
+				t.Fatalf("round %d: an edit racing a commit ended %s", round, e.raw)
+			}
+		}
+		if won != 1 {
+			t.Fatalf("round %d: %d edits won", round, won)
+		}
+	}
+}
+
 // The same request under the same key is answered with the recorded result,
 // byte for byte, and writes nothing more; the same key for a different request
 // is key_reused. A retry after the reply was lost is exactly this.

@@ -1165,6 +1165,12 @@ an agent kept to its own operations. `internal/server/undo_test.go` and
 the copy, and an unsent local edit refusing the undo; each was seen failing
 with the undo broken.
 
+**Found on the way.** The full gate's race run failed the seventeen competing
+edits in 30 of 40 runs: `edit_note`, `append_note` and `prepend_note` read a
+note's head and then its entry, and a commit between the two reads made a
+note that had moved on answer `not_found`. They read it once now, and
+`TestEditsRacingACommitAreStaleNeverNotFound` holds every loser `stale`.
+
 ### Latent issues in the chunker
 
 Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,
