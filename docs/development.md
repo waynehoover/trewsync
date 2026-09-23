@@ -94,8 +94,14 @@ to a freshly built CLI child and the real Go server:
 cd client
 bun run test src/cli/mcp.test.ts src/cli/mcp-bin.test.ts src/cli/mcp-protocol.test.ts src/cli/mcp-artifact.test.ts
 bun run test src/cli/mcp-token.test.ts src/cli/mcp-token-auth.test.ts src/cli/mcp-http.test.ts src/cli/mcp-http-process.test.ts src/cli/mcp-http-concurrency.test.ts
-bun run stress src/stress/mcp.stress.ts
 ```
+
+The TypeScript MCP's stress file, `mcp.stress.ts`, was retired in M2 rather than
+moved to protocol 1: its phone races (disjoint, overlapping, append, delete and
+rename edits against a phone, and an offline phone catching up) are the cases M5
+task 12 ports to the server's MCP, from Basalt's identical copy, and its crash
+and before-image cases belong to the MCP write path M5 replaces (tasks 3 and 9).
+The classification of its 43 cases is in plan/strip-ledger.md, "M2 outcome".
 
 The workflow finds a daily note, changes two exact task lines, compares unrelated
 BOM/CRLF/frontmatter/link bytes, reads the before-image, and checks both copies
