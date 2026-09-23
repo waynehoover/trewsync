@@ -133,6 +133,22 @@ export type Action =
   | { readonly kind: "deleteLocal"; readonly why: string }
   | { readonly kind: "deleteRemote"; readonly why: string }
   | { readonly kind: "createLocalFolder"; readonly why: string }
+  /**
+   * A folder this device synced is gone from its disk.
+   *
+   * Its deletion goes to the server at the end of the pass, after the
+   * deletions of everything that was in it have committed, and only if the
+   * server then holds nothing live beneath it (docs/design.md, "Folders").
+   */
+  | { readonly kind: "deleteRemoteFolder"; readonly why: string }
+  /**
+   * A folder this device synced was deleted on another device.
+   *
+   * Removed at the end of the pass if nothing is left in it once the pass's
+   * own deletions have landed. Anything still in it keeps it, and the folder
+   * goes back on the server. No file is ever deleted or trashed for this.
+   */
+  | { readonly kind: "removeLocalFolder"; readonly why: string }
   /** Local is gone and the server has content that must not be lost. */
   | { readonly kind: "restoreLocal"; readonly why: string }
   /**
@@ -256,11 +272,20 @@ function decideFolder(
       return { kind: "upload", why: "new folder, the server has never held this path" };
     }
     if (remote.deleted) {
-      // A folder deletion is not propagated on its own. Obsidian's engine
-      // treats folders as bookkeeping, and removing one here would mean
-      // deciding what to do about anything inside it that has not synced
-      // yet. The files carry the truth.
-      return { kind: "nothing", why: "folder deleted elsewhere; its files decide" };
+      if (syncedFolder(index)) {
+        // Folder deletions travel (docs/design.md, "Folders"). What is inside
+        // it here is not decided by this: the engine removes the folder only
+        // once nothing is left in it, after this pass's own deletions, and
+        // anything that is left keeps it and puts it back on the server.
+        return {
+          kind: "removeLocalFolder",
+          why: "folder deleted on another device, so it goes here once nothing is left in it",
+        };
+      }
+      // Never synced from here, so the deletion is of some earlier folder or
+      // file that had this name, and this one is new: the same answer a file
+      // gets in that position.
+      return { kind: "upload", why: "folder deleted on the server but never synced from here" };
     }
     if (!remote.folder) {
       // A folder here and a file of the same name there. This used to
@@ -278,23 +303,33 @@ function decideFolder(
       // device retried an impossible mkdir for ever.
       return { kind: "clash", why: "a file here and a folder of the same name on another device" };
     }
-    if (index.synctime > 0) {
+    if (syncedFolder(index) && index.syncuid === remote.uid) {
       // Known here once and gone now: somebody removed it. Creating it again
       // would undo that on the device it was done on, a second after they did
-      // it. A folder deletion is still not propagated, so the other devices
-      // keep theirs; this is only about not resurrecting it here.
+      // it (Basalt d52e824), and the deletion now travels too.
       //
       // `synctime` rather than content, because a folder has none. It is set
       // when a folder entry syncs and survives `prune` while the server still
-      // holds the folder, which is exactly the window this has to cover.
-      return {
-        kind: "nothing",
-        why: "folder removed here, and deletions of folders do not travel",
-      };
+      // holds the folder, which is exactly the window this has to cover. And
+      // only the version this device synced: a folder another device put back
+      // since, because something in it kept it there, is newer than the
+      // removal here and comes back like any folder this device lacks.
+      return { kind: "deleteRemoteFolder", why: "folder removed here" };
     }
     return { kind: "createLocalFolder", why: "folder exists on the server and not here" };
   }
   return { kind: "nothing", why: "folder absent on both sides" };
+}
+
+/**
+ * Whether the index records this path as a folder that synced here.
+ *
+ * `synctime` says it synced and `synchash` says as what: a folder's is always
+ * empty, and a file's never is (an empty note's is `-empty-`). An entry left
+ * over from a file of the same name is not a folder this device ever held.
+ */
+function syncedFolder(index: IndexEntry): boolean {
+  return index.synctime > 0 && index.synchash === "";
 }
 
 function decideMissingLocally(remote: RemoteState, index: IndexEntry): Action {

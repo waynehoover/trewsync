@@ -2064,6 +2064,8 @@ export function renderReport(
   say(r.deletedRemotely, "deleted on the server");
   say(r.restored, "brought back, having been edited elsewhere");
   say(r.foldersCreated, "folders created");
+  say(r.foldersDeletedLocally, "folders removed here, deleted elsewhere");
+  say(r.foldersDeletedRemotely, "folders deleted on the server");
   say(r.waiting, "waiting for a write to settle");
   say(r.retrying, "failed, will try again");
   // One line where there were three, and one list under it where there were

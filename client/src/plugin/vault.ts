@@ -1684,6 +1684,78 @@ export class ObsidianVault implements Vault {
     this.entryChanged(normalized);
   }
 
+  /**
+   * Removes an empty folder, and only an empty one (docs/design.md, "Folders").
+   *
+   * Neither shipped adapter can be asked for that (see `removeOwnEmptyFolder`),
+   * so the emptiness is established here, and a look followed by a recursive
+   * removal would take a note saved into the folder between the two with it,
+   * past the trash. So the folder is moved aside first, onto a hidden name
+   * nothing writes to, and looked at again there. Whatever was saved before
+   * the move is in the hidden folder, which then goes back; nothing can be
+   * saved into it after, because the name a save would land under has gone.
+   */
+  async removeFolder(path: string): Promise<boolean> {
+    const normalized = this.resolve(path);
+    const stat = await this.adapter.stat(normalized);
+    if (stat === null) {
+      this.wentAway(normalized);
+      return true;
+    }
+    if (stat.type !== "folder") return false;
+    if (!(await holdsNothing(this.adapter, normalized))) return false;
+    const aside = await freeRemovalFolder(this.adapter, normalized);
+    try {
+      await this.move(normalized, aside);
+    } catch {
+      // Not moved, so not removed. The next pass asks again.
+      return false;
+    }
+    this.entryChanged(normalized);
+    if (await holdsNothing(this.adapter, aside)) {
+      await removeOwnEmptyFolder(this.adapter, aside);
+      this.wentAway(normalized);
+      return true;
+    }
+    // Something was saved into it between the look and the move, so the
+    // folder stays, with it inside.
+    try {
+      await this.move(aside, normalized);
+      this.entryChanged(normalized);
+    } catch (err) {
+      // The name is taken again, by a folder made in the same instant. What is
+      // in the hidden one is written down, file by file, so it is reported
+      // rather than lost from view.
+      await this.recordStrandedUnder(aside, path, err);
+    }
+    return false;
+  }
+
+  /** Every file under one of this client's hidden folders, written into the ledger. */
+  private async recordStrandedUnder(hidden: string, path: string, err: unknown): Promise<void> {
+    const queue = [hidden];
+    while (queue.length > 0) {
+      const at = queue.pop()!;
+      let listed;
+      try {
+        listed = await this.adapter.list(at);
+      } catch {
+        continue;
+      }
+      queue.push(...listed.folders);
+      for (const file of listed.files) {
+        await this.ledger.record({
+          at: file,
+          from: `${normalizePath(path)}${file.slice(hidden.length)}`,
+          why:
+            `${path} was moved aside to be removed, something had been saved into it, and it ` +
+            `could not be put back (${(err as Error).message})`,
+          when: Date.now(),
+        });
+      }
+    }
+  }
+
   async mkdir(path: string): Promise<void> {
     const normalized = this.resolve(path);
     if (await this.adapter.exists(normalized)) return;

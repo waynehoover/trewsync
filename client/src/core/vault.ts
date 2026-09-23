@@ -261,6 +261,23 @@ export interface Vault {
     keepAt: string,
   ): Promise<Replaced>;
   remove(path: string): Promise<void>;
+  /**
+   * Removes a folder only if nothing at all is in it, and says whether it is
+   * gone: true when it was removed or was not there, false when anything is
+   * inside, listed or not, and then nothing has changed.
+   *
+   * Never recursive and never a trash, because what it is for is a folder
+   * another device deleted (docs/design.md, "Folders"), and the files that
+   * were in it travel as deletions of their own. Anything still inside is not
+   * this call's to remove: a dot-prefixed file, a note written offline, a file
+   * this device ignores. The emptiness has to be the disk's answer at the
+   * moment of removal, not a listing's from a moment before, or a note saved
+   * into the folder in between goes with it.
+   *
+   * `remove` is not this. Both real adapters move a folder into the trash with
+   * everything in it, which is right for a file and wrong here.
+   */
+  removeFolder(path: string): Promise<boolean>;
   mkdir(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   /**
@@ -732,6 +749,24 @@ export class MemoryVault implements Vault {
     this.notify(path);
   }
 
+  /**
+   * Runs just before a folder removal looks inside, which is where a note
+   * saved into the folder at the last moment would land.
+   */
+  beforeRemoveFolder: ((path: string) => Promise<void> | void) | undefined;
+
+  async removeFolder(path: string): Promise<boolean> {
+    await this.beforeRemoveFolder?.(path);
+    if (this.files.has(path)) return false;
+    if (!this.folders.has(path)) return true;
+    const under = `${path}/`;
+    for (const file of this.files.keys()) if (file.startsWith(under)) return false;
+    for (const folder of this.folders) if (folder.startsWith(under)) return false;
+    this.folders.delete(path);
+    this.notify(path);
+    return true;
+  }
+
   async mkdir(path: string): Promise<void> {
     this.folders.add(path);
     for (const parent of parents(path)) this.folders.add(parent);
@@ -868,6 +903,7 @@ export function timedVault(
     stat: (path) => time("stat", () => inner.stat(path)),
     write: (path, bytes, times) => time("write", () => inner.write(path, bytes, times)),
     remove: (path) => time("remove", () => inner.remove(path)),
+    removeFolder: (path) => time("removeFolder", () => inner.removeFolder(path)),
     mkdir: (path) => time("mkdir", () => inner.mkdir(path)),
     exists: (path) => time("exists", () => inner.exists(path)),
     ...(inner.watch ? { watch: inner.watch.bind(inner) } : {}),

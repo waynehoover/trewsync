@@ -21,6 +21,8 @@ function report(over: Partial<SyncReport>): SyncReport {
     deletedRemotely: 0,
     restored: 0,
     foldersCreated: 0,
+    foldersDeletedLocally: 0,
+    foldersDeletedRemotely: 0,
     unchanged: 0,
     waiting: 0,
     retrying: 0,
@@ -112,6 +114,8 @@ describe("what counts as work worth another pass (C-D6)", () => {
       "deletedRemotely",
       "restored",
       "foldersCreated",
+      "foldersDeletedLocally",
+      "foldersDeletedRemotely",
     ] as const) {
       expect(didSomething(report({ [key]: 1 })), key).toBe(true);
     }
@@ -134,6 +138,13 @@ describe("the one-line summary (N1)", () => {
   it("mentions folders it made", () => {
     expect(summarise(report({ foldersCreated: 1 }))).toBe("1 folder");
     expect(summarise(report({ uploaded: 2, foldersCreated: 3 }))).toBe("2 sent, 3 folders");
+  });
+
+  it("mentions folders it removed, in either direction", () => {
+    expect(summarise(report({ foldersDeletedLocally: 1 }))).toBe("1 folder removed");
+    expect(summarise(report({ foldersDeletedLocally: 1, foldersDeletedRemotely: 2 }))).toBe(
+      "3 folders removed",
+    );
   });
 
   it("still says up to date when a pass really had nothing to report", () => {

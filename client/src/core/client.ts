@@ -1969,7 +1969,9 @@ export function didSomething(r: SyncReport): boolean {
       r.deletedLocally +
       r.deletedRemotely +
       r.restored +
-      r.foldersCreated >
+      r.foldersCreated +
+      r.foldersDeletedLocally +
+      r.foldersDeletedRemotely >
     0
   );
 }
@@ -1996,6 +1998,7 @@ export function summarise(r: SyncReport): string {
   add(r.deletedLocally + r.deletedRemotely, "deleted");
   add(r.restored, "restored");
   add(r.foldersCreated, "folders", "folder");
+  add(r.foldersDeletedLocally + r.foldersDeletedRemotely, "folders removed", "folder removed");
   add(r.waiting, "waiting");
   add(r.retrying, "retrying");
   // One phrase where there were three. "stuck", "ignored" and "in the way"

@@ -183,16 +183,68 @@ describe("folders", () => {
     expect(at(local({ folder: true, hash: "" }), undefined, entry()).kind).toBe("upload");
   });
 
-  it("does not delete a local folder because the server dropped it", () => {
-    // Deleting it here would mean deciding what happens to anything inside
-    // that has not synced yet. The files carry the truth; a folder is
-    // bookkeeping.
+  /**
+   * Folder deletions travel (docs/design.md, "Folders"). The decision says
+   * only that this folder is to go; what is inside it is the engine's to
+   * look at, at the end of the pass, and anything there keeps it.
+   *
+   * This replaces "does not delete a local folder because the server dropped
+   * it", which pinned the rule inherited from Basalt that a folder deletion
+   * does not travel at all. That assertion was about a folder this device had
+   * never synced, and such a folder is still never removed: it uploads.
+   */
+  it("removes a synced folder another device deleted", () => {
     const a = at(
       local({ folder: true, hash: "" }),
-      remote({ folder: true, deleted: true }),
-      entry(),
+      remote({ uid: 9, deleted: true, hash: "" }),
+      entry({ folder: true, synctime: 5, syncuid: 7 }),
     );
-    expect(a.kind).toBe("nothing");
+    expect(a.kind).toBe("removeLocalFolder");
+  });
+
+  it("uploads a folder here the server last saw deleted and never had from here", () => {
+    // A folder made again with the same name, or one a vault copied in by
+    // hand: new, whatever the server said about the name before.
+    const a = at(local({ folder: true, hash: "" }), remote({ deleted: true, hash: "" }), entry());
+    expect(a.kind).toBe("upload");
+  });
+
+  it("does not read a file's old entry as a folder that synced here", () => {
+    const a = at(
+      local({ folder: true, hash: "" }),
+      remote({ deleted: true, hash: "" }),
+      entry({ synchash: BASE, synctime: 5, syncuid: 7 }),
+    );
+    expect(a.kind).toBe("upload");
+  });
+
+  it("sends the deletion of a synced folder removed here", () => {
+    const a = at(
+      undefined,
+      remote({ uid: 7, folder: true, hash: "" }),
+      entry({ folder: true, synctime: 5, syncuid: 7 }),
+    );
+    expect(a.kind).toBe("deleteRemoteFolder");
+  });
+
+  it("creates a folder another device put back after it was removed here", () => {
+    // The server's folder is newer than the one this device synced and then
+    // removed: another device kept it because something was still in it.
+    const a = at(
+      undefined,
+      remote({ uid: 12, folder: true, hash: "" }),
+      entry({ folder: true, synctime: 5, syncuid: 7 }),
+    );
+    expect(a.kind).toBe("createLocalFolder");
+  });
+
+  it("creates a folder that has the name of a file this device synced", () => {
+    const a = at(
+      undefined,
+      remote({ uid: 7, folder: true, hash: "" }),
+      entry({ synchash: BASE, synctime: 5, syncuid: 7 }),
+    );
+    expect(a.kind).toBe("createLocalFolder");
   });
 
   it("does nothing when a folder is on both sides", () => {
@@ -218,6 +270,18 @@ describe("every decision explains itself", () => {
       [local({ hash: "mine" }), remote({ deleted: true }), entry({ synchash: BASE }), true],
       [local({ folder: true, hash: "" }), undefined, entry(), true],
       [undefined, remote({ folder: true, hash: "" }), entry(), true],
+      [
+        undefined,
+        remote({ uid: 7, folder: true, hash: "" }),
+        entry({ folder: true, synctime: 5, syncuid: 7 }),
+        true,
+      ],
+      [
+        local({ folder: true, hash: "" }),
+        remote({ deleted: true, hash: "" }),
+        entry({ folder: true, synctime: 5, syncuid: 3 }),
+        true,
+      ],
       [undefined, undefined, entry(), true],
     ];
     const seen = new Set<string>();

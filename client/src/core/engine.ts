@@ -472,6 +472,14 @@ export interface SyncReport {
   deletedRemotely: number;
   restored: number;
   foldersCreated: number;
+  /**
+   * Folders removed from this disk because another device deleted them, with
+   * nothing left in them here. A folder that still held something is kept
+   * and put back on the server, which counts as `uploaded`.
+   */
+  foldersDeletedLocally: number;
+  /** Folders removed here whose deletion this device sent (docs/design.md, "Folders"). */
+  foldersDeletedRemotely: number;
   unchanged: number;
   /**
    * Files held back by the write debounce, which will go on the next pass.
@@ -810,6 +818,8 @@ function emptyReport(): SyncReport {
     deletedRemotely: 0,
     restored: 0,
     foldersCreated: 0,
+    foldersDeletedLocally: 0,
+    foldersDeletedRemotely: 0,
     unchanged: 0,
     waiting: 0,
     retrying: 0,
@@ -1721,6 +1731,11 @@ export class Engine {
       this.inbox = [];
       this.inboxBytes = 0;
     }
+    // The same for the folder work a pass defers to its end: nothing in it
+    // was sent or removed, and this pass decides it again.
+    this.folderDeletes = [];
+    this.folderRemovals = [];
+    this.liveFolderSpellings = undefined;
 
     let stats = await this.opts.vault.list({
       forceFull: opts.verifyContents === true || opts.forceFullScan === true,
@@ -2039,6 +2054,11 @@ export class Engine {
     await this.applyDeletes(report);
     this.wroteThisPass = [];
     await this.flush(report);
+    // Folders last, once every file this pass moves has moved: a folder's
+    // deletion goes to the server after the deletions of what was in it have
+    // committed, and a folder another device deleted is removed here only
+    // once this pass's own deletions have emptied it.
+    await this.settleFolders(report);
     into("transferMs");
 
     this.opts.onProgress?.(undefined);
@@ -2207,6 +2227,37 @@ export class Engine {
     }
 
     let action = decide({ local, remote, index: entry, mergeable: this.mergeable(path) });
+
+    // A folder whose name changed only in case is one folder under two
+    // spellings on a disk that folds case, and the rename retired the old
+    // spelling on the server as a move (plan/protocol.md, "Paths", collision
+    // rule 1). Neither spelling is a folder somebody deleted: the old one is
+    // still here as the new one, or the new one arrived where the old one is.
+    // Read as deletions, a rename would remove the folder it renamed, empty or
+    // not, from every device that folds case. So a folder spelled here the
+    // way the server spells it no longer, or missing here under the spelling
+    // the server has now, is left as it is, as it always was.
+    if (action.kind === "deleteRemoteFolder") {
+      const here = this.localByIdentity.get(this.identity(path));
+      if (here !== undefined && here !== path) {
+        action = {
+          kind: "nothing",
+          why: `folder is here as ${here}, a spelling this disk folds together`,
+        };
+      }
+    } else if (local?.folder && remote?.deleted) {
+      const live = this.liveFolderSpelledOtherwise(path);
+      if (live !== undefined) {
+        // Handled, as far as this device can: the retired spelling is the
+        // live one here. Recorded, so the retirement does not hold back the
+        // applied checkpoint for as long as the folder lasts.
+        if (action.kind === "removeLocalFolder") reconciled(entry, "", remote.uid, now);
+        action = {
+          kind: "nothing",
+          why: `folder is live on the server as ${live}, a spelling this disk folds together`,
+        };
+      }
+    }
 
     // The server still spells this name a way this device does not.
     //
@@ -2410,6 +2461,26 @@ export class Engine {
         entry.folder = true;
         if (remote) synced(entry, "", [], remote.uid, now);
         report.foldersCreated++;
+        return;
+
+      case "deleteRemoteFolder":
+        if (!this.sending) {
+          this.heldBack(
+            path,
+            report,
+            "this device is read-only, so the folder was not deleted anywhere",
+          );
+          return;
+        }
+        // At the end of the pass, not now: folders are decided first, and the
+        // deletions and moves of what was in this one have not gone yet.
+        this.folderDeletes.push(path);
+        return;
+
+      case "removeLocalFolder":
+        // At the end of the pass too, once this pass's own deletions have
+        // landed and its downloads and uploads have committed.
+        this.folderRemovals.push(path);
         return;
 
       case "clash":
@@ -3709,6 +3780,278 @@ export class Engine {
         this.recordFailure(path, err, report);
       }
     }
+  }
+
+  /** Folders this pass found gone from the disk here, to delete on the server at its end. */
+  private folderDeletes: string[] = [];
+  /** Folders this pass found deleted on another device, to remove here at its end. */
+  private folderRemovals: string[] = [];
+  /** What last kept each folder removed here live on the server, so it is logged once. */
+  private readonly folderKeptBy = new Map<string, string>();
+  /**
+   * Each folder identity the server's live paths give, with every spelling of
+   * it: live folder entries and the folders above live paths. Built at most
+   * once a pass, and only when a folder decision asks.
+   */
+  private liveFolderSpellings: Map<string, Set<string>> | undefined;
+
+  /**
+   * Another spelling of this folder that the server holds live, where this
+   * disk files the two as one folder: the new name of a case-only rename,
+   * seen from the old one (see `reconcile`).
+   */
+  private liveFolderSpelledOtherwise(path: string): string | undefined {
+    if (this.liveFolderSpellings === undefined) {
+      const out = new Map<string, Set<string>>();
+      const add = (folder: string): void => {
+        const key = this.identity(folder);
+        const same = out.get(key);
+        if (same) same.add(folder);
+        else out.set(key, new Set([folder]));
+      };
+      for (const [p, r] of this.remote) {
+        if (r.deleted) continue;
+        if (r.folder) add(p);
+        for (const dir of parents(p)) add(dir);
+      }
+      this.liveFolderSpellings = out;
+    }
+    for (const spelling of this.liveFolderSpellings.get(this.identity(path)) ?? []) {
+      if (spelling !== path) return spelling;
+    }
+    return undefined;
+  }
+
+  /**
+   * The folder work this pass put off until everything else in it had moved
+   * (docs/design.md, "Folders").
+   *
+   * Folders are decided first, because a folder has to exist before anything
+   * lands in it, and that is exactly the wrong time to delete one: the files
+   * inside have not been deleted or moved yet, on the server or here. So the
+   * decisions wait for the end of the pass, and each is asked again against
+   * what the pass has done since.
+   */
+  private async settleFolders(report: SyncReport): Promise<void> {
+    const deletes = this.folderDeletes;
+    const removals = this.folderRemovals;
+    this.folderDeletes = [];
+    this.folderRemovals = [];
+    if (deletes.length === 0 && removals.length === 0) return;
+    await this.sendFolderDeletions(deletes, report);
+    await this.removeEmptiedFolders(removals, report);
+    await this.flush(report);
+  }
+
+  /**
+   * Sends the deletion of each folder removed here whose server copy holds
+   * nothing live any more.
+   *
+   * The deletions of the files that were in it went in this pass's earlier
+   * batches and have committed, and a move out of it retired its source, so
+   * `remote` already says what the server holds beneath. Something live there
+   * that this device did not delete keeps the folder on the server: a note
+   * another device wrote into it, a file this device ignores or could not
+   * fetch, a deletion the server refused. The server refuses a folder's
+   * deletion in that state anyway (`stale`); asking first saves the refusal,
+   * and a refusal from a write that raced this is read and decided again, as
+   * any stale write is.
+   *
+   * Deepest first, so a folder inside another goes ahead of it in the batch
+   * and the outer one is judged against the state the inner one left.
+   */
+  private async sendFolderDeletions(paths: string[], report: SyncReport): Promise<void> {
+    const going = new Set<string>();
+    for (const path of deepestFirst(paths)) {
+      try {
+        const remote = this.remote.get(path);
+        const entry = this.entries.get(path);
+        // Asked again, because the pass has written since it decided: a peer's
+        // write may have moved the folder on, and a download into it puts it
+        // back on this disk.
+        if (
+          remote === undefined ||
+          remote.deleted ||
+          !remote.folder ||
+          entry === undefined ||
+          entry.syncuid !== remote.uid
+        )
+          continue;
+        if (await this.opts.vault.exists(path)) continue;
+        const held = this.liveBeneath(path, going);
+        if (held !== undefined) {
+          // Said once, not every pass: a file this device ignores keeps the
+          // folder for as long as it is there.
+          if (this.folderKeptBy.get(path) !== held) {
+            this.log("kept on the server", path, `folder removed here, and ${held} is live in it`);
+          }
+          this.folderKeptBy.set(path, held);
+          continue;
+        }
+        this.folderKeptBy.delete(path);
+        going.add(path);
+        const facts: PutFacts = {
+          path: remote.wire ?? path,
+          meta: { size: 0, ctime: 0, mtime: this.now(), deleted: true },
+          names: [],
+        };
+        await this.queue(
+          {
+            path,
+            size: 0,
+            entry: { ...facts, base: remote.uid },
+            bodyOf: noBodies,
+            commit: (uid, remoteIsNewer) => {
+              if (!remoteIsNewer)
+                this.remote.set(path, {
+                  uid,
+                  folder: false,
+                  deleted: true,
+                  mtime: this.now(),
+                  size: 0,
+                  hash: "",
+                });
+              this.entries.delete(path);
+              report.foldersDeletedRemotely++;
+              this.log(
+                "deleted on the server",
+                path,
+                "folder removed here, with nothing left in it",
+              );
+              this.activity("deleted-server", path);
+            },
+          },
+          report,
+        );
+      } catch (err) {
+        this.recordFailure(path, err, report);
+      }
+    }
+  }
+
+  /** A live path the server holds beneath a folder, other than folders on their way out. */
+  private liveBeneath(folder: string, going: ReadonlySet<string>): string | undefined {
+    const under = `${folder}/`;
+    for (const [path, remote] of this.remote) {
+      if (!remote.deleted && path.startsWith(under) && !going.has(path)) return path;
+    }
+    return undefined;
+  }
+
+  /**
+   * Removes each folder another device deleted, if nothing is left in it.
+   *
+   * The vault removes a folder only when it is empty, on the disk and not in
+   * a listing, so a file the listing never shows (a dot-prefixed file, one
+   * this device ignores, one two names claim) keeps it as surely as a note
+   * does. Nothing inside is ever deleted or trashed for this: the files in a
+   * deleted folder travel as deletions of their own, one by one, and the ones
+   * that did not arrive as deletions are not this device's to remove.
+   *
+   * A folder that is not empty either waits or is put back, by what is in it
+   * (`keepsFolder`). Put back, it is a live folder on the server again, based
+   * on the deletion it answers, and the device that deleted it creates it
+   * again with whatever kept it.
+   *
+   * Deepest first, so an emptied folder inside another is gone before the
+   * outer one is asked.
+   */
+  private async removeEmptiedFolders(paths: string[], report: SyncReport): Promise<void> {
+    const waiting = new Set<string>();
+    let listing: Map<string, FileStat> | undefined;
+    for (const path of deepestFirst(paths)) {
+      try {
+        const remote = this.remote.get(path);
+        const entry = this.entries.get(path);
+        if (remote === undefined || !remote.deleted || entry === undefined) continue;
+        const stat = await this.opts.vault.stat(path);
+        if (stat === undefined) {
+          // Gone already, by hand or by another process: the deletion is done.
+          this.entries.delete(path);
+          continue;
+        }
+        // Something else has the name now, and the next pass decides about it.
+        if (!stat.folder) continue;
+        if (await this.opts.vault.removeFolder(path)) {
+          this.entries.delete(path);
+          listing = undefined;
+          report.foldersDeletedLocally++;
+          this.log("deleted locally", path, "folder deleted on another device, and empty here");
+          this.activity("deleted-local", path);
+          continue;
+        }
+        listing ??= new Map((await this.opts.vault.list()).map((s) => [s.path, s]));
+        const keeper = this.keepsFolder(path, remote.uid, listing, waiting);
+        if (keeper === undefined) {
+          // Recorded as seen, so an applied checkpoint is not held back by a
+          // folder whose fate is its files'. The decision is made again every
+          // pass, whatever this says, for as long as the folder is here.
+          waiting.add(path);
+          reconciled(entry, "", remote.uid, this.now());
+          this.log(
+            "kept for now",
+            path,
+            "folder deleted on another device; what is left in it is going too",
+          );
+          continue;
+        }
+        this.log(
+          "kept",
+          path,
+          `folder deleted on another device, and ${keeper} is still in it here`,
+        );
+        await this.upload(path, entry, report, remote.uid, true);
+      } catch (err) {
+        this.recordFailure(path, err, report);
+      }
+    }
+  }
+
+  /**
+   * What keeps a folder another device deleted: the first path in it that
+   * stays, or undefined when everything in it is on its way out too.
+   *
+   * On its way out is two things. A deletion this device has been sent and has
+   * not applied yet, because applying it failed or the file changed after the
+   * pass decided and is looked at again. And a file this device synced and has
+   * not changed, whose server version is older than the folder's deletion:
+   * the server refuses a folder's deletion while anything live is in it, so
+   * the file's own deletion is still to come, from a history that arrived in
+   * another order. Waiting for those gives the same result whichever order the
+   * deletions come in.
+   *
+   * Anything else stays, and keeps the folder: a file this device has not sent
+   * or has edited, one written after the deletion, a folder that is itself
+   * staying, and whatever the listing does not show at all.
+   */
+  private keepsFolder(
+    folder: string,
+    deletedAt: number,
+    listing: ReadonlyMap<string, FileStat>,
+    waiting: ReadonlySet<string>,
+  ): string | undefined {
+    const under = `${folder}/`;
+    let listed = false;
+    for (const [path, stat] of listing) {
+      if (!path.startsWith(under)) continue;
+      listed = true;
+      if (stat.folder) {
+        if (waiting.has(path)) continue;
+        return path;
+      }
+      const remote = this.remote.get(path);
+      const entry = this.entries.get(path);
+      if (remote === undefined || entry === undefined) return path;
+      const unchanged =
+        entry.synchash !== "" &&
+        entry.hash === entry.synchash &&
+        !needsRehash(entry, Math.ceil(stat.mtime), stat.size, stat.changeId);
+      if (!unchanged) return path;
+      if (remote.deleted) continue;
+      if (remote.uid < deletedAt && entry.syncuid === remote.uid) continue;
+      return path;
+    }
+    return listed ? undefined : "something this device does not list";
   }
 
   /**
@@ -5109,6 +5452,8 @@ export function combinePasses(a: SyncReport, b: SyncReport): SyncReport {
     deletedRemotely: a.deletedRemotely + b.deletedRemotely,
     restored: a.restored + b.restored,
     foldersCreated: a.foldersCreated + b.foldersCreated,
+    foldersDeletedLocally: a.foldersDeletedLocally + b.foldersDeletedLocally,
+    foldersDeletedRemotely: a.foldersDeletedRemotely + b.foldersDeletedRemotely,
     chunksSent: a.chunksSent + b.chunksSent,
     reusedChunks: a.reusedChunks + b.reusedChunks,
     // Summed, not replaced. `sync` runs a pass again while `again` is set, and
@@ -5514,6 +5859,12 @@ type PutFacts = Pick<BatchEntry, "path" | "meta" | "names">;
 interface UploadPlan {
   readonly names: string[];
   readonly bodyOf: (name: string) => Promise<Uint8Array>;
+}
+
+/** Paths once each, those with more segments first, then in order. */
+function deepestFirst(paths: readonly string[]): string[] {
+  const depth = (path: string): number => path.split("/").length;
+  return [...new Set(paths)].sort((a, b) => depth(b) - depth(a) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /** For a put that carries no bodies at all: a folder, or a deletion. */
