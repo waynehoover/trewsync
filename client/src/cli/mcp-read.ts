@@ -16,7 +16,8 @@ export const PAGE_TEXT_BYTES = 64 * 1024;
 const PAGE_ROWS_BYTES = 192 * 1024;
 const SEARCH_BYTES = 8 * 1024 * 1024;
 const SEARCH_FILES = 512;
-interface Position {
+/** Exported for the Go port's oracle (mcp-oracle.run.ts); behaviour unchanged. */
+export interface Position {
   path: string;
   line: number;
   column: number;
@@ -55,10 +56,12 @@ function bound(value: number | undefined, fallback: number, max: number, min = 1
     throw new NoteError("invalid_limit", "the requested page limit is invalid");
   return result;
 }
-function fingerprint(value: unknown): string {
+/** Exported for the Go port's oracle (mcp-oracle.run.ts); behaviour unchanged. */
+export function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
-function token(query: unknown, at: Position): string {
+/** Exported for the Go port's oracle (mcp-oracle.run.ts); behaviour unchanged. */
+export function token(query: unknown, at: Position): string {
   // JSON escaping expanded legal Linux paths past the cursor's own input cap.
   // Encode the UTF-8 path separately so control characters cost no extra space.
   const path = Buffer.from(at.path).toString("base64url");
@@ -66,7 +69,8 @@ function token(query: unknown, at: Position): string {
     "base64url",
   );
 }
-function position(value: string | undefined, query: unknown): Position | undefined {
+/** Exported for the Go port's oracle (mcp-oracle.run.ts); behaviour unchanged. */
+export function position(value: string | undefined, query: unknown): Position | undefined {
   if (value === undefined) return undefined;
   if (value.length > 8192 || !/^[A-Za-z0-9_-]+$/u.test(value))
     throw new NoteError("invalid_cursor", "the continuation is invalid");

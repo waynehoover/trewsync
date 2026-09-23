@@ -11,7 +11,8 @@ export interface LinkChange {
   inventory: readonly string[];
   canonical: (path: string) => string;
 }
-interface LinkSpan {
+/** Exported for the Go port's oracle (mcp-oracle.run.ts); behaviour unchanged. */
+export interface LinkSpan {
   start: number;
   end: number;
   wholeStart: number;
@@ -26,10 +27,13 @@ function escaped(source: string, at: number): boolean {
   return count % 2 === 1;
 }
 
-export function changeLinks(
-  source: string,
-  change: LinkChange,
-): { edits: SourceEdit[]; ambiguous: number } {
+/**
+ * The links changeLinks rewrites, found exactly as it finds them.
+ *
+ * Moved out of changeLinks, unchanged, and exported for the Go port's oracle
+ * (mcp-oracle.run.ts).
+ */
+export function linkSpans(source: string): LinkSpan[] {
   const body = frontmatter(source).body;
   const hidden = markdownHidden(source, body);
   const blocked = (start: number, end: number) =>
@@ -94,37 +98,51 @@ export function changeLinks(
     const url = match[1]!.split("|")[0]!;
     spans.push({ start, end: start + url.length, wholeStart: at, wholeEnd: end, url, wiki: true });
   }
-  const resolver = (inventory: readonly string[]) => {
-    const paths = new Map<string, Set<string>>(),
-      short = new Map<string, Set<string>>();
-    const add = (map: Map<string, Set<string>>, key: string, path: string) => {
-      if (!map.has(key)) map.set(key, new Set());
-      map.get(key)!.add(path);
-    };
-    for (const path of inventory)
-      for (const name of new Set([path, path.replace(/\.(md|txt)$/iu, "")])) {
-        add(paths, change.canonical(name), path);
-        add(short, change.canonical(posix.basename(name)), path);
-      }
-    return (name: string, wiki: boolean, owner: string): string[] => {
-      if (!name || /^[a-z][a-z0-9+.-]*:/iu.test(name) || name.startsWith("//")) return [];
-      const candidates = new Set<string>();
-      const add = (name: string) => {
-        for (const path of paths.get(change.canonical(posix.normalize(name))) ?? [])
-          candidates.add(path);
-      };
-      if (name.startsWith("/")) add(name.slice(1));
-      else if (wiki) {
-        add(name);
-        add(posix.join(posix.dirname(owner), name));
-        if (!name.includes("/"))
-          for (const path of short.get(change.canonical(name)) ?? []) candidates.add(path);
-      } else add(posix.join(posix.dirname(owner), name));
-      return [...candidates];
-    };
+  return spans;
+}
+
+/**
+ * changeLinks's name resolution over an inventory of note paths.
+ *
+ * Moved out of changeLinks, unchanged, and exported for the Go port's oracle
+ * (mcp-oracle.run.ts).
+ */
+export function linkResolver(inventory: readonly string[], canonical: (path: string) => string) {
+  const paths = new Map<string, Set<string>>(),
+    short = new Map<string, Set<string>>();
+  const add = (map: Map<string, Set<string>>, key: string, path: string) => {
+    if (!map.has(key)) map.set(key, new Set());
+    map.get(key)!.add(path);
   };
-  const resolve = resolver(change.inventory);
-  const after = resolver(
+  for (const path of inventory)
+    for (const name of new Set([path, path.replace(/\.(md|txt)$/iu, "")])) {
+      add(paths, canonical(name), path);
+      add(short, canonical(posix.basename(name)), path);
+    }
+  return (name: string, wiki: boolean, owner: string): string[] => {
+    if (!name || /^[a-z][a-z0-9+.-]*:/iu.test(name) || name.startsWith("//")) return [];
+    const candidates = new Set<string>();
+    const add = (name: string) => {
+      for (const path of paths.get(canonical(posix.normalize(name))) ?? []) candidates.add(path);
+    };
+    if (name.startsWith("/")) add(name.slice(1));
+    else if (wiki) {
+      add(name);
+      add(posix.join(posix.dirname(owner), name));
+      if (!name.includes("/"))
+        for (const path of short.get(canonical(name)) ?? []) candidates.add(path);
+    } else add(posix.join(posix.dirname(owner), name));
+    return [...candidates];
+  };
+}
+
+export function changeLinks(
+  source: string,
+  change: LinkChange,
+): { edits: SourceEdit[]; ambiguous: number } {
+  const spans = linkSpans(source);
+  const resolve = linkResolver(change.inventory, change.canonical);
+  const after = linkResolver(
     change.to === undefined
       ? change.inventory
       : [
@@ -133,6 +151,7 @@ export function changeLinks(
           ),
           change.to,
         ],
+    change.canonical,
   );
   const edits: SourceEdit[] = [];
   let ambiguous = 0;
