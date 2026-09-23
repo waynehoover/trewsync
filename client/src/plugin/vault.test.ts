@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { FakeAdapter, FakeVaultIndex, asVault, normalizePath } from "./fake.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
-import { plainDigest } from "../core/crypto.ts";
+import { plainDigest } from "../core/digest.ts";
 
 let adapter: FakeAdapter;
 let vault: ObsidianVault;

@@ -43,7 +43,6 @@ function pair(plugin: Subject) {
   vi.spyOn(plugin, "devices").mockResolvedValue({
     devices: [],
     invites: [],
-    maxDevices: 0,
     thisDevice: "sample",
   });
 }
@@ -57,17 +56,15 @@ it("updates an already open setup panel when another surface finishes pairing, w
   const plugin = await load();
   const tab = plugin.settingTabs[0]!;
   tab.display();
-  const field = rows(tab.containerEl).find((row) => row.name === "Invite or setup line")!.texts[0]!;
+  const field = rows(tab.containerEl).find((row) => row.name === "Invite")!.texts[0]!;
   field.type("a draft invite");
   state(plugin, { kind: "unpaired" });
-  expect(rows(tab.containerEl).find((row) => row.name === "Invite or setup line")!.texts[0]).toBe(
-    field,
-  );
+  expect(rows(tab.containerEl).find((row) => row.name === "Invite")!.texts[0]).toBe(field);
   expect(field.getValue()).toBe("a draft invite");
   pair(plugin);
   state(plugin, { kind: "synced", summary: "Up to date", at: 1, refused: 0, waiting: 0 });
   expect(rows(tab.containerEl).map((row) => row.name)).toContain("Sync status");
-  expect(rows(tab.containerEl).map((row) => row.name)).not.toContain("Invite or setup line");
+  expect(rows(tab.containerEl).map((row) => row.name)).not.toContain("Invite");
   tab.hide();
   expect((plugin as unknown as { listeners: Set<unknown> }).listeners.size).toBe(0);
 });
@@ -80,7 +77,7 @@ it("gives pairing inputs accessible names matching the visible labels", async ()
   // collapsed More options, and a label inside a closed `details` is still a
   // label: a screen reader reaches it by opening the disclosure, and it has to
   // say the same thing there as it does on screen.
-  for (const name of ["Device name", "Invite or setup line"]) {
+  for (const name of ["Device name", "Invite"]) {
     expect(
       rows(tab.containerEl)
         .find((row) => row.name === name)!
