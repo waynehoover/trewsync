@@ -560,6 +560,8 @@ Tasks:
 
 Done when: Claude Code configured with the URL and token lists, reads, searches, and compares versions of a scratch vault while a plugin edits it; search matches the reference literal scan over the corpus; a concurrent rename produces no ghost row; and a note full of instruction-shaped text comes back under `untrusted_content` with the warning attached.
 
+**Status, 2026-09-23.** Tasks 1 to 11 are merged (`46be6a4`). The transport is hand-written after the evaluation task 1 asks for, with go-sdk v1.8.0 as a test-only client (a test keeps it out of the binary); it negotiates 2025-06-18 and 2025-11-25 through `initialize` and 2026-07-28 through `server/discover`. Search matches Basalt's literal scan on the 83-query oracle corpus with and without the index, and the SDK client at three protocol versions read, searched and compared byte for byte while a device wrote 256 versions (`docs/development.md`). The decisions the spec left open are recorded there too. Left for the done criterion: Claude Code itself, configured with the URL and a token, doing the same while the plugin edits, which waits for the plugin on protocol 1 (M2).
+
 **Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "MCP (M4, M5, plan/mcp-tools.md)". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
 
 ### M5. MCP write tools and the crash matrix (L, lane C)
