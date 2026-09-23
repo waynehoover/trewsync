@@ -183,11 +183,11 @@ describe("the list of what is gone", () => {
   }, 300_000);
 
   /**
-   * The paths come back unsealed. The server never saw them in the clear and
-   * still has not: it answered with the sealed names, and the client opened
-   * them with a key the server has never held.
+   * The deleted list names a note exactly as it was written, spaces and all:
+   * the path travels and is stored as the plain string it is, and what comes
+   * back is that string rather than anything standing in for it.
    */
-  it("reads back plaintext names the server cannot", async () => {
+  it("reads back the names exactly as they were written", async () => {
     const dir = await paired();
     await write(dir, "Meeting notes 2026.md", "x\n");
     await cli("sync", "--dir", dir);

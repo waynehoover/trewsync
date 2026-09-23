@@ -10,8 +10,10 @@
  * Scaled down so it runs in a suite rather than a benchmark, and with one
  * change that matters: half the large files are incompressible. Their generator
  * writes prose, and prose is what hid the chunk-ceiling defect here for months,
- * because deflate made the sealed chunk smaller than the plaintext and the
- * overhead vanished into the saving.
+ * in Basalt, whose chunks were sealed: deflate made the sealed chunk smaller
+ * than the note's own bytes and the overhead vanished into the saving. A frame
+ * over incompressible bytes is the case that shows a ceiling off by its marker
+ * byte now.
  */
 
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";

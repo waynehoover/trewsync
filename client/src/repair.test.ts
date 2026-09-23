@@ -82,8 +82,9 @@ describe("what repair costs the device running it", () => {
   it("reads nothing when the server is not missing anything", async () => {
     // The offer is the index's own chunk names, so making it opens no files
     // (R083-09). It used to plan an upload for every synced note before
-    // offering anything, which on a phone meant reading, chunking and sealing
-    // the whole vault to find out the server had lost nothing.
+    // offering anything, which on a phone meant reading and chunking the whole
+    // vault (sealing it too, in Basalt) to find out the server had lost
+    // nothing.
     await serverBinary();
     const server = new TestServer();
     await server.start();

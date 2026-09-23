@@ -934,11 +934,12 @@ export class NodeVault implements Vault {
   /**
    * Turns a vault-relative path into an absolute one, refusing to escape.
    *
-   * Paths arrive from the server, sealed by another device, and a client that
-   * joined `../../.ssh/authorized_keys` onto the vault root without looking
-   * would write outside it. The seal proves the path came from someone holding
-   * the vault key; it does not prove they meant this device well, and a bug on
-   * another device is enough.
+   * Paths arrive from the server, written there by another device or by an
+   * agent, and a client that joined `../../.ssh/authorized_keys` onto the vault
+   * root without looking would write outside it. The server refuses such a path
+   * too (plan/protocol.md, "Paths"), which proves it passed the server's rules
+   * and not that the server is honest or that whoever wrote it meant this
+   * device well; a bug on another device is enough.
    */
   private async absolute(path: string): Promise<string> {
     const full = resolve(this.root, path);

@@ -9,14 +9,15 @@
  * That is not a small gap. `.obsidian/plugins/<any>/main.js` is executed by
  * Obsidian on the next reload, in a renderer with Node integration, so an
  * arbitrary write there is arbitrary code execution as the user. `.trew/`
- * holds this client's own pairing secret and server URL, and `.git/hooks/` runs
+ * holds this client's own device token and server URL, and `.git/hooks/` runs
  * on the next checkout.
  *
- * It needs the vault key, so the attacker is a leaked pairing string or one
- * compromised device rather than a hostile server. It is also reachable with no
- * attacker at all: a client told its config folder is somewhere else uploads the
- * ordinary `.obsidian` it still has, and every other device would have applied
- * it.
+ * The attacker is anything that can put an entry on the server: one
+ * compromised device, somebody holding a leaked invite, or a server that does
+ * not keep its own path rules, which refuse such a path but which no client
+ * should rely on alone. It is also reachable with no attacker at all: a client
+ * told its config folder is somewhere else uploads the ordinary `.obsidian` it
+ * still has, and every other device would have applied it.
  *
  * The invariant, asserted here for both vaults because the bug was that they
  * disagreed: a path this client will never upload is a path it must never

@@ -202,9 +202,9 @@ describe("reading and writing", () => {
 
 describe("paths from elsewhere", () => {
   /**
-   * Paths arrive from the server, sealed by another device. The seal proves
-   * they came from someone holding the vault key; it does not prove that
-   * device is well, and a bug on it is enough.
+   * Paths arrive from the server, written there by another device or an
+   * agent. That they passed the server's path rules does not prove the server
+   * is honest or that the device is well, and a bug on it is enough.
    */
   it("refuses to write outside the vault", async () => {
     const v = new NodeVault(root);
