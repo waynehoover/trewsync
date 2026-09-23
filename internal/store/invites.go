@@ -181,11 +181,11 @@ func (s *Store) CreateInvite(vaultID, label, issuedBy string, expiresAt *int64, 
 			return err
 		}
 		for attempt := 0; attempt < 3; attempt++ {
-			id := make([]byte, InviteIDBytes)
-			token := make([]byte, InviteTokenBytes)
-			if _, err := io.ReadFull(rand.Reader, id); err != nil {
+			id, err := newInviteID()
+			if err != nil {
 				return err
 			}
+			token := make([]byte, InviteTokenBytes)
 			if _, err := io.ReadFull(rand.Reader, token); err != nil {
 				return err
 			}
@@ -205,6 +205,29 @@ func (s *Store) CreateInvite(vaultID, label, issuedBy string, expiresAt *int64, 
 		return errors.New("three random invite ids or tokens in a row were already taken")
 	})
 	return out, err
+}
+
+// newInviteID draws an invite id whose encoding does not begin with "-".
+//
+// The id is what a person types to cancel an invite, as `trew uninvite ID`,
+// and Go's flag package takes arguments as flags until the first positional
+// one, so an id beginning with a dash is read as a flag and refused: the
+// invite could not be cancelled from the command line at all, only waited
+// out. Base64url's alphabet includes the dash, so one draw in 64 began with
+// one. Basalt met this with its own invite ids, and the client's
+// generateDeviceId keeps the same rule for device ids. A redraw costs
+// nothing anybody relies on: the id names an invite and redeems nothing
+// (TestNoInviteIDBeginsWithADash).
+func newInviteID() ([]byte, error) {
+	for {
+		id := make([]byte, InviteIDBytes)
+		if _, err := io.ReadFull(rand.Reader, id); err != nil {
+			return nil, err
+		}
+		if EncodeToken(id)[0] != '-' {
+			return id, nil
+		}
+	}
 }
 
 // betweenRedeemWrites runs inside RedeemInvite's transaction, after the device
