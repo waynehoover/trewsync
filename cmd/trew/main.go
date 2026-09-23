@@ -110,6 +110,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return cmdUninvite(rest, out)
 		case "mcp-token":
 			return cmdMCPToken(rest, out)
+		case "audit":
+			return cmdAudit(rest, out)
 		case "cat":
 			return cmdCat(rest, out)
 		case "export":
@@ -118,8 +120,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			fmt.Fprintf(out, "trew %s %s/%s %s\n", resolveVersion(version, moduleVersion()), runtime.GOOS, runtime.GOARCH, runtime.Version())
 			return nil
 		default:
-			return fmt.Errorf("unknown command %q (try serve, invite, devices, revoke, uninvite, mcp-token, cat, "+
-				"export, backup, verify, purge, stats, service, health, version)", cmd)
+			return fmt.Errorf("unknown command %q (try serve, invite, devices, revoke, uninvite, mcp-token, audit, "+
+				"cat, export, backup, verify, purge, stats, service, health, version)", cmd)
 		}
 	}
 	return cmdServe(ctx, args, out)
@@ -800,12 +802,14 @@ func cmdVerify(args []string, out io.Writer) error {
 	// registry rows appear only under -deep, because that is the only pass
 	// that opens them and a "0 registry rows" on a shallow one would read as a
 	// registry that was looked at and found empty (rule 7).
+	// The agents' operations are decoded on both passes, so they are counted
+	// on both.
 	if *deep {
-		fmt.Fprintf(out, "checked %d entries and %d chunk references and %d registry rows, %d faults\n",
-			checked.Entries, checked.Chunks, checked.Rows, len(checked.Faults))
+		fmt.Fprintf(out, "checked %d entries and %d chunk references and %d registry rows and %d agent operations, %d faults\n",
+			checked.Entries, checked.Chunks, checked.Rows, checked.Operations, len(checked.Faults))
 	} else {
-		fmt.Fprintf(out, "checked %d entries and %d chunk references, %d faults\n",
-			checked.Entries, checked.Chunks, len(checked.Faults))
+		fmt.Fprintf(out, "checked %d entries and %d chunk references and %d agent operations, %d faults\n",
+			checked.Entries, checked.Chunks, checked.Operations, len(checked.Faults))
 	}
 	for _, f := range checked.Faults {
 		fmt.Fprintln(out, " ", f)
@@ -943,6 +947,17 @@ func cmdPurge(args []string, out io.Writer) error {
 	// what is printed is what committed rather than rows that were rolled back.
 	fmt.Fprintf(out, "versions %d -> %d (removed %d)\n",
 		rep.VersionsBefore, rep.VersionsAfter, rep.VersionsRemoved)
+	// The history this purge kept because an agent displaced it, as its own
+	// line: without it a purge that removed less than `stats` led somebody to
+	// expect would not say why (rule 8, and PLAN.md section 4.5).
+	if rep.VersionsPinned > 0 {
+		fmt.Fprintf(out, "kept %d versions agents' edits displaced, which are pinned until their windows end\n",
+			rep.VersionsPinned)
+	}
+	if rep.PinsExpired+rep.RepliesExpired+rep.KeysExpired > 0 {
+		fmt.Fprintf(out, "let go of %d expired pins, %d recorded replies and %d idempotency keys; "+
+			"`trew audit` still lists their operations\n", rep.PinsExpired, rep.RepliesExpired, rep.KeysExpired)
+	}
 
 	// The chunk figures are a different kind of number and get a different
 	// rule. The sweep is a walk, and a walk that stopped counted what it
@@ -1404,6 +1419,14 @@ func cmdBackup(args []string, out io.Writer) error {
 	if rep.InvitesLeftOut > 0 {
 		fmt.Fprintf(out, "  (%d outstanding invites were left out: a restore must not bring back an invite\n"+
 			"  that has been used or cancelled since; make a new one after restoring)\n", rep.InvitesLeftOut)
+	}
+	// What agents did travels with the notes, and the pins with it, which is
+	// what keeps a restored store's purge off the before-images (PLAN.md
+	// section 4.5). Only when there is any, so a vault no agent has written
+	// to reads as it did.
+	if o := rep.Oplog; o.Operations > 0 {
+		fmt.Fprintf(out, "  %d agent operations carried, with %d before-image pins and %d idempotency keys\n",
+			o.Operations, o.Pins, o.Keys)
 	}
 
 	// What the backup covers, read back from the file just written rather than

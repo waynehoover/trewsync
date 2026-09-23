@@ -43,6 +43,16 @@ func (s *Server) OperatorRevoke(vaultID, deviceID string) (Revocation, error) {
 	return s.revoke(vaultID, deviceID, nil)
 }
 
+// OperatorAudit is one page of the vault's operation log (PLAN.md M5 task 2):
+// operations committed at or after since, in milliseconds, after the one with
+// sequence number after, and the store's epoch to read them against. A read,
+// so it takes no lock; the log is written only inside an operation's own
+// commit, and a page is one read transaction.
+func (s *Server) OperatorAudit(vaultID string, since, after int64) ([]store.OperationRecord, bool, string, error) {
+	ops, more, err := s.st.Operations(vaultID, since, after, store.AuditMax)
+	return ops, more, s.st.Epoch(), err
+}
+
 // OperatorUninvite cancels an outstanding invite by its id.
 func (s *Server) OperatorUninvite(vaultID, id string) error {
 	s.commitMu.Lock()

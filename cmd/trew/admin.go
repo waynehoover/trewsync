@@ -124,6 +124,19 @@ func (o *operator) Handle(_ context.Context, req control.Request) control.Reply 
 			o.mcp.Revoked(req.TokenID)
 		}
 		return control.Reply{MCPRevoked: &control.MCPRevoked{TokenID: req.TokenID}}
+	case "audit":
+		if req.Since < 0 || req.After < 0 {
+			return control.Refused(control.CodeBadRequest, "an audit starts at a time and a sequence number, neither negative")
+		}
+		ops, more, epoch, err := o.srv.OperatorAudit(o.vault, req.Since, req.After)
+		if err != nil {
+			return control.Refused(control.CodeInternal, err.Error())
+		}
+		b, err := json.Marshal(ops)
+		if err != nil {
+			return control.Refused(control.CodeInternal, err.Error())
+		}
+		return control.Reply{Audit: &control.Audit{Operations: b, More: more, Vault: o.vault, Epoch: epoch}}
 	}
 	return control.Refused(control.CodeBadRequest, fmt.Sprintf("unknown request %q", req.Op))
 }

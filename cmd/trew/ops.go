@@ -200,6 +200,13 @@ func writeReclaimable(out io.Writer, rec store.Reclaimable, grace time.Duration)
 	if rec.Versions > 0 {
 		fmt.Fprintf(out, "  %d of those versions are history, which purge would drop\n", rec.Versions)
 	}
+	// History a purge keeps and would otherwise drop, said apart from the
+	// figure above so a purge that frees less than expected has its reason
+	// printed before it runs (rule 8).
+	if rec.Pinned > 0 {
+		fmt.Fprintf(out, "  %d of those versions are what agents' edits displaced, which purge keeps until their pins expire\n",
+			rec.Pinned)
+	}
 	// An incomplete walk describes how far it got, not what the vault holds,
 	// so it prints no figure at all. Same rule, and the same incident, as the
 	// purge report: one stray file in the first shard used to produce a full
@@ -229,6 +236,8 @@ func writeReclaimable(out io.Writer, rec store.Reclaimable, grace time.Duration)
 			humanBytes(rec.RecentBytes), rec.RecentBodies, grace)
 	case rec.Versions > 0:
 		fmt.Fprintln(out, "  purge would reclaim no disk: every body those versions use is shared with a version that stays")
+	case rec.Pinned > 0:
+		fmt.Fprintln(out, "  nothing for purge to reclaim yet: the only history is pinned, and every body is still referenced")
 	default:
 		fmt.Fprintln(out, "  nothing for purge to reclaim: no history, and every body is still referenced")
 	}
@@ -297,6 +306,10 @@ type vaultStats struct {
 	Purged      int64 `json:"purged"`
 	Versions    int64 `json:"versions"`
 	History     int64 `json:"history"`
+	// Pinned is history a purge keeps because an agent's operation displaced
+	// it and its pin has not expired; not in History, which is what a purge
+	// would drop.
+	Pinned      int64 `json:"pinned"`
 	ChunkRefs   int64 `json:"chunkRefs"`
 	LatestUID   int64 `json:"latestUid"`
 	AllocatedTo int64 `json:"allocatedTo"`
@@ -358,7 +371,7 @@ func writeStatsJSON(out io.Writer, st *store.Store, vaults []string, bodies int)
 			Vault: v, Devices: len(devices),
 			Files: s.Files, Folders: s.Folders, Bytes: s.Bytes,
 			Deleted: s.Deleted, Recoverable: s.Recoverable, Purged: s.Deleted - s.Recoverable,
-			Versions: s.Versions, History: rec.Versions, ChunkRefs: s.ChunkRefs,
+			Versions: s.Versions, History: rec.Versions, Pinned: rec.Pinned, ChunkRefs: s.ChunkRefs,
 			LatestUID: s.LatestUID, AllocatedTo: s.AllocatedTo, Purges: s.Purges, Invites: invites,
 			ReclaimBytes: rec.Bytes, ReclaimBodies: rec.Bodies,
 			RecentBytes: rec.RecentBytes, RecentBodies: rec.RecentBodies,
