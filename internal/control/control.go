@@ -9,7 +9,9 @@
 // The socket carries `invite`, `devices`, `revoke` and `uninvite` to the server,
 // which does each through the same code a device's request goes through: the
 // same commit lock, the same eviction. It carries the MCP token commands too
-// (`mcp-token`, `mcp-tokens`, `mcp-revoke`), under the same lock.
+// (`mcp-token`, `mcp-tokens`, `mcp-revoke`), under the same lock, and the
+// read of the agents' operation log (`audit`), so the log a person reads is
+// the one the running server is writing.
 //
 // The socket is a unix socket in the data directory, mode 0600, so whoever can
 // reach it can already read the database beside it: the socket is not a new
@@ -46,7 +48,7 @@ const requestTimeout = 30 * time.Second
 // Request is one operation the operator asks of the running server.
 type Request struct {
 	// Op is "invite", "devices", "revoke", "uninvite", "mcp-token",
-	// "mcp-tokens" or "mcp-revoke".
+	// "mcp-tokens", "mcp-revoke" or "audit".
 	Op string `json:"op"`
 
 	// invite and mcp-token. TTLMs is the lifetime, and Never says the
@@ -72,6 +74,11 @@ type Request struct {
 	Scope string `json:"scope,omitempty"`
 	// mcp-revoke.
 	TokenID string `json:"tokenId,omitempty"`
+
+	// audit: operations committed at or after Since, in milliseconds, and
+	// after the one with sequence number After, which pages.
+	Since int64 `json:"since,omitempty"`
+	After int64 `json:"after,omitempty"`
 }
 
 // Reply is the answer to one Request: exactly one of its parts is set, and
@@ -87,6 +94,18 @@ type Reply struct {
 	MCPToken   *MCPToken   `json:"mcpToken,omitempty"`
 	MCPTokens  *MCPTokens  `json:"mcpTokens,omitempty"`
 	MCPRevoked *MCPRevoked `json:"mcpRevoked,omitempty"`
+
+	Audit *Audit `json:"audit,omitempty"`
+}
+
+// Audit is one page of a vault's operation log, in the store's shape, the
+// vault's epoch beside it so an operation from before a restore can be told
+// apart, and whether there is more after it.
+type Audit struct {
+	Operations json.RawMessage `json:"operations"`
+	More       bool            `json:"more"`
+	Vault      string          `json:"vault"`
+	Epoch      string          `json:"epoch"`
 }
 
 // MCPToken is a minted MCP token: the listing row and, once, the token itself.

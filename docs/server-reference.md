@@ -26,6 +26,7 @@ for installed usage.
 | `service` | Print a systemd unit and installation instructions. | Prints only. |
 | `health` | Check a running server. | Yes. |
 | `mcp-token -label L` | Mint, list (`-list`) or revoke (`-revoke ID`) a token for the MCP endpoint. | Yes; it goes through the running server. |
+| `audit [-since WHEN] [-json]` | List what agents' write operations changed. | Yes; it goes through the running server. |
 | `version` | Print version, platform, and toolchain. | Independent of serving. |
 
 ## serve
@@ -96,6 +97,26 @@ Tailscale or an identity-aware proxy. A request from a browser must carry an
 it is missing or damaged, and not part of a backup. A `search.db` that cannot
 be opened is kept as `search.db.broken` for inspection and may be deleted.
 
+## audit
+
+`trew audit` lists every write an agent made through the MCP endpoint, oldest
+first: when it committed by the server's clock, the tool, the token's label and
+id, the operation id, and each path it changed with its version before and
+after. A version an edit displaced is listed as pinned, with the date until
+which purge keeps it. Revoking a token does not remove its operations from the
+list. Like `devices`, it goes through the running server's control socket, or
+opens the store directly when no server is running.
+
+| Flag | Meaning |
+|---|---|
+| `-since WHEN` | Only operations committed since then: a duration back from now (`24h`, `7d`) or a time (`2026-09-23`, `2026-09-23T10:00:00Z`, UTC). Default: all of them. |
+| `-json` | Structured output, one record per operation. |
+
+The list holds no token and no note text. A recorded reply is kept for seven
+days, so an agent whose connection dropped can retry with the same
+idempotency key and get the same answer; the operation itself stays in the
+list after that.
+
 ## invite, devices, revoke, uninvite
 
 These administer the vault's devices. While `serve` runs they go through its
@@ -134,6 +155,11 @@ Follow the [purge procedure](server-operations.md#purge), including a separate
 pre-purge backup. A deletion record can survive after its restorable content is
 purged.
 
+Purge never removes a version an agent's edit, move or delete displaced until
+30 days after that edit, however old the version is: it is the only copy of
+what the note said before the agent touched it. `stats` and `purge` report how
+many versions are kept this way; after the 30 days they are ordinary history.
+
 Useful `stats -json` fields:
 
 | Field | Meaning |
@@ -141,6 +167,7 @@ Useful `stats -json` fields:
 | `files`, `folders`, `bytes` | Current live content. |
 | `deleted`, `recoverable`, `purged` | Deleted paths and recovery availability. |
 | `versions`, `history` | All versions and the older versions eligible for purge; required move/deletion history is retained. |
+| `pinned` | Older versions purge keeps because an agent's edit displaced them within the last 30 days. |
 | `latestUid` | Newest version still present. |
 | `allocatedTo` | Highest version number ever allocated; does not go backward after purge. |
 | `purges` | Purge generation. |

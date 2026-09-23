@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/waynehoover/trew/internal/chunks"
@@ -303,7 +304,7 @@ CREATE INDEX IF NOT EXISTS entry_chunks_by_name ON entry_chunks(vault_id, name);
 -- 112 ms against 5.6 ms with this, and the write it costs is 5 us against a
 -- chunk fsync of 7.8 ms.
 CREATE INDEX IF NOT EXISTS entries_by_prev ON entries(vault_id, prev_path, uid);
-` + liveSchema + mcpTokensSchema
+` + liveSchema + mcpTokensSchema + oplogSchema
 
 // Store is the server's whole persistent state: entries in SQLite, bodies in a
 // chunk store.
@@ -368,6 +369,23 @@ type Store struct {
 	// from it stands in for any post-delete query failing, so a test can prove
 	// the delete rolls back rather than standing with the history already gone.
 	afterPurgeDelete func() error
+
+	// duringOperation runs inside CommitOperation's transaction after each
+	// step that writes, named by the step, and is nil in every non-test
+	// build. Returning an error stands in for that statement failing, so a
+	// test can prove a failure anywhere in the operation leaves nothing of it
+	// behind. failOperationCommit, when set, replaces the COMMIT with a
+	// rollback and this error, standing in for the one failure whose outcome
+	// cannot be stated.
+	duringOperation     func(step string) error
+	failOperationCommit error
+
+	// now is the clock operations are committed and pins expire by, and
+	// retention the windows a new operation's pins and reply are given; see
+	// SetClock and SetRetention. The clock is read without writeMu, so it is
+	// held atomically; the retention is read and written only under it.
+	now       atomic.Pointer[func() time.Time]
+	retention Retention
 
 	// subs are the channels Subscribe handed out, nudged after every commit
 	// that appends entries; see Committed. Guarded by subMu, never by writeMu,
@@ -809,8 +827,10 @@ func (s *Store) sizeAccountedFor(vaultID string, e Entry) error {
 }
 
 // writeEntry is the conditional check and the three inserts, inside whatever
-// transaction or savepoint the caller has opened.
-func writeEntry(tx *sql.Tx, vaultID string, e Entry, base *int64, prevBase int64) (int64, error) {
+// transaction or savepoint the caller has opened: a device's put and batch,
+// and each entry of an agent's operation (CommitOperation), so the three
+// cannot come to different conclusions about one write.
+func writeEntry(tx execer, vaultID string, e Entry, base *int64, prevBase int64) (int64, error) {
 	if base != nil {
 		head, deleted, err := pathHead(tx, vaultID, e.Path)
 		if err != nil {
@@ -1586,11 +1606,25 @@ type PurgeReport struct {
 	// (rule 7). The version figures are unaffected: they come from a committed
 	// transaction that ran before the sweep.
 	SweepComplete bool
+
+	// VersionsPinned is how many of VersionsAfter survived only because an
+	// agent's operation pinned them (PLAN.md section 4.5): history this purge
+	// would otherwise have dropped, kept as some note's before-image until its
+	// pin expires. Its own figure, so a purge that reclaimed less than the
+	// operator expected says why (rule 8).
+	VersionsPinned int64
+	// PinsExpired, RepliesExpired and KeysExpired are the operation records
+	// this purge found past their windows and let go: pins that no longer
+	// hold a version, recorded replies cleared from their operations, and the
+	// idempotency keys that replayed them. The operations themselves stay.
+	PinsExpired    int64
+	RepliesExpired int64
+	KeysExpired    int64
 }
 
-// Purge drops version history, keeping current paths and source retirements, then
-// deletes chunk bodies that no surviving entry references and that are older
-// than grace.
+// Purge drops version history, keeping current paths, source retirements and
+// the versions agents' operations have pinned, then deletes chunk bodies that
+// no surviving entry references and that are older than grace.
 //
 // grace protects bodies belonging to a push that has uploaded but not yet
 // committed; pass chunks.DefaultGrace, and see its comment for the livelock that
@@ -1616,12 +1650,31 @@ type PurgeReport struct {
 // The report describes what committed. A transaction that rolls back returns a
 // zeroed one, because its counts were read inside a delete that no longer
 // stands.
+//
+// # Pins, and what happens when one expires
+//
+// A version an agent's operation displaced survives every purge until its pin
+// expires, whatever age the version is (PLAN.md section 4.5): the grace starts
+// when the version was displaced, counted on the server's clock from the
+// operation's commit, not from a client's mtime. Once the pin has expired the
+// version is ordinary history again, and this purge drops it exactly as it
+// would have had no agent touched it, unless it is a head or a rename record
+// for its own reasons. The expired pin row goes in the same transaction, since
+// it holds nothing; the operation and the paths it recorded stay, naming the
+// uids, so the audit still says what the operation displaced after the bytes
+// are gone. Expired replies and the keys that replayed them are let go here
+// too, which is the retention ResultFor promises and nothing longer.
+//
+// The time is the store's clock, read once, so the set the purge captures, the
+// set it deletes against and the grace its sweep applies are all one moment.
 func (s *Store) Purge(vaultID string, grace time.Duration) (PurgeReport, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
 	var rep PurgeReport
 	var live map[string]struct{}
+	now := s.clock()
+	survivors := survivorArgs(vaultID, now.UnixMilli())
 
 	// Everything that reads or writes the entries, in one transaction, so the
 	// history is only gone once the proof that the purge was right has passed.
@@ -1634,7 +1687,7 @@ func (s *Store) Purge(vaultID string, grace time.Duration) (PurgeReport, error) 
 		// Capture the required UIDs before deleting. Counting distinct paths
 		// afterward cannot detect a lost retirement record, or a whole path
 		// removed by a faulty delete predicate.
-		rows, err := tx.Query(purgeSurvivorUIDs, vaultID, vaultID, vaultID, vaultID)
+		rows, err := tx.Query(purgeSurvivorUIDs, survivors...)
 		if err != nil {
 			return err
 		}
@@ -1652,11 +1705,20 @@ func (s *Store) Purge(vaultID string, grace time.Duration) (PurgeReport, error) 
 			return err
 		}
 
+		// How many of those only a pin is keeping, counted before the delete
+		// against the same moment.
+		if err := tx.QueryRow(
+			`SELECT COUNT(*) FROM entries WHERE vault_id = ?
+			    AND uid IN (`+pinnedUIDs+`) AND uid NOT IN (`+baseSurvivorUIDs+`)`,
+			append([]any{vaultID, vaultID, now.UnixMilli()}, survivors[:4]...)...).Scan(&rep.VersionsPinned); err != nil {
+			return err
+		}
+
 		res, err := tx.Exec(
 			`DELETE FROM entries
 			  WHERE vault_id = ?
 			    AND uid NOT IN (`+purgeSurvivorUIDs+`)`,
-			vaultID, vaultID, vaultID, vaultID, vaultID)
+			append([]any{vaultID}, survivors...)...)
 		if err != nil {
 			return err
 		}
@@ -1712,6 +1774,22 @@ func (s *Store) Purge(vaultID string, grace time.Duration) (PurgeReport, error) 
 			}
 		}
 
+		// The operation records past their windows, in the same transaction
+		// as the history they no longer protect. See the section above.
+		if rep.PinsExpired, err = affected(tx.Exec(
+			`DELETE FROM op_pins WHERE vault_id = ? AND expires_at <= ?`, vaultID, now.UnixMilli())); err != nil {
+			return err
+		}
+		if rep.KeysExpired, err = affected(tx.Exec(
+			`DELETE FROM op_keys WHERE vault_id = ? AND expires_at <= ?`, vaultID, now.UnixMilli())); err != nil {
+			return err
+		}
+		if rep.RepliesExpired, err = affected(tx.Exec(
+			`UPDATE operations SET result = NULL
+			  WHERE vault_id = ? AND result IS NOT NULL AND result_expires_at <= ?`, vaultID, now.UnixMilli())); err != nil {
+			return err
+		}
+
 		// The live set is read here, after the delete and inside the same
 		// transaction, so it is exactly what the committed result references.
 		live, err = liveChunks(tx, vaultID)
@@ -1728,13 +1806,21 @@ func (s *Store) Purge(vaultID string, grace time.Duration) (PurgeReport, error) 
 	}
 
 	rep.ChunksLive = len(live)
-	swept, err := s.chunks.Sweep(vaultID, live, time.Now().Add(-grace))
+	swept, err := s.chunks.Sweep(vaultID, live, now.Add(-grace))
 	rep.ChunksDeleted, rep.ChunksSpared = swept.Deleted, swept.Spared
 	rep.ChunksQuarantined, rep.ChunksTemp = swept.Quarantined, swept.Temp
 	rep.BytesDeleted, rep.BytesSpared = swept.DeletedBytes, swept.SparedBytes
 	rep.BytesQuarantined, rep.BytesTemp = swept.QuarantinedBytes, swept.TempBytes
 	rep.SweepComplete = swept.Complete
 	return rep, err
+}
+
+// affected is a statement's row count, for the counts a report carries.
+func affected(res sql.Result, err error) (int64, error) {
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // inTx runs fn in a transaction, committing if it returns nil and rolling back
@@ -1770,7 +1856,8 @@ func (s *Store) inTx(fn func(*sql.Tx) error) error {
 // ceremony on a stopped server.
 type Reclaimable struct {
 	// Versions is the history a purge would drop after retaining current
-	// paths and the rename records that still retire their sources.
+	// paths, the rename records that still retire their sources, and the
+	// versions an unexpired pin holds.
 	Versions int64
 	// Bodies and Bytes are the chunk bodies that no surviving version
 	// references and that are older than the grace window, which is what a
@@ -1784,6 +1871,11 @@ type Reclaimable struct {
 	// would promise space that purge then reports as spared. Rule 8.
 	RecentBodies int
 	RecentBytes  int64
+	// Pinned is history a purge would drop and does not, because an agent's
+	// operation displaced it and its pin has not expired: PurgeReport's
+	// VersionsPinned, predicted. Not in Versions, and its bodies not in
+	// Bodies, because a purge now frees neither.
+	Pinned int64
 	// Complete says the walk reached the end of the chunk tree. False means
 	// every figure above describes how far it got rather than what the vault
 	// holds, and a caller must not print them as a status (rule 7), exactly as
@@ -1803,9 +1895,19 @@ type Reclaimable struct {
 // TestReclaimablePredictsExactlyWhatAPurgeThenFrees.
 func (s *Store) Reclaimable(vaultID string, grace time.Duration) (Reclaimable, error) {
 	var r Reclaimable
+	// One moment for every question, as Purge takes one, so a pin expiring
+	// between two of them cannot make the figures disagree with each other.
+	now := s.clock()
+	survivors := survivorArgs(vaultID, now.UnixMilli())
 	if err := s.db.QueryRow(
 		`SELECT COUNT(*) FROM entries WHERE vault_id = ? AND uid NOT IN (`+purgeSurvivorUIDs+`)`,
-		vaultID, vaultID, vaultID, vaultID, vaultID).Scan(&r.Versions); err != nil {
+		append([]any{vaultID}, survivors...)...).Scan(&r.Versions); err != nil {
+		return r, err
+	}
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM entries WHERE vault_id = ?
+		    AND uid IN (`+pinnedUIDs+`) AND uid NOT IN (`+baseSurvivorUIDs+`)`,
+		append([]any{vaultID, vaultID, now.UnixMilli()}, survivors[:4]...)...).Scan(&r.Pinned); err != nil {
 		return r, err
 	}
 
@@ -1813,25 +1915,25 @@ func (s *Store) Reclaimable(vaultID string, grace time.Duration) (Reclaimable, e
 		`SELECT DISTINCT name FROM entry_chunks
 		  WHERE vault_id = ?
 		    AND uid IN (`+purgeSurvivorUIDs+`)`,
-		vaultID, vaultID, vaultID, vaultID, vaultID)
+		append([]any{vaultID}, survivors...)...)
 	if err != nil {
 		return r, err
 	}
-	survivors := map[string]struct{}{}
+	names := map[string]struct{}{}
 	for rows.Next() {
 		var n string
 		if err := rows.Scan(&n); err != nil {
 			rows.Close()
 			return r, err
 		}
-		survivors[n] = struct{}{}
+		names[n] = struct{}{}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return r, err
 	}
 
-	rep, err := s.chunks.Reclaimable(vaultID, survivors, time.Now().Add(-grace))
+	rep, err := s.chunks.Reclaimable(vaultID, names, now.Add(-grace))
 	r.Bodies, r.Bytes = rep.Deleted, rep.DeletedBytes
 	r.RecentBodies, r.RecentBytes = rep.Spared, rep.SparedBytes
 	r.Complete = rep.Complete
@@ -1876,7 +1978,7 @@ type Fault struct {
 	// Reason is one of a fixed vocabulary, because things match on it:
 	// "missing", "corrupt", "badsize", "nochunks", "straychunks",
 	// "shortchunks", "chunkorder", "badpath", "baddevice", "badinvite",
-	// "novault", "livekeys".
+	// "novault", "livekeys", "badop", "lostpin".
 	//
 	// Kept complete on purpose. It was written as though it were the whole
 	// list and then fell behind the code twice, so anything reading it to
@@ -1920,6 +2022,10 @@ type Verification struct {
 	// Rows is device and invite rows decoded, and zero unless deep, because a
 	// shallow pass does not look at them and must not report that it did.
 	Rows int
+	// Operations is agent operations decoded, with their paths, pins and
+	// keys: every pass reads them, because a backup's check of its own
+	// snapshot is a shallow one and a restore serves what it carries.
+	Operations int
 }
 
 // Verify walks every live entry and checks that its chunks exist. With deep, it
@@ -1933,7 +2039,8 @@ type Verification struct {
 // verification is complete for the bytes and for the sizes: every name and
 // every declared size can be recomputed from what is on disk.
 //
-// Deep also decodes the registry: see verifyRegistry.
+// Deep also decodes the registry: see verifyRegistry. Every pass decodes the
+// operation log: see verifyOplog.
 //
 // Returns what was checked as well as what was found. Both matter: zero faults
 // out of zero checks is not a healthy vault, and rule 8 says to trust the
@@ -1954,6 +2061,12 @@ func (s *Store) Verify(deep bool) (Verification, error) {
 	}
 	liveFaults, err := s.verifyLive()
 	v.Faults = append(v.Faults, liveFaults...)
+	if err != nil {
+		return v, err
+	}
+	opFaults, ops, err := s.verifyOplog()
+	v.Faults = append(v.Faults, opFaults...)
+	v.Operations = ops
 	if err != nil || !deep {
 		return v, err
 	}
