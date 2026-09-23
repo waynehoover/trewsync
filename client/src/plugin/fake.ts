@@ -36,6 +36,8 @@
  *     vault root as a folder called `/`.
  *   - The desktop `trashSystem` lets Electron's refusal throw; the Capacitor
  *     one catches it and answers false.
+ *   - `rmdir` never removes only an empty folder: desktop refuses every
+ *     directory without `recursive`, and mobile recurses whatever it is told.
  *   - Writes, removals and trashes put their own path into the index before
  *     they resolve. `rename` only moves a record the adapter already held, so
  *     a staged copy renamed into place is on the disk and missing from the
@@ -143,6 +145,7 @@ export type FaultOp =
   | "appendBinary"
   | "mkdir"
   | "remove"
+  | "rmdir"
   | "rename"
   | "copy"
   | "trashSystem"
@@ -669,10 +672,35 @@ export class FakeAdapter implements DataAdapter {
     }
   }
 
+  /**
+   * Whether this is the Capacitor adapter, for the one call that differs in a
+   * way the plugin has to design around: `rmdir`.
+   */
+  mobile = false;
+
+  /**
+   * Removes a folder the way the shipped adapters do, which is not what the
+   * signature suggests.
+   *
+   * Read out of 1.13.7. Desktop is `fs.rm(path, { maxRetries: 5, recursive })`,
+   * and `fs.rm` refuses any directory, empty or not, unless told to recurse
+   * (`EISDIR`). Mobile hands Capacitor `recursive: true` whatever it was
+   * told. So neither removes only an empty folder: desktop removes nothing
+   * without recursion and everything with it, and mobile removes everything.
+   * The first version of this fake removed the folder and left what was in it,
+   * which is neither, and let a call that never worked on desktop pass.
+   */
   async rmdir(normalizedPath: string, recursive: boolean): Promise<void> {
+    this.check("rmdir", normalizedPath);
+    normalizedPath = this.real(normalizedPath);
+    if (!this.folders.has(normalizedPath)) {
+      throw new Error(`ENOENT: no such file or directory, rm '${normalizedPath}'`);
+    }
+    if (!recursive && !this.mobile) {
+      throw new Error(`Path is a directory: rm returned EISDIR (is a directory) ${normalizedPath}`);
+    }
     this.folders.delete(normalizedPath);
     this.forgotten(normalizedPath);
-    if (!recursive) return;
     for (const path of [...this.files.keys()]) {
       if (path.startsWith(`${normalizedPath}/`)) {
         this.files.delete(path);

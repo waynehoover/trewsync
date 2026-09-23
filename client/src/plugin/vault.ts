@@ -179,6 +179,42 @@ async function freeRemovalFolder(adapter: Writer, normalized: string): Promise<s
   return firstFreeName(named(), (path) => adapter.exists(path), named);
 }
 
+/**
+ * Whether a folder holds nothing at all, as the adapter lists it: hidden
+ * names included, because `list` reads the directory rather than the index.
+ */
+async function holdsNothing(
+  adapter: Pick<DataAdapter, "list">,
+  normalized: string,
+): Promise<boolean> {
+  const listed = await adapter.list(normalized);
+  return listed.files.length === 0 && listed.folders.length === 0;
+}
+
+/**
+ * Removes one of this client's own hidden folders, if it is empty.
+ *
+ * Neither shipped adapter has a call that removes only an empty folder. Read
+ * out of 1.13.7: desktop `rmdir` is `fs.rm` with `recursive` as given, which
+ * refuses every directory unless told to recurse and then takes everything in
+ * it, and mobile `rmdir` recurses whatever it is told. `rmdir(folder, false)`
+ * therefore did nothing on desktop, and every deletion that arrived there left
+ * its empty removal folder behind. So the emptiness is looked at here, and the
+ * removal recurses into what was just seen to be nothing. Only for a name
+ * this client made at random and nothing else writes to, where no note can
+ * arrive between the look and the removal.
+ */
+async function removeOwnEmptyFolder(
+  adapter: Pick<DataAdapter, "list" | "rmdir">,
+  normalized: string,
+): Promise<void> {
+  try {
+    if (await holdsNothing(adapter, normalized)) await adapter.rmdir(normalized, true);
+  } catch {
+    // Litter at worst: a hidden folder with nothing in it.
+  }
+}
+
 function nonce(): string {
   const bytes = new Uint8Array(4);
   crypto.getRandomValues(bytes);
@@ -1212,8 +1248,9 @@ export class ObsidianVault implements Vault {
       await this.move(from, aside);
     } catch {
       // Could not be moved, so it cannot be identified either. Left where it
-      // is rather than deleted on an unproven decision.
-      await this.adapter.rmdir(folder, false).catch(() => undefined);
+      // is rather than deleted on an unproven decision. The folder goes only
+      // if the move really left nothing in it: mobile `rmdir` recurses.
+      await removeOwnEmptyFolder(this.adapter, folder);
       return { keptAt: path, landed: true };
     }
     this.entryChanged(from);
@@ -1259,9 +1296,10 @@ export class ObsidianVault implements Vault {
       });
       return { keptAt: aside, landed: true };
     } finally {
-      // Only once it is known to be empty. Obsidian's `rmdir` is `rm -rf`
-      // when told to recurse, and the note is what would be under there.
-      if (emptied) await this.adapter.rmdir(folder, false).catch(() => undefined);
+      // Only once it is known to be empty, and looked at again before it
+      // goes: Obsidian's `rmdir` is `rm -rf` on mobile whatever it is told,
+      // and the note is what would be under there.
+      if (emptied) await removeOwnEmptyFolder(this.adapter, folder);
     }
   }
 
