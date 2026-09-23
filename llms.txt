@@ -2,10 +2,11 @@
 
 > Self-hosted vault sync with full version history, on a server you run.
 
-Trew syncs notes and attachments through a server the user controls. Content
-and filenames are encrypted on devices. The supported client environment is
-macOS, Linux, and Android with local storage; Android sync runs in the foreground.
-The CLI is experimental. Settings and plugins do not sync.
+Trew syncs notes and attachments through a server the user controls. The server
+holds notes and their history in plaintext; there is no end-to-end encryption.
+The supported client environment is macOS, Linux, and Android with local
+storage; Android sync runs in the foreground. The CLI is experimental. Settings
+and plugins do not sync.
 
 For installation requests, start with the agent runbook. Follow linked references
 only as needed. The URLs below point to Markdown on the main branch; use matching
@@ -17,7 +18,7 @@ release documentation and release notes when installed behavior differs.
 - [Server setup](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server.md): Docker, binaries, TLS, and upgrades.
 - [Obsidian plugin](https://raw.githubusercontent.com/waynehoover/trew/main/docs/plugin.md): Pairing, status, history, and recovery.
 - [CLI guide](https://raw.githubusercontent.com/waynehoover/trew/main/client/README.md): Optional headless mirror and automation.
-- [Security and privacy](https://raw.githubusercontent.com/waynehoover/trew/main/docs/security.md): Keys, metadata, revocation, and backups.
+- [Security and privacy](https://raw.githubusercontent.com/waynehoover/trew/main/docs/security.md): What the server reads, devices and invites, revocation, and backups.
 - [Server maintenance](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server-operations.md): Backup, restore, repair, and purge.
 
 ## Reference

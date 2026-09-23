@@ -8,9 +8,8 @@ store. It is written before deployment on purpose (PLAN.md M5.5), as a list of
 requirements, each with where it is enforced and whether it is yet. A
 requirement with no enforcement is a hope, and this page says which ones are.
 
-[Security and privacy](security.md) is the user-facing page. Until the M1 and
-M2 strip lands it still describes the end-to-end encrypted system the code is
-today; M9 rewrites it from this page.
+[Security and privacy](security.md) is the user-facing page, written from this
+one for the plaintext server; M9 revisits it with the agent endpoint.
 
 ## The decision this rests on
 

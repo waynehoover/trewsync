@@ -2,7 +2,9 @@
 
 [Developer documentation](development.md) · [Product comparison](compared.md)
 
-This page records dated measurements and design evaluations. Results describe
+This page records dated measurements and design evaluations. Those dated
+before September 22, 2026, or measured against a numbered release, were taken
+on Basalt, with its end-to-end encryption, and are its history. Results describe
 specific fixtures, not a speed ranking against another product. The original
 transfer tables remain in `git show 573617c:docs/compared.md`.
 
@@ -399,7 +401,7 @@ in the [follow-up](reviews/0.7.1-fixes.md).
 From `client/`:
 
 ```bash
-bun run bench          # chunking, sealing, transfer sizes
+bun run bench          # chunking, naming, transfer sizes
 bun run bench:sync     # complete sync with latency and bandwidth controls
 bun run bench:cadence  # saved-edit latency with production sync timers
 bun run scale          # larger note collections
@@ -590,8 +592,8 @@ do not predict phone latency or suspended-app behavior.
 
 ## Transfer feedback
 
-The panel now shows transfer direction, file or batch identity, and encrypted
-body bytes moved. Counters exclude reused chunks and continue across split
+The panel now shows transfer direction, file or batch identity, and body bytes
+moved. Counters exclude reused chunks and continue across split
 downloads. They do not imply a saved file or a completed sync. Tests hold back
 socket draining, later download bodies, and the index save to check those
 boundaries; a three-file batch sharing two chunks verifies exact retained
@@ -651,8 +653,10 @@ The chunk-size target balances that list against the changed content sent.
 
 The recorded deduplication sample saved **0.11% across different files** and
 **73–90% across versions of one file**. Repeated edits, rather than unrelated
-notes containing the same text, motivated the design. Deterministic sealing
-also reveals equality of chunks within a vault; see [the threat model](design.md).
+notes containing the same text, motivated the design. Chunk names, the SHA-256
+of raw bytes, reveal equality of chunks within a vault, as Basalt's
+deterministic sealing did, and also let anyone holding them confirm guessed
+content; see [the threat model](threat-model.md).
 
 ## Whole-vault sync
 
@@ -714,8 +718,10 @@ would require additional platform-specific storage integration.
 
 ## Evaluated alternatives
 
-These record decisions at the time of evaluation. Revisit them when requirements
-or measurements change, with compatibility and preservation tests.
+These record decisions at the time of evaluation, most of them Basalt's. Trew
+has since reversed one: chunk names are over raw bytes (PLAN.md section 2.2),
+so an alternative codec no longer changes chunk identities. Revisit them when
+requirements or measurements change, with compatibility and preservation tests.
 
 | Alternative | Evaluation and tradeoff |
 |---|---|
@@ -733,11 +739,13 @@ or measurements change, with compatibility and preservation tests.
 | Alternative codec (I25) | Encoded bytes affect chunk identities. Require a measured benefit and a migration plan; see the historical review evidence. |
 | Diff-match-patch fork (I26) | The evaluated fork produced different diffs and lacked equivalent line-mode/deadline behavior. A dependency swap would change merge results. |
 
-Data-key epochs, re-encryption, and device signatures could strengthen access
-revocation and author attribution. They also require key distribution, history
-and backup compatibility, and migration work. They are outside the current
-personal-device scope. The [design](design.md#what-the-server-can-and-cannot-do)
-states the resulting limits; these mechanisms are not inherently impossible.
+Basalt evaluated data-key epochs, re-encryption, and device signatures for
+access revocation and author attribution, and left them out of scope. Trew has
+no data key, so only device signatures remain relevant: they would restore the
+author attribution that went with the entry authenticator, at the cost of key
+distribution, history and backup compatibility, and migration work. The
+[design](design.md#what-the-server-can-and-cannot-do) states the resulting
+limits; the mechanism is not inherently impossible.
 
 ### Locking
 
@@ -774,8 +782,8 @@ for current user-facing guidance.
 
 The client uses `diff-match-patch` for merging and `fflate` for compression;
 the server uses `modernc.org/sqlite` and `github.com/coder/websocket`. Exact
-versions live in the package manifests and lockfiles. Changes that affect sealed
-bytes or merge output need compatibility tests, even when the replacement API
+versions live in the package manifests and lockfiles. Changes that affect chunk
+names or merge output need compatibility tests, even when the replacement API
 looks equivalent.
 
 The namespace expansion uses a preview containing exact source spans and required
