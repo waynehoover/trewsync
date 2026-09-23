@@ -25,7 +25,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { macEntry, sealChunks, sealPath, type Schedule } from "./crypto.ts";
+import { chunkName } from "./digest.ts";
 import { engineOnFakeSocket, settle } from "./fake-socket.ts";
 import { deltaBetween } from "./index-journal.ts";
 import type { StoredState } from "./vault.ts";
@@ -34,26 +34,25 @@ import type { WireEntry } from "./transport.ts";
 const enc = new TextEncoder();
 
 async function entryFor(
-  keys: Schedule,
   uid: number,
   path: string,
   text: string,
   bodies: Map<string, Uint8Array>,
 ): Promise<WireEntry> {
-  const plain = enc.encode(text);
-  const [chunk] = await sealChunks(keys, [plain]);
-  bodies.set(chunk!.name, chunk!.bytes);
-  const facts = {
-    path: await sealPath(keys, path),
-    size: plain.length,
+  const raw = enc.encode(text);
+  const name = await chunkName(raw);
+  bodies.set(name, raw);
+  return {
+    uid,
+    path,
+    size: raw.length,
     ctime: 1000,
     mtime: 1000,
     folder: false,
     deleted: false,
-    chunks: [chunk!.name],
-    parent: "",
+    chunks: [name],
+    device: "other",
   };
-  return { uid, ...facts, device: "other", mac: await macEntry(keys, facts) };
 }
 
 /** A deep copy, so a state the engine goes on mutating stays as it was handed over. */
@@ -61,7 +60,7 @@ const frozen = (s: StoredState): StoredState => JSON.parse(JSON.stringify(s)) as
 
 describe("a vault where both sides agree", () => {
   it("hands the store nothing new, however many times it passes", async () => {
-    const { engine, socket, keys } = await engineOnFakeSocket();
+    const { engine, socket } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     socket.autoReply = (frame, s) => {
       if (frame["op"] === "fetch")
@@ -76,13 +75,7 @@ describe("a vault where both sides agree", () => {
     const entries: WireEntry[] = [];
     for (let i = 0; i < count; i++) {
       entries.push(
-        await entryFor(
-          keys,
-          i + 1,
-          `folder-${i % 5}/note-${i}.md`,
-          `note ${i} says something`,
-          bodies,
-        ),
+        await entryFor(i + 1, `folder-${i % 5}/note-${i}.md`, `note ${i} says something`, bodies),
       );
     }
     socket.raw({ op: "batch", from: 1, to: count, entries });
