@@ -119,7 +119,7 @@ import type { MergeOutcome } from "./merge.ts";
  * hundreds of thousands out of band, against two merges at once, and counts
  * instead of throwing. Both have to see the same seeds produce the same cases
  * or a comparison between them means nothing, so the seeds are generated here,
- * once. Same shape as compression-golden.ts, and for the same reason.
+ * once. Same shape as chunk-fixtures.ts, and for the same reason.
  */
 
 // ---------------------------------------------------------------------------

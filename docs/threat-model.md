@@ -8,9 +8,8 @@ store. It is written before deployment on purpose (PLAN.md M5.5), as a list of
 requirements, each with where it is enforced and whether it is yet. A
 requirement with no enforcement is a hope, and this page says which ones are.
 
-[Security and privacy](security.md) is the user-facing page. Until the M1 and
-M2 strip lands it still describes the end-to-end encrypted system the code is
-today; M9 rewrites it from this page.
+[Security and privacy](security.md) is the user-facing page, written from this
+one for the plaintext server; M9 revisits it with the agent endpoint.
 
 ## The decision this rests on
 
@@ -110,7 +109,7 @@ owner decided, with the date and what it costs).
 
 | # | Requirement | Enforced by | Status |
 |---|---|---|---|
-| D1 | A client refuses inbound paths it could not hold safely: dot segments, staging names, and on Windows the names Windows reserves, each as a visible stranded path, never a retried write error | engine (M2); Windows rule exists in `client/src/core/windows-names.ts` | planned |
+| D1 | A client refuses inbound paths it could not hold safely: dot segments, staging names, and on Windows the names Windows reserves, each as a visible stranded path, never a retried write error | engine `refusedInboundPath`, with the Windows rule from `client/src/core/windows-names.ts` when the plugin or headless client runs on Windows; `client/src/core/windows-inbound.test.ts` | enforced |
 | D2 | The plugin never adds client-side error reporting or telemetry (the community directory forbids it) | review rule (M9 lint gate) | documented |
 | D3 | An invite link never pairs by itself: the modal shows the server address the invite names, warns when it differs from the configured one, and changes nothing until confirmed | plugin (M2) | planned |
 

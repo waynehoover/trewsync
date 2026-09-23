@@ -3,17 +3,20 @@
     "One entry shape, checked by both languages (I03).",
     "",
     "The TypeScript client and the Go server each decide for themselves what a",
-    "well-formed entry is, and for a long time they decided differently: the",
-    "server refused an empty authenticator on a file and accepted one on a",
-    "folder (F20), while the client checked neither and two other things the",
-    "server also checks. Nothing compared the two lists, so a divergence was",
-    "only ever found by meeting one in a vault.",
+    "well-formed entry is. In Basalt, which Trew was forked from, they decided",
+    "differently for a long time: its server refused an empty entry",
+    "authenticator on a file and accepted one on a folder (F20), while its",
+    "client checked neither and two other things the server also checked.",
+    "Nothing compared the two lists, so a divergence was only ever found by",
+    "meeting one in a vault. Protocol 1 carries no authenticator and no parent",
+    "digest (plan/protocol.md, \"Writing\"), so the cases about them are gone.",
     "",
     "Every case here is fed to store.Entry.Validate in Go and to",
     "checkEntryShape in TypeScript, and both have to reach the same verdict.",
     "A case that is valid must be accepted by both; a case that is not must be",
     "refused by both. Adding a rule to one side without the other fails here,",
-    "which is the whole point of the file.",
+    "which is the whole point of the file. `$chunk` in a case stands for",
+    "`goodChunk`, so the cases stay readable.",
     "",
     "The client is the side that matters most for the invalid cases. A server",
     "is not obliged to be honest, so every shape the server refuses to store is",
@@ -24,9 +27,10 @@
     "client caps what a handshake may raise its own memory limits to, and it has",
     "to have those numbers in hand before the handshake, so it cannot read them",
     "off the wire. Two copies of a constant drift, and this one drifts into a",
-    "client that kills a connection over a batch the server was entitled to send."
+    "client that kills a connection over a batch the server was entitled to send.",
+    "The client's chunk ceiling is held to `constants.chunkMax` for the same",
+    "reason: a smaller one refuses a chunk the server was entitled to send."
   ],
-  "goodMac": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "goodChunk": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "ceilings": {
     "maxBatchBytes": 16777216,
@@ -46,8 +50,6 @@
         "deleted": false,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": [
           "$chunk"
         ]
@@ -66,8 +68,6 @@
         "deleted": false,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": []
       }
     },
@@ -84,8 +84,6 @@
         "deleted": false,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": []
       }
     },
@@ -102,8 +100,6 @@
         "deleted": true,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": []
       }
     },
@@ -121,8 +117,6 @@
         "deleted": false,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": []
       }
     },
@@ -140,8 +134,6 @@
         "deleted": false,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": [
           "$chunk"
         ]
@@ -161,8 +153,6 @@
         "deleted": false,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": [
           "$chunk"
         ]
@@ -182,8 +172,6 @@
         "deleted": true,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": [
           "$chunk"
         ]
@@ -203,110 +191,7 @@
         "deleted": true,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": []
-      }
-    },
-    {
-      "name": "a file with no authenticator",
-      "valid": false,
-      "why": "F20: every reader refuses it for ever, and only the writer could have noticed",
-      "entry": {
-        "uid": 10,
-        "path": "note.md",
-        "size": 12,
-        "ctime": 1000,
-        "mtime": 1000,
-        "folder": false,
-        "deleted": false,
-        "device": "a",
-        "prev": "",
-        "mac": "",
-        "parent": "",
-        "chunks": [
-          "$chunk"
-        ]
-      }
-    },
-    {
-      "name": "a folder with no authenticator",
-      "valid": false,
-      "why": "F20 exactly: this was the kind the server used to let through",
-      "entry": {
-        "uid": 11,
-        "path": "notes",
-        "size": 0,
-        "ctime": 1000,
-        "mtime": 1000,
-        "folder": true,
-        "deleted": false,
-        "device": "a",
-        "prev": "",
-        "mac": "",
-        "parent": "",
-        "chunks": []
-      }
-    },
-    {
-      "name": "a deletion with no authenticator",
-      "valid": false,
-      "why": "F20, the other kind",
-      "entry": {
-        "uid": 12,
-        "path": "gone.md",
-        "size": 0,
-        "ctime": 1000,
-        "mtime": 1000,
-        "folder": false,
-        "deleted": true,
-        "device": "a",
-        "prev": "",
-        "mac": "",
-        "parent": "",
-        "chunks": []
-      }
-    },
-    {
-      "name": "an authenticator that is not a digest",
-      "valid": false,
-      "why": "the shape is checkable without the key, so it is checked",
-      "entry": {
-        "uid": 13,
-        "path": "note.md",
-        "size": 12,
-        "ctime": 1000,
-        "mtime": 1000,
-        "folder": false,
-        "deleted": false,
-        "device": "a",
-        "prev": "",
-        "mac": "not a digest",
-        "parent": "",
-        "chunks": [
-          "$chunk"
-        ]
-      }
-    },
-    {
-      "name": "a parent that is neither empty nor a digest",
-      "valid": false,
-      "why": "empty is a real value, meaning a first version; anything else must be a digest",
-      "entry": {
-        "uid": 14,
-        "path": "note.md",
-        "size": 12,
-        "ctime": 1000,
-        "mtime": 1000,
-        "folder": false,
-        "deleted": false,
-        "device": "a",
-        "prev": "",
-        "mac": "$mac",
-        "parent": "halfway",
-        "chunks": [
-          "$chunk"
-        ]
       }
     },
     {
@@ -323,8 +208,6 @@
         "deleted": false,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": [
           "$chunk"
         ]
@@ -344,8 +227,6 @@
         "deleted": false,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": [
           "../../etc/passwd"
         ]
@@ -365,8 +246,6 @@
         "deleted": false,
         "device": "a",
         "prev": "",
-        "mac": "$mac",
-        "parent": "",
         "chunks": [
           "$chunk"
         ]

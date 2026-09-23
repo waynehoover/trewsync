@@ -13,6 +13,12 @@ for installed usage.
 | Command | Purpose | Can the server remain running? |
 |---|---|---|
 | `serve` | Serve one vault; also the default command. | One server per data directory. |
+| `invite` | Print an invite that adds one device. | Yes; it goes through the running server. |
+| `devices [-json]` | List devices and outstanding invites. | Yes; it goes through the running server. |
+| `revoke ID` | Stop a device syncing and cancel the invites it made. | Yes; it goes through the running server. |
+| `uninvite ID` | Cancel an outstanding invite. | Yes; it goes through the running server. |
+| `cat -path P [-uid N]` | Print a note, or one version of it, straight from the store. | Yes. |
+| `export -uid N -to FILE` | Write one version to a new file. | Yes. |
 | `backup -to DIR` | Copy and verify a snapshot. | Yes. |
 | `verify [-deep]` | Check stored entries and content. | Yes. |
 | `stats [-json]` | Inspect storage and potential reclaimable space. | Yes. |
@@ -27,7 +33,9 @@ for installed usage.
 | Flag | Default | Meaning |
 |---|---|---|
 | `-addr` | `:3003` | Listen address. Use `127.0.0.1:3003` behind a local proxy. |
-| `-localhost` | Off | Bind to loopback and print a `ws://` setup address. |
+| `-url` | This machine's addresses | The `ws://` or `wss://` address devices reach, which invites carry. Give the proxy's address. |
+| `-localhost` | Off | Bind to loopback and put a `ws://` address in invites. |
+| `-invite-out` | `first-invite` in the data directory | Where to write the first device's invite when the vault has no devices. |
 | `-vault` | `default` | The vault this server serves. |
 | `-max-file` | `67108864` | Maximum file size in bytes: 64 MiB; maximum 256 MiB. |
 | `-max-batch-bytes` | `16777216` | Upload batch budget: 16 MiB; may be lowered, not raised. |
@@ -53,6 +61,11 @@ Larger files cost more client memory, especially on phones. The server refuses
 to start if its file limit is below a current live file already stored. Raise
 the limit to start it; to lower it later, first delete or shrink those files
 through a client and let the changes sync. Purge alone keeps current files.
+
+On a vault with no devices, `serve` writes an invite for the first one to
+`-invite-out`, mode 0600, and logs that path and its expiry, never the invite.
+The file has one line per address the invite names, all the same invite. A
+restart while it is still outstanding leaves the file alone.
 
 ## The MCP endpoint
 
@@ -82,6 +95,27 @@ Tailscale or an identity-aware proxy. A request from a browser must carry an
 `search.db` in the data directory; it is derived, rebuilt from the store when
 it is missing or damaged, and not part of a backup. A `search.db` that cannot
 be opened is kept as `search.db.broken` for inspection and may be deleted.
+
+## invite, devices, revoke, uninvite
+
+These administer the vault's devices. While `serve` runs they go through its
+control socket, a private socket in the data directory, so a revoke takes
+effect in the running server at once; with no server running they open the
+store directly. All take `-data DIR` and `-vault NAME`, which go before an ID:
+`trew revoke -data /var/lib/trew DEVICE_ID`.
+
+| Flag | Command | Meaning |
+|---|---|---|
+| `-ttl DURATION` | invite | How long the invite works, such as `30m`; default `1h`. `0` makes one that never expires. |
+| `-label TEXT` | invite | A name shown in the device list until the invite is used. |
+| `-out FILE` | invite | Write the invite to this file, mode 0600, instead of printing it. |
+| `-url URL` | invite | The address the invite names; default the server's own. |
+| `-json` | devices | Structured output. |
+
+An invite works once and expires after one hour by default. Anyone holding it
+before it is used can add a device, so hand it over privately. Revoking a
+device stops it receiving and sending at once, and cancels the invites it
+created; the last device can be revoked too, and `trew invite` pairs a new one.
 
 ## backup, verify, purge, stats
 
@@ -162,7 +196,7 @@ These are implementation limits for operators and client authors.
 | File | 64 MiB default; configurable up to 256 MiB. |
 | Chunk body | 1 MiB. |
 | Chunks per entry or fetch | 65,536. |
-| Encrypted path | 4,096 bytes. |
+| Path | 1,024 bytes of UTF-8; each file or folder name at most 255 bytes. |
 | Entries per upload batch | 256. |
 | Encoded upload batch and summed body budget | 16 MiB maximum. |
 | Fetch body budget | 64 MiB default; configurable up to 256 MiB. |
@@ -171,8 +205,7 @@ These are implementation limits for operators and client authors.
 | Connections awaiting a handshake | 32. |
 | Handshake timeout | 10 seconds. |
 | Vault and device names | 64 bytes, no control characters. |
-| Wrapped key or sealed invite | 256 bytes of base64url. |
-| Invite lifetime | 10 minutes default; at most 1 hour. |
+| Invite lifetime | One hour by default, and at most one hour when a device asks; `trew invite -ttl 0` on the server makes one that never expires. |
 | Deleted entries per protocol page | 1,000, with continuation information. |
 
 ## Stopping it

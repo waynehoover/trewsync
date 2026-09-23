@@ -22,8 +22,8 @@
  * the input's SHA-256 so that two generators disagreeing is reported as that
  * and not as a chunker bug.
  *
- * Imported only by the fixture test and the runner, like compression-golden.ts,
- * so none of this reaches a shipped bundle; that is also why it may use
+ * Imported only by the fixture test and the runner, like test-server.ts, so
+ * none of this reaches a shipped bundle; that is also why it may use
  * `node:crypto` and `node:fs`.
  */
 
@@ -437,9 +437,8 @@ const CLAMPED_192: ChunkSizes = { min: 192, avg: 192, max: 192 };
 const CLAMPED_193: ChunkSizes = { min: 193, avg: 193, max: 193 };
 /**
  * Binary sizes as protocol 1's sizesFor gives them at the default ceiling: the
- * whole MiB, with no seal overhead reserved. Today's sizesFor still reserves
- * it (sizesForV1 in the fixture file says why); chunkBytes takes sizes as
- * given, so the corpus can pin the protocol 1 ones already.
+ * whole MiB, with nothing reserved below it, since `chunkMax` bounds raw bytes
+ * and a frame's marker byte sits on top.
  */
 const BINARY: ChunkSizes = BINARY_SIZES;
 

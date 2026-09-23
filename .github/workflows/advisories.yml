@@ -30,12 +30,12 @@
 # cannot complete fails rather than passing, for the same reason
 # `scripts/check.sh` exits 2 when a check could not run.
 #
-# Updating a dependency changes bytes that this protocol depends on. The
-# compression golden check in CI pins the sealed-chunk format byte for byte
-# across both runtimes: a compressor that emits different bytes gives one chunk
-# two names and deduplication stops without an error. So an update goes through
-# the full gate like anything else, and a green `bun audit` is never a reason
-# to skip it.
+# Updating a dependency can change what this project writes and reads. A
+# chunk's name is the hash of its raw bytes, so a compressor that emits
+# different bytes no longer changes any identity, but a decoder that reads a
+# frame differently, or a chunker dependency that cuts differently, would. So
+# an update goes through the full gate like anything else, and a green
+# `bun audit` is never a reason to skip it.
 name: Advisories
 
 on:

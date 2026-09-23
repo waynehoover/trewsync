@@ -11,7 +11,7 @@ use, start with the [server](server.md), [plugin](plugin.md), or
 | Document | Purpose |
 |---|---|
 | [Design](design.md) | Durability rules, supported environment, and threat model. |
-| [Protocol](protocol.md) | Requests, replies, authentication, limits, and cryptography. |
+| [Protocol](protocol.md) | Requests, replies, pairing, paths, chunk framing, and errors. |
 | [Index journal](index-journal.md) | Client state format and recovery behavior. |
 | [Engineering notes](research.md) | Historical measurements, design evaluations, and credits. |
 | [Threat model](threat-model.md) | Requirements for the plaintext server and agent endpoint, each with where it is enforced and its status. |
@@ -24,9 +24,9 @@ use, start with the [server](server.md), [plugin](plugin.md), or
 
 ```text
 go.mod, cmd/, internal/  trew: server, store, backup, verification, purge
-client/src/core/         shared sync engine, crypto, chunking, merging, transport
+client/src/core/         shared sync engine, chunking, merging, transport
 client/src/plugin/       Obsidian plugin and Vault adapter
-client/src/cli/          trew CLI and filesystem adapter
+client/src/node/          trew CLI and filesystem adapter
 client/src/stress/       fault, crash, collision, and scale coverage
 scripts/                 validation and release tools
 ```
@@ -92,10 +92,16 @@ to a freshly built CLI child and the real Go server:
 
 ```bash
 cd client
-bun run test src/cli/mcp.test.ts src/cli/mcp-bin.test.ts src/cli/mcp-protocol.test.ts src/cli/mcp-artifact.test.ts
-bun run test src/cli/mcp-token.test.ts src/cli/mcp-token-auth.test.ts src/cli/mcp-http.test.ts src/cli/mcp-http-process.test.ts src/cli/mcp-http-concurrency.test.ts
-bun run stress src/stress/mcp.stress.ts
+bun run test src/node/mcp.test.ts src/node/mcp-bin.test.ts src/node/mcp-protocol.test.ts src/node/mcp-artifact.test.ts
+bun run test src/node/mcp-token.test.ts src/node/mcp-token-auth.test.ts src/node/mcp-http.test.ts src/node/mcp-http-process.test.ts src/node/mcp-http-concurrency.test.ts
 ```
+
+The TypeScript MCP's stress file, `mcp.stress.ts`, was retired in M2 rather than
+moved to protocol 1: its phone races (disjoint, overlapping, append, delete and
+rename edits against a phone, and an offline phone catching up) are the cases M5
+task 12 ports to the server's MCP, from Basalt's identical copy, and its crash
+and before-image cases belong to the MCP write path M5 replaces (tasks 3 and 9).
+The classification of its 43 cases is in plan/strip-ledger.md, "M2 outcome".
 
 The workflow finds a daily note, changes two exact task lines, compares unrelated
 BOM/CRLF/frontmatter/link bytes, reads the before-image, and checks both copies
@@ -283,9 +289,8 @@ published gallery. A failed layout check leaves a `.failed.png` for inspection.
 | Downloading changes | [View](assets/screenshots/downloading.png) | [View](assets/screenshots/downloading-dark.png) |
 | Plugin settings | [View](assets/screenshots/settings.png) | [View](assets/screenshots/settings-dark.png) |
 | Status indicator | [View](assets/screenshots/status.png) | [View](assets/screenshots/status-dark.png) |
-| Setup choices | [View](assets/screenshots/pairing.png) | [View](assets/screenshots/pairing-dark.png) |
-| First device | [View](assets/screenshots/setup.png) | [View](assets/screenshots/setup-dark.png) |
-| Join a vault | [View](assets/screenshots/join.png) | [View](assets/screenshots/join-dark.png) |
+| Pair this device | [View](assets/screenshots/pairing.png) | [View](assets/screenshots/pairing-dark.png) |
+| An invite pasted | [View](assets/screenshots/join.png) | [View](assets/screenshots/join-dark.png) |
 | Confirm merging existing files | [View](assets/screenshots/join-confirm.png) | [View](assets/screenshots/join-confirm-dark.png) |
 | QR invite and pairing code | [View](assets/screenshots/invite.png) | [View](assets/screenshots/invite-dark.png) |
 | Server address | [View](assets/screenshots/server.png) | [View](assets/screenshots/server-dark.png) |
@@ -302,9 +307,8 @@ Phone layout previews (desktop rendering with mobile styles):
 | Loading sync history | [View](assets/screenshots/loading-phone.png) | [View](assets/screenshots/loading-phone-dark.png) |
 | Uploading changes | [View](assets/screenshots/uploading-phone.png) | [View](assets/screenshots/uploading-phone-dark.png) |
 | Downloading changes | [View](assets/screenshots/downloading-phone.png) | [View](assets/screenshots/downloading-phone-dark.png) |
-| Setup choices | [View](assets/screenshots/pairing-phone.png) | [View](assets/screenshots/pairing-phone-dark.png) |
-| First device | [View](assets/screenshots/setup-phone.png) | [View](assets/screenshots/setup-phone-dark.png) |
-| Join a vault | [View](assets/screenshots/join-phone.png) | [View](assets/screenshots/join-phone-dark.png) |
+| Pair this device | [View](assets/screenshots/pairing-phone.png) | [View](assets/screenshots/pairing-phone-dark.png) |
+| An invite pasted | [View](assets/screenshots/join-phone.png) | [View](assets/screenshots/join-phone-dark.png) |
 | Confirm merging existing files | [View](assets/screenshots/join-confirm-phone.png) | [View](assets/screenshots/join-confirm-phone-dark.png) |
 | QR invite and pairing code | [View](assets/screenshots/invite-phone.png) | [View](assets/screenshots/invite-phone-dark.png) |
 | Server address | [View](assets/screenshots/server-phone.png) | [View](assets/screenshots/server-phone-dark.png) |
@@ -349,10 +353,11 @@ gh attestation verify main.js --repo waynehoover/trew
 An attestation identifies the build source. It is not a security audit or proof
 that the application is defect-free.
 
-The current source uses protocol 7. Build the server and clients together for
-local testing; release 0.8.0 uses protocol 7 and 0.7.x uses protocol 6. No compatibility
-fallback is provided. Tests exercise preserved bytes across concurrent writers,
-not just final agreement.
+The current source speaks protocol 1, Trew's own; Basalt's releases speak
+protocol 7, and the two refuse each other at hello, naming both numbers. Build
+the server and clients together for local testing. No compatibility fallback is
+provided. Tests exercise preserved bytes across concurrent writers, not just
+final agreement.
 
 The screenshot script includes activity, conflict comparison, first-sync
 preview, and attachment history scenes. Use a disposable Obsidian vault and
@@ -379,12 +384,15 @@ removed. The steps, each gated by a full `scripts/check.sh` run:
    binary. Release tags stay `server/vX.Y.Z` until M9 decides the release
    scheme; they are release triggers, not Go module versions.
 
-Deliberately not renamed, because they die with the crypto in M1 and M2 and
-renaming them now would change derived bytes or golden vectors: the
-`basalt3i_` invite and `basalt3_` credential prefixes, and the
+Deliberately not renamed at M0, because they were to die with the crypto in
+M1 and M2 and renaming them would have changed derived bytes or golden vectors:
+the `basalt3i_` invite and `basalt3_` credential prefixes, and the
 `basalt/<purpose>/1` key-derivation labels including the crypto suite id.
-Three tests had matched a recovery key with a loose `/^basalt/` pattern; they
-now match the kept `basalt3_` prefix.
+Three tests had matched a recovery key with a loose `/^basalt/` pattern and
+were changed to match the kept `basalt3_` prefix. The key schedule and the
+recovery key have since gone. The two prefixes survive in `parseInvite`
+(`client/src/core/pairing.ts`), which recognises a pasted Basalt string so it
+can say that it is Basalt's, and in the fixtures' refused invite vectors.
 
 `docs/findings.md`, `docs/documentation-review.md` and `docs/reviews/` are
 Basalt's history, copied verbatim with a provenance note, because the review
@@ -416,8 +424,10 @@ can build on FTS5 without a second dependency.
 
 On 2026-09-22, against Obsidian 1.13.7 on macOS: the built plugin was
 installed in a brand-new vault, loaded unpaired with no captured errors, and
-claimed a fresh `trew serve -localhost` through its first-device flow
-(`pairFirst`, with the recovery key handed over before the claim). A note
+claimed a fresh `trew serve -localhost` through its first-device flow, still
+Basalt's at M0 (`pairFirst`, with the recovery key handed over before the
+claim; both are gone since M2, and the first device now pairs from an invite).
+A note
 written through the `obsidian` CLI reached the server; a headless client
 paired from an invite the plugin created and downloaded it byte-identical; a
 note created on the headless client arrived in the vault over the live
@@ -427,6 +437,26 @@ versions.
 
 This is M0's acceptance, not M3's: one desktop, one machine, loopback, and
 the flows driven through the plugin's own methods rather than by hand.
+
+M2's, on 2026-09-23 at `99953a7`, against Obsidian 1.13.7 on macOS: two
+brand-new vaults opened through Obsidian's own IPC, each with the built
+plugin, and one headless client, all against `trew serve -localhost`. The
+first vault paired from the server's `first-invite` with the merge confirmed
+(it held a note already); the second vault and the headless client paired
+from invites the first vault's plugin created. Notes written through the
+`obsidian` CLI in each vault and on disk for the headless client converged
+to one normalised path and SHA-256 inventory on all three. The headless
+client, offline, and the first vault edited the same line of one note; after
+it synced, all three held the vault's version under the note's name and the
+headless client's as a conflicted copy. A note deleted in the first vault
+left the other two, was restored from the second vault's deleted list, and
+came back byte-identical everywhere. A control-character name on the
+headless client's disk and another written through Obsidian's adapter in the
+first vault each stayed on the disk that held it and were named with the
+reason, in `trew sync` and `trew status` (both exiting 1) and in the
+plugin's stranded list. The driver is not in the repository; it drives the
+plugin through its own methods (`pair`, `createInvite`, `deletedNotes`,
+`recover`, `syncNow`) from `obsidian eval`, as M0's did.
 
 ### The MCP transport: hand-rolled, with the SDK as the test client
 
@@ -622,30 +652,45 @@ runs the same in the test process on every `go test`.
 
 Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,
 2026-09-22). None is reachable through `sizesFor` with today's tables, so both
-ports keep the behaviour, but each is a trap for whoever changes the sizes:
+ports keep the behaviour, but each is a trap for whoever changes the sizes.
+Line numbers are those of the M2 core:
 
 - `chunkStream` and `chunkBytes` disagree for minimums of 1 or 2: after a UTF-8
   trim the streaming splitter re-hashes the carried bytes without testing them
-  for a boundary (`chunk.ts:436-451`) while the in-memory one re-tests them
-  (`:341`). The engine uses both on the same files, so a table with a tiny
+  for a boundary (`chunk.ts:450-465`) while the in-memory one re-tests them
+  (`:355`). The engine uses both on the same files, so a table with a tiny
   minimum would rename chunks.
-- The 192-byte floor (`WINDOW * 4`, `chunk.ts:219`) can exceed a server's
-  advertised `chunkMax`, producing chunks that server refuses for ever, against
-  the promise at `:193-196`. This server advertises a fixed 1 MiB. The client
-  should refuse a `chunkMax` below the floor at the handshake rather than
-  strand every file (an M2 item).
 - With a minimum under 4, a chunk of valid UTF-8 can be invalid on its own
-  (`:256`), and chunks other than the last can come out up to 3 bytes below
+  (`:270`), and chunks other than the last can come out up to 3 bytes below
   the minimum.
-- `EngineOptions.mergeable` also decides chunking (`engine.ts:437`, `:2332`):
+- `EngineOptions.mergeable` also decides chunking (`engine.ts:354`, `:2217`):
   it picks the size table and the UTF-8 flag, so a custom merge predicate
   would silently change chunk names. Nothing in production sets it.
 - Dead code: `TEXT_AVG_MAX` (`:132`) cannot apply through `sizesFor`, and
-  `if (lead < start)` (`:250`) is never true.
+  `if (lead < start)` (`:264`) is never true.
+
+Settled in M2:
+
+- **Done.** The 192-byte floor (`CHUNK_FLOOR`, `WINDOW * 4`, `chunk.ts:199`)
+  can exceed a server's advertised `chunkMax`, which would produce chunks that
+  server refuses for ever, against the promise at `:204-207`. The engine's
+  `start()` now refuses a `chunkMax` below the floor at the handshake, with a
+  non-retryable `protostate` naming both numbers, and closes the connection
+  rather than strand every file. This server advertises a fixed 1 MiB.
+- **Done.** The chunking text-extension list existed twice in TypeScript.
+  `looksLikeText` in `chunk.ts` now delegates to `chunkingText` in
+  `path-policy.ts`, and `TEXT_EXTENSIONS` is a view of
+  `CHUNKING_TEXT_EXTENSIONS`, so the list `protocol-fixtures.json` pins is the
+  one the chunker uses.
 
 ### The strip ledger
 
 Before M1 or M2 deletes a test file, each of its assertions is classified as
 obsolete with the crypto or still a guarantee (PLAN §2.1). The ledger is
-[plan/strip-ledger.md](../plan/strip-ledger.md).
+[plan/strip-ledger.md](../plan/strip-ledger.md): its per-test tables hold the
+classification, its
+[unique guarantees](../plan/strip-ledger.md#guarantees-with-no-equivalent-elsewhere)
+are the ones no other test would catch, and its
+[M1 outcome](../plan/strip-ledger.md#m1-outcome-the-go-side) records where each
+Go test went.
 

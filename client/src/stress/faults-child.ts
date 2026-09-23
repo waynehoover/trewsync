@@ -20,11 +20,11 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { seamNamed } from "../core/seam.ts";
-import { NodeVault } from "../cli/vault.ts";
+import { NodeVault } from "../node/vault.ts";
 // For its seams. The parent enumerates every registered seam and asks for
 // each by name, so a module it has loaded and this one has not is a name
 // this process cannot find.
-import "../cli/lock.ts";
+import "../node/lock.ts";
 import { SCENARIOS } from "./fault-scenarios.ts";
 import type { Ground } from "./faults.ts";
 

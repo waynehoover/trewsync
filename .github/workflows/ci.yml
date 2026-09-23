@@ -187,8 +187,8 @@ jobs:
   # default, so this is the same suite against the other kind of disk.
   #
   # Its own job rather than a matrix on `client`, because the Linux one carries
-  # the format check, the typecheck and the compression golden, and running
-  # those twice buys nothing. What this adds is the filesystem.
+  # the format check and the typecheck, and running those twice buys nothing.
+  # What this adds is the filesystem.
   # systemd's opinion of the unit `trew service` writes (I20).
   #
   # `TestService` checks the unit's text against what this project meant to
@@ -402,15 +402,6 @@ jobs:
       - name: test
         working-directory: client
         run: bun run test
-
-      # The sealed-chunk format, byte for byte, under a second runtime. A chunk
-      # is named by the hash of its sealed bytes, so a compressor or cipher
-      # that differed between Node and Bun would give one chunk two names and
-      # dedup would silently stop; the vitest run above checks the same table
-      # under Node.
-      - name: compression golden, under bun
-        working-directory: client
-        run: bun run src/core/compression-golden.run.ts
 
       # A plugin bundle that reaches for a node: builtin compiles, passes every
       # other test, and fails only on a phone.

@@ -4,7 +4,7 @@ export interface TransferActivity {
   readonly files: number;
   /** Present only when the batch contains one file. */
   readonly path?: string;
-  /** Encrypted body bytes transferred; excludes reused chunks and metadata. */
+  /** Body bytes on the wire, as frames; excludes reused chunks and metadata. */
   readonly bytes: number;
 }
 

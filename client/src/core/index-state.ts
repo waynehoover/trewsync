@@ -49,8 +49,8 @@ export interface IndexEntry {
    *
    * The same cache one level further on. Obsidian stops at the hash because it
    * uploads whole files; Trew uploads chunks, so re-deriving the chunk list
-   * for an unchanged file would mean re-reading, re-chunking, re-compressing
-   * and re-encrypting it to learn something already known.
+   * for an unchanged file would mean re-reading, re-chunking and re-hashing it
+   * to learn something already known.
    */
   chunks: string[];
   /** Content hash as of the last successful sync. The merge base. */
@@ -100,9 +100,9 @@ export interface RemoteState {
   /**
    * An identity for the content: the chunk list, joined.
    *
-   * The server holds no plaintext hash, so equality of content is equality of
-   * the chunk name sequence. Sealing is deterministic precisely so that this
-   * works; see src/crypto.ts.
+   * Equality of content is equality of the chunk name sequence. A chunk's
+   * name is the SHA-256 of its raw bytes and the chunker is deterministic, so
+   * the same bytes are always the same list; see digest.ts and chunk.ts.
    */
   readonly hash: string;
 }
@@ -324,7 +324,7 @@ function decideMissingLocally(remote: RemoteState, index: IndexEntry): Action {
  * `(i.mtime && i.mtime === o && i.size === r.size) || (i.hash = "")`. If the
  * stat has not moved, the cached hash stands and the file is not opened. A vault
  * of four thousand notes then costs four thousand stats rather than four
- * thousand reads, four thousand chunkings and twelve thousand crypto calls.
+ * thousand reads, four thousand chunkings and four thousand rounds of hashing.
  *
  * Trew extends it to the chunk list, because it uploads chunks rather than
  * whole files and re-deriving that list means redoing all of the above.
@@ -338,7 +338,7 @@ export function needsRehash(
   // Do not be tempted to excuse a `changeId` difference when the inode and the
   // stat agree.
   //
-  // That was tried, to stop a folder rename re-sealing every note under it: a
+  // That was tried, to stop a folder rename re-hashing every note under it: a
   // rename moves an inode's change time without touching a byte, so the
   // argument was that same device, same inode, same modification time and same
   // size must be the same bytes. It is not. An editor that writes in place and
@@ -349,7 +349,7 @@ export function needsRehash(
   if (changeId !== undefined && changeId !== entry.changeId) return true;
   // An empty file is made of no chunks, so "no chunks" cannot mean "not
   // hashed yet" for one: `contentId([])` is `-empty-`, and a synced empty
-  // note was re-read, re-chunked and re-sealed on every pass for the life of
+  // note was re-read, re-chunked and re-hashed on every pass for the life of
   // the vault, which is the one file where that work is certain to produce
   // nothing. The stat still decides, as it does for every other file.
   if (entry.hash === "-empty-" && entry.size === 0) return entry.mtime !== mtime || size !== 0;

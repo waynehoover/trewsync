@@ -6,7 +6,7 @@ import { PROTO } from "../../client/src/core/transport";
 import { Plugin, PluginSettingTab } from "obsidian";
 import { TrewPanel, TrewModal, RecoverModal, paintStatus } from "../../client/src/plugin/main";
 import { HistoryModal } from "../../client/src/plugin/history";
-import { formatInvite } from "../../client/src/core/pairing";
+import { formatInviteString } from "../../client/src/core/invite-string";
 import { MergeConfirmationRequired } from "../../client/src/plugin/first-sync";
 
 const electron = require("electron");
@@ -14,11 +14,10 @@ const fs = require("fs");
 const now = new Date();
 now.setHours(10, 30, 0, 0);
 const at = +now;
-const invite = formatInvite({
+const invite = formatInviteString({
+  token: new Uint8Array(16).fill(17),
   url: "wss://sync.example.com",
-  vaultId: "default",
-  id: new Uint8Array(16).fill(17),
-  key: new Uint8Array(32).fill(34),
+  vault: "default",
 });
 const texts = [
   "# Weekend plans\n\n## Saturday\n- Coffee at the market\n- Walk along the coast\n\n## Sunday\n- Lunch with friends\n- Read a few chapters\n",
@@ -104,7 +103,11 @@ export default class Screenshots extends Plugin {
       currentState: paired
         ? { kind: "synced", summary: "up to date", at, refused: 0, waiting: 0 }
         : { kind: "unpaired" },
-      pendingFirstPairing: () => undefined,
+      pendingPairing: undefined,
+      pairingFailure: undefined,
+      configProblem: undefined,
+      dataPath: ".obsidian/plugins/trew-sync/data.json",
+      ignoredNames: [],
       cursors: () => ({ local: 124, server: 124 }),
       connection: () => ({
         url: "wss://sync.example.com",
@@ -149,12 +152,10 @@ export default class Screenshots extends Plugin {
       }),
       changeServerAddress: unavailable,
       renameDevice: unavailable,
-      rotate: unavailable,
       repair: unavailable,
       unlink: unavailable,
       recover: unavailable,
       pair: unavailable,
-      pairFirst: unavailable,
     };
   }
 
@@ -175,7 +176,7 @@ export default class Screenshots extends Plugin {
           : this.platformClasses.get(cls),
       );
     }
-    this.model = this.makeModel(!["pairing", "join", "join-confirm", "setup"].includes(name));
+    this.model = this.makeModel(!["pairing", "join", "join-confirm"].includes(name));
     if (name === "join-confirm")
       this.model.pair = async () => {
         throw new MergeConfirmationRequired();
@@ -283,12 +284,12 @@ export default class Screenshots extends Plugin {
       button.click();
       return button;
     };
-    if (name === "join" || name === "join-confirm") press("Paste an invite");
-    if (name === "setup") press("Use a setup line");
-    if (name === "join" || name === "join-confirm" || name === "setup") {
-      const field = content.querySelector("input");
-      field.value = name.startsWith("join") ? "Phone" : "MacBook";
+    if (name === "join" || name === "join-confirm") {
+      const field = content.querySelector('input[aria-label="Invite"]');
+      if (!field) throw new Error("Missing the Invite field");
+      field.value = invite;
       field.dispatchEvent(new field.ownerDocument.defaultView.Event("input", { bubbles: true }));
+      await settle();
     }
     if (name === "join-confirm") {
       press("Pair");

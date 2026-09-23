@@ -16,16 +16,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "./client.ts";
-import { testWrapped } from "./test-keys.ts";
 import { LatencyProxy } from "./latency.ts";
 import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
-const SECRET = new Uint8Array(32).fill(36);
-let wrapped: string;
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 afterAll(async () => {
   await cleanupBinary();
@@ -54,7 +50,7 @@ async function client(
     vault,
     store: new MemoryIndexStore(),
     url,
-    ...(await server!.deviceCredentials(SECRET, wrapped, name)),
+    ...(await server!.deviceCredentials(name)),
     vaultId: "default",
     device: name,
     timeoutMs,
@@ -81,7 +77,7 @@ function incompressible(size: number): Uint8Array {
  * The rate is set by the largest single body rather than by the total, and
  * that is the arithmetic this had wrong. A timeout is re-armed per body, so
  * what must fit inside one is one chunk, and a binary chunk runs to
- * `BINARY_SIZES.max`, a mebibyte, plus the seal. At 500 KB/s that is 2.1
+ * `BINARY_SIZES.max`, a mebibyte, plus its frame's marker byte. At 500 KB/s that is 2.1
  * seconds against a 2 second timeout, so any run whose rolling hash happened
  * to place a boundary near the maximum failed: measured at roughly one run in
  * five, on random bytes that make a different cut every time. At the rate
@@ -149,18 +145,36 @@ describe("a long backlog over a slow link", () => {
     server = new TestServer();
     await server.start();
     const fast = await client("fast", server.wsUrl, 20_000);
-    // The server sends catch-up in frames of two hundred entries, each a few
-    // hundred sealed bytes, so three frames of about 90 KB each: at the rate
-    // below one frame fits inside the timeout and the whole backlog does
-    // not. A frame is the smallest thing a WebSocket client can see arrive,
-    // so that is the granularity progress has here.
-    for (let i = 0; i < 600; i++) await fast.vault.edit(`n${i}.md`, `note ${i}\n`);
+    // The server sends catch-up in frames of two hundred entries (BatchSize
+    // in internal/server), each around two hundred bytes now that paths are
+    // plaintext, so eight frames of about 40 KB each: at the rate below one
+    // frame fits inside the timeout and the whole backlog does not. A frame
+    // is the smallest thing a WebSocket client can see arrive, so that is
+    // the granularity progress has here.
+    //
+    // It was six hundred notes while every path was sealed, and without the
+    // sealing those caught up in 2.6 s against the 3 s timeout: a backlog
+    // that fits inside one timeout passes whether the wait is measured from
+    // the last batch or from the hello, so the case proved nothing until the
+    // elapsed check below said so.
+    const notes = 1600;
+    const timeout = 3_000;
+    for (let i = 0; i < notes; i++) await fast.vault.edit(`n${i}.md`, `note ${i}\n`);
     await fast.c.settle();
 
     proxy = new LatencyProxy("127.0.0.1", server.port, { rttMs: 20, bytesPerSecond: 50_000 });
     await proxy.start();
-    const slow = await client("slow", proxy.url, 3_000);
+    const started = Date.now();
+    const slow = await client("slow", proxy.url, timeout);
+    const took = Date.now() - started;
+    expect(
+      took,
+      `the backlog arrived in ${took} ms, inside one ${timeout} ms timeout, so this proves nothing`,
+    ).toBeGreaterThan(timeout);
     expect(slow.c.transport.isClosed).toBe(false);
-    expect(slow.c.serverCursor).toBeGreaterThan(0);
+    expect(slow.c.serverCursor).toBeGreaterThanOrEqual(notes);
+    expect(slow.c.transport.appliedCursor, "the backlog was not all read").toBe(
+      slow.c.serverCursor,
+    );
   }, 120_000);
 });

@@ -10,15 +10,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "./client.ts";
-import { testWrapped } from "./test-keys.ts";
 import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
-const SECRET = new Uint8Array(32).fill(44);
-let wrapped: string;
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 afterAll(async () => {
   await cleanupBinary();
@@ -36,7 +32,7 @@ async function connected(name: string, vault: MemoryVault): Promise<Client> {
     vault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(SECRET, wrapped)),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device: name,
     timeoutMs: 60_000,
@@ -54,7 +50,8 @@ describe("an attachment over the batch byte bound", () => {
     const av = new MemoryVault();
     const a = await connected("a", av);
     for (let i = 0; i < 20; i++) await av.edit(`note-${i}.md`, `note ${i}\n`);
-    // Incompressible, and over 16 MiB once sealed.
+    // Incompressible, and over the 16 MiB of declared bytes one batch may
+    // carry (plan/protocol.md, "Limits").
     const big = new Uint8Array(20 * 1024 * 1024);
     for (let at = 0; at < big.length; at += 65536) {
       crypto.getRandomValues(big.subarray(at, Math.min(at + 65536, big.length)));

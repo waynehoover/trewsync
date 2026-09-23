@@ -71,8 +71,11 @@ services:
     security_opt:
       - no-new-privileges:true
 
-    # The line to paste into your first device is in here, once:
-    #   docker compose logs trew | grep '#'
+    # The first device pairs from an invite. `serve` writes one to
+    # /data/first-invite, mode 0600, and logs only where it is and when it
+    # expires, never the string. Behind a TLS proxy that invite names addresses
+    # no device can reach, so make one naming the address devices do use:
+    #   docker compose exec trew /trew invite -url wss://homelab.example.ts.net
     logging:
       driver: json-file
       options:

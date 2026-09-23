@@ -1,8 +1,8 @@
 {
 "about": {
-"generator": "client/src/cli/mcp-oracle.run.ts",
+"generator": "client/src/node/mcp-oracle.run.ts",
 "runtime": "bun 1.4.2",
-"note": "The TypeScript MCP's outputs for a corpus; internal/notes must reproduce every one. Regenerate with: cd client && bun run src/cli/mcp-oracle.run.ts"
+"note": "The TypeScript MCP's outputs for a corpus; internal/notes must reproduce every one. Regenerate with: cd client && bun run src/node/mcp-oracle.run.ts"
 },
 "page": [
 {"text":"","startLine":1,"maxLines":200,"want":{"content":"","startLine":1,"endLine":0,"nextLine":null,"complete":true}},

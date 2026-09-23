@@ -2,7 +2,6 @@ import { afterEach, expect, it } from "vitest";
 import { Client } from "./client.ts";
 import { MemoryVault, MemoryIndexStore } from "./vault.ts";
 import { TestServer } from "./test-server.ts";
-import { testWrapped } from "./test-keys.ts";
 import { previewCounts } from "./preview.ts";
 import type { ClientOptions } from "./client.ts";
 
@@ -15,8 +14,6 @@ afterEach(async () => {
 async function setup() {
   server = new TestServer();
   await server.start();
-  const secret = new Uint8Array(32).fill(49),
-    wrapped = await testWrapped(secret);
   return async (device: string, extra: Partial<ClientOptions> = {}) => {
     const vault = new MemoryVault(),
       store = new MemoryIndexStore();
@@ -27,7 +24,7 @@ async function setup() {
       vaultId: "default",
       device,
       coalesceWrites: false,
-      ...(await server.deviceCredentials(secret, wrapped, device)),
+      ...(await server.deviceCredentials(device)),
       ...extra,
     });
     clients.push(client);

@@ -4,10 +4,13 @@
 > user's devices, and verify sync. Continue through the steps you can complete;
 > report any missing access or unfinished verification precisely.
 
-Trew is self-hosted Obsidian sync with encrypted content and filenames. The
-plugin runs on macOS, Linux, and Android with local vault storage. iOS is
-untested; Windows is unsupported. Android sync requires Obsidian in the
-foreground. The CLI is experimental and optional.
+Trew is self-hosted Obsidian sync with version history. The server holds the
+notes in plaintext: there is no end-to-end encryption, so the server host, its
+disk and its backups can read every note. Tell the user this before installing
+if they have not already chosen Trew knowing it. The plugin runs on macOS,
+Linux, and Android with local vault storage. iOS is untested; Windows is
+unsupported. Android sync requires Obsidian in the foreground. The CLI is
+experimental and optional.
 
 Repository: <https://github.com/waynehoover/trew>.
 Use the [server setup](docs/server.md), [plugin guide](docs/plugin.md), and
@@ -26,18 +29,24 @@ before asking questions. Collect only missing information:
 | Vault | Exact local path and device, Obsidian version, and configuration folder (normally `.obsidian`). Do not infer the intended vault from whichever one is open. |
 | Existing sync | Whether this vault already uses Trew or another sync service. Reuse an existing Trew pairing. For another service, let outstanding sync finish, preserve a backup, and agree on the switch before enabling Trew. |
 | Secure connection | Existing HTTPS proxy/domain, or Tailscale on the server and devices. Prefer what is already configured. Ask for the user's choice if neither exists. |
-| Recovery key | A user-controlled place to save it separately from the vault, such as their password manager. A temporary file on one device is not the final recovery copy. |
+| Storage | Whether the server's data volume and the backup destination sit on encrypted storage. Both hold every note in plaintext; record what the user decides. |
 | Backup | An available separate disk or off-host destination, and an existing scheduler if any. |
 
 Check whether this is a fresh installation, an upgrade, or an additional device.
-An existing claimed server does not need initializing again. A second device
-joins by invite. If only the local computer is accessible, do the local work and
-identify the server or phone steps needing access.
+A server that already has devices needs no first-device step. Every device,
+the first included, joins by invite. If only the local computer is accessible,
+do the local work and identify the server or phone steps needing access.
 
 Keep a short, secret-free record of the chosen host, paths, Compose project,
 endpoint, versions, and completed steps. On a retry, inspect current state and
 resume. Do not delete an existing volume, pairing, or recovery file to make the
 instructions run again. Back up existing notes before the first sync.
+
+A Basalt Sync vault does not move over by pairing: Trew and Basalt speak
+different protocols, and a Basalt invite or recovery key does not pair with
+Trew. Moving from Basalt is a fresh pairing against a new Trew server, done on a
+rehearsed copy first; agree that plan with the user before touching the live
+vault.
 
 ## 2. Choose released artifacts
 
@@ -154,11 +163,28 @@ verification to make the check pass. If authentication at the proxy prevents
 normal Trew WebSocket connections, resolve that configuration before pairing.
 Plain `ws://` is only for an explicitly local test on loopback.
 
-The initial server log contains a one-use setup string `HOST:3003#TOKEN`.
-Capture that log through a private channel or a permission-restricted file;
-do not paste the token into the conversation. Replace only the address before
-`#` with the verified endpoint: `wss://actual-hostname#TOKEN`. Preserve the token
-exactly. It is distinct from the recovery key generated during pairing.
+The first device pairs from an invite, a `trew1i_` string that carries a
+single-use token, the server's address and the vault name. An invite names the
+address devices connect to, so it has to name the verified `wss://` endpoint,
+not the server's own port. Once the endpoint works, make the first device's
+invite on the server host, naming that endpoint, into a permission-restricted
+file rather than the conversation:
+
+```bash
+(umask 077 && docker compose exec -T trew /trew invite -url wss://actual-hostname \
+  > /private/path/first-invite.txt)
+```
+
+The file holds a line saying when the invite expires and the invite itself, the
+line starting `trew1i_`. For a binary installation, run
+`trew invite -data /path/to/trew-data -url wss://actual-hostname -out /private/path/first-invite.txt`
+as the service account, which writes only the invite, mode 0600. Either way
+the command goes through the running server. A server with no devices also
+writes an invite to `first-invite` in its data directory at startup and logs
+that path, never the string; it names the endpoint only when `serve` was
+started with `-url`. Keep the invite out of the conversation, screenshots and
+logs: until it is used, anyone holding it can add a device. It expires after
+one hour.
 
 ## 5. Install and enable the plugin
 
@@ -196,48 +222,48 @@ steps. Do not invent an installation API or claim the plugin is enabled because
 files exist. [Obsidian's CLI documentation](https://obsidian.md/help/cli) and the
 installed CLI's help describe available capabilities.
 
-## 6. Pair and save the recovery key
+## 6. Pair each device
 
 Interact with the actual panel through available app controls. There is no
 documented Trew CLI command that writes the plugin's pairing state. Do not
 manufacture `data.json`, copy another device's credentials, or run the headless
 client against the plugin's vault as a shortcut.
 
-**First device, unclaimed server:** paste the secure setup string into **Invite
-or setup line** and press **Start a new vault**. The panel names the server it
-will claim; check it before pressing. A device name is suggested and can be
-changed under **More options**. The panel
-shows the recovery key under **Write this down**. Help the user save it in the
-chosen private location. Press **I have written it down** only after the user
-has saved it, or after verifying a save to a destination they designated for
-this purpose. Wait for pairing and sync to finish.
+**First device:** paste the invite from section 4 into **Invite** and check the
+server (and the vault, if it is not `default`) that the panel says it points
+to. **Pair** becomes available once the panel can read the invite. A device
+name is suggested and can be changed under **More options**. There is no
+recovery key to save: the notes and their history stay on the server, and
+`trew invite` on the server pairs a replacement whenever one is needed. Wait
+for pairing and sync to finish.
 
 **Additional device:** an empty local vault downloads the synced files directly.
-If files already exist, **Confirm merge** asks before combining them with the
-synced vault. Continue only when the user wants those files included; an older
-copy can reintroduce moved or deleted files. Cancelling leaves the invite unused.
+If files already exist, the panel asks before combining them with the synced
+vault. Continue only when the user wants those files included; an older copy
+can reintroduce moved or deleted files. Cancelling leaves the invite unused.
 For a fresh copy, create a new empty Obsidian vault and preserve the old vault
 separately; do not clear it automatically. Sync runs both ways after pairing.
 
-On a paired device, choose **Add another device → Create
-invite**. On the new device, paste the invite into **Invite or setup line** and
-press **Pair**. The same field takes a recovery key. Check the vault and server
-named under it first. Invites expire after ten minutes by default and
-work once. Create one per device. A recovery key is the fallback when no paired
-device remains, not the routine handoff.
+On a paired device, choose **Add another device → Create invite**. On the new
+device, paste the invite into **Invite**, or scan its QR code, check the server
+named under the field, and press **Pair**. An invite works once and expires
+after one hour by default. Create one per device.
 
 If **Review your first sync** appears, review the upload, download, and
 preserved-copy counts before choosing **Continue sync**. **Pause sync** keeps
 the first sync paused; resume from the Trew menu when ready.
 
 If pairing is interrupted, inspect the panel and saved state before retrying.
-Keep any recovery key already generated. Do not initialize a second vault or
-unlink simply because a previous attempt timed out.
+A device saves its pairing before sending it, so one whose reply was lost is
+finished by the next attempt, even after the invite has expired; follow what
+the panel says. Do not unlink or make a fresh invite simply because a previous
+attempt timed out.
 
-Keep secrets out of chat, screenshots, command arguments, and routine logs. Use
-private local files or protected input when supported. Do not extract keys into
-a transcript to automate a button. When no private interaction is available,
-let the user enter or save the secret while continuing independent setup work.
+Keep invites and device credentials out of chat, screenshots, command
+arguments, and routine logs. Use private local files or protected input when
+supported. Do not copy an invite into a transcript to automate a button. When
+no private interaction is available, let the user paste the invite while
+continuing independent setup work.
 
 ## 7. Verify the installed system
 
@@ -264,7 +290,9 @@ restore checks pending. Do not equate files installed with working sync.
 Follow [server backup](docs/server-operations.md#backup) to create and verify a
 snapshot, copy it to the chosen separate disk or host, and configure an ordered,
 non-overlapping scheduled job. Verify the schedule and destination. A backup
-inside the server volume alone does not protect against losing that disk.
+inside the server volume alone does not protect against losing that disk. A
+backup is a readable copy of every note and its history, so its destination
+needs the same protection as the server's disk.
 Schedule a [restore rehearsal](docs/server-operations.md#restore-rehearsal);
 do not replace live data for this check. If no backup destination is available,
 state that backups are pending and ask for the missing destination. Installation
@@ -273,9 +301,10 @@ does not authorize purging history or discarding existing backups.
 Report concisely:
 
 - Server endpoint, running version, service/Compose location, and health result.
-- Plugin version and paired vault/device names, without keys or invites.
+- Plugin version and paired vault/device names, without credentials or invites.
 - Sync and recovery checks that actually passed, with any remaining device steps.
-- Recovery-key handoff and backup location/schedule, or what is still pending.
+- Whether the data volume and backups are on encrypted storage, and the backup
+  location/schedule, or what is still pending.
 
 Distinguish **installed**, **paired**, and **verified between devices** in the
 result. Link [the plugin guide](docs/plugin.md) for daily use. Do not ask for
@@ -328,8 +357,9 @@ agent on the Mac, configure the Mac's MCP client and use stdio when it supports 
 
 ## Working from development source
 
-This source tree, the Compose image, and released 0.8.x and 0.9.x clients use protocol 7.
-Version 0.7.x uses protocol 6 and cannot connect. For source builds, build the
-server and clients from the same checkout.
-Keep existing data and credentials, and verify the reported protocol after
-connecting. `trew preview --json` provides a read-only plan for CLI vaults.
+This source tree speaks protocol 1, Trew's own. Basalt's releases speak its
+protocol 7, and the two refuse each other at the handshake, naming both
+numbers. For source builds, build the server and clients from the same
+checkout. Keep existing data and credentials, and verify the reported protocol
+after connecting. `trew preview --json` provides a read-only plan for CLI
+vaults.

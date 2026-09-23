@@ -18,13 +18,17 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { checkEntryShape } from "./engine.ts";
-import { LOCAL_MAX_BATCH_BYTES, LOCAL_MAX_FETCH_BYTES } from "./transport.ts";
+import {
+  LOCAL_MAX_BATCH_BYTES,
+  LOCAL_MAX_CHUNK_BYTES,
+  LOCAL_MAX_FETCH_BYTES,
+} from "./transport.ts";
 import type { WireEntry } from "./transport.ts";
 
 interface Fixture {
-  goodMac: string;
   goodChunk: string;
   ceilings: { maxBatchBytes: number; maxFetchBytes: number };
+  constants: { chunkMax: number };
   cases: { name: string; valid: boolean; why?: string; entry: Record<string, unknown> }[];
 }
 
@@ -32,10 +36,9 @@ const fixtures = JSON.parse(
   readFileSync(join(import.meta.dirname, "..", "..", "..", "protocol-fixtures.json"), "utf8"),
 ) as Fixture;
 
-/** `$mac` and `$chunk` stand in for real digests, so the file stays readable. */
+/** `$chunk` stands in for a real digest, so the file stays readable. */
 function resolve(entry: Record<string, unknown>): WireEntry {
-  const swap = (v: unknown): unknown =>
-    v === "$mac" ? fixtures.goodMac : v === "$chunk" ? fixtures.goodChunk : v;
+  const swap = (v: unknown): unknown => (v === "$chunk" ? fixtures.goodChunk : v);
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     out[k] = Array.isArray(v) ? v.map(swap) : swap(v);
@@ -78,5 +81,16 @@ describe("the ceilings both languages hard-code", () => {
   it("match the fixtures the server also reads", () => {
     expect(fixtures.ceilings.maxBatchBytes).toBe(LOCAL_MAX_BATCH_BYTES);
     expect(fixtures.ceilings.maxFetchBytes).toBe(LOCAL_MAX_FETCH_BYTES);
+  });
+
+  /**
+   * The chunk ceiling this device decodes frames against before a handshake
+   * has said anything, and caps the server's `chunkMax` at after one. Below
+   * the protocol's it would refuse, as `toolarge`, a chunk the server was
+   * entitled to send; above it, a frame bigger than any the server may send
+   * would be inflated before being refused.
+   */
+  it("hold the chunk ceiling at the protocol's", () => {
+    expect(fixtures.constants.chunkMax).toBe(LOCAL_MAX_CHUNK_BYTES);
   });
 });

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// The cases of client/src/cli/mcp-links.test.ts, through ChangeLinks and
+// The cases of client/src/node/mcp-links.test.ts, through ChangeLinks and
 // ApplySourceEdits.
 
 // moved is the TypeScript suite's helper: Old.md, linked from Index.md, moved

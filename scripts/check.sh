@@ -189,7 +189,6 @@ run "install" client bun install --frozen-lockfile
 run "format" client bun run format:check
 run "typecheck" client bun run typecheck
 run "test" client bun run test
-run "compression golden, under bun" client bun run src/core/compression-golden.run.ts
 run "build" client bun run build
 run "gallery screenshots contain PNG images" "" node "$root/scripts/check-screenshots.mjs"
 run "the packed CLI installs and runs under node" "" \
@@ -203,10 +202,10 @@ run "the packed CLI installs and runs under node" "" \
 # that has stopped working is worth finding on the machine where the panel is
 # being changed rather than after the push.
 #
-# Already inside `bun run test` above. Run again by name for the same reason
-# `compression golden, under bun` is: the CI job it mirrors runs exactly this
-# and nothing else, and a step this script covered only incidentally is a step
-# it would stop covering the day the other command changed.
+# Already inside `bun run test` above. Run again by name because the CI job it
+# mirrors runs exactly this and nothing else, and a step this script covered
+# only incidentally is a step it would stop covering the day the other command
+# changed.
 run "capture every panel state" client bunx vitest run src/plugin/panel-shots.test.ts
 
 # The one that was missed. Its own command, its own job, and not part of

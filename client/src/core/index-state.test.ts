@@ -251,8 +251,8 @@ describe("the content cache, which is the whole cost of a routine scan", () => {
   /**
    * Obsidian caches the hash and stops there, because it uploads whole files.
    * Trew uploads chunks, so a cached hash with no chunk list still means
-   * re-reading, re-chunking, re-compressing and re-encrypting the file to
-   * learn something it already knows.
+   * re-reading, re-chunking and re-naming every chunk of the file to learn
+   * something it already knows.
    */
   it("re-reads when the hash is known but the chunk list is not", () => {
     const e = entry({ mtime: 500, size: 42, hash: "cached", chunks: [] });
@@ -262,8 +262,8 @@ describe("the content cache, which is the whole cost of a routine scan", () => {
   /**
    * C-D13 in the 0.3.0 review. An empty file is made of no chunks, so for one
    * file in the vault "no chunk list" is never going to become "a chunk list"
-   * and the rule above read it, chunked it and sealed it on every single pass,
-   * for ever, to learn that it is empty.
+   * and the rule above read it and chunked it on every single pass, for ever,
+   * to learn that it is empty.
    */
   it("does not re-read a synced empty file every pass", () => {
     const e = entry({ mtime: 500, size: 0, hash: "-empty-", chunks: [] });

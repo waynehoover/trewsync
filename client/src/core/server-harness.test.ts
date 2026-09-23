@@ -3,12 +3,12 @@
  *
  * These tests build `cmd/trew`, run it on a loopback port with a temporary
  * data directory, and talk to it with the actual transport. Nothing is mocked:
- * the sealing is real, the chunking is real, the SQLite writes are real, and the
+ * the chunking is real, the framing is real, the SQLite writes are real, and the
  * assertions are checked by asking the server's own `verify` whether what it
- * stored is serveable.
+ * stored is serveable, and its own `cat` what it holds.
  *
  * This is the test that could not be written until both halves existed, and it is
- * the one that matters: every protocol decision in docs/protocol.md was made on
+ * the one that matters: every protocol decision in plan/protocol.md was made on
  * one side of the wire, and two implementations that each pass their own suites
  * can still disagree about the wire between them.
  *
@@ -20,53 +20,21 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { chunkBytes, looksLikeText, sizesFor } from "./chunk.ts";
-import {
-  authToken,
-  deriveRootKeys,
-  macEntry,
-  openChunk,
-  openPath,
-  parentOf,
-  sealChunks,
-  sealPath,
-  type Schedule,
-} from "./crypto.ts";
-import { testKeys, testWrapped } from "./test-keys.ts";
+import { chunkName, chunkNames } from "./digest.ts";
 import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
 import { ProtocolError, Transport, type Batch, type BatchEntry, PROTO } from "./transport.ts";
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const run = promisify(execFile);
-
-/**
- * The keys every client in this file shares, derived once.
- *
- * One vault, one root secret, and the auth key is a branch of the same schedule,
- * so every device that has the secret authenticates with the same key.
- */
-let sharedKeys: Schedule | undefined;
-async function vaultKeys(): Promise<Schedule> {
-  sharedKeys ??= await testKeys(SECRET);
-  return sharedKeys;
-}
 const enc = new TextEncoder();
 
 /**
- * A mac of the right shape. These cases test the server's own refusals, and the
- * server holds no key: it checks that an entry carries an authenticator, never
- * what the authenticator says.
+ * The conditions of a first write, for the puts below that are about the
+ * transport rather than about the entry: no live version at the path. `put`
+ * takes its conditions rather than defaulting them, so that a caller with a
+ * base cannot forget to pass it; a test that deliberately writes against
+ * nothing says so here.
  */
-/**
- * No authenticator, for the puts below that are about the transport rather
- * than about the entry. `put` takes it rather than defaulting it, so that a
- * caller that has one cannot forget to pass it; a test that deliberately has
- * none says so here.
- */
-const unsigned = { mac: "", parent: "" };
+const noBase = { base: 0 };
 
-const shapedMac = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const dec = new TextDecoder();
 
 // Built once for the whole suite by vitest.global-setup.ts. This file used to
@@ -91,7 +59,7 @@ afterAll(async () => {
 const Server = TestServer;
 type Server = TestServer;
 
-/** A client: keys, a transport, and the batches it has been given. */
+/** A client: a transport, and the batches it has been given. */
 class Client {
   readonly batches: Batch[] = [];
   readonly entries = new Map<number, Batch["entries"][number]>();
@@ -99,10 +67,7 @@ class Client {
   caughtUpAt: number | undefined;
   transport!: Transport;
 
-  constructor(
-    readonly keys: Schedule,
-    readonly device: string,
-  ) {}
+  constructor(readonly device: string) {}
 
   async connect(server: Server, cursor = 0) {
     this.transport = new Transport(server.wsUrl, {
@@ -123,44 +88,30 @@ class Client {
       vault: "default",
       device: this.device,
       cursor,
-      ...(await server.deviceCredentials(SECRET, await testWrapped(SECRET), this.device)),
+      ...(await server.deviceCredentials(this.device)),
     });
   }
 
-  /** Chunks, seals and puts a file exactly as the engine will. */
+  /** Chunks, names and puts a file exactly as the engine will. */
   async write(path: string, content: string | Uint8Array, mtime = 1000) {
     const data = typeof content === "string" ? enc.encode(content) : content;
     const isText = looksLikeText(path);
     const parts = [...chunkBytes(data, sizesFor(data.length, isText), isText)].map((c) => c.bytes);
-    const sealed = await sealChunks(this.keys, parts);
-    const sealedPath = await sealPath(this.keys, path);
-    const names = sealed.map((c) => c.name);
+    const names = await chunkNames(parts);
     const meta = { size: data.length, ctime: 1, mtime };
-    // Signed, because the engine signs and this exists to do exactly what
-    // the engine does.
-    const parent = await parentOf("");
-    const mac = await macEntry(this.keys, {
-      path: sealedPath,
-      size: meta.size,
-      ctime: meta.ctime,
-      mtime: meta.mtime,
-      folder: false,
-      deleted: false,
-      chunks: names,
-      parent,
-    });
     const result = await this.transport.put(
-      sealedPath,
+      path,
       meta,
       names,
-      async (n) => sealed.find((c) => c.name === n)!.bytes,
-      { mac, parent, base: this.heads.get(sealedPath) ?? 0 },
+      // The raw chunk: the transport frames it as it goes.
+      async (n) => parts[names.indexOf(n)]!,
+      { base: this.heads.get(path) ?? 0 },
     );
-    this.heads.set(sealedPath, result.uid);
+    this.heads.set(path, result.uid);
     return { ...result, chunks: names, plaintext: data };
   }
 
-  /** Chunks, seals and puts several files in one batched exchange. */
+  /** Chunks, names and puts several files in one batched exchange. */
   async writeMany(files: { path: string; content: string; mtime?: number }[]) {
     const bodies = new Map<string, Uint8Array>();
     const entries: BatchEntry[] = [];
@@ -170,29 +121,13 @@ class Client {
       const parts = [...chunkBytes(data, sizesFor(data.length, isText), isText)].map(
         (c) => c.bytes,
       );
-      const sealed = await sealChunks(this.keys, parts);
-      for (const c of sealed) bodies.set(c.name, c.bytes);
-      const path = await sealPath(this.keys, f.path);
-      const meta = { size: data.length, ctime: 1, mtime: f.mtime ?? 1000 };
-      const names = sealed.map((c) => c.name);
-      // A real writer signs; the harness is standing in for one.
-      const parent = await parentOf("");
+      const names = await chunkNames(parts);
+      names.forEach((name, i) => bodies.set(name, parts[i]!));
       entries.push({
-        path,
-        base: this.heads.get(path) ?? 0,
-        meta,
+        path: f.path,
+        base: this.heads.get(f.path) ?? 0,
+        meta: { size: data.length, ctime: 1, mtime: f.mtime ?? 1000 },
         names,
-        parent,
-        mac: await macEntry(this.keys, {
-          path,
-          size: meta.size,
-          ctime: meta.ctime,
-          mtime: meta.mtime,
-          folder: false,
-          deleted: false,
-          chunks: names,
-          parent,
-        }),
       });
     }
     const out = await this.transport.putMany(entries, async (n) => bodies.get(n)!);
@@ -202,19 +137,17 @@ class Client {
     return { ...out, entries };
   }
 
-  /** Downloads a version and reassembles the plaintext, as the engine will. */
+  /** Downloads a version and reassembles it, as the engine will. */
   async read(uid: number): Promise<Uint8Array> {
     const meta = await this.transport.get(uid);
     if (meta.chunks.length === 0) return new Uint8Array(0);
+    // Raw chunks, each already decoded from its frame and checked against
+    // its name by the transport.
     const bodies = await this.transport.fetch(meta.chunks);
-    const opened: Uint8Array[] = [];
-    for (let i = 0; i < bodies.length; i++) {
-      opened.push(await openChunk(this.keys, bodies[i]!));
-    }
-    const total = opened.reduce((n, b) => n + b.length, 0);
+    const total = bodies.reduce((n, b) => n + b.length, 0);
     const out = new Uint8Array(total);
     let at = 0;
-    for (const b of opened) {
+    for (const b of bodies) {
       out.set(b, at);
       at += b.length;
     }
@@ -226,12 +159,11 @@ class Client {
   }
 }
 
-const SECRET = new Uint8Array(32).fill(21);
 let server: Server;
 const clients: Client[] = [];
 
 async function newClient(device: string, cursor = 0): Promise<Client> {
-  const c = new Client(await testKeys(SECRET), device);
+  const c = new Client(device);
   clients.push(c);
   await c.connect(server, cursor);
   return c;
@@ -266,15 +198,17 @@ describe("the handshake, against the real server", () => {
   it("agrees on the protocol and the limits", async () => {
     // The values the server enforces, which the client has to know before
     // its first put or it will send something that can never be accepted.
-    const c = new Client(await testKeys(SECRET), "a");
+    const c = new Client("a");
     clients.push(c);
     const ready = await c.connect(server);
     expect(ready.proto).toBe(PROTO);
     // One protocol, so the range the server speaks is one number wide.
     expect(ready.minProto).toBe(PROTO);
     expect(ready.serverVersion).not.toBe("");
-    // And a data key, which every vault has.
-    expect(ready.wrapped).not.toBe("");
+    // And the store's epoch, which every store has, and which a device keeps
+    // beside its cursor.
+    expect(typeof ready.epoch).toBe("string");
+    expect(ready.epoch).not.toBe("");
     // The two caps, at the server's own constants.
     expect(ready.maxBatchBytes).toBe(16 * 1024 * 1024);
     expect(ready.maxFetchBytes).toBe(64 * 1024 * 1024);
@@ -293,8 +227,7 @@ describe("the handshake, against the real server", () => {
     await expect(
       t.hello({
         vault: "default",
-        deviceId: (await server.deviceCredentials(SECRET, await testWrapped(SECRET), "impostor"))
-          .deviceId,
+        deviceId: (await server.deviceCredentials("impostor")).deviceId,
         token: "not-the-token",
         device: "impostor",
         cursor: 0,
@@ -309,7 +242,7 @@ describe("the handshake, against the real server", () => {
     await expect(
       t.hello({
         vault: "someone-elses",
-        ...(await server.deviceCredentials(SECRET, await testWrapped(SECRET), "a")),
+        ...(await server.deviceCredentials("a")),
         device: "a",
         cursor: 0,
       }),
@@ -324,7 +257,7 @@ describe("the handshake, against the real server", () => {
     await t.connect();
     await expect(
       t.hello({
-        ...(await server.deviceCredentials(SECRET, await testWrapped(SECRET), "a")),
+        ...(await server.deviceCredentials("a")),
         vault: "default",
         device: "a",
         cursor: 999_999,
@@ -335,11 +268,11 @@ describe("the handshake, against the real server", () => {
 });
 
 describe("a file, all the way there and back", () => {
-  it("round trips through chunking, sealing, the wire, and the server", async () => {
+  it("round trips through chunking, framing, the wire, and the server", async () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const c = new Client(await testKeys(SECRET), "a");
+      const c = new Client("a");
       await c.connect(fresh);
 
       const content = "# A real note\n\nWith several lines.\n\nAnd a second paragraph.\n";
@@ -350,9 +283,12 @@ describe("a file, all the way there and back", () => {
       const back = await c.read(put.uid);
       expect(dec.decode(back)).toBe(content);
 
-      // And the server agrees that what it stored is serveable.
+      // And the server agrees that what it stored is serveable, and holds the
+      // note itself, as written, rather than anything it would need a key to
+      // read: bodies travel framed and are stored raw.
       const verified = await fresh.cli("verify", "-deep");
       expect(verified).toMatch(/0 faults/);
+      expect(await fresh.cli("cat", "-path", "notes/real.md")).toBe(content);
       c.close();
     } finally {
       await fresh.cleanup();
@@ -363,7 +299,7 @@ describe("a file, all the way there and back", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const c = new Client(await testKeys(SECRET), "a");
+      const c = new Client("a");
       await c.connect(fresh);
 
       let text = "";
@@ -390,7 +326,7 @@ describe("a file, all the way there and back", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const c = new Client(await testKeys(SECRET), "a");
+      const c = new Client("a");
       await c.connect(fresh);
 
       const bytes = new Uint8Array(600_000);
@@ -408,7 +344,7 @@ describe("a file, all the way there and back", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const c = new Client(await testKeys(SECRET), "a");
+      const c = new Client("a");
       await c.connect(fresh);
       const put = await c.write("notes/empty.md", "");
       expect(put.uploaded).toBe(0);
@@ -423,15 +359,16 @@ describe("a file, all the way there and back", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const c = new Client(await testKeys(SECRET), "a");
+      const c = new Client("a");
       await c.connect(fresh);
       const path = "notes/2026-08-27 meeting: with a colon 🗿.md";
       const put = await c.write(path, "content");
-      // The server never saw the name, only the sealed form, and the client
-      // recovers it from the entry it gets back.
-      const sealedPath = await sealPath(c.keys, path);
-      expect(await openPath(c.keys, sealedPath)).toBe(path);
+      // The server holds the name exactly as the device spelled it, and
+      // answers for it by that name.
       expect(dec.decode(await c.read(put.uid))).toBe("content");
+      const [newest] = await c.transport.history(path, { limit: 1 });
+      expect(newest?.path).toBe(path);
+      expect(await fresh.cli("cat", "-path", path)).toBe("content");
       c.close();
     } finally {
       await fresh.cleanup();
@@ -448,7 +385,7 @@ describe("a batched write, which is one exchange for many notes", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const c = new Client(await testKeys(SECRET), "a");
+      const c = new Client("a");
       await c.connect(fresh);
 
       const files = Array.from({ length: 40 }, (_, i) => ({
@@ -478,7 +415,7 @@ describe("a batched write, which is one exchange for many notes", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const c = new Client(await testKeys(SECRET), "a");
+      const c = new Client("a");
       await c.connect(fresh);
       const same = "# Identical\n\nThe same bytes in two places.\n";
       const { results, uploaded } = await c.writeMany([
@@ -501,40 +438,32 @@ describe("a batched write, which is one exchange for many notes", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const c = new Client(await testKeys(SECRET), "a");
+      const c = new Client("a");
       await c.connect(fresh);
 
-      const good = await sealPath(c.keys, "good.md");
-      const alsoGood = await sealPath(c.keys, "also-good.md");
-      const body = await sealChunks(c.keys, [enc.encode("fine")]);
-      const bodies = new Map(body.map((b) => [b.name, b.bytes]));
+      const body = enc.encode("fine");
+      const name = await chunkName(body);
 
       const { results } = await c.transport.putMany(
         [
           {
-            path: good,
+            path: "good.md",
             meta: { size: 4, ctime: 1, mtime: 1 },
-            names: [body[0]!.name],
-            mac: shapedMac,
-            parent: "",
+            names: [name],
           },
           // A size that no chunk list can honestly account for.
           {
-            path: alsoGood,
+            path: "also-good.md",
             meta: { size: -1, ctime: 1, mtime: 1 },
             names: [],
-            mac: shapedMac,
-            parent: "",
           },
           {
-            path: alsoGood,
+            path: "also-good.md",
             meta: { size: 4, ctime: 1, mtime: 2 },
-            names: [body[0]!.name],
-            mac: shapedMac,
-            parent: "",
+            names: [name],
           },
         ],
-        async (n) => bodies.get(n)!,
+        async () => body,
       );
 
       expect(results[0]!.uid).toBeGreaterThan(0);
@@ -555,7 +484,7 @@ describe("deduplication, which is the point", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const c = new Client(await testKeys(SECRET), "a");
+      const c = new Client("a");
       await c.connect(fresh);
 
       const content = "# Shared\n\nThe very same words.\n";
@@ -577,7 +506,7 @@ describe("deduplication, which is the point", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const c = new Client(await testKeys(SECRET), "a");
+      const c = new Client("a");
       await c.connect(fresh);
 
       let text = "";
@@ -613,8 +542,8 @@ describe("two devices", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const a = new Client(await testKeys(SECRET), "a");
-      const b = new Client(await testKeys(SECRET), "b");
+      const a = new Client("a");
+      const b = new Client("b");
       await a.connect(fresh);
       await b.connect(fresh);
 
@@ -646,8 +575,8 @@ describe("two devices", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const a = new Client(await testKeys(SECRET), "a");
-      const b = new Client(await testKeys(SECRET), "b");
+      const a = new Client("a");
+      const b = new Client("b");
       await a.connect(fresh);
       await b.connect(fresh);
 
@@ -677,13 +606,13 @@ describe("two devices", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const a = new Client(await testKeys(SECRET), "a");
+      const a = new Client("a");
       await a.connect(fresh);
       for (let i = 0; i < 5; i++) await a.write(`f${i}.md`, `content ${i}`);
       a.close();
 
       // A second device arriving late gets everything, in order.
-      const late = new Client(await testKeys(SECRET), "late");
+      const late = new Client("late");
       clients.push(late);
       const ready = await late.connect(fresh, 0);
       expect(ready.cursor).toBe(5);
@@ -691,7 +620,7 @@ describe("two devices", () => {
       expect(late.entries.size).toBe(5);
 
       // And one that already has part of it gets only the rest.
-      const partial = new Client(await testKeys(SECRET), "partial");
+      const partial = new Client("partial");
       clients.push(partial);
       await partial.connect(fresh, 3);
       await until("the remainder to arrive", () => partial.caughtUpAt === 5);
@@ -710,18 +639,18 @@ describe("refusals that the session survives", () => {
     const fresh = new Server();
     await fresh.start();
     try {
-      const c = new Client(await testKeys(SECRET), "a");
+      const c = new Client("a");
       await c.connect(fresh);
 
       // A size with no chunks, which is indistinguishable from an empty
       // file and so is refused rather than stored as one.
       await expect(
         c.transport.put(
-          await sealPath(c.keys, "bad.md"),
+          "bad.md",
           { size: 4096, ctime: 1, mtime: 1 },
           [],
           async () => new Uint8Array(0),
-          unsigned,
+          noBase,
         ),
       ).rejects.toMatchObject({ code: "badentry" });
 
@@ -752,19 +681,19 @@ describe("refusals that the session survives", () => {
     // The transport has to know, because a caller that carried on after a
     // busy would talk to a closed connection and one that tore down over a
     // badname would turn one bad file into a reconnect.
-    for (const code of [
-      "proto",
-      "auth",
-      "cursor",
-      "busy",
-      "protostate",
-      "nospace",
-      "internal",
-      "rotated",
-    ]) {
+    for (const code of ["proto", "auth", "cursor", "busy", "protostate", "nospace", "internal"]) {
       expect(new ProtocolError(code, "x").endsSession, code).toBe(true);
     }
-    for (const code of ["badentry", "badname", "toolarge", "nouid", "nocontent", "nochunk"]) {
+    for (const code of [
+      "badentry",
+      "badname",
+      "toolarge",
+      "nouid",
+      "nocontent",
+      "nochunk",
+      "badpath",
+      "collision",
+    ]) {
       expect(new ProtocolError(code, "x").endsSession, code).toBe(false);
     }
   });
@@ -796,36 +725,21 @@ describe("refusals that the session survives", () => {
       },
     });
     await t.connect();
-    const keys = await vaultKeys();
     try {
       await t.hello({
         vault: "default",
         device: "ids",
         cursor: 0,
-        ...(await server.deviceCredentials(SECRET, await testWrapped(SECRET), "ids")),
+        ...(await server.deviceCredentials("ids")),
       });
       const hello = frames.find((f) => f["op"] === "hello")!;
       const ready = seen.find((f) => f["res"] === "ready")!;
       expect(hello["id"]).toBe(1);
       expect(ready["id"]).toBe(1);
 
-      const body = (await sealChunks(keys, [enc.encode("ids\n")]))[0]!;
-      const sealed = await sealPath(keys, "ids.md");
-      const facts = {
-        path: sealed,
-        size: 4,
-        ctime: 1,
-        mtime: 1,
-        folder: false,
-        deleted: false,
-        chunks: [body.name],
-        parent: "",
-      };
-      const mac = await macEntry(keys, facts);
-      await t.put(sealed, { size: 4, ctime: 1, mtime: 1 }, [body.name], async () => body.bytes, {
-        mac,
-        parent: "",
-      });
+      const body = enc.encode("ids\n");
+      const name = await chunkName(body);
+      await t.put("ids.md", { size: 4, ctime: 1, mtime: 1 }, [name], async () => body, noBase);
       const put = frames.find((f) => f["op"] === "put")!;
       const want = seen.find((f) => f["res"] === "want")!;
       const ack = seen.find((f) => f["res"] === "ack")!;
@@ -841,16 +755,17 @@ describe("refusals that the session survives", () => {
 
   /**
    * The other side of the version check: this client says the one version it
-   * speaks, and a hello in any other is refused rather than answered. A server
-   * that answered an older one would hand a connection the vault's own
-   * credential as a sync credential, which is exactly what per-device
-   * credentials took away.
+   * speaks, and a hello in any other is refused rather than answered.
+   *
+   * Probed with what a Basalt plugin actually sends, a protocol 7 hello with
+   * the crypto suite it implements, and with the credentials of a device this
+   * server really has (hazard 7 in plan/strip-ledger.md). A Basalt plugin
+   * meeting a Trew server has to be told `proto` with both numbers named,
+   * which says which end to change, and not `auth`, which would send somebody
+   * to re-pair a device that will never speak this server's protocol.
    */
   it("refuses a hello in any protocol but this one", async () => {
-    const creds = server.credentials(
-      authToken(await deriveRootKeys(SECRET)),
-      await testWrapped(SECRET),
-    );
+    const creds = await server.deviceCredentials("old-phone");
     const ws = new WebSocket(server.wsUrl);
     const answer = new Promise<Record<string, unknown>>((resolve, reject) => {
       ws.addEventListener("message", (ev) => {
@@ -863,54 +778,24 @@ describe("refusals that the session survives", () => {
     ws.send(
       JSON.stringify({
         op: "hello",
-        proto: 3,
+        id: 1,
+        proto: 7,
         crypto: "basalt/hkdf-aes-gcm/1",
         vault: "default",
+        deviceId: creds.deviceId,
+        token: creds.token,
         device: "old-phone",
         cursor: 0,
-        token: creds.token,
-        claim: creds.claim.auth,
-        wrapped: creds.claim.wrapped,
       }),
     );
     const refusal = await answer;
     ws.close();
     expect(refusal["res"]).toBe("err");
-    expect(refusal["code"]).toBe("proto");
+    expect(refusal["code"], JSON.stringify(refusal)).toBe("proto");
     // Both numbers named, because that is how somebody works out which end to
-    // upgrade. 3 stands in for any version outside the range.
-    expect(String(refusal["msg"])).toMatch(/protocol 3 not supported/);
+    // upgrade.
+    expect(String(refusal["msg"])).toMatch(/protocol 7 not supported/);
     expect(String(refusal["msg"])).toMatch(new RegExp(`${PROTO} to ${PROTO}`));
+    expect(refusal["retryable"]).toBe(false);
   });
-});
-
-describe("what the server can and cannot see", () => {
-  it("never receives a readable path or a readable byte", async () => {
-    const fresh = new Server();
-    await fresh.start();
-    try {
-      const c = new Client(await testKeys(SECRET), "a");
-      await c.connect(fresh);
-      await c.write("Personal/Diary 2026.md", "Today I wrote something private.");
-      c.close();
-      await fresh.stop();
-
-      // Grep everything the server wrote. Neither the path nor the content
-      // may appear anywhere on its disk.
-      const { stdout } = await run("grep", ["-rl", "Diary", fresh.dataDir]).catch(() => ({
-        stdout: "",
-      }));
-      expect(stdout.trim(), "the path appeared in the server's files").toBe("");
-      const { stdout: content } = await run("grep", [
-        "-rl",
-        "something private",
-        fresh.dataDir,
-      ]).catch(() => ({
-        stdout: "",
-      }));
-      expect(content.trim(), "the content appeared in the server's files").toBe("");
-    } finally {
-      await fresh.cleanup();
-    }
-  }, 60_000);
 });

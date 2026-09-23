@@ -8,8 +8,8 @@
  * needs no crypto, and stays synchronous, which is what lets a parser run from
  * a constructor.
  *
- * Not a hash. Anything here that has to resist tampering uses the entry MAC
- * instead; see docs/design.md.
+ * Not a hash, and nothing here resists tampering: a chunk is checked by its
+ * SHA-256 name, and the server is trusted with the rest (PLAN.md section 3.6).
  */
 export function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;

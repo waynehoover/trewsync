@@ -1,26 +1,24 @@
 /**
  * What the engine does with an entry it should not act on.
  *
- * Every entry here is authenticated by the vault's own key, so nothing below
- * is a forgery. It is a peer that is well and truly ours and still wrong: a
- * path under a dot folder, a path that is not in canonical form, two paths
- * one disk files as one. The right answer in each case is to refuse the
- * entry, say so once, and never retry what cannot succeed, without ending
- * the session over it.
+ * Every entry here is well formed and names content the server really holds.
+ * It is a peer that is honest and still wrong: a path under a dot folder, a
+ * path that is not in canonical form, two paths one disk files as one. The
+ * right answer in each case is to refuse the entry, say so once, and never
+ * retry what cannot succeed, without ending the session over it.
  */
 
 import { describe, expect, it } from "vitest";
 
-import { macEntry, sealChunks, sealPath, type Schedule } from "./crypto.ts";
+import { chunkName } from "./digest.ts";
 import { FakeSocket, engineOnFakeSocket, settle } from "./fake-socket.ts";
 import type { WireEntry } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 const enc = new TextEncoder();
 
-/** One authenticated entry with real sealed content behind it. */
+/** One entry with real content behind it, as a peer's write arrives. */
 async function entryFor(
-  keys: Schedule,
   uid: number,
   path: string,
   text: string,
@@ -28,23 +26,22 @@ async function entryFor(
   /** The name this is moved from, for an entry that carries a rename. */
   from?: string,
 ): Promise<WireEntry> {
-  const plain = enc.encode(text);
-  const [chunk] = await sealChunks(keys, [plain]);
-  bodies.set(chunk!.name, chunk!.bytes);
-  const facts = {
-    path: await sealPath(keys, path),
-    size: plain.length,
+  const raw = enc.encode(text);
+  const name = await chunkName(raw);
+  bodies.set(name, raw);
+  return {
+    uid,
+    path,
+    size: raw.length,
     ctime: 1000,
     mtime: 1000,
     folder: false,
     deleted: false,
-    chunks: [chunk!.name],
-    parent: "",
-    // In the authenticator, because a rename is one operation and the old
-    // name is part of what was signed.
-    ...(from !== undefined ? { prev: await sealPath(keys, from) } : {}),
+    chunks: [name],
+    device: "other",
+    // A rename is one operation, so the old name travels on the entry.
+    ...(from !== undefined ? { prev: from } : {}),
   };
-  return { uid, ...facts, device: "other", mac: await macEntry(keys, facts) };
 }
 
 /** A server that serves every body it was told about. */
@@ -69,12 +66,12 @@ async function accepted(engine: { status(): { pending: number } }, n: number): P
  */
 describe("an inbound path that never syncs", () => {
   it("is refused at accept as permanent, not retried, and never written", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     serving(socket, bodies);
     const entries = [
-      await entryFor(keys, 1, ".obsidian/plugins/evil/main.js", "module.exports = 1", bodies),
-      await entryFor(keys, 2, "ok.md", "fine", bodies),
+      await entryFor(1, ".obsidian/plugins/evil/main.js", "module.exports = 1", bodies),
+      await entryFor(2, "ok.md", "fine", bodies),
     ];
     socket.raw({ op: "batch", from: 1, to: 2, entries });
     await accepted(engine, 1);
@@ -107,14 +104,14 @@ describe("an inbound path that never syncs", () => {
         throw err;
       }
     }
-    const { engine, socket, keys } = await engineOnFakeSocket({}, { vault: new Refusing() });
+    const { engine, socket } = await engineOnFakeSocket({}, { vault: new Refusing() });
     const bodies = new Map<string, Uint8Array>();
     serving(socket, bodies);
     socket.raw({
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "config/x.md", "y", bodies)],
+      entries: [await entryFor(1, "config/x.md", "y", bodies)],
     });
     await accepted(engine, 1);
     const report = await engine.sync();
@@ -132,13 +129,17 @@ describe("an inbound path that never syncs", () => {
  */
 describe("a wire path that is not canonical", () => {
   it("is refused at accept, by name, and the canonical one beside it is taken", async () => {
-    const { engine, socket, vault, keys, logs } = await engineOnFakeSocket();
+    const { engine, socket, vault, logs } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     serving(socket, bodies);
-    const odd = ["a//b.md", "a/./c.md", "d/e.md/", "/f.md", "g/../h.md", ""];
+    // The empty path used to be in this list too, when the wire carried a
+    // sealed name and "" was what one opened to. In protocol 1 the wire path
+    // is the name, so an empty one is an entry with no path at all, and the
+    // case below refuses it for that.
+    const odd = ["a//b.md", "a/./c.md", "d/e.md/", "/f.md", "g/../h.md"];
     const entries = [
-      ...(await Promise.all(odd.map((p, i) => entryFor(keys, i + 1, p, `odd ${i}`, bodies)))),
-      await entryFor(keys, odd.length + 1, "a/b.md", "canonical", bodies),
+      ...(await Promise.all(odd.map((p, i) => entryFor(i + 1, p, `odd ${i}`, bodies)))),
+      await entryFor(odd.length + 1, "a/b.md", "canonical", bodies),
     ];
     socket.raw({ op: "batch", from: 1, to: entries.length, entries });
     await accepted(engine, 1);
@@ -154,6 +155,32 @@ describe("a wire path that is not canonical", () => {
     expect(socket.closed).toBe(false);
   });
 
+  it("refuses an empty path as a batch nobody can apply, and applies none of it", async () => {
+    // Not a name to refuse by name: there is no name, and a batch whose entry
+    // says nothing about which file it is cannot be matched to a file. The
+    // transport ends the session over it, as over any entry with no path, and
+    // the canonical entry beside it goes with it rather than being half of a
+    // batch applied.
+    const { engine, socket, vault, t, logs } = await engineOnFakeSocket();
+    const bodies = new Map<string, Uint8Array>();
+    serving(socket, bodies);
+    const entries = [
+      await entryFor(1, "a/b.md", "canonical", bodies),
+      await entryFor(2, "", "no name at all", bodies),
+    ];
+    socket.raw({ op: "batch", from: 1, to: 2, entries });
+    for (let i = 0; i < 400 && !t.isClosed; i++) await settle();
+
+    expect(t.isClosed, "a batch naming no file was taken").toBe(true);
+    expect(
+      logs.some((l) => /uid 2 with no path/.test(l)),
+      logs.join(" | "),
+    ).toBe(true);
+    expect(engine.status().cursor).toBe(0);
+    expect(engine.status().pending).toBe(0);
+    expect(vault.paths()).toEqual([]);
+  });
+
   it("is still refused, and still counted, after a restart", async () => {
     // The refusal used to live only in memory: the version was dropped on the
     // floor at accept, so a restart forgot both the refusal and the fact that
@@ -165,9 +192,7 @@ describe("a wire path that is not canonical", () => {
 
     const first = await engineOnFakeSocket({}, { store });
     serving(first.socket, bodies);
-    const entries = await Promise.all(
-      odd.map((p, i) => entryFor(first.keys, i + 1, p, `odd ${i}`, bodies)),
-    );
+    const entries = await Promise.all(odd.map((p, i) => entryFor(i + 1, p, `odd ${i}`, bodies)));
     first.socket.raw({ op: "batch", from: 1, to: entries.length, entries });
     await accepted(first.engine, 1);
     const before = await first.engine.sync();
@@ -189,20 +214,20 @@ describe("a wire path that is not canonical", () => {
     // removal of the old name, and if that removal is itself refused and
     // pinned in `pending` for ever, the vault can never report a clean sync
     // again and nobody can do anything about it (rule 7).
-    const { engine, socket, keys, vault } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     serving(socket, bodies);
     socket.raw({
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "a//b.md", "written wrong", bodies)],
+      entries: [await entryFor(1, "a//b.md", "written wrong", bodies)],
     });
     await accepted(engine, 1);
     expect((await engine.sync()).skipped).toBe(1);
 
     // The rename, as a peer sends one: the new name, moved from the old.
-    const fixed = await entryFor(keys, 2, "a/b.md", "written wrong", bodies, "a//b.md");
+    const fixed = await entryFor(2, "a/b.md", "written wrong", bodies, "a//b.md");
     socket.raw({ op: "batch", from: 2, to: 2, entries: [fixed] });
     await accepted(engine, 1);
     await engine.sync();
@@ -223,18 +248,16 @@ describe("a wire path that is not canonical", () => {
  */
 describe("two aliases of one file arriving in different fills", () => {
   it("refuses the second, because the first has already landed this pass", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     serving(socket, bodies);
     // The inbox fills at 256 entries. The first spelling is in the first
     // fill and the second is the two hundred and fifty-seventh entry.
-    const entries: WireEntry[] = [await entryFor(keys, 1, "Note.md", "capital", bodies)];
+    const entries: WireEntry[] = [await entryFor(1, "Note.md", "capital", bodies)];
     for (let i = 2; i <= 256; i++) {
-      entries.push(
-        await entryFor(keys, i, `filler/${String(i).padStart(3, "0")}.md`, `f${i}`, bodies),
-      );
+      entries.push(await entryFor(i, `filler/${String(i).padStart(3, "0")}.md`, `f${i}`, bodies));
     }
-    entries.push(await entryFor(keys, 257, "note.md", "lower", bodies));
+    entries.push(await entryFor(257, "note.md", "lower", bodies));
     socket.raw({ op: "batch", from: 1, to: 257, entries });
     await accepted(engine, 257);
 
@@ -248,43 +271,48 @@ describe("two aliases of one file arriving in different fills", () => {
 });
 
 /**
- * Every sealed path ever seen was kept in a map for the life
- * of the session, so a device that stayed connected through months of
- * renames and deletions held every name it had ever been told, for nothing.
+ * Every name ever seen used to be kept for the life of the session, so a
+ * device that stayed connected through months of renames and deletions held
+ * every name it had ever been told, for nothing. Basalt kept them in a cache
+ * of sealed paths, which protocol 1 has no use for; what is left to forget is
+ * the server's word about a path, and the property is the same: once nothing
+ * refers to a path any more, the index lets go of it.
  */
-describe("the sealed-path cache", () => {
-  it("forgets paths that nothing refers to any more", async () => {
-    const { engine, socket, vault, keys, logs } = await engineOnFakeSocket();
+describe("a path nothing refers to any more", () => {
+  it("is forgotten once its deletion has been applied", async () => {
+    const { engine, socket, vault, logs, store } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     serving(socket, bodies);
     socket.raw({
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "gone.md", "here", bodies)],
+      entries: [await entryFor(1, "gone.md", "here", bodies)],
     });
     await accepted(engine, 1);
     await engine.sync();
     expect(vault.text("gone.md")).toBe("here");
-    expect(engine.status().cachedPaths).toBe(1);
+    expect(Object.keys((await store.load())!.remote)).toEqual(["gone.md"]);
 
     // A deletion arrives for it and is applied; the next pass prunes the
-    // remote record, and with it the cached name.
-    const deletion = {
-      path: await sealPath(keys, "gone.md"),
-      size: 0,
-      ctime: 0,
-      mtime: 2000,
-      folder: false,
-      deleted: true,
-      chunks: [],
-      parent: "",
-    };
+    // remote record, which was the last thing naming it.
     socket.raw({
       op: "batch",
       from: 2,
       to: 2,
-      entries: [{ uid: 2, ...deletion, device: "other", mac: await macEntry(keys, deletion) }],
+      entries: [
+        {
+          uid: 2,
+          path: "gone.md",
+          size: 0,
+          ctime: 0,
+          mtime: 2000,
+          folder: false,
+          deleted: true,
+          chunks: [],
+          device: "other",
+        },
+      ],
     });
     await accepted(engine, 1);
     // Without the write debounce: the file was landed a moment ago and a
@@ -292,6 +320,8 @@ describe("the sealed-path cache", () => {
     const applied = await engine.sync({ coalesceWrites: false });
     expect(vault.text("gone.md"), `${JSON.stringify(applied)} ${logs.join("\n")}`).toBeUndefined();
     await engine.sync({ coalesceWrites: false });
-    expect(engine.status().cachedPaths).toBe(0);
+    const saved = (await store.load())!;
+    expect(Object.keys(saved.remote), "the index kept the word about a deleted path").toEqual([]);
+    expect(Object.keys(saved.entries)).toEqual([]);
   });
 });

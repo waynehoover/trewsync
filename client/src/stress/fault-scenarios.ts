@@ -11,7 +11,7 @@ import { chmod, link, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { expecting, type Scenario } from "./faults.ts";
-import { retireName } from "../cli/vault.ts";
+import { retireName } from "../node/vault.ts";
 
 const enc = new TextEncoder();
 const NOW = { mtime: 1_700_000_000_000, ctime: 1_700_000_000_000 };

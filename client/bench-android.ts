@@ -51,9 +51,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { Client } from "./src/core/client.ts";
-import { testWrapped } from "./src/core/test-keys.ts";
 import { TestServer, serverBinary } from "./src/core/test-server.ts";
-import { JsonIndexStore, NodeVault } from "./src/cli/vault.ts";
+import { JsonIndexStore, NodeVault } from "./src/node/vault.ts";
 import { corpusPaths, noteBody, pathFor } from "./bench-corpus.ts";
 
 const run = promisify(execFile);
@@ -181,8 +180,6 @@ async function atSize(size: number): Promise<void> {
 
   const server = new TestServer();
   await server.start();
-  const secret = new Uint8Array(32).fill(41);
-  const wrapped = await testWrapped(secret);
   const peerDir = await mkdtemp(join(tmpdir(), "trew-android-peer-"));
   const port = new URL(server.wsUrl).port;
 
@@ -201,7 +198,7 @@ async function atSize(size: number): Promise<void> {
     vault: new NodeVault(peerDir),
     store: new JsonIndexStore(join(peerDir, ".trew", "index.json")),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(secret, wrapped, "peer")),
+    ...(await server.deviceCredentials("peer")),
     vaultId: "default",
     device: "peer",
     timeoutMs: 300_000,
@@ -268,12 +265,16 @@ async function atSize(size: number): Promise<void> {
       await adb("shell", "rm", "-f", `${PLUGIN_DIR}/${stale}`);
     }
 
-    // An hour, not the ten-minute default. What this is waiting for is a
-    // person picking up a phone, and an invite that expires while they do
-    // fails as "could not connect", which reads like a broken endpoint rather
-    // than a stopwatch. The server caps this if it disagrees.
-    const invite = await peer.invite(60 * 60_000);
-    const until = new Date(invite.expiresAt).toLocaleTimeString();
+    // An hour, asked for rather than left to the default. What this is
+    // waiting for is a person picking up a phone, and an invite that expires
+    // while they do fails as "could not connect", which reads like a broken
+    // endpoint rather than a stopwatch. An hour is also the most a device may
+    // ask for: the server clamps anything longer to it.
+    const invite = await peer.invite({ ttlMs: 60 * 60_000 });
+    const until =
+      invite.expiresAt === null
+        ? "it is cancelled, since it never expires"
+        : new Date(invite.expiresAt).toLocaleTimeString();
     console.log("\n  ---- do this on the phone ----");
     console.log(`  1. Obsidian, vault switcher, "Open folder as vault", pick ${VAULT}`);
     console.log("     (it exists now: this step is why it did not before)");

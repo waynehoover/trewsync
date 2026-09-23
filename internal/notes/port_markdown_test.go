@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// The cases of client/src/cli/mcp-markdown.test.ts, on the reading side: the
+// The cases of client/src/node/mcp-markdown.test.ts, on the reading side: the
 // tags each note holds, where they are, and the tag patterns and matching the
 // edits select by. The edits themselves (changeTags) are the write tools'.
 

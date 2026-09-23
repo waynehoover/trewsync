@@ -16,7 +16,7 @@
  * both still exist.
  */
 
-import { isChunkName } from "./crypto.ts";
+import { isChunkName } from "./digest.ts";
 import type { StoredState } from "./vault.ts";
 
 /** How to get out of a refused index. Always the same, so said once. */
@@ -37,6 +37,14 @@ export function validateStoredState(raw: unknown): StoredState | undefined {
 
   const cursor = raw["cursor"];
   if (!isCount(cursor)) throw refuse(`cursor is ${describe(cursor)}, not a non-negative integer`);
+
+  // Optional, because an index written before the first connection has none,
+  // and absent is read by the hello as "take the cursor as it is". Present, it
+  // is the server's own opaque string and nothing else.
+  const epoch = raw["epoch"];
+  if (epoch !== undefined && (typeof epoch !== "string" || epoch === "")) {
+    throw refuse(`epoch is ${describe(epoch)}, not the server's epoch`);
+  }
 
   const entries = raw["entries"];
   if (!isObject(entries)) throw refuse("entries is not an object");
@@ -67,7 +75,13 @@ export function validateStoredState(raw: unknown): StoredState | undefined {
     }
   }
 
-  return { cursor, entries, remote, pending: pending as string[] };
+  return {
+    cursor,
+    ...(epoch !== undefined ? { epoch } : {}),
+    entries,
+    remote,
+    pending: pending as string[],
+  };
 }
 
 function checkEntry(path: string, entry: unknown, refuse: (what: string) => Error): void {

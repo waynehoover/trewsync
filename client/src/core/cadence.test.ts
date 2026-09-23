@@ -4,8 +4,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { Client, type ClientOptions } from "./client.ts";
 import type { SyncReport } from "./engine.ts";
 import type { TransferActivity } from "./transfer.ts";
+import type { SocketLike } from "./transport.ts";
 import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
-import { testWrapped } from "./test-keys.ts";
 import { deferred, receiveCommitted, within } from "./test-async.ts";
 import { MemoryIndexStore, MemoryVault, type StoredState } from "./vault.ts";
 
@@ -17,15 +17,35 @@ class ManualVault extends MemoryVault {
   }
 }
 
-const secret = new Uint8Array(32).fill(93);
+/**
+ * A socket factory that counts the body frames the receiving side reads.
+ *
+ * Every binary frame a session receives is a chunk body (plan/protocol.md,
+ * "Chunk bodies"), and `TransferActivity.bytes` is documented as exactly those
+ * frames, so this is the number a download's progress has to end on.
+ */
+function countingBodies(): { socketFactory: (url: string) => SocketLike; bytes: () => number } {
+  let bytes = 0;
+  return {
+    socketFactory: (url) => {
+      const socket = new WebSocket(url);
+      socket.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string") return;
+        if (!(ev.data instanceof ArrayBuffer)) throw new Error("a body arrived as something else");
+        bytes += ev.data.byteLength;
+      });
+      return socket as unknown as SocketLike;
+    },
+    bytes: () => bytes,
+  };
+}
+
 const clients: Client[] = [];
 const loops: Promise<Error>[] = [];
 let server: TestServer;
-let wrapped: string;
 
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(secret);
 });
 afterEach(async () => {
   for (const client of clients.splice(0)) await client.close();
@@ -49,7 +69,7 @@ async function pair(
       vault,
       store: new MemoryIndexStore(),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(secret, wrapped, device)),
+      ...(await server.deviceCredentials(device)),
       vaultId: "default",
       device,
       ...extra,
@@ -186,9 +206,10 @@ describe("automatic sync cadence", () => {
       }
     }
     const store = new GatedStore();
+    const bodies = countingBodies();
     const { a, b, av, bv } = await pair(
       {},
-      { store, onTransfer: (p) => downloads.push(p) },
+      { store, onTransfer: (p) => downloads.push(p), socketFactory: bodies.socketFactory },
       { onTransfer: (p) => uploads.push(p) },
     );
     // A deliberately small client fetch cap splits one download batch into
@@ -232,7 +253,13 @@ describe("automatic sync cadence", () => {
       expect(sent!.chunksSent).toBe(2);
       expect(requests).toBe(2);
       expect(up.at(-1)!.bytes).toBe(sent!.bytesSent);
-      expect(down.at(-1)!.bytes).toBe(sent!.bytesSent);
+      // Across both fetch requests, in one unit: the frames that arrived.
+      // They are the server's encoding, not the sender's, since the two ends
+      // need not deflate alike, so this is its own number and not the upload's.
+      expect(bodies.bytes(), "no body reached the receiver's socket").toBeGreaterThan(0);
+      expect(down.at(-1)!.bytes, "the download total is not the frames that arrived").toBe(
+        bodies.bytes(),
+      );
       expect(down.map((p) => p.bytes)).toEqual(down.map((p) => p.bytes).sort((a, b) => a - b));
       expect(uploads.at(-1)).toBeUndefined();
       expect(downloads.at(-1)).toBeUndefined();
@@ -250,6 +277,45 @@ describe("automatic sync cadence", () => {
       releaseScan();
       release();
       bv.list = list;
+    }
+  });
+
+  it("counts a download split across fetch requests in frames, and never backwards", async () => {
+    // Bytes that do not compress travel raw, a marker byte over their length.
+    // A running total that added each raw body to a count the transport keeps
+    // in frames came up one byte short at every fetch boundary, and the next
+    // request's first report stepped the progress back by that byte.
+    const downloads: (TransferActivity | undefined)[] = [];
+    const bodies = countingBodies();
+    const { a, b, av, bv } = await pair(
+      {},
+      { onTransfer: (p) => downloads.push(p), socketFactory: bodies.socketFactory },
+    );
+    (b.engine as unknown as { limits: { maxFetchBytes: number } }).limits.maxFetchBytes = 4096;
+    const fetch = b.transport.fetch.bind(b.transport);
+    let requests = 0;
+    b.transport.fetch = async (...args) => {
+      requests++;
+      return fetch(...args);
+    };
+    const originals = [0, 1, 2].map(() => globalThis.crypto.getRandomValues(new Uint8Array(3000)));
+    for (let i = 0; i < originals.length; i++) {
+      await av.write(`${i}.bin`, originals[i]!, { mtime: 1000, ctime: 1000 });
+    }
+    await a.sync({ coalesceWrites: false });
+    await until("all batch metadata", () => b.engine.status().cursor === a.serverCursor);
+    await b.sync({ coalesceWrites: false });
+
+    expect(requests, "the download was not split, so there is no boundary to cross").toBe(3);
+    const down = downloads
+      .filter((p): p is TransferActivity => p !== undefined)
+      .map((p) => p.bytes);
+    expect(down, "download progress went backwards").toEqual([...down].sort((x, y) => x - y));
+    // Raw frames: each body and its marker byte, and nothing else.
+    expect(bodies.bytes()).toBe(3 * 3001);
+    expect(down.at(-1), "the download total is not the frames that arrived").toBe(bodies.bytes());
+    for (let i = 0; i < originals.length; i++) {
+      expect(Buffer.from(await bv.read(`${i}.bin`)).equals(Buffer.from(originals[i]!))).toBe(true);
     }
   });
 

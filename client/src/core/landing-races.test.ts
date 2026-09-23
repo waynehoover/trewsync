@@ -14,7 +14,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { macEntry, sealChunks, sealPath, type Schedule } from "./crypto.ts";
+import { chunkName } from "./digest.ts";
 import { FakeSocket, engineOnFakeSocket, settle } from "./fake-socket.ts";
 import type { WireEntry } from "./transport.ts";
 import { MemoryVault } from "./vault.ts";
@@ -24,27 +24,26 @@ afterEach(() => vi.useRealTimers());
 const enc = new TextEncoder();
 
 async function entryFor(
-  keys: Schedule,
   uid: number,
   path: string,
   text: string,
   bodies: Map<string, Uint8Array>,
   over: { deleted?: boolean; mtime?: number } = {},
 ): Promise<WireEntry> {
-  const plain = enc.encode(text);
-  const [chunk] = await sealChunks(keys, [plain]);
-  bodies.set(chunk!.name, chunk!.bytes);
-  const facts = {
-    path: await sealPath(keys, path),
-    size: plain.length,
+  const raw = enc.encode(text);
+  const name = await chunkName(raw);
+  bodies.set(name, raw);
+  return {
+    uid,
+    path,
+    size: over.deleted ? 0 : raw.length,
     ctime: 1000,
     mtime: over.mtime ?? 1000,
     folder: false,
     deleted: over.deleted ?? false,
-    chunks: over.deleted ? [] : [chunk!.name],
-    parent: "",
+    chunks: over.deleted ? [] : [name],
+    device: "other",
   };
-  return { uid, ...facts, device: "other", mac: await macEntry(keys, facts) };
 }
 
 /**
@@ -84,7 +83,7 @@ function beside(vault: MemoryVault, path: string): { path: string; text: string 
 
 describe("a note edited while its next version is in flight (F01)", () => {
   it("keeps the edit, and puts the incoming version beside it", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
 
@@ -92,7 +91,7 @@ describe("a note edited while its next version is in flight (F01)", () => {
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "note.md", "one", bodies)],
+      entries: [await entryFor(1, "note.md", "one", bodies)],
     });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -100,7 +99,7 @@ describe("a note edited while its next version is in flight (F01)", () => {
 
     // Version two is announced, and the editor saves over the note while its
     // body is on the wire.
-    const two = await entryFor(keys, 2, "note.md", "two", bodies, { mtime: 2000 });
+    const two = await entryFor(2, "note.md", "two", bodies, { mtime: 2000 });
     servingWith(socket, bodies, async () => {
       await vault.write("note.md", enc.encode("mine"), { mtime: 5000, ctime: 1000 });
     });
@@ -121,12 +120,12 @@ describe("a note edited while its next version is in flight (F01)", () => {
   });
 
   it("keeps a note created under the path while a first version is in flight", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
 
     // Nothing is here when the decision is taken, so the engine plans a plain
     // write. The person creates a note at that path before the body lands.
-    const one = await entryFor(keys, 1, "fresh.md", "from the server", bodies);
+    const one = await entryFor(1, "fresh.md", "from the server", bodies);
     servingWith(socket, bodies, async () => {
       await vault.write("fresh.md", enc.encode("typed here first"), { mtime: 5000, ctime: 5000 });
     });
@@ -145,7 +144,7 @@ describe("a note edited while its next version is in flight (F01)", () => {
 
 describe("a note edited while an incoming deletion is in flight (F01)", () => {
   it("does not delete bytes the server has never seen", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
 
@@ -153,7 +152,7 @@ describe("a note edited while an incoming deletion is in flight (F01)", () => {
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "doomed.md", "one", bodies)],
+      entries: [await entryFor(1, "doomed.md", "one", bodies)],
     });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -163,8 +162,8 @@ describe("a note edited while an incoming deletion is in flight (F01)", () => {
     // its own. A real pass has other work: deletions are applied at the end,
     // after every download, so the fetch for an unrelated note is exactly
     // the window in which the editor saves over the doomed one.
-    const gone = await entryFor(keys, 2, "doomed.md", "", bodies, { deleted: true, mtime: 2000 });
-    const other = await entryFor(keys, 3, "other.md", "unrelated", bodies);
+    const gone = await entryFor(2, "doomed.md", "", bodies, { deleted: true, mtime: 2000 });
+    const other = await entryFor(3, "other.md", "unrelated", bodies);
     servingWith(socket, bodies, async () => {
       await vault.write("doomed.md", enc.encode("still writing this"), {
         mtime: 5000,
@@ -198,18 +197,15 @@ describe("a client connected only to look (F08)", () => {
   it("takes a batch and neither downloads it nor saves an index", async () => {
     const { Client } = await import("./client.ts");
     const { MemoryIndexStore } = await import("./vault.ts");
-    const { TEST_DATA_KEY, testKeys } = await import("./test-keys.ts");
-    const { FakeSocket, ready, RIG_SECRET } = await import("./fake-socket.ts");
+    const { FakeSocket, ready } = await import("./fake-socket.ts");
 
     const socket = new FakeSocket();
     const bodies = new Map<string, Uint8Array>();
-    const keys = await testKeys(RIG_SECRET);
     const looking = new MemoryVault();
     const store = new MemoryIndexStore();
     const client = new Client({
       vault: looking,
       store,
-      dataKey: TEST_DATA_KEY,
       url: "ws://test",
       deviceId: "inspector",
       token: "t",
@@ -236,7 +232,7 @@ describe("a client connected only to look (F08)", () => {
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "arrived.md", "not asked for", bodies)],
+      entries: [await entryFor(1, "arrived.md", "not asked for", bodies)],
     });
     await client.transport.drainReceived();
     await vi.advanceTimersByTimeAsync(1);
@@ -253,41 +249,42 @@ describe("a client connected only to look (F08)", () => {
 });
 
 /**
- * Replay of a signed old version, which the server can do and nothing here
- * detects (F11).
+ * Replay of an old version, which the server can do and nothing here detects
+ * (F11).
  *
- * The entry authenticator covers the content, the metadata and the version
- * this one was written on top of. It does not cover the uid, because the
- * server assigns uids and ordering the log is its job. So a server can take a
- * version a device really did write, hand it back under a newer uid, and the
- * receiving device applies it: the note reverts to contents it genuinely had
- * once, with a valid signature on the entry that did it.
+ * The server assigns uids and ordering the log is its job, and protocol 1
+ * carries nothing a device could check that ordering against: devices take the
+ * server's word about who wrote what (PLAN.md section 3.6). Basalt's entry
+ * authenticator covered the content and the metadata and still not the uid, so
+ * this was open there too. A server can take a version a device really did
+ * write, hand it back under a newer uid, and the receiving device applies it:
+ * the note reverts to contents it genuinely had once.
  *
  * These are pinned rather than fixed. docs/design.md says so under what the
  * server can do, and describes the ancestry check that would close it. If a
  * later change makes one of them fail, that is the fix landing, and the test
  * should become an assertion of the new behaviour rather than be deleted.
  */
-describe("a server that replays a signed old version (F11, pinned)", () => {
+describe("a server that replays an old version (F11, pinned)", () => {
   it("reverts a note, because nothing binds a version to its place in the log", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
 
-    const one = await entryFor(keys, 1, "note.md", "the first version", bodies);
+    const one = await entryFor(1, "note.md", "the first version", bodies);
     socket.raw({ op: "batch", from: 1, to: 1, entries: [one] });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
 
-    const two = await entryFor(keys, 2, "note.md", "the second version", bodies, { mtime: 2000 });
+    const two = await entryFor(2, "note.md", "the second version", bodies, { mtime: 2000 });
     socket.raw({ op: "batch", from: 2, to: 2, entries: [two] });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
     expect(vault.text("note.md")).toBe("the second version");
 
     // The same entry the device accepted as version one, handed back with a
-    // uid that makes it look like the newest thing on the server. Its MAC is
-    // the original and verifies, because it is the original.
+    // uid that makes it look like the newest thing on the server. Nothing in
+    // it is anything but the original.
     socket.raw({ op: "batch", from: 3, to: 3, entries: [{ ...one, uid: 3 }] });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -307,7 +304,7 @@ describe("a server that replays a signed old version (F11, pinned)", () => {
    * here.
    */
   it("does not delete a note written since, even when the tombstone is replayed", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
 
@@ -315,12 +312,12 @@ describe("a server that replays a signed old version (F11, pinned)", () => {
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "gone.md", "here for now", bodies)],
+      entries: [await entryFor(1, "gone.md", "here for now", bodies)],
     });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
 
-    const tomb = await entryFor(keys, 2, "gone.md", "", bodies, { deleted: true, mtime: 2000 });
+    const tomb = await entryFor(2, "gone.md", "", bodies, { deleted: true, mtime: 2000 });
     socket.raw({ op: "batch", from: 2, to: 2, entries: [tomb] });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -357,12 +354,12 @@ describe("a note whose name is a property name (F14)", () => {
   const awkward = ["__proto__", "constructor", "toString", "hasOwnProperty"];
 
   it("survives a download, a save and a restart", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
 
     const entries = await Promise.all(
-      awkward.map((name, i) => entryFor(keys, i + 1, name, `contents of ${name}`, bodies)),
+      awkward.map((name, i) => entryFor(i + 1, name, `contents of ${name}`, bodies)),
     );
     socket.raw({ op: "batch", from: 1, to: awkward.length, entries });
     await accepted(engine, 1);
@@ -439,7 +436,6 @@ describe("a background pass that fails (F16)", () => {
   it("tells the shell, rather than logging it if anybody asked", async () => {
     const { Client } = await import("./client.ts");
     const { MemoryIndexStore } = await import("./vault.ts");
-    const { TEST_DATA_KEY } = await import("./test-keys.ts");
     const { FakeSocket, ready } = await import("./fake-socket.ts");
 
     const socket = new FakeSocket();
@@ -447,7 +443,6 @@ describe("a background pass that fails (F16)", () => {
     const client = new Client({
       vault: new MemoryVault(),
       store: new MemoryIndexStore(),
-      dataKey: TEST_DATA_KEY,
       url: "ws://test",
       deviceId: "d",
       token: "t",
@@ -495,7 +490,7 @@ describe("a background pass that fails (F16)", () => {
  */
 describe("an edit a stat cannot tell apart", () => {
   it("survives a download that lands on it, same length and same timestamp", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
 
@@ -511,7 +506,7 @@ describe("an edit a stat cannot tell apart", () => {
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "note.md", before, bodies)],
+      entries: [await entryFor(1, "note.md", before, bodies)],
     });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -531,7 +526,7 @@ describe("an edit a stat cannot tell apart", () => {
       from: 2,
       to: 2,
       entries: [
-        await entryFor(keys, 2, "note.md", "the server's own version\n", bodies, { mtime: 9000 }),
+        await entryFor(2, "note.md", "the server's own version\n", bodies, { mtime: 9000 }),
       ],
     });
     await accepted(engine, 1);
@@ -550,7 +545,7 @@ describe("an edit a stat cannot tell apart", () => {
   /**
    * The same edit, under the landing that never goes to the network (R19).
    *
-   * Chunk names are hashes of ciphertext, so a version whose content this
+   * Chunk names are hashes of the raw bytes, so a version whose content this
    * device already holds somewhere else is written from that copy rather than
    * fetched. That is the path a move takes, and it writes over the
    * destination exactly as a download does.
@@ -561,7 +556,7 @@ describe("an edit a stat cannot tell apart", () => {
    * copies, the second one holding the server's own text, from one edit.
    */
   it("keeps the edit when the version is rebuilt from a copy this device has", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
 
@@ -577,8 +572,8 @@ describe("an edit a stat cannot tell apart", () => {
       from: 1,
       to: 2,
       entries: [
-        await entryFor(keys, 1, "held.md", shared, bodies),
-        await entryFor(keys, 2, "note.md", before, bodies),
+        await entryFor(1, "held.md", shared, bodies),
+        await entryFor(2, "note.md", before, bodies),
       ],
     });
     await accepted(engine, 2);
@@ -604,8 +599,8 @@ describe("an edit a stat cannot tell apart", () => {
       from: 3,
       to: 4,
       entries: [
-        await entryFor(keys, 3, "note.md", shared, bodies, { mtime: 9000 }),
-        await entryFor(keys, 4, "fetched.md", "something only the server has\n", bodies, {
+        await entryFor(3, "note.md", shared, bodies, { mtime: 9000 }),
+        await entryFor(4, "fetched.md", "something only the server has\n", bodies, {
           mtime: 9000,
         }),
       ],
@@ -636,7 +631,7 @@ describe("an edit a stat cannot tell apart", () => {
    * and this device silently does not, with the index recording it as landed.
    */
   it("keeps the incoming version beside the note when the name is taken", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
 
@@ -644,7 +639,7 @@ describe("an edit a stat cannot tell apart", () => {
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "note.md", "the original line\n", bodies)],
+      entries: [await entryFor(1, "note.md", "the original line\n", bodies)],
     });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -659,7 +654,7 @@ describe("an edit a stat cannot tell apart", () => {
       from: 2,
       to: 2,
       entries: [
-        await entryFor(keys, 2, "note.md", "the server's own version\n", bodies, { mtime: 9000 }),
+        await entryFor(2, "note.md", "the server's own version\n", bodies, { mtime: 9000 }),
       ],
     });
     await accepted(engine, 1);
@@ -687,7 +682,7 @@ describe("an edit a stat cannot tell apart", () => {
    * created in between was the only copy anybody had.
    */
   it("keeps a note created at a path the pass had never seen", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
 
     // Created inside the adapter, which is the only place left after the
@@ -705,7 +700,7 @@ describe("an edit a stat cannot tell apart", () => {
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "fresh.md", "the server's version\n", bodies)],
+      entries: [await entryFor(1, "fresh.md", "the server's version\n", bodies)],
     });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -731,7 +726,7 @@ describe("an edit a stat cannot tell apart", () => {
    * holding it, an indexer, a permissions blip.
    */
   it("keeps an edit under a deletion whose baseline could not be read", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
 
@@ -739,7 +734,7 @@ describe("an edit a stat cannot tell apart", () => {
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "doomed.md", "the original line\n", bodies)],
+      entries: [await entryFor(1, "doomed.md", "the original line\n", bodies)],
     });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -763,7 +758,7 @@ describe("an edit a stat cannot tell apart", () => {
       op: "batch",
       from: 2,
       to: 2,
-      entries: [await entryFor(keys, 2, "doomed.md", "", bodies, { deleted: true, mtime: 9000 })],
+      entries: [await entryFor(2, "doomed.md", "", bodies, { deleted: true, mtime: 9000 })],
     });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -776,7 +771,7 @@ describe("an edit a stat cannot tell apart", () => {
   });
 
   it("survives a deletion that lands on it, same length and same timestamp", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
 
@@ -790,7 +785,7 @@ describe("an edit a stat cannot tell apart", () => {
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "doomed.md", before, bodies)],
+      entries: [await entryFor(1, "doomed.md", before, bodies)],
     });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -812,7 +807,7 @@ describe("an edit a stat cannot tell apart", () => {
       op: "batch",
       from: 2,
       to: 2,
-      entries: [await entryFor(keys, 2, "doomed.md", "", bodies, { deleted: true, mtime: 9000 })],
+      entries: [await entryFor(2, "doomed.md", "", bodies, { deleted: true, mtime: 9000 })],
     });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -834,7 +829,7 @@ describe("an edit a stat cannot tell apart", () => {
    * writing anything.
    */
   it("still overwrites a file nobody touched, with no copy left behind", async () => {
-    const { engine, socket, vault, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
 
@@ -842,7 +837,7 @@ describe("an edit a stat cannot tell apart", () => {
       op: "batch",
       from: 1,
       to: 1,
-      entries: [await entryFor(keys, 1, "quiet.md", "what was here\n", bodies)],
+      entries: [await entryFor(1, "quiet.md", "what was here\n", bodies)],
     });
     await accepted(engine, 1);
     await engine.sync({ coalesceWrites: false });
@@ -852,9 +847,7 @@ describe("an edit a stat cannot tell apart", () => {
       op: "batch",
       from: 2,
       to: 2,
-      entries: [
-        await entryFor(keys, 2, "quiet.md", "the server's version\n", bodies, { mtime: 9000 }),
-      ],
+      entries: [await entryFor(2, "quiet.md", "the server's version\n", bodies, { mtime: 9000 })],
     });
     await accepted(engine, 1);
     const report = await engine.sync({ coalesceWrites: false });

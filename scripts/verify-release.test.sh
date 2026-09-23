@@ -146,12 +146,12 @@ done
 
 # Packing and installation are real here; only the tiny CLI's version differs.
 package_root="$scratch/package"
-mkdir -p "$package_root/scripts" "$package_root/client/dist" "$package_root/client/src/cli"
+mkdir -p "$package_root/scripts" "$package_root/client/dist" "$package_root/client/src/node"
 cp "$root/scripts/pack-check.sh" "$package_root/scripts/"
 # This fixture tests exact version comparison with a deliberately tiny CLI.
 # The real MCP workflow runs in pack-check and mcp-artifact.test.ts; record
 # delegation here so a metadata fixture need not imitate the protocol.
-cat > "$package_root/client/src/cli/mcp-artifact.run.ts" <<'TREW_PACK_FIXTURE'
+cat > "$package_root/client/src/node/mcp-artifact.run.ts" <<'TREW_PACK_FIXTURE'
 import { access } from "node:fs/promises";
 if (process.argv.length !== 4) throw new Error("missing artifact or Node executable");
 await access(process.argv[2]);

@@ -51,6 +51,8 @@ export interface Snapshot {
  */
 export interface JournalDelta {
   readonly cursor?: number;
+  /** The store epoch the cursor belongs to, when it changed. */
+  readonly epoch?: string;
   readonly set?: Record<string, unknown>;
   readonly del?: readonly string[];
   readonly remote?: Record<string, unknown>;
@@ -219,6 +221,7 @@ export function replay(snapshot: Snapshot, log: string): Replayed {
 /** A state being built up, before it is anything the engine would accept. */
 interface Fold {
   cursor: unknown;
+  epoch?: unknown;
   entries: Record<string, unknown>;
   remote: Record<string, unknown>;
   pending: unknown;
@@ -235,6 +238,7 @@ function copyOf(state: StoredState): Fold {
   const from = (state ?? {}) as Partial<StoredState>;
   return {
     cursor: from.cursor,
+    ...(from.epoch !== undefined ? { epoch: from.epoch } : {}),
     // Null-prototype, because a filename is not a property name (F14). A note
     // called `__proto__` assigned into an ordinary object sets the prototype
     // instead of adding a key, silently, so replaying a delta that named it
@@ -254,6 +258,7 @@ function foldInto(work: Fold, delta: JournalDelta): void {
   for (const [path, value] of Object.entries(delta.remote ?? {})) work.remote[path] = value;
   for (const path of delta.unremote ?? []) delete work.remote[path];
   if (delta.cursor !== undefined) work.cursor = delta.cursor;
+  if (delta.epoch !== undefined) work.epoch = delta.epoch;
   if (delta.pending !== undefined) work.pending = [...delta.pending];
 }
 
@@ -274,6 +279,7 @@ export function applyDelta(state: StoredState, delta: JournalDelta): StoredState
  */
 export interface SavedShape {
   readonly cursor: number;
+  readonly epoch: string | undefined;
   /** Path to a detached JSON value as it was written. */
   readonly entries: ReadonlyMap<string, SavedValue>;
   readonly remote: ReadonlyMap<string, SavedValue>;
@@ -289,6 +295,7 @@ interface SavedValue {
 export function shapeOf(state: StoredState): SavedShape {
   return {
     cursor: state.cursor,
+    epoch: state.epoch,
     entries: serialised(state.entries),
     remote: serialised(state.remote),
     pending: listOf(state.pending),
@@ -313,6 +320,7 @@ export function deltaFrom(
 ): { delta: JournalDelta | undefined; shape: SavedShape } {
   const shape: SavedShape = {
     cursor: next.cursor,
+    epoch: next.epoch,
     entries: serialised(next.entries, saved.entries),
     remote: serialised(next.remote, saved.remote),
     pending: listOf(next.pending),
@@ -320,6 +328,7 @@ export function deltaFrom(
 
   const delta: {
     cursor?: number;
+    epoch?: string;
     set?: Record<string, unknown>;
     del?: string[];
     remote?: Record<string, unknown>;
@@ -328,6 +337,9 @@ export function deltaFrom(
   } = {};
 
   if (saved.cursor !== next.cursor) delta.cursor = next.cursor;
+  // An epoch is only ever replaced, never removed: an index that had one and
+  // has none is not a state the engine writes.
+  if (next.epoch !== undefined && saved.epoch !== next.epoch) delta.epoch = next.epoch;
 
   const e = changed(saved.entries, shape.entries, next.entries);
   if (Object.keys(e.set).length > 0) delta.set = e.set;

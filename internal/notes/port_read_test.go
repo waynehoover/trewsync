@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// The cases of client/src/cli/mcp-read.test.ts that exercise what this
+// The cases of client/src/node/mcp-read.test.ts that exercise what this
 // package ports: paging, the search page loop and the cursor codec. The
 // others test the reader around them (the vault, symlinks, the inventory,
 // concurrency, cancellation), which the server's tools own.

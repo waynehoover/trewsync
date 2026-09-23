@@ -12,7 +12,7 @@ let server: TestServer | undefined;
 
 beforeEach(() => {
   resetStub();
-  vi.spyOn(console, "info").mockImplementation(() => undefined);
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
 });
 afterEach(async () => {
   for (const plugin of plugins.splice(0)) {
@@ -67,10 +67,12 @@ it("restores the selected deletion's content when a peer has since reused its na
   await server.start();
   const a = await load();
   a.app.vault.adapter.seed("Note.md", "the deleted note\n");
-  const key = await a.plugin.pairFirst(server.setup, "laptop");
+  // The first device from the invite the server wrote, confirming the merge a
+  // vault with a note in it asks for; the second from `trew invite`.
+  await a.plugin.pair(await server.firstInvite(), "laptop", true);
   await synced(a.plugin);
   const b = await load();
-  await b.plugin.pair(key, "phone");
+  await b.plugin.pair(await server.invite(), "phone");
   await synced(b.plugin);
 
   await a.app.vault.adapter.remove("Note.md");

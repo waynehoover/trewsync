@@ -2,32 +2,31 @@
 
 [Documentation](index.md) · [CLI quick start](../client/README.md)
 
-`trew` operates on a local vault. `trew` operates on the server.
-Commands use the current directory unless `--dir` is set. Run `trew --help`
-for the installed version's usage.
+This page covers the headless client, the `trew-sync` npm package, whose
+command is `trew`. The server's binary has the same name; its commands are in
+the [server reference](server-reference.md). The client operates on a local
+vault. Commands use the current directory unless `--dir` is set. Run
+`trew --help` for the installed version's usage.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `init SETUP` | Claim a new server vault and register this device. |
-| `pair INVITE` | Join using an invite or recovery key. |
-| `invite [--ttl 10m]` | Create an invite, valid once. |
+| `pair INVITE` | Join a vault with an invite. Run the same command again to finish a pairing whose reply was lost. |
+| `invite [--ttl 1h]` | Create an invite, valid once. |
 | `devices` | List device IDs, labels, activity, and outstanding invites. |
 | `rename NAME` | Change this device's label. |
-| `revoke ID` | Revoke a registered device and close its connections. |
+| `revoke ID` | Revoke a device, including this one or the last one, and close its connections. |
 | `uninvite ID` | Cancel an outstanding invite. |
-| `rotate KEY` | Replace the recovery key; keep history and existing devices. |
 | `sync [--watch]` | Sync once, or keep syncing. |
 | `mcp [--listen [ADDR]]` | Serve notes over stdio or authenticated HTTP while syncing. |
 | `mcp-token [--revoke]` | Issue, rotate, or revoke this directory's HTTP MCP credential. |
 | `preview` | Show planned changes without writing notes; `--json` includes paths and counts. |
-| `status` | Check connection, local state, and recovery issues. |
+| `status` | Check connection, local state, refused paths, and recovery issues. |
 | `history PATH [--before UID]` | Page through versions, newest first. |
 | `deleted` | List deleted notes and recovery availability. |
 | `restore PATH` | Restore the newest version with content, or use `--uid`. |
 | `repair` | Resend missing server content available on this device. |
-| `rebase [--backup-taken]` | Inspect or confirm rejoining a restored server. |
 | `unlink` | Forget the local pairing and index; retain notes. |
 | `unlock` | Recover a lock when manual intervention is required. |
 | `--version` | Print the CLI version. |
@@ -39,8 +38,6 @@ for the installed version's usage.
 | `--verify` | `sync` only, without `--watch`: re-read all file contents before syncing. |
 | `--dir DIR` | Local vault directory. |
 | `--device NAME` | Device label at pairing; default is hostname plus a random suffix. |
-| `--vault-id ID` | Vault name for `init`; default `default`. |
-| `--server URL --token TOKEN` | Alternative to the combined setup string for `init`. |
 | `--json` | Structured command output; invalid for `mcp` and `mcp-token`. |
 | `--timeout MS` | Server wait; default `30000`. |
 | `--vault NAME=DIR` | `mcp` only: repeat for up to ten separately paired absolute directories. Cannot combine with `--dir`. |
@@ -48,48 +45,46 @@ for the installed version's usage.
 | `--writable` | Enable HTTP mutation tools; requires `--listen` and a writable device. |
 | `--allow-origin ORIGIN` | Allow an exact HTTP origin; repeatable, requires `--listen`. |
 | `--revoke` | `mcp-token` only: remove the credential without restarting the service. |
-| `--read-only` | Hold back local sync changes; persisted by `init` and `pair`. For `mcp`, also omit mutation tools. |
+| `--read-only` | Hold back local sync changes; persisted by `pair`. For `mcp`, also omit mutation tools. |
 | `--no-merge` | Keep conflicting versions separately for this invocation. |
 | `--config-dir NAME` | Obsidian configuration folder; default `.obsidian`. |
 | `--ignore NAME` | Exclude a file/folder name at any depth, local to this device; repeatable. |
-| `--ttl DURATION` | Invite lifetime; default `10m`, maximum `1h`. |
+| `--ttl DURATION` | Invite lifetime, such as `30m`; default `1h`, which is also the most a device can ask for. |
 | `--uid N` | Exact version for `restore`. |
 | `--to PATH` | Destination for `restore`. |
 | `--limit N` | `history`: default 20; `deleted`: default all. |
 | `--before UID` | Earlier page for `history` or `deleted`. |
-| `--key-file PATH` | Read a setup string, invite, or recovery key from a private file. |
-| `--key-out PATH` | Save a generated key in a new `0600` file. For `mcp-token`, this suppresses the token on stdout and must be outside the vault. |
-| `--recovery-key KEY` | Use the recovery key for `devices`, `revoke`, or `uninvite`. |
-| `--allow-last` | Permit revoking the final device; requires the recovery key. |
+| `--key-file PATH` | `pair` only: read the invite from a private file. |
+| `--key-out PATH` | `mcp-token` only: save the new credential in a new `0600` file outside the vault, suppressing it on stdout. |
 | `--force` | `unlock` only: clear a holder recorded on another machine after verifying it stopped. |
 | `-v`, `--verbose` | Engine logging. |
 | `--` | End options; remaining arguments are literal values. |
 
-For `init`, `pair`, and `rotate`, use `-` as the secret argument to read standard
-input. `--key-out` refuses to overwrite an existing file. For recovery-key
-generation it also prints the key; for `mcp-token` it prints only the credential
-id and output path.
+For `pair`, use `-` as the invite argument to read it from standard input.
+`--key-out` refuses to overwrite an existing file and prints only the
+credential id and output path.
+
+## Pairing
+
+An invite is a single-use `trew1i_` string carrying the server's address and
+the vault's name, so `pair` needs nothing else. It works once and expires after
+one hour by default; `invite --ttl` can ask for less, and the server makes one
+that never expires only through `trew invite -ttl 0` on its own host.
+
+`pair` saves the pairing before sending it. If the reply is lost, running the
+same `pair` again in that directory finishes it as the same device, even after
+the invite has expired. A refusal (an unknown, used, expired or cancelled
+invite) leaves nothing saved.
 
 ## Device access
 
-Any paired device can revoke another or cancel an invite. To revoke the last
-device, provide the recovery key explicitly:
-
-```bash
-trew revoke DEVICE_ID --allow-last --recovery-key 'RECOVERY_KEY'
-```
-
-Replace `RECOVERY_KEY` with the actual key. Unlike the positional secret inputs
-to `init`, `pair`, and `rotate`, `--recovery-key` accepts a literal value only;
-it does not support `-` or `--key-file`. Avoid recording this command in shell
-history, and be aware that the value is visible in process arguments.
-
-The recovery key can also list devices and cancel invites when no working
-paired device remains. It does not erase a device's local notes or data key.
-See [Security and privacy](security.md).
-
-In a paired directory, these commands target its saved server address. In an
-unpaired directory, they use the address embedded in the recovery key.
+Any paired device can revoke any device, including itself and the last one,
+and cancel any outstanding invite. Revoking stops that device receiving and
+sending at once and cancels the invites it created. It does not erase the
+device's local notes. When no paired device is left, `trew invite` on the
+server host pairs a new one; see the [server reference](server-reference.md).
+These commands target the directory's saved server address. See
+[Security and privacy](security.md).
 
 Read-only mode governs ordinary synchronization. It is not an access restriction
 on the server, and an explicit `repair` can upload missing content.
@@ -142,7 +137,7 @@ can run while a watcher holds the vault. Sync checks the plan again before writi
 ## MCP over stdio
 
 `trew mcp --dir /absolute/path/to/agent-vault` starts one local MCP server
-and keeps that paired directory in sync. Pair separately with `init` or `pair`;
+and keeps that paired directory in sync. Pair it separately with `pair`;
 MCP has no pairing or device-administration tools. Use Node 22 or newer and a
 dedicated headless directory on local macOS or Linux storage. See the
 [host configuration](../client/README.md#connect-a-local-agent).
@@ -174,8 +169,8 @@ requires `vault`, for example `{"vault":"work","path":"daily.md"}`. There is
 no shared current-vault setting. A single vault keeps the selector optional;
 `--dir` uses the name `default`.
 
-Each vault keeps its own sync connection, keys, history, read queue and mutation
-queue. The process acquires all vault locks before starting and keeps every lock
+Each vault keeps its own sync connection, credential, history, read queue and
+mutation queue. The process acquires all vault locks before starting and keeps every lock
 until all admitted work drains. Saved read-only settings apply per vault; shared
 launch flags such as `--ignore`, `--no-merge` and `--read-only` apply to every vault.
 
@@ -199,9 +194,9 @@ resolve to its canonical local directory.
 |---|---|
 | `list_vaults` | No arguments. Lists only configured aliases, access modes and readiness. |
 | `list_notes` | Optional `folder`, `nameContains`, `after`, `limit` (default 100, max 500), `includeBackups` (default false). Lists notes, attachment metadata and folders. `nameContains` is a case-sensitive filename substring. |
-| `read_note` | Required `path`; optional `uid`, `startLine` (default 1), `maxLines` (default 200, max 1000), `base`. Returns exact text, the complete note's SHA-256 `base`, and `nextLine`. `uid` selects authenticated server history. |
+| `read_note` | Required `path`; optional `uid`, `startLine` (default 1), `maxLines` (default 200, max 1000), `base`. Returns exact text, the complete note's SHA-256 `base`, and `nextLine`. `uid` selects a version from server history. |
 | `search_notes` | Required `query` (max 1024 bytes); optional `mode` (`content`, `filename`, `both`, `tag`; default `content`), `folder`, `caseSensitive` (default false), `cursor`, `limit` (default 50, max 200), `contextLines` (default 0, max 3), `includeBackups`. Tag mode matches case-insensitive tags and their nested descendants; `includeChildren:false` selects only the exact tag. It reads frontmatter and body text, excluding code, comments and link syntax. Filename rows have line 0. Returns explicit skipped/omitted counts. |
-| `note_history` | Required `path`; optional `before`, `limit` (default 20, max 100). Returns authenticated versions newest first and `nextBefore`. Device names are labels, not proof of authorship. |
+| `note_history` | Required `path`; optional `before`, `limit` (default 20, max 100). Returns versions newest first and `nextBefore`. Device names are labels, not proof of authorship. |
 | `compare_versions` | Required `path`, historical `fromUid`; optional historical `toUid` (defaults to current local bytes), `after`, `limit` (default 20, max 100), `fromBase`, `toBase`. Returns bounded line differences and both complete bases. |
 | `delivery_status` | No arguments. Reports live device checkpoints and whether receipt is received, waiting or unconfirmed. Omits device IDs and pairing invitations. |
 | `deleted_notes` | Optional `before`, `limit` (default 50, max 200). Returns deleted notes, their latest recoverable version UID (`restorable`, or 0) and `nextBefore`. |
@@ -382,8 +377,8 @@ the vault, including through directory aliases. Without `--key-out`, issuance
 prints the 43-character token once to stdout. The directory stores only its
 SHA-256 hash, short id and issue time in `.trew/mcp-token.json` at mode `0600`.
 That state never syncs and cannot be read by MCP. The token is independent of
-the device secret, data key and recovery key. It grants access to this one
-process's tools; it cannot authenticate to `trew`.
+the device's own credential. It grants access to this one process's tools; the
+sync server does not accept it.
 
 Every request to `/mcp`, including loopback requests, needs
 `Authorization: Bearer TOKEN`. Configure the token in the client's authentication

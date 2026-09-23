@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { JsonIndexStore } from "./cli/vault.ts";
+import { JsonIndexStore } from "./node/vault.ts";
 import { indexLogPath } from "./core/index-journal-store.ts";
 import { encodeRecord } from "./core/index-journal.ts";
 import type { StoredState } from "./core/vault.ts";
@@ -396,7 +396,7 @@ describe("a journal whose snapshot is gone", () => {
     );
   });
 
-  it("is what unlink and rebase avoid by removing the journal first", async () => {
+  it("is what unlink avoids by removing the journal first", async () => {
     // The order in cli/config.ts. A crash halfway through must leave a
     // snapshot with no journal, which loads without a word, and never a
     // journal with no snapshot, which does not load at all.

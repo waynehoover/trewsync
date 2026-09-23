@@ -3,8 +3,10 @@
 **Self-hosted vault sync with full version history, on a server you run.**
 
 Keep a local copy of your Obsidian notes on a NAS or another machine without
-Obsidian. Trew connects to your own server, encrypts content before upload,
-and provides note history and recovery from the terminal.
+Obsidian. Trew connects to your own server, which keeps your notes and every
+earlier version, and provides note history and recovery from the terminal.
+The server can read what it stores: see
+[Security and privacy](https://github.com/waynehoover/trew/blob/main/docs/security.md).
 
 **Experimental.** Use macOS or Linux, Node **22 or newer**, and a local
 filesystem. Run one Trew process that writes to each vault, and keep other
@@ -12,11 +14,14 @@ sync tools and the Obsidian plugin off that same directory. For everyday
 editing, use the
 [Obsidian plugin](https://github.com/waynehoover/trew/blob/main/docs/plugin.md).
 
+The package installs a command called `trew`, the same name as the server's
+binary. On a machine that has both, run the server by its full path.
+
 ## Set up a mirror
 
-Create an invite on an existing device, using **Add another device** in the
-plugin or `trew invite`. An invite works once and expires after ten minutes;
-`--ttl` raises that to at most one hour. Then, on the mirror machine:
+Create an invite on an existing device, using **Add another device → Create
+invite** in the plugin or `trew invite` on a paired client. Then, on the mirror
+machine:
 
 ```bash
 npm install -g trew-sync
@@ -26,29 +31,43 @@ trew pair 'INVITE' --read-only
 trew sync --watch
 ```
 
-Replace `INVITE` with the string you created. It works once and expires after
-ten minutes by default. `--read-only` is saved during pairing, so subsequent
-syncs keep local changes from being uploaded even without the flag.
+Replace `INVITE` with the string you created. It starts `trew1i_` and carries
+the server's address and the vault's name, so there is nothing else to type.
+An invite works once and expires after one hour by default. `--read-only` is
+saved during pairing, so subsequent syncs keep local changes from being
+uploaded even without the flag.
 
 Keep the process running for continuous sync. For a scheduled job, use
 `trew sync --dir /path/to/trew-mirror` instead.
 
-## Start a new vault
+If pairing is interrupted after the invite was sent, for example by a dropped
+connection, run the same `trew pair` command again in that directory. The
+client saved the pairing before sending it, and finishes it as the same device,
+even if the invite has expired since. A refused invite (unknown, already used,
+expired or cancelled) leaves nothing saved; ask for a new one.
 
-If no device has claimed the server yet, use its setup string:
+## The first device on a new server
+
+The first device pairs from an invite too. Make one on the server host with
+`trew invite -url wss://your-host`, naming the address devices reach, or use
+the one a server with no devices writes to `first-invite` in its data
+directory. Copy it to this machine privately, then pair, without `--read-only`
+if this device should write:
 
 ```bash
-trew init 'wss://homelab.example.ts.net#TOKEN' --dir ~/vault
+mkdir -p ~/vault
+trew pair --dir ~/vault --key-file /private/path/invite.txt
 trew sync --dir ~/vault
 ```
 
-This creates a writable client. Save the recovery key printed during setup,
-separate from your devices. If every device is lost, the key lets you pair a
-replacement. Trew cannot recover it for you.
+A `first-invite` file holds one line per server address, each the same invite;
+give `--key-file` a file holding just the line this machine can reach.
 
-See [server setup](https://github.com/waynehoover/trew/blob/main/docs/server.md)
-for TLS and obtaining the token. A named server vault also needs
-`--vault-id NAME` on `init`.
+There is no separate command for starting a vault, and no recovery key to
+save: the notes and their history are on the server, and `trew invite` on the
+server pairs a new device whenever you need one. See
+[server setup](https://github.com/waynehoover/trew/blob/main/docs/server.md#the-first-device)
+for TLS and the first invite.
 
 ## Everyday commands
 
@@ -56,13 +75,16 @@ Commands use the current directory unless you pass `--dir DIR`.
 
 | Command | Use it to… |
 |---|---|
+| `trew pair INVITE` | Join a vault with an invite; run it again to finish an interrupted pairing. |
 | `trew sync` | Sync once and exit. |
 | `trew sync --watch` | Keep syncing and reconnect after temporary outages. |
 | `trew mcp` | Expose this paired directory over stdio, or HTTP with `--listen`. |
 | `trew mcp-token` | Issue or rotate the HTTP MCP credential; `--revoke` revokes it. |
-| `trew status` | Check connection, local changes, and recovery issues. |
+| `trew status` | Check connection, local changes, refused paths, and recovery issues. |
 | `trew invite` | Add another device with a single-use invite. |
 | `trew devices` | List devices and outstanding invites. |
+| `trew revoke ID` | Stop a device syncing, this one and the last one included. |
+| `trew uninvite ID` | Cancel an outstanding invite. |
 | `trew rename NAME` | Rename this device's label. |
 | `trew history "Note.md"` | View a note's versions, newest first. |
 | `trew deleted` | List deleted notes and whether they can be restored. |
@@ -70,7 +92,7 @@ Commands use the current directory unless you pass `--dir DIR`.
 | `trew unlink` | Remove local pairing and index while keeping notes. |
 
 The [command reference](https://github.com/waynehoover/trew/blob/main/docs/cli-reference.md)
-covers all flags, device revocation, rotation, repair, and server recovery.
+covers all flags, device access, repair, and recovery.
 
 ## Connect a local agent
 
@@ -176,7 +198,7 @@ trew mcp --dir /srv/vault --listen 127.0.0.1:3010
 The output directory must already exist. Without `--key-out`, the command prints
 the token once. With it, only the credential id and file path are printed.
 Every HTTP request needs `Authorization: Bearer TOKEN`, including requests on
-loopback. The token is separate from your recovery key and device credential.
+loopback. The token is separate from this device's own credential.
 HTTP has read-only tools by default; add `--writable` only when the agent should
 edit notes. A saved read-only pairing cannot be overridden. This default limits
 MCP tools, while ordinary sync still uploads on a writable device.
@@ -262,7 +284,7 @@ client keeps an ordinary device credential, and explicit administrative
 commands still work. In particular, `trew repair` can resend missing content.
 Use this mode on a machine you trust.
 
-`init` and `pair` persist `--read-only`; passing it to `sync` applies it to that
+`pair` persists `--read-only`; passing it to `sync` applies it to that
 invocation. There is no flag to turn a persisted setting off.
 
 To review conflicting edits yourself instead of merging them:
@@ -287,10 +309,19 @@ Restore never overwrites an existing file. If the target is occupied, it writes
 a copy such as `Quarterly plan (restored 42).md`. On a writable client, it then
 attempts to send that copy. On a read-only mirror, the copy stays local.
 
-When the server has been restored from an older backup, use `trew rebase`
-to inspect the recovery situation, then `trew rebase --backup-taken` after
-preserving local notes and backing up the server. This rejoins without deleting
-local files and sends local-only versions when the device is writable.
+When the server is restored from a `trew backup` snapshot, this client needs
+nothing from you. The restored server has a new history, and at its next
+connection the client reads that history as a fresh listing: files that match agree, files
+that differ are kept both ways as a conflict copy, files only this device holds
+are sent back (unless it is read-only), and nothing is deleted because the
+restored history lacks it. A note deleted after that backup was taken can
+therefore come back; delete it again if you still want it gone.
+
+If the server's data directory was instead copied back by hand, the client
+stops with a `cursor` error. Back up the server, then `trew unlink` and pair
+again with a new invite. Local files are kept, and what only this device holds
+is sent back. Either way the next edit made on two devices at once keeps both
+versions instead of merging them, because the last agreed version is gone.
 
 If a command reports a version kept at a hidden path, preserve that file and
 `.trew/`. Copy the retained version to a new visible filename and inspect it
@@ -315,29 +346,38 @@ Restore separates `restored` (the local file was written), `sent` (that copy was
 acknowledged by the server), and `ok` (the overall operation succeeded). If the
 copy was restored but sync failed, retry `trew sync` to avoid creating another copy.
 
-To keep setup strings, invites, and recovery keys out of command arguments, use
-an existing private file or standard input:
+To keep invites out of command arguments, use an existing private file or
+standard input:
 
 ```bash
 trew pair --key-file /private/path/invite.txt --read-only
 trew pair - --read-only < /private/path/invite.txt
-trew rotate --key-file /private/path/recovery.txt --key-out /private/path/new-recovery.txt
 ```
 
-`--key-out` creates a new private file and refuses to overwrite one. Recovery
-keys are also printed, so protect command output and logs. For `mcp-token`,
-exporting suppresses the token on stdout.
+`trew invite` prints the new invite, so protect its output and logs. For
+`mcp-token`, `--key-out` creates a new private file, refuses to overwrite one,
+and suppresses the token on stdout.
 
 ## Files and local state
 
-Trew stores credentials and the sync index in `.trew/`, which never syncs.
-Protect this directory: it contains the keys this device needs to read notes.
-Unlink through the command rather than deleting state files by hand.
+Trew stores this device's credential and the sync index in `.trew/`, which
+never syncs. Protect this directory: a copy of it can connect as this device
+until you revoke the device. Unlink through the command rather than deleting
+state files by hand.
 
 The CLI excludes dot-prefixed files and folders, `node_modules`, and the
 Obsidian configuration folder. Use `--config-dir NAME` if yours differs from
 `.obsidian`. Add `--ignore NAME` for a file or folder name to exclude at every
 depth; repeat the flag for more names. These choices apply to this device only.
+
+A name that starts with a dot never syncs from any device, at any depth, so a
+folder such as `.attachments` stays on this machine. The server also refuses
+paths Obsidian could not hold: longer than 1,024 bytes, a file or folder name
+longer than 255 bytes, control characters, backslashes, no-break spaces, and a
+few more. Two paths that differ only in letter case, such as `Notes/a.md` and
+`notes/a.md`, cannot both sync either, because a case-insensitive disk would
+hold them as one. A refused path stays on this device and `trew status` lists
+it with the reason; rename it and sync again.
 
 Equivalent Unicode filename spellings are normalized. If two distinct files
 would become the same name, Trew blocks those paths and identifies them;

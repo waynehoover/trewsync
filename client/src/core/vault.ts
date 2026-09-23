@@ -82,7 +82,7 @@ export interface Ambiguous {
 export interface ExpectedContent {
   /** The engine's content id for the local version the decision was taken on. */
   readonly contentId: string;
-  /** Computes the content id of bytes, so the adapter needs no crypto of its own. */
+  /** Computes the content id of bytes, so the adapter needs no hashing of its own. */
   readonly idOf: (bytes: Uint8Array) => Promise<string>;
 }
 
@@ -462,6 +462,16 @@ export class LastIndexWrite {
 export interface StoredState {
   /** The last uid this device has applied. */
   readonly cursor: number;
+  /**
+   * The store epoch `cursor` was read under, as the server's `ready` said
+   * (PLAN.md section 2.8), or absent before the first connection.
+   *
+   * Beside the cursor because it is what the cursor means: a uid is only a
+   * position in one history, and a server restored from a backup has another.
+   * Sent back at the next hello, and a different one in the answer means the
+   * cursor, and everything learned under it, belongs to a history that is gone.
+   */
+  readonly epoch?: string;
   /** Index entries by path. Shape mirrors IndexEntry. */
   readonly entries: Record<string, unknown>;
   /** The server's newest word per path, by plaintext path. */
@@ -674,13 +684,13 @@ export class MemoryVault implements Vault {
    *
    * The import is deferred because this module has no others: it is the
    * interface every vault implements, and the plugin, the CLI and the engine
-   * all reach it. Pulling `crypto.ts` in at the top would put the whole cipher
-   * suite into any bundle that only wanted the type.
+   * all reach it, and a module that only wanted the type should not pull in
+   * anything that runs.
    */
   contentDigest = async (path: string): Promise<string | undefined> => {
     const f = this.files.get(path);
     if (f === undefined) return undefined;
-    const { plainDigest } = await import("./crypto.ts");
+    const { plainDigest } = await import("./digest.ts");
     return plainDigest(f.bytes);
   };
 

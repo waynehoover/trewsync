@@ -26,7 +26,9 @@ it("refuses to pair when Obsidian returns undefined for an unreadable settings f
   plugin.loadData = async () => undefined;
   await plugin.onload();
   expect(plugin.currentState.kind).toBe("stopped");
-  await expect(plugin.pairFirst("unused setup", "laptop")).rejects.toThrow(
+  // Refused before the invite is even read: nothing about the string matters
+  // when pairing would write over a file that could not be read.
+  await expect(plugin.pair("an invite that is never read", "laptop")).rejects.toThrow(
     /saved settings.*could not be read/,
   );
   expect(app.vault.adapter.text(path)).toBe(broken);

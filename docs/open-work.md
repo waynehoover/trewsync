@@ -6,15 +6,14 @@ differently, and each says what would change the answer.
 
 ## Downloads hold a whole copy of the file
 
-`assemble` builds the entire plaintext in one buffer before anything is
-written, and the inbox holds the sealed bodies until the file lands. So a
-download peaks at roughly twice the file's size, on whichever device has the
-least memory.
+`assemble` builds the entire file in one buffer before anything is written, and
+the inbox holds the chunk bodies until the file lands. So a download peaks at
+roughly twice the file's size, on whichever device has the least memory.
 
 Uploads have not done this since `streamScan`: they cut and name a 256 MiB file
 without ever holding it, and above 8 MiB `planUpload` keeps only offsets and
-re-seals a chunk when the server asks for it. The asymmetry is the whole of why
-the server's `-max-file` defaults to 64 MiB.
+re-reads and re-hashes a chunk when the server asks for it. The asymmetry is the
+whole of why the server's `-max-file` defaults to 64 MiB.
 
 The fix is to stream the assembly: write each chunk into a staging file as it
 is opened, verify, then rename into place. That removes both copies and makes
@@ -30,10 +29,10 @@ and wrong for a vault of notes people edit. The part worth copying is that they
 never hold a file.
 
 **Before changing the default:** the 2.7 MB per MiB in
-[store.go](../internal/store/store.go) was measured before the
-single-buffer assembly and the windowed sealing landed, so the number the
-64 MiB default rests on is no longer true. Measure peak resident on a phone for
-one large attachment first.
+[store.go](../internal/store/store.go) was measured in Basalt, before the
+single-buffer assembly and the windowed sealing (now windowed naming) landed,
+so the number the 64 MiB default rests on is no longer true. Measure peak
+resident on a phone for one large attachment first.
 
 ## The index snapshot may be the wrong shape at 50,000 notes
 

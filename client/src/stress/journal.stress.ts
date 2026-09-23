@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { JsonIndexStore } from "../cli/vault.ts";
+import { JsonIndexStore } from "../node/vault.ts";
 import { deltaFrom, encodeRecord, replay, shapeOf } from "../core/index-journal.ts";
 import { indexLogPath } from "../core/index-journal-store.ts";
 import type { StoredState } from "../core/vault.ts";

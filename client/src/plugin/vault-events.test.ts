@@ -259,7 +259,7 @@ describe("what the fake claims Obsidian does", () => {
   it("leaves every dot-prefixed path out of the index, and puts the root in it", () => {
     const s = new Session();
     s.typed("real.md", "x");
-    s.adapter.seed(".obsidian/plugins/trew/data.json", "the root secret");
+    s.adapter.seed(".obsidian/plugins/trew/data.json", "this device's credential");
     s.adapter.seed("notes/.git/config", "[core]");
     s.adapter.seed(".trash/old.md", "deleted last week");
 

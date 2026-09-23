@@ -23,35 +23,80 @@
 
 import { describe, expect, it } from "vitest";
 
-import { macEntry, sealChunks, sealPath, type Schedule } from "./crypto.ts";
+import { chunkName } from "./digest.ts";
 import { FakeSocket, engineOnFakeSocket, settle, settleUntil } from "./fake-socket.ts";
 import type { WireEntry } from "./transport.ts";
-import { otherVaultKeys } from "./test-keys.ts";
 
 const enc = new TextEncoder();
 
 async function entryFor(
-  keys: Schedule,
   uid: number,
   path: string,
   text: string,
   bodies: Map<string, Uint8Array>,
 ): Promise<WireEntry> {
-  const plain = enc.encode(text);
-  const [chunk] = await sealChunks(keys, [plain]);
-  bodies.set(chunk!.name, chunk!.bytes);
-  const facts = {
-    path: await sealPath(keys, path),
-    size: plain.length,
+  const raw = enc.encode(text);
+  const name = await chunkName(raw);
+  bodies.set(name, raw);
+  return {
+    uid,
+    path,
+    size: raw.length,
     ctime: 1000,
     mtime: 1000,
     folder: false,
     deleted: false,
-    chunks: [chunk!.name],
-    parent: "",
+    chunks: [name],
+    device: "other",
   };
-  return { uid, ...facts, device: "other", mac: await macEntry(keys, facts) };
 }
+
+/**
+ * Two batches this device must refuse, each a refusal that stands without
+ * any authenticator (hazard 5 in plan/strip-ledger.md).
+ *
+ * These tests used to be seeded with an entry signed under another vault's
+ * key, and protocol 1 has no key to sign with: left as it was, the forgery
+ * would be accepted as an ordinary entry and the assertions below would hold
+ * or fail for reasons that have nothing to do with a refusal. So each is
+ * seeded with something refused on its own terms. One is the engine's to
+ * refuse, an entry whose fields contradict each other; the other is the
+ * transport's, a chunk list naming something that is not a chunk name. The
+ * `refused` pattern is what each says when it refuses, so a test can tell the
+ * refusal happened rather than infer it from nothing having changed.
+ */
+const unacceptable = [
+  {
+    what: "an entry declaring bytes and naming no chunks",
+    entry: (uid: number): WireEntry => ({
+      uid,
+      path: "theirs.md",
+      size: 19,
+      ctime: 1000,
+      mtime: 1000,
+      folder: false,
+      deleted: false,
+      chunks: [],
+      device: "other",
+    }),
+    refused: /declares 19 bytes and names no chunks/,
+  },
+  {
+    what: "an entry naming something that is not a chunk",
+    entry: (uid: number): WireEntry => ({
+      uid,
+      path: "theirs.md",
+      size: 19,
+      ctime: 1000,
+      mtime: 1000,
+      folder: false,
+      deleted: false,
+      chunks: ["../../not-a-chunk-name"],
+      device: "other",
+    }),
+    refused: /which is not a chunk name/,
+  },
+] as const;
 
 function serving(socket: FakeSocket, bodies: Map<string, Uint8Array>): void {
   socket.autoReply = (frame, s) => {
@@ -72,75 +117,80 @@ function serving(socket: FakeSocket, bodies: Map<string, Uint8Array>): void {
  * this project keeps finding, so it gets a property of its own.
  */
 describe("failed input does not advance a cursor", () => {
-  it("refuses a batch signed by another vault, and remembers nothing of it", async () => {
-    const { engine, socket, vault, t, logs, keys } = await engineOnFakeSocket();
-    void keys;
-    const bodies = new Map<string, Uint8Array>();
-    serving(socket, bodies);
+  it.each(unacceptable)(
+    "refuses a batch carrying $what, and remembers nothing of it",
+    async ({ entry, refused }) => {
+      const { engine, socket, vault, t, logs } = await engineOnFakeSocket();
+      const bodies = new Map<string, Uint8Array>();
+      serving(socket, bodies);
 
-    const before = engine.status().cursor;
-    const theirs = await otherVaultKeys(9);
-    // A well-formed batch in every respect except the key that signed it.
-    const forged = await entryFor(theirs, 1, "theirs.md", "not from this vault", bodies);
-    socket.raw({ op: "batch", from: 1, to: 1, entries: [forged] });
-    // Until it is refused, not for a fixed number of ticks: the refusal
-    // verifies a MAC, so how many macrotasks it takes is a fact about the
-    // machine. Two was enough here and not enough on CI.
-    await settleUntil(
-      "the forged batch to be refused",
-      () => t.isClosed || logs.some((l: string) => /forg|not this vault|vault's key/i.test(l)),
-    );
+      const before = engine.status().cursor;
+      // A good entry in front, so the refusal has something to take with it:
+      // a batch is refused whole or not at all.
+      const good = await entryFor(1, "fine.md", "applied only if the batch is", bodies);
+      socket.raw({ op: "batch", from: 1, to: 2, entries: [good, entry(2)] });
+      // Until it is refused, not for a fixed number of ticks: how many
+      // macrotasks a refusal takes is a fact about the machine. Two was
+      // enough here and not enough on CI.
+      await settleUntil("the batch to be refused", () => t.isClosed);
 
-    // The batch was delivered and refused, rather than never arriving: without
-    // this the assertions below would hold for a test that did nothing.
-    expect(
-      t.isClosed || logs.some((l) => /forg|not this vault|vault's key/i.test(l)),
-      `nothing refused the forged batch, so this proves nothing: ${logs.join(" | ")}`,
-    ).toBe(true);
-    expect(engine.status().cursor, "the cursor moved over a batch this device refused").toBe(
-      before,
-    );
-    expect(vault.paths(), "a refused batch wrote a note").toEqual([]);
-  });
+      // The batch was delivered and refused for the reason it was built to
+      // be, rather than never arriving: without this the assertions below
+      // would hold for a test that did nothing.
+      expect(
+        logs.some((l) => refused.test(l)),
+        `nothing refused the batch for its own fault, so this proves nothing: ${logs.join(" | ")}`,
+      ).toBe(true);
+      expect(engine.status().cursor, "the cursor moved over a batch this device refused").toBe(
+        before,
+      );
+      // Pending is what a save would persist for a later pass to act on, and
+      // the good entry in front would be on it had the batch been applied in
+      // part.
+      expect(engine.status().pending, "a refused batch left work behind").toBe(0);
+      expect(vault.paths(), "a refused batch wrote a note").toEqual([]);
+    },
+  );
 
-  it("keeps the cursor where the last applied entry left it, not where the batch claimed", async () => {
-    const { engine, socket, vault, keys, t, logs } = await engineOnFakeSocket();
-    const bodies = new Map<string, Uint8Array>();
-    serving(socket, bodies);
+  it.each(unacceptable)(
+    "keeps the cursor where the last applied entry left it, not where a batch carrying $what claimed",
+    async ({ entry, refused }) => {
+      const { engine, socket, vault, t, logs } = await engineOnFakeSocket();
+      const bodies = new Map<string, Uint8Array>();
+      serving(socket, bodies);
 
-    // One good batch, applied.
-    socket.raw({
-      op: "batch",
-      from: 1,
-      to: 1,
-      entries: [await entryFor(keys, 1, "good.md", "kept", bodies)],
-    });
-    for (let i = 0; i < 200 && engine.status().pending < 1; i++) await settle();
-    await engine.sync({ coalesceWrites: false });
-    const applied = engine.status().cursor;
-    expect(applied).toBeGreaterThan(0);
-    expect(vault.text("good.md")).toBe("kept");
+      // One good batch, applied.
+      socket.raw({
+        op: "batch",
+        from: 1,
+        to: 1,
+        entries: [await entryFor(1, "good.md", "kept", bodies)],
+      });
+      for (let i = 0; i < 200 && engine.status().pending < 1; i++) await settle();
+      await engine.sync({ coalesceWrites: false });
+      const applied = engine.status().cursor;
+      expect(applied).toBeGreaterThan(0);
+      expect(vault.text("good.md")).toBe("kept");
 
-    // Then one this device cannot accept. The claimed range says 2 to 9,
-    // which is what a device that trusted the header would jump to.
-    const theirs = await otherVaultKeys(9);
-    socket.raw({
-      op: "batch",
-      from: 2,
-      to: 9,
-      entries: [await entryFor(theirs, 9, "theirs.md", "not from this vault", bodies)],
-    });
-    // The same race as above: the cursor is only safe to read once the batch
-    // has been refused, and refusing it verifies a MAC.
-    await settleUntil(
-      "the forged batch to be refused",
-      () => t.isClosed || logs.some((l: string) => /forg|not this vault|vault's key/i.test(l)),
-    );
+      // Then one this device cannot accept. The claimed range says 2 to 9,
+      // which is what a device that trusted the header would jump to.
+      socket.raw({ op: "batch", from: 2, to: 9, entries: [entry(9)] });
+      // The same race as above: the cursor is only safe to read once the
+      // batch has been refused.
+      await settleUntil("the batch to be refused", () => t.isClosed);
+      expect(
+        logs.some((l) => refused.test(l)),
+        logs.join(" | "),
+      ).toBe(true);
 
-    expect(engine.status().cursor, "the cursor jumped to the end of a batch that was refused").toBe(
-      applied,
-    );
-  });
+      expect(
+        engine.status().cursor,
+        "the cursor jumped to the end of a batch that was refused",
+      ).toBe(applied);
+      expect(t.appliedCursor, "the transport's cursor moved over the refused batch").toBe(applied);
+      expect(vault.text("good.md"), "the note an earlier batch wrote was touched").toBe("kept");
+    },
+  );
 });
 
 /**
@@ -153,11 +203,11 @@ describe("failed input does not advance a cursor", () => {
  */
 describe("a read does not mutate", () => {
   it("leaves the vault and the cursor alone across a history request", async () => {
-    const { engine, socket, vault, t, keys } = await engineOnFakeSocket();
+    const { engine, socket, vault, t } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     serving(socket, bodies);
 
-    const entry = await entryFor(keys, 1, "note.md", "the only version", bodies);
+    const entry = await entryFor(1, "note.md", "the only version", bodies);
     socket.raw({ op: "batch", from: 1, to: 1, entries: [entry] });
     for (let i = 0; i < 200 && engine.status().pending < 1; i++) await settle();
     await engine.sync({ coalesceWrites: false });
@@ -191,7 +241,7 @@ describe("a read does not mutate", () => {
  */
 describe("a refusal that names its next step", () => {
   it("tells somebody what to do about a file the server will not take", async () => {
-    const { engine, socket, keys } = await engineOnFakeSocket();
+    const { engine, socket } = await engineOnFakeSocket();
     const bodies = new Map<string, Uint8Array>();
     // The server refuses this path for good, with the code that means it.
     socket.autoReply = (frame, s) => {
@@ -206,7 +256,6 @@ describe("a refusal that names its next step", () => {
         s.bodies(...(frame["chunks"] as string[]).map((n) => bodies.get(n)!));
       }
     };
-    void keys;
 
     const { vault } = await Promise.resolve({
       vault: (engine as never as { opts: { vault: import("./vault.ts").MemoryVault } }).opts.vault,
@@ -264,7 +313,6 @@ describe("a reconnect wait that can be ended", () => {
   it("stops within a moment of being told to, not at the end of the backoff", async () => {
     const { runForever } = await import("./client.ts");
     const { MemoryIndexStore, MemoryVault } = await import("./vault.ts");
-    const { TEST_DATA_KEY } = await import("./test-keys.ts");
 
     let going = true;
     let wake: (() => void) | undefined;
@@ -275,7 +323,6 @@ describe("a reconnect wait that can be ended", () => {
       {
         vault: new MemoryVault(),
         store: new MemoryIndexStore(),
-        dataKey: TEST_DATA_KEY,
         url: "ws://nowhere.invalid",
         deviceId: "d",
         token: "t",

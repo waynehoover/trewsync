@@ -17,10 +17,11 @@ import { join } from "node:path";
 import { createServer } from "node:net";
 import { promisify } from "node:util";
 
-import { Registrar } from "./client.ts";
 import { deferred, within } from "./test-async.ts";
-import { authToken, deriveRootKeys, deviceAuthToken, generateDeviceSecret } from "./crypto.ts";
-import { generateDeviceId } from "./pairing.ts";
+import { base64urlEncode } from "./digest.ts";
+import { parseInviteString } from "./invite-string.ts";
+import { generateDeviceId, generateDeviceToken } from "./pairing.ts";
+import { Transport } from "./transport.ts";
 
 const run = promisify(execFile);
 const GO_DIR = new URL("../../..", import.meta.url).pathname;
@@ -124,7 +125,6 @@ export class TestServer {
   private proc: ChildProcess | undefined;
   dataDir = "";
   port = 0;
-  token = "";
   readonly stderr: string[] = [];
 
   /**
@@ -172,9 +172,21 @@ export class TestServer {
     if (!this.dataDir) this.dataDir = await mkdtemp(join(tmpdir(), "trew-data-"));
     this.port = fixedPort ?? (await freePort());
     this.stderr.length = 0;
+    // `-url` so every invite this server mints, the first one included, names
+    // the address the tests dial rather than a wss:// address with no TLS in
+    // front of it.
     this.proc = spawn(
       binary,
-      ["serve", "-data", this.dataDir, "-addr", `127.0.0.1:${this.port}`, ...this.extraArgs],
+      [
+        "serve",
+        "-data",
+        this.dataDir,
+        "-addr",
+        `127.0.0.1:${this.port}`,
+        "-url",
+        `ws://127.0.0.1:${this.port}`,
+        ...this.extraArgs,
+      ],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
     this.proc.stderr?.on("data", (b: Buffer) => this.stderr.push(b.toString()));
@@ -205,7 +217,6 @@ export class TestServer {
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) throw new Error(`server health check failed: ${res.status}`);
-    this.token = (await readFile(join(this.dataDir, "auth-token"), "utf8")).trim();
   }
 
   /**
@@ -228,71 +239,65 @@ export class TestServer {
   }
 
   /**
-   * What a registrar should authenticate with.
+   * A fresh invite for this server's vault, minted by `trew invite` through
+   * the running server's control socket, exactly as an operator mints one.
    *
-   * The first session uses the token the server printed on its first run, and
-   * offers the auth key the vault should belong to from then on, with a data
-   * key for the server to store. Every session after that uses the key and
-   * offers the same pair, which the server ignores. This mirrors what the
-   * shells do, and a harness that handed out the bootstrap for ever, or that
-   * claimed without a data key, would be testing a server that does not exist.
-   *
-   * The wrapped data key comes from the caller rather than from here, because
-   * a test derives it from the same fixed key it derives its own keys from;
-   * see test-keys.ts.
+   * `ttl` is the command's own flag, a Go duration such as `1h` or `0` for an
+   * invite that never expires; absent is the server's default of an hour.
    */
-  credentials(
-    derivedAuthKey: string,
-    wrapped: string,
-  ): { token: string; claim: { auth: string; wrapped: string } } {
-    const token = this.claimed ? derivedAuthKey : this.token;
-    this.claimed = true;
-    return { token, claim: { auth: derivedAuthKey, wrapped } };
+  async invite(opts: { ttl?: string; label?: string } = {}): Promise<string> {
+    const out = await this.cli(
+      "invite",
+      ...(opts.ttl !== undefined ? ["-ttl", opts.ttl] : []),
+      ...(opts.label !== undefined ? ["-label", opts.label] : []),
+    );
+    const found = /trew1i_[A-Za-z0-9_-]+/.exec(out);
+    if (!found) throw new Error(`trew invite printed no invite: ${out}`);
+    return found[0];
   }
 
-  private claimed = false;
+  /** Where `serve` wrote the first device's invite, on a store with no devices. */
+  get firstInvitePath(): string {
+    return join(this.dataDir, "first-invite");
+  }
+
+  /** The first device's invite, as `serve` wrote it: the first line of the file. */
+  async firstInvite(): Promise<string> {
+    const text = await readFile(this.firstInvitePath, "utf8");
+    const line = text.split("\n").find((l) => l.trim() !== "");
+    if (line === undefined) throw new Error(`${this.firstInvitePath} holds no invite`);
+    return line.trim();
+  }
 
   /**
-   * Registers a device row and returns what a protocol 4 hello needs.
+   * Adds a device to the vault and returns what its hello needs.
    *
-   * Every test that connects goes through here, because under protocol 4 the
-   * vault's own credential may not sync: a hello has to name a row that
-   * exists. Doing it in one place is what keeps two dozen test files from each
-   * having their own idea of how a device comes to exist, which is how a
-   * harness ends up testing a server that does not exist.
+   * Every test that connects goes through here, because a hello has to name a
+   * row that exists. It pairs the way a device does: an invite minted with
+   * `trew invite`, then a redemption carrying a fresh id and a fresh 32-byte
+   * token (plan/protocol.md, "Invite redemption"). Doing it in one place is
+   * what keeps two dozen test files from each having their own idea of how a
+   * device comes to exist, which is how a harness ends up testing a server
+   * that does not exist.
    */
-  async deviceCredentials(
-    secret: Uint8Array,
-    wrapped: string,
-    device = "test",
-  ): Promise<{ deviceId: string; token: string; dataKey: Uint8Array }> {
-    const root = await deriveRootKeys(secret);
-    const wire = { url: this.wsUrl, vaultId: "default", device, secret, timeoutMs: 15_000 };
-    // The first-run token, and then the key this secret derives if that token
-    // has already been spent by somebody else. The same fallback the shells
-    // have, for the same reason: a harness that offered a spent bootstrap for
-    // ever would be testing a server that does not exist.
-    const registrar = await Registrar.open({
-      ...wire,
-      ...this.registrarCredentials(authToken(root), wrapped),
-    }).catch(() => Registrar.open(wire));
+  async deviceCredentials(device = "test"): Promise<{ deviceId: string; token: string }> {
+    const invite = parseInviteString(await this.invite());
+    const deviceId = generateDeviceId();
+    const token = generateDeviceToken();
+    const transport = new Transport(invite.url, { onBatch: () => {}, timeoutMs: 15_000 });
     try {
-      const deviceId = generateDeviceId();
-      const deviceSecret = generateDeviceSecret();
-      const { dataKey } = await registrar.register({ deviceId, deviceSecret, name: device });
-      return { deviceId, token: await deviceAuthToken(deviceSecret), dataKey };
+      await transport.connect();
+      await transport.redeem({
+        vault: invite.vault,
+        device,
+        invite: base64urlEncode(invite.token),
+        deviceId,
+        token,
+      });
     } finally {
-      registrar.close();
+      transport.close();
     }
-  }
-
-  /** `credentials`, in the shape `Registrar.open` takes. */
-  registrarCredentials(
-    derivedAuthKey: string,
-    wrapped: string,
-  ): { bootstrap?: string; claim: { auth: string; wrapped: string } } {
-    const { token, claim } = this.credentials(derivedAuthKey, wrapped);
-    return { ...(token === claim.auth ? {} : { bootstrap: token }), claim };
+    return { deviceId, token };
   }
 
   async stop(): Promise<void> {
@@ -337,20 +342,27 @@ export class TestServer {
     if (this.dataDir) await removeTree(this.dataDir);
   }
 
-  /** Runs a maintenance subcommand against this server's data directory. */
+  /**
+   * Runs a maintenance subcommand against this server's data directory.
+   *
+   * `-data DIR` goes straight after the subcommand's name rather than at the
+   * end. Go's flag package stops at the first positional argument, so behind
+   * an id, as in `cli("uninvite", id)` or `cli("revoke", id)`, it was read as
+   * two more positional arguments and the command refused for having three.
+   * Flags are read in any order, so every other subcommand is unaffected.
+   */
   async cli(...args: string[]): Promise<string> {
     const binary = await serverBinary();
-    const { stdout } = await run(binary, [...args, "-data", this.dataDir]);
+    const [command, ...rest] = args;
+    const { stdout } = await run(
+      binary,
+      command === undefined ? ["-data", this.dataDir] : [command, "-data", this.dataDir, ...rest],
+    );
     return stdout;
   }
 
   get wsUrl(): string {
     return `ws://127.0.0.1:${this.port}`;
-  }
-
-  /** The one line the server prints for its first device: address#token. */
-  get setup(): string {
-    return `${this.wsUrl}#${this.token}`;
   }
 }
 

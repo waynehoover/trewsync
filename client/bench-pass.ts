@@ -42,10 +42,9 @@ import { cpus } from "node:os";
 
 import { Client } from "./src/core/client.ts";
 import type { PassPhases, SyncReport } from "./src/core/engine.ts";
-import { testWrapped } from "./src/core/test-keys.ts";
 import { TestServer, serverBinary } from "./src/core/test-server.ts";
 import { noteBody, pathFor } from "./bench-corpus.ts";
-import { JsonIndexStore, NodeVault } from "./src/cli/vault.ts";
+import { JsonIndexStore, NodeVault } from "./src/node/vault.ts";
 import { timedVault } from "./src/core/vault.ts";
 
 /** Vault sizes. Doubling, so the ratio between rows is the growth rate. */
@@ -152,8 +151,6 @@ interface Row {
 async function atSize(size: number): Promise<Row> {
   const server = new TestServer();
   await server.start();
-  const secret = new Uint8Array(32).fill(31);
-  const wrapped = await testWrapped(secret);
   const dirs: string[] = [];
   const clients: Client[] = [];
 
@@ -176,7 +173,7 @@ async function atSize(size: number): Promise<Row> {
         },
       }),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(secret, wrapped, name)),
+      ...(await server.deviceCredentials(name)),
       vaultId: "default",
       device: name,
       timeoutMs: 120_000,
@@ -245,10 +242,10 @@ async function atSize(size: number): Promise<Row> {
     // This is the difference between the two shells rather than a variant of
     // the benchmark. Obsidian fires a rename event and the plugin forwards it
     // to `noteRename`, which carries the entry, its chunk list and its hash to
-    // the new path: nothing is read and nothing is sealed, because the bytes
-    // did not change and sealing is deterministic. The CLI has no such event,
-    // so every moved note looks like a new path with no entry and is read,
-    // chunked and sealed again from scratch.
+    // the new path: nothing is read and nothing is hashed, because the bytes
+    // did not change and a chunk's name is the SHA-256 of its bytes. The CLI
+    // has no such event, so every moved note looks like a new path with no
+    // entry and is read, chunked and named again from scratch.
     let told = 0;
     const renameReported = await measure(
       async () => {

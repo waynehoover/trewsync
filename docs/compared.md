@@ -3,8 +3,9 @@
 [Documentation](index.md) · [Get started](server.md)
 
 Choose Trew if you want to sync a personal Obsidian vault through your own
-server, with encrypted notes, version history, and a small plugin interface.
-You run one server and add your devices with invites.
+server, with version history and a small plugin interface, and you are content
+for that server to read your notes. You run one server and add your devices
+with invites.
 
 The biggest choice is how much you want to manage yourself.
 
@@ -15,7 +16,7 @@ The biggest choice is how much you want to manage yourself.
 | Hosting | Your Trew server | Managed by Obsidian | Your chosen backend, including CouchDB or S3-compatible storage |
 | Setup | Run the server, install the plugin manually, pair devices | Subscribe and set up Sync in Obsidian | Install the plugin and configure a supported backend |
 | File scope | Notes and attachments | Notes, attachments, and configurable vault settings | Notes and attachments, with options for settings, themes, and plugins |
-| Encryption | Contents and filenames encrypted on your devices | End-to-end encryption available and enabled by default for new vaults | End-to-end encryption available |
+| Encryption | None end to end: your server holds notes in plaintext; TLS protects them in transit | End-to-end encryption available and enabled by default for new vaults | End-to-end encryption available |
 | Cost model | Free MIT software; you cover hosting and maintenance | Subscription | Open-source software; hosting costs depend on your setup |
 
 Obsidian's [Sync overview](https://obsidian.md/sync),
@@ -28,7 +29,9 @@ for current plans and features.
 ## What you get with Trew
 
 **Control over where your notes live.** Run the server on a machine you manage.
-It stores encrypted content; your devices keep the readable notes.
+It stores your notes and their history readable, so protect its disk and its
+backups as you would the notes themselves; there is no key to lose, and a lost
+device loses no synced note.
 
 **Less data to transfer after edits.** Trew reuses unchanged pieces of a file
 across versions. This is useful for notes you edit often, especially larger
@@ -47,6 +50,8 @@ sync and recovery. There is no database service to install alongside Trew.
   supports iOS and Windows, which are outside Trew's supported setup.
 - **Consider LiveSync if you want storage choices or configuration sync.** It
   offers a broader set of backends and plugin features.
+- **Choose either of those if the server must not read your notes.** Both
+  offer end-to-end encryption; Trew does not.
 - **Try Trew if you already run a homelab and want a focused personal sync
   service.** Be comfortable maintaining it and keeping independent backups.
 

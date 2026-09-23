@@ -14,10 +14,10 @@
 // The MCP read side. Paging for read_note, the opaque continuation cursors,
 // literal search within one note, line comparison for compare_versions, and
 // the reading half of tags and links are ports of Basalt's TypeScript MCP
-// (client/src/cli/mcp-read.ts, mcp-inspect.ts, mcp-markdown.ts and
+// (client/src/node/mcp-read.ts, mcp-inspect.ts, mcp-markdown.ts and
 // mcp-links.ts), which stays in the tree as the oracle until these pass
 // against it (PLAN.md section 2.1). The generator
-// client/src/cli/mcp-oracle.run.ts feeds a corpus through the TypeScript and
+// client/src/node/mcp-oracle.run.ts feeds a corpus through the TypeScript and
 // records what it returns in mcp-fixtures.json; oracle_test.go holds this
 // package to those outputs. Positions an agent sees are counted the way
 // Basalt counted them, in UTF-16 code units: search columns, clip lengths,

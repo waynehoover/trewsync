@@ -7,26 +7,34 @@
  * stay nasty enough that it finds things.
  */
 
-import { mkdtemp, readFile, readdir, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { Client } from "../core/client.ts";
-import { testWrapped } from "../core/test-keys.ts";
+import { Client, credentialsFor, pairWithInvite } from "../core/client.ts";
+import { parseInvite, startPairing, type DeviceConfig } from "../core/pairing.ts";
 import { removeTree, TestServer } from "../core/test-server.ts";
-import { JsonIndexStore, NodeVault } from "../cli/vault.ts";
+import { configPath, indexPath, loadConfig, saveConfig } from "../node/config.ts";
+import { JsonIndexStore, NodeVault } from "../node/vault.ts";
 
 export const enc = new TextEncoder();
-
-/** One root for the whole suite: these tests are not about key derivation. */
-export const SUITE_SECRET = new Uint8Array(32).fill(23);
 
 export interface Device {
   readonly c: Client;
   readonly dir: string;
 }
 
-/** A device on its own directory, connected. */
+/**
+ * A new device on its own directory, paired and connected.
+ *
+ * It joins the vault the way a person's device does: an invite minted by
+ * `trew invite` through the running server, redeemed by `pairWithInvite`,
+ * which is the call both shells make (plan/protocol.md, "Invite redemption").
+ * The finished pairing is saved where the headless client keeps its own,
+ * `.trew/config.json`, so the suite's devices come to exist through the same
+ * code as everybody else's, and one that is restarted finds its credential
+ * where `trew sync` would.
+ */
 export async function device(
   server: TestServer,
   name: string,
@@ -35,15 +43,45 @@ export async function device(
 ): Promise<Device> {
   const dir = await mkdtemp(join(tmpdir(), `trew-stress-${name}-`));
   dirs.push(dir);
+  await pair(server, name, dir);
   return reopen(server, name, dir, open);
+}
+
+/**
+ * Pairs `dir` as the device `name`, with a fresh invite from `server`.
+ *
+ * The pending pairing is saved before the redemption is sent and replaced by
+ * the finished one on `redeemed`, as `pairWithInvite` does for the shells. A
+ * refusal removes it, and one whose answer never came stays a pending pairing,
+ * which `credentialsFor` refuses, so nothing a failed pairing leaves behind can
+ * pass for a device when `reopen` reads it.
+ */
+export async function pair(server: TestServer, name: string, dir: string): Promise<DeviceConfig> {
+  const pending = startPairing(parseInvite(await server.invite()), name);
+  return pairWithInvite(
+    pending,
+    {
+      save: (config) => saveConfig(dir, config),
+      forget: async () => {
+        await rm(configPath(dir), { force: true });
+      },
+    },
+    { timeoutMs: 15_000 },
+  );
 }
 
 /**
  * The same device again, as a new process would find it.
  *
  * A killed client does not resume; it starts over against the directory it
- * left behind, with whatever its index last managed to write. Reconnecting the
- * old object would test a reconnection nobody performs.
+ * left behind: the pairing it saved there, and whatever its index last managed
+ * to write. Reconnecting the old object would test a reconnection nobody
+ * performs.
+ *
+ * With the credential it saved, read back from the disk, and never a new one.
+ * The harness used to register a fresh device on every reopen, which no
+ * restarted process does: a real one reconnects as the row it already is, and
+ * that is the hello a restart after a crash has to survive.
  */
 export async function reopen(
   server: TestServer,
@@ -51,13 +89,22 @@ export async function reopen(
   dir: string,
   open: Client[],
 ): Promise<Device> {
+  const config = await loadConfig(dir);
+  if (config === undefined) {
+    throw new Error(`${dir} holds no pairing, so there is no device to reopen there`);
+  }
+  // A pairing for another name or another server is a harness fault, and
+  // connecting with it anyway would test a device the caller did not name.
+  if (config.device !== name || config.url !== server.wsUrl) {
+    throw new Error(
+      `${dir} is paired as ${config.device} with ${config.url}, ` +
+        `not as ${name} with ${server.wsUrl}`,
+    );
+  }
   const c = new Client({
     vault: new NodeVault(dir),
-    store: new JsonIndexStore(join(dir, ".trew", "index.json")),
-    url: server.wsUrl,
-    ...(await server.deviceCredentials(SUITE_SECRET, await testWrapped(SUITE_SECRET), name)),
-    vaultId: "default",
-    device: name,
+    store: new JsonIndexStore(indexPath(dir)),
+    ...credentialsFor(config),
     timeoutMs: 120_000,
     coalesceWrites: false,
   });
@@ -113,7 +160,7 @@ export async function fingerprint(dir: string): Promise<Map<string, string>> {
         // differently here. Only the constructor copies.
         //
         // The vault does the same thing for the same reason, and `toBuffer` in
-        // crypto.ts is the third place this hazard has had to be handled.
+        // digest.ts is the third place this hazard has had to be handled.
         const bytes = new Uint8Array(await readFile(join(at, item.name)));
         const digest = await crypto.subtle.digest("SHA-256", bytes.buffer as ArrayBuffer);
         out.set(path, Buffer.from(digest).toString("hex"));
@@ -145,6 +192,9 @@ export async function settle(devices: Device[], rounds = 6): Promise<void> {
 
 export async function tidy(open: Client[], dirs: string[], server?: TestServer): Promise<void> {
   while (open.length) open.pop()!.close();
+  // Stopped before any directory goes, because one of them may be the one it
+  // is serving: a restore points a server at a backup made in a test's dirs.
+  if (server) await server.stop();
   while (dirs.length) await removeTree(dirs.pop()!);
   if (server) await server.cleanup();
 }

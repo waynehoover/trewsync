@@ -263,3 +263,51 @@ describe("what a pass changed", () => {
     expect(JSON.stringify(s), "applyDelta mutated its argument").toBe(frozen);
   });
 });
+
+/**
+ * The store epoch the cursor was read under (PLAN.md section 2.8), which
+ * travels beside the cursor. A cursor replayed without the epoch it belongs to
+ * is a cursor into a history the server may since have replaced, and the
+ * hello would then continue from it instead of replaying the vault.
+ */
+describe("the store epoch beside the cursor", () => {
+  it("is carried by a delta only when it changed", () => {
+    const s = state({ cursor: 3, epoch: "one" });
+    expect(deltaBetween(s, { ...s }), "an unchanged epoch was written again").toBeUndefined();
+    expect(deltaBetween(state({ cursor: 3 }), s)).toEqual({ epoch: "one" });
+    expect(deltaBetween(s, state({ cursor: 0, epoch: "two" }))).toEqual({
+      cursor: 0,
+      epoch: "two",
+    });
+    expect(deltaBetween(s, state({ cursor: 4, epoch: "one" }))).toEqual({ cursor: 4 });
+    // Never as a removal: an epoch is only ever replaced, and an index that
+    // had one and has none is not a state the engine writes.
+    expect(deltaBetween(s, state({ cursor: 3 }))).toBeUndefined();
+  });
+
+  it("survives a replay, and an absent one stays absent", () => {
+    const replaced = replay(base(), encodeRecord(1, { cursor: 0, epoch: "restored" }));
+    expect(replaced.state).toMatchObject({ cursor: 0, epoch: "restored" });
+
+    const plain = replay(base(), encodeRecord(1, { cursor: 6 }));
+    expect("epoch" in plain.state, "a replay invented an epoch").toBe(false);
+
+    // A later record that says nothing about it leaves it as it was.
+    const kept = replay(
+      base(),
+      log(encodeRecord(1, { epoch: "e" }), encodeRecord(2, { cursor: 9 })),
+    );
+    expect(kept.state).toMatchObject({ cursor: 9, epoch: "e" });
+  });
+
+  it("survives a round trip through the log with everything else a pass changed", () => {
+    const before = state({ cursor: 5, epoch: "old" });
+    const after = state({
+      cursor: 1,
+      epoch: "new",
+      entries: { "two.md": entry("two.md", 7) },
+    });
+    const out = replay({ state: before, seq: 0 }, encodeRecord(1, deltaBetween(before, after)!));
+    expect(out.state, "a delta did not carry the epoch with the rest").toEqual(after);
+  });
+});

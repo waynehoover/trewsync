@@ -108,6 +108,11 @@
   align-items: center;
 }
 
+/* Windows and iOS only: the platform's standing, beside the glyph, always. */
+.status-bar-item.plugin-trew-sync .trew-status-platform {
+  margin-inline-start: var(--size-2-2);
+}
+
 .status-bar-item.plugin-trew-sync.trew-attention,
 .trew-sync-ribbon.trew-attention {
   color: var(--text-error);
@@ -121,33 +126,6 @@
   to {
     transform: rotate(360deg);
   }
-}
-
-/* A recovery key or an invite: shown precisely so it can be taken off this
- * device, which means it has to be selectable, and it was not.
- *
- * Obsidian turns selection off across its own UI, so this inherited it: on a
- * phone a long press on the key did nothing, and there was no second screen to
- * read it from and no keyboard worth transcribing sixty characters on. The Copy
- * button beside it is the first answer and this is the second, because a
- * clipboard is not always there and `copyToClipboard`'s fallback tells somebody
- * to copy it by hand.
- *
- * Monospace and boxed because these are strings to be compared character by
- * character, and `overflow-wrap: anywhere` because a key is one long word that
- * would otherwise push the modal sideways on a narrow screen. */
-.trew-pairing {
-  display: block;
-  user-select: text;
-  -webkit-user-select: text;
-  font-family: var(--font-monospace);
-  font-size: var(--font-ui-small);
-  overflow-wrap: anywhere;
-  margin: 8px 0;
-  padding: 8px 10px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 4px;
-  background: var(--background-secondary);
 }
 
 /* Rows and groups use Obsidian's own settings layout in both hosts. */
@@ -172,8 +150,7 @@
   overflow-wrap: anywhere;
 }
 
-.trew-panel .setting-items > .trew-advice,
-.trew-panel .setting-items > .trew-pairing {
+.trew-panel .setting-items > .trew-advice {
   margin-inline: var(--size-4-5);
 }
 
@@ -209,13 +186,15 @@
 
 .trew-add-device,
 .trew-server,
-.trew-manage {
+.trew-manage,
+.trew-more-options {
   margin-top: var(--size-4-4);
 }
 
 .trew-add-device > summary,
 .trew-server > summary,
-.trew-manage > summary {
+.trew-manage > summary,
+.trew-more-options > summary {
   cursor: pointer;
   color: var(--text-muted);
   font-size: var(--font-ui-small);
@@ -409,7 +388,8 @@
 
   .trew-add-device,
   .trew-server,
-  .trew-manage {
+  .trew-manage,
+  .trew-more-options {
     margin-top: var(--size-4-2);
   }
 

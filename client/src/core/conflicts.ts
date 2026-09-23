@@ -1,4 +1,4 @@
-import { plainDigest } from "./crypto.ts";
+import { plainDigest } from "./digest.ts";
 import { looksLikeText } from "./chunk.ts";
 import { conflictCopyPath } from "./merge.ts";
 import { firstFreeName } from "./paths.ts";

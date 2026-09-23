@@ -18,7 +18,7 @@ import (
 
 // The search oracle: mcp-fixtures.json records what Basalt's TypeScript
 // search returned, page by page, over small vaults (the generator is
-// client/src/cli/mcp-oracle.run.ts). internal/notes is held to it one page at
+// client/src/node/mcp-oracle.run.ts). internal/notes is held to it one page at
 // a time; here the whole tool is, over the store and the index. Page
 // boundaries differ where the index lets a page skip notes that cannot match,
 // so what must agree is everything the pages return between them: every

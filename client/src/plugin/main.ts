@@ -31,53 +31,51 @@ import {
 
 import {
   Client,
+  PairingInterrupted,
   SYNC_EVENT_DELAY_MS,
-  adviseAfterRegistering,
+  adviseAfterPairing,
   attentionLines,
+  isFatal,
   needsAttention,
+  pairWithInvite,
   rebaseCursors,
-  redeemInvite,
   refuseUnlessAhead,
-  registerAsDevice,
+  retryWait,
   whatTheDiskHolds,
   runForever,
   summarise,
   credentialsFor,
-  proveDeviceConnects,
   type ClientOptions,
   type DeletedList,
   type Deletion,
   type DeviceRow,
   type InviteRow,
+  type PairingRemains,
+  type PairingStore,
   type Version,
 } from "../core/client.ts";
 import { watchResume } from "./resume.ts";
 import { watchDelivery } from "./delivery.ts";
 import type { TransferActivity } from "../core/transfer.ts";
 import { describeTransfer } from "./transfer.ts";
+import { SUPPORT_TABLE, platformStanding } from "./platform-notice.ts";
 import { describeDelivery } from "../core/delivery.ts";
-import { generateSecret } from "../core/crypto.ts";
 import { REJOIN_ADVICE, type RepairReport, type SyncReport } from "../core/engine.ts";
 import {
   DEFAULT_VAULT,
-  INVITE_PREFIX,
-  PAIRING_PREFIX,
   decodeConfig,
   deviceCredential,
   encodeConfig,
-  formatPairing,
   isIgnorableName,
-  isInvite,
+  isPendingPairing,
   joinDestination,
   normaliseUrl,
   parseInvite,
-  parseSetup,
-  parsePairing,
+  startPairing,
   type DeviceConfig,
-  type Invite,
+  type PendingPairing,
 } from "../core/pairing.ts";
-import { rotateVault } from "../core/rotation.ts";
-import { ProtocolError } from "../core/transport.ts";
+import { Backoff, ProtocolError, Transport } from "../core/transport.ts";
 import { DISPLACED_LOG, type Displaced, type Inventory } from "../core/displaced.ts";
 import { firstFreeName } from "../core/paths.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
@@ -86,9 +84,26 @@ import type { JournalSaveCost, JournalStoreOptions } from "../core/index-journal
 import { INVITE_ACTION, inviteQrImage } from "./invite-qr.ts";
 import { checkFirstSync, MergeConfirmationRequired } from "./first-sync.ts";
 
+/**
+ * Where the plugin's running commentary goes: the developer console, at the
+ * level Obsidian's directory asks plugins to keep it at. The panel and the
+ * notices carry everything a person has to act on; this is for the one
+ * attaching a debugger.
+ */
+const log = (message: string, ...rest: unknown[]): void => console.debug("Trew:", message, ...rest);
+
 /** What the status bar is saying, which is also what the modal shows. */
 export type State =
   | { kind: "unpaired" }
+  /**
+   * A pairing whose redemption went out and has not been answered
+   * (plan/protocol.md, "Invite redemption"). Not paired and not unpaired: the
+   * credential is saved and whether the server registered it is what is not
+   * yet known, so it is finished rather than started over. `retryAt` is set
+   * while it waits after an attempt that got no answer, and `why` says what
+   * that attempt ran into.
+   */
+  | { kind: "pairing"; why?: string; retryAt?: number }
   | { kind: "connecting" }
   | { kind: "loading"; local: number; server: number }
   /**
@@ -189,7 +204,7 @@ export default class TrewPlugin extends Plugin {
    * The client of the current run from the moment it exists, connected or
    * not. `client` is set only once the handshake has succeeded, and a vault
    * unlinked during a slow handshake had no handle on the connection being
-   * made with its old secret. This is that handle.
+   * made with its old credential. This is that handle.
    */
   private live: Client | undefined;
   /**
@@ -236,15 +251,23 @@ export default class TrewPlugin extends Plugin {
    *
    * Rule 2: an unreadable config is not an unpaired vault. The panel used to
    * branch on `paired` alone and offer the pairing form over a file it could
-   * not read, and pairing writes new credentials over the old ones, after
-   * which the device row this vault already has is stranded and, if the string
-   * belonged to another vault, nothing on the server can be decrypted here.
+   * not read, and pairing writes a new credential over the old one, after
+   * which the device row this vault already has is stranded: the file may
+   * hold the only copy of that row's token.
    */
   private unreadable: string | undefined;
   /** Whether this pairing has ever completed a handshake since the plugin loaded. */
   private everConnected = false;
   /** The pairing in progress, so a second press cannot start another. */
   private pairing: Promise<unknown> | undefined;
+  /**
+   * Why the last pairing did not finish, while the panel is offering another.
+   *
+   * A pairing refused while it was being finished in the background has
+   * nobody waiting on it to tell: the panel is where the reason goes, above
+   * the form that tries again, and a notice says it once.
+   */
+  private failedPairing: string | undefined;
   /** What the notices have already said, so they say it once. */
   private announced = { attention: "", waiting: "", unknown: "" };
   /** What `onunload` started and could not wait for, for anything that can. */
@@ -376,13 +399,16 @@ export default class TrewPlugin extends Plugin {
     // A block rather than an early return, because returning would skip the
     // vault event registration below and leave an older Obsidian syncing
     // only on the timer. The first version of this guard did exactly that.
+    // eslint-disable-next-line obsidianmd/no-unsupported-api -- the typeof feature detection itself
     if (typeof this.registerCliHandler === "function") {
+      // eslint-disable-next-line obsidianmd/no-unsupported-api -- feature-detected with typeof above
       this.registerCliHandler(
         "trew:history",
         "List Trew version history for a note",
         { path: { value: "<path>", description: "Vault path" } },
         async (flags) => this.cliHistory(String(flags["path"] ?? "")),
       );
+      // eslint-disable-next-line obsidianmd/no-unsupported-api -- feature-detected with typeof above
       this.registerCliHandler(
         "trew:restore",
         "Restore a Trew version",
@@ -437,21 +463,28 @@ export default class TrewPlugin extends Plugin {
       this.config = await this.readConfig();
     } catch (err) {
       // Rule 2: an unreadable config is not an unpaired vault. Starting
-      // over would generate a new root secret and make everything already
-      // on the server undecryptable here.
+      // over would write a new credential over one that may be the only
+      // copy of a live row's token.
       this.unreadable = (err as Error).message;
       this.setState({ kind: "stopped", why: this.unreadable });
       new Notice(`Trew: ${this.unreadable}`, 10_000);
     }
 
+    // A link opens the form, filled in, and never pairs by itself: the panel
+    // shows where the invite points and nothing changes until somebody
+    // presses Pair. Anybody who can put a link in front of somebody can send
+    // one of these, which is the reason (plan/research/README.md section 5).
     this.registerObsidianProtocolHandler(INVITE_ACTION, (params) => {
       try {
         this.refuseUnlessPairable();
         const invite = params["invite"]?.trim() ?? "";
         try {
           parseInvite(invite);
-        } catch {
-          throw new Error("This invite link is invalid. Create a new invite on the other device.");
+        } catch (err) {
+          throw new Error(
+            `This invite link is invalid: ${(err as Error).message}. Create a new invite on a ` +
+              `paired device, or with trew invite on the server.`,
+          );
         }
         new TrewModal(this, invite).open();
       } catch (err) {
@@ -460,6 +493,8 @@ export default class TrewPlugin extends Plugin {
     });
 
     if (this.unreadable !== undefined) return;
+    // A pending pairing starts too: the run loop finishes it before anything
+    // connects as the device it names.
     if (this.config) this.start();
     else this.setState({ kind: "unpaired" });
   }
@@ -722,8 +757,8 @@ export default class TrewPlugin extends Plugin {
     // Every run is numbered, and only the newest one may speak. A single
     // boolean was not enough: unlinking cleared it, pairing again set it,
     // and the *previous* run woke from its backoff, read the new run's
-    // flag, and carried on with the old vault's secret. It reconnected,
-    // failed authentication, and its refusal put "Trew has stopped: not
+    // flag, and carried on with the old pairing's credential. It
+    // reconnected, was refused, and its refusal put "Trew has stopped: not
     // authorised for this vault" on screen while the real client was
     // syncing perfectly well behind it.
     const mine = ++this.generation;
@@ -769,23 +804,33 @@ export default class TrewPlugin extends Plugin {
   }
 
   /**
-   * Checks there is something to connect with, then runs the loop.
+   * Finishes a pairing that is still pending, checks there is something to
+   * connect with, then runs the loop.
    *
    * There is one credential and no list of candidates to try. A paired device
    * holds one credential for one row, and either it opens the vault or nothing
    * on this phone does. Trying a second would mean a device with a way in that
    * revoking the first cannot close.
    *
-   * So the check in front of the loop is not a step that can be resumed, it is
-   * a refusal. A config that holds no credential is one a pairing left behind
-   * unfinished, and there is nothing this can do about it that a person cannot
-   * see: it stops with `deviceCredential`'s words, which name what is missing
-   * and, if the vault's root is still here, print the recovery key so the vault
-   * can be paired again rather than lost. Retrying it forever instead would sit
-   * there saying "connecting" about a connection nothing was going to make.
+   * A pending pairing is not that check failing: it holds a credential, and
+   * whether the server registered it is what is not known yet, so it is
+   * finished first (`finishPairing`) and only then connected with.
+   *
+   * The check after that is not a step that can be resumed, it is a refusal.
+   * A config that holds no credential is one nothing here wrote, and there is
+   * nothing this can do about it that a person cannot see: it stops with
+   * `deviceCredential`'s words, which name what is missing and say to pair
+   * again with an invite. Retrying it forever instead would sit there saying
+   * "connecting" about a connection nothing was going to make
+   * (plan/research/basalt-lessons.md section 6, item 7).
    */
   private async runLoop(config: DeviceConfig, mine: number): Promise<void> {
     const current = () => mine === this.generation;
+    if (isPendingPairing(config)) {
+      const finished = await this.finishPairing(config, mine);
+      if (finished === undefined || !current()) return;
+      config = finished;
+    }
     try {
       deviceCredential(config);
     } catch (err) {
@@ -795,6 +840,121 @@ export default class TrewPlugin extends Plugin {
     const refusal = await this.runOnce(config, mine);
     if (!current() || refusal === undefined) return;
     this.stop(refusal);
+  }
+
+  /**
+   * Finishes a pairing whose redemption went out and heard nothing, in the
+   * background and with backoff (plan/protocol.md, "Invite redemption").
+   *
+   * Calling `pairWithInvite` again with the saved pending pairing is the
+   * retry: the same device id and token, which the server answers `redeemed`
+   * again if it registered them, even after the invite has expired. What each
+   * outcome leaves:
+   *
+   *  - **`redeemed`**: the finished device is saved in place of the pending
+   *    pairing, read back (rule 4), and returned for the loop to connect with.
+   *  - **a refusal**, anything the server says trying again cannot change: the
+   *    server registered nothing under this credential, so the pending pairing
+   *    is removed, proven gone, and the panel says why and offers pairing
+   *    again (`dropRefusedPairing`).
+   *  - **anything else** is kept and tried again after a wait: no answer, a
+   *    retryable refusal such as `busy`, or a server that could not be reached
+   *    at all. That last one is the difference from a first attempt, which
+   *    `pairWithInvite` forgets when nothing was sent: a pending pairing on
+   *    disk is one whose redemption went out in some earlier attempt, and it
+   *    may have committed. Forgetting it because the server is not reachable
+   *    *now* would throw away the only copy of a registered row's token. So the
+   *    store handed over here does not forget, and this decides instead.
+   *
+   * Resolves undefined when the pairing was refused, or when this run was
+   * retired (unlink, unload, pause), which the backoff wait wakes for.
+   */
+  private async finishPairing(
+    pending: PendingPairing,
+    mine: number,
+  ): Promise<DeviceConfig | undefined> {
+    const current = () => this.running && mine === this.generation;
+    const backoff = new Backoff();
+    const store: PairingStore = {
+      save: (config) => this.saveDuringRun(mine, config),
+      // Decided below, by what the refusal was. See the comment above.
+      forget: async () => {},
+    };
+    while (current()) {
+      this.setState({ kind: "pairing" });
+      try {
+        const device = await pairWithInvite(pending, store, { log });
+        if (!current()) return undefined;
+        this.config = device;
+        this.failedPairing = undefined;
+        return device;
+      } catch (err) {
+        if (!current()) return undefined;
+        const error = err instanceof Error ? err : new Error(String(err));
+        if (isFatal(error)) {
+          await this.dropRefusedPairing(error, mine);
+          return undefined;
+        }
+        backoff.fail();
+        const wait = retryWait(error, backoff.delay());
+        this.setState({ kind: "pairing", why: error.message, retryAt: Date.now() + wait });
+        await this.backoffWait(wait, mine);
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Waits out a backoff, unless the run is retired or somebody asks sooner.
+   *
+   * The same handle the reconnect loop uses (I05): `quiet`, `onunload` and a
+   * pause wake it into a decision to stop, and Sync now wakes it into another
+   * attempt.
+   */
+  private backoffWait(ms: number, mine: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const wake = () => {
+        clearTimeout(timer);
+        if (this.wakeLoop === wake) this.wakeLoop = undefined;
+        resolve();
+      };
+      timer = setTimeout(wake, ms);
+      if (mine === this.generation) this.wakeLoop = wake;
+    });
+  }
+
+  /**
+   * Removes a pending pairing the server refused for good, and says why.
+   *
+   * Nothing is left saved after a refusal (plan/protocol.md, "Invite
+   * redemption"): a refusal writes nothing on the server, so the credential
+   * saved here opens nothing, and a config holding it would be finished again
+   * on every load only to be refused again. Removed through the same guarded
+   * writer every pairing save goes through, and read back.
+   */
+  private async dropRefusedPairing(refusal: Error, mine: number): Promise<void> {
+    try {
+      await this.forgetDuringRun(mine);
+    } catch (err) {
+      if (mine !== this.generation) return;
+      // Kept on disk, and the next load will be refused the same way. Stopped
+      // rather than unpaired, because the pairing form would write over it.
+      this.setState({
+        kind: "stopped",
+        why:
+          `the pairing was refused (${refusal.message}), and the pairing saved in ` +
+          `${this.dataPath} could not be removed: ${(err as Error).message}`,
+      });
+      return;
+    }
+    if (mine !== this.generation) return;
+    this.config = undefined;
+    this.failedPairing =
+      `The pairing could not be finished: ${refusal.message}. ` +
+      adviseAfterPairing({ remains: { kind: "nothing" }, surface: "panel", where: this.dataPath });
+    this.setState({ kind: "unpaired" });
+    new Notice(`Trew: ${this.failedPairing}`, 20_000);
   }
 
   /** One `runForever`, resolving with the refusal that ended it, if one did. */
@@ -814,11 +974,9 @@ export default class TrewPlugin extends Plugin {
         if (!client) return;
         this.everConnected = true;
         this.setState({ kind: "syncing", since: Date.now() });
-        // Nothing to write back. A connection used to settle which of several
-        // credentials had opened the vault, whether the first-run token was
-        // spent and what the vault's wrapped data key was; all three are
-        // settled by the registration that made this device, before it ever
-        // connects, and a connection now proves only what it says it proves.
+        // Nothing to write back. The pairing that made this device settled
+        // everything about its credential before it ever connected, and a
+        // connection proves only what it says it proves.
       },
       onDisconnected: (cause, retryIn) => {
         if (!current()) return;
@@ -884,7 +1042,8 @@ export default class TrewPlugin extends Plugin {
         : this.everConnected
           ? `Trew has stopped: ${cause.message}`
           : `Trew could not join this vault: ${cause.message}. ` +
-            `If the pairing string or setup string was wrong, unlink this vault from the Trew panel and pair again.`,
+            `If the invite was for another vault, or this device was revoked, unlink this vault ` +
+            `from the Trew panel and pair it again with a new invite.`,
       0,
     );
   }
@@ -932,7 +1091,6 @@ export default class TrewPlugin extends Plugin {
   private async clientOptions(config: DeviceConfig, mine: number): Promise<ClientOptions> {
     const current = () => mine === this.generation;
     const configDir = this.app.vault.configDir;
-    const log = (message: string, ...rest: unknown[]) => console.info("Trew:", message, ...rest);
     // Held, because the pass callbacks below read what it stranded. The report
     // cannot carry that: a displaced version is something the adapter did, and
     // the engine is told only that a path was kept.
@@ -962,9 +1120,12 @@ export default class TrewPlugin extends Plugin {
             }
           : {},
       ),
-      // Which key authenticates and what the vault is bound to, worked out in
-      // core so that both shells cannot answer it differently.
-      ...(await credentialsFor(config)),
+      // Which row this device connects as and which token proves it, worked
+      // out in core so that both shells cannot answer it differently.
+      ...credentialsFor(config),
+      // A name Windows cannot hold arrives as a stranded path with its reason
+      // rather than as a write that fails for ever (PLAN.md section 4.12).
+      ...(Platform.isWin ? { windows: true } : {}),
       confirmFirstSync: (preview) => this.confirmSync(preview, "Review your first sync", current),
       confirmDeletions: (preview) => this.confirmSync(preview, "Review folder deletions", current),
       onActivity: (event) => {
@@ -1229,8 +1390,8 @@ export default class TrewPlugin extends Plugin {
         throw new Error("the pairing changed while renaming this device");
       this.config = { ...config, device: said };
 
-      // `quiet` and then `start`, which is what rotate and rebase do and for a
-      // related reason: a run that is merely disconnected reconnects, and a pass
+      // `quiet` and then `start`, which is what rebase does and for a related
+      // reason: a run that is merely disconnected reconnects, and a pass
       // in flight is still writing under the old name. `stop` is not the way to
       // do this, because it puts "Trew has stopped" and a cause on screen, and
       // nothing here has gone wrong.
@@ -1255,9 +1416,9 @@ export default class TrewPlugin extends Plugin {
       let mine = this.generation;
       const stillCurrent = () => mine === this.generation && this.config === config;
 
-      // Authenticate with the existing device credential. This connection applies
+      // Connect with the existing device credential. This connection applies
       // no changes, so an incorrect address cannot replace the pairing or index.
-      await proveDeviceConnects(next, { timeoutMs: 15_000 });
+      await proveConnects(next, 15_000);
       if (!stillCurrent()) throw new Error("the pairing changed while checking the server address");
 
       mine++;
@@ -1312,7 +1473,7 @@ export default class TrewPlugin extends Plugin {
     this.editingConnection = true;
     try {
       const config = this.config;
-      if (!config) throw new Error("this vault is not paired yet.");
+      if (!config || !this.paired) throw new Error("this vault is not paired yet.");
       const wanted = [...new Set(names.map((name) => name.trim()))].filter((name) =>
         isIgnorableName(name),
       );
@@ -1386,6 +1547,19 @@ export default class TrewPlugin extends Plugin {
         new Notice("Trew: reconnecting…");
         return;
       }
+      // The same for a pairing waiting out its backoff: somebody who has just
+      // fixed the network should not have to wait five minutes to find out.
+      if (
+        this.running &&
+        this.state.kind === "pairing" &&
+        this.state.retryAt !== undefined &&
+        this.wakeLoop
+      ) {
+        this.setState({ kind: "pairing" });
+        this.wakeLoop();
+        new Notice("Trew: trying to finish the pairing again…");
+        return;
+      }
       new Notice(`Trew: ${this.whyNoClient()}`);
       return;
     }
@@ -1448,6 +1622,8 @@ export default class TrewPlugin extends Plugin {
         return "still connecting to the server.";
       case "loading":
         return "loading sync history. Keep Obsidian open; your notes will sync next.";
+      case "pairing":
+        return "this vault's pairing has not finished yet. Trew is finishing it and will sync once it has.";
       case "unpaired":
         return "this vault is not paired yet.";
       default:
@@ -1560,11 +1736,13 @@ export default class TrewPlugin extends Plugin {
   /**
    * Whether a pairing may be made now, and if not, why not.
    *
-   * Re-pairing would replace the root secret, and everything already on the
-   * server would stop being decryptable here. That holds for a config that
-   * is there and for one that is there but unreadable, and it holds while a
-   * pairing is still being made: two presses of the button used to make two
-   * secrets, the second winning on disk while the first was the one running.
+   * Pairing again would write a new credential over the one this vault holds,
+   * and that credential may be the only copy of a live row's token. That holds
+   * for a config that is there, for one that is there but unreadable, for a
+   * pairing still being finished in the background, and while a pairing is
+   * being made from the panel: two presses of the button used to make two
+   * credentials, the second winning on disk while the first was the one
+   * running.
    */
   private refuseUnlessPairable(): void {
     if (this.unlinking) throw new Error("This vault is being unlinked.");
@@ -1574,11 +1752,13 @@ export default class TrewPlugin extends Plugin {
           `and pairing over them would replace the credential they hold. Fix or move that file, then reload the plugin.`,
       );
     }
+    if (this.pendingPairing !== undefined) {
+      throw new Error(
+        "this vault has a pairing that is still being finished. Wait for it, or unlink this " +
+          "vault in the Trew panel to give it up and pair again.",
+      );
+    }
     if (this.paired) throw new Error("this vault is already paired");
-    // A config holding only a root is a first pairing that was abandoned
-    // before it claimed anything. Pairing again is the way out of it, and it
-    // costs nothing: no vault was made, no device row exists, and the key that
-    // config holds opens nothing anybody has.
     if (this.pairing) throw new Error("a pairing is already in progress");
   }
 
@@ -1595,33 +1775,48 @@ export default class TrewPlugin extends Plugin {
   }
 
   /**
-   * Adds this vault to one that already exists, with an invite or with the
-   * vault's recovery key.
+   * Where a pairing's progress is kept: this plugin's data.json, through the
+   * guarded writer every config save goes through.
    *
-   * An invite is the ordinary way and the recovery key is the last resort.
-   * Both end with this device holding a row of its own, the credential for it
-   * and the vault's data key, and no root, which is what makes revoking this
+   * `save` writes and reads back (rule 4), and refuses once this run has been
+   * retired, so an unlink or an unload cannot be overtaken by a pairing still
+   * in flight (R10). `forget` removes the saved config and reads the file back
+   * to prove it gone.
+   */
+  private pairingStore(mine: number): PairingStore {
+    return {
+      save: (config) => this.saveDuringRun(mine, config),
+      forget: () => this.forgetDuringRun(mine),
+    };
+  }
+
+  /**
+   * Joins a vault by redeeming an invite.
+   *
+   * Every device pairs this way, the first one included: `trew serve` writes
+   * the first device's invite to `first-invite` in its data folder, `trew
+   * invite` on the server makes more, and a paired device's panel mints them
+   * over the wire. What comes back is this device's own row and the token for
+   * it, and nothing else that authenticates, which is what makes revoking this
    * phone on its own mean anything.
    *
-   * An **invite** is spent by the very exchange that registers this device, so
-   * there is nothing to save until the server has answered and everything to
-   * save the moment it has. A failure before the reply leaves this vault
-   * unpaired and one row on the server that nobody holds the key to, which is
-   * visible in the device list as a device that has never connected; the other
-   * ordering strands this phone instead. See `redeemInvite`.
+   * The order is `pairWithInvite`'s (plan/protocol.md, "Invite redemption"):
+   * the pending pairing, with the id and token this device will connect as,
+   * is saved and read back before anything is sent. So:
    *
-   * A **recovery key** buys a registrar session, which may register a device
-   * and may not sync, so that path is register-then-save and nothing is
-   * written until the row exists. The key was pasted in a moment ago, so there
-   * is nothing on this phone yet worth keeping and a key the vault does not
-   * know should leave it exactly as unpaired as it was found. The registration
-   * is *awaited*, so the server has answered before this reports a paired
-   * vault: a wrong address or a wrong key used to be saved and announced as
-   * paired, and the first sign of it was a status bar saying stopped, later
-   * (I13). See `registerAsDevice`.
+   *  - a server that cannot be reached, or one that refuses, leaves nothing
+   *    saved and the vault as unpaired as it was;
+   *  - a redemption that went out and heard nothing leaves the pending pairing
+   *    on disk, and the run loop finishes it with the same credential, which
+   *    the server answers `redeemed` again if it did register it;
+   *  - `redeemed` replaces it with the finished device, and the loop starts.
+   *
+   * The files already in this vault are checked first, before anything is
+   * saved or sent, because an invite is spent by the redemption and combining
+   * a populated vault is a choice somebody makes (`checkFirstSync`).
    */
   async pair(
-    pairingString: string,
+    inviteText: string,
     device: string,
     mergeConfirmed = false,
     /**
@@ -1639,73 +1834,26 @@ export default class TrewPlugin extends Plugin {
       const name = deviceName(device);
       const skip = [...new Set(ignore.map((n) => n.trim()))].filter(isIgnorableName).sort();
       const mine = this.generation;
-      const invite = isInvite(pairingString) ? parseInvite(pairingString) : undefined;
-      const pairing = invite === undefined ? parsePairing(pairingString) : undefined;
+      // Read before anything else is looked at, so a string that is not an
+      // invite, a Basalt string among them, is refused in its own words.
+      const invite = parseInvite(inviteText);
       await checkFirstSync(this.app.vault.adapter, this.app.vault.configDir, mergeConfirmed);
       if (mine !== this.generation)
         throw new Error("Pairing was cancelled while checking local files.");
-      if (invite !== undefined) return await this.pairWithInvite(invite, name, skip);
-      let registered = false;
+      this.failedPairing = undefined;
+      const pending = startPairing(invite, name, skip.length > 0 ? { ignore: skip } : {});
       let paired: DeviceConfig;
       try {
-        paired = await registerAsDevice(
-          {
-            url: pairing!.url,
-            vaultId: pairing!.vaultId,
-            device: name,
-            secret: pairing!.secret,
-            ...(skip.length > 0 ? { ignore: skip } : {}),
-          },
-          (next) => this.saveDuringRun(mine, next),
-          {
-            onRegistered: () => {
-              registered = true;
-            },
-            log: (message, ...rest) => console.info("Trew:", message, ...rest),
-          },
-        );
+        paired = await pairWithInvite(pending, this.pairingStore(mine), { log });
       } catch (err) {
-        if (!registered) throw err;
-        // Registered, and then what the disk says rather than which step threw
-        // (rule 4), through the counsellor the CLI's `init` and `pair` use.
-        // The `.catch(() => undefined)` this read it with is what that
-        // replaces: it made an unreadable data.json look like an absent one,
-        // so a save that succeeded with a read-back that then failed was told
-        // to revoke a row it was itself holding the key to.
-        const remains = await whatTheDiskHolds(() => this.readConfig());
-        // Guarded, because reading the disk is itself an await (R10). A
-        // pairing that was retired while this was asking is one `unlink` has
-        // waited for and is about to remove, and starting a loop on what it
-        // finds would put the pairing back on a vault somebody has just
-        // unlinked. The credential on the server is real either way, and the
-        // message below names it.
-        if (remains.kind === "credential" && mine === this.generation) {
-          // The row is real and this phone holds the only copy of its
-          // credential, so what was written stays and the panel says as much
-          // rather than looking unpaired.
-          this.config = remains.config;
-          this.start();
-        }
-        throw new Error(
-          `${(err as Error).message}. ` +
-            adviseAfterRegistering({
-              remains,
-              registered,
-              surface: "panel",
-              where: this.dataPath,
-            }),
-        );
+        throw await this.pairingDidNotFinish(err as Error, mine);
       }
-      // The same guard the invite branch has, and for the same reason (R10).
-      // `registerAsDevice` is a round trip and a save; a vault unlinked while
-      // it was in flight must not be started again from the credential it
-      // produced. The row on the server is real, so this says so rather than
-      // pretending the registration did not happen.
+      // Checked again after the save, because the save is itself an await: a
+      // config that landed for a retired run is one `unlink` has waited for
+      // and is about to remove, and starting a loop on it would put the
+      // pairing back (F23, R10).
       if (mine !== this.generation) {
-        throw new Error(
-          "this vault was unlinked while it was being paired. The device row it registered is " +
-            "on the server; remove it with trew revoke, or pair again.",
-        );
+        throw this.retiredPairing(await whatTheDiskHolds(() => this.readConfig()));
       }
       this.config = paired;
       this.start();
@@ -1713,223 +1861,70 @@ export default class TrewPlugin extends Plugin {
   }
 
   /**
-   * The invite half of pairing: redeem, save, start.
+   * What a pairing that did not finish leaves, and the error that says so.
    *
-   * The redemption is the registration, so what comes back is a finished
-   * device: this config never holds a root, at any point.
+   * Answered from what the disk holds rather than from which step threw (rule
+   * 4), through the counsellor `trew pair` takes its words from too:
    *
-   * Saved and read back before the run starts, because at the moment the reply
-   * lands the only copy of the data key on this phone is in memory and the
-   * invite that carried it is already spent (rule 4).
+   *  - **pending**: the redemption went out and heard nothing, so the pairing
+   *    is kept and the run loop finishes it with the same credential.
+   *  - **credential**: the finished device reached the disk and a step after
+   *    it failed; the row is real and this is its only token, so it is kept
+   *    and started.
+   *  - **unreadable**: nothing is known, and the file may hold the only copy
+   *    of a registered row's token, so the plugin stops and refuses to pair
+   *    over it, exactly as it does for a data.json it cannot read at load
+   *    (rule 2).
+   *  - **nothing**: refused, or the server was never reached. Nothing is
+   *    saved, the invite was not spent by this attempt, and the panel says so
+   *    above the form that tries again.
+   *
+   * Nothing is started or stopped for a run that has been retired while this
+   * was asking the disk: `unlink` has waited for it and is about to remove
+   * what it finds (R10). What it says then is `retiredPairing`'s, because an
+   * empty disk after an unlink is not evidence that nothing was registered.
    */
-  private async pairWithInvite(
-    invite: Invite,
-    name: string,
-    ignore: readonly string[] = [],
-  ): Promise<void> {
-    // The generation this pairing belongs to, taken before the network (F23).
-    //
-    // Redeeming is a round trip, and the plugin can be unloaded, unlinked or
-    // paired again while it is in flight. This wrote its config and started a
-    // sync loop unconditionally when it came back, so completing after an
-    // unload revived a plugin that had been retired: a save, a client, and a
-    // ticker belonging to nothing. The root registration path next door has
-    // used `saveDuringRun` for this since it was written; this one reached
-    // straight for `saveVerified`.
-    const mine = this.generation;
-    const redeemed = await redeemInvite(invite, name, {
-      log: (message, ...rest) => console.info("Trew:", message, ...rest),
-    });
-    const config: DeviceConfig = {
-      url: invite.url,
-      vaultId: invite.vaultId,
-      device: name,
-      deviceId: redeemed.deviceId,
-      deviceSecret: redeemed.deviceSecret,
-      dataKey: redeemed.dataKey,
-      // Written with the pairing, so the first pass already skips them and
-      // nothing is downloaded that this device was never going to keep.
-      ...(ignore.length > 0 ? { ignore } : {}),
-    };
-    // Refuses once this run has been retired, and is registered where
-    // `unlink` waits for it, which is the pair of guarantees the two halves
-    // of `saveDuringRun` exist for.
-    await this.saveDuringRun(mine, config);
-    // Checked again after the save, because the save is itself an await: a
-    // config that landed for a retired run is one `unlink` has waited for and
-    // is about to remove, and starting a loop on it would put the pairing
-    // back. The row on the server is real either way, and the panel's
-    // counsellor is what names it.
-    if (mine !== this.generation) {
-      throw new Error(
-        "this vault was unlinked while the invite was being redeemed. The device row it " +
-          "registered is on the server; remove it with trew revoke, or pair again.",
-      );
+  private async pairingDidNotFinish(err: Error, mine: number): Promise<Error> {
+    const remains = await whatTheDiskHolds(() => this.readConfig());
+    // A run retired while this was in flight, by an unlink or an unload, is
+    // answered in its own words: what the disk holds is what the retirement
+    // left, not what the server said.
+    if (mine !== this.generation) return this.retiredPairing(remains);
+    const advice = adviseAfterPairing({ remains, surface: "panel", where: this.dataPath });
+    if (remains.kind === "pending" || remains.kind === "credential") {
+      this.config = remains.config;
+      this.start();
+    } else if (remains.kind === "unreadable") {
+      this.unreadable = remains.why;
+      this.setState({
+        kind: "stopped",
+        why: `${this.dataPath} could not be read: ${remains.why}`,
+      });
+    } else {
+      this.failedPairing = `The pairing did not finish: ${err.message}. ${advice}`;
     }
-    this.config = config;
-    this.start();
+    // A lost reply says so itself, in words that already carry its cause; the
+    // counsellor's version of the same sentence would only repeat it.
+    if (err instanceof PairingInterrupted && remains.kind === "pending") {
+      return new Error(`${err.message} Trew is finishing it now, and keeps trying until it has.`);
+    }
+    return new Error(`${err.message}. ${advice}`);
   }
 
   /**
-   * Starts a new vault from the one line the server printed: `host:3003#TOKEN`.
+   * What a pairing retired under it says, from what the disk holds and
+   * whether an unlink is what retired it.
    *
-   * It used to be two fields, and the server printed one line, so the line
-   * had to be split by hand and nothing said so. Every device now pastes one
-   * thing; only the thing differs.
-   *
-   * The root is saved before anything is sent, because here the handshake is
-   * the claim: the server binds the vault to this device's key the moment it
-   * says hello, and a root secret that had claimed a server without being
-   * written down first is a vault nobody can ever open. That save is the only
-   * reason a config here ever holds a root, and the registration below
-   * replaces it with this device's own credential.
-   *
-   * The claim and the registration are awaited rather than left to `start`,
-   * so what comes back is a phone that has joined the vault or an error
-   * saying it has not. If the claim went through and the registration did not,
-   * the root is still on disk and every screen from here on prints the
-   * recovery key out of it: the vault is recoverable by pairing again with
-   * that key, which is what the words say.
-   *
-   * The recovery key is returned for the panel to show once, and this is the
-   * only moment it exists anywhere: a paired device does not keep the root, on
-   * purpose, and nothing here can print it again.
-   *
-   * `onKey` is how it gets out before anything can lose it (F02). Returning
-   * it only at the end meant every failure after the registration threw it
-   * away: the save that records this device's credential replaces the root on
-   * disk, and the connection that proves the credential comes after, so a
-   * proof that failed left a working device, no root, and an error with no
-   * key in it. A crash in the same window did the same thing with no error at
-   * all. So the key is handed over while the root is still what is on disk
-   * and before the first byte goes out, and everything after it is allowed to
-   * fail.
+   * An unlink in progress counts as an empty disk whatever the disk says at
+   * this moment, because it is about to remove the pending pairing: reading
+   * the file a moment before the unlink writes it would otherwise report as
+   * saved a pairing that is about to be gone.
    */
-  async pairFirst(
-    setup: string,
-    device: string,
-    onKey?: (key: string) => void | Promise<void>,
-    /** Names this device will never sync, chosen before it starts (Codex-05). */
-    ignore: readonly string[] = [],
-  ): Promise<string> {
-    return this.onePairing(async () => {
-      // Captured before anything is awaited (R10). It was taken after the
-      // save and the key handoff below, so an unload during either of those
-      // was invisible to every check that followed and the pairing went on to
-      // start a loop for a vault that had been retired.
-      const mine = this.generation;
-      // The vault the line names, or `default` (R083-14). A server started
-      // with `-vault work` prints its name in the line, and until this the
-      // plugin could only ever claim `default`: the documented way to start a
-      // differently named vault from a phone was to install the CLI on
-      // something else first.
-      const { url, token, vaultId = DEFAULT_VAULT } = parseSetup(setup);
-      const secret = generateSecret();
-      const name = deviceName(device);
-      const skip = [...new Set(ignore.map((n) => n.trim()))].filter(isIgnorableName).sort();
-      const starting: DeviceConfig = {
-        url,
-        vaultId,
-        device: name,
-        secret,
-        ...(skip.length > 0 ? { ignore: skip } : {}),
-      };
-      await this.saveVerified(starting);
-      this.config = starting;
-      const recoveryKey = formatPairing({ url, vaultId, secret });
-      // On screen now, and *waited for*, while the root above is still the
-      // only thing on disk and nothing has been sent (R02).
-      //
-      // Showing it and carrying on was not a handoff. Registration replaces
-      // the root-bearing config with this device's own credential the moment
-      // there is one, so a reload, a crash or a closed panel between the two
-      // took the only copy of a key nothing can reissue. Returning from a
-      // callback is not evidence that anybody read the screen.
-      //
-      // Awaited, so a surface that asks somebody to confirm they have written
-      // it down actually holds the vault's claim until they have. The same
-      // obligation `rotateVault` documents and for the same reason; this is
-      // the other half of it.
-      //
-      // If the wait is abandoned, nothing has been claimed and the config
-      // still holds the root: `pendingFirstPairing` finds it on the next load
-      // and offers the key again, so the interrupted case recovers rather
-      // than losing anything.
-      await onKey?.(recoveryKey);
-
-      let registered = false;
-      try {
-        this.config = await registerAsDevice(
-          {
-            url,
-            vaultId,
-            device: name,
-            secret,
-            bootstrap: token,
-            ...(skip.length > 0 ? { ignore: skip } : {}),
-          },
-          (next) => this.saveDuringRun(mine, next),
-          {
-            onRegistered: () => {
-              registered = true;
-            },
-            log: (message, ...rest) => console.info("Trew:", message, ...rest),
-          },
-        );
-      } catch (err) {
-        // The config stays, whatever it now holds. If it is still the root,
-        // the claim may have committed with its reply lost and throwing it
-        // away is a vault nothing will ever open again; `start` stops on it
-        // and puts the recovery key on the panel, which is somewhere it can be
-        // read from rather than a notice that goes. If the registration got as
-        // far as saving a credential, that is what is on disk and `start`
-        // connects with it. Read back rather than assumed (rule 4).
-        const remains = await whatTheDiskHolds(() => this.readConfig());
-        // Guarded, because reading the disk is an await (R10): a vault
-        // unlinked while this was asking must not be started again from what
-        // it finds. The key is still put on screen below, which is the part
-        // that must happen whatever the lifecycle did.
-        if (mine === this.generation) {
-          this.config = "config" in remains ? remains.config : starting;
-          this.start();
-        }
-        // The recovery key only when the root is still what is held: a
-        // credential that landed has replaced it, and there is then nothing on
-        // the panel to write down. The row this may have left is named by the
-        // same counsellor the pairing form above uses, because a phone sent
-        // straight back to pairing registers a second row without learning
-        // about the first.
-        // The key, either way, and most of all when the credential landed.
-        // That is the case where the root is gone from disk, so the copy the
-        // panel is holding is the only one left in the world; saying nothing
-        // there was the whole of F02.
-        const writeItDown =
-          remains.kind === "credential"
-            ? `Write down the recovery key on the panel now: it is no longer on this device. ${recoveryKey}. `
-            : "Write the recovery key shown in the Trew panel down now. ";
-        throw new Error(
-          `the vault was started but this device could not register itself with it: ` +
-            `${(err as Error).message}. ${writeItDown}` +
-            adviseAfterRegistering({
-              remains,
-              registered,
-              surface: "panel",
-              where: this.dataPath,
-            }),
-        );
-      }
-      // And the success path (R10). Registration is a round trip, a save and
-      // a wait for somebody to write the key down, so a vault retired during
-      // any of that must not be started again from the credential it made.
-      if (mine !== this.generation) {
-        throw new Error(
-          "this vault was unlinked while it was being started. The device row it registered is " +
-            `on the server. Its recovery key is ${recoveryKey} and nothing else holds it.`,
-        );
-      }
-      this.start();
-      return recoveryKey;
-    });
+  private retiredPairing(remains: PairingRemains): Error {
+    return retiredPairing(
+      this.unlinking !== undefined ? { kind: "nothing" } : remains,
+      this.dataPath,
+    );
   }
 
   /* ------------------------------------------------------------ *
@@ -2291,8 +2286,8 @@ export default class TrewPlugin extends Plugin {
   }
 
   /**
-   * Every device that may reach this vault, any limit reported by an older
-   * server, and every invite that could still add one.
+   * Every device that may reach this vault, and every invite that could still
+   * add one.
    *
    * Needs a connection, and says so rather than showing an empty list. "There
    * are no other devices" and "I could not ask" are different answers, and
@@ -2301,11 +2296,11 @@ export default class TrewPlugin extends Plugin {
    * The invites are part of the same answer. A row is a device that was added
    * and an outstanding invite is one about to be, and until they were listed a
    * string issued on a device somebody had just lost stayed invisible until
-   * somebody redeemed it, for up to an hour.
+   * somebody redeemed it, for up to an hour. What an invite row carries is its
+   * id, its label and its expiry, never anything that redeems it.
    */
   async devices(): Promise<{
     devices: DeviceRow[];
-    maxDevices: number;
     invites: InviteRow[];
     thisDevice: string;
   }> {
@@ -2324,26 +2319,28 @@ export default class TrewPlugin extends Plugin {
    * Needs a connection, because the server has to store it, and says so rather
    * than handing over a string that would be refused.
    *
-   * This is how a device is added. The recovery key is not: it is written down
-   * and offline, no device holds one, and what an invite hands over is the
-   * vault's data key, which is what a device holds anyway. The redemption
+   * This is how a device is added: the string is a `trew1i_` invite carrying
+   * this server's address, this vault and a one-time token, and the redemption
    * registers the new device's own row, so what appears in the list below is a
-   * device that can be revoked on its own.
+   * device that can be revoked on its own. It lasts an hour unless it is used
+   * or cancelled first, and revoking this device cancels it too.
    */
-  async createInvite(ttlMs?: number): Promise<{ invite: string; expiresAt: number }> {
+  async createInvite(
+    opts: { ttlMs?: number; label?: string } = {},
+  ): Promise<{ invite: string; id: string; expiresAt: number | null }> {
     const client = this.client;
     if (!client) throw new Error(`${this.whyNoClient()} There is no way to register an invite.`);
-    return client.invite(ttlMs);
+    return client.invite(opts);
   }
 
   /**
    * Cancels an outstanding invite, so the string stops working before it
    * expires.
    *
-   * The companion to being able to see one. Otherwise the only ways to retire
-   * an invite issued on a device that has just been lost are to wait out its
-   * hour or to replace the vault's secret, which retires the recovery key with
-   * it.
+   * The companion to being able to see one. Otherwise the only way to retire
+   * an invite issued on a device that has just been lost is to wait out its
+   * hour, or to revoke that device, which cancels the invites it issued.
+   * Takes the invite's id from the device list.
    */
   async uninvite(invite: string): Promise<void> {
     const client = this.client;
@@ -2354,14 +2351,13 @@ export default class TrewPlugin extends Plugin {
   /**
    * Stops one device connecting, and closes whatever it has open.
    *
-   * The device retains its notes and data key. Rotating an exposed recovery
-   * key prevents reuse of that recovery key; it does not change the data key
-   * or prevent decryption of ciphertext obtained elsewhere.
+   * What revoking does not do is un-read anything: the notes that device has
+   * already synced stay on it, readable there, in plaintext. It stops receiving
+   * anything new and stops writing, and the panel says so beside the button.
    *
-   * No `allowLast`, and it is not an omission. Emptying the vault takes the
-   * recovery key, no device holds one, and a plugin that offered the flag
-   * would be offering a request the server can only refuse. The panel says so
-   * where the button would have been.
+   * Any device may be revoked, the last one included, and no flag is needed
+   * for that: a vault with no devices gets one back from `trew invite` on the
+   * server, and nothing a device holds is needed for it.
    */
   async revoke(deviceId: string): Promise<{ self: boolean }> {
     const client = this.client;
@@ -2376,7 +2372,7 @@ export default class TrewPlugin extends Plugin {
         kind: "stopped",
         why:
           "this device was revoked and may no longer sync this vault. Unlink it to forget the " +
-          "pairing, or pair again with the vault's recovery key.",
+          "pairing, then pair it again with a new invite if it should sync",
       });
     }
     return { self };
@@ -2388,7 +2384,7 @@ export default class TrewPlugin extends Plugin {
   }
 
   /* ------------------------------------------------------------ *
-   * Rejoining a restored server, and retiring a leaked secret
+   * Rejoining a restored server
    * ------------------------------------------------------------ */
 
   /**
@@ -2401,16 +2397,15 @@ export default class TrewPlugin extends Plugin {
    */
   async rejoinCursors(): Promise<{ local: number; server: number }> {
     const config = this.config;
-    if (!config) throw new Error("this vault is not paired yet.");
+    if (!config || !this.paired) throw new Error("this vault is not paired yet.");
     return rebaseCursors(await this.clientOptions(config, this.generation));
   }
 
   /**
    * Rejoins a server that has lost history this device already applied.
    *
-   * The same operation as `trew rebase --backup-taken`, and it exists here
-   * because the documented alternative for a plugin device was to unlink and
-   * pair again. Re-pairing throws away the index too, but it also throws away
+   * It exists because the documented alternative for a plugin device was to
+   * unlink and pair again. Re-pairing throws away the index too, but it also throws away
    * the merge base: every note comes back as an ancestor-less new version, and
    * the next edit made on two devices at once cannot merge, so a restore was
    * followed by a conflict-copy storm on precisely the devices least able to
@@ -2482,93 +2477,14 @@ export default class TrewPlugin extends Plugin {
   }
 
   /**
-   * Gives the vault a new root secret, keeping its history and its devices.
-   *
-   * The answer to a recovery key that has been somewhere it should not have
-   * been. It takes that key as an argument, because no device holds one:
-   * rotating is the root's own power and a device that held the root could
-   * register itself again after being revoked, which is the whole thing
-   * per-device credentials removed.
-   *
-   * **Every device keeps syncing across this, including this one.** A rotation
-   * replaces the vault's secret and its wrapping of the data key, and touches
-   * no device row. A rotation that evicted every device would mean typing the
-   * new string into a phone, which is how a leaked key goes unrotated.
-   *
-   * The data key is this device's own, which is the vault's: a rotation
-   * replaces the wrapping and never the key, so the copy a paired device holds
-   * is always current and there is nothing to fetch before rewrapping it.
-   *
-   * The new recovery key is returned before the request goes out, and the
-   * panel shows it before pressing on, because there is nowhere on a device to
-   * stage a root any more: not holding one is the point. The server commits,
-   * closes every other registrar and only then replies, so if that reply is
-   * lost the only durable copy of the new key is the one somebody wrote down.
-   * `settled` says whether the server was heard from.
-   */
-  async rotate(
-    recoveryKey: string,
-    onKey?: (key: string) => void | Promise<void>,
-  ): Promise<{ recoveryKey: string; settled: boolean }> {
-    const config = this.config;
-    if (!config) throw new Error("this vault is not paired yet.");
-    if (this.pairing) throw new Error("a pairing is already in progress");
-    const { dataKey } = deviceCredential(config);
-
-    // The same state machine the CLI runs (I02). What differs between the two
-    // surfaces is how the candidate is put in front of somebody, which is the
-    // callback, and how the four outcomes are worded, which is below. Deciding
-    // what happened is not something either surface should be doing on its
-    // own: it is exactly where the two drifted, and F03 is what that cost.
-    const rotation = await rotateVault(
-      {
-        url: config.url,
-        vaultId: config.vaultId,
-        device: config.device,
-        recoveryKey,
-        dataKey,
-      },
-      // Awaited, like first pairing's (R24). `rotateVault` documents this as
-      // the step that makes the rest survivable and awaits it; passing a
-      // callback that returns before anybody has read the screen satisfies the
-      // type and not the obligation. Rotation is the worse of the two to get
-      // wrong: it retires the key that was written down, so a reload before
-      // the new one is copied leaves a vault with no way back at all.
-      async (candidate: string) => {
-        await onKey?.(candidate);
-      },
-    );
-
-    switch (rotation.kind) {
-      case "committed":
-        return { recoveryKey: rotation.recoveryKey, settled: true };
-      case "refused":
-        throw new Error(
-          "the vault's secret was replaced by somebody else first, so this was refused and no " +
-            "new key was made. The recovery key you used has been retired too.",
-        );
-      case "notCommitted":
-        throw new Error(
-          `the vault's secret was not replaced: ${rotation.why}. It still has the recovery key ` +
-            `you used.`,
-        );
-      case "unknown":
-        // The new key may be the vault's, so it goes back to be written down.
-        // `settled` is what says the server never confirmed it.
-        return { recoveryKey: rotation.recoveryKey, settled: false };
-    }
-    // Named rather than left implicit, so a fifth outcome fails loudly here.
-    throw new Error(`unhandled rotation outcome ${JSON.stringify(rotation)}`);
-  }
-
-  /**
    * Stops everything this plugin has running, and waits for it.
    *
-   * What `unlink` does before it touches a file, and what `rebase` and `rotate`
-   * need for the same reason: a run that is merely disconnected reconnects, a
-   * pass in flight is still writing the index, and a settle save already past
-   * its generation check is still going to write `data.json`. The bumped
-   * generation is what stops another starting.
+   * What `unlink` does before it touches a file, and what `rebase` and a
+   * rename need for the same reason: a run that is merely disconnected
+   * reconnects, a pass in flight is still writing the index, a pairing being
+   * finished is still going to write `data.json`, and a save already past its
+   * generation check is still going to write it too. The bumped generation is
+   * what stops another starting.
    */
   private async quiet(): Promise<void> {
     this.generation++;
@@ -2589,11 +2505,10 @@ export default class TrewPlugin extends Plugin {
    * A config write made while something long-running is in flight, which
    * `unlink` can wait for and a retired run cannot make.
    *
-   * R10, in the shape protocol 4 gives it. The write that used to be in flight
-   * past a generation check was the settle that dropped a spent bootstrap; now
-   * it is the save that records this device's own credential, made in the
-   * middle of a registration that has already reached the server. The hazard
-   * is the same: unlinking writes `null` over the pairing, and a save that
+   * R10, in the shape pairing gives it. The write in flight past a generation
+   * check is the save that records this device's credential, made in the
+   * middle of a redemption that may already have reached the server. The
+   * hazard is that unlinking writes `null` over the pairing, and a save that
    * lands after it puts the pairing back, so memory says unpaired, the file
    * says paired, and the next start syncs a vault the person removed.
    *
@@ -2610,6 +2525,18 @@ export default class TrewPlugin extends Plugin {
     return this.trackStateWrite(this.saveVerified(config));
   }
 
+  /**
+   * Removes a pairing that was refused or never reached the server, the same
+   * way: registered where `unlink` waits for it, refused once its run has been
+   * retired.
+   */
+  private forgetDuringRun(mine: number): Promise<void> {
+    if (mine !== this.generation) {
+      return Promise.reject(new Error("this vault is no longer paired"));
+    }
+    return this.trackStateWrite(this.forgetVerified());
+  }
+
   /** Let unlink/unload drain a state write that has already started. */
   private trackStateWrite(writing: Promise<void>): Promise<void> {
     this.settling.add(writing);
@@ -2621,27 +2548,13 @@ export default class TrewPlugin extends Plugin {
    * Writes the pairing and reads it back before believing it.
    *
    * Rule 4: verify the outcome, not the exit code. The one write that cannot
-   * afford to be taken on trust is the root a vault being started is saved
-   * with, because the claim that binds the server to it goes out on the
-   * strength of it. `decodeConfig` refuses a half-written config, so a torn
-   * write is caught here rather than on the next start.
+   * afford to be taken on trust is the pending pairing, because the redemption
+   * goes out on the strength of it: a credential the server registers and this
+   * device never wrote down is a row nothing can connect as. `decodeConfig`
+   * refuses a half-written config, so a torn write is caught here rather than
+   * on the next start. What is written is exactly `encodeConfig`'s keys, and
+   * `invite` only while the pairing is pending.
    */
-  /**
-   * The recovery key of a first pairing that never finished, or undefined
-   * (R02).
-   *
-   * A config holding the vault's root and no device credential is not a
-   * device: it is a vault that was started here and never joined. The root is
-   * the recovery key, so an interrupted pairing is recoverable, and the panel
-   * offers it rather than leaving somebody with a key they were shown once and
-   * a vault they cannot open.
-   */
-  pendingFirstPairing(): string | undefined {
-    const config = this.config;
-    if (config?.secret === undefined || config.deviceId !== undefined) return undefined;
-    return formatPairing({ url: config.url, vaultId: config.vaultId, secret: config.secret });
-  }
-
   private async saveVerified(config: DeviceConfig): Promise<void> {
     const record = encodeConfig(config);
     await this.saveData(record);
@@ -2654,6 +2567,18 @@ export default class TrewPlugin extends Plugin {
     if (back === undefined || JSON.stringify(encodeConfig(back)) !== JSON.stringify(record)) {
       throw new Error(`${this.dataPath} did not read back as it was written`);
     }
+  }
+
+  /** Removes the saved pairing, and reads the file back to prove it gone (rule 4). */
+  private async forgetVerified(): Promise<void> {
+    await this.saveData(null);
+    let back: DeviceConfig | undefined;
+    try {
+      back = await this.readConfig();
+    } catch (err) {
+      throw new Error(`${this.dataPath} could not be read back: ${(err as Error).message}`);
+    }
+    if (back !== undefined) throw new Error(`${this.dataPath} still holds a pairing`);
   }
 
   /**
@@ -2747,6 +2672,7 @@ export default class TrewPlugin extends Plugin {
     }
     this.config = undefined;
     this.paused = false;
+    this.failedPairing = undefined;
     this.setState({ kind: "unpaired" });
   }
 
@@ -2788,7 +2714,13 @@ export default class TrewPlugin extends Plugin {
       this.ribbonEl.removeClass("trew-attention", "trew-working");
       const tone = toneFor(state);
       if (tone) this.ribbonEl.addClass(tone);
-      this.ribbonEl.setAttribute("aria-label", `Trew: ${longStatus(state)}`);
+      // With the platform's standing, because on a phone this is the status
+      // bar: iOS has none (PLAN.md section 4.12).
+      const standing = platformStanding(Platform);
+      this.ribbonEl.setAttribute(
+        "aria-label",
+        `Trew: ${longStatus(state)}${standing ? ` ${standing.title}.` : ""}`,
+      );
     }
     this.announceOnAPhone(state);
     for (const listener of this.listeners) listener(state);
@@ -2848,20 +2780,30 @@ export default class TrewPlugin extends Plugin {
   }
 
   /**
-   * Whether this vault has a device credential and can sync.
+   * Whether this vault has a finished device credential and can sync.
    *
-   * Not "a config exists". `pairFirst` saves the root to disk before it shows
-   * the key, deliberately, so an interrupted first pairing is recoverable; the
-   * config at that point holds a root and no device row, and nothing has been
-   * claimed on any server. Counting that as paired drew the whole synced
-   * interface -- Sync, invites, the device list, Replace the secret -- over a
-   * vault that will never connect, and `refuseUnlessPairable` then answered
-   * every retry with "this vault is already paired", which is untrue and names
-   * no way out. `pendingFirstPairing` recovered the key and nothing recovered
-   * the vault.
+   * Not "a config exists". A pairing is saved to disk before its redemption
+   * is sent, deliberately, so a reply lost on the way back can be finished
+   * rather than stranding a row; the config at that point holds a credential
+   * the server may or may not have registered. Counting that as paired would
+   * draw the whole synced interface (Sync, invites, the device list) over a
+   * vault that has not been told it may connect.
    */
   get paired(): boolean {
-    return this.config !== undefined && this.pendingFirstPairing() === undefined;
+    return this.config !== undefined && !isPendingPairing(this.config);
+  }
+
+  /**
+   * The pairing being finished, while there is one: not paired and not
+   * unpaired, and the panel draws it as neither.
+   */
+  get pendingPairing(): PendingPairing | undefined {
+    return this.config !== undefined && isPendingPairing(this.config) ? this.config : undefined;
+  }
+
+  /** Why the last pairing did not finish, while the panel is offering another. */
+  get pairingFailure(): string | undefined {
+    return this.failedPairing;
   }
 
   /** Why the saved settings cannot be used, while that is so. */
@@ -2895,7 +2837,67 @@ async function copyToClipboard(text: string, said: string): Promise<void> {
   }
 }
 
-/** Keep mobile keyboards from capitalizing or correcting addresses and keys. */
+/**
+ * Proves a device credential opens its vault at an address, and applies
+ * nothing.
+ *
+ * One hello and a close. The cursor is zero, because nothing here applies
+ * anything and a cursor is only ever refused for being ahead of the server, so
+ * this cannot fail for a reason that is not about the address or the
+ * credential it is testing. What moving to a new address needs before it
+ * writes the address down: a wrong one must not replace a pairing that works.
+ */
+async function proveConnects(config: DeviceConfig, timeoutMs: number): Promise<void> {
+  const who = credentialsFor(config);
+  const transport = new Transport(who.url, { onBatch: () => {}, timeoutMs, log });
+  try {
+    await transport.connect();
+    await transport.hello({
+      vault: who.vaultId,
+      deviceId: who.deviceId,
+      token: who.token,
+      device: who.device,
+      cursor: 0,
+    });
+  } finally {
+    transport.close();
+  }
+}
+
+/**
+ * What a pairing left when its run was retired under it, by an unlink or an
+ * unload, from what the disk holds afterwards.
+ *
+ * Not the counsellor's words for an empty disk, which say nothing was
+ * registered: an unlink removes the pending pairing whatever the server did
+ * with the redemption, so an empty disk here says nothing about the server,
+ * and a row the redemption registered is one nothing can connect as. An
+ * unload leaves the disk alone, and the next load takes it from there.
+ */
+function retiredPairing(remains: PairingRemains, where: string): Error {
+  switch (remains.kind) {
+    case "nothing":
+      return new Error(
+        "this vault was unlinked while it was being paired. If the invite had already gone " +
+          "out, the server may have registered this device: its row is then in the device " +
+          "list as a device that never connected, and another device can revoke it.",
+      );
+    case "pending":
+      return new Error(
+        "Trew stopped before this pairing finished. It is saved, and the next time Trew " +
+          "loads it finishes the pairing with the same credential.",
+      );
+    case "credential":
+      return new Error(
+        "Trew stopped before this pairing finished here. It is saved, and the next time " +
+          "Trew loads it connects as this device.",
+      );
+    default:
+      return new Error(adviseAfterPairing({ remains, surface: "panel", where }));
+  }
+}
+
+/** Keep mobile keyboards from capitalizing or correcting addresses and invites. */
 function literalInput(field: TextComponent, address = false): void {
   field.inputEl.setAttribute("autocapitalize", "none");
   field.inputEl.setAttribute("autocorrect", "off");
@@ -3026,10 +3028,18 @@ function paintStatus(el: HTMLElement, state: State): void {
     if (tone !== "") el.addClass(tone);
     el.setAttribute("data-trew-tone", tone);
   }
+  // A word beside the glyph for as long as this runs where the tests do not
+  // (PLAN.md section 4.12), whatever the sync state: a glyph alone cannot say
+  // "unsupported", and a tooltip is only read by somebody already looking.
+  const standing = platformStanding(Platform);
+  const word = el.querySelector<HTMLElement>(".trew-status-platform");
+  if (standing === undefined) word?.remove();
+  else (word ?? el.createSpan({ cls: "trew-status-platform" })).setText(standing.short);
   // Both, because Obsidian styles aria-label as its own tooltip and a plain
   // title is what shows if it ever stops.
-  el.setAttribute("aria-label", `Trew Sync: ${longStatus(state)}`);
-  el.setAttribute("title", `Trew Sync: ${longStatus(state)}`);
+  const tip = `Trew Sync: ${longStatus(state)}${standing ? ` ${standing.title}.` : ""}`;
+  el.setAttribute("aria-label", tip);
+  el.setAttribute("title", tip);
 }
 
 /**
@@ -3043,6 +3053,11 @@ function iconFor(state: State): string {
       return "pause";
     case "unpaired":
       return "link";
+    // Working while an attempt is out, and the offline glyph while it waits
+    // on one that got no answer: the same two things the reconnect loop's
+    // states say.
+    case "pairing":
+      return state.retryAt === undefined ? "refresh-cw" : "cloud-off";
     case "connecting":
     case "loading":
     case "syncing":
@@ -3078,6 +3093,8 @@ function toneFor(state: State): string {
     case "paused":
     case "unpaired":
       return "";
+    case "pairing":
+      return state.retryAt === undefined ? "trew-working" : "";
     case "connecting":
     case "loading":
     case "syncing":
@@ -3115,6 +3132,7 @@ const DOCS = "https://github.com/waynehoover/trew/blob/main/docs/plugin.md";
 
 /** Native settings groups on current Obsidian; flat rows on older releases. */
 function settingGroup(host: HTMLElement): HTMLElement {
+  // eslint-disable-next-line obsidianmd/no-unsupported-api -- feature-detected with typeof on the same line
   return typeof SettingGroup === "function" ? new SettingGroup(host).listEl : host.createDiv();
 }
 
@@ -3190,19 +3208,13 @@ class TrewPanel {
     this.closed = true;
     this.renderGeneration++;
     this.stopDelivery?.();
+    // Nothing here holds a pairing waiting on the panel: the populated-vault
+    // confirmation is a panel step that runs no pairing until Continue, so
+    // closing the panel on it leaves nothing pending (R40's rule, that every
+    // wait answers on every way out of it, holds by having no wait).
     this.joinDraft = undefined;
     this.confirmMerge = false;
     this.unwatch?.();
-    // The wait for "I have written it down" needs an answer on every way out
-    // of it, and closing the panel is one of them (R40).
-    //
-    // It used to be left pending. The pairing awaiting it therefore never
-    // returned, `onePairing` never let go, and every later attempt was refused
-    // with "a pairing is already in progress" for the rest of the session:
-    // nothing was lost, because the root reaches the disk before the wait, and
-    // nothing worked either. Abandoning is an outcome and is reported as one.
-    this.abandonRecoveryKey("the panel was closed before the recovery key was acknowledged");
-    this.freshRecoveryKey = undefined;
     this.host.empty();
   }
 
@@ -3216,6 +3228,9 @@ class TrewPanel {
 
     this.host.addClass("trew-panel");
     const contentEl = this.host;
+    // First, and on every screen the panel draws, paired or not: the notice
+    // lasts as long as the plugin runs on the platform (PLAN.md section 4.12).
+    this.renderPlatformStanding(contentEl);
 
     const problem = this.plugin.configProblem;
     if (problem !== undefined) {
@@ -3223,40 +3238,16 @@ class TrewPanel {
       this.watchShape();
       return;
     }
+    // A pairing being finished is neither of the two screens below. The form
+    // would write a second credential over one the server may already have
+    // registered, and the paired panel would offer syncing, invites and a
+    // device list to a vault that has not been told it may connect.
+    const pending = this.plugin.pendingPairing;
+    if (pending !== undefined) {
+      this.renderFinishing(contentEl, pending);
+      return;
+    }
     if (!this.plugin.paired) {
-      // The key first, when there is one.
-      //
-      // A first pairing that was interrupted leaves a config holding the root
-      // and no device row: not paired, and holding the only copy of a key
-      // nothing can reissue. This block used to sit in the paired branch
-      // below, where `paired` meaning "a config exists" happened to reach it,
-      // and moving that definition to the truthful one took the key off the
-      // screen and let the pairing sail past the wait it is supposed to hold
-      // at. It belongs here, which is the state it describes.
-      // Two states, and they are not the same screen.
-      //
-      // A *fresh* key is a pairing in flight: it is waiting for somebody to say
-      // they have it (R02) and the claim is held open until they do. Nothing
-      // else is drawn, because a live "Start a new vault" under it is a second
-      // way forward that abandons the key the first one is asking to be written
-      // down. A screenshot showed both on one screen and every markup test was
-      // happy with it.
-      //
-      // A *pending* key is an abandoned pairing from some earlier session:
-      // nothing is in flight, the config holds the only copy of the key, and
-      // the form goes underneath because otherwise there is no way to try
-      // again. Drawing only the key here loops: acknowledging clears the fresh
-      // one and `pendingFirstPairing` still answers from the config, so the
-      // same screen comes back for ever. That is what this used to do for both
-      // states, and a test that says "there is no way to try again" is the one
-      // that caught it.
-      if (this.freshRecoveryKey !== undefined) {
-        this.renderRecoveryKey(contentEl, this.freshRecoveryKey);
-        this.watchShape();
-        return;
-      }
-      const pending = this.plugin.pendingFirstPairing();
-      if (pending !== undefined) this.renderRecoveryKey(contentEl, pending);
       this.renderPairing(contentEl);
       this.watchShape();
       return;
@@ -3360,13 +3351,6 @@ class TrewPanel {
     // offer the way out, without anybody opening anything first.
     if (offersRejoin(this.plugin.currentState)) this.renderRejoin(primary);
 
-    // A key this panel has just produced, still on screen until somebody says
-    // they have it (R02). The unfinished-pairing case is drawn in the unpaired
-    // branch above, which is the state it is actually in.
-    if (this.freshRecoveryKey !== undefined) {
-      this.renderRecoveryKey(contentEl, this.freshRecoveryKey);
-    }
-
     row(primary, "Recover a deleted note", "Restore a copy.").addButton((b) =>
       b.setButtonText("Browse deleted").onClick(() => {
         // Checked at the press as well as by the shape watcher above, because
@@ -3393,12 +3377,6 @@ class TrewPanel {
     this.renderStranded(management);
     this.renderIgnored(management);
     this.renderDevices(management);
-    row(management, "Recovery key", "Not stored on this device. Keep your saved copy safe.");
-
-    // Beside the recovery key, because it is the same secret and the same
-    // warning, and behind two presses, because it is the one action here that
-    // retires the key somebody wrote down.
-    this.renderRotate(management);
 
     // Beside the device list rather than under recovery, because it is a thing
     // done to the server and not to this vault, and it is here at all for the
@@ -3464,6 +3442,25 @@ class TrewPanel {
   }
 
   /**
+   * A row saying this platform is unsupported or untested, and what that
+   * leaves untested, on Windows and iOS only (PLAN.md section 4.12).
+   *
+   * Not dismissable, deliberately: the decision was to pair on these platforms
+   * with a notice that lasts, rather than to refuse, and a notice somebody can
+   * close is a toast with extra steps.
+   */
+  private renderPlatformStanding(host: HTMLElement): void {
+    const standing = platformStanding(Platform);
+    if (standing === undefined) return;
+    const setting = row(settingGroup(host), standing.title, standing.detail);
+    setting.settingEl.addClass("trew-platform-standing");
+    setting.descEl.createEl("br");
+    setting.descEl
+      .createEl("a", { text: "Which platforms Trew supports" })
+      .setAttribute("href", SUPPORT_TABLE);
+  }
+
+  /**
    * The paths this device has not synced, with what it says about each.
    *
    * Two kinds, kept apart, because they need different things from a person
@@ -3516,7 +3513,8 @@ class TrewPanel {
       JSON.stringify([
         this.plugin.configProblem !== undefined,
         this.plugin.paired,
-        (this.freshRecoveryKey ?? this.plugin.pendingFirstPairing()) !== undefined,
+        this.plugin.pendingPairing !== undefined,
+        this.plugin.pairingFailure,
         offersRejoin(this.plugin.currentState),
       ]);
     const drawn = shape();
@@ -3576,7 +3574,6 @@ class TrewPanel {
       say(said, "");
       let answer: {
         devices: DeviceRow[];
-        maxDevices: number;
         invites: InviteRow[];
         thisDevice: string;
       };
@@ -3590,15 +3587,13 @@ class TrewPanel {
         refresh.setDisabled(false);
       }
       list.empty();
-      // The last row is the vault's last device, and it is always this one:
-      // reading the list at all means this device connected. Emptying the
-      // vault is the recovery key's to do, so there is no button for it here.
-      // A button that could only ever be refused is worse than none.
+      // Every row can be revoked, the last one included, which reading the
+      // list at all means is this device. The way back into a vault with no
+      // devices is `trew invite` on the server, and the confirmation says so
+      // on that row rather than the panel hiding the button.
       const last = answer.devices.length === 1;
       heading.setDesc(
-        answer.maxDevices > 0
-          ? `${answer.devices.length} of ${answer.maxDevices} devices`
-          : `${answer.devices.length} ${answer.devices.length === 1 ? "device" : "devices"}`,
+        `${answer.devices.length} ${answer.devices.length === 1 ? "device" : "devices"}`,
       );
       const names = new Map<string, number>();
       for (const device of answer.devices) {
@@ -3609,7 +3604,7 @@ class TrewPanel {
         const mine = device.id === answer.thisDevice;
         // Flagged rather than left as a blank, because a row nothing has ever
         // connected under is the reclaimable one: a pairing that reached the
-        // server and then crashed leaves exactly that.
+        // server and never finished here leaves exactly that.
         const cursor = this.plugin.cursors()?.server;
         const seen =
           cursor === undefined ? "Delivery unconfirmed" : describeDelivery(device, cursor);
@@ -3618,7 +3613,6 @@ class TrewPanel {
           .setName(`${name}${mine ? " (this device)" : ""}`)
           // Keep identical names distinguishable before a destructive action.
           .setDesc(names.get(name)! > 1 ? `${seen} · ID ${device.id}` : seen);
-        if (last) continue;
         let confirmed = false;
         row.addButton((b) =>
           b
@@ -3628,11 +3622,19 @@ class TrewPanel {
               if (!confirmed) {
                 confirmed = true;
                 b.setButtonText("Yes, revoke");
+                // What revoking does not do, said before it is done: nothing
+                // a device already synced is taken back, and without
+                // end-to-end encryption what it holds is readable as it is.
                 say(
                   said,
-                  `${mine ? "This device" : `"${name}"`} will stop syncing. ` +
-                    "It keeps its decryption key and can still read copies of your notes. " +
-                    "Press again to revoke.",
+                  `${mine ? "This device" : `"${name}"`} will stop syncing. Revoking does not ` +
+                    `un-read anything: the notes already on ${mine ? "it" : "that device"} stay ` +
+                    `readable there, in plaintext.` +
+                    (last
+                      ? " It is the vault's last device, so adding one back takes an invite " +
+                        "from trew invite on the server."
+                      : "") +
+                    " Press again to revoke.",
                 );
                 return;
               }
@@ -3648,21 +3650,24 @@ class TrewPanel {
       }
       // The invites under the rows, because they are the same question: a row
       // is a device that was added and an outstanding invite is one about to
-      // be. Identifier and expiry only. The string itself is not here and
-      // cannot be: the server never had the invite key, so nothing on this
-      // screen redeems anything, and what the identifier is for is saying
-      // which invite to cancel.
+      // be. Its id, its label and its expiry, and never the string itself:
+      // the listing carries nothing that redeems (plan/protocol.md, "Devices
+      // and invites"), and what the id is for is saying which invite to cancel.
       for (const invite of answer.invites) {
+        const expiry =
+          invite.expiresAt === null ? "Does not expire" : `Expires ${when(invite.expiresAt)}`;
         const row = new Setting(list)
-          .setName("Outstanding invite")
-          .setDesc(`Expires ${when(invite.expiresAt)}`);
+          .setName(
+            invite.label === "" ? "Outstanding invite" : `Outstanding invite: ${invite.label}`,
+          )
+          .setDesc(`${expiry} · ID ${invite.invite}`);
         row.addButton((b) =>
           b
             .setButtonText("Cancel")
             .setWarning()
             .onClick(async () => {
               try {
-                await this.plugin.uninvite(invite.id);
+                await this.plugin.uninvite(invite.invite);
                 new Notice("Invite cancelled. It can no longer add a device.", 10_000);
                 this.render();
               } catch (err) {
@@ -3708,7 +3713,7 @@ class TrewPanel {
     row(
       contentEl,
       "Add another device",
-      "Create a one-time invite. Expires in 10 minutes.",
+      "Create a one-time invite. Expires in one hour.",
     ).addButton((b) =>
       b.setButtonText("Create invite").onClick(async () => {
         try {
@@ -3727,7 +3732,12 @@ class TrewPanel {
             // Long server addresses can exceed QR capacity. Copy still works.
             qr.hide();
           }
-          say(expiry, `${scanAdvice} Expires at ${when(issued.expiresAt)}.`);
+          say(
+            expiry,
+            issued.expiresAt === null
+              ? `${scanAdvice} It does not expire, so cancel it from the device list once it is used.`
+              : `${scanAdvice} Expires at ${when(issued.expiresAt)}.`,
+          );
           await copyToClipboard(issued.invite, "Copied. Paste it into Trew on the other device.");
         } catch (err) {
           new Notice(`Trew: ${(err as Error).message}`, 10_000);
@@ -3739,7 +3749,11 @@ class TrewPanel {
     qr.setAttribute("alt", "Scan to open this invite in Obsidian");
     qr.hide();
     const expiry = later(contentEl, "trew-advice");
-    const codeRow = row(contentEl, "Pairing code", "Paste this into Trew on your other device.");
+    const codeRow = row(
+      contentEl,
+      "Pairing code",
+      "Paste this into the Invite field of Trew on your other device.",
+    );
     codeRow.settingEl.addClass("trew-invite-code");
     codeRow.settingEl.hide();
     codeRow
@@ -3764,9 +3778,8 @@ class TrewPanel {
    *
    * Two presses, and the first one is not destructive: it asks the server where
    * it is and puts both numbers on screen, which is also how somebody finds out
-   * that this is not their problem. The confirmation is what `--backup-taken`
-   * is on the command line, and it is worth more here: a flag has to be typed
-   * and a button is one tap from a thumb.
+   * that this is not their problem. The confirmation is worth more on a phone
+   * than anywhere: a button is one tap from a thumb.
    */
   private renderRejoin(contentEl: HTMLElement): void {
     const said = later(contentEl, "trew-advice");
@@ -3810,26 +3823,6 @@ class TrewPanel {
     );
   }
 
-  /**
-   * Replacing the vault's root secret.
-   *
-   * The answer to a recovery key that has been somewhere it should not have
-   * been, and the second half of the answer to a device that was stolen: the
-   * first half is revoking it above, which stops it connecting, and this is
-   * what stops the key it was holding opening the vault again.
-   *
-   * It asks for the current recovery key, because no device holds one. That is
-   * the whole point of the change: a device that could rotate could also
-   * register itself again after being revoked. So this is a field rather than
-   * a button, and somebody who has not got the key cannot do it from here,
-   * which is correct and is what the one-line description says: paste the
-   * vault's current recovery key.
-   *
-   * Two presses, because it retires the old key the moment it commits, and the
-   * new key goes on screen before the second press: the server commits, closes
-   * every other registrar and only then replies, so a reply lost in between
-   * leaves a vault whose new root exists only on paper.
-   */
   /**
    * This device's own name, changeable, which it was not until protocol 5.
    *
@@ -3979,67 +3972,12 @@ class TrewPanel {
     );
   }
 
-  private renderRotate(contentEl: HTMLElement): void {
-    const said = later(contentEl, "trew-advice");
-    let keyField: TextComponent | undefined;
-    row(
-      contentEl,
-      "Replace the vault's secret",
-      "Replace an exposed recovery key. Existing devices keep syncing.",
-    )
-      .addText((t) => {
-        t.setPlaceholder("Current recovery key");
-        t.inputEl.setAttribute("aria-label", "Current recovery key");
-        literalInput(t);
-        keyField = t;
-      })
-      .addButton((b) =>
-        b
-          .setButtonText("Replace the secret")
-          .setWarning()
-          .onClick(async () => {
-            const given = keyField?.getValue() ?? "";
-            if (given.trim() === "") {
-              say(said, "Paste the vault's current recovery key first.");
-              return;
-            }
-            try {
-              // Rendered before the request rather than after it returns: a
-              // rotation that commits and loses its reply has already changed
-              // the vault, and a key that only exists in a resolved promise is
-              // one a crash takes with it.
-              const { settled } = await this.plugin.rotate(given, async (key) => {
-                this.freshRecoveryKey = key;
-                this.render();
-                // Held here until somebody says they have it (R24). Nothing has
-                // been sent yet, so abandoning this costs only the candidate:
-                // the vault still has the key that was typed in above.
-                await this.writtenDown;
-              });
-              new Notice(
-                settled
-                  ? "The vault has a new secret. Write down the new recovery key shown in the panel. " +
-                      "Every device keeps syncing."
-                  : "The vault may already have the new secret: the server never answered. Write down " +
-                      "the new recovery key shown in the panel, keep the old one until you know, and " +
-                      "try each of them here.",
-                0,
-              );
-              this.render();
-            } catch (err) {
-              say(said, "");
-              new Notice(`Trew: ${(err as Error).message}`, 10_000);
-            }
-          }),
-      );
-  }
-
   /**
    * A config that is there and cannot be read gets no pairing form.
    *
-   * Pairing writes a new root secret over the old one, and everything on the
-   * server would then be undecryptable from here. The only safe offers are
-   * the reason and the path.
+   * Pairing writes a new credential over the old one, and the old one may be
+   * the only copy of a live row's token. The only safe offers are the reason
+   * and the path.
    */
   private renderUnreadable(contentEl: HTMLElement, problem: string): void {
     contentEl.createEl("p", { text: `Trew has stopped: ${problem}` });
@@ -4051,24 +3989,22 @@ class TrewPanel {
   }
 
   /**
-   * One field, because the string already says which kind it is.
+   * One field, "Invite", and one button, "Pair".
    *
-   * This screen has been rebuilt twice and both times for the same reason. It
-   * began as both forms at once: a device name, an invite field and *Pair*,
-   * then "Or start a new vault", a setup string and *Start a new vault*.
-   * Everything needed was on screen and nothing said which half was yours.
+   * This screen has been rebuilt several times and always for the same
+   * reason: it asked somebody to choose between kinds of string before it
+   * would draw a form, when the string in their clipboard had already made
+   * the choice. There is one kind now. Every device pairs from an invite, the
+   * first one included: `trew serve` writes the first device's invite to
+   * `first-invite` in its data folder, `trew invite` on the server prints
+   * more, and a paired device's panel mints them.
    *
-   * The fix then was to ask first, so a choice came before a form. That did
-   * remove the ambiguity, and it bought it with a screen whose only content
-   * was a question. Reported as too much for what it does, and it is: a person
-   * with an invite in their clipboard has already made the choice the screen
-   * is asking them to make.
-   *
-   * An invite starts `basalt3i_`, a recovery key starts `basalt3_`, and a
-   * setup line is neither; `parseSetup` has always refused the other two by
-   * name. So the string is self-describing and the question was never
-   * necessary. One field takes all three, the line under it says what pressing
-   * the button will do and to which server, and the button says it too.
+   * The line under the field says where the invite points before anything
+   * can be pressed (R083-05): an unpaired vault pointed at somebody else's
+   * server uploads itself there on the first sync, and an invite that arrived
+   * through `obsidian://trew?invite=...` was filled in by whoever sent the
+   * link. A string that is not an invite, a Basalt one included, gets the
+   * reason it cannot be read, and the button stays disabled.
    *
    * The two things somebody might still want are behind *More options*, with
    * working defaults in place: a device name suggested from the platform, and
@@ -4106,7 +4042,7 @@ class TrewPanel {
               b.setDisabled(true);
               cancel.setDisabled(true);
               try {
-                await this.pairFromPanel(draft.key, draft.device, this.joinSkip, true);
+                await this.pairFromPanel(draft.invite, draft.device, this.joinSkip, true);
               } finally {
                 b.setDisabled(false);
                 cancel.setDisabled(false);
@@ -4117,94 +4053,80 @@ class TrewPanel {
     }
 
     new Setting(host).setName("Set up sync").setHeading();
+    // Why the last pairing did not finish, above the form that tries again.
+    // A pairing refused while it was being finished in the background has no
+    // other place to say so for longer than a notice lasts.
+    const failed = this.plugin.pairingFailure;
+    if (failed !== undefined) {
+      host.createEl("p", { cls: "trew-advice", text: failed }).setAttribute("role", "alert");
+    }
     const contentEl = settingGroup(host);
 
-    let pairingField: TextComponent | undefined;
+    let inviteField: TextComponent | undefined;
     row(
       contentEl,
-      "Invite or setup line",
-      "Paste an invite from a paired device, or your saved recovery key. If this is the " +
-        "first device on this vault, paste the setup line from your server instead.",
+      "Invite",
+      "Paste an invite from a paired device's Trew panel. For the first device, use the one " +
+        "trew serve wrote to first-invite in its data folder, or make one with trew invite on " +
+        "the server.",
     ).addText((t) => {
-      t.setPlaceholder("basalt3i_...");
-      t.inputEl.setAttribute("aria-label", "Invite or setup line");
-      literalInput(t, true);
-      const key = this.joinDraft?.key ?? this.incomingInvite;
-      if (key !== undefined) t.setValue(key);
+      t.setPlaceholder("trew1i_...");
+      t.inputEl.setAttribute("aria-label", "Invite");
+      literalInput(t);
+      const value = this.joinDraft?.invite ?? this.incomingInvite;
+      if (value !== undefined) t.setValue(value);
       t.onChange(() => showDestination());
-      pairingField = t;
+      inviteField = t;
     });
 
-    // Where this string goes, before it goes there (R083-05).
-    //
-    // An invite carries the server address and the vault name, and neither was
-    // on screen: a person pressed Pair on a base64 blob, and an invite arriving
-    // through `obsidian://trew?invite=...` filled the field in for them.
-    // An unpaired vault pointed at a stranger's server uploads itself to it on
-    // the first sync, so the address has to be readable first and the button
-    // stays disabled until it is. A setup line claims a server for a vault that
-    // does not exist yet, so getting that address wrong is a vault started
-    // somewhere nobody meant; the same line answers both.
+    // Where this invite goes, before it goes there (R083-05).
     const destination = contentEl.createEl("p", { cls: "trew-advice" });
     destination.setAttribute("role", "status");
     let goButton: ButtonComponent | undefined;
 
-    /** Which of the three this is, from the string alone. */
-    const kindOf = (value: string): "join" | "first" =>
-      value.startsWith(INVITE_PREFIX) || value.startsWith(PAIRING_PREFIX) ? "join" : "first";
-
     const showDestination = () => {
-      const value = pairingField?.getValue().trim() ?? "";
+      const value = inviteField?.getValue().trim() ?? "";
       let readable = false;
-      let starting = false;
       if (value === "") {
-        destination.setText(
-          "Paste an invite from another device, or your server's setup line, to see where it goes.",
-        );
+        destination.setText("Paste an invite to see which server and vault it joins.");
       } else {
-        const kind = kindOf(value);
-        starting = kind === "first";
         try {
-          const to = joinDestination(value, kind);
+          const to = joinDestination(value);
           readable = true;
-          if (kind === "first") {
-            destination.setText(`Starts a new vault at ${to.url}. Check that this is your server.`);
-          } else {
-            // The vault is named only when somebody named it. Almost every
-            // invite carries "default", which is the value assumed when a
-            // string carries none, so naming it back reads as a placeholder
-            // that leaked rather than as the confirmation this line is for.
-            const named = to.vaultId !== undefined && to.vaultId !== DEFAULT_VAULT;
-            destination.setText(
-              named
-                ? `Joins vault "${to.vaultId}" at ${to.url}. Check that this is your server.`
-                : `Joins ${to.url}. Check that this is your server.`,
-            );
-          }
-        } catch (err) {
-          // Named shapes, not the parser's complaint.
-          //
-          // With one field a string that is none of the three reaches whichever
-          // parser its shape guessed, and that parser answers as though the
-          // guess were established: paste a typo and `parseSetup` explains what
-          // is wrong with a setup line, which is not what you were holding. So
-          // an unrecognised string is answered by the field, and only a string
-          // that named its own kind and then failed gets the parser's reason.
+          // The vault is named only when somebody named it. Almost every
+          // invite carries "default", which is the value assumed when a
+          // string carries none, so naming it back reads as a placeholder
+          // that leaked rather than as the confirmation this line is for.
+          const named = to.vaultId !== DEFAULT_VAULT;
           destination.setText(
-            starting && !value.includes("#")
-              ? "Cannot read that. An invite starts basalt3i_, a recovery key starts " +
-                  `${PAIRING_PREFIX}, and a setup line looks like homelab:3003#TOKEN.`
-              : `Cannot read that: ${(err as Error).message}`,
+            named
+              ? `Joins vault "${to.vaultId}" at ${to.url}. Check that this is your server.`
+              : `Joins ${to.url}. Check that this is your server.`,
           );
+        } catch (err) {
+          // The codec's own reason, or `parseInvite`'s for a Basalt string:
+          // one kind of string can go in this field, so a refusal names what
+          // is wrong with it rather than guessing what else it might be.
+          destination.setText(`Cannot read that: ${(err as Error).message}`);
         }
       }
-      // The label follows the string, so the button says what it will do
-      // rather than what this screen is for. Before anything readable is
-      // there it reads Pair, because every device after the first joins and
-      // only one ever starts.
-      goButton?.setButtonText(readable && starting ? "Start a new vault" : "Pair");
       goButton?.setDisabled(!readable);
     };
+
+    new Setting(contentEl).addButton((b) => {
+      goButton = b;
+      b.setButtonText("Pair")
+        .setCta()
+        .onClick(async () => {
+          const value = inviteField?.getValue() ?? "";
+          b.setDisabled(true);
+          try {
+            await this.pairFromPanel(value, device(), skipping());
+          } finally {
+            showDestination();
+          }
+        });
+    });
 
     // More options, collapsed, because both have answers that work.
     //
@@ -4212,7 +4134,11 @@ class TrewPanel {
     // the device list. A skip list is empty for almost everybody. Neither is a
     // decision most people have to make, and a screen that asks anyway is a
     // screen that says all four of these matter equally.
-    const more = contentEl.createEl("details", { cls: "trew-more-options" });
+    //
+    // Below the group rather than inside it, like the paired panel's
+    // disclosures: a disclosure among the rows sat outside their padding and
+    // drew a row border under its own summary, which only a screenshot showed.
+    const more = host.createEl("details", { cls: "trew-more-options" });
     more.createEl("summary", { text: "More options" });
     const moreEl = settingGroup(more);
 
@@ -4235,56 +4161,68 @@ class TrewPanel {
     this.renderJoinSkip(moreEl);
     const skipping = () => this.joinSkip;
 
-    new Setting(contentEl).addButton((b) => {
-      goButton = b;
-      b.setButtonText("Pair")
-        .setCta()
-        .onClick(async () => {
-          const value = pairingField?.getValue() ?? "";
-          if (kindOf(value.trim()) === "join") {
-            b.setDisabled(true);
-            try {
-              await this.pairFromPanel(value, device(), skipping());
-            } finally {
-              showDestination();
-            }
-            return;
-          }
-          try {
-            // Rendered the moment the key exists, which is before the vault is
-            // claimed and long before the registration replaces the root on
-            // disk (F02), and the pairing *waits here* until somebody says they
-            // have it (R02).
-            //
-            // Showing it and carrying on was not a handoff. Registration
-            // replaces the root with this device's own credential, so a reload
-            // or a closed panel in between took the only copy of a key nothing
-            // can reissue, and returning from a callback is not evidence that
-            // anybody read the screen. Nothing has been claimed while this
-            // waits, so abandoning it costs nothing: the config still holds the
-            // root, and the panel offers the key again on the next load.
-            await this.plugin.pairFirst(
-              value,
-              device(),
-              async (key) => {
-                this.freshRecoveryKey = key;
-                this.render();
-                await this.writtenDown;
-              },
-              skipping(),
-            );
-            new Notice(
-              "Vault started. Trew is connecting. Write down the recovery key shown in this panel.",
-            );
-            this.render();
-          } catch (err) {
-            new Notice(`Trew: ${(err as Error).message}`, 10_000);
-          }
-        });
-    });
     showDestination();
 
     docsLink(host.createEl("p", { cls: "trew-advice" }), "How pairing works");
+  }
+
+  /**
+   * A pairing whose redemption went out and has not been answered.
+   *
+   * Neither the form nor the paired panel. The pending pairing on disk holds
+   * the credential the server may already have registered, so what this
+   * offers is the state, a way to try now rather than at the end of the
+   * backoff, and a way to give up, which says what giving up may leave on the
+   * server.
+   */
+  private renderFinishing(host: HTMLElement, pending: PendingPairing): void {
+    new Setting(host).setName("Finishing pairing").setHeading();
+    const group = settingGroup(host);
+    const status = row(group, "Pairing status");
+    status.descEl.addClass("trew-sync-status");
+    status.descEl.setAttribute("role", "status");
+    status.descEl.setText(longStatus(this.plugin.currentState));
+    status.addButton((b) =>
+      b.setButtonText("Try now").onClick(async () => {
+        await this.plugin.syncNow();
+      }),
+    );
+    const named = pending.vaultId !== DEFAULT_VAULT;
+    group.createEl("p", {
+      cls: "trew-advice",
+      text: named
+        ? `Joining vault "${pending.vaultId}" at ${pending.url}.`
+        : `Joining ${pending.url}.`,
+    });
+    group.createEl("p", {
+      cls: "trew-advice",
+      text: adviseAfterPairing({
+        remains: { kind: "pending", config: pending },
+        surface: "panel",
+        where: this.plugin.dataPath,
+      }),
+    });
+    row(
+      group,
+      "Unlink this vault",
+      "Give up this pairing. If the server did register it, the row stays in the device list " +
+        "as a device that never connected, and another device can revoke it.",
+    ).addButton((b) =>
+      b
+        .setButtonText("Unlink")
+        .setWarning()
+        .onClick(async () => {
+          try {
+            await this.plugin.unlink();
+          } catch (err) {
+            new Notice(`Trew: ${(err as Error).message}`, 10_000);
+          }
+          this.render();
+        }),
+    );
+    this.watchShape(() => {
+      status.descEl.setText(longStatus(this.plugin.currentState));
+    });
   }
 
   /**
@@ -4338,20 +4276,20 @@ class TrewPanel {
     }
   }
 
-  private joinDraft: { key: string; device: string } | undefined;
+  private joinDraft: { invite: string; device: string } | undefined;
   private confirmMerge = false;
 
   /** Confirmation is a panel step; it never leaves a pairing request waiting. */
   private async pairFromPanel(
-    key: string,
+    invite: string,
     device: string,
     ignore: readonly string[] = this.joinSkip,
     mergeConfirmed = false,
   ): Promise<void> {
     if (this.closed) return;
-    this.joinDraft = { key, device };
+    this.joinDraft = { invite, device };
     try {
-      await this.plugin.pair(key, device, mergeConfirmed, ignore);
+      await this.plugin.pair(invite, device, mergeConfirmed, ignore);
       this.joinDraft = undefined;
       this.confirmMerge = false;
       new Notice("Paired. Trew is connecting.");
@@ -4363,111 +4301,12 @@ class TrewPanel {
         this.render();
       } else {
         new Notice(`Trew: ${(err as Error).message}`, 10_000);
+        // Redrawn, so the reason stays on the panel after the notice has
+        // gone, and a pairing kept to finish is drawn as the state it is in.
+        this.confirmMerge = false;
+        this.render();
       }
     }
-  }
-
-  /** The recovery key of a vault this panel just started, shown once. */
-  private freshRecoveryKey: string | undefined;
-
-  /**
-   * Resolves when somebody presses "I have written it down" (R02).
-   *
-   * What makes the handoff a stage rather than a notification: the pairing
-   * awaits this before it claims the vault, so a key on screen that nobody has
-   * read cannot be retired by the next step.
-   */
-  private writtenDown: Promise<void> = Promise.resolve();
-  private confirmWrittenDown: (() => void) | undefined;
-  private giveUpWrittenDown: ((why: Error) => void) | undefined;
-
-  /**
-   * Ends the wait without an acknowledgement, if one is outstanding.
-   *
-   * Rejecting rather than resolving, because resolving would tell the pairing
-   * that somebody has the key when nobody said so, and the next thing it does
-   * is replace the root that key came from.
-   */
-  private abandonRecoveryKey(why: string): void {
-    const give = this.giveUpWrittenDown;
-    this.confirmWrittenDown = undefined;
-    this.giveUpWrittenDown = undefined;
-    this.writtenDown = Promise.resolve();
-    give?.(new Error(why));
-  }
-
-  private renderRecoveryKey(contentEl: HTMLElement, key: string): void {
-    if (this.confirmWrittenDown === undefined) {
-      this.writtenDown = new Promise<void>((go, stop) => {
-        this.confirmWrittenDown = go;
-        this.giveUpWrittenDown = stop;
-      });
-      // Nobody is necessarily awaiting this: the key is drawn again on a later
-      // load from `pendingFirstPairing`, with no pairing behind it. Marking it
-      // handled here keeps an abandoned one from surfacing as an unhandled
-      // rejection, and does not stop a real awaiter seeing it.
-      void this.writtenDown.catch(() => undefined);
-    }
-    new Setting(contentEl).setName("Write this down").setHeading();
-    contentEl.createEl("p", {
-      cls: "trew-advice",
-      text:
-        "Save this key somewhere safe and separate. It is the only way back if every device " +
-        "is lost. Anyone with it can access your vault.",
-    });
-    // The key and its Copy on one row, so the button is beside the thing it
-    // copies rather than under the next paragraph.
-    //
-    // "Write it down" is the advice and a phone is where it is hardest to
-    // follow: there is no second screen to read from and no keyboard worth
-    // transcribing sixty characters on. Without a button the only ways off the
-    // device were a photograph of a secret or retyping it, and the clipboard is
-    // the least bad of the three for getting it into a password manager. The
-    // key is selectable for the same reason, which it was not: Obsidian's own
-    // UI turns selection off broadly, so a long press on a phone did nothing at
-    // all, and `copyToClipboard`'s fallback advice ("shown in the panel, to
-    // copy by hand") described something that could not be done. styles.css
-    // turns it back on for this one class.
-    // The key is a block in the panel, not a column in a row.
-    //
-    // Two wrong homes before this, both found by looking at it rather than by a
-    // test. In the row's `nameEl` it was clipped through the middle, because a
-    // name is laid out as one short line and this is sixty characters. In the
-    // row's description column it wrapped correctly and sat indented from the
-    // paragraph above, because a row's columns carry the row's padding: the one
-    // thing on screen that has to be read character by character was the one
-    // thing aligned with nothing.
-    contentEl.createEl("code", { cls: "trew-pairing", text: key });
-
-    // Copy and the acknowledgement on one row, in reading order.
-    //
-    // They were two rows, which put a mostly empty row and a lone
-    // right-aligned button between the key and the bottom of the panel. What
-    // makes them safe together is R02 itself: a pairing abandoned here leaves
-    // the root in the config and the panel offers the key again on the next
-    // load, so a mis-tap costs a reload rather than a vault.
-    new Setting(contentEl)
-      .addButton((b) =>
-        b.setButtonText("Copy").onClick(async () => {
-          await copyToClipboard(
-            key,
-            "Recovery key copied. Put it somewhere offline, then clear the clipboard.",
-          );
-        }),
-      )
-      .addButton((b) =>
-        b.setButtonText("I have written it down").onClick(() => {
-          this.freshRecoveryKey = undefined;
-          // Releases the pairing, which has been holding the vault's claim
-          // until now. Cleared so a later key gets a wait of its own.
-          const go = this.confirmWrittenDown;
-          this.confirmWrittenDown = undefined;
-          this.giveUpWrittenDown = undefined;
-          this.writtenDown = Promise.resolve();
-          go?.();
-          this.render();
-        }),
-      );
   }
 }
 
@@ -5013,11 +4852,11 @@ export interface Connection {
  * The scheme is the whole of what is known about the hop, and it is a complete
  * test because `normaliseUrl` stores one of exactly two. `wss://` means
  * something in front of the server terminated TLS, which is the arrangement
- * server.md describes, and `ws://` means nothing did. The second is not a
- * warning that the vault is exposed, because it is not: the notes are sealed
- * on this device either way. What it does cost is named exactly, because the
- * only wrong thing to say here is the vague thing. Which of the two is exposed
- * is what fits on the line; which network can see it is in docs/plugin.md.
+ * server.md describes, and `ws://` means nothing did. The second is a warning
+ * with nothing to soften it: the notes travel in plaintext between devices and
+ * the server, so on that hop they are as exposed as the device credential.
+ * `connectionDetail` says so in one line; which network can see it is in
+ * docs/plugin.md.
  */
 export function describeConnection(at: Connection): string {
   return at.server === undefined
@@ -5029,24 +4868,23 @@ export function describeConnection(at: Connection): string {
  * Whether the connection is protected, in one line.
  *
  * Shown in the connection details, which is somewhere somebody has gone
- * looking for a fact rather than for an explanation. It used to spend three
- * sentences here on what encryption covers and where to read more, in a panel
- * whose last row is a link to that guide.
+ * looking for a fact rather than for an explanation, in a panel whose last row
+ * is a link to the guide.
  *
- * Shorter, not smaller. `panel-shots.test.ts` guards this line as one of four
- * things "paid for in incidents", and it is right to: the fact worth having is
- * not that TLS is missing, it is that the notes are sealed anyway and the
- * credential is not. Cutting to "this connection is not encrypted" reads as
- * though the notes were exposed, which is both wrong and more alarming than
- * the truth. So the clause stays and the lecture goes.
+ * `panel-shots.test.ts` guards this line as one of the things "paid for in
+ * incidents". What it says is the opposite of what Basalt's said: Basalt could
+ * tell somebody on a plain hop that their notes were still sealed and only the
+ * credential was exposed. Trew has no end-to-end encryption, so a hop without
+ * TLS exposes the notes themselves as well as the device credential, and a
+ * line that named only the credential would understate it.
  *
  * Nothing at all when the hop is protected: explaining TLS to somebody who
- * already has it is the same lecture with a happier ending.
+ * already has it is a lecture with a happier ending.
  */
 export function connectionDetail(at: Connection): string {
   return at.url.startsWith("wss://")
     ? ""
-    : "No TLS on this hop: your notes are still sealed, the device credential is not.";
+    : "No TLS on this hop: your notes and the device credential both cross it in the clear.";
 }
 
 /** A fragment placed where a sentence starts. A leading digit is left alone. */
@@ -5060,6 +4898,12 @@ function longStatus(state: State): string {
       return "Sync is paused on this device until you resume it or restart Obsidian.";
     case "unpaired":
       return "Not paired.";
+    case "pairing":
+      return state.retryAt === undefined
+        ? "Finishing the pairing with the server."
+        : // Without its own full stop, which the reason for a lost reply ends with.
+          `Finishing the pairing: ${(state.why ?? "the last attempt did not finish").replace(/\.$/, "")}. ` +
+            `Trying again at ${clock(state.retryAt)}.`;
     case "connecting":
       return "Connecting.";
     case "loading": {

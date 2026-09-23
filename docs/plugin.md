@@ -28,42 +28,43 @@ changes the protocol, upgrade the server before its clients.
 
 ## Pairing
 
+Every device joins with an invite: a single-use string starting `trew1i_` that
+carries the server's address and the vault's name. The setup screen has one
+field, **Invite**, and a **Pair** button.
+
 <details>
 <summary>See the setup screen</summary>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/pairing-dark.png">
-  <img src="assets/screenshots/pairing.png" alt="Choose to join an existing vault or set up a new one." width="640">
+  <img src="assets/screenshots/pairing.png" alt="The setup screen: an Invite field and a Pair button." width="640">
 </picture>
 
 </details>
 
 ### Start your first device
 
-1. Paste the server's setup string into **Invite or setup line**. With TLS
-   configured, it looks like `wss://homelab.example.ts.net#TOKEN`. Trew reads
-   it and says which server it will start the vault on; check that address.
-2. Press **Start a new vault**, save the recovery key under **Write this down**,
-   then press **I have written it down**.
-3. Wait for sync to finish before adding another device.
+1. Get the first invite from your server. It is in the `first-invite` file in
+   the server's data directory, or `trew invite` on the server prints a fresh
+   one; [server setup](server.md#the-first-device) shows both.
+2. Paste it into **Invite**. Trew reads it and says which server it points to,
+   and which vault if it is not `default`; check that address. **Pair** becomes
+   available once the invite can be read.
+3. Press **Pair**, then wait for sync to finish before adding another device.
 
-To name this device something other than the suggestion, open **More options**
-first.
+To name this device something other than the suggestion, or to skip a folder
+on this device, open **More options** first.
 
-Keep the recovery key somewhere safe and separate from your devices. It is how
-you regain access if every device is lost; Trew cannot reissue it. Use an
-invite for routine pairing.
-
-A server using a vault name other than `default` must be initialized once with
-[the CLI](server.md#a-vault-that-is-not-called-default). The plugin can then
-join it with an invite.
+There is no recovery key to write down. Your notes and their history live on
+the server, so losing every device loses no synced note: run `trew invite` on
+the server to pair a new one.
 
 ### Add another device
 
 1. On a paired device, open **Add another device → Create invite**.
 2. On your phone, install and enable Trew, then scan the QR code. Or copy the
-   pairing code and paste it into **Invite or setup line** on the new device.
-3. Check the vault and server named under the field, then press **Pair**.
+   pairing code and paste it into **Invite** on the new device.
+3. Check the server (and vault) named under the field, then press **Pair**.
 4. If this vault already contains files, Trew asks you to confirm combining
    them with your synced vault. An older copy can bring back files moved or
    deleted elsewhere. **Cancel** leaves your files and invite untouched.
@@ -75,8 +76,14 @@ To download a fresh copy, create a new empty Obsidian vault and keep the old
 vault as a backup. Trew does not clear or move existing files during pairing.
 
 An invite works once and expires after one hour. If it expires, create a new
-one. If no paired device remains, paste the recovery key into the same field.
-There is no fixed device limit.
+one. If no paired device remains, run `trew invite` on the server and paste
+what it prints into the same field. There is no fixed device limit.
+
+If pairing is interrupted after the invite was sent, Trew keeps the pairing
+and finishes it on the next attempt, even after the invite has expired. A
+refused invite (unknown, already used, expired or cancelled) leaves nothing
+saved. An invite or recovery key from Basalt Sync does not pair with Trew; the
+field says so.
 
 <details>
 <summary>See the QR code and pairing code</summary>
@@ -118,9 +125,11 @@ cannot confirm new changes until it reconnects.
 | Stopped | Follow the panel's instructions. Repeated attempts alone will not fix this condition. |
 
 For a protocol mismatch, update the server and plugin to compatible releases.
-For a restored server, use **Rejoin this server** below. If the panel reports
-unreadable local state, preserve that state and your notes before attempting
-recovery; deleting the plugin's files is not a general troubleshooting step.
+After the server is restored from a backup, Trew catches up by itself; see
+[rejoining a restored server](#rejoining-a-restored-server) for the one case
+that stops. If the panel reports unreadable local state, preserve that state
+and your notes before attempting recovery; deleting the plugin's files is not a
+general troubleshooting step.
 
 ## Activity and quick actions
 
@@ -226,12 +235,22 @@ both versions on a conflict is not a promise that sync never changes an open fil
 - Obsidian's configuration folder: settings, plugins, themes, snippets, and
   workspace layout.
 - Files or folders whose names start with a dot, at any depth, including
-  `.git`, `.trash`, and `.trew`.
+  `.git`, `.trash`, and `.trew`. An `.attachments` folder is one of these, so
+  attachments kept there stay on the device that has them.
 - Files above the server's limit, **64 MiB by default**. The server operator
   can [adjust the limit](server-reference.md#serve).
+- Paths the server refuses because Obsidian could not hold them everywhere:
+  longer than 1,024 bytes, a file or folder name longer than 255 bytes, control
+  characters, backslashes, and a few more. A no-break space in a name is not
+  one of them: Obsidian reads it as an ordinary space, and so does Trew, so
+  the note syncs under that name and the file keeps its own.
+- A path that differs from another synced path only in letter case, such as
+  `Notes/a.md` beside `notes/a.md`, because a case-insensitive disk would hold
+  them as one.
 
-Other notes and attachments are included. Large attachments need more memory,
-particularly on phones.
+The panel lists each refused path with its reason, and the file stays on this
+device. Rename it and press **Sync now**. Other notes and attachments are
+included. Large attachments need more memory, particularly on phones.
 
 ## Phones
 
@@ -266,11 +285,14 @@ Under **Manage this vault**:
 
 - **This device's name → Rename** changes the label used for future activity.
   Existing history and conflict filenames retain their old labels.
-- **Devices → Show devices** lists registered devices and outstanding invites.
-- **Revoke** stops a device connecting; **Cancel** invalidates an unused invite.
+- **Devices → Show devices** lists paired devices and outstanding invites.
+- **Revoke** stops a device syncing; **Cancel** invalidates an unused invite.
 
 When names match, the list shows device IDs to help you tell them apart.
-Rows marked **Never connected** may be left by an interrupted pairing.
+Rows marked **Never connected** may be left by an interrupted pairing. The
+server's host can do the same with `trew devices`, `trew revoke` and
+`trew uninvite`; see the
+[server reference](server-reference.md#invite-devices-revoke-uninvite).
 
 <details>
 <summary>See the device list</summary>
@@ -282,36 +304,37 @@ Rows marked **Never connected** may be left by an interrupted pairing.
 
 </details>
 
-Revocation cannot erase notes or decryption keys already on a device. See
+Revoking a device stops it receiving and sending changes at once, and cancels
+any invites it created. It cannot erase notes already on that device: they stay
+readable there. See
 [what to do after losing a device](security.md#if-a-device-is-lost-or-stolen).
-Revoking the final device requires the recovery key and the
-[CLI](cli-reference.md#device-access).
+You can revoke any device, including this one and the last one; `trew invite`
+on the server pairs a device again afterwards.
 
 <details>
 <summary>Recovery and server maintenance</summary>
 
-## Replacing the vault's secret
-
-If your recovery key was exposed, choose **Manage this vault → Replace the
-vault's secret**, provide the current recovery key, and follow the confirmation.
-Save the new key. If the result is uncertain, keep both keys and follow the
-message before discarding either.
-
-This replaces the recovery key and cancels outstanding invites. Existing
-devices keep syncing and history remains available. It does not revoke those
-devices or replace the data-encryption key. Review
-[the privacy limits](security.md#if-a-device-is-lost-or-stolen) before relying
-on it after a theft.
-
 ## Rejoining a restored server
 
-After the server is restored from an older backup, the panel may show
-**Stopped** and offer **Rejoin this server**.
+When the operator restores the server from a `trew backup` snapshot, the
+server starts a new history, and this device notices at its next connection.
+It then reads the restored history as a fresh listing, with nothing to press:
+files that match agree, files that differ are kept both ways as a conflict
+copy, files only this device holds are sent back, and nothing is deleted
+because the restored history lacks it. A note deleted after that backup was
+taken can come back; delete it again if you still want it gone.
 
-First have the operator back up the restored server and preserve local notes.
-Press **Rejoin this server**, review the two positions shown, then confirm.
-Trew rejoins and sends versions held only on this device, keeping both copies
-where they disagree. Prefer this action to unlinking and pairing again.
+The one case that stops is a server data directory copied back by hand rather
+than restored from a backup. The panel then shows **Stopped** and offers
+**Rejoin this server**. First have the operator back up the server and
+preserve local notes. Press **Rejoin this server**, review the two positions
+shown, then confirm. Trew rejoins and sends versions held only on this device,
+keeping both copies where they disagree. Prefer this action to unlinking and
+pairing again.
+
+After either, the next edit made on two devices at once keeps both versions
+instead of merging them, because the last version the devices agreed on is
+gone.
 
 ## Sending back what the server has lost
 
