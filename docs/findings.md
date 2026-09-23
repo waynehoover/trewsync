@@ -199,13 +199,13 @@ failing before its fix and passing after it.
 
 | Defect | Result after the fix | Regression coverage |
 |---|---|---|
-| The documented `pair -` form rejected standard input as an unknown option. | A lone dash reaches the secret reader; pairing from a private pipe works. | [state.test.ts](../client/src/cli/state.test.ts): standard-input pairing, saved mirror mode, and note readback. |
-| `unlock --json` returned success for competing holders. | Contested recovery returns `ok: false` and exit 1, matching text output. | [unlock.test.ts](../client/src/cli/unlock.test.ts): contested recovery preserves the current holder. |
-| Recovery-key administration could act on another server with the same vault name. | A paired directory's saved endpoint determines the target; keys with an old address remain usable. | [cli.test.ts](../client/src/cli/cli.test.ts): two-server refusal and moved-address administration. |
-| A sync failure hid a completed local restore. | Both output formats retain the restored path and distinguish local restoration from sync failure. | [recover.test.ts](../client/src/cli/recover.test.ts): the restored bytes and current edit both survive; sync can be retried. |
-| An unrelated upload marked a restored note as sent. | Delivery is checked for that exact path, and an unsent copy is reported accurately. | [recover.test.ts](../client/src/cli/recover.test.ts): another file uploads while the restored file remains absent from server history. |
-| Watch mode omitted its live recovery inventory. | Watch reports include retained paths and incomplete recovery, using the current connection. | [state.test.ts](../client/src/cli/state.test.ts): a separate watcher process reports a torn ledger and retains the displaced bytes. |
-| CLI advice implied that rotation protected future content after device theft. | The device list and revocation output explain the retained data key and when recovery-key rotation helps. | [cli.test.ts](../client/src/cli/cli.test.ts): listing and revocation guidance. |
+| The documented `pair -` form rejected standard input as an unknown option. | A lone dash reaches the secret reader; pairing from a private pipe works. | [state.test.ts](../client/src/node/state.test.ts): standard-input pairing, saved mirror mode, and note readback. |
+| `unlock --json` returned success for competing holders. | Contested recovery returns `ok: false` and exit 1, matching text output. | [unlock.test.ts](../client/src/node/unlock.test.ts): contested recovery preserves the current holder. |
+| Recovery-key administration could act on another server with the same vault name. | A paired directory's saved endpoint determines the target; keys with an old address remain usable. | [cli.test.ts](../client/src/node/cli.test.ts): two-server refusal and moved-address administration. |
+| A sync failure hid a completed local restore. | Both output formats retain the restored path and distinguish local restoration from sync failure. | [recover.test.ts](../client/src/node/recover.test.ts): the restored bytes and current edit both survive; sync can be retried. |
+| An unrelated upload marked a restored note as sent. | Delivery is checked for that exact path, and an unsent copy is reported accurately. | [recover.test.ts](../client/src/node/recover.test.ts): another file uploads while the restored file remains absent from server history. |
+| Watch mode omitted its live recovery inventory. | Watch reports include retained paths and incomplete recovery, using the current connection. | [state.test.ts](../client/src/node/state.test.ts): a separate watcher process reports a torn ledger and retains the displaced bytes. |
+| CLI advice implied that rotation protected future content after device theft. | The device list and revocation output explain the retained data key and when recovery-key rotation helps. | [cli.test.ts](../client/src/node/cli.test.ts): listing and revocation guidance. |
 
 Documentation corrections remove the old device caps from the server reference,
 name the current pairing and deleted-note controls, distinguish plugin releases

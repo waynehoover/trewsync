@@ -23,7 +23,7 @@ const { version } = JSON.parse(await readFile("package.json", "utf8"));
 
 /** The headless client, as one file a person can run. */
 const cli = {
-  entryPoints: ["src/cli/bin.ts"],
+  entryPoints: ["src/node/bin.ts"],
   outfile: "dist/trew.mjs",
   platform: "node",
   target: "node20",

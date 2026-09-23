@@ -150,7 +150,7 @@ async function inviteOf(dir: string): Promise<string> {
 
 /** The CLI as a separate process, which is the only way two of them contend. */
 function trew(...argv: string[]): ChildProcess & { stderrText: () => string } {
-  const child = spawn("bun", ["src/cli/bin.ts", ...argv], {
+  const child = spawn("bun", ["src/node/bin.ts", ...argv], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   }) as ChildProcess & { stderrText: () => string };

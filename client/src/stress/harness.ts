@@ -14,8 +14,8 @@ import { dirname, join } from "node:path";
 import { Client, credentialsFor, pairWithInvite } from "../core/client.ts";
 import { parseInvite, startPairing, type DeviceConfig } from "../core/pairing.ts";
 import { removeTree, TestServer } from "../core/test-server.ts";
-import { configPath, indexPath, loadConfig, saveConfig } from "../cli/config.ts";
-import { JsonIndexStore, NodeVault } from "../cli/vault.ts";
+import { configPath, indexPath, loadConfig, saveConfig } from "../node/config.ts";
+import { JsonIndexStore, NodeVault } from "../node/vault.ts";
 
 export const enc = new TextEncoder();
 

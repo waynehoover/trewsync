@@ -26,7 +26,7 @@ use, start with the [server](server.md), [plugin](plugin.md), or
 go.mod, cmd/, internal/  trew: server, store, backup, verification, purge
 client/src/core/         shared sync engine, chunking, merging, transport
 client/src/plugin/       Obsidian plugin and Vault adapter
-client/src/cli/          trew CLI and filesystem adapter
+client/src/node/          trew CLI and filesystem adapter
 client/src/stress/       fault, crash, collision, and scale coverage
 scripts/                 validation and release tools
 ```
@@ -92,8 +92,8 @@ to a freshly built CLI child and the real Go server:
 
 ```bash
 cd client
-bun run test src/cli/mcp.test.ts src/cli/mcp-bin.test.ts src/cli/mcp-protocol.test.ts src/cli/mcp-artifact.test.ts
-bun run test src/cli/mcp-token.test.ts src/cli/mcp-token-auth.test.ts src/cli/mcp-http.test.ts src/cli/mcp-http-process.test.ts src/cli/mcp-http-concurrency.test.ts
+bun run test src/node/mcp.test.ts src/node/mcp-bin.test.ts src/node/mcp-protocol.test.ts src/node/mcp-artifact.test.ts
+bun run test src/node/mcp-token.test.ts src/node/mcp-token-auth.test.ts src/node/mcp-http.test.ts src/node/mcp-http-process.test.ts src/node/mcp-http-concurrency.test.ts
 ```
 
 The TypeScript MCP's stress file, `mcp.stress.ts`, was retired in M2 rather than

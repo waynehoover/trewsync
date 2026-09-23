@@ -52,7 +52,7 @@ import { promisify } from "node:util";
 
 import { Client } from "./src/core/client.ts";
 import { TestServer, serverBinary } from "./src/core/test-server.ts";
-import { JsonIndexStore, NodeVault } from "./src/cli/vault.ts";
+import { JsonIndexStore, NodeVault } from "./src/node/vault.ts";
 import { corpusPaths, noteBody, pathFor } from "./bench-corpus.ts";
 
 const run = promisify(execFile);

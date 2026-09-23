@@ -28,7 +28,7 @@ import { dirname, join, relative } from "node:path";
 
 import { releaseAllSeams, seams, type Seam } from "../core/seam.ts";
 import type { ExpectedContent, Replaced } from "../core/vault.ts";
-import { NodeVault } from "../cli/vault.ts";
+import { NodeVault } from "../node/vault.ts";
 import { removeTree } from "../core/test-server.ts";
 
 const enc = new TextEncoder();

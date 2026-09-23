@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { NodeVault } from "../cli/vault.ts";
+import { NodeVault } from "../node/vault.ts";
 import { plainDigest } from "./digest.ts";
 import { Engine, type SyncReport } from "./engine.ts";
 import { receiveCommitted } from "./test-async.ts";

@@ -18,8 +18,8 @@ import { SCENARIOS } from "./fault-scenarios.ts";
 // Imported for their seams: a seam is only in the registry once its module
 // has been loaded, so the driver's coverage is exactly what is imported here
 // and by the scenarios (see `seams`).
-import "../cli/vault.ts";
-import "../cli/lock.ts";
+import "../node/vault.ts";
+import "../node/lock.ts";
 
 afterEach(() => releaseAllSeams());
 

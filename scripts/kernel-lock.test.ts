@@ -18,9 +18,9 @@ import { hostname, platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-import { STATE_DIR } from "../client/src/cli/config.ts";
-import { alive, currentHolder, lockPath, lockVault } from "../client/src/cli/lock.ts";
-import { BUSY, mechanismFor, provenFor } from "../client/src/cli/exclusion.ts";
+import { STATE_DIR } from "../client/src/node/config.ts";
+import { alive, currentHolder, lockPath, lockVault } from "../client/src/node/lock.ts";
+import { BUSY, mechanismFor, provenFor } from "../client/src/node/exclusion.ts";
 
 const failures: string[] = [];
 function ok(what: string, holds: boolean): void {

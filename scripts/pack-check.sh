@@ -84,7 +84,7 @@ for listed in "trew sync" "trew pair" "--version"; do
 done
 
 echo "==> using MCP from the packed artifact under node"
-bun run "$root/client/src/cli/mcp-artifact.run.ts" \
+bun run "$root/client/src/node/mcp-artifact.run.ts" \
   "$work/elsewhere/node_modules/trew-sync/dist/trew.mjs" "$(command -v node)"
 
 echo "==> the packed CLI installs and runs"

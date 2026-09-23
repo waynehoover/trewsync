@@ -29,7 +29,7 @@ import { encodeFrame } from "../core/frame.ts";
 import { chunkBytes, sizesFor } from "../core/chunk.ts";
 import { encodedEntryBytes } from "../core/transport.ts";
 import { removeTree, TestServer } from "../core/test-server.ts";
-import { JsonIndexStore, NodeVault } from "../cli/vault.ts";
+import { JsonIndexStore, NodeVault } from "../node/vault.ts";
 
 const COUNT = Number(process.env["NOTES"] ?? 10000);
 const enc = new TextEncoder();

@@ -29,7 +29,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { NodeVault } from "./cli/vault.ts";
+import { NodeVault } from "./node/vault.ts";
 import { FakeAdapter, FakeVaultIndex, asVault } from "./plugin/fake.ts";
 import { ObsidianVault } from "./plugin/vault.ts";
 import { removeTree } from "./core/test-server.ts";

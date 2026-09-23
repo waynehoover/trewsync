@@ -22,7 +22,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { JsonIndexStore, writeDurably } from "../cli/vault.ts";
+import { JsonIndexStore, writeDurably } from "../node/vault.ts";
 import { deltaFrom, encodeRecord, replay, shapeOf } from "../core/index-journal.ts";
 import { indexLogPath } from "../core/index-journal-store.ts";
 import type { StoredState } from "../core/vault.ts";

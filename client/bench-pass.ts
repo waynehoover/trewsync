@@ -44,7 +44,7 @@ import { Client } from "./src/core/client.ts";
 import type { PassPhases, SyncReport } from "./src/core/engine.ts";
 import { TestServer, serverBinary } from "./src/core/test-server.ts";
 import { noteBody, pathFor } from "./bench-corpus.ts";
-import { JsonIndexStore, NodeVault } from "./src/cli/vault.ts";
+import { JsonIndexStore, NodeVault } from "./src/node/vault.ts";
 import { timedVault } from "./src/core/vault.ts";
 
 /** Vault sizes. Doubling, so the ratio between rows is the growth rate. */

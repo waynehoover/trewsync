@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { JsonIndexStore } from "./cli/vault.ts";
+import { JsonIndexStore } from "./node/vault.ts";
 import { indexLogPath } from "./core/index-journal-store.ts";
 import { encodeRecord } from "./core/index-journal.ts";
 import type { StoredState } from "./core/vault.ts";
