@@ -368,6 +368,12 @@ type Store struct {
 	// from it stands in for any post-delete query failing, so a test can prove
 	// the delete rolls back rather than standing with the history already gone.
 	afterPurgeDelete func() error
+
+	// subs are the channels Subscribe handed out, nudged after every commit
+	// that appends entries; see Committed. Guarded by subMu, never by writeMu,
+	// so a subscriber can never hold up a commit.
+	subMu sync.Mutex
+	subs  map[chan struct{}]struct{}
 }
 
 // Open uses SyncFull. Use OpenWithSync only to trade durability for speed in a
@@ -744,6 +750,7 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
+		s.notifyCommitted()
 	}
 	return out, nil
 }
@@ -910,6 +917,7 @@ func (s *Store) appendEntry(vaultID string, e Entry, base *int64, prevBase int64
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	s.notifyCommitted()
 	return uid, nil
 }
 
