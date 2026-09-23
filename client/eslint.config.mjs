@@ -17,7 +17,7 @@
  * plugin reads `manifest.json` from the working directory: `minAppVersion` is
  * what `no-unsupported-api` checks against, and without it that rule, the one
  * that decides whether an older Obsidian can load the plugin at all, turns
- * itself off without a word.
+ * itself off: the plugin logs that it found no manifest and the lint passes.
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
