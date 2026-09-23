@@ -4636,7 +4636,7 @@ export class Engine {
     // syncs, which no retry changes; the others are the server's. `badpath`
     // and `collision` are a path the server will not hold, with the reason in
     // the message (plan/protocol.md, "Paths"): a stranded path the person has
-    // to see, in the panel and in `trew-sync status`, rather than a log line
+    // to see, in the panel and in `trew status`, rather than a log line
     // nobody reads while the file never syncs (PLAN.md section 4.9).
     const permanent =
       code !== undefined &&

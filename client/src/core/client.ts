@@ -1792,7 +1792,7 @@ export async function whatTheDiskHolds(
 
 /**
  * What to do next when pairing this device did not finish: one counsellor for
- * `trew-sync pair` and the panel.
+ * `trew pair` and the panel.
  *
  * It answers from what the disk says rather than from which step threw (rule
  * 4), because that is the only thing that tells the states apart, and it is
@@ -1823,12 +1823,12 @@ export function adviseAfterPairing(what: {
     case "credential":
       return cli
         ? `This device is paired with the vault and ${where} holds its credential; ` +
-            `run trew-sync sync here to finish, or trew-sync unlink to start again.`
+            `run trew sync here to finish, or trew unlink to start again.`
         : `This device is paired with the vault; Trew will connect as it on the next attempt.`;
     case "pending":
       return cli
         ? `The invite was sent and no answer came back, so whether the server registered this ` +
-            `device is not known. ${where} holds the pairing: run trew-sync pair here again to ` +
+            `device is not known. ${where} holds the pairing: run trew pair here again to ` +
             `finish it with the same credential, which works even after the invite has expired ` +
             `if the server did register it.`
         : `The invite was sent and no answer came back, so whether the server registered this ` +
@@ -1840,7 +1840,7 @@ export function adviseAfterPairing(what: {
         `nothing should be revoked on the strength of it: a credential that was written and ` +
         `cannot be read back is still the only copy of its row's token. Fix that first, ` +
         (cli
-          ? `then trew-sync status here says whether this device has one.`
+          ? `then trew status here says whether this device has one.`
           : `then reload the plugin, which says whether this device has one.`)
       );
     default:
