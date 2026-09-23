@@ -265,7 +265,7 @@ func TestAnotherProductOrANewerSchemaIsRefusedAndLeftByteIdentical(t *testing.T)
 	}{
 		{"another product", `UPDATE store_identity SET product = 'lyell'`, ErrForeignStore, []string{"lyell"}},
 		{"a newer schema", fmt.Sprintf(`UPDATE store_identity SET schema_version = %d`, SchemaVersion+1),
-			ErrFutureSchema, []string{fmt.Sprint(SchemaVersion + 1), "newer " + Product}},
+			ErrFutureSchema, []string{fmt.Sprint(SchemaVersion + 1), "newer " + Program}},
 		{"no epoch", `UPDATE store_identity SET epoch = ''`, ErrForeignStore, []string{"epoch"}},
 		{"no identity row", `DELETE FROM store_identity`, ErrForeignStore, []string{"0 identity rows"}},
 	} {

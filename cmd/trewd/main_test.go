@@ -111,7 +111,7 @@ func appendOne(t *testing.T, dir, path, body string) {
 	}
 }
 
-// trew runs a command and returns what it printed.
+// trew runs a trewd command and returns what it printed.
 func trew(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
@@ -123,7 +123,7 @@ func mustRun(t *testing.T, args ...string) string {
 	t.Helper()
 	out, err := trew(t, args...)
 	if err != nil {
-		t.Fatalf("trew %s: %v\n%s", strings.Join(args, " "), err, out)
+		t.Fatalf("trewd %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return out
 }
@@ -822,11 +822,11 @@ func TestCommandsRefuseADataDirectoryThatIsNotThere(t *testing.T) {
 	} {
 		out, err := trew(t, args...)
 		if err == nil {
-			t.Fatalf("trew %s succeeded against a directory that does not exist:\n%s",
+			t.Fatalf("trewd %s succeeded against a directory that does not exist:\n%s",
 				strings.Join(args, " "), out)
 		}
-		if !strings.Contains(err.Error(), "no trew data directory") {
-			t.Fatalf("trew %s refused unhelpfully: %v", strings.Join(args, " "), err)
+		if !strings.Contains(err.Error(), "no trewd data directory") {
+			t.Fatalf("trewd %s refused unhelpfully: %v", strings.Join(args, " "), err)
 		}
 	}
 
@@ -1240,7 +1240,7 @@ func TestAPairedVaultWritesNoFirstInvite(t *testing.T) {
 	}
 	var out bytes.Buffer
 	printPairing(&out, "vault.example.ts.net:3003", "default", first)
-	if !strings.Contains(out.String(), "trew invite") {
+	if !strings.Contains(out.String(), "trewd invite") {
 		t.Errorf("a paired vault did not say how to add a device:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), invite.Prefix) {
@@ -1621,7 +1621,7 @@ func TestThePortAnswersBeforeTheStartupSummaryRuns(t *testing.T) {
 //
 // A stop drains in two halves of shutdownTimeout each and then closes the
 // store. Two managers impose their own deadline on top of that and neither
-// knows the arithmetic: systemd's TimeoutStopSec, written by `trew service`,
+// knows the arithmetic: systemd's TimeoutStopSec, written by `trewd service`,
 // and Docker's stop grace, which defaults to ten seconds if compose does not
 // say otherwise. Ten seconds is exactly the two halves with nothing left for
 // closing the store, so a busy shutdown under compose was killed partway
@@ -1640,7 +1640,7 @@ func TestEveryStopDeadlineOutlastsTheShutdownBudget(t *testing.T) {
 	budget := 2*shutdownTimeout + shutdownTimeout
 
 	written := unit(unitArgs{
-		Binary: "/usr/local/bin/trew", Data: "/var/lib/trew", User: "trew",
+		Binary: "/usr/local/bin/trewd", Data: "/var/lib/trew", User: "trew",
 		Addr: ":3003", Vault: "default",
 	})
 	var systemdStop time.Duration
@@ -1688,7 +1688,7 @@ func TestEveryStopDeadlineOutlastsTheShutdownBudget(t *testing.T) {
 	}
 }
 
-// `trew health` says which kind of unwell (I17).
+// `trewd health` says which kind of unwell (I17).
 //
 // /health answers one word naming its case, and reporting only "503 Service
 // Unavailable" would collapse "the disk is full" and "we are shutting down"
@@ -1913,7 +1913,7 @@ func TestABackupRefusedAfterItIsLockedIsStillReleased(t *testing.T) {
 // health, and the exit code is what a retention script reads.
 //
 // The printed line already told the two apart and the status did not, so
-// `trew verify -deep -data DIR && rm -rf OLD` -- the step docs/server.md
+// `trewd verify -deep -data DIR && rm -rf OLD` -- the step docs/server.md
 // documents, written the natural way -- passed over an empty store and deleted
 // the last copy of the history a purge had just dropped.
 func TestVerifyRefusesAStoreItCheckedNothingIn(t *testing.T) {
@@ -1950,7 +1950,7 @@ func TestVerifyPassesAStoreWithEntriesInIt(t *testing.T) {
 	}
 }
 
-// `trew stats` reports the numbers it exists to report.
+// `trewd stats` reports the numbers it exists to report.
 //
 // Two correct changes made it report none of them. Inspection commands open
 // the store read-only (I15); the health probe writes, because a `SELECT 1`
@@ -1996,7 +1996,7 @@ func TestStatsReportsTheDiskItIsAskedAbout(t *testing.T) {
 	}
 }
 
-// `trew service` reads the store and does not write to it.
+// `trewd service` reads the store and does not write to it.
 //
 // It opens one to run a single `SELECT` and was using the writable open, which
 // creates the directory, runs `migrate`, applies the schema and stamps

@@ -2,7 +2,7 @@
  * A backup, restored, read back by a device that has never seen the vault
  * (I16).
  *
- * `cmd/trew/rehearsal_test.go` already executes the runbook and it is
+ * `cmd/trewd/rehearsal_test.go` already executes the runbook and it is
  * the reason `trew restore` is not a rumour: back up, lose the original,
  * copy the backup somewhere fresh, verify it deeply, start a server on it, and
  * read every version and every body back over a real socket. What it cannot do
@@ -17,11 +17,11 @@
  * read it back. Nothing checked that end to end, so this does:
  *
  *   1. a device writes notes whose hashes are known here,
- *   2. `trew backup` takes a copy,
+ *   2. `trewd backup` takes a copy,
  *   3. the live directory is destroyed, which is the disaster,
  *   4. a server starts on the backup,
  *   5. a device that has never existed pairs from an invite made with
- *      `trew invite` on that server,
+ *      `trewd invite` on that server,
  *   6. and every note it pulls down is compared by hash to what was written.
  *
  * Step 5 is the one that matters and the one no server-side test can reach: it
@@ -121,7 +121,7 @@ describe("losing the server and getting the vault back", () => {
       await restored.stop();
     });
 
-    // A device that has never existed, paired from an invite `trew invite`
+    // A device that has never existed, paired from an invite `trewd invite`
     // makes on the restored server, and holding nothing else. This is the
     // person who lost every machine they own.
     const second = new MemoryVault();

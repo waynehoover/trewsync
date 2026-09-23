@@ -49,7 +49,7 @@
  * check: that the walk really reached every state and captured something real
  * in each.
  *
- * Everything here runs against the stub in `stub.ts` and a real `trew`, so
+ * Everything here runs against the stub in `stub.ts` and a real `trewd`, so
  * the panel being captured is the panel the plugin builds, not a description
  * of it.
  */
@@ -405,7 +405,7 @@ const setState = (plugin: Testable, state: unknown): void =>
 /**
  * Every panel state, walked and captured.
  *
- * Against a real `trew`, because the paired states are the ones with rows
+ * Against a real `trewd`, because the paired states are the ones with rows
  * in them and a paired panel is one that talked to a server. The caller owns
  * the server and the returned plugins: `onunload` on each, in reverse, and
  * then the server.
@@ -551,7 +551,7 @@ export async function walkPanelStates(
   shots.push(
     shotOfOpenPanel(
       "devices-listed-last-device",
-      "One device, and its row can be revoked too: the last device may be, and trew invite on the server brings one back.",
+      "One device, and its row can be revoked too: the last device may be, and trewd invite on the server brings one back.",
     ),
   );
   closePanel();

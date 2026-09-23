@@ -507,7 +507,7 @@ export default class TrewPlugin extends Plugin {
         } catch (err) {
           throw new Error(
             `This invite link is invalid: ${(err as Error).message}. Create a new invite on a ` +
-              `paired device, or with trew invite on the server.`,
+              `paired device, or with trewd invite on the server.`,
           );
         }
         new TrewModal(this, invite).open();
@@ -1877,8 +1877,8 @@ export default class TrewPlugin extends Plugin {
   /**
    * Joins a vault by redeeming an invite.
    *
-   * Every device pairs this way, the first one included: `trew serve` writes
-   * the first device's invite to `first-invite` in its data folder, `trew
+   * Every device pairs this way, the first one included: `trewd serve` writes
+   * the first device's invite to `first-invite` in its data folder, `trewd
    * invite` on the server makes more, and a paired device's panel mints them
    * over the wire. What comes back is this device's own row and the token for
    * it, and nothing else that authenticates, which is what makes revoking this
@@ -2483,7 +2483,7 @@ export default class TrewPlugin extends Plugin {
    * anything new and stops writing, and the panel says so beside the button.
    *
    * Any device may be revoked, the last one included, and no flag is needed
-   * for that: a vault with no devices gets one back from `trew invite` on the
+   * for that: a vault with no devices gets one back from `trewd invite` on the
    * server, and nothing a device holds is needed for it.
    */
   async revoke(deviceId: string): Promise<{ self: boolean }> {
@@ -3788,7 +3788,7 @@ class TrewPanel {
       list.empty();
       // Every row can be revoked, the last one included, which reading the
       // list at all means is this device. The way back into a vault with no
-      // devices is `trew invite` on the server, and the confirmation says so
+      // devices is `trewd invite` on the server, and the confirmation says so
       // on that row rather than the panel hiding the button.
       const last = answer.devices.length === 1;
       heading.setDesc(
@@ -3831,7 +3831,7 @@ class TrewPanel {
                     `readable there, in plaintext.` +
                     (last
                       ? " It is the vault's last device, so adding one back takes an invite " +
-                        "from trew invite on the server."
+                        "from trewd invite on the server."
                       : "") +
                     " Press again to revoke.",
                 );
@@ -4001,7 +4001,7 @@ class TrewPanel {
               say(
                 said,
                 `This device is at version ${at.local} and the server is at ${at.server}. ` +
-                  `Take a backup of the server first (trew backup). Press again to rejoin.`,
+                  `Take a backup of the server first (trewd backup). Press again to rejoin.`,
               );
               return;
             }
@@ -4194,8 +4194,8 @@ class TrewPanel {
    * reason: it asked somebody to choose between kinds of string before it
    * would draw a form, when the string in their clipboard had already made
    * the choice. There is one kind now. Every device pairs from an invite, the
-   * first one included: `trew serve` writes the first device's invite to
-   * `first-invite` in its data folder, `trew invite` on the server prints
+   * first one included: `trewd serve` writes the first device's invite to
+   * `first-invite` in its data folder, `trewd invite` on the server prints
    * more, and a paired device's panel mints them.
    *
    * The line under the field says where the invite points before anything
@@ -4302,10 +4302,10 @@ class TrewPanel {
       contentEl,
       "Invite",
       again
-        ? "Paste a new invite from a paired device's Trew panel, or make one with trew invite " +
+        ? "Paste a new invite from a paired device's Trew panel, or make one with trewd invite " +
             "on the server."
         : "Paste an invite from a paired device's Trew panel. For the first device, use the one " +
-            "trew serve wrote to first-invite in its data folder, or make one with trew invite on " +
+            "trewd serve wrote to first-invite in its data folder, or make one with trewd invite on " +
             "the server.",
     ).addText((t) => {
       t.setPlaceholder("trew1i_...");
@@ -5105,7 +5105,7 @@ export interface Connection {
 export function describeConnection(at: Connection): string {
   return at.server === undefined
     ? `Not connected to ${at.url}.`
-    : `Connected to ${at.url}. Protocol ${at.server.proto}, trew ${at.server.version}.`;
+    : `Connected to ${at.url}. Protocol ${at.server.proto}, trewd ${at.server.version}.`;
 }
 
 /**

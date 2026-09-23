@@ -1863,7 +1863,7 @@ describe("a conflict copy whose name is taken in the gap", () => {
  * One catch used to cover the ancestor fetch, the local read, the incoming
  * fetch and the decoding, so every one of those failures became a conflict
  * copy labelled "not valid UTF-8". A purged ancestor is the case that happens
- * in practice: `trew purge` keeps the newest version of each path, and a
+ * in practice: `trewd purge` keeps the newest version of each path, and a
  * device that was away holds a base the server has since let go of.
  */
 /**
@@ -3187,7 +3187,7 @@ describe("a server that is behind this device", () => {
    * either resets the merge base.
    *
    * Basalt's first way back was `trew rebase --backup-taken`, which the
-   * headless client no longer has: a restore through `trew backup` starts a
+   * headless client no longer has: a restore through `trewd backup` starts a
    * new epoch, the server replays the vault, and nothing is asked of the
    * device, so what is left to recover from here is a data directory copied
    * back behind the server's back, and the refusal says that too.

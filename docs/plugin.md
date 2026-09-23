@@ -45,7 +45,7 @@ field, **Invite**, and a **Pair** button.
 ### Start your first device
 
 1. Get the first invite from your server. It is in the `first-invite` file in
-   the server's data directory, or `trew invite` on the server prints a fresh
+   the server's data directory, or `trewd invite` on the server prints a fresh
    one; [server setup](server.md#the-first-device) shows both.
 2. Paste it into **Invite**. Trew reads it and says which server it points to,
    and which vault if it is not `default`; check that address. **Pair** becomes
@@ -56,7 +56,7 @@ To name this device something other than the suggestion, or to skip a folder
 on this device, open **More options** first.
 
 There is no recovery key to write down. Your notes and their history live on
-the server, so losing every device loses no synced note: run `trew invite` on
+the server, so losing every device loses no synced note: run `trewd invite` on
 the server to pair a new one.
 
 ### Add another device
@@ -76,7 +76,7 @@ To download a fresh copy, create a new empty Obsidian vault and keep the old
 vault as a backup. Trew does not clear or move existing files during pairing.
 
 An invite works once and expires after one hour. If it expires, create a new
-one. If no paired device remains, run `trew invite` on the server and paste
+one. If no paired device remains, run `trewd invite` on the server and paste
 what it prints into the same field. There is no fixed device limit.
 
 If pairing is interrupted after the invite was sent, Trew keeps the pairing
@@ -290,8 +290,8 @@ Under **Manage this vault**:
 
 When names match, the list shows device IDs to help you tell them apart.
 Rows marked **Never connected** may be left by an interrupted pairing. The
-server's host can do the same with `trew devices`, `trew revoke` and
-`trew uninvite`; see the
+server's host can do the same with `trewd devices`, `trewd revoke` and
+`trewd uninvite`; see the
 [server reference](server-reference.md#invite-devices-revoke-uninvite).
 
 <details>
@@ -308,7 +308,7 @@ Revoking a device stops it receiving and sending changes at once, and cancels
 any invites it created. It cannot erase notes already on that device: they stay
 readable there. See
 [what to do after losing a device](security.md#if-a-device-is-lost-or-stolen).
-You can revoke any device, including this one and the last one; `trew invite`
+You can revoke any device, including this one and the last one; `trewd invite`
 on the server pairs a device again afterwards.
 
 On the revoked device, the panel says it was revoked and shows **Pair this
@@ -323,7 +323,7 @@ device under the same name, still skipping what it skipped.
 
 ## Rejoining a restored server
 
-When the operator restores the server from a `trew backup` snapshot, the
+When the operator restores the server from a `trewd backup` snapshot, the
 server starts a new history, and this device notices at its next connection.
 It then reads the restored history as a fresh listing, with nothing to press:
 files that match agree, files that differ are kept both ways as a conflict
@@ -351,7 +351,7 @@ still has the notes. Trew resends missing content without creating new note
 versions.
 
 Repeat on other devices that may have additional copies. The operator should
-then run `trew verify`; a successful repair on one device cannot establish
+then run `trewd verify`; a successful repair on one device cannot establish
 that all server history is recoverable.
 
 ## Durability

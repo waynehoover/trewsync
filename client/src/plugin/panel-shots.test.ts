@@ -311,7 +311,7 @@ describe("the panel walk", () => {
     const body = of("devices-listed-last-device");
     expect(body).toContain("Received latest changes");
     // The last device may be revoked (hazard 4, decided): the way back into a
-    // vault with no devices is `trew invite` on the server, so the row keeps
+    // vault with no devices is `trewd invite` on the server, so the row keeps
     // its button like any other. It is this device, so the button says so.
     expect(body).toContain("button  [Unlink from the server] (warning)");
     expect(prose("devices-listed-last-device")).toContain("1 device");

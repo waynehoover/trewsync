@@ -141,9 +141,9 @@ echo "server  ->  release/server/"
 for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
   goos=${target%/*}
   goarch=${target#*/}
-  name="trew-$goos-$goarch"
+  name="trewd-$goos-$goarch"
   ( CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-      go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$out/server/$name" ./cmd/trew )
+      go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$out/server/$name" ./cmd/trewd )
   printf '  %-24s %s\n' "$name" "$(du -h "$out/server/$name" | cut -f1)"
 done
 
@@ -294,8 +294,8 @@ cliversion=$(python3 -c 'import json;print(json.load(open("client/package.json")
 # The server block, and the verify flag, only where a version was given.
 if [ -n "$serverversion" ]; then
   serverblock=$(cat <<'BLOCK'
-  git tag -a server/v@SERVER@ -m "trew @SERVER@" && git push origin server/v@SERVER@
-  gh release create server/v@SERVER@ --draft --title "trew @SERVER@" \
+  git tag -a server/v@SERVER@ -m "trewd @SERVER@" && git push origin server/v@SERVER@
+  gh release create server/v@SERVER@ --draft --title "trewd @SERVER@" \
     --notes-file /tmp/trew-server-@SERVER@-notes.md \
     release/server/*
 

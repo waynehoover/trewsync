@@ -1,7 +1,7 @@
 /**
  * The client against the real server.
  *
- * These tests build `cmd/trew`, run it on a loopback port with a temporary
+ * These tests build `cmd/trewd`, run it on a loopback port with a temporary
  * data directory, and talk to it with the actual transport. Nothing is mocked:
  * the chunking is real, the framing is real, the SQLite writes are real, and the
  * assertions are checked by asking the server's own `verify` whether what it
@@ -216,7 +216,7 @@ describe("the handshake, against the real server", () => {
     // The default, which is a server's policy rather than the store's
     // ceiling: preparing a file to send costs the client several times the
     // file, so what the server accepts is chosen for the devices syncing it
-    // and `trew serve -max-file` moves it.
+    // and `trewd serve -max-file` moves it.
     expect(ready.perFileMax).toBe(64 * 1024 * 1024);
     expect(ready.maxChunks).toBe(65536);
   });

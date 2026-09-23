@@ -73,7 +73,7 @@ func HTTPHandler(srv *Server, log *slog.Logger, extraOrigins ...string) http.Han
 	// and behind a tunnel the port is on the internet, so it is held to the
 	// same rule as every other pre-auth surface, which
 	// TestNoPreAuthSurfaceNamesTheServerVersion enforces. The numbers behind
-	// the word are in `trew stats`, which is run on the machine.
+	// the word are in `trewd stats`, which is run on the machine.
 	//
 	// 503 rather than 200 with a body somebody has to parse: the common case is
 	// a container runtime or an uptime checker that reads the status code and
@@ -106,7 +106,7 @@ func HTTPHandler(srv *Server, log *slog.Logger, extraOrigins ...string) http.Han
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-			http.Error(w, "trew speaks websocket only", http.StatusUpgradeRequired)
+			http.Error(w, "trewd speaks websocket only", http.StatusUpgradeRequired)
 			return
 		}
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{

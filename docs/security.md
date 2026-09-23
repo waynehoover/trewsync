@@ -6,7 +6,7 @@ Trew is designed for one person's trusted devices and a server they control.
 **The server can read your notes.** It stores their contents, their filenames
 and every earlier version in plaintext. That is deliberate: it is what lets the
 server check everything it holds, hand a note back with nothing but the server
-itself (`trew cat`), and host the planned built-in agent that reads and edits
+itself (`trewd cat`), and host the planned built-in agent that reads and edits
 the same notes. There is no end-to-end encryption. If you need a server that
 cannot read what it stores, Trew is the wrong tool.
 
@@ -53,7 +53,7 @@ whoever holds it can add their own device, so hand it over privately, and
 cancel one you no longer need under **Devices** or with `trew uninvite`.
 
 There is no recovery key. Your notes and their history live on the server, so
-losing every device loses no synced note: run `trew invite` on the server to
+losing every device loses no synced note: run `trewd invite` on the server to
 pair a new one. That also means shell access to the server host is access to
 the vault.
 
@@ -64,8 +64,8 @@ state can connect as the device until you revoke it.
 ## If a device is lost or stolen
 
 1. Open **Manage this vault → Devices** on another paired device and revoke
-   the missing device. On the server, `trew devices` lists devices and
-   `trew revoke -data DIR DEVICE_ID` does the same.
+   the missing device. On the server, `trewd devices` lists devices and
+   `trewd revoke -data DIR DEVICE_ID` does the same.
 2. Review the device list and outstanding invites. Revoke unfamiliar devices
    and cancel invites you no longer trust.
 
@@ -73,7 +73,7 @@ Revoking stops the device receiving and sending changes at once, and cancels
 the invites it had created, so an invite made on a stolen laptop cannot add
 the thief's next device. It cannot un-read anything: the device keeps every
 note it had already synced, in plaintext, and whoever holds it can read them.
-You may revoke the last device; `trew invite` on the server is the way back.
+You may revoke the last device; `trewd invite` on the server is the way back.
 
 If you later restore the server from a backup taken before the revocation, the
 revoked device is in the restored device list again. Revoke it again after the

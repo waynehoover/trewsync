@@ -125,7 +125,7 @@ func TestServeRefusesABasaltDirectoryAndChangesNothing(t *testing.T) {
 func TestEveryCommandRefusesABasaltDirectoryAndChangesNothing(t *testing.T) {
 	dir := basaltDataDir(t)
 	// The same database under this product's name, which is the case that
-	// gets past "there is no trew data directory here".
+	// gets past "there is no trewd data directory here".
 	b, err := os.ReadFile(filepath.Join(dir, "basalt.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -144,10 +144,10 @@ func TestEveryCommandRefusesABasaltDirectoryAndChangesNothing(t *testing.T) {
 	} {
 		_, err := trew(t, args...)
 		if !errors.Is(err, store.ErrForeignStore) {
-			t.Errorf("trew %s: %v, want ErrForeignStore", strings.Join(args, " "), err)
+			t.Errorf("trewd %s: %v, want ErrForeignStore", strings.Join(args, " "), err)
 		}
 		if after := dirDigest(t, dir); after != before {
-			t.Fatalf("trew %s changed the directory:\nbefore\n%s\nafter\n%s",
+			t.Fatalf("trewd %s changed the directory:\nbefore\n%s\nafter\n%s",
 				strings.Join(args, " "), before, after)
 		}
 	}

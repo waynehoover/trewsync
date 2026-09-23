@@ -59,17 +59,17 @@ Linux amd64/arm64 or macOS amd64/arm64. Make it executable and run it with a
 writable data directory:
 
 ```bash
-chmod +x trew-linux-amd64
-./trew-linux-amd64 serve -data ./trew-data -addr 127.0.0.1:3003
+chmod +x trewd-linux-amd64
+./trewd-linux-amd64 serve -data ./trew-data -addr 127.0.0.1:3003
 ```
 
 Use your downloaded filename on macOS. For a persistent Linux service, install
-the binary as `/usr/local/bin/trew`, create a dedicated `trew` account and
+the binary as `/usr/local/bin/trewd`, create a dedicated `trew` account and
 writable `/var/lib/trew` directory, then run:
 
 ```bash
-trew service -data /var/lib/trew -addr 127.0.0.1:3003 \
-  -user trew -binary /usr/local/bin/trew
+trewd service -data /var/lib/trew -addr 127.0.0.1:3003 \
+  -user trew -binary /usr/local/bin/trewd
 ```
 
 This prints a systemd unit and installation commands; review and follow them.
@@ -136,7 +136,7 @@ support WebSockets. If the proxy runs in Docker, connect it to Trew over a
 private Docker network; `127.0.0.1` inside the proxy container refers to that
 container, not the host.
 
-For a test entirely on one machine, `trew serve -localhost` binds to loopback
+For a test entirely on one machine, `trewd serve -localhost` binds to loopback
 and puts a `ws://127.0.0.1` address in its invites. The first device still
 pairs from an invite.
 
@@ -151,15 +151,15 @@ Once secure access works, make the first invite on the server, naming that
 address:
 
 ```bash
-docker compose exec trew /trew invite -url wss://homelab.example.ts.net
+docker compose exec trew /trewd invite -url wss://homelab.example.ts.net
 ```
 
 For a binary installation, run
-`trew invite -data /var/lib/trew -url wss://homelab.example.ts.net` as the
+`trewd invite -data /var/lib/trew -url wss://homelab.example.ts.net` as the
 account that runs the server. It prints the invite; `-out FILE` writes it to a
 file, mode 0600, instead. The command goes through the running server.
 
-When the vault has no devices yet, `trew serve` also writes an invite for the
+When the vault has no devices yet, `trewd serve` also writes an invite for the
 first one to `first-invite` in its data directory, mode 0600, and logs that
 path and when it expires, never the invite itself. It names the right address
 only when `serve` was started with `-url wss://homelab.example.ts.net`;
@@ -173,9 +173,9 @@ own port, which no device can use while the proxy in front terminates TLS.
 4. Use **Add another device → Create invite** for each additional device.
 
 An invite works once and expires after one hour, so make it when you are ready
-to pair; `trew invite -ttl 0` makes one that never expires, for when you mean
+to pair; `trewd invite -ttl 0` makes one that never expires, for when you mean
 it. There is no recovery key: the notes and their history are on the server,
-and `trew invite` there pairs a new device whenever you need one, even when no
+and `trewd invite` there pairs a new device whenever you need one, even when no
 device is left.
 
 Find the startup log with `docker compose logs trew`, `docker logs trew`,
@@ -190,12 +190,12 @@ Open version history to confirm you can find the earlier version.
 For the server itself:
 
 ```bash
-docker compose exec trew /trew health
-docker compose exec trew /trew stats
+docker compose exec trew /trewd health
+docker compose exec trew /trewd stats
 ```
 
-With a binary installation, use `trew health` and
-`trew stats -data /path/to/trew-data`.
+With a binary installation, use `trewd health` and
+`trewd stats -data /path/to/trew-data`.
 
 Before relying on the service, set up
 [backups and a restore rehearsal](server-operations.md#backup). History grows
@@ -218,7 +218,7 @@ release, then run `docker compose pull` and `docker compose up -d`. Preserve
 the data volume and any customized flags, especially the file-size limit.
 Never use `docker compose down -v` to upgrade.
 
-Use `trew version` to check the server build and the plugin panel to check
+Use `trewd version` to check the server build and the plugin panel to check
 what each device connected to. The [protocol reference](protocol.md) describes
 the version used by this source tree.
 
@@ -235,12 +235,12 @@ to type; the plugin shows the name before you press **Pair**.
 |---|---|
 | Cannot reach the server | Server process, proxy, and the proxy's hostname and port. With Tailscale, check it is connected on both server and device. |
 | Works on the server but not the phone | Use the proxy's `wss://` hostname and HTTPS port. `localhost` on the phone is the phone itself. |
-| Invite refused | An invite works once and expires; make a new one with `trew invite` on the server or **Create invite** on a paired device. |
-| Invite names an address the device cannot reach | Make one that names the proxy's address: `trew invite -url wss://your-host`. |
+| Invite refused | An invite works once and expires; make a new one with `trewd invite` on the server or **Create invite** on a paired device. |
+| Invite names an address the device cannot reach | Make one that names the proxy's address: `trewd invite -url wss://your-host`. |
 | Protocol mismatch | Update the server and clients to compatible releases. |
 | Device limit reached | Update the server. Older releases capped the number of devices. |
 | Browser origin rejected | Check the exact origin in the server log and the plugin's hint. Add only that required origin with `-allow-origin`. |
-| Stopped after the data directory was copied back | Follow [server restoration](server-operations.md#restore), then use **Rejoin this server**. A restore from a `trew backup` snapshot needs nothing from the devices. |
+| Stopped after the data directory was copied back | Follow [server restoration](server-operations.md#restore), then use **Rejoin this server**. A restore from a `trewd backup` snapshot needs nothing from the devices. |
 | File too large | Check the default 64 MiB limit and [how to change it](server-reference.md#serve). |
 
 Android needs Obsidian in the foreground. For note recovery and device-specific

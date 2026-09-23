@@ -49,7 +49,7 @@ func TestAnUnknownDeviceAndAWrongKeyAreOneRefusal(t *testing.T) {
 // devices at all is not a lost vault: the operator mints an invite on the
 // server, a new device redeems it, and everything the old devices wrote is
 // there. Basalt's way back was the recovery key; Trew's is this, and the
-// control socket's `trew invite` is the same CreateInvite.
+// control socket's `trewd invite` is the same CreateInvite.
 func TestAStoreWithHistoryAndNoDevicesGetsOneBackFromAnInvite(t *testing.T) {
 	r := newRig(t)
 	first := r.dial("a")

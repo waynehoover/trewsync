@@ -14,8 +14,8 @@ sync tools and the Obsidian plugin off that same directory. For everyday
 editing, use the
 [Obsidian plugin](https://github.com/waynehoover/trew/blob/main/docs/plugin.md).
 
-The package installs a command called `trew`, the same name as the server's
-binary. On a machine that has both, run the server by its full path.
+The package installs a command called `trew`. The server's command is `trewd`,
+so a machine can have both on its path.
 
 ## Set up a mirror
 
@@ -49,7 +49,7 @@ expired or cancelled) leaves nothing saved; ask for a new one.
 ## The first device on a new server
 
 The first device pairs from an invite too. Make one on the server host with
-`trew invite -url wss://your-host`, naming the address devices reach, or use
+`trewd invite -url wss://your-host`, naming the address devices reach, or use
 the one a server with no devices writes to `first-invite` in its data
 directory. Copy it to this machine privately, then pair, without `--read-only`
 if this device should write:
@@ -64,7 +64,7 @@ A `first-invite` file holds one line per server address, each the same invite;
 give `--key-file` a file holding just the line this machine can reach.
 
 There is no separate command for starting a vault, and no recovery key to
-save: the notes and their history are on the server, and `trew invite` on the
+save: the notes and their history are on the server, and `trewd invite` on the
 server pairs a new device whenever you need one. See
 [server setup](https://github.com/waynehoover/trew/blob/main/docs/server.md#the-first-device)
 for TLS and the first invite.
@@ -309,7 +309,7 @@ Restore never overwrites an existing file. If the target is occupied, it writes
 a copy such as `Quarterly plan (restored 42).md`. On a writable client, it then
 attempts to send that copy. On a read-only mirror, the copy stays local.
 
-When the server is restored from a `trew backup` snapshot, this client needs
+When the server is restored from a `trewd backup` snapshot, this client needs
 nothing from you. The restored server has a new history, and at its next
 connection the client reads that history as a fresh listing: files that match agree, files
 that differ are kept both ways as a conflict copy, files only this device holds

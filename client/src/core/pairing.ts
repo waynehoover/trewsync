@@ -11,7 +11,7 @@
  * A device joins a vault by redeeming a single-use invite: a `trew1i_` string
  * carrying a 16-byte token, the server's address and the vault's name
  * (plan/protocol.md, "The invite string"; the codec is `invite-string.ts`).
- * `trew serve` writes the first one to `<data>/first-invite`, `trew invite` on
+ * `trewd serve` writes the first one to `<data>/first-invite`, `trewd invite` on
  * the server prints more, and a paired device mints them over the wire. Anyone
  * holding an unexpired, unspent invite can add a device, so it is shown to the
  * person who asked and to nothing else.
@@ -236,7 +236,7 @@ export function deviceCredential(config: DeviceConfig): { deviceId: string; devi
   if (missing.length > 0 || !config.deviceId || !config.deviceToken) {
     throw new NoCredential(
       `this device has no credential for the vault: it is missing ${missing.join(" and ")}. ` +
-        "Pair this vault again with an invite, from another device or from trew invite on " +
+        "Pair this vault again with an invite, from another device or from trewd invite on " +
         "the server.",
     );
   }
@@ -414,7 +414,7 @@ export function parseInvite(input: string): InviteString {
   if (text.startsWith("basalt3_") || text.startsWith("basalt3i_")) {
     throw new Error(
       "that is a Basalt string, and Trew does not read them. Pair with a trew1i_ invite: " +
-        "trew invite on the server makes one, and so does a paired device's panel.",
+        "trewd invite on the server makes one, and so does a paired device's panel.",
     );
   }
   return parseInviteString(input);

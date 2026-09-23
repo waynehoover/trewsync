@@ -32,7 +32,7 @@ set -euo pipefail
 tag=${1:?usage: release-tags.sh <tag> [existing-tags-file]}
 
 # Full syntax, anchored. A tag is what decides the version people run and what
-# `trew version` will print for the life of that image, and "close enough to
+# `trewd version` will print for the life of that image, and "close enough to
 # a version" is how server/v1.2 or server/v1.2.3.4 would get published as
 # something no ref resolves.
 if [[ ! "$tag" =~ ^server/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then

@@ -31,14 +31,19 @@ const Product = "trew"
 // them as unreferenced.
 const basaltDatabase = "basalt.db"
 
+// Program is the server's command, which the refusals below name because it
+// is what a person runs and upgrades. Product is what a data directory
+// records, and stays what it is when the command's name changes.
+const Program = "trewd"
+
 // ErrForeignStore is a data directory or a database this build will not
 // adopt: Basalt's, another product's, one with no identity at all, or a chunk
 // tree with no database beside it. It is refused before anything is written,
 // and the directory is left as it was found.
-var ErrForeignStore = errors.New("this is not a " + Product + " data directory")
+var ErrForeignStore = errors.New("this is not a " + Program + " data directory")
 
-// ErrFutureSchema is a database written by a newer trew.
-var ErrFutureSchema = errors.New("this database was written by a newer " + Product)
+// ErrFutureSchema is a database written by a newer trewd.
+var ErrFutureSchema = errors.New("this database was written by a newer " + Program)
 
 // Identity is what a store says about itself: which product wrote it, which
 // schema it is in, and which epoch its uid sequence belongs to.
@@ -308,10 +313,10 @@ func readIdentity(q querier, dbPath string) (Identity, bool, error) {
 			"%w: %s is schema %d and this %s understands %d. Run the newer %s, or restore a backup "+
 				"taken before the upgrade. Opening it with this one would read rows it does not "+
 				"understand and write rows the newer one would not; nothing was changed",
-			ErrFutureSchema, dbPath, id.SchemaVersion, Product, SchemaVersion, Product)
+			ErrFutureSchema, dbPath, id.SchemaVersion, Program, SchemaVersion, Program)
 	case id.SchemaVersion < 1:
 		return Identity{}, false, fmt.Errorf("%w: %s says it is schema %d, which no %s has written; "+
-			"nothing was changed", ErrForeignStore, dbPath, id.SchemaVersion, Product)
+			"nothing was changed", ErrForeignStore, dbPath, id.SchemaVersion, Program)
 	case id.Epoch == "":
 		return Identity{}, false, fmt.Errorf("%w: %s has no epoch in its identity; nothing was changed",
 			ErrForeignStore, dbPath)

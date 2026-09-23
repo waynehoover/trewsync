@@ -15,7 +15,7 @@ const (
 	// random bytes, 43 characters of unpadded base64url on the wire.
 	MCPTokenBytes = 32
 	// MCPTokenIDBytes is a token's id, minted beside it and not derived from
-	// it (PLAN.md section 2.3): the handle `trew mcp-token -list` shows and
+	// it (PLAN.md section 2.3): the handle `trewd mcp-token -list` shows and
 	// `-revoke` takes, and the author id a token's writes are recorded under.
 	MCPTokenIDBytes = 16
 	// MaxMCPLabelLen bounds a token's label, which becomes the author name on

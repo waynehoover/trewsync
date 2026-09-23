@@ -23,7 +23,7 @@ use, start with the [server](server.md), [plugin](plugin.md), or
 ## Repository layout
 
 ```text
-go.mod, cmd/, internal/  trew: server, store, backup, verification, purge
+go.mod, cmd/, internal/  trewd: server, store, backup, verification, purge
 client/src/core/         shared sync engine, chunking, merging, transport
 client/src/plugin/       Obsidian plugin and Vault adapter
 client/src/node/          trew CLI and filesystem adapter
@@ -612,7 +612,7 @@ an implementation that is not this one. Linking its `mcp` package into the
 server was measured and rejected: it pulls `golang.org/x/oauth2`,
 `google/jsonschema-go`, segmentio's assembly-accelerated JSON and base64,
 `uritemplate` and `x/time/rate` into the binary, beside a 12,000-line
-streamable transport. Test-only imports are not linked into `trew`, and
+streamable transport. Test-only imports are not linked into `trewd`, and
 `TestTheSDKIsImportedOnlyByTests` checks no server file imports it.
 
 Two eras are spoken, because 2026-07-28 removed the handshake:
@@ -750,12 +750,15 @@ running server's control socket, and drives `/mcp` with the SDK client at
 three protocol versions while a second connection keeps writing:
 
 ```bash
-go build -o /tmp/trew ./cmd/trew
-/tmp/trew serve --mcp -localhost -addr 127.0.0.1:3013 -data /tmp/accept-data &
+go build -o /tmp/trewd ./cmd/trewd
+/tmp/trewd serve --mcp -localhost -addr 127.0.0.1:3013 -data /tmp/accept-data &
 TREW_ACCEPT_DATA=/tmp/accept-data TREW_ACCEPT_ADDR=127.0.0.1:3013 \
-  go test ./cmd/trew -run TestMCPAcceptanceExternal -v -count=1
-/tmp/trew mcp-token -data /tmp/accept-data -list
+  go test ./cmd/trewd -run TestMCPAcceptanceExternal -v -count=1
+/tmp/trewd mcp-token -data /tmp/accept-data -list
 ```
+
+The transcript below was recorded before the server command was renamed
+`trewd`, so its one command line still says `trew`.
 
 ```text
 serving MCP at /mcp with no token yet, so every request is refused
@@ -807,7 +810,7 @@ runs the same in the test process on every `go test`.
 ### Agent operations: the commit boundary, the log and the pins (M5)
 
 The store half of M5 tasks 1, 2, 3 and 10 (`internal/store/oplog.go`). The
-tools that call it are later work; `cmd/trew/audit_test.go` commits through it
+tools that call it are later work; `cmd/trewd/audit_test.go` commits through it
 directly in the meantime.
 
 **The commit boundary.** `Store.CommitOperation(Operation) (OpResult, error)`
@@ -853,7 +856,7 @@ vault's previous operation), `op_entries` (every path changed, with its uid
 before and the uid that changed it; a move is a `write` row and a `source`
 row), `op_pins` and `op_keys`. No bearer token, token hash or note body is
 stored, which a test checks column by column. Revoking a token deletes its
-token and author rows and none of this. `trew audit` reads it, through the
+token and author rows and none of this. `trewd audit` reads it, through the
 control socket while `serve` runs. The version is 2 and not just new tables
 because the build before would open such a store and purge every pinned
 before-image it cannot see; at version 2 it refuses the store instead.

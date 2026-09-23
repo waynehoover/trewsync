@@ -111,8 +111,8 @@ Once the configuration and compatible image pin are verified, start it:
 
 ```bash
 docker compose up -d
-docker compose exec trew /trew version
-docker compose exec trew /trew health
+docker compose exec trew /trewd version
+docker compose exec trew /trewd health
 ```
 
 If the directory or container name already exists, inspect it and reuse the
@@ -128,7 +128,7 @@ from that release's `SHA256SUMS` before running it. Use a dedicated writable
 local data directory and bind `127.0.0.1:3003`.
 
 For Linux persistence, follow [binary installation](docs/server.md#a-binary):
-create the service account and data directory, then use `trew service` to
+create the service account and data directory, then use `trewd service` to
 print the unit and installation instructions. Apply those instructions through
 the available authorized service manager. The command only prints; it does not
 install or start the service. On macOS, use an appropriate existing service
@@ -171,13 +171,13 @@ invite on the server host, naming that endpoint, into a permission-restricted
 file rather than the conversation:
 
 ```bash
-(umask 077 && docker compose exec -T trew /trew invite -url wss://actual-hostname \
+(umask 077 && docker compose exec -T trew /trewd invite -url wss://actual-hostname \
   > /private/path/first-invite.txt)
 ```
 
 The file holds a line saying when the invite expires and the invite itself, the
 line starting `trew1i_`. For a binary installation, run
-`trew invite -data /path/to/trew-data -url wss://actual-hostname -out /private/path/first-invite.txt`
+`trewd invite -data /path/to/trew-data -url wss://actual-hostname -out /private/path/first-invite.txt`
 as the service account, which writes only the invite, mode 0600. Either way
 the command goes through the running server. A server with no devices also
 writes an invite to `first-invite` in its data directory at startup and logs
@@ -234,7 +234,7 @@ server (and the vault, if it is not `default`) that the panel says it points
 to. **Pair** becomes available once the panel can read the invite. A device
 name is suggested and can be changed under **More options**. There is no
 recovery key to save: the notes and their history stay on the server, and
-`trew invite` on the server pairs a replacement whenever one is needed. Wait
+`trewd invite` on the server pairs a replacement whenever one is needed. Wait
 for pairing and sync to finish.
 
 **Additional device:** an empty local vault downloads the synced files directly.

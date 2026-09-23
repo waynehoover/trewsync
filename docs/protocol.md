@@ -70,7 +70,7 @@ this point, since every chunk it cut would be refused.
 ### The store epoch
 
 `epoch` is an opaque name for the store's history. Every data directory has
-one, and every `trew backup` snapshot is given a new one, so restoring a
+one, and every `trewd backup` snapshot is given a new one, so restoring a
 snapshot always starts a new epoch. A device stores the epoch beside its cursor
 and sends it in hello.
 
@@ -370,7 +370,7 @@ ordinarily uploads it as a new version.
 ```
 
 Every device session may use these. The operator has the same through
-`trew invite`, `trew devices`, `trew revoke` and `trew uninvite` on the server
+`trewd invite`, `trewd devices`, `trewd revoke` and `trewd uninvite` on the server
 host, which go through a private control socket while `serve` runs.
 
 **Invites.** `invite` in a listing, in `invited` and in `uninvite` is the
@@ -379,13 +379,13 @@ from its token. Nothing in any listing can redeem an invite; `token` appears
 once, in `invited`, to the device that asked. `ttlMs` of 0 or absent is the
 one-hour default, anything above an hour is clamped to one hour before it is
 converted, and a negative one is `badentry`. `expiresAt` is null only for an
-invite that never expires, which only `trew invite -ttl 0` on the server can
+invite that never expires, which only `trewd invite -ttl 0` on the server can
 make. A label is at most 64 bytes with no control characters. `uninvite` of an
 id that is unknown, spent, cancelled or expired is `badentry`. A backup carries
 no outstanding invite, so restoring an old copy cannot revive one that has
 since been used or cancelled.
 
-**The first device.** `trew serve` on a store with no devices and no
+**The first device.** `trewd serve` on a store with no devices and no
 outstanding invite mints one invite and writes it, mode 0600, to
 `<data>/first-invite` (or `-invite-out FILE`), one line per address the server
 can name. It logs the path and the expiry, never the string, because a
@@ -396,7 +396,7 @@ fan-out in one hold on the commit lock, which every mutation and broadcast
 also takes, so no later commit reaches them and no mutation they have in
 flight can commit. Revoking a device cancels, in the same transaction, the
 invites it issued. The last device may be revoked; the way back is
-`trew invite` on the server. `self` is true when a device revoked itself, and
+`trewd invite` on the server. `self` is true when a device revoked itself, and
 the reply is then the last frame on the connection. A device id the vault does
 not have is `nodevice`. Revocation cannot erase what the device already holds.
 

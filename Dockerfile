@@ -4,10 +4,10 @@
 # makes `scratch` possible. There is no shell in the result, no package manager
 # and nothing to update, so the attack surface of the image is the binary.
 #
-# That is also why `trew health` exists: a HEALTHCHECK needs something to run,
+# That is also why `trewd health` exists: a HEALTHCHECK needs something to run,
 # and adding curl would mean adding a base image and undoing all of the above.
 
-# Must match the go directive in go.mod, and a test in cmd/trew asserts it
+# Must match the go directive in go.mod, and a test in cmd/trewd asserts it
 # does. A builder older than the module needs is a build that fails only once
 # somebody tries to make an image, which is later than it should be found.
 ARG GO_VERSION=1.27
@@ -29,7 +29,7 @@ ARG VERSION=docker
 ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /trew ./cmd/trew
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /trewd ./cmd/trewd
 
 # An empty data directory, owned by the user the server runs as. Docker
 # initialises a fresh named volume from whatever the image has at the mount
@@ -38,7 +38,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 RUN mkdir -p /data && chown 65532:65532 /data
 
 FROM scratch
-COPY --from=build /trew /trew
+COPY --from=build /trewd /trewd
 COPY --from=build --chown=65532:65532 /data /data
 
 # The data directory, and the reason it is named here rather than left to the
@@ -64,11 +64,11 @@ EXPOSE 3003
 # that comes up is -max-file: serve refuses to start with a ceiling below a
 # live file the vault already holds, and a vault that took a large attachment
 # under a raised ceiling needs that ceiling again. docs/server.md says more.
-ENTRYPOINT ["/trew"]
+ENTRYPOINT ["/trewd"]
 CMD ["serve", "-addr", "0.0.0.0:3003"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD ["/trew", "health", "-addr", "127.0.0.1:3003"]
+  CMD ["/trewd", "health", "-addr", "127.0.0.1:3003"]
 
 # SIGTERM is what serve listens for, and it finishes what it is doing: an ack
 # means stored, and a container stopping must not turn one into a lie.

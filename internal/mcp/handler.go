@@ -52,7 +52,7 @@ type Config struct {
 	Now func() time.Time
 }
 
-// Handler is the MCP endpoint, mounted at /mcp by `trew serve --mcp`.
+// Handler is the MCP endpoint, mounted at /mcp by `trewd serve --mcp`.
 type Handler struct {
 	srv     *server.Server
 	st      *store.Store
@@ -550,7 +550,7 @@ func (h *Handler) callTool(ctx context.Context, r *http.Request, cred *credentia
 		return nil, &rpcError{status: http.StatusUnauthorized, code: codeInvalidRequest, message: "unauthorized"}, tool.Name
 	case !tok.Scope.Allows(tool.Scope):
 		o = c.fail(&ToolError{Code: "read_only", Message: "this token has read scope and " + tool.Name +
-			" changes notes; mint one with `trew mcp-token -scope write` to use it"})
+			" changes notes; mint one with `trewd mcp-token -scope write` to use it"})
 	default:
 		cctx, cancel := context.WithTimeout(ctx, h.limits.ToolDeadline)
 		c.ctx = cctx

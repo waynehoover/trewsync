@@ -3,7 +3,7 @@
 [Documentation](index.md) · [CLI quick start](../client/README.md)
 
 This page covers the headless client, the `trew-sync` npm package, whose
-command is `trew`. The server's binary has the same name; its commands are in
+command is `trew`. The server's command is `trewd`, and its commands are in
 the [server reference](server-reference.md). The client operates on a local
 vault. Commands use the current directory unless `--dir` is set. Run
 `trew --help` for the installed version's usage.
@@ -69,7 +69,7 @@ credential id and output path.
 An invite is a single-use `trew1i_` string carrying the server's address and
 the vault's name, so `pair` needs nothing else. It works once and expires after
 one hour by default; `invite --ttl` can ask for less, and the server makes one
-that never expires only through `trew invite -ttl 0` on its own host.
+that never expires only through `trewd invite -ttl 0` on its own host.
 
 `pair` saves the pairing before sending it. If the reply is lost, running the
 same `pair` again in that directory finishes it as the same device, even after
@@ -81,7 +81,7 @@ invite) leaves nothing saved.
 Any paired device can revoke any device, including itself and the last one,
 and cancel any outstanding invite. Revoking stops that device receiving and
 sending at once and cancels the invites it created. It does not erase the
-device's local notes. When no paired device is left, `trew invite` on the
+device's local notes. When no paired device is left, `trewd invite` on the
 server host pairs a new one; see the [server reference](server-reference.md).
 These commands target the directory's saved server address. See
 [Security and privacy](security.md).

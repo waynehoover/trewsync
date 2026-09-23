@@ -353,11 +353,11 @@ These are random keys, not user-chosen passwords.
 | MCP bearer token | Owner and configured MCP client; serving device stores only its hash | Authenticate to one device's HTTP MCP endpoint in its launch mode. |
 
 There is no vault key, root secret or recovery key. Administration beyond what
-a device can do is shell access to the server's data directory: `trew invite`,
-`trew devices`, `trew revoke` and `trew uninvite` there go through the running
+a device can do is shell access to the server's data directory: `trewd invite`,
+`trewd devices`, `trewd revoke` and `trewd uninvite` there go through the running
 server's private control socket, so a revoke from the host takes effect in the
 server at once. Losing every device loses no synced note, because the notes and
-their history are on the server; `trew invite` pairs a new device.
+their history are on the server; `trewd invite` pairs a new device.
 
 The MCP token is independently random, not derived from the device's token.
 Its hash lives in unsynced `.trew` state. Rotating or revoking it does not
@@ -373,7 +373,7 @@ A device **can issue an invite and thereby add another device**. Device and
 invite listings make that authority visible; they do not prevent a compromised
 authorized device from using it. Any device can revoke any device, itself and
 the last one included; the way back into a vault with no devices is
-`trew invite` on the server.
+`trewd invite` on the server.
 
 CLI read-only mode restricts ordinary sync behavior. It does not change the
 server credential or prevent explicit repair and administration requests.

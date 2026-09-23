@@ -25,8 +25,8 @@ let dir: string | undefined;
 
 export async function setup(): Promise<void> {
   dir = await mkdtemp(join(tmpdir(), "trew-bin-"));
-  const binary = join(dir, "trew");
-  await run("go", ["build", "-o", binary, "./cmd/trew"], {
+  const binary = join(dir, "trewd");
+  await run("go", ["build", "-o", binary, "./cmd/trewd"], {
     cwd: GO_DIR,
     env: { ...process.env, CGO_ENABLED: "0" },
   });

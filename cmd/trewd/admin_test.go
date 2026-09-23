@@ -17,7 +17,7 @@ import (
 	"github.com/waynehoover/trew/internal/wire"
 )
 
-// The administrative commands (PLAN.md section 2.3.1): `trew invite`,
+// The administrative commands (PLAN.md section 2.3.1): `trewd invite`,
 // `devices`, `revoke` and `uninvite`, through the running server's control
 // socket when it runs and against the store under the server lock when it
 // does not. The first are the operator's powers of last resort, which Basalt
@@ -45,7 +45,7 @@ func serving(t *testing.T) (dir, addr string, first *wsClient) {
 	return dir, addr, dialFirstDevice(t, "ws://"+addr, readFirstInvite(t, dir))
 }
 
-// parseInvite finds the invite string in `trew invite`'s output.
+// parseInvite finds the invite string in `trewd invite`'s output.
 func parseInvite(t *testing.T, out string) invite.Invite {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {
@@ -74,7 +74,7 @@ func redeemAs(t *testing.T, url string, inv invite.Invite, name string) map[stri
 	return cl.readJSON()
 }
 
-// devicesJSON is `trew devices -json`, decoded.
+// devicesJSON is `trewd devices -json`, decoded.
 func devicesJSON(t *testing.T, dir string) (devices []wire.DeviceStatus, invites []store.Invite) {
 	t.Helper()
 	var got struct {
@@ -101,7 +101,7 @@ func TestTheAdminCommandsGoThroughTheRunningServer(t *testing.T) {
 	}
 	inv := parseInvite(t, out)
 	if res := redeemAs(t, "ws://"+addr, inv, "tablet"); res["res"] != "redeemed" {
-		t.Fatalf("the invite from `trew invite` was answered %v", res)
+		t.Fatalf("the invite from `trewd invite` was answered %v", res)
 	}
 
 	spare := parseInvite(t, mustRun(t, "invite", "-data", dir))
@@ -155,7 +155,7 @@ func TestTheAdminCommandsGoThroughTheRunningServer(t *testing.T) {
 		{[]string{"invite", "-data", dir, "-vault", "another"}},
 	} {
 		if out, err := trew(t, c.args...); err == nil {
-			t.Errorf("trew %s succeeded:\n%s", strings.Join(c.args, " "), out)
+			t.Errorf("trewd %s succeeded:\n%s", strings.Join(c.args, " "), out)
 		}
 	}
 }

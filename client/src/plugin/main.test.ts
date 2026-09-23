@@ -69,7 +69,7 @@ type Testable = TrewPlugin & StubPlugin;
 
 /**
  * Pairs the vault's first device, the way the first device pairs: from the
- * invite `trew serve` wrote to `<data>/first-invite` on a store with no
+ * invite `trewd serve` wrote to `<data>/first-invite` on a store with no
  * devices.
  *
  * With the merge confirmed, because a first device is usually a vault full of
@@ -81,7 +81,7 @@ async function startVault(plugin: Testable, name = "laptop", on?: TestServer): P
 }
 
 /**
- * An invite for another device, minted with `trew invite` on the server, the
+ * An invite for another device, minted with `trewd invite` on the server, the
  * way an operator mints one. A paired device's panel mints them too, and the
  * tests about that go through `createInvite`.
  */
@@ -415,7 +415,7 @@ describe("where its own state goes", () => {
 describe("pairing", () => {
   /**
    * The first device pairs the way every other one does, from an invite: the
-   * one `trew serve` wrote to its data folder on a store with no devices.
+   * one `trewd serve` wrote to its data folder on a store with no devices.
    */
   it("pairs the first device from the invite the server wrote, and syncs it", async () => {
     await fresh();
@@ -628,7 +628,7 @@ describe("pairing instructions", () => {
     // Where the first device's invite comes from, which a device with no other
     // device to ask has to be told.
     expect(field.desc).toMatch(/first-invite/);
-    expect(field.desc).toMatch(/trew invite on the server/);
+    expect(field.desc).toMatch(/trewd invite on the server/);
     expect(field.nameEl.children).toEqual([]);
   }, 300_000);
 });
@@ -1741,7 +1741,7 @@ describe("the panel, which is a modal and a settings tab", () => {
     const listed = built.find((s) => s.name.startsWith("laptop"))!;
     expect(listed.name).toMatch(/\(this device\)/);
     // The vault's only device, and it can still be revoked: the last device
-    // may be, and `trew invite` on the server is the way back. What revoking
+    // may be, and `trewd invite` on the server is the way back. What revoking
     // it says is in "the device list in the panel", below.
     expect(listed.buttons.map((b) => b.label)).toEqual(["Unlink from the server"]);
   }, 300_000);
@@ -5112,7 +5112,7 @@ describe("what the panel knows and used to keep to itself", () => {
     expect(to.server!.version, "the build is the fallback, not what ready said").not.toBe(
       "unknown",
     );
-    expect(shown).toContain(`Protocol ${PROTO}, trew ${to.server!.version}.`);
+    expect(shown).toContain(`Protocol ${PROTO}, trewd ${to.server!.version}.`);
     expect(shown).not.toContain("Not connected");
     // A hop with no TLS shows its warning in the server details, and without
     // end-to-end encryption the warning is about the notes as well as the
@@ -5134,7 +5134,7 @@ describe("what the panel knows and used to keep to itself", () => {
       url: "wss://homelab.tailnet.ts.net",
       server: { proto: 4, version: "0.3.4" },
     });
-    expect(on).toContain("Protocol 4, trew 0.3.4.");
+    expect(on).toContain("Protocol 4, trewd 0.3.4.");
     // The scheme is the whole of what is known about the hop, and wss is the
     // only thing that says something terminated TLS in front.
     //
@@ -5303,7 +5303,7 @@ describe("the device list in the panel", () => {
   });
   /**
    * The last device may be revoked (plan/strip-ledger.md, hazard 4, decided):
-   * nothing a device holds is needed to add one back, because `trew invite` on
+   * nothing a device holds is needed to add one back, because `trewd invite` on
    * the server is the way back into a vault with no devices. So the last row
    * has its button, and the confirmation says what it leaves.
    */
@@ -5332,7 +5332,7 @@ describe("the device list in the panel", () => {
     await button.click();
     expect(button.label).toBe("Yes, revoke");
     expect(panelText()).toMatch(/last device/);
-    expect(panelText()).toMatch(/trew invite on the server/);
+    expect(panelText()).toMatch(/trewd invite on the server/);
     expect((await plugin.devices()).devices).toHaveLength(1);
 
     // The second does it: the server takes its last row away, and this device
@@ -5340,7 +5340,7 @@ describe("the device list in the panel", () => {
     await button.click();
     await until("this device to be stopped", () => plugin.currentState.kind === "stopped");
     expect((plugin.currentState as { why: string }).why).toMatch(/revoked/);
-    // And a device paired afterwards, from `trew invite`, finds itself alone.
+    // And a device paired afterwards, from `trewd invite`, finds itself alone.
     const next = await load();
     await next.plugin.pair(await anInvite(), "phone");
     await synced(next.plugin);
@@ -5423,7 +5423,7 @@ describe("the device list in the panel", () => {
     expect(notices.map((n) => n.message).join(" ")).toMatch(/can no longer add a device/);
     expect((await first.plugin.devices()).invites).toHaveLength(0);
 
-    // An invite that never expires, which only `trew invite -ttl 0` on the
+    // An invite that never expires, which only `trewd invite -ttl 0` on the
     // server makes, says so rather than showing a date, and its label is on
     // the row.
     await server.invite({ ttl: "0", label: "for the tablet" });

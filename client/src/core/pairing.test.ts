@@ -418,7 +418,7 @@ describe("a config that cannot connect", () => {
     // wording that sent somebody looking for a server problem.
     expect(message).toMatch(/missing a device token/);
     expect(message).toMatch(/Pair this vault again with an invite/);
-    expect(message).toMatch(/trew invite on\s+the server/);
+    expect(message).toMatch(/trewd invite on\s+the server/);
     expect(message).not.toMatch(/authoris/i);
     // And both halves, when both are missing.
     expect(() => deviceCredential({ ...base })).toThrow(/missing a device id and a device token/);
