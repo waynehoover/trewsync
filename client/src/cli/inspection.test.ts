@@ -32,7 +32,7 @@ async function setup() {
   vi.spyOn(console, "info").mockImplementation(() => undefined);
   server = new TestServer();
   await server.start();
-  const dir = await mkdtemp(join(tmpdir(), "telimus-inspection-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-inspection-"));
   dirs.push(dir);
   const init = await cli(dir, "init", server.setup);
   expect(init.code, init.text + init.errors).toBe(0);
@@ -42,23 +42,23 @@ async function setup() {
 it("preview leaves staging and the recovery ledger untouched while a writer holds the vault", async () => {
   const { dir } = await setup();
   await writeFile(join(dir, "note.md"), "A local note waiting to upload.\n");
-  const staging = join(dir, ".telimus", "tmp");
+  const staging = join(dir, ".trew", "tmp");
   await mkdir(staging, { recursive: true });
   const temp = join(staging, `${TEMP_MARK}old`);
   await writeFile(temp, "staged download");
   const old = new Date(Date.now() - 7 * 24 * 3600 * 1000);
   await utimes(temp, old, old);
-  const ledger = join(dir, ".telimus", DISPLACED_LOG);
+  const ledger = join(dir, ".trew", DISPLACED_LOG);
   const records =
     JSON.stringify({
-      at: ".telimus/tmp/preserved.resolved",
+      at: ".trew/tmp/preserved.resolved",
       from: "note.md",
       why: "Previously recovered",
       when: 1,
     }) + "\n";
   await writeFile(ledger, records);
   const before = (await readdir(staging)).sort();
-  const release = await lockVault(dir, "telimus sync --watch");
+  const release = await lockVault(dir, "trew sync --watch");
   try {
     const result = await cli(dir, "preview");
     expect(result.code, result.text + result.errors).toBe(0);
@@ -75,7 +75,7 @@ it("repair never schedules ordinary sync when a peer edit arrives while it resen
   const { dir, key } = await setup();
   await writeFile(join(dir, "note.md"), "Original text.\n");
   expect((await cli(dir, "sync")).code).toBe(0);
-  const peer = await mkdtemp(join(tmpdir(), "telimus-inspection-peer-"));
+  const peer = await mkdtemp(join(tmpdir(), "trew-inspection-peer-"));
   dirs.push(peer);
   expect((await cli(peer, "pair", key)).code).toBe(0);
   expect((await cli(peer, "sync")).code).toBe(0);
@@ -93,7 +93,7 @@ it("repair never schedules ordinary sync when a peer edit arrives while it resen
     return resend.call(this, names, bodyOf);
   });
   const list = vi.spyOn(NodeVault.prototype, "list");
-  const release = await lockVault(dir, "telimus sync --watch");
+  const release = await lockVault(dir, "trew sync --watch");
   try {
     const result = await cli(dir, "repair");
     expect(result.code, result.text + result.errors).toBe(0);

@@ -27,7 +27,7 @@ export const MAX_SEGMENT_BYTES = 255;
  * The name the adapters give files they are staging. Derived from the product
  * name, which is not final (PLAN.md section 10).
  */
-export const STAGING_MARK = ".telimus-tmp-";
+export const STAGING_MARK = ".trew-tmp-";
 
 /** Why a path is refused, in the order `pathReason` tests them. */
 export type PathReason =

@@ -18,7 +18,7 @@ const digest = async (bytes: Uint8Array): Promise<string> =>
   createHash("sha256").update(bytes).digest("hex");
 let root: string;
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "telimus-mcp-notes-"));
+  root = await mkdtemp(join(tmpdir(), "trew-mcp-notes-"));
 });
 afterEach(async () => {
   vi.mocked(rm).mockRestore();
@@ -487,7 +487,7 @@ it("reports a preserved branch even when staging cleanup overrides the adapter r
   const realRm = vi.mocked(rm).getMockImplementation()!;
   let fault = false;
   vi.mocked(rm).mockImplementation(async (...args) => {
-    if (!fault && /\/\.telimus\/tmp\/replace\.[a-f0-9]+$/u.test(String(args[0]))) {
+    if (!fault && /\/\.trew\/tmp\/replace\.[a-f0-9]+$/u.test(String(args[0]))) {
       fault = true;
       throw Object.assign(new Error("staging cleanup failed"), { code: "EIO" });
     }

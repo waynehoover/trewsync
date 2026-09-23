@@ -112,7 +112,7 @@ function statOf(item: TAbstractFile): { mtime: number; ctime: number; size: numb
  * The name every staging copy carries, so one can be told from a file of the
  * user's. Reserved: nothing else in a vault is expected to start with it.
  */
-const STAGING_MARK = ".telimus-tmp-";
+const STAGING_MARK = ".trew-tmp-";
 
 /**
  * Where a staged copy of `path` goes: beside it, under a name nothing syncs.
@@ -153,7 +153,7 @@ async function freeStagingPath(adapter: Writer, normalized: string): Promise<str
  * A folder rather than a name, and that is the whole of it. Both trashes keep
  * a file's basename and drop every folder above it, so a note moved aside
  * under a different *name* reaches the trash under that name: delete
- * `doomed.md` and find `.telimus-tmp-9f2c-doomed.md` in there, which is not
+ * `doomed.md` and find `.trew-tmp-9f2c-doomed.md` in there, which is not
  * what a person looking for the note they deleted searches for. Moved into a
  * folder, it keeps the only part of the path a trash reads.
  *
@@ -1623,8 +1623,7 @@ export class ObsidianIndexStore implements IndexStore {
   ) {
     this.files = new ObsidianJournalFiles(adapter, normalizePath(path));
     this.store = new JournalIndexStore(this.files, {
-      log: (message: string, ...rest: unknown[]) =>
-        console.warn(`Telimus Sync: ${message}`, ...rest),
+      log: (message: string, ...rest: unknown[]) => console.warn(`Trew Sync: ${message}`, ...rest),
       ...opts,
     });
   }

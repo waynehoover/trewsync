@@ -78,7 +78,7 @@ describe("what a pass came to", () => {
   });
 
   it("keeps a known hidden version distinct from visible conflict copies", () => {
-    const at = ".telimus/tmp/preserved.edit";
+    const at = ".trew/tmp/preserved.edit";
     const recovery = { complete: true, waiting: [{ at }] };
     const outcome = outcomeOf(report({ conflicted: 1 }), undefined, recovery);
     expect(outcome).toEqual({ kind: "recoveryNeeded", paths: [at] });

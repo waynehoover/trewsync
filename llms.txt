@@ -1,8 +1,8 @@
-# Telimus Sync
+# Trew Sync
 
 > Self-hosted vault sync with full version history, on a server you run.
 
-Telimus syncs notes and attachments through a server the user controls. Content
+Trew syncs notes and attachments through a server the user controls. Content
 and filenames are encrypted on devices. The supported client environment is
 macOS, Linux, and Android with local storage; Android sync runs in the foreground.
 The CLI is experimental. Settings and plugins do not sync.
@@ -13,19 +13,19 @@ release documentation and release notes when installed behavior differs.
 
 ## Install and use
 
-- [Agent installation runbook](https://raw.githubusercontent.com/waynehoover/telimus/main/llm.md): Set up the server, secure connection, plugin, pairing, and verification.
-- [Server setup](https://raw.githubusercontent.com/waynehoover/telimus/main/docs/server.md): Docker, binaries, TLS, and upgrades.
-- [Obsidian plugin](https://raw.githubusercontent.com/waynehoover/telimus/main/docs/plugin.md): Pairing, status, history, and recovery.
-- [CLI guide](https://raw.githubusercontent.com/waynehoover/telimus/main/client/README.md): Optional headless mirror and automation.
-- [Security and privacy](https://raw.githubusercontent.com/waynehoover/telimus/main/docs/security.md): Keys, metadata, revocation, and backups.
-- [Server maintenance](https://raw.githubusercontent.com/waynehoover/telimus/main/docs/server-operations.md): Backup, restore, repair, and purge.
+- [Agent installation runbook](https://raw.githubusercontent.com/waynehoover/trew/main/llm.md): Set up the server, secure connection, plugin, pairing, and verification.
+- [Server setup](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server.md): Docker, binaries, TLS, and upgrades.
+- [Obsidian plugin](https://raw.githubusercontent.com/waynehoover/trew/main/docs/plugin.md): Pairing, status, history, and recovery.
+- [CLI guide](https://raw.githubusercontent.com/waynehoover/trew/main/client/README.md): Optional headless mirror and automation.
+- [Security and privacy](https://raw.githubusercontent.com/waynehoover/trew/main/docs/security.md): Keys, metadata, revocation, and backups.
+- [Server maintenance](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server-operations.md): Backup, restore, repair, and purge.
 
 ## Reference
 
-- [Server command reference](https://raw.githubusercontent.com/waynehoover/telimus/main/docs/server-reference.md): Flags, limits, and health checks.
-- [CLI reference](https://raw.githubusercontent.com/waynehoover/telimus/main/docs/cli-reference.md): Commands, flags, and outcomes.
+- [Server command reference](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server-reference.md): Flags, limits, and health checks.
+- [CLI reference](https://raw.githubusercontent.com/waynehoover/trew/main/docs/cli-reference.md): Commands, flags, and outcomes.
 
 ## Optional
 
-- [Product comparison](https://raw.githubusercontent.com/waynehoover/telimus/main/docs/compared.md): Which sync option fits the user's needs.
-- [Developer documentation](https://raw.githubusercontent.com/waynehoover/telimus/main/docs/development.md): Design, protocol, measurements, and review history.
+- [Product comparison](https://raw.githubusercontent.com/waynehoover/trew/main/docs/compared.md): Which sync option fits the user's needs.
+- [Developer documentation](https://raw.githubusercontent.com/waynehoover/trew/main/docs/development.md): Design, protocol, measurements, and review history.

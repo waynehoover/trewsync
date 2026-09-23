@@ -1,4 +1,4 @@
-// Package doctor holds the checks `telimus doctor` runs (PLAN.md M5.5):
+// Package doctor holds the checks `trew doctor` runs (PLAN.md M5.5):
 // diagnoses that read the system and the store and never repair anything, so
 // they are safe to run while worried.
 package doctor

@@ -68,7 +68,7 @@ func TestS7AFailedSecondBackupLeavesTheFirstRestorable(t *testing.T) {
 	// The live database is still the first backup's. A staged snapshot may
 	// remain as debris, which the next run clears; what must not happen is its
 	// having been published over the good database, which the verify above
-	// already proved by opening telimus.db and finding it whole.
+	// already proved by opening trew.db and finding it whole.
 	if _, err := os.Stat(filepath.Join(dir, dbFileName)); err != nil {
 		t.Fatalf("the published database is gone: %v", err)
 	}

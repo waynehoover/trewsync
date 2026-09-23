@@ -123,7 +123,7 @@ describe("the instrument itself", () => {
    */
   it("accepts a real SVG, and rejects it with one tag removed", () => {
     const real = [
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 248 179" width="248" height="179" role="img" aria-label="Telimus">',
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 248 179" width="248" height="179" role="img" aria-label="Trew">',
       '  <polygon points="109.0,50.0 94.0,63.0 64.0,63.0 49.0,50.0 64.0,37.0 94.0,37.0" fill="#8FA3B8"/>',
       '  <polygon points="49.0,50.0 64.0,63.0 64.0,149.0 49.0,136.0" fill="#4B5C70"/>',
       '  <polygon points="64.0,63.0 94.0,63.0 94.0,149.0 64.0,149.0" fill="#3A4857"/>',

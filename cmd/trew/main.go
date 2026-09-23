@@ -1,4 +1,4 @@
-// Command telimus is the whole server: one static binary, one vault.
+// Command trew is the whole server: one static binary, one vault.
 //
 // TLS is terminated in front of this by `tailscale serve` or a tunnel, so no key
 // material lives here and there is no certificate to configure.
@@ -24,24 +24,24 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/dirlock"
-	"github.com/waynehoover/telimus/internal/fsync"
-	"github.com/waynehoover/telimus/internal/server"
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/dirlock"
+	"github.com/waynehoover/trew/internal/fsync"
+	"github.com/waynehoover/trew/internal/server"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // version is stamped at build time with -X main.version=...
 //
 // A deployed server that cannot say what it is running is one you reason about
-// from memory. It is printed at startup and by `telimus version`, so the answer
+// from memory. It is printed at startup and by `trew version`, so the answer
 // is in the journal of every machine this is on.
 var version = "dev"
 
 // resolveVersion picks what to print, preferring the stamped value.
 //
-// `go install github.com/.../cmd/telimus@v0.1.3` reaches no ldflags, so a
+// `go install github.com/.../cmd/trew@v0.1.3` reaches no ldflags, so a
 // binary installed that way called itself "dev" and could not say what it was:
 // exactly the thing the stamp exists to prevent. Go records the module version
 // in the build info instead, which is the same number under a different name.
@@ -55,7 +55,7 @@ func resolveVersion(stamped, fromModule string) string {
 	if fromModule == "" || fromModule == "(devel)" {
 		return stamped
 	}
-	// Printed without the v, so `telimus version` reads the same however it was
+	// Printed without the v, so `trew version` reads the same however it was
 	// installed. The v belongs to the tag, because Go requires it there.
 	return strings.TrimPrefix(fromModule, "v")
 }
@@ -71,7 +71,7 @@ func moduleVersion() string {
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, "telimus:", err)
+		fmt.Fprintln(os.Stderr, "trew:", err)
 		os.Exit(1)
 	}
 }
@@ -83,7 +83,7 @@ func main() {
 // list smaller prints its arithmetic, and backup and purge both do; an
 // untestable print is an untestable promise.
 func run(ctx context.Context, args []string, out io.Writer) error {
-	// Subcommands come before flag parsing so `telimus verify -deep` reads the
+	// Subcommands come before flag parsing so `trew verify -deep` reads the
 	// way it looks.
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, rest := args[0], args[1:]
@@ -103,7 +103,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		case "stats":
 			return cmdStats(rest, out)
 		case "version":
-			fmt.Fprintf(out, "telimus %s %s/%s %s\n", resolveVersion(version, moduleVersion()), runtime.GOOS, runtime.GOARCH, runtime.Version())
+			fmt.Fprintf(out, "trew %s %s/%s %s\n", resolveVersion(version, moduleVersion()), runtime.GOOS, runtime.GOARCH, runtime.Version())
 			return nil
 		default:
 			return fmt.Errorf("unknown command %q (try serve, backup, verify, purge, stats, service, health, version)", cmd)
@@ -125,14 +125,14 @@ func dataFlags(fs *flag.FlagSet) *string {
 const tokenFileName = "auth-token"
 
 func defaultDataDir() string {
-	if d := os.Getenv("TELIMUS_DATA"); d != "" {
+	if d := os.Getenv("TREW_DATA"); d != "" {
 		return d
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "telimus-data"
+		return "trew-data"
 	}
-	return filepath.Join(home, ".telimus")
+	return filepath.Join(home, ".trew")
 }
 
 func openStore(dataDir string) (*store.Store, error) {
@@ -189,8 +189,8 @@ func requireDataDir(dataDir, verb string) error {
 	if _, err := os.Stat(dbPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf(
-				"there is no telimus data directory at %s, so there is nothing to %s.\n"+
-					"Check the -data path. Only `telimus serve` creates one.", dataDir, verb)
+				"there is no trew data directory at %s, so there is nothing to %s.\n"+
+					"Check the -data path. Only `trew serve` creates one.", dataDir, verb)
 		}
 		return err
 	}
@@ -218,7 +218,7 @@ func locked(err error, dataDir, action, hint string) error {
 	return fmt.Errorf("%s cannot run: %w%s\n%s", action, err, who, hint)
 }
 
-const stopFirst = "Stop the running telimus process and try again."
+const stopFirst = "Stop the running trew process and try again."
 
 // requireVault refuses a vault name the store does not hold, before any
 // destructive command mutates on the strength of it (S13).
@@ -527,7 +527,7 @@ func refuseCeilingBelowContent(st *store.Store, vault string, ceiling int64) err
 	}
 	fmt.Fprintf(&b, "\nA device paired from now on could never download %s, and would report the vault synced without %s.\n"+
 		"Start with -max-file %d or more and this server runs as it did. Nothing is lost by doing that: the %s\n"+
-		"%s already here. `telimus service -max-file %d` writes the systemd unit with the flag in it, and under\n"+
+		"%s already here. `trew service -max-file %d` writes the systemd unit with the flag in it, and under\n"+
 		"Docker it goes in the command.\n"+
 		"Deleting on a device is not a way out from here, because a device deletes by pushing an entry and there\n"+
 		"is no server to push to. To bring the ceiling down: raise, start, delete or shrink %s on a device, wait\n"+
@@ -613,7 +613,7 @@ func logStartup(log *slog.Logger, st *store.Store, served, version string) error
 	if rec, err := st.Reclaimable(served, chunks.DefaultGrace); err != nil {
 		log.Warn("could not tell how much a purge would reclaim", "vault", served, "err", err)
 	} else if !rec.Complete {
-		reclaimable = "the chunk walk stopped early; run telimus verify"
+		reclaimable = "the chunk walk stopped early; run trew verify"
 	} else {
 		reclaimable = humanBytes(rec.Bytes)
 	}
@@ -697,20 +697,20 @@ func printSetup(out io.Writer, addr, vault, token string, fresh, local, unclaime
 	if fresh && unclaimed {
 		fmt.Fprintln(out, "A new bootstrap token was generated for this server.")
 	}
-	fmt.Fprintf(out, "telimus %s listening on %s, serving vault %q\n", resolveVersion(version, moduleVersion()), addr, vault)
+	fmt.Fprintf(out, "trew %s listening on %s, serving vault %q\n", resolveVersion(version, moduleVersion()), addr, vault)
 
 	if !unclaimed {
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "This vault has been claimed, so the bootstrap token no longer opens it.")
 		fmt.Fprintln(out, "To add another device, pair it with one that already has the vault:")
-		fmt.Fprintln(out, "run `telimus invite` there, or copy the pairing string from the plugin.")
+		fmt.Fprintln(out, "run `trew invite` there, or copy the pairing string from the plugin.")
 		return
 	}
 
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "No device has claimed this vault yet. Paste one of these lines into")
-	fmt.Fprintln(out, "Telimus on your first device, under \"Start a new vault\", or run")
-	fmt.Fprintln(out, "`telimus init <line>` there:")
+	fmt.Fprintln(out, "Trew on your first device, under \"Start a new vault\", or run")
+	fmt.Fprintln(out, "`trew init <line>` there:")
 	fmt.Fprintln(out)
 	// The vault's name, in the line, when it is not the one every client
 	// assumes. Without it the only way to start a vault called anything else
@@ -940,7 +940,7 @@ func cmdVerify(args []string, out io.Writer) error {
 	// say so because that is what reads it.
 	//
 	// The line above already distinguished the two and the status did not, so
-	// `telimus verify -deep -data DIR && rm -rf OLD` -- which is the retention
+	// `trew verify -deep -data DIR && rm -rf OLD` -- which is the retention
 	// step docs/server.md documents, and the natural way to write it -- passed
 	// over an empty store: a restore that copied the database before it was
 	// populated, a `VACUUM INTO` that produced a fresh file, a typo that
@@ -1120,7 +1120,7 @@ func cmdPurge(args []string, out io.Writer) error {
 		// has not changed is right to consider it synced and has no reason to
 		// send anything, so "waiting for a device to resend them" was a wait
 		// with nothing at the end of it.
-		fmt.Fprintf(out, "%d quarantined bodies (%s) left in place. Run `telimus repair` on a device "+
+		fmt.Fprintf(out, "%d quarantined bodies (%s) left in place. Run `trew repair` on a device "+
 			"that still has those notes; they are replaced when the real body arrives\n",
 			rep.ChunksQuarantined, humanBytes(rep.BytesQuarantined))
 	}
@@ -1214,9 +1214,9 @@ func backupCovers(
 	if err := store.RefuseSamePlace(dir, dataDir); err != nil {
 		return 0, nil, err
 	}
-	if _, err := os.Stat(filepath.Join(dir, "telimus.db")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "trew.db")); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil, fmt.Errorf("there is no backup at %s: no telimus.db in it; nothing was purged", dir)
+			return 0, nil, fmt.Errorf("there is no backup at %s: no trew.db in it; nothing was purged", dir)
 		}
 		return 0, nil, err
 	}
@@ -1230,7 +1230,7 @@ func backupCovers(
 	// the deletion, and everything below would be a true statement about a
 	// directory that no longer exists.
 	//
-	// Shared, not exclusive: a second reader is harmless and `telimus backup`
+	// Shared, not exclusive: a second reader is harmless and `trew backup`
 	// takes the destination exclusively, so a backup writing into this
 	// directory is refused while a purge is relying on it.
 	bkLock, err := dirlock.Shared(dir, dirlock.Data)
@@ -1274,7 +1274,7 @@ func backupCovers(
 		return 0, nil, fmt.Errorf(
 			"the backup at %s holds %q up to uid %d and this store is at uid %d, so it is missing "+
 				"versions this purge would drop for good; nothing was purged.\n"+
-				"Take a fresh one first: telimus backup -to %s", dir, vault, backupLatest, sourceLatest, dir)
+				"Take a fresh one first: trew backup -to %s", dir, vault, backupLatest, sourceLatest, dir)
 	}
 
 	// Every version this store holds, present in the backup, identical, and
@@ -1298,7 +1298,7 @@ func backupCovers(
 		if !ok {
 			return fmt.Errorf(
 				"the backup at %s is missing version %d of %q, which this purge could drop for "+
-					"good; nothing was purged.\nTake a fresh one first: telimus backup -to %s",
+					"good; nothing was purged.\nTake a fresh one first: trew backup -to %s",
 				dir, e.UID, vault, dir)
 		}
 		if why := sameVersion(e, held); why != "" {
@@ -1319,7 +1319,7 @@ func backupCovers(
 			// moment before the only other copy is deleted.
 			//
 			// It costs a full read of every body the vault currently
-			// references, which is what `telimus backup -deep` costs and is
+			// references, which is what `trew backup -deep` costs and is
 			// the same order as taking the backup was. Purge already means
 			// stop, back up, purge, start.
 			if err := bk.Chunks().Check(vault, name); err != nil {
@@ -1338,7 +1338,7 @@ func backupCovers(
 				}
 				return fmt.Errorf(
 					"the backup at %s has %s; nothing was purged.\nTake a fresh one first: "+
-						"telimus backup -to %s", dir, what, dir)
+						"trew backup -to %s", dir, what, dir)
 			}
 			bodies++
 		}
@@ -1548,7 +1548,7 @@ func cmdBackup(args []string, out io.Writer) error {
 	fmt.Fprintln(out, "which this server has never seen. Keep that written down somewhere")
 	fmt.Fprintln(out, "else, or the backup is a pile of bytes nobody can read.")
 	fmt.Fprintf(out, "\nTo restore: point the server at it, or copy it back.\n")
-	fmt.Fprintf(out, "  telimus verify -deep -data %s\n", rep.Dir)
+	fmt.Fprintf(out, "  trew verify -deep -data %s\n", rep.Dir)
 	return nil
 }
 

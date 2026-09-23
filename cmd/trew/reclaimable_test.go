@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 /* ---------------------------------------------------------------- *
@@ -76,7 +76,7 @@ func TestStatsSaysWhetherAPurgeIsWorthRunning(t *testing.T) {
 // told "no" out loud.
 func TestStatsSaysSoWhenThereIsNothingToReclaim(t *testing.T) {
 	dir := emptyDataDir(t)
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestStatsPrintsNoReclaimFigureWhenTheWalkStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := telimus(t, "stats", "-data", dir)
+	out, err := trew(t, "stats", "-data", dir)
 	if err == nil {
 		t.Fatalf("an unexpected file in the chunk store did not stop stats:\n%s", out)
 	}

@@ -677,7 +677,7 @@ export function createVaultTools(vaults: readonly NamedMcpSession[], version: st
     vaults.some((vault) => !/^[a-z][a-z0-9_-]{0,31}$/u.test(vault.id))
   )
     throw new NoteError("invalid_vaults", "configure between one and ten distinct vault names");
-  const server = new TrackedMcpServer({ name: "telimus", version });
+  const server = new TrackedMcpServer({ name: "trew", version });
   const definitions = new Map<
     string,
     {

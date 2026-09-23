@@ -43,7 +43,7 @@ const dec = new TextDecoder();
 
 let root: string;
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "telimus-spelling-"));
+  root = await mkdtemp(join(tmpdir(), "trew-spelling-"));
 });
 afterEach(async () => {
   await removeTree(root);
@@ -263,13 +263,13 @@ describe("a vault holding both spellings", () => {
 
 /**
  * The spellings were learned only by `list`, and the
- * commands that recover a note never call it: `telimus restore` is its own
+ * commands that recover a note never call it: `trew restore` is its own
  * process, and it went straight to `exists` and a write.
  *
  * On a disk that keeps the two spellings apart that made restore invisible to
  * itself. The note was there under the disk's name, `exists` asked about the
  * other one and was told no, and the restore landed beside the note instead of
- * being numbered past it. The next `telimus sync` then refused the whole vault:
+ * being numbered past it. The next `trew sync` then refused the whole vault:
  * two files, one path once normalized, and two names on screen that look
  * identical. One note recovered, every note stopped.
  *
@@ -336,7 +336,7 @@ afterEach(async () => {
 async function client(dir = root, device = "mac", form = normalForm): Promise<Client> {
   const c = new Client({
     vault: new NodeVault(dir, { normalForm: form }),
-    store: new JsonIndexStore(join(dir, ".telimus", "index.json")),
+    store: new JsonIndexStore(join(dir, ".trew", "index.json")),
     url: server.wsUrl,
     ...(await server.deviceCredentials(SECRET, wrapped)),
     vaultId: "default",
@@ -349,7 +349,7 @@ async function client(dir = root, device = "mac", form = normalForm): Promise<Cl
 }
 
 async function second(name: string): Promise<{ c: Client; dir: string }> {
-  const dir = await mkdtemp(join(tmpdir(), `telimus-spelling-${name}-`));
+  const dir = await mkdtemp(join(tmpdir(), `trew-spelling-${name}-`));
   extra.push(dir);
   const c = await client(dir, name);
   await c.connect();
@@ -537,7 +537,7 @@ describe("naming two spellings a person cannot tell apart", () => {
  * client left behind, met by a process that goes straight to `exists` and a
  * write without listing anything.
  */
-describe("telimus restore into a vault whose disk spells a name its own way", () => {
+describe("trew restore into a vault whose disk spells a name its own way", () => {
   it("puts the older version beside the note, and the vault still syncs", async () => {
     server = new TestServer();
     await server.start();
@@ -554,7 +554,7 @@ describe("telimus restore into a vault whose disk spells a name its own way", ()
     // What a client older than the rename rule left on the disk.
     await rename(join(root, NAME), join(root, ON_DISK));
 
-    // A separate process, which is what `telimus restore` is. Nothing here
+    // A separate process, which is what `trew restore` is. Nothing here
     // has listed the vault.
     const restoring = await client();
     await restoring.connect();

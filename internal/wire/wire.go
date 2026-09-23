@@ -1,4 +1,4 @@
-// Package wire is the Telimus protocol's message shapes and nothing else.
+// Package wire is the Trew protocol's message shapes and nothing else.
 //
 // It holds no state, opens no connection and knows no policy, so the whole
 // vocabulary can be exercised without a server. That separation is deliberate:
@@ -12,7 +12,7 @@
 // no `ok` here.
 package wire
 
-import "github.com/waynehoover/telimus/internal/store"
+import "github.com/waynehoover/trew/internal/store"
 
 // Proto is the newest protocol version this server implements, and MinProto the
 // oldest it still answers. A version outside that range is refused at hello

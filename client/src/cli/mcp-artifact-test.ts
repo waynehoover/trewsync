@@ -12,7 +12,7 @@ import { openHttp } from "./mcp-http-test.ts";
 /** Used by both the fresh production build test and the npm tarball gate. */
 export async function smokeMcpArtifact(artifact: string, runtime: string, denyRead?: string) {
   const server = new TestServer();
-  const dir = await realpath(await mkdtemp(join(tmpdir(), "telimus-mcp-artifact-vault-")));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "trew-mcp-artifact-vault-")));
   const host = new Client({ name: "artifact-check", version: "1" });
   let command = runtime;
   let args = [artifact, "mcp", "--dir", dir];
@@ -86,7 +86,7 @@ export async function smokeMcpArtifact(artifact: string, runtime: string, denyRe
 
 export async function smokeHttpArtifact(artifact: string, runtime: string, denyRead?: string) {
   const server = new TestServer();
-  const dir = await realpath(await mkdtemp(join(tmpdir(), "telimus-http-artifact-vault-")));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "trew-http-artifact-vault-")));
   let host: Awaited<ReturnType<typeof openHttp>> | undefined;
   try {
     await server.start();

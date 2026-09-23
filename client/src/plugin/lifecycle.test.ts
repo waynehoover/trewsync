@@ -1,12 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
-import TelimusPlugin from "./main.ts";
+import TrewPlugin from "./main.ts";
 import { App, notices, resetStub } from "./stub.ts";
 import { TestServer } from "../core/test-server.ts";
 import { nextTurn, within } from "../core/test-async.ts";
 
 let server: TestServer | undefined;
-let plugin: TelimusPlugin | undefined;
+let plugin: TrewPlugin | undefined;
 afterEach(async () => {
   plugin?.onunload();
   await plugin?.closing;
@@ -35,11 +35,11 @@ it("a retired reconnect loop must not erase the replacement loop's wake handle",
   server = new TestServer();
   await server.start();
   const app = new App();
-  plugin = new TelimusPlugin(
+  plugin = new TrewPlugin(
     app as unknown as ObsidianApp,
     {
-      id: "telimus-review",
-      dir: ".obsidian/plugins/telimus-review",
+      id: "trew-review",
+      dir: ".obsidian/plugins/trew-review",
     } as PluginManifest,
   );
   await plugin.onload();
@@ -66,7 +66,7 @@ it("a retired reconnect loop must not erase the replacement loop's wake handle",
     await server.start(port);
     notices.length = 0;
     await plugin.syncNow();
-    expect(notices.some(({ message }) => message === "Telimus: reconnecting…")).toBe(true);
+    expect(notices.some(({ message }) => message === "Trew: reconnecting…")).toBe(true);
     expect(state.wakeLoop).toBe(newWake);
     await stateIs("synced");
   } finally {

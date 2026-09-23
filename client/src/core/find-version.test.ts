@@ -3,7 +3,7 @@
  *
  * `history` is paged, and both places that looked for one version used to read
  * a single page and give up: the newest version with content, and a version
- * by uid. `telimus history` would list a version that `telimus restore --uid`
+ * by uid. `trew history` would list a version that `trew restore --uid`
  * then said did not exist.
  */
 

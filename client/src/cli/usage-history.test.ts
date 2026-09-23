@@ -19,7 +19,7 @@ async function cli(...args: string[]) {
 it("history can page to an older version with the existing before argument", async () => {
   server = new TestServer();
   await server.start();
-  dir = await mkdtemp(join(tmpdir(), "telimus-review-cli-"));
+  dir = await mkdtemp(join(tmpdir(), "trew-review-cli-"));
   const init = await cli(
     "init",
     "--dir",
@@ -59,7 +59,7 @@ it("preview JSON reports blocked files as unsuccessful without changing the note
   server = new TestServer();
   server.extraArgs = ["-max-file", "10"];
   await server.start();
-  dir = await mkdtemp(join(tmpdir(), "telimus-preview-cli-"));
+  dir = await mkdtemp(join(tmpdir(), "trew-preview-cli-"));
   const init = await cli(
     "init",
     "--dir",
@@ -99,6 +99,6 @@ it("the documented nested backup is refused and a separate destination works", a
   await expect(server.cli("backup", "-to", join(server.dataDir, "before-purge"))).rejects.toThrow(
     /contain one another/,
   );
-  dir = await mkdtemp(join(tmpdir(), "telimus-review-backup-"));
+  dir = await mkdtemp(join(tmpdir(), "trew-review-backup-"));
   await expect(server.cli("backup", "-to", join(dir, "snapshot"))).resolves.toBeTypeOf("string");
 });

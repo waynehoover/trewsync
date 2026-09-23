@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/trew/internal/chunks"
 )
 
 /*
@@ -60,7 +60,7 @@ func TestHealthOnAStoreThatWorks(t *testing.T) {
 // branch is driven with one, on a handle that believes it is writable.
 //
 // It used to be driven with `OpenForInspection`, and that stand-in was the
-// confusion itself: every inspection command opens that way, so `telimus
+// confusion itself: every inspection command opens that way, so `trew
 // stats` reported every healthy server as unable to take a note. The two
 // answers are told apart here and in the test below.
 func TestHealthNoticesADatabaseThatRefusesWrites(t *testing.T) {
@@ -176,7 +176,7 @@ func TestHealthWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	before, err := DatabaseStamp(strings.TrimSuffix(dbPath, "/telimus.db"))
+	before, err := DatabaseStamp(strings.TrimSuffix(dbPath, "/trew.db"))
 	if err != nil {
 		// DataDir layout differs; fall back to hashing the file directly.
 		before.Digest, err = fileDigest(dbPath)

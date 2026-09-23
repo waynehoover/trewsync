@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/trew/internal/chunks"
 )
 
 /* ---------------------------------------------------------------- *
@@ -106,7 +106,7 @@ func writeOldDatabase(t *testing.T, dbPath string) {
 
 func TestOpeningADatabaseFromAnOlderBuildAddsTheColumnsAndLosesNothing(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "telimus.db")
+	dbPath := filepath.Join(dir, "trew.db")
 	writeOldDatabase(t, dbPath)
 
 	s, err := Open(dbPath, filepath.Join(dir, "chunks"))
@@ -206,7 +206,7 @@ func TestOpeningADatabaseFromAnOlderBuildAddsTheColumnsAndLosesNothing(t *testin
 // never started.
 func TestMigratingTwiceChangesNothing(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "telimus.db")
+	dbPath := filepath.Join(dir, "trew.db")
 	writeOldDatabase(t, dbPath)
 
 	first, err := Open(dbPath, filepath.Join(dir, "chunks"))
@@ -267,7 +267,7 @@ func schemaOf(t *testing.T, db *sql.DB) string {
 // statement made it, and it fails against a build with neither.
 func TestADatabaseFromAnOlderBuildGainsTheDevicesTable(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "telimus.db")
+	dbPath := filepath.Join(dir, "trew.db")
 	writeOldDatabase(t, dbPath)
 
 	s, err := Open(dbPath, filepath.Join(dir, "chunks"))

@@ -43,11 +43,11 @@ afterEach(async () => {
 });
 
 async function device(name: string): Promise<{ c: Client; dir: string }> {
-  const dir = await mkdtemp(join(tmpdir(), `telimus-shape-${name}-`));
+  const dir = await mkdtemp(join(tmpdir(), `trew-shape-${name}-`));
   dirs.push(dir);
   const c = new Client({
     vault: new NodeVault(dir),
-    store: new JsonIndexStore(join(dir, ".telimus", "index.json")),
+    store: new JsonIndexStore(join(dir, ".trew", "index.json")),
     url: server.wsUrl,
     ...(await server.deviceCredentials(SECRET, wrapped)),
     vaultId: "default",
@@ -155,7 +155,7 @@ async function contentsOf(dir: string): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const walk = async (at: string, prefix: string): Promise<void> => {
     for (const item of await readdir(at, { withFileTypes: true })) {
-      if (item.name === ".telimus" || item.name === ".trash") continue;
+      if (item.name === ".trew" || item.name === ".trash") continue;
       const path = prefix ? `${prefix}/${item.name}` : item.name;
       if (item.isDirectory()) await walk(join(at, item.name), path);
       else {

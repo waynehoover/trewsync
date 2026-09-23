@@ -230,7 +230,7 @@ describe("UTF-8 boundaries", () => {
     // Dense multi-byte content at a small chunk size, so boundary
     // candidates land inside characters constantly.
     let text = "";
-    for (let i = 0; i < 4000; i++) text += "日本語のノート🗿 telimus ";
+    for (let i = 0; i < 4000; i++) text += "日本語のノート🗿 trew ";
     const data = enc.encode(text);
     const sizes: ChunkSizes = { min: 64, avg: 128, max: 512 };
 
@@ -331,7 +331,7 @@ describe("streaming", () => {
     // other streaming test here is ASCII, so without this the lookahead is
     // untested.
     let text = "";
-    for (let i = 0; i < 3000; i++) text += "日本語のノート🗿 telimus ";
+    for (let i = 0; i < 3000; i++) text += "日本語のノート🗿 trew ";
     const data = enc.encode(text);
     const sizes: ChunkSizes = { min: 64, avg: 128, max: 512 };
 

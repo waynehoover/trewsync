@@ -13,7 +13,7 @@ let server: TestServer | undefined;
 const roots: string[] = [];
 const hosts: { client: Client; close(): Promise<unknown> }[] = [];
 beforeAll(async () => {
-  buildDir = await mkdtemp(join(tmpdir(), "telimus-tools-build-"));
+  buildDir = await mkdtemp(join(tmpdir(), "trew-tools-build-"));
   bundle = await buildMcp(buildDir);
 });
 afterAll(async () => removeTree(buildDir));
@@ -24,7 +24,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await removeTree(root);
 });
 async function directory() {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-tools-process-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-tools-process-"));
   roots.push(dir);
   return dir;
 }

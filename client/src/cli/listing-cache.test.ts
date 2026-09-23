@@ -44,7 +44,7 @@ vi.mock("node:fs/promises", async (original) => {
 let root: string;
 let stop: (() => void) | undefined;
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "telimus-list-cache-"));
+  root = await mkdtemp(join(tmpdir(), "trew-list-cache-"));
   await mkdir(join(root, "notes"));
   await Promise.all(
     ["one.md", "two.md", "three.md"].map((name) => writeFile(join(root, "notes", name), name)),
@@ -229,7 +229,7 @@ it("does not retry an old deletion after a restored note's watcher event is miss
     const secret = new Uint8Array(32).fill(91);
     client = new Client({
       vault,
-      store: new JsonIndexStore(join(root, ".telimus/index.json")),
+      store: new JsonIndexStore(join(root, ".trew/index.json")),
       url: server.wsUrl,
       ...(await server.deviceCredentials(secret, await testWrapped(secret), "writer")),
       vaultId: "default",
@@ -300,7 +300,7 @@ it.each([false, true])(
         coalesceWrites: false,
         inspect: true,
       };
-      const store = () => new JsonIndexStore(join(root, ".telimus/index.json"));
+      const store = () => new JsonIndexStore(join(root, ".trew/index.json"));
       client = new Client({ ...opts, vault: new NodeVault(root), store: store() });
       await client.connect();
       await client.settle();
@@ -352,7 +352,7 @@ it("still aborts reconciliation when an omitted synced path cannot be checked", 
     const secret = new Uint8Array(32).fill(164);
     client = new Client({
       vault,
-      store: new JsonIndexStore(join(root, ".telimus/index.json")),
+      store: new JsonIndexStore(join(root, ".trew/index.json")),
       url: server.wsUrl,
       vaultId: "default",
       device: "writer",

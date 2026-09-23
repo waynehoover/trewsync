@@ -11,7 +11,7 @@
  *
  * The exclusion is the kernel's: `O_EXLOCK` on macOS, an abstract Unix socket
  * on Linux, both in `cli/exclusion.ts` and both released when this process
- * dies however it dies. Holding it establishes that no other telimus on this
+ * dies however it dies. Holding it establishes that no other trew on this
  * machine is inside this vault. That is the whole of the mutual exclusion.
  *
  * The lock file is then a *record* rather than a claim. It names the holder,
@@ -21,7 +21,7 @@
  * what any of this can see.
  *
  * That split is what makes the file safe to overwrite. A record left by a
- * telimus that crashed is debris by construction: if it were a live local
+ * trew that crashed is debris by construction: if it were a live local
  * holder, the exclusion would not have been free.
  *
  * ## Why the staleness protocol is gone
@@ -46,14 +46,14 @@
  * Two things, and both say so rather than being silently absorbed.
  *
  * A holder on another machine cannot be checked from here, so it is believed,
- * and `telimus unlock --force` is how somebody who knows better says so.
+ * and `trew unlock --force` is how somebody who knows better says so.
  *
  * And an exclusion is only as good as the filesystem: `O_EXLOCK` is advisory
  * and a network mount may ignore it. It is therefore proved on every run
  * rather than assumed, against the vault's own state folder. Where it does not
  * hold, everything below falls back to the file-only protocol this module had
  * before, which refuses a lock it cannot prove is abandoned and waits for
- * `telimus unlock`. That is slower to recover and it is not wrong.
+ * `trew unlock`. That is slower to recover and it is not wrong.
  */
 
 import { link, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
@@ -125,7 +125,7 @@ export const midBreak = composite({
   /**
    * After the lock is in this call's hand and before anything is decided.
    *
-   * The vault's name is free here, and this call emptied it. A `telimus sync`
+   * The vault's name is free here, and this call emptied it. A `trew sync`
    * arriving now takes the vault legitimately, which is fine when the lock
    * really was abandoned and is the thing to be careful about when it was not.
    */
@@ -159,8 +159,8 @@ export interface LockHolder {
 export async function lockVault(vault: string, command: string): Promise<() => Promise<void>> {
   const path = lockPath(vault);
   const dir = join(vault, STATE_DIR);
-  // The lock lives under `.telimus` like the config and the index, and gets the
-  // same question before it is created (R11): a `.telimus` that is a link out
+  // The lock lives under `.trew` like the config and the index, and gets the
+  // same question before it is created (R11): a `.trew` that is a link out
   // of the vault would put the thing that decides who owns this vault
   // somewhere two vaults could share.
   await refuseOutsideVaultAt(vault, path);
@@ -188,8 +188,8 @@ export async function lockVault(vault: string, command: string): Promise<() => P
     const who = await readHolder(path);
     throw new Error(
       who === undefined
-        ? `another telimus is using this vault. Wait for it to finish, or stop it.`
-        : `another telimus is using this vault: ${who.command} (pid ${who.pid} on ${who.host}, ` +
+        ? `another trew is using this vault. Wait for it to finish, or stop it.`
+        : `another trew is using this vault: ${who.command} (pid ${who.pid} on ${who.host}, ` +
             `since ${new Date(who.since).toISOString()}). Wait for it to finish, or stop it.`,
     );
   }
@@ -205,7 +205,7 @@ export async function lockVault(vault: string, command: string): Promise<() => P
 
   // No kernel exclusion on this platform, or it did not prove itself. Then the
   // file is the only thing there is and a lock left by a crash waits for
-  // `telimus unlock`, which is where this project was before I27 and is not
+  // `trew unlock`, which is where this project was before I27 and is not
   // wrong, only slower to recover.
   //
   // Three attempts, and each is a whole acquisition rather than a step towards
@@ -261,16 +261,16 @@ async function claimUnder(
     const who = at.holder;
     // A machine this one cannot ask. Believed, as it always was: a vault on a
     // disk two machines can reach is outside what any kernel can answer for,
-    // and this is the case `telimus unlock --force` exists for.
+    // and this is the case `trew unlock --force` exists for.
     //
     // Thrown rather than released here: the caller releases on any throw, and
     // two places releasing one exclusion is two places to get it wrong.
     if (who.host !== hostname()) {
       throw new Error(
-        `another telimus is using this vault: ${who.command} (pid ${who.pid} on ${who.host}, ` +
+        `another trew is using this vault: ${who.command} (pid ${who.pid} on ${who.host}, ` +
           `since ${new Date(who.since).toISOString()}). That is a different machine, so this ` +
           `one cannot tell whether it is still running. Wait for it to finish, or if you know ` +
-          `it is gone, run telimus unlock --force.`,
+          `it is gone, run trew unlock --force.`,
       );
     }
     // A live local pid in a file this process holds the exclusion for is a
@@ -280,20 +280,20 @@ async function claimUnder(
     // Belt and braces against the one failure that would matter: an exclusion
     // that returns success without excluding. `selfTest` is supposed to catch
     // that and this is what happens if it did not. Refusing costs a false stop
-    // where a pid was recycled onto an unrelated process, which `telimus
+    // where a pid was recycled onto an unrelated process, which `trew
     // unlock` clears; not refusing costs two writers.
     if (who.pid !== process.pid && alive(who.pid)) {
       throw new Error(
         `this vault is locked by ${who.command} (pid ${who.pid} on ${who.host}), which is ` +
           `still running, but the ${kernel.how} exclusion for it was free. Something is wrong ` +
           `with locking on this filesystem, so nothing was changed. Stop that process, or run ` +
-          `telimus unlock if it is not really telimus.`,
+          `trew unlock if it is not really trew.`,
       );
     }
   }
 
   // Whatever was there is debris: this process holds the exclusion, so no
-  // other local telimus can be inside, and a record left by one that died is
+  // other local trew can be inside, and a record left by one that died is
   // exactly what this replaces.
   //
   // Through a temporary and a rename even so. Nothing local is competing for
@@ -306,7 +306,7 @@ async function claimUnder(
     await midPublish.pause("");
     await rename(temp, path);
   } catch (err) {
-    // Nothing sweeps `.telimus` itself, so a staging copy left by a failure
+    // Nothing sweeps `.trew` itself, so a staging copy left by a failure
     // here would sit beside the lock for ever.
     await rm(temp, { force: true }).catch(() => undefined);
     throw err;
@@ -328,7 +328,7 @@ async function claimUnder(
  *
  * Undefined covers both a platform without a mechanism and a filesystem where
  * the mechanism does not actually exclude, and the caller treats them the
- * same: fall back to the file, and to a person running `telimus unlock` after a
+ * same: fall back to the file, and to a person running `trew unlock` after a
  * crash. Saying which is worth doing once rather than on every command, so it
  * goes to stderr and not into the refusal.
  */
@@ -350,8 +350,8 @@ async function takeLocally(vault: string): Promise<Exclusion | typeof BUSY | und
     // clears itself and one that waits for somebody, and a person who is about
     // to wait for something should be told why.
     process.stderr.write(
-      `telimus: ${m.how} does not lock on this filesystem, so a crashed telimus will need ` +
-        `telimus unlock rather than clearing itself.\n`,
+      `trew: ${m.how} does not lock on this filesystem, so a crashed trew will need ` +
+        `trew unlock rather than clearing itself.\n`,
     );
     return undefined;
   }
@@ -363,7 +363,7 @@ function refusal(at: Extract<LockState, { state: "held" | "unreadable" }>, path:
   if (at.state === "unreadable") {
     return (
       `something is at ${path} but it does not name a holder, so this vault cannot be ` +
-      `locked and nobody can say who has it. Run telimus unlock to clear it.`
+      `locked and nobody can say who has it. Run trew unlock to clear it.`
     );
   }
   const who = at.holder;
@@ -375,21 +375,21 @@ function refusal(at: Extract<LockState, { state: "held" | "unreadable" }>, path:
   // it over, which is what the five attempts were about.
   if (who.host !== hostname()) {
     return (
-      `another telimus is using this vault: ${what}. That is a different machine, so ` +
+      `another trew is using this vault: ${what}. That is a different machine, so ` +
       `this one cannot tell whether it is still running. Wait for it to finish, or if ` +
-      `you know it is gone, run telimus unlock --force.`
+      `you know it is gone, run trew unlock --force.`
     );
   }
   if (alive(who.pid)) {
-    return `another telimus is using this vault: ${what}. Wait for it to finish, or stop it.`;
+    return `another trew is using this vault: ${what}. Wait for it to finish, or stop it.`;
   }
   // Reached only on the fallback path, so the reason has to name it. Saying
-  // "telimus does not take a lock over by itself" would be a policy this
+  // "trew does not take a lock over by itself" would be a policy this
   // client no longer has: everywhere the kernel's exclusion holds, a lock like
   // this is taken over without anybody being told about it.
   return (
     `this vault is locked by ${what}, which is not running any more. This filesystem does ` +
-    `not support the lock that would let telimus clear that by itself, so run telimus unlock.`
+    `not support the lock that would let trew clear that by itself, so run trew unlock.`
   );
 }
 
@@ -443,10 +443,10 @@ export async function unlockVault(vault: string, force = false): Promise<Unlocke
       did: "refused",
       was: other ?? mine,
       why:
-        `another telimus unlock is already running against this vault` +
+        `another trew unlock is already running against this vault` +
         (other === undefined ? "" : ` (pid ${other.pid} on ${other.host})`) +
         `. Two of them at once can hand this vault to two writers, so this one stopped. ` +
-        `If no telimus is running, remove ${recovery} and try again`,
+        `If no trew is running, remove ${recovery} and try again`,
     };
   }
   try {
@@ -469,7 +469,7 @@ async function breakLock(path: string, force: boolean): Promise<Unlocked> {
   // happens before the taking-aside rather than after it.
   //
   // Moving a live holder's lock out of the way, even for the instant it takes
-  // to decide to put it back, leaves the vault looking free: a `telimus sync`
+  // to decide to put it back, leaves the vault looking free: a `trew sync`
   // starting in that instant takes it while the holder is still running, which
   // is two writers on one vault caused by the command that exists to prevent
   // them. Every ordinary refusal -- somebody's watcher is running, the lock is
@@ -536,7 +536,7 @@ async function breakLock(path: string, force: boolean): Promise<Unlocked> {
     was: who,
     why:
       `this vault was locked by ${who.command} (pid ${who.pid} on ${who.host}), which is ` +
-      `still running, and another telimus took the lock while that was being established. ` +
+      `still running, and another trew took the lock while that was being established. ` +
       `Two processes may both believe they hold this vault: stop both, then run unlock again`,
   };
 }

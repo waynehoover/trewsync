@@ -73,7 +73,7 @@ let server: TestServer;
 const dirs: string[] = [];
 
 async function vaultDir(name: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), `telimus-${name}-`));
+  const dir = await mkdtemp(join(tmpdir(), `trew-${name}-`));
   dirs.push(dir);
   return dir;
 }
@@ -88,7 +88,7 @@ afterEach(async () => {
   // twenty-one test files running at once against the same /tmp it can find
   // the directory repopulated in between and throw ENOTEMPTY. Node retries
   // that error specifically when asked to. It showed up once in twelve full
-  // runs, on `.telimus`.
+  // runs, on `.trew`.
   //
   // This is not covering for a write that outlived the command, which was the
   // first suspicion and would have been a real bug. save() is awaited, the
@@ -162,8 +162,8 @@ describe("pairing a vault", () => {
     const { a, b } = await twoDevices();
 
     // Both ends agree about the vault, and only one of them was told.
-    const configA = JSON.parse(await read(a, ".telimus/config.json")) as Record<string, string>;
-    const configB = JSON.parse(await read(b, ".telimus/config.json")) as Record<string, string>;
+    const configA = JSON.parse(await read(a, ".trew/config.json")) as Record<string, string>;
+    const configB = JSON.parse(await read(b, ".trew/config.json")) as Record<string, string>;
     expect(configB["secret"]).toBe(configA["secret"]);
     expect(configB["url"]).toBe(configA["url"]);
     expect(configB["device"]).toBe("b");
@@ -178,7 +178,7 @@ describe("pairing a vault", () => {
     const a = await vaultDir("a");
     const init = await cli("init", server.setup, "--dir", a, "--device", "a", "--json");
     expect(init.code, init.all).toBe(0);
-    const config = JSON.parse(await read(a, ".telimus/config.json")) as Record<string, string>;
+    const config = JSON.parse(await read(a, ".trew/config.json")) as Record<string, string>;
     expect(config["url"]).toBe(server.wsUrl);
 
     const b = await vaultDir("b");
@@ -203,7 +203,7 @@ describe("pairing a vault", () => {
     // home directory is the quiet way to lose one.
     await fresh();
     const { a } = await twoDevices();
-    const mode = (await stat(join(a, ".telimus", "config.json"))).mode & 0o777;
+    const mode = (await stat(join(a, ".trew", "config.json"))).mode & 0o777;
     expect(mode.toString(8)).toBe("600");
   }, 240_000);
 
@@ -222,7 +222,7 @@ describe("pairing a vault", () => {
     expect(asked.all).toMatch(/does not hold the vault's recovery key/);
     expect(asked.all).toMatch(/shown once/);
     // And it is not on disk either, which is the fact the sentence rests on.
-    const config = JSON.parse(await read(dir, ".telimus/config.json")) as Record<string, string>;
+    const config = JSON.parse(await read(dir, ".trew/config.json")) as Record<string, string>;
     expect(config["secret"], "the root secret is still on this device").toBeUndefined();
     expect(config["deviceId"]).toMatch(/^[A-Za-z0-9_-]+$/);
   }, 240_000);
@@ -259,7 +259,7 @@ describe("pairing a vault", () => {
     expect(nonsense.all).toMatch(/basalt3_/);
 
     // And nothing was written, so a failed pair leaves no half-configured vault.
-    await expect(read(c, ".telimus/config.json")).rejects.toThrow();
+    await expect(read(c, ".trew/config.json")).rejects.toThrow();
   }, 240_000);
 });
 
@@ -434,7 +434,7 @@ describe("syncing real files on a real disk", () => {
   }, 300_000);
 
   it("leaves its own state folder out of the vault it syncs", async () => {
-    // .telimus holds the root secret. Syncing it would put the key to the
+    // .trew holds the root secret. Syncing it would put the key to the
     // vault in the vault, which is the one place it must never be.
     await fresh();
     const { a, b } = await twoDevices();
@@ -442,10 +442,10 @@ describe("syncing real files on a real disk", () => {
     await cli("sync", "--dir", a);
     await cli("sync", "--dir", b);
 
-    const configB = JSON.parse(await read(b, ".telimus/config.json")) as Record<string, string>;
+    const configB = JSON.parse(await read(b, ".trew/config.json")) as Record<string, string>;
     expect(configB["device"]).toBe("b");
     const { readdir } = await import("node:fs/promises");
-    expect(await readdir(join(b, ".telimus"))).not.toContain("config.json.tmp");
+    expect(await readdir(join(b, ".trew"))).not.toContain("config.json.tmp");
   }, 300_000);
 });
 
@@ -499,7 +499,7 @@ describe("status", () => {
     expect(s.json()["cursor"]).toBe(0);
     expect(server_["behind"]).toBe(3);
     // And it stayed a question: nothing of the backlog was written here.
-    expect((await readdir(b)).sort()).toEqual([".telimus"]);
+    expect((await readdir(b)).sort()).toEqual([".trew"]);
   }, 300_000);
 
   /**
@@ -614,7 +614,7 @@ describe("status", () => {
 
     // This device has applied more than the server ever issued, which is what
     // a server restored from an older backup looks like from here.
-    const index = join(a, ".telimus", "index.json");
+    const index = join(a, ".trew", "index.json");
     const stored = JSON.parse(await readFile(index, "utf8")) as Record<string, unknown>;
     await writeFile(index, JSON.stringify({ ...stored, cursor: 9_999 }));
 
@@ -718,7 +718,7 @@ describe("unlinking", () => {
     const gone = await cli("unlink", "--dir", b);
     expect(gone.code, gone.all).toBe(0);
     expect(gone.stdout).toContain(mine);
-    expect(gone.stdout).toMatch(new RegExp(`telimus revoke ${mine}`));
+    expect(gone.stdout).toMatch(new RegExp(`trew revoke ${mine}`));
 
     // And it is true: the row is still there, and that command removes it.
     const still = await cli("devices", "--dir", a, "--json");
@@ -738,7 +738,7 @@ describe("unlinking", () => {
     const gone = await cli("unlink", "--dir", b, "--json");
     expect(gone.code).toBe(0);
     expect(await read(b, "keep.md")).toBe("still here\n");
-    await expect(read(b, ".telimus/config.json")).rejects.toThrow();
+    await expect(read(b, ".trew/config.json")).rejects.toThrow();
 
     // And the server still has it, because unlinking is a local decision.
     const c = await vaultDir("c");
@@ -761,8 +761,8 @@ describe("saying no clearly", () => {
     // look like an unpaired vault, and the next pair would replace the root
     // secret with a new one.
     const dir = await vaultDir("broken");
-    await mkdir(join(dir, ".telimus"), { recursive: true });
-    await writeFile(join(dir, ".telimus", "config.json"), "{ not json");
+    await mkdir(join(dir, ".trew"), { recursive: true });
+    await writeFile(join(dir, ".trew", "config.json"), "{ not json");
     const r = await cli("status", "--dir", dir);
     expect(r.code).toBe(1);
     expect(r.all).toMatch(/not valid JSON/);
@@ -772,9 +772,9 @@ describe("saying no clearly", () => {
     // A short secret derives keys perfectly happily. They are the wrong keys,
     // and the vault would sync and decrypt nothing.
     const dir = await vaultDir("shortsecret");
-    await mkdir(join(dir, ".telimus"), { recursive: true });
+    await mkdir(join(dir, ".trew"), { recursive: true });
     await writeFile(
-      join(dir, ".telimus", "config.json"),
+      join(dir, ".trew", "config.json"),
       JSON.stringify({
         url: "ws://x",
         token: "t",
@@ -798,7 +798,7 @@ describe("saying no clearly", () => {
   it("prints usage for no command and for a wrong one", async () => {
     const none = await cli();
     expect(none.code).toBe(2);
-    expect(none.stdout).toMatch(/telimus sync/);
+    expect(none.stdout).toMatch(/trew sync/);
 
     const wrong = await cli("frobnicate");
     expect(wrong.code).toBe(2);
@@ -888,7 +888,7 @@ describe("one secret", () => {
     // Keeping it is keeping a second secret that opens nothing, and so is
     // keeping the root: init registers this device and drops both, so what is
     // left is a credential for one row and the data key it reads with.
-    const after = JSON.parse(await read(a, ".telimus/config.json")) as Record<string, string>;
+    const after = JSON.parse(await read(a, ".trew/config.json")) as Record<string, string>;
     expect(after["bootstrap"]).toBeUndefined();
     expect(Object.keys(after).sort()).toEqual([
       "dataKey",
@@ -919,7 +919,7 @@ describe("one secret", () => {
 
     const b = await vaultDir("b");
     await cli("pair", pairing, "--dir", b, "--device", "b");
-    const config = JSON.parse(await read(b, ".telimus/config.json")) as Record<string, string>;
+    const config = JSON.parse(await read(b, ".trew/config.json")) as Record<string, string>;
     expect(
       config["bootstrap"],
       "a second device was handed a bootstrap it must not have",
@@ -1137,7 +1137,7 @@ describe("a vault is claimed when init says it is", () => {
     );
     expect(init.code, init.all).toBe(0);
 
-    const config = JSON.parse(await readFile(join(a, ".telimus", "config.json"), "utf8")) as Record<
+    const config = JSON.parse(await readFile(join(a, ".trew", "config.json"), "utf8")) as Record<
       string,
       unknown
     >;
@@ -1177,7 +1177,7 @@ describe("adding a device", () => {
     // What the new device holds: its own credential and the data key, and no
     // root. That is the whole point of an invite carrying the data key. With
     // the root here, this device could register itself again after a revoke.
-    const config = JSON.parse(await read(b, ".telimus/config.json")) as Record<string, string>;
+    const config = JSON.parse(await read(b, ".trew/config.json")) as Record<string, string>;
     expect(config["secret"], "an invite handed over the vault's root").toBeUndefined();
     expect(config["deviceId"]).toBe(paired.json()["deviceId"]);
     expect(config["deviceSecret"]).toMatch(/^[A-Za-z0-9_-]+$/);
@@ -1205,7 +1205,7 @@ describe("adding a device", () => {
     expect(again.all).toMatch(/not authorised/);
     // Nothing kept, so the next attempt with a fresh invite is the ordinary
     // path rather than an unlink first.
-    await expect(stat(join(c, ".telimus", "config.json"))).rejects.toMatchObject({
+    await expect(stat(join(c, ".trew", "config.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
     // And the vault gained one device, not two.
@@ -1220,7 +1220,7 @@ describe("adding a device", () => {
     const given = await cli("pair", "basalt3i_notreallyaninvite", "--dir", b);
     expect(given.code).toBe(1);
     expect(given.all).toMatch(/this invite is damaged/);
-    await expect(stat(join(b, ".telimus", "config.json"))).rejects.toMatchObject({
+    await expect(stat(join(b, ".trew", "config.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   }, 60_000);
@@ -1234,7 +1234,7 @@ describe("adding a device", () => {
     const asked = await cli("recovery-key", "--dir", dir);
     expect(asked.code).toBe(1);
     expect(asked.all).toMatch(/does not hold the vault's recovery key/);
-    expect(asked.all).toMatch(/telimus invite/);
+    expect(asked.all).toMatch(/trew invite/);
   }, 60_000);
 
   it("pairs with the recovery key, registers a row, and then forgets the key", async () => {
@@ -1252,7 +1252,7 @@ describe("adding a device", () => {
     // feature rests on: with the root on disk, this device could re-derive
     // the vault's credential and register itself again, so revoking it would
     // stop nothing.
-    const config = JSON.parse(await read(b, ".telimus/config.json")) as Record<string, string>;
+    const config = JSON.parse(await read(b, ".trew/config.json")) as Record<string, string>;
     expect(config["secret"], "the root secret is still on the new device").toBeUndefined();
     expect(config["deviceId"]).toBe(paired.json()["deviceId"]);
     expect(config["deviceSecret"]).toMatch(/^[A-Za-z0-9_-]+$/);
@@ -1289,7 +1289,7 @@ describe("adding a device", () => {
     // And nothing is left behind. A key the server does not know has to leave
     // the vault exactly as unpaired as it found it, or the next attempt
     // is refused for being already paired and the person has to unlink first.
-    await expect(stat(join(b, ".telimus", "config.json"))).rejects.toMatchObject({
+    await expect(stat(join(b, ".trew", "config.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   }, 60_000);
@@ -1333,7 +1333,7 @@ describe("the device list", () => {
     const { a } = await twoDevices();
     const listed = await cli("devices", "--dir", a);
     expect(listed.stdout).toMatch(/does not un-read/);
-    expect(listed.stdout).toMatch(/telimus rotate/);
+    expect(listed.stdout).toMatch(/trew rotate/);
     expect(listed.stdout).toMatch(/later encrypted content/);
     expect(listed.stdout).toMatch(/recovery key was exposed/);
   }, 60_000);
@@ -1392,7 +1392,7 @@ describe("the device list", () => {
     const missing = await cli("revoke", "no-such-device", "--dir", a);
     expect(missing.code).toBe(1);
     expect(missing.all).toMatch(/no device with id no-such-device/);
-    expect(missing.all).toMatch(/telimus devices again/);
+    expect(missing.all).toMatch(/trew devices again/);
   }, 60_000);
 
   /**
@@ -1483,7 +1483,7 @@ describe("the device list", () => {
 
     const shown = await cli("devices", "--dir", a);
     expect(shown.stdout).toMatch(/1 outstanding invite/);
-    expect(shown.stdout).toMatch(/telimus uninvite ID/);
+    expect(shown.stdout).toMatch(/trew uninvite ID/);
 
     // Cancelled, and the string stops working, which is the point of seeing
     // it in the first place.
@@ -1505,7 +1505,7 @@ describe("the device list", () => {
     const again = await cli("uninvite", id, "--dir", a);
     expect(again.code).toBe(1);
     expect(again.all).toMatch(/no outstanding invite/);
-    expect(again.all).toMatch(/telimus devices/);
+    expect(again.all).toMatch(/trew devices/);
   }, 60_000);
 
   /**
@@ -1554,7 +1554,7 @@ describe("the device list", () => {
     // An ineffective option is a usage error, just like a stray positional.
     expect(refused.code).toBe(2);
     expect(refused.all).toMatch(/does not take --recovery-key/);
-    expect(refused.all).toMatch(/telimus rotate takes the key as its argument/);
+    expect(refused.all).toMatch(/trew rotate takes the key as its argument/);
   }, 60_000);
 
   /**
@@ -1724,7 +1724,7 @@ describe("a folder this device ignores and another device syncs (R2)", () => {
 
   /**
    * N4. An ignored path was left on the inbound work list for ever, so
-   * `telimus status` said "N files with work outstanding" about a folder
+   * `trew status` said "N files with work outstanding" about a folder
    * whose owner had decided it would never arrive. Rule 7: the ignored
    * counter is where that belongs, and nothing is outstanding.
    */
@@ -1963,7 +1963,7 @@ describe("rebasing onto a server that lost history (I10)", () => {
     // The refusal is the server's, and the server has never heard of the
     // command that fixes it. It used to stop at the diagnosis, so the only
     // place the way out existed was docs/server.md. Error strings are UI.
-    expect(refused.all, "the refusal named no recovery").toMatch(/telimus rebase --backup-taken/);
+    expect(refused.all, "the refusal named no recovery").toMatch(/trew rebase --backup-taken/);
 
     const withoutFlag = await cli("rebase", "--dir", a);
     expect(withoutFlag.code).toBe(1);
@@ -2047,7 +2047,7 @@ describe("what the disk says about case (C-D2)", () => {
 /**
  * C-D15 in the 0.3.0 review. `parseArgs` collects everything that is not an
  * option into `rest`, and the commands that take no positional never looked.
- * `telimus sync ~/notes` synced the current directory and reported that it had
+ * `trew sync ~/notes` synced the current directory and reported that it had
  * synced, which is a wrong vault reported as a right one.
  */
 describe("an argument the command does not take", () => {
@@ -2272,11 +2272,11 @@ describe("the commands", () => {
       [...source.slice(from, to).matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]!),
     );
 
-    // The usage, from the lines that begin `  telimus <word>`, minus the
+    // The usage, from the lines that begin `  trew <word>`, minus the
     // options that are listed among them because that is where somebody looks
     // for them.
     const documented = new Set(
-      [...USAGE.matchAll(/^ {2}telimus (--?[a-z-]+|[a-z][a-z-]*)/gm)]
+      [...USAGE.matchAll(/^ {2}trew (--?[a-z-]+|[a-z][a-z-]*)/gm)]
         .map((m) => m[1]!)
         .filter((word) => !word.startsWith("-")),
     );
@@ -2308,7 +2308,7 @@ describe("the commands", () => {
  * characters produced a sixty-six byte default, the server refuses anything
  * over sixty-four, and every pairing test on that runner failed with
  * "the device name is 66 bytes". Nobody had chosen that name -- it is the
- * hostname plus a random tail -- so `telimus init` failed on a machine whose
+ * hostname plus a random tail -- so `trew init` failed on a machine whose
  * only unusual property was what it is called.
  *
  * The split is between a name somebody typed and one this program derived. A

@@ -30,7 +30,7 @@ When two reviews that did not see each other land on the same finding, it is wor
 
 **Atomic batches are not a flag.** (Astra.) `AppendMany` is *deliberately* partial: savepoints per entry, a session-layer fallback to individual commits, and `TestAppendManyRefusesOneEntryAndCommitsTheRest` holding the behaviour on purpose. That is right for a device and wrong for an agent's multi-file refactor. Two APIs now (§4.3). Astra also found that preview-then-apply is not saved by matching bases: a device adding a backlink, or a filename that changes a short wiki-link's resolution, invalidates what the preview *read* while every output base still matches.
 
-**Schema version 1 collides with Basalt's schema version 1.** (Astra.) A Telimus binary opened on a Basalt data directory would find a version it accepts. Became product identifier plus store epoch, validated before any write, with the epoch binding cursors and preconditions so a restored database cannot make a stale precondition match the wrong version (§2.8, §3.3).
+**Schema version 1 collides with Basalt's schema version 1.** (Astra.) A Trew binary opened on a Basalt data directory would find a version it accepts. Became product identifier plus store epoch, validated before any write, with the epoch binding cursors and preconditions so a restored database cannot make a stale precondition match the wrong version (§2.8, §3.3).
 
 **FTS5 phrase matching is not literal search.** (Astra, with a live SQLite probe.) With `foobar` indexed, `MATCH '"oo"'` returns nothing; `instr(body,'oo')` returns the row. Basalt's `search_notes` is an escaped literal regex (`mcp-read.ts:305`), so the swap would have quietly returned fewer results with no error. Also proven with a fixture: the as-of listing predicate leaves rename *sources* visible (§2.5, M4).
 
@@ -48,7 +48,7 @@ When two reviews that did not see each other land on the same finding, it is wor
 
 **A refused path becomes an invisible stuck file.** (Opus.) Server-side NFC refusal with no UI surface means a file silently never syncs and the only trace is a log line (§4.9).
 
-**`telimus cat`.** (Opus.) A shell-level way to get a version out with the binary and nothing else. Twenty lines, absent from the plan, and the thing you want at 2am. Now an M1 task.
+**`trew cat`.** (Opus.) A shell-level way to get a version out with the binary and nothing else. Twenty lines, absent from the plan, and the thing you want at 2am. Now an M1 task.
 
 **Line counts.** (Astra, measured.) Go non-test is 13,588 not 9,500; Go test 22,895 not 27,000; 536 test functions not ~600; core TypeScript 20,802 not 22,900. The "roughly 80 percent reusable unchanged" was never measured and is replaced by a per-symbol ledger (§2.1).
 
@@ -70,7 +70,7 @@ Both reviewers proposed a name and checked availability. Opus proposed **Quarry*
 
 Neither pick survived the user's own criteria, which emerged over a long search: short, unambiguous to pronounce, concrete rather than moral, correctly spelled, and clean as `<name>-sync`. Roughly 220 candidates were checked across seventeen languages, fiction, Latin and Old English, coinages, descriptive compounds and geology.
 
-The settled name was Lyell at the time of this synthesis. It was replaced by **Telimus** on 2026-09-22. Full reasoning and the rejected list are in PLAN §10.
+The settled name was Lyell at the time of this synthesis. On 2026-09-22 it was replaced by Telimus, and then, the same day, by **Trew**. Full reasoning and the rejected list are in PLAN §10.
 
 Two findings from that search worth keeping:
 
@@ -79,4 +79,4 @@ Two findings from that search worth keeping:
 
 ## What was not done
 
-Neither review ran the full Basalt suite, verified FTS5 in the pinned Go driver, or operated a live vault. The FTS5 probe used the local SQLite CLI, not `modernc.org/sqlite`. M0 still has to check the pinned build. No Telimus code exists, so every proposed race and recovery test in the plan is acceptance work, not a passed test.
+Neither review ran the full Basalt suite, verified FTS5 in the pinned Go driver, or operated a live vault. The FTS5 probe used the local SQLite CLI, not `modernc.org/sqlite`. M0 still has to check the pinned build. No Trew code exists, so every proposed race and recovery test in the plan is acceptance work, not a passed test.

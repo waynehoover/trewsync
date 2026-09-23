@@ -179,13 +179,13 @@ describe("the panel walk", () => {
    */
   it("keeps the everyday rows out of the disclosure and the rare ones in", () => {
     const body = of("paired");
-    const disclosure = body.indexOf("<details.telimus-manage>");
+    const disclosure = body.indexOf("<details.trew-manage>");
     expect(disclosure, "the panel has no disclosure at all").toBeGreaterThan(-1);
     expect(body).toContain("Manage this vault");
 
-    const adding = body.indexOf("<details.telimus-add-device>");
+    const adding = body.indexOf("<details.trew-add-device>");
     expect(adding).toBeGreaterThan(-1);
-    expect(adding).toBeLessThan(body.indexOf("<details.telimus-server>"));
+    expect(adding).toBeLessThan(body.indexOf("<details.trew-server>"));
     expect(body.indexOf("name    Add another device")).toBeGreaterThan(adding);
     for (const row of ["Sync status", "Recover a deleted note"]) {
       expect(
@@ -214,7 +214,7 @@ describe("the panel walk", () => {
     expect(prose("paired").indexOf("Connected to")).toBeLessThan(
       prose("paired").indexOf("name Server address"),
     );
-    for (const shot of shots) expect(shot.body).not.toContain("telimus-help");
+    for (const shot of shots) expect(shot.body).not.toContain("trew-help");
   });
 
   /**
@@ -342,7 +342,7 @@ describe("the panel walk", () => {
     // `setTitle` is invisible under mod-sidebar-layout, which collapses the
     // modal header to nothing, so the path is drawn above the list instead.
     // Without it the modal never says which note you are looking at.
-    expect(body).toContain("telimus-history-heading");
+    expect(body).toContain("trew-history-heading");
     expect(body).toContain("Daily/2026-09-04.md");
     // Not an empty pane. The newest version is what somebody opening history
     // is nearly always after, and it is what the pane starts on.
@@ -359,8 +359,8 @@ describe("the panel walk", () => {
     // nothing and every diff rendered in one colour. One element per line is
     // what those rules need, so the count of them is what says they can work.
     const diff = of("history-diff");
-    expect(diff).toContain("<pre.telimus-history-diff>");
-    for (const cls of ["telimus-added", "telimus-removed"]) {
+    expect(diff).toContain("<pre.trew-history-diff>");
+    for (const cls of ["trew-added", "trew-removed"]) {
       expect(diff, `nothing in the diff carries ${cls}:\n${diff}`).toContain(`<span.${cls}>`);
     }
   });

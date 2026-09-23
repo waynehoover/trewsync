@@ -1,4 +1,4 @@
-// Package server speaks the Telimus protocol over a WebSocket.
+// Package server speaks the Trew protocol over a WebSocket.
 //
 // It owns session state and message dispatch. Durability lives in the store and
 // the chunk layer below it; this package's whole contribution to "do not lose a
@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 	"sync/atomic"
 )
 
@@ -616,7 +616,7 @@ func (s *Server) SetPerFileMax(max int64) {
 // read and sealed the file to find out. There is no floor beyond one byte: a
 // ceiling set low only refuses files, and refusing is the safe direction.
 //
-// Exported because `telimus service` writes the flag into a unit and has to
+// Exported because `trew service` writes the flag into a unit and has to
 // check it against the vault first, and two copies of this arithmetic would be
 // two answers to "what will this unit actually run with".
 func ClampPerFileMax(max int64) int64 {

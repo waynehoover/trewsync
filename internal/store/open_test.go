@@ -13,7 +13,7 @@ import (
  *
  * There was one opening path and every command used it: it created the
  * directory if it was missing, ran the migrations and executed the schema. So
- * `telimus verify -data /typo` made an empty store and pronounced it healthy,
+ * `trew verify -data /typo` made an empty store and pronounced it healthy,
  * and inspecting a database from an older build silently upgraded it. Neither
  * is catastrophic on its own; both are a command doing something other than
  * what it says, to the directory holding somebody's notes.
@@ -55,12 +55,12 @@ func TestANewStoreRecordsItsSchemaVersion(t *testing.T) {
 	}
 }
 
-// The one that matters. An older telimus must stop rather than proceed.
+// The one that matters. An older trew must stop rather than proceed.
 func TestADatabaseFromTheFutureIsRefused(t *testing.T) {
 	dbPath, chunkDir := newStore(t)
 
 	// Stamp a version this binary has never heard of, which is what a newer
-	// telimus would have left behind.
+	// trew would have left behind.
 	bump, err := OpenMode(dbPath, chunkDir, Existing, SyncFull)
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestADatabaseFromTheFutureIsRefused(t *testing.T) {
 			// Both numbers, because the answer is always "run the newer one"
 			// and a message that does not say which is which leaves somebody
 			// guessing at their own data.
-			for _, want := range []string{"9999", "newer telimus"} {
+			for _, want := range []string{"9999", "newer trew"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not mention %q: %v", want, err)
 				}

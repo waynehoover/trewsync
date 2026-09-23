@@ -79,7 +79,7 @@ const respell: Scenario = {
   run: async (g) => {
     const from = join(g.dir, "old-name.md");
     const source = await stat(from);
-    await retireName(join(g.dir, ".telimus", "tmp"), from, { dev: source.dev, ino: source.ino });
+    await retireName(join(g.dir, ".trew", "tmp"), from, { dev: source.dev, ino: source.ino });
   },
   interfere: async (g, token) => await g.save("old-name.md", `# note\n\n${token}\n`),
 };
@@ -155,7 +155,7 @@ const giveBack: Scenario = {
   },
   run: async (g) =>
     await retireName(
-      join(g.dir, ".telimus", "tmp"),
+      join(g.dir, ".trew", "tmp"),
       join(g.dir, "old-name.md"),
       g.state.source as { dev: number; ino: number },
     ),

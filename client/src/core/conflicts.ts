@@ -63,7 +63,7 @@ async function reviewFile(vault: Vault, path: string): Promise<ReviewedFile | un
 
 export async function reviewConflict(vault: Vault, pair: ConflictPair): Promise<ConflictReview> {
   if (pair.original === pair.copy || conflictOriginal(pair.copy) !== pair.original)
-    throw new Error("Choose a Telimus conflict copy to review.");
+    throw new Error("Choose a Trew conflict copy to review.");
   const current = await reviewFile(vault, pair.original);
   const preserved = await reviewFile(vault, pair.copy);
   if (!preserved)

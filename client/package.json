@@ -1,5 +1,5 @@
 {
-  "name": "telimus-sync",
+  "name": "trew-sync",
   "version": "0.10.0",
   "description": "Self-hosted vault sync with full version history, on a server you run.",
   "keywords": [
@@ -9,14 +9,14 @@
     "end-to-end-encryption",
     "notes"
   ],
-  "homepage": "https://github.com/waynehoover/telimus",
+  "homepage": "https://github.com/waynehoover/trew",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/waynehoover/telimus.git",
+    "url": "git+https://github.com/waynehoover/trew.git",
     "directory": "client"
   },
   "bugs": {
-    "url": "https://github.com/waynehoover/telimus/issues"
+    "url": "https://github.com/waynehoover/trew/issues"
   },
   "license": "MIT",
   "author": "Wayne Hoover",
@@ -24,7 +24,7 @@
     "node": ">=22"
   },
   "files": [
-    "dist/telimus.mjs",
+    "dist/trew.mjs",
     "README.md"
   ],
   "type": "module",
@@ -67,6 +67,6 @@
     "zod": "4.6.5"
   },
   "bin": {
-    "telimus": "./dist/telimus.mjs"
+    "trew": "./dist/trew.mjs"
   }
 }

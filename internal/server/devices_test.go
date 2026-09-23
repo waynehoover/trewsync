@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // Protocol 4: a device connects as itself, the vault's credential registers

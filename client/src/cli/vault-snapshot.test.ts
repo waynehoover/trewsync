@@ -30,7 +30,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 let root: string;
 beforeEach(async () => {
-  root = await realpath(await mkdtemp(join(tmpdir(), "telimus-snapshot-")));
+  root = await realpath(await mkdtemp(join(tmpdir(), "trew-snapshot-")));
 });
 afterEach(async () => {
   vi.mocked(open).mockRestore();
@@ -129,9 +129,9 @@ describe("a model-addressable snapshot", () => {
   });
 
   it.each(["alias/secret.md", "secret.md"])("refuses an in-vault link at %s", async (path) => {
-    await note(".telimus/secret.md", "a device credential");
-    await symlink(join(root, ".telimus"), join(root, "alias"));
-    await symlink(join(root, ".telimus/secret.md"), join(root, "secret.md"));
+    await note(".trew/secret.md", "a device credential");
+    await symlink(join(root, ".trew"), join(root, "alias"));
+    await symlink(join(root, ".trew/secret.md"), join(root, "secret.md"));
     const before = await inventory();
     await expect(new NodeVault(root).readSnapshot(path, 1024)).rejects.toThrow(/link/);
     expect(await inventory()).toEqual(before);
@@ -139,11 +139,11 @@ describe("a model-addressable snapshot", () => {
 
   it("refuses an ancestor changed to a link after a previous ordinary read", async () => {
     await note("folder/note.md", "public");
-    await note(".telimus/note.md", "credential");
+    await note(".trew/note.md", "credential");
     const vault = new NodeVault(root);
     await vault.read("folder/note.md");
     await rename(join(root, "folder"), join(root, "parked"));
-    await symlink(join(root, ".telimus"), join(root, "folder"));
+    await symlink(join(root, ".trew"), join(root, "folder"));
     const before = await inventory();
     await expect(vault.readSnapshot("folder/note.md", 1024)).rejects.toThrow(/link/);
     expect(await inventory()).toEqual(before);
@@ -272,14 +272,14 @@ describe("a model-addressable snapshot", () => {
 
   it("does not return bytes from a name swapped between checking and opening", async () => {
     await note("folder/note.md", "public");
-    await note(".telimus/note.md", "credential");
+    await note(".trew/note.md", "credential");
     const realOpen = vi.mocked(open).getMockImplementation()!;
     let swapped = false;
     vi.mocked(open).mockImplementation(async (...args) => {
       if (!swapped && String(args[0]).endsWith("folder/note.md")) {
         swapped = true;
         await rename(join(root, "folder"), join(root, "saved"));
-        await symlink(join(root, ".telimus"), join(root, "folder"));
+        await symlink(join(root, ".trew"), join(root, "folder"));
       }
       return realOpen(...args);
     });
@@ -353,14 +353,14 @@ describe("a model-addressable snapshot", () => {
   });
 
   it("checks missing destinations and their ancestors without creating directories", async () => {
-    await note(".telimus/token.md", "secret");
-    await symlink(join(root, ".telimus"), join(root, "alias"));
+    await note(".trew/token.md", "secret");
+    await symlink(join(root, ".trew"), join(root, "alias"));
     const vault = new NodeVault(root);
     const before = await inventory();
     await expect(vault.checkPath("alias/new/note.md", { allowMissing: true })).rejects.toThrow(
       /link/,
     );
-    await expect(vault.checkPath(".telimus/new/note.md", { allowMissing: true })).rejects.toThrow(
+    await expect(vault.checkPath(".trew/new/note.md", { allowMissing: true })).rejects.toThrow(
       /excluded/,
     );
     expect(await vault.checkPath("new/folder/note.md", { allowMissing: true })).toEqual({
@@ -373,7 +373,7 @@ describe("a model-addressable snapshot", () => {
 
   it.each([1, 2])("refuses a link introduced during destination walk %i", async (walk) => {
     await mkdir(join(root, "folder"));
-    await mkdir(join(root, ".telimus"));
+    await mkdir(join(root, ".trew"));
     const realReadDir = vi.mocked(readdir).getMockImplementation()!;
     let swapped = false;
     let walks = 0;
@@ -382,7 +382,7 @@ describe("a model-addressable snapshot", () => {
       if (!swapped && String(args[0]) === join(root, "folder") && walks === walk) {
         swapped = true;
         await rename(join(root, "folder"), join(root, "saved"));
-        await symlink(join(root, ".telimus"), join(root, "folder"));
+        await symlink(join(root, ".trew"), join(root, "folder"));
       }
       return realReadDir(...args);
     });
@@ -396,6 +396,6 @@ describe("a model-addressable snapshot", () => {
     };
     await expect(operation()).rejects.toThrow(/link|changed/);
     expect(swapped).toBe(true);
-    await expect(readFile(join(root, ".telimus/new.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(root, ".trew/new.md"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

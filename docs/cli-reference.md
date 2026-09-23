@@ -2,8 +2,8 @@
 
 [Documentation](index.md) · [CLI quick start](../client/README.md)
 
-`telimus` operates on a local vault. `telimus` operates on the server.
-Commands use the current directory unless `--dir` is set. Run `telimus --help`
+`trew` operates on a local vault. `trew` operates on the server.
+Commands use the current directory unless `--dir` is set. Run `trew --help`
 for the installed version's usage.
 
 ## Commands
@@ -76,7 +76,7 @@ Any paired device can revoke another or cancel an invite. To revoke the last
 device, provide the recovery key explicitly:
 
 ```bash
-telimus revoke DEVICE_ID --allow-last --recovery-key 'RECOVERY_KEY'
+trew revoke DEVICE_ID --allow-last --recovery-key 'RECOVERY_KEY'
 ```
 
 Replace `RECOVERY_KEY` with the actual key. Unlike the positional secret inputs
@@ -129,10 +129,10 @@ includes `nextBefore`; use it for the next page until it is `null` (an exactly
 full final page may require one empty request):
 
 ```bash
-telimus history "Notes/Meeting.md" --limit 100 --json
-telimus history "Notes/Meeting.md" --limit 100 --before 1234 --json
-telimus preview --dir ~/vault --json
-telimus sync --dir ~/vault --verify
+trew history "Notes/Meeting.md" --limit 100 --json
+trew history "Notes/Meeting.md" --limit 100 --before 1234 --json
+trew preview --dir ~/vault --json
+trew sync --dir ~/vault --verify
 ```
 
 Command-specific flags used on another command are refused with exit 2.
@@ -141,7 +141,7 @@ can run while a watcher holds the vault. Sync checks the plan again before writi
 
 ## MCP over stdio
 
-`telimus mcp --dir /absolute/path/to/agent-vault` starts one local MCP server
+`trew mcp --dir /absolute/path/to/agent-vault` starts one local MCP server
 and keeps that paired directory in sync. Pair separately with `init` or `pair`;
 MCP has no pairing or device-administration tools. Use Node 22 or newer and a
 dedicated headless directory on local macOS or Linux storage. See the
@@ -163,7 +163,7 @@ Stdout contains only MCP messages; diagnostics and verbose logs go to stderr.
 To expose several separately paired headless directories, name each one explicitly:
 
 ```bash
-telimus mcp --vault personal=/srv/personal --vault work=/srv/work
+trew mcp --vault personal=/srv/personal --vault work=/srv/work
 ```
 
 Names begin with a lowercase letter and contain lowercase letters, digits,
@@ -292,7 +292,7 @@ complete base, its action and exact source edits. Offsets count JavaScript UTF-1
 code units; `old` and `text` carry the actual removed and inserted text.
 
 To apply, resubmit the same tool arguments with the complete returned `changes`
-array. Telimus recomputes the operation and refuses `plan_changed` if an affected
+array. Trew recomputes the operation and refuses `plan_changed` if an affected
 note, base or edit differs, including a new affected note. Inspect a new preview
 and reconsider before retrying. Never replace bases automatically.
 
@@ -307,7 +307,7 @@ every required before-image before changing any original. It rechecks bases befo
 publication and before each file. A later race or I/O failure stops the batch.
 Inspect every `results` row, including `attempted`, `applied`, `durable`,
 `beforeImage` and `preserved`; `complete:false` can accompany completed local
-changes. Telimus does not roll those changes back over other writers.
+changes. Trew does not roll those changes back over other writers.
 
 A move creates and verifies the destination, updates approved backlinks, then
 retires the source last. It is a recoverable copy and deletion, not an atomic
@@ -373,17 +373,17 @@ Use the same separately paired headless directory, tools and preservation rules
 as stdio, including [explicitly named vaults](#several-vaults). Issue a credential before starting the listener:
 
 ```bash
-telimus mcp-token --dir /srv/vault --key-out /private/path/telimus-mcp.key
-telimus mcp --dir /srv/vault --listen 127.0.0.1:3010
+trew mcp-token --dir /srv/vault --key-out /private/path/trew-mcp.key
+trew mcp --dir /srv/vault --listen 127.0.0.1:3010
 ```
 
 The output file's parent must exist and the file must be new, private and outside
 the vault, including through directory aliases. Without `--key-out`, issuance
 prints the 43-character token once to stdout. The directory stores only its
-SHA-256 hash, short id and issue time in `.telimus/mcp-token.json` at mode `0600`.
+SHA-256 hash, short id and issue time in `.trew/mcp-token.json` at mode `0600`.
 That state never syncs and cannot be read by MCP. The token is independent of
 the device secret, data key and recovery key. It grants access to this one
-process's tools; it cannot authenticate to `telimus`.
+process's tools; it cannot authenticate to `trew`.
 
 Every request to `/mcp`, including loopback requests, needs
 `Authorization: Bearer TOKEN`. Configure the token in the client's authentication
@@ -414,8 +414,8 @@ unsupported methods return empty 405.
 Rotate by running `mcp-token` again, using a new output filename if exporting:
 
 ```bash
-telimus mcp-token --dir /srv/vault --key-out /private/path/telimus-mcp-next.key
-telimus mcp-token --dir /srv/vault --revoke
+trew mcp-token --dir /srv/vault --key-out /private/path/trew-mcp-next.key
+trew mcp-token --dir /srv/vault --revoke
 ```
 
 These commands work while the service holds the vault lock. Each request reads
@@ -444,11 +444,11 @@ acceptance remain unverified.
 
 ## Files and locking
 
-Local state lives under `.telimus/`: private credentials, `index.json`,
+Local state lives under `.trew/`: private credentials, `index.json`,
 `index.log`, lock records, and the displaced-version recovery log. Keep recovery
 material until you have inspected the retained files. Use `unlink` to remove a
 pairing; do not treat deleting state as routine repair.
 
 Supported local macOS and Linux setups release CLI exclusion when the process
-exits. Where Telimus reports a fallback, `unlock` refuses a running local holder.
+exits. Where Trew reports a fallback, `unlock` refuses a running local holder.
 Neither manual recovery nor `--force` makes a shared network filesystem supported.

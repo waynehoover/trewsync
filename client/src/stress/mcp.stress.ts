@@ -32,7 +32,7 @@ const children: { dispose(): Promise<void> }[] = [];
 const httpServers: Awaited<ReturnType<typeof startHttp>>[] = [];
 const releases: (() => void)[] = [];
 beforeAll(async () => {
-  buildDir = await mkdtemp(join(tmpdir(), "telimus-mcp-crash-build-"));
+  buildDir = await mkdtemp(join(tmpdir(), "trew-mcp-crash-build-"));
   bundle = await buildMcp(buildDir, "./mcp-fault-child.ts");
 });
 afterAll(async () => removeTree(buildDir));
@@ -306,7 +306,7 @@ it.each(
   async ({ point, http }) => {
     server = new TestServer();
     await server.start();
-    const dir = await mkdtemp(join(tmpdir(), "telimus-mcp-crash-"));
+    const dir = await mkdtemp(join(tmpdir(), "trew-mcp-crash-"));
     dirs.push(dir);
     const initialized = await cli("init", server.setup, "--dir", dir, "--json");
     expect(initialized.code, initialized.err).toBe(0);
@@ -360,7 +360,7 @@ it.each(
     if (http) restarted.child.kill("SIGTERM");
     else restarted.child.stdin!.end();
     expect((await restarted.exited()).code).toBe(0);
-    const fresh = await mkdtemp(join(tmpdir(), "telimus-mcp-crash-reader-"));
+    const fresh = await mkdtemp(join(tmpdir(), "trew-mcp-crash-reader-"));
     dirs.push(fresh);
     expect((await cli("pair", key, "--dir", fresh)).code).toBe(0);
     expect((await cli("sync", "--dir", fresh)).code).toBe(0);
@@ -454,7 +454,7 @@ it("a stale single put from an MCP edit retains the remote branch after its auth
 it("a restore survives a kill before its reply, and retry never creates a second destination", async () => {
   server = new TestServer();
   await server.start();
-  const dir = await mkdtemp(join(tmpdir(), "telimus-mcp-restore-kill-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-mcp-restore-kill-"));
   dirs.push(dir);
   const initialized = await cli("init", server.setup, "--dir", dir, "--json");
   expect(initialized.code).toBe(0);
@@ -496,7 +496,7 @@ it("a restore survives a kill before its reply, and retry never creates a second
   );
   restarted.child.stdin.end();
   expect((await restarted.exited()).code).toBe(0);
-  const fresh = await mkdtemp(join(tmpdir(), "telimus-mcp-restore-fresh-"));
+  const fresh = await mkdtemp(join(tmpdir(), "trew-mcp-restore-fresh-"));
   dirs.push(fresh);
   expect((await cli("pair", key, "--dir", fresh)).code).toBe(0);
   expect((await cli("sync", "--dir", fresh)).code).toBe(0);
@@ -507,7 +507,7 @@ it("a restore survives a kill before its reply, and retry never creates a second
 it("an admitted MCP edit finishes across server disconnection and reaches a fresh device after reconnect", async () => {
   server = new TestServer();
   await server.start();
-  const dir = await mkdtemp(join(tmpdir(), "telimus-mcp-disconnect-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-mcp-disconnect-"));
   dirs.push(dir);
   const initialized = await cli("init", server.setup, "--dir", dir, "--json");
   expect(initialized.code).toBe(0);
@@ -545,7 +545,7 @@ it("an admitted MCP edit finishes across server disconnection and reaches a fres
   );
   child.child.stdin.end();
   expect((await child.exited()).code).toBe(0);
-  const fresh = await mkdtemp(join(tmpdir(), "telimus-mcp-reconnect-reader-"));
+  const fresh = await mkdtemp(join(tmpdir(), "trew-mcp-reconnect-reader-"));
   dirs.push(fresh);
   expect((await cli("pair", key, "--dir", fresh)).code).toBe(0);
   expect((await cli("sync", "--dir", fresh)).code).toBe(0);
@@ -619,7 +619,7 @@ it.each(
   async ({ name, point, http }) => {
     server = new TestServer();
     await server.start();
-    const dir = await mkdtemp(join(tmpdir(), "telimus-namespace-crash-"));
+    const dir = await mkdtemp(join(tmpdir(), "trew-namespace-crash-"));
     dirs.push(dir);
     const init = await cli("init", server.setup, "--dir", dir, "--json");
     expect(init.code, init.err).toBe(0);
@@ -665,7 +665,7 @@ it.each(
     if (http) restarted.child.kill("SIGTERM");
     else restarted.child.stdin!.end();
     expect((await restarted.exited()).code).toBe(0);
-    const fresh = await mkdtemp(join(tmpdir(), "telimus-namespace-crash-reader-"));
+    const fresh = await mkdtemp(join(tmpdir(), "trew-namespace-crash-reader-"));
     dirs.push(fresh);
     expect((await cli("pair", key, "--dir", fresh)).code).toBe(0);
     const synced = await cli("sync", "--dir", fresh);

@@ -1,15 +1,15 @@
-# Install Telimus with an agent
+# Install Trew with an agent
 
-> Follow this runbook to install the Telimus server and Obsidian plugin, pair the
+> Follow this runbook to install the Trew server and Obsidian plugin, pair the
 > user's devices, and verify sync. Continue through the steps you can complete;
 > report any missing access or unfinished verification precisely.
 
-Telimus is self-hosted Obsidian sync with encrypted content and filenames. The
+Trew is self-hosted Obsidian sync with encrypted content and filenames. The
 plugin runs on macOS, Linux, and Android with local vault storage. iOS is
 untested; Windows is unsupported. Android sync requires Obsidian in the
 foreground. The CLI is experimental and optional.
 
-Repository: <https://github.com/waynehoover/telimus>.
+Repository: <https://github.com/waynehoover/trew>.
 Use the [server setup](docs/server.md), [plugin guide](docs/plugin.md), and
 [maintenance guide](docs/server-operations.md) for details. If reading a raw copy
 of this file, resolve those paths against the repository root at the same ref.
@@ -22,9 +22,9 @@ before asking questions. Collect only missing information:
 
 | Input | What to establish |
 |---|---|
-| Server | Existing Telimus endpoint, or the host and authorized access for a new installation. Check OS, architecture, local disk, Docker/Compose or service manager, and free port 3003. |
+| Server | Existing Trew endpoint, or the host and authorized access for a new installation. Check OS, architecture, local disk, Docker/Compose or service manager, and free port 3003. |
 | Vault | Exact local path and device, Obsidian version, and configuration folder (normally `.obsidian`). Do not infer the intended vault from whichever one is open. |
-| Existing sync | Whether this vault already uses Telimus or another sync service. Reuse an existing Telimus pairing. For another service, let outstanding sync finish, preserve a backup, and agree on the switch before enabling Telimus. |
+| Existing sync | Whether this vault already uses Trew or another sync service. Reuse an existing Trew pairing. For another service, let outstanding sync finish, preserve a backup, and agree on the switch before enabling Trew. |
 | Secure connection | Existing HTTPS proxy/domain, or Tailscale on the server and devices. Prefer what is already configured. Ask for the user's choice if neither exists. |
 | Recovery key | A user-controlled place to save it separately from the vault, such as their password manager. A temporary file on one device is not the final recovery copy. |
 | Backup | An available separate disk or off-host destination, and an existing scheduler if any. |
@@ -47,8 +47,8 @@ the user requested a development build. Release channels have different tags:
 | Component | Tag / artifact |
 |---|---|
 | Obsidian plugin | Bare `X.Y.Z`; `main.js`, `manifest.json`, `styles.css`, and `SHA256SUMS`. |
-| Server | `server/vX.Y.Z`; container image or `telimus-OS-ARCH` binary. |
-| CLI, if requested | `telimus-sync` on npm; source tags use `cli/vX.Y.Z`. |
+| Server | `server/vX.Y.Z`; container image or `trew-OS-ARCH` binary. |
+| CLI, if requested | `trew-sync` on npm; source tags use `cli/vX.Y.Z`. |
 
 List releases and choose the newest compatible stable plugin and server. Do not
 assume GitHub's single “latest release” is the plugin, or that all components
@@ -61,18 +61,18 @@ release are also suitable. Replace `X.Y.Z` with the selected published plugin
 tag. Do not run this placeholder unchanged.
 
 ```bash
-TELIMUS_PLUGIN_TAG='X.Y.Z'
-TELIMUS_DOWNLOAD_DIR="$(mktemp -d)"
-gh release download "$TELIMUS_PLUGIN_TAG" --repo waynehoover/telimus \
-  --dir "$TELIMUS_DOWNLOAD_DIR" \
+TREW_PLUGIN_TAG='X.Y.Z'
+TREW_DOWNLOAD_DIR="$(mktemp -d)"
+gh release download "$TREW_PLUGIN_TAG" --repo waynehoover/trew \
+  --dir "$TREW_DOWNLOAD_DIR" \
   --pattern main.js --pattern manifest.json --pattern styles.css --pattern SHA256SUMS
-(cd "$TELIMUS_DOWNLOAD_DIR" && shasum -a 256 -c SHA256SUMS)
+(cd "$TREW_DOWNLOAD_DIR" && shasum -a 256 -c SHA256SUMS)
 ```
 
 Stop on a failed download or checksum. Check that the manifest ID is
-`telimus-sync` and its version matches the tag. Where GitHub attestation
+`trew-sync` and its version matches the tag. Where GitHub attestation
 verification is available, verify all three assets with `gh attestation verify
-FILE --repo waynehoover/telimus`. Report whether provenance was checked;
+FILE --repo waynehoover/trew`. Report whether provenance was checked;
 a matching checksum alone does not authenticate its publisher. Never silently
 substitute source archives for the built plugin.
 
@@ -86,8 +86,8 @@ and preserve its data and flags before any upgrade.
 Clone the official repository into a new dedicated deployment directory:
 
 ```bash
-git clone https://github.com/waynehoover/telimus.git
-cd telimus-sync
+git clone https://github.com/waynehoover/trew.git
+cd trew-sync
 docker compose config
 ```
 
@@ -102,8 +102,8 @@ Once the configuration and compatible image pin are verified, start it:
 
 ```bash
 docker compose up -d
-docker compose exec telimus /telimus version
-docker compose exec telimus /telimus health
+docker compose exec trew /trew version
+docker compose exec trew /trew health
 ```
 
 If the directory or container name already exists, inspect it and reuse the
@@ -119,7 +119,7 @@ from that release's `SHA256SUMS` before running it. Use a dedicated writable
 local data directory and bind `127.0.0.1:3003`.
 
 For Linux persistence, follow [binary installation](docs/server.md#a-binary):
-create the service account and data directory, then use `telimus service` to
+create the service account and data directory, then use `trew service` to
 print the unit and installation instructions. Apply those instructions through
 the available authorized service manager. The command only prints; it does not
 install or start the service. On macOS, use an appropriate existing service
@@ -130,7 +130,7 @@ subsequent maintenance commands.
 
 ## 4. Establish the secure endpoint
 
-Run Telimus behind Tailscale Serve or an HTTPS reverse proxy. It does not provide
+Run Trew behind Tailscale Serve or an HTTPS reverse proxy. It does not provide
 TLS itself; keep its own HTTP/WebSocket port private. Recommend Tailscale Serve
 for a new personal homelab, or preserve the user's existing HTTPS proxy.
 
@@ -144,14 +144,14 @@ for a new personal homelab, or preserve the user's existing HTTPS proxy.
 - **Existing domain and proxy:** configure Caddy or the user's existing proxy
   to forward WebSockets to `127.0.0.1:3003`. Preserve unrelated sites. For a new
   Caddy site, the [secure access guide](docs/server.md#caddy) gives the configuration.
-  A containerized proxy needs a shared private network to reach the Telimus
+  A containerized proxy needs a shared private network to reach the Trew
   container; its own loopback does not reach the host.
   Validate configuration and certificates before using it.
 
 Check the public endpoint's `/health` over HTTPS from a client device, in
 addition to the server-local health check. Do not disable certificate
 verification to make the check pass. If authentication at the proxy prevents
-normal Telimus WebSocket connections, resolve that configuration before pairing.
+normal Trew WebSocket connections, resolve that configuration before pairing.
 Plain `ws://` is only for an explicitly local test on loopback.
 
 The initial server log contains a one-use setup string `HOST:3003#TOKEN`.
@@ -166,21 +166,21 @@ On each accessible device:
 
 1. Resolve the intended vault and configuration folder. Preserve an existing
    plugin directory before an upgrade, including its state and credentials.
-2. Disable a running Telimus plugin before replacing its files. Copy the three
-   verified release assets into `<vault>/<config-folder>/plugins/telimus-sync/`.
+2. Disable a running Trew plugin before replacing its files. Copy the three
+   verified release assets into `<vault>/<config-folder>/plugins/trew-sync/`.
    Update only `main.js`, `manifest.json`, and `styles.css`; keep all other files.
-3. Reload Obsidian's plugin discovery, enable **Telimus Sync**, and check the
+3. Reload Obsidian's plugin discovery, enable **Trew Sync**, and check the
    installed version. Leave unrelated plugins and settings intact.
-4. Open Telimus's panel and inspect its actual pairing or sync state.
+4. Open Trew's panel and inspect its actual pairing or sync state.
 
 On desktop, check `obsidian help` for supported automation commands. When
 available, these commands target a specific open vault:
 
 ```bash
 obsidian vault="My Vault" vault info=path
-obsidian vault="My Vault" plugin:enable id=telimus-sync
-obsidian vault="My Vault" plugin id=telimus-sync
-obsidian vault="My Vault" commands filter=telimus-sync
+obsidian vault="My Vault" plugin:enable id=trew-sync
+obsidian vault="My Vault" plugin id=trew-sync
+obsidian vault="My Vault" commands filter=trew-sync
 ```
 
 Replace `My Vault` with the verified vault name and check the returned path.
@@ -188,7 +188,7 @@ Use the listed command IDs to open the panel or trigger sync. New manually
 copied files may require an app reload before they are discoverable. Enable
 community plugins if needed, accounting for any existing disabled plugins.
 `plugin:install` searches the community directory; it is not a substitute for
-manual release installation while Telimus is outside that directory.
+manual release installation while Trew is outside that directory.
 
 Use app automation when available. If Obsidian or Android is inaccessible,
 prepare the verified files and give the user just the remaining install/enable
@@ -199,7 +199,7 @@ installed CLI's help describe available capabilities.
 ## 6. Pair and save the recovery key
 
 Interact with the actual panel through available app controls. There is no
-documented Telimus CLI command that writes the plugin's pairing state. Do not
+documented Trew CLI command that writes the plugin's pairing state. Do not
 manufacture `data.json`, copy another device's credentials, or run the headless
 client against the plugin's vault as a shortcut.
 
@@ -228,7 +228,7 @@ device remains, not the routine handoff.
 
 If **Review your first sync** appears, review the upload, download, and
 preserved-copy counts before choosing **Continue sync**. **Pause sync** keeps
-the first sync paused; resume from the Telimus menu when ready.
+the first sync paused; resume from the Trew menu when ready.
 
 If pairing is interrupted, inspect the panel and saved state before retrying.
 Keep any recovery key already generated. Do not initialize a second vault or
@@ -250,7 +250,7 @@ asks to remove it.
    sync or recovery error. Inspect reasons for ignored or oversized files.
 3. Create a uniquely named small Markdown note on device A. Wait for sync and
    read back the same content on device B.
-4. Edit that note on B and confirm A receives the edit. Open its Telimus version
+4. Edit that note on B and confirm A receives the edit. Open its Trew version
    history and confirm the earlier version is present.
 5. Restore that earlier version. Verify the restored content appears as a
    separate copy while the current note remains intact.
@@ -295,7 +295,7 @@ restriction.
 When the user wants an agent to work with their notes, pair a dedicated headless
 directory first, using a separate invite. Do not use the plugin's live vault or
 copy its credentials. Configure the host with the absolute Node 22+ executable,
-absolute `telimus.mjs` path and `mcp --dir /absolute/path/to/agent-vault`, following
+absolute `trew.mjs` path and `mcp --dir /absolute/path/to/agent-vault`, following
 the [CLI host example](client/README.md#connect-a-local-agent). One host owns the
 directory's lock and sync loop; stop any existing watcher first. Use `--read-only`
 when edits are outside the authorized scope. It omits mutations while incoming
@@ -313,8 +313,8 @@ never blindly retry with a fresh base. Follow the
 or server version and recover it to a new path. Keep recovery copies for the owner.
 
 For authorized HTTP access, follow the [service and proxy runbook](client/README.md#connect-over-http):
-issue `telimus mcp-token --dir DIR --key-out /private/path/new-mcp.key` outside the
-vault, run `telimus mcp --dir DIR --listen 127.0.0.1:3010`, and enable `--writable`
+issue `trew mcp-token --dir DIR --key-out /private/path/new-mcp.key` outside the
+vault, run `trew mcp --dir DIR --listen 127.0.0.1:3010`, and enable `--writable`
 only if edits are authorized and the device is writable. Put the token in the
 client's bearer-auth configuration, never in a note or model prompt. Tailscale
 Serve can publish the loopback listener; its TLS terminator sees plaintext notes.
@@ -332,4 +332,4 @@ This source tree, the Compose image, and released 0.8.x and 0.9.x clients use pr
 Version 0.7.x uses protocol 6 and cannot connect. For source builds, build the
 server and clients from the same checkout.
 Keep existing data and credentials, and verify the reported protocol after
-connecting. `telimus preview --json` provides a read-only plan for CLI vaults.
+connecting. `trew preview --json` provides a read-only plan for CLI vaults.

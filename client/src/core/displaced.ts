@@ -11,7 +11,7 @@
  * parked names. That works and it is not enough:
  *
  *   - It can say a file is there and not what it is. Somebody looking at
- *     `note.md..telimus-tmp-keep3f9c` has to guess which note it came off and
+ *     `note.md..trew-tmp-keep3f9c` has to guess which note it came off and
  *     why it is not at its name.
  *   - The plugin cannot do it at all in the place it matters. Its displaced
  *     versions go into a hidden folder, and it never implemented the walk, so
@@ -299,6 +299,6 @@ function parseLine(line: string): Displaced | undefined {
  *
  * One name rather than two, because somebody looking for it after a crash
  * should not have to know which client wrote it, and because a support answer
- * that says "look in `.telimus`" is worth more than one that says "it depends".
+ * that says "look in `.trew`" is worth more than one that says "it depends".
  */
 export const DISPLACED_LOG = "displaced.log";

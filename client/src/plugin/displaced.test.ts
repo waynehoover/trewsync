@@ -2,8 +2,8 @@ import { expect, it } from "vitest";
 import { ObsidianVault } from "./vault.ts";
 import { FakeAdapter, FakeVaultIndex, asVault } from "./fake.ts";
 
-const log = ".obsidian/plugins/telimus-sync/displaced.log";
-const kept = "Notes/.telimus-tmp-review/Note.md";
+const log = ".obsidian/plugins/trew-sync/displaced.log";
+const kept = "Notes/.trew-tmp-review/Note.md";
 const record = { at: kept, from: "Notes/Note.md", when: 1, why: "A save raced a deletion" };
 
 /** Desktop Obsidian's exists returns false on access errors; stat propagates them. */

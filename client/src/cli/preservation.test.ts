@@ -56,7 +56,7 @@ afterEach(async () => {
 });
 
 async function vault(): Promise<{ dir: string; v: NodeVault }> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-preserve-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-preserve-"));
   dirs.push(dir);
   return { dir, v: new NodeVault(dir) };
 }
@@ -239,7 +239,7 @@ describe("a write with no baseline at all", () => {
     expect(await readFile(join(dir, "brand-new.md"), "utf8")).toBe("the server's version\n");
     // And nothing beside it: no conflict copy, no staging left over.
     expect((await readdir(dir)).filter((n) => !n.startsWith("."))).toEqual(["brand-new.md"]);
-    expect(await readdir(join(dir, ".telimus", "tmp")).catch(() => [])).toEqual([]);
+    expect(await readdir(join(dir, ".trew", "tmp")).catch(() => [])).toEqual([]);
   });
 });
 
@@ -559,13 +559,13 @@ describe("a preservation interrupted halfway", () => {
     };
     try {
       await expect(
-        retireName(join(dir, ".telimus", "tmp"), from, { dev: source.dev, ino: source.ino }),
+        retireName(join(dir, ".trew", "tmp"), from, { dev: source.dev, ino: source.ino }),
       ).rejects.toThrow(/went away/);
     } finally {
       midRespell.parked = async () => {};
     }
 
-    const staging = join(dir, ".telimus", "tmp");
+    const staging = join(dir, ".trew", "tmp");
     const parked = (await readdir(staging)).filter((n) => !n.startsWith("."));
     expect(parked, "the note was not parked anywhere").toHaveLength(1);
 
@@ -585,7 +585,7 @@ describe("a preservation interrupted halfway", () => {
    */
   it("leaves an older version's leftovers alone", async () => {
     const { dir, v } = await vault();
-    const staging = join(dir, ".telimus", "tmp");
+    const staging = join(dir, ".trew", "tmp");
     await mkdir(staging, { recursive: true });
     const leftovers = {
       "respell.9f2cab01": "an unsent edit an older client parked\n",
@@ -611,7 +611,7 @@ describe("a preservation interrupted halfway", () => {
 describe("the staging reaper", () => {
   it("deletes only files this code makes", async () => {
     const { dir, v } = await vault();
-    const staging = join(dir, ".telimus", "tmp");
+    const staging = join(dir, ".trew", "tmp");
     await mkdir(staging, { recursive: true });
     const debris = join(staging, `note.md${TEMP_MARK}zz`);
     const notOurs = join(staging, "somebody-elses-notes.md");
@@ -632,11 +632,11 @@ describe("the staging reaper", () => {
   });
 
   it("refuses a staging directory that leaves the vault, and deletes nothing", async () => {
-    const base = await mkdtemp(join(tmpdir(), "telimus-preserve-"));
+    const base = await mkdtemp(join(tmpdir(), "trew-preserve-"));
     dirs.push(base);
     const dir = join(base, "vault");
     const elsewhere = join(base, "elsewhere");
-    await mkdir(join(dir, ".telimus"), { recursive: true });
+    await mkdir(join(dir, ".trew"), { recursive: true });
     await mkdir(elsewhere, { recursive: true });
     const valuable = join(elsewhere, "valuable.md");
     await writeFile(valuable, "not in the vault at all\n");
@@ -648,7 +648,7 @@ describe("the staging reaper", () => {
     const old = (Date.now() - STALE_TEMP_MS - 60_000) / 1000;
     await utimes(valuable, old, old);
     await utimes(looksLikeOurs, old, old);
-    await (await import("node:fs/promises")).symlink(elsewhere, join(dir, ".telimus", "tmp"));
+    await (await import("node:fs/promises")).symlink(elsewhere, join(dir, ".trew", "tmp"));
 
     await new NodeVault(dir).list().catch(() => undefined);
 

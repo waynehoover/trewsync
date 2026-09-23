@@ -2,7 +2,7 @@
 //
 // Rule 1: a write is acknowledged only once it is durable, and a body renamed
 // into a directory is not durable until the directory entry naming it is. So
-// the chunk store, `telimus backup` and the token writer all fsync a directory
+// the chunk store, `trew backup` and the token writer all fsync a directory
 // after a rename, and all three carried their own unexported copy of the four
 // lines that do it.
 //

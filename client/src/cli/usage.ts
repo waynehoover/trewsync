@@ -20,7 +20,7 @@ function refuseRecoveryKey(args: Args): void {
   if (TAKES_RECOVERY_KEY.has(args.command ?? "")) return;
   throw new Error(
     `${args.command} does not take --recovery-key, so the key would have been ignored. ` +
-      `It is for ${[...TAKES_RECOVERY_KEY].join(", ")}; telimus rotate takes the key as its ` +
+      `It is for ${[...TAKES_RECOVERY_KEY].join(", ")}; trew rotate takes the key as its ` +
       `argument instead.`,
   );
 }
@@ -29,7 +29,7 @@ function refuseForce(args: Args): void {
   if (!args.force || args.command === "unlock") return;
   throw new Error(
     `${args.command} does not take --force, so it would have been ignored. It is for ` +
-      `telimus unlock, and only for a lock held on another machine.`,
+      `trew unlock, and only for a lock held on another machine.`,
   );
 }
 

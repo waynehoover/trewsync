@@ -1,5 +1,5 @@
 /**
- * Three-way text merge, and the one place Telimus deliberately behaves worse than
+ * Three-way text merge, and the one place Trew deliberately behaves worse than
  * Obsidian in order to behave correctly.
  *
  * Two merges live here, and the order they are written in is the order they
@@ -148,7 +148,7 @@
  *   - two words changed in one sentence
  *
  * The reason is granularity. diff3 is line-wise, and a Markdown paragraph is one
- * line, so any two edits to one paragraph collide. Telimus's notes are prose,
+ * line, so any two edits to one paragraph collide. Trew's notes are prose,
  * where that is the common case rather than the rare one, and it would mean a
  * conflict copy most days for the most ordinary thing two devices do.
  *
@@ -166,7 +166,7 @@
  *
  * Obsidian merges silently and drops what does not fit. LiveSync mostly opens a
  * dialog and asks (`ModuleConflictResolver`), falling back to newest-wins for
- * binaries and identical content. Telimus merges when it is clean and keeps both
+ * binaries and identical content. Trew merges when it is clean and keeps both
  * when it is not, and never asks: there is no settings screen and no decision to
  * put in front of someone who wanted to write a note.
  */
@@ -1111,7 +1111,7 @@ function describe(text: string): string {
  * depending on Swedish formatting to produce an ISO-like date is a fine trick
  * and not one to rely on.
  *
- * Telimus differs in *which* version gets this name. Obsidian puts the local
+ * Trew differs in *which* version gets this name. Obsidian puts the local
  * content in the conflict copy and overwrites the original with the server's, so
  * the file you have open changes under you and your version moves somewhere you
  * are not looking. Here the local content stays where it is and the incoming

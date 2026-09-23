@@ -13,7 +13,7 @@ const roots: string[] = [];
 const hosts: Awaited<ReturnType<typeof openMcp>>[] = [];
 let server: TestServer | undefined;
 beforeAll(async () => {
-  buildDir = await mkdtemp(join(tmpdir(), "telimus-mcp-build-"));
+  buildDir = await mkdtemp(join(tmpdir(), "trew-mcp-build-"));
   bundle = await buildMcp(buildDir);
 }, 30000);
 afterAll(async () => {
@@ -26,7 +26,7 @@ afterEach(async () => {
   for (const dir of roots.splice(0)) await removeTree(dir);
 });
 async function directory() {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-mcp-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-mcp-"));
   roots.push(dir);
   return dir;
 }

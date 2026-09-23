@@ -14,7 +14,7 @@ Ported from Basalt's TypeScript MCP (`basalt:client/src/cli/mcp-tools.ts` and fr
 
 ## What changes
 
-| Basalt | Telimus | Why |
+| Basalt | Trew | Why |
 |---|---|---|
 | `base` is SHA-256 of the local file bytes | `base` is the version UID, bound to the store epoch | The store's conditional write is keyed by UID; it is the same precondition devices use. |
 | Before-image sibling file, verified and flushed | `previousUid` in the result, **pinned in `op_pins`** | History is only a before-image if purge cannot reclaim it. An age cutoff does not achieve that; see PLAN §4.5, where the 30-day proposal was shown to delete the before-image of a year-old note on the day an agent edits it. |
@@ -30,7 +30,7 @@ Ported from Basalt's TypeScript MCP (`basalt:client/src/cli/mcp-tools.ts` and fr
 
 ## Authentication and authorship
 
-`telimus mcp-token --label "Claude on Mac" [--scope read|write] [--key-out FILE]` prints or writes a 32-byte base64url token once and stores `{id, token_hash, label, scope, created_at}`. `telimus mcp-token --list` and `--revoke ID`. The token's `id` is generated and collision-resistant (PLAN §2.3); the first eight hex characters of its hash are a display fingerprint only, never an identity. (An earlier revision said the id was the fingerprint, as in Basalt; that contradicted PLAN §2.3 and this document's own later section, and was corrected on 2026-09-22.)
+`trew mcp-token --label "Claude on Mac" [--scope read|write] [--key-out FILE]` prints or writes a 32-byte base64url token once and stores `{id, token_hash, label, scope, created_at}`. `trew mcp-token --list` and `--revoke ID`. The token's `id` is generated and collision-resistant (PLAN §2.3); the first eight hex characters of its hash are a display fingerprint only, never an identity. (An earlier revision said the id was the fingerprint, as in Basalt; that contradicted PLAN §2.3 and this document's own later section, and was corrected on 2026-09-22.)
 
 Each token has an author row named after the label. It is **not** a `devices` row with an `mcp:` id, because `ValidDeviceID` accepts base64url, which has no colon (`basalt:server/internal/store/store.go:2595`). Author rows carry their own `kind`, and must not present as offline sync peers whose applied checkpoints other devices wait on. Writes carry that device label; conflict copies made by other devices' engines read `(Conflicted copy Claude on Mac 202609171130)`. Revoking the token deletes the row.
 
@@ -128,7 +128,7 @@ The write procedure is PLAN §4.3. Steps that matter for tests: bodies are store
 
 ### `create_note` `{path, content: text(1 MiB)}`
 
-Exclusive create: `base` is implicitly 0; an existing live path → `exists`. Parent folders are created as folder entries in the same batch. Non-text extension → `unsupported_format`. Reserved names (`.telimus-tmp-`, conflict-copy pattern) → `reserved_name`.
+Exclusive create: `base` is implicitly 0; an existing live path → `exists`. Parent folders are created as folder entries in the same batch. Non-text extension → `unsupported_format`. Reserved names (`.trew-tmp-`, conflict-copy pattern) → `reserved_name`.
 
 ### `create_directory` `{path}`
 

@@ -30,17 +30,17 @@ it.each([false, true])(
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     server = new TestServer();
     await server.start();
-    dir = await mkdtemp(join(tmpdir(), "telimus-recovery-outcome-"));
+    dir = await mkdtemp(join(tmpdir(), "trew-recovery-outcome-"));
     expect((await cli("init", server.setup, "--json")).code).toBe(0);
     await writeFile(join(dir, "note.md"), "Visible agreed version.\n");
     expect((await cli("sync")).code).toBe(0);
-    const at = ".telimus/tmp/preserved.unsent-edit";
+    const at = ".trew/tmp/preserved.unsent-edit";
     const text = "Only this hidden version has the unsent edit.\n";
-    await mkdir(join(dir, ".telimus", "tmp"), { recursive: true });
+    await mkdir(join(dir, ".trew", "tmp"), { recursive: true });
     await writeFile(join(dir, at), text);
     // The inventory is complete and readable; its unresolved record is the issue.
     await writeFile(
-      join(dir, ".telimus", DISPLACED_LOG),
+      join(dir, ".trew", DISPLACED_LOG),
       JSON.stringify({
         at,
         from: "note.md",
@@ -86,16 +86,16 @@ it.each([false, true])(
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     server = new TestServer();
     await server.start();
-    dir = await mkdtemp(join(tmpdir(), "telimus-recovery-unreadable-"));
+    dir = await mkdtemp(join(tmpdir(), "trew-recovery-unreadable-"));
     expect((await cli("init", server.setup, "--json")).code).toBe(0);
     await writeFile(join(dir, "note.md"), "Visible agreed version.\n");
     expect((await cli("sync")).code).toBe(0);
-    const staging = join(dir, ".telimus", "tmp");
-    const at = ".telimus/tmp/preserved.unsent-edit";
+    const staging = join(dir, ".trew", "tmp");
+    const at = ".trew/tmp/preserved.unsent-edit";
     const text = "Only this hidden version has the unsent edit.\n";
     await mkdir(staging, { recursive: true });
     await writeFile(join(dir, at), text);
-    const ledger = join(dir, ".telimus", DISPLACED_LOG);
+    const ledger = join(dir, ".trew", DISPLACED_LOG);
     const record =
       JSON.stringify({ at, from: "note.md", why: "Could not place the edit", when: 1 }) + "\n";
     if (recorded) await writeFile(ledger, record);

@@ -1,12 +1,12 @@
 /**
- * One telimus per vault, decided by the kernel rather than by this program.
+ * One trew per vault, decided by the kernel rather than by this program.
  *
  * Automatic stale-lock takeover was attempted five times and four of those
  * handed one vault to two writers (R03, R20, R34, R40, R44/R49). Every attempt
  * was a different arrangement of the same missing primitive: "the holder is
  * dead, so I may have it" is a conclusion drawn from an observation, and
  * between the observation and the act the holder can be alive again. Nothing
- * in POSIX closes that, so `telimus unlock` was made a person's job instead.
+ * in POSIX closes that, so `trew unlock` was made a person's job instead.
  *
  * That was the conservative answer, not the destination. The way out is not a
  * better staleness protocol; it is not having staleness, which is what an
@@ -155,7 +155,7 @@ const openLock: Mechanism = {
 const abstractSocket: Mechanism = {
   how: "abstract socket",
   async take(vault) {
-    const name = `\0telimus.${createHash("sha256").update(vault).digest("hex").slice(0, 32)}`;
+    const name = `\0trew.${createHash("sha256").update(vault).digest("hex").slice(0, 32)}`;
     const server = net.createServer();
     // It must not hold the process open. The command finishing is a perfectly
     // good reason for the vault to become free.
@@ -185,7 +185,7 @@ const abstractSocket: Mechanism = {
  * The mechanism for this platform, or undefined where there is not one.
  *
  * Undefined is a real answer and the caller has to handle it: everything falls
- * back to the file-only protocol and to `telimus unlock`, which is slower to
+ * back to the file-only protocol and to `trew unlock`, which is slower to
  * recover and is not wrong.
  */
 export function mechanismFor(os: string = platform): Mechanism | undefined {

@@ -1,9 +1,9 @@
 /**
- * Nothing internal is written outside the vault, whatever `.telimus` is (R11).
+ * Nothing internal is written outside the vault, whatever `.trew` is (R11).
  *
  * F24 gave `NodeVault.write` a containment check and the trash a pair of them,
  * and stopped there. The config, the index, the lock and the exclusive-create
- * path all write under `.telimus` and none of them asked. A `.telimus` that is a
+ * path all write under `.trew` and none of them asked. A `.trew` that is a
  * symlink to somewhere else therefore put this device's recovery material,
  * its index and its lock outside the vault, and no race was needed to arrange
  * it: an ordinary pre-existing filesystem layout does it, which is why this is
@@ -25,9 +25,9 @@ afterEach(async () => {
   while (dirs.length) await rm(dirs.pop()!, { recursive: true, force: true });
 });
 
-/** A vault whose `.telimus` is a link to somewhere else entirely. */
+/** A vault whose `.trew` is a link to somewhere else entirely. */
 async function vaultWithEscapingState(): Promise<{ vault: string; elsewhere: string }> {
-  const base = await mkdtemp(join(tmpdir(), "telimus-contain-"));
+  const base = await mkdtemp(join(tmpdir(), "trew-contain-"));
   dirs.push(base);
   const vault = join(base, "vault");
   const elsewhere = join(base, "elsewhere");
@@ -46,7 +46,7 @@ const config = () => ({
   dataKey: generateSecret(),
 });
 
-describe("a .telimus that leaves the vault", () => {
+describe("a .trew that leaves the vault", () => {
   it("is refused by saveConfig, and writes nothing outside", async () => {
     const { vault, elsewhere } = await vaultWithEscapingState();
     await expect(saveConfig(vault, config())).rejects.toThrow(/leaves the vault/);
@@ -68,7 +68,7 @@ describe("a .telimus that leaves the vault", () => {
 
 describe("a staging directory that leaves the vault", () => {
   it("is refused by an exclusive create", async () => {
-    const base = await mkdtemp(join(tmpdir(), "telimus-contain-"));
+    const base = await mkdtemp(join(tmpdir(), "trew-contain-"));
     dirs.push(base);
     const vault = join(base, "vault");
     const elsewhere = join(base, "elsewhere");
@@ -96,7 +96,7 @@ describe("a note path that leaves the vault", () => {
    * `read` did not. That was defensible while the only caller was the engine,
    * which reads paths its own `list` produced and `list` does not follow
    * links. It stops being defensible the moment a path arrives from somewhere
-   * that is not this device: `telimus mcp` hands an agent's path straight to
+   * that is not this device: `trew mcp` hands an agent's path straight to
    * the adapter, and a read primitive that follows a link out of the vault is
    * a read primitive for the whole filesystem.
    *
@@ -105,7 +105,7 @@ describe("a note path that leaves the vault", () => {
    * to be thought to have covered.
    */
   it("is refused by read, whether the link is the leaf or an ancestor", async () => {
-    const base = await mkdtemp(join(tmpdir(), "telimus-contain-read-"));
+    const base = await mkdtemp(join(tmpdir(), "trew-contain-read-"));
     dirs.push(base);
     const vault = join(base, "vault");
     const elsewhere = join(base, "elsewhere");
@@ -121,7 +121,7 @@ describe("a note path that leaves the vault", () => {
   });
 
   it("still reads an ordinary note, and one under a real folder", async () => {
-    const base = await mkdtemp(join(tmpdir(), "telimus-contain-read-ok-"));
+    const base = await mkdtemp(join(tmpdir(), "trew-contain-read-ok-"));
     dirs.push(base);
     const vault = join(base, "vault");
     await mkdir(join(vault, "folder"), { recursive: true });
@@ -136,7 +136,7 @@ describe("a note path that leaves the vault", () => {
 
 describe("an ordinary vault", () => {
   it("is not refused by any of it", async () => {
-    const base = await mkdtemp(join(tmpdir(), "telimus-contain-ok-"));
+    const base = await mkdtemp(join(tmpdir(), "trew-contain-ok-"));
     dirs.push(base);
     const vault = join(base, "vault");
     await mkdir(vault, { recursive: true });

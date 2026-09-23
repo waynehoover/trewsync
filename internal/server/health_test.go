@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 /*

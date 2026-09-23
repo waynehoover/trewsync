@@ -30,7 +30,7 @@ export class SyncPreviewModal extends Modal {
   override onOpen(): void {
     this.isClosed = false;
     this.setTitle(this.heading);
-    this.modalEl.addClass("mod-telimus-preview");
+    this.modalEl.addClass("mod-trew-preview");
     this.contentEl.empty();
     if (!this.preview) {
       this.contentEl
@@ -59,7 +59,7 @@ export class SyncPreviewModal extends Modal {
     const changes = this.preview.files.filter((file) => file.action !== "unchanged");
     if (changes.length === 0) {
       this.contentEl.createEl("p", {
-        cls: "telimus-advice",
+        cls: "trew-advice",
         text:
           this.preview.files.length === 0
             ? "There is nothing here and nothing on the server yet."
@@ -70,7 +70,7 @@ export class SyncPreviewModal extends Modal {
       details.createEl("summary", {
         text: `File details (${changes.length.toLocaleString()})`,
       });
-      const list = details.createDiv("telimus-activity-list");
+      const list = details.createDiv("trew-activity-list");
       for (const file of changes.slice(0, 200))
         new Setting(list).setName(file.path).setDesc(LABELS[file.action]);
       if (changes.length > 200)

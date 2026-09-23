@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 // One secret. The auth key is another branch of the same HKDF schedule that
@@ -23,7 +23,7 @@ const longKey = "a-derived-auth-key-of-a-realistic-length-01"
 func authRig(t *testing.T) (*store.Store, Authenticator) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestAVaultIsNotClaimedWithoutADataKey(t *testing.T) {
 // against, and an empty token would match an empty bootstrap exactly.
 func TestAServerWithNoBootstrapClaimsNothing(t *testing.T) {
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

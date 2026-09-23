@@ -85,7 +85,7 @@ run "the protocol vectors are what the reference writes" "" \
 # Tests also read repository docs outside the Go module; the Go result cache
 # does not track those inputs. Always execute the release gate's server tests.
 run "test" "" go test -race -count=1 ./...
-run "the systemd unit verifies" "" go test -race -run 'TestService' ./cmd/telimus/
+run "the systemd unit verifies" "" go test -race -run 'TestService' ./cmd/trew/
 
 # ---- systemd's own opinion of that unit -------------------------------------
 #
@@ -96,9 +96,9 @@ run "the systemd unit verifies" "" go test -race -run 'TestService' ./cmd/telimu
 # run" and "passed" are different sentences, and exit 2 says which.
 systemd_accepts() {
   local unit; unit=$(mktemp)
-  go -C "$root" build -o "$(dirname "$unit")/telimus" ./cmd/telimus
-  "$(dirname "$unit")/telimus" service -data /var/lib/telimus -addr 0.0.0.0:3003 \
-    -vault default -user telimus -binary /usr/local/bin/telimus -max-file 134217728 > "$unit"
+  go -C "$root" build -o "$(dirname "$unit")/trew" ./cmd/trew
+  "$(dirname "$unit")/trew" service -data /var/lib/trew -addr 0.0.0.0:3003 \
+    -vault default -user trew -binary /usr/local/bin/trew -max-file 134217728 > "$unit"
   systemd-analyze verify "$unit"
 }
 if command -v systemd-analyze >/dev/null 2>&1; then
@@ -119,13 +119,13 @@ only_in_ci "a filesystem of its own, mounted" \
 
 # ---- the kernel exclusion --------------------------------------------------
 #
-# Whether the operating system really takes the lock away when a telimus dies,
+# Whether the operating system really takes the lock away when a trew dies,
 # which is what stops a crashed sync wedging the next one (I27). A unit test
 # cannot establish it -- a process still running to make an assertion has not
 # died -- so this spawns a holder and kills it. macOS and Linux use entirely
 # different mechanisms, so this passing here says nothing about the other one,
 # which is why CI runs it too.
-run "the kernel gives the lock back when a telimus dies" client \
+run "the kernel gives the lock back when a trew dies" client \
   bun run "$root/scripts/kernel-lock.test.ts"
 
 # ---- the compose pin -------------------------------------------------------
@@ -162,7 +162,7 @@ run "every action is pinned to a commit" "" \
 # runbook it executes is the one nobody finds out is wrong until the day the
 # live directory is gone.
 run "the backup restores, verifies and serves what it held" "" \
-  go test -tags rehearsal -run TestRestoreRehearsal -count=1 ./cmd/telimus/
+  go test -tags rehearsal -run TestRestoreRehearsal -count=1 ./cmd/trew/
 
 # ---- client ----------------------------------------------------------------
 # ---- the filesystem this is running on --------------------------------------
@@ -223,8 +223,8 @@ elif ! docker info >/dev/null 2>&1; then
   skip "it runs" "no docker daemon"
   skip "the compose file is valid" "no docker daemon"
 else
-  run "build the image" "" docker build -t telimus:ci .
-  run "it runs" "" docker run --rm telimus:ci version
+  run "build the image" "" docker build -t trew:ci .
+  run "it runs" "" docker run --rm trew:ci version
   run "the compose file is valid" "" docker compose -f compose.yaml config -q
 fi
 

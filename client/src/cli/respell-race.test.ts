@@ -42,7 +42,7 @@ afterEach(async () => {
 });
 
 async function vault(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-respell-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-respell-"));
   dirs.push(dir);
   return dir;
 }
@@ -75,7 +75,7 @@ describe("taking away a name whose file has a second one", () => {
     const dir = await vault();
     const from = join(dir, "old-name.md");
     const to = join(dir, "new-name.md");
-    const staging = join(dir, ".telimus", "tmp");
+    const staging = join(dir, ".trew", "tmp");
     await writeFile(from, "the synced contents\n");
     const source = await lstat(from);
     await hardLink(from, to);
@@ -103,7 +103,7 @@ describe("taking away a name whose file has a second one", () => {
     const dir = await vault();
     const from = join(dir, "old-name.md");
     const to = join(dir, "new-name.md");
-    const staging = join(dir, ".telimus", "tmp");
+    const staging = join(dir, ".trew", "tmp");
     await writeFile(from, "the only copy\n");
     const source = await lstat(from);
     await hardLink(from, to);
@@ -133,7 +133,7 @@ describe("taking away a name whose file has a second one", () => {
     const dir = await vault();
     const from = join(dir, "old-name.md");
     const to = join(dir, "new-name.md");
-    const staging = join(dir, ".telimus", "tmp");
+    const staging = join(dir, ".trew", "tmp");
     await writeFile(from, "the synced contents\n");
     const source = await lstat(from);
     await hardLink(from, to);
@@ -178,7 +178,7 @@ describe("taking away a name whose file has a second one", () => {
 
   it("does nothing when the old name has already gone", async () => {
     const dir = await vault();
-    const staging = join(dir, ".telimus", "tmp");
+    const staging = join(dir, ".trew", "tmp");
     await expect(
       retireName(staging, join(dir, "never-existed.md"), { dev: 1, ino: 1 }),
     ).resolves.toBeUndefined();
@@ -234,7 +234,7 @@ describe("the whole scan, on a filesystem that keeps the spellings apart", () =>
 
     await new NodeVault(dir).list();
 
-    const found = await contentsUnder(dir, join(dir, ".telimus", "tmp"));
+    const found = await contentsUnder(dir, join(dir, ".trew", "tmp"));
     expect(
       found.join("|"),
       `the edit saved during the scan is gone. Found: ${JSON.stringify(found)}`,

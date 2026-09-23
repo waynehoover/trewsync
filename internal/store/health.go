@@ -23,7 +23,7 @@ import (
 // and an operator finds out from a phone that will not sync.
 //
 // Cheap on purpose. One indexed read and one statfs, both of which a probe can
-// afford every few seconds; the deep verification lives in `telimus verify`,
+// afford every few seconds; the deep verification lives in `trew verify`,
 // where it is asked for. A health check that costs real work is a health check
 // somebody turns off, and one that walks the store competes with the thing it
 // is reporting on.
@@ -40,7 +40,7 @@ type Health struct {
 	// FreeBytes and TotalBytes describe the filesystem holding the store, or
 	// zero where it could not be asked. Not reported over the network: a
 	// stranger on the port learns nothing from this package, and these are for
-	// `telimus stats` and the log.
+	// `trew stats` and the log.
 	FreeBytes  int64
 	TotalBytes int64
 
@@ -147,7 +147,7 @@ func (s *Store) CheckHealth(ctx context.Context) (h Health) {
 	//
 	// Every inspection command opens that way (I15), and this probe refuses on
 	// exactly such a connection by design (R15), so the two together made
-	// `telimus stats` say `canPersist: false, reason: store-read-only` about
+	// `trew stats` say `canPersist: false, reason: store-read-only` about
 	// every healthy server, and return before the statfs, leaving the
 	// free-space numbers that command exists to print at zero. Two correct
 	// changes; one wrong answer. The rest of the report is still worth having,

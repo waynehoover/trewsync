@@ -39,11 +39,11 @@ if (process.argv[2] === "hold") {
     // Not a pass. A platform with no mechanism falls back to the file, which
     // is correct behaviour and is not what this file is checking, so it says
     // so rather than printing a row of ticks.
-    console.log(`  no mechanism on ${platform()}, so a crashed telimus needs telimus unlock`);
+    console.log(`  no mechanism on ${platform()}, so a crashed trew needs trew unlock`);
     process.exit(0);
   }
 
-  const dir = await mkdtemp(join(tmpdir(), "telimus-kernel-lock-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-kernel-lock-"));
   await mkdir(join(dir, STATE_DIR), { recursive: true });
   ok(`${m.how} actually excludes on this filesystem`, await provenFor(m, join(dir, STATE_DIR)));
 
@@ -57,9 +57,9 @@ if (process.argv[2] === "hold") {
   try {
     await lockVault(dir, "second");
   } catch (err) {
-    refused = /another telimus/.test((err as Error).message);
+    refused = /another trew/.test((err as Error).message);
   }
-  ok("a second telimus is refused while the holder runs", refused);
+  ok("a second trew is refused while the holder runs", refused);
   ok("and the lock names the holder", (await currentHolder(dir))?.pid === child.pid);
 
   child.kill("SIGKILL");
@@ -74,7 +74,7 @@ if (process.argv[2] === "hold") {
     console.log(`         refused: ${(err as Error).message.slice(0, 80)}`);
   }
   // The whole of I27 in one line. Everything else here is scaffolding for it.
-  ok("after SIGKILL the next telimus takes it, with nobody typing anything", took);
+  ok("after SIGKILL the next trew takes it, with nobody typing anything", took);
 
   // And a record naming a pid that never existed is debris, not a holder.
   let dead = 4_000_000;
@@ -104,7 +104,7 @@ if (process.argv[2] === "hold") {
   // Forced, because garbage collection is not otherwise a thing a test can
   // wait for. Bun's own warning about a collected handle is what found this in
   // the first place, on a run where it happened to fire.
-  const gcDir = await mkdtemp(join(tmpdir(), "telimus-kernel-gc-"));
+  const gcDir = await mkdtemp(join(tmpdir(), "trew-kernel-gc-"));
   await mkdir(gcDir, { recursive: true });
   await (async () => {
     await m.take(`${gcDir}#probe`, join(gcDir, "lock.excl"));
@@ -125,7 +125,7 @@ if (process.argv[2] === "hold") {
   // name of their own and each admitted a second writer. macOS never had it,
   // because a `flock` is on an inode and does not care what the path looked
   // like, which is why this check has to run on Linux to mean anything.
-  const twoNames = await mkdtemp(join(tmpdir(), "telimus-kernel-names-"));
+  const twoNames = await mkdtemp(join(tmpdir(), "trew-kernel-names-"));
   const real = join(twoNames, "vault");
   await mkdir(join(real, STATE_DIR), { recursive: true });
   const link = join(twoNames, "link");

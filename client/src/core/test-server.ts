@@ -1,5 +1,5 @@
 /**
- * A real `cmd/telimus` for tests to talk to.
+ * A real `cmd/trew` for tests to talk to.
  *
  * Not a mock and not a fixture in the usual sense: it builds the Go binary and
  * runs it. Imported by the test files rather than living in one of them, because
@@ -40,12 +40,12 @@ let buildDir: string | undefined;
  * having done nothing.
  */
 export function serverBinary(): Promise<string> {
-  const shared = process.env["TELIMUS_TEST_BINARY"];
+  const shared = process.env["TREW_TEST_BINARY"];
   if (shared) return Promise.resolve(shared);
   built ??= (async () => {
-    buildDir = await mkdtemp(join(tmpdir(), "telimus-bin-"));
-    const binary = join(buildDir, "telimus");
-    await run("go", ["build", "-o", binary, "./cmd/telimus"], {
+    buildDir = await mkdtemp(join(tmpdir(), "trew-bin-"));
+    const binary = join(buildDir, "trew");
+    await run("go", ["build", "-o", binary, "./cmd/trew"], {
       cwd: GO_DIR,
       env: { ...process.env, CGO_ENABLED: "0" },
     });
@@ -62,7 +62,7 @@ export function serverBinary(): Promise<string> {
  * hypothetical, it is what happens when several files run at once.
  */
 export async function cleanupBinary(): Promise<void> {
-  if (process.env["TELIMUS_TEST_BINARY"]) return;
+  if (process.env["TREW_TEST_BINARY"]) return;
   if (buildDir) await removeTree(buildDir);
   buildDir = undefined;
   built = undefined;
@@ -79,7 +79,7 @@ export async function cleanupBinary(): Promise<void> {
  * The retries are counted rather than done by `rm` itself, because the question
  * worth answering was whether something of ours was still writing after a
  * command returned. That would be a real durability bug and retries would hide
- * it. Measured over six full runs, with TELIMUS_RM_STATS set:
+ * it. Measured over six full runs, with TREW_RM_STATS set:
  *
  *   1836 removes, 1834 on the first attempt, 2 on the second, 0 failures
  *
@@ -98,7 +98,7 @@ export async function removeTree(path: string): Promise<void> {
     try {
       // No built-in retries: this loop is doing them, so that it can say
       // how often the race actually happens rather than absorbing it
-      // silently. Set TELIMUS_RM_STATS to a file to find out.
+      // silently. Set TREW_RM_STATS to a file to find out.
       await rm(path, { recursive: true, force: true });
       note(`${attempt}\t${path}`);
       return;
@@ -115,7 +115,7 @@ export async function removeTree(path: string): Promise<void> {
 
 /** Appends one line per remove when asked, so the retries can be counted. */
 function note(line: string): void {
-  const file = process.env["TELIMUS_RM_STATS"];
+  const file = process.env["TREW_RM_STATS"];
   if (file) appendFileSync(file, `${line}\n`);
 }
 
@@ -169,7 +169,7 @@ export class TestServer {
 
   private async startOnce(fixedPort?: number): Promise<void> {
     const binary = await serverBinary();
-    if (!this.dataDir) this.dataDir = await mkdtemp(join(tmpdir(), "telimus-data-"));
+    if (!this.dataDir) this.dataDir = await mkdtemp(join(tmpdir(), "trew-data-"));
     this.port = fixedPort ?? (await freePort());
     this.stderr.length = 0;
     this.proc = spawn(
@@ -186,7 +186,7 @@ export class TestServer {
     let banner = "";
     const output = (data: Buffer) => {
       banner += data.toString();
-      if (/^telimus .* listening on /m.test(banner)) listening.resolve();
+      if (/^trew .* listening on /m.test(banner)) listening.resolve();
     };
     const exited = (code: number | null) =>
       listening.reject(new Error(`server exited with ${code}: ${this.stderr.join("")}`));

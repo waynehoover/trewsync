@@ -127,12 +127,12 @@ export class ActivityModal extends Modal {
   }
   override onOpen(): void {
     this.setTitle("Sync activity");
-    this.modalEl.addClass("mod-telimus-activity");
+    this.modalEl.addClass("mod-trew-activity");
     const problem = this.contentEl.createEl("p");
     let query = "";
     let filter = "all";
     const controls = new Setting(this.contentEl).setName("Recent activity");
-    controls.settingEl.addClass("telimus-activity-filter");
+    controls.settingEl.addClass("trew-activity-filter");
     controls.addSearch((input) => {
       input.inputEl.setAttribute("aria-label", "Find activity by filename");
       input.setPlaceholder("Find a file…").onChange((value) => {
@@ -149,7 +149,7 @@ export class ActivityModal extends Modal {
           draw();
         });
     });
-    const list = this.contentEl.createDiv("telimus-activity-list");
+    const list = this.contentEl.createDiv("trew-activity-list");
     const rows = new Map<Activity, Setting>();
     const empty = list.createEl("p", { text: "No matching activity." });
     const draw = () => {

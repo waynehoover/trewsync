@@ -26,7 +26,7 @@ let writer: NodeVault;
 let reader: NodeVault;
 const releases: (() => void)[] = [];
 beforeEach(async () => {
-  root = await realpath(await mkdtemp(join(tmpdir(), "telimus-preview-observer-")));
+  root = await realpath(await mkdtemp(join(tmpdir(), "trew-preview-observer-")));
   server = new TestServer();
   await server.start();
   writer = new NodeVault(root);
@@ -53,7 +53,7 @@ afterEach(async () => {
 
 it("uses observed stats without reaping staging or normalizing a note's disk spelling", async () => {
   const nfd = "cafe\u0301.md";
-  const stage = join(root, ".telimus", "tmp");
+  const stage = join(root, ".trew", "tmp");
   await mkdir(stage, { recursive: true });
   const leftover = join(stage, "replace.abandoned");
   await writeFile(leftover, "a crashed staged write");

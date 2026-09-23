@@ -1,7 +1,7 @@
 /**
  * Putting back a body the server lost, without inventing an edit (I14).
  *
- * `telimus verify` finds a chunk whose bytes no longer hash to its name, sets
+ * `trew verify` finds a chunk whose bytes no longer hash to its name, sets
  * it aside, and says it is waiting for a device to resend it. Nothing ever did.
  * A device whose copy of the note has not changed is right to consider it
  * synced: the entry is committed, the hashes agree, and a pass has nothing to
@@ -250,7 +250,7 @@ describe("a body the server has lost", () => {
    * A body belonging to a version this device no longer holds is not on its
    * disk and is not in its index: nothing here could notice it is gone. So
    * repair reports a clean run, correctly, and the thing that must be true is
-   * that a clean run is not sold as a whole vault. `telimus verify` on the
+   * that a clean run is not sold as a whole vault. `trew verify` on the
    * server is what knows, and both shells point at it.
    *
    * Written as a test rather than a comment because the tempting fix is to make

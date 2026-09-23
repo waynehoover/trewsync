@@ -89,7 +89,7 @@ describe("listing", () => {
     adapter.indexHidesDotfiles = false;
     // Plugin and settings sync is refused, and one device disabling every
     // plugin on another is the incident that rule came from.
-    for (const dir of [".obsidian", ".telimus", ".git", ".trash"]) {
+    for (const dir of [".obsidian", ".trew", ".git", ".trash"]) {
       adapter.seed(`${dir}/inside.md`, "x");
     }
     adapter.seed("real.md", "x");
@@ -105,7 +105,7 @@ describe("listing", () => {
   it("leaves alone whatever Obsidian calls its config folder", async () => {
     adapter.indexHidesDotfiles = false; // As above: the filter is what is under test.
     const odd = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".my-config");
-    adapter.seed(".my-config/plugins/telimus/data.json", "the root secret lives here");
+    adapter.seed(".my-config/plugins/trew/data.json", "the root secret lives here");
     adapter.seed("real.md", "x");
     expect((await odd.list()).map((f) => f.path)).toEqual(["real.md"]);
 
@@ -328,7 +328,7 @@ describe("the index", () => {
   });
 
   it("round trips", async () => {
-    const store = new ObsidianIndexStore(adapter, ".obsidian/plugins/telimus/index.json");
+    const store = new ObsidianIndexStore(adapter, ".obsidian/plugins/trew/index.json");
     await store.save(state(7));
     expect(await store.load()).toEqual(state(7));
   });
@@ -675,9 +675,9 @@ describe("writing a name that differs only by case", () => {
  */
 /** Whether a path is a staging copy beside `note`, whatever its random part. */
 const isStaging = (path: string, note = "note.md") =>
-  new RegExp(`^\\.telimus-tmp-[0-9a-f]{8}-${note.replace(".", "\\.")}$`).test(path);
+  new RegExp(`^\\.trew-tmp-[0-9a-f]{8}-${note.replace(".", "\\.")}$`).test(path);
 /** The staging copies present, by name. */
-const stagingCopies = (a: FakeAdapter) => a.filePaths().filter((p) => p.includes(".telimus-tmp-"));
+const stagingCopies = (a: FakeAdapter) => a.filePaths().filter((p) => p.includes(".trew-tmp-"));
 
 describe("landing a note without a moment where it is half written", () => {
   const times = { mtime: 1000, ctime: 1000 };
@@ -732,7 +732,7 @@ describe("landing a note without a moment where it is half written", () => {
     adapter.seed("note.md", "old");
     adapter.fault = (op, path) => (op === "writeBinary" && path === "note.md" ? 1 : undefined);
     await expect(vault.write("note.md", enc.encode("new content"), times)).rejects.toThrow(
-      /complete new content is beside it at \.telimus-tmp-[0-9a-f]{8}-note\.md/,
+      /complete new content is beside it at \.trew-tmp-[0-9a-f]{8}-note\.md/,
     );
     // The destination is what the adapter left, which is the failure this
     // API cannot prevent; the new version is whole beside it, and the old one
@@ -936,9 +936,9 @@ describe("a spelling check that cannot be made", () => {
  * the plugin on every load. A vault whose notes were all fine sat behind it.
  */
 describe("the index, interrupted", () => {
-  const INDEX = ".obsidian/plugins/telimus/index.json";
-  const TEMP = ".obsidian/plugins/telimus/.telimus-tmp-index-index.json";
-  const LOG = ".obsidian/plugins/telimus/index.log";
+  const INDEX = ".obsidian/plugins/trew/index.json";
+  const TEMP = ".obsidian/plugins/trew/.trew-tmp-index-index.json";
+  const LOG = ".obsidian/plugins/trew/index.log";
   const state = (cursor: number) => ({
     cursor,
     entries: { "note.md": { path: "note.md", hash: `h${cursor}` } },
@@ -1125,11 +1125,11 @@ describe("a dotfile of the user's where a staging copy would go", () => {
       return arr;
     }) as typeof crypto.getRandomValues;
     try {
-      adapter.seed(".telimus-tmp-abababab-note.md", "the user's own dotfile");
+      adapter.seed(".trew-tmp-abababab-note.md", "the user's own dotfile");
       await vault.write("note.md", enc.encode("a note"), { mtime: 1, ctime: 1 });
       expect(adapter.text("note.md")).toBe("a note");
-      expect(adapter.text(".telimus-tmp-abababab-note.md")).toBe("the user's own dotfile");
-      expect(stagingCopies(adapter)).toEqual([".telimus-tmp-abababab-note.md"]);
+      expect(adapter.text(".trew-tmp-abababab-note.md")).toBe("the user's own dotfile");
+      expect(stagingCopies(adapter)).toEqual([".trew-tmp-abababab-note.md"]);
     } finally {
       crypto.getRandomValues = realRandom;
     }
@@ -1376,7 +1376,7 @@ describe("what flush must not forget (P-D4, P-D5)", () => {
     // after it do not, and the directory entry that moved is the one thing
     // that changed on disk.
     desktop.fault = (op, path) =>
-      op === "writeBinary" && path.includes("telimus-tmp") ? new Error("ENOSPC") : undefined;
+      op === "writeBinary" && path.includes("trew-tmp") ? new Error("ENOSPC") : undefined;
     await expect(v.write("daily/NOTE.md", enc.encode("new"), times)).rejects.toThrow(/ENOSPC/);
     desktop.fault = undefined;
 
@@ -1479,7 +1479,7 @@ describe("what flush must not forget (P-D4, P-D5)", () => {
   });
 
   it("treats a file that has gone as flushed rather than as a failure, for ever (R6)", async () => {
-    const INDEX = ".obsidian/plugins/telimus/index.json";
+    const INDEX = ".obsidian/plugins/trew/index.json";
     const state = { cursor: 1, entries: {}, remote: {}, pending: [] };
     const desktop = new DesktopAdapter();
     const { fs, synced } = fsOver(desktop);
@@ -1515,7 +1515,7 @@ describe("what flush must not forget (P-D4, P-D5)", () => {
  * safe only while what it remembers is what is on disk.
  */
 describe("the index write that is skipped because nothing changed (P-D6)", () => {
-  const INDEX = ".obsidian/plugins/telimus/index.json";
+  const INDEX = ".obsidian/plugins/trew/index.json";
   const state = (cursor: number) => ({
     cursor,
     entries: { "note.md": { path: "note.md", hash: `h${cursor}` } },
@@ -1713,7 +1713,7 @@ describe("writing over a file the pass did not decide about", () => {
   it("does not truncate a text file if its backup cannot be staged", async () => {
     adapter.seed("note.md", "unsent local text\n", 1000);
     adapter.fault = (op, path) =>
-      op === "writeBinary" && path.includes(".telimus-tmp-") ? 2 : undefined;
+      op === "writeBinary" && path.includes(".trew-tmp-") ? 2 : undefined;
     const out = await vault.replace(
       "note.md",
       undefined,

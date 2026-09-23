@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 // Hub fans committed entries out to every device on a vault.

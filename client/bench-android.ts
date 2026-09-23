@@ -38,7 +38,7 @@
  *
  * The phone has one JavaScript thread and Obsidian is on it, so a phase that
  * held the event loop while Obsidian reacted to the same save is charged for
- * it. That is why the **quiet ticker passes**, where Telimus is alone on the
+ * it. That is why the **quiet ticker passes**, where Trew is alone on the
  * thread, are the evidence for the phase split, and the save passes are used
  * only for the end-to-end figure.
  */
@@ -61,7 +61,7 @@ const run = promisify(execFile);
 /** The vault on the phone this may touch, and nothing else. */
 const VAULT = process.env["BENCH_VAULT"] ?? "Bench";
 const VAULT_DIR = `/sdcard/Documents/${VAULT}`;
-const PLUGIN_DIR = `${VAULT_DIR}/.obsidian/plugins/telimus-sync`;
+const PLUGIN_DIR = `${VAULT_DIR}/.obsidian/plugins/trew-sync`;
 const TIMING_LOG = `${PLUGIN_DIR}/pass-timings.ndjson`;
 const SIZES = (process.env["BENCH_SIZES"] ?? "10000").split(",").map(Number);
 const SAMPLES = Number(process.env["BENCH_SAMPLES"] ?? 15);
@@ -183,7 +183,7 @@ async function atSize(size: number): Promise<void> {
   await server.start();
   const secret = new Uint8Array(32).fill(41);
   const wrapped = await testWrapped(secret);
-  const peerDir = await mkdtemp(join(tmpdir(), "telimus-android-peer-"));
+  const peerDir = await mkdtemp(join(tmpdir(), "trew-android-peer-"));
   const port = new URL(server.wsUrl).port;
 
   // The phone reaches this machine over its own loopback, forwarded by adb.
@@ -199,7 +199,7 @@ async function atSize(size: number): Promise<void> {
 
   const peer = new Client({
     vault: new NodeVault(peerDir),
-    store: new JsonIndexStore(join(peerDir, ".telimus", "index.json")),
+    store: new JsonIndexStore(join(peerDir, ".trew", "index.json")),
     url: server.wsUrl,
     ...(await server.deviceCredentials(secret, wrapped, "peer")),
     vaultId: "default",
@@ -226,7 +226,7 @@ async function atSize(size: number): Promise<void> {
     await peer.settle({}, 256);
 
     // The folders the corpus actually used, so the archive names them rather
-    // than sweeping in the peer's `.telimus` index alongside the notes.
+    // than sweeping in the peer's `.trew` index alongside the notes.
     const corpusFolders = [...new Set(corpusPaths(size).map((p) => p.split("/")[0]!))];
 
     // The phone gets the same bytes locally rather than downloading them, so
@@ -256,7 +256,7 @@ async function atSize(size: number): Promise<void> {
     await adb("push", "dist/plugin/manifest.json", `${PLUGIN_DIR}/manifest.json`);
     await adb("push", "dist/plugin/styles.css", `${PLUGIN_DIR}/styles.css`);
     const enabled = join(peerDir, ".community-plugins.json");
-    await writeFile(enabled, JSON.stringify(["telimus-sync"]));
+    await writeFile(enabled, JSON.stringify(["trew-sync"]));
     await adb("push", enabled, `${VAULT_DIR}/.obsidian/community-plugins.json`);
     await adb("shell", "touch", TIMING_LOG);
     // Unpaired, every run. The server this seeds against is disposable, so a
@@ -278,7 +278,7 @@ async function atSize(size: number): Promise<void> {
     console.log(`  1. Obsidian, vault switcher, "Open folder as vault", pick ${VAULT}`);
     console.log("     (it exists now: this step is why it did not before)");
     console.log("  2. Settings, Community plugins, turn off Restricted mode");
-    console.log("  3. Telimus, Paste an invite, and paste this:");
+    console.log("  3. Trew, Paste an invite, and paste this:");
     console.log(`\n     ${invite.invite}\n`);
     console.log(`     It must say it joins ${endpoint}. If it names anything else, stop.`);
     console.log("  4. Leave Obsidian open, in the foreground, screen on");
@@ -322,7 +322,7 @@ async function atSize(size: number): Promise<void> {
     await adb("shell", "touch", TIMING_LOG);
     // Obsidian in front, or there are no passes to collect.
     //
-    // Android suspends a backgrounded WebView, and Telimus's own guide says
+    // Android suspends a backgrounded WebView, and Trew's own guide says
     // sync runs on Android only while Obsidian is open in the foreground. A
     // collection window with the phone on a home screen gathers nothing at
     // all, which is what two runs did. `obsidian://open` brings it forward and
@@ -439,7 +439,7 @@ async function readFileMaybe(path: string): Promise<string | undefined> {
 }
 
 async function main(): Promise<void> {
-  console.log("telimus: what a pass costs on the phone");
+  console.log("trew: what a pass costs on the phone");
   console.log(`  ${cpus()[0]?.model ?? "unknown cpu"}, ${cpus().length} cores (host)`);
   for (const [k, v] of Object.entries(await phoneFacts())) console.log(`  ${k}: ${v}`);
   console.log(`  vault: ${VAULT_DIR}`);

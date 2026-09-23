@@ -7,7 +7,7 @@ import qrcode from "qrcode-generator";
  * The word 'QR Code' is a registered trademark of DENSO WAVE INCORPORATED.
  */
 
-export const INVITE_ACTION = "telimus";
+export const INVITE_ACTION = "trew";
 
 /** The receiving plugin opens a form; following this link never pairs automatically. */
 export function inviteLink(invite: string): string {

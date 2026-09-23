@@ -9,7 +9,7 @@ import { backupOf } from "./mcp-notes.ts";
 import { previewOperation, applyOperation, type VaultOperation } from "./mcp-operations.ts";
 let root: string, vault: NodeVault, observer: NodeVault;
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "telimus-mcp-operations-"));
+  root = await mkdtemp(join(tmpdir(), "trew-mcp-operations-"));
   vault = new NodeVault(root);
   observer = new NodeVault(root, { observeOnly: true });
 });
@@ -151,7 +151,7 @@ it("refuses a global operation if a note cannot be decoded instead of silently s
   ).rejects.toMatchObject({ code: "invalid_utf8" });
   expect(create).not.toHaveBeenCalled();
 });
-it.each([".telimus/secret.md", "../outside.md", "a (MCP backup 20260915T000000Z abcdef12).md"])(
+it.each([".trew/secret.md", "../outside.md", "a (MCP backup 20260915T000000Z abcdef12).md"])(
   "refuses namespace mutations of %s",
   async (path) => {
     await seed("a.md", "original");
@@ -179,7 +179,7 @@ it("treats an existing directory as a no-op and refuses files or excluded locati
     applied: false,
     error: { code: "not_regular_file" },
   });
-  expect(await createDirectory(vault, ".telimus/new", () => {})).toMatchObject({
+  expect(await createDirectory(vault, ".trew/new", () => {})).toMatchObject({
     applied: false,
     error: { code: "excluded_path" },
   });

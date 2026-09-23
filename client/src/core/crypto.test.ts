@@ -285,7 +285,7 @@ describe("paths", () => {
       "note.md",
       "folder/sub folder/note.md",
       "notes/2026-08-27 meeting: with a colon.md",
-      "emoji 🗿 telimus.md",
+      "emoji 🗿 trew.md",
       "accents éàü and a ' quote.md",
       "very/" + "deep/".repeat(20) + "note.md",
       "trailing space .md",

@@ -11,7 +11,7 @@ let root: string;
 let vault: NodeVault;
 const enc = new TextEncoder();
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "telimus-mcp-batch-"));
+  root = await mkdtemp(join(tmpdir(), "trew-mcp-batch-"));
   vault = new NodeVault(root);
 });
 afterEach(async () => {

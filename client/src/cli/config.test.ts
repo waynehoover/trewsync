@@ -50,7 +50,7 @@ afterEach(async () => {
 });
 
 async function paired(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-config-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-config-"));
   dirs.push(dir);
   await saveConfig(dir, {
     url: "ws://x",

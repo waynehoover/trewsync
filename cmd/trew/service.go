@@ -11,9 +11,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/waynehoover/telimus/internal/dirlock"
-	"github.com/waynehoover/telimus/internal/server"
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/dirlock"
+	"github.com/waynehoover/trew/internal/server"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 // cmdService prints a systemd unit for running this server.
@@ -32,7 +32,7 @@ func cmdService(args []string, out io.Writer) error {
 	addr := fs.String("addr", ":3003", "listen address the unit should use")
 	vault := fs.String("vault", "default", "the one vault this server serves")
 	runAs := fs.String("user", "", "user to run as (default: whoever is running this)")
-	binary := fs.String("binary", "", "path to the telimus binary (default: this one)")
+	binary := fs.String("binary", "", "path to the trew binary (default: this one)")
 	// The ceiling goes in the unit, because a unit that cannot carry it is how
 	// somebody who ran by hand with -max-file makes that permanent and silently
 	// drops it. serve then refuses to start on a vault holding a larger file,
@@ -53,7 +53,7 @@ func cmdService(args []string, out io.Writer) error {
 	// whoever is typing rather than whoever reads journals (rule 7: say what
 	// the vault holds, not what this command was told).
 	//
-	// Only when there is a data directory to read. `telimus service` is
+	// Only when there is a data directory to read. `trew service` is
 	// normally run before the first serve, on a directory that does not exist
 	// yet, and refusing to print a unit because there is nothing to check
 	// would be refusing the ordinary case. Shared, like verify: this reads and
@@ -70,7 +70,7 @@ func cmdService(args []string, out io.Writer) error {
 		// `openStore` creates the directory, runs `migrate`, applies the
 		// schema and stamps `user_version`. This opens the store to run one
 		// `SELECT`, and it was the last inspection command still writing to
-		// what it inspects: `telimus service` silently migrated an older store
+		// what it inspects: `trew service` silently migrated an older store
 		// just by being asked to print a unit, and could not print one at all
 		// against read-only media.
 		st, err := openForInspection(*dataDir, "read")
@@ -147,17 +147,17 @@ func cmdService(args []string, out io.Writer) error {
 	// directory that is not the one meant.
 	qExe, qData := shellQuote(exe), shellQuote(data)
 	fmt.Fprintf(out, `
-# Save this output as telimus.service and review it. Then install it as root:
+# Save this output as trew.service and review it. Then install it as root:
 #
-#   install -m 0644 telimus.service /etc/systemd/system/telimus.service
+#   install -m 0644 trew.service /etc/systemd/system/trew.service
 #   systemctl daemon-reload
-#   systemctl enable --now telimus
-#   systemctl status telimus
-#   journalctl -u telimus -f
+#   systemctl enable --now trew
+#   systemctl status trew
+#   journalctl -u trew -f
 #
 # The token it prints on its first run is in the log:
 #
-#   journalctl -u telimus | grep '#'
+#   journalctl -u trew | grep '#'
 #
 # Backups do not need the server stopped, so this is a cron or timer away:
 #
@@ -168,7 +168,7 @@ func cmdService(args []string, out io.Writer) error {
 # because -vault says which one and -confirm is the typing-it-out that a
 # command destroying history should ask for (I13):
 #
-#   systemctl stop telimus && %s purge -data %s -vault %s -confirm %s -backup /somewhere/else && systemctl start telimus
+#   systemctl stop trew && %s purge -data %s -vault %s -confirm %s -backup /somewhere/else && systemctl start trew
 `, qExe, qData, qExe, qData, shellQuote(*vault), shellQuote(*vault))
 	return nil
 }
@@ -226,8 +226,8 @@ type unitArgs struct {
 func unit(a unitArgs) string {
 	return strings.Join([]string{
 		"[Unit]",
-		"Description=Telimus, self-hosted sync for Obsidian",
-		"Documentation=https://github.com/waynehoover/telimus",
+		"Description=Trew, self-hosted sync for Obsidian",
+		"Documentation=https://github.com/waynehoover/trew",
 		"After=network-online.target",
 		"Wants=network-online.target",
 		"",
@@ -236,9 +236,9 @@ func unit(a unitArgs) string {
 		"# -max-file, and a refusal is not a crash: with no limit it reprints",
 		"# every five seconds for ever while the unit never reaches failed and",
 		"# nothing watching unit state says a word. Five failures inside five",
-		"# minutes and systemd gives up, so `systemctl status telimus` says failed",
+		"# minutes and systemd gives up, so `systemctl status trew` says failed",
 		"# and the reason is the last thing in the journal. Once it is fixed,",
-		"# `systemctl reset-failed telimus` before starting again. A server that",
+		"# `systemctl reset-failed trew` before starting again. A server that",
 		"# crashes now and then is well inside this and still comes back.",
 		"StartLimitIntervalSec=5min",
 		"StartLimitBurst=5",
@@ -298,7 +298,7 @@ func unit(a unitArgs) string {
 
 // protectHome emits ProtectHome only when it would not break the service.
 //
-// The default data directory is ~/.telimus, and ProtectHome=true makes home
+// The default data directory is ~/.trew, and ProtectHome=true makes home
 // unreadable to the unit, so the hardening line that looks most obviously
 // correct is the one that stops the server starting at all. It is emitted when
 // the data lives somewhere else, and explained when it does not, because a
@@ -309,7 +309,7 @@ func protectHome(data, home string) string {
 	}
 	return "\n# ProtectHome is left off: the data directory is inside a home\n" +
 		"# directory, and turning it on would make that unreadable to this unit.\n" +
-		"# Moving the data somewhere like /var/lib/telimus and adding\n" +
+		"# Moving the data somewhere like /var/lib/trew and adding\n" +
 		"# ProtectHome=true is the stronger arrangement.\n"
 }
 
@@ -317,7 +317,7 @@ func protectHome(data, home string) string {
 //
 // `home` is the real answer when the system could supply one, and it is what
 // makes this right on a machine whose homes are not under /home: a data
-// directory at /srv/people/wayne/.telimus used to get ProtectHome=true and a
+// directory at /srv/people/wayne/.trew used to get ProtectHome=true and a
 // unit that could not read its own data. The prefixes stay as a fallback for a
 // user that does not exist yet on the machine generating the unit.
 func underHome(path, home string) bool {

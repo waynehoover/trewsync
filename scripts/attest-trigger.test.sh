@@ -149,7 +149,7 @@ for job in plugin server; do
   run_block "$job" publish > "$scratch/publish.sh"
   if [[ ! -s "$scratch/publish.sh" ]] || ! (
     PATH="$scratch/bin:$PATH" LATEST_RELEASE="$scratch/latest" \
-      GITHUB_REPOSITORY=example/telimus TAG="$tag" \
+      GITHUB_REPOSITORY=example/trew TAG="$tag" \
       bash -euo pipefail "$scratch/publish.sh" > "$scratch/publish.log" 2>&1
   ); then
     fail "$job publication did not execute successfully"
@@ -166,9 +166,9 @@ done
 # generating one binary inside the checkout used to dirty the next three.
 echo "building attested server binaries:"
 fixture="$scratch/checkout"
-mkdir -p "$fixture/cmd/telimus"
+mkdir -p "$fixture/cmd/trew"
 printf 'module example.test/attest-fixture\n\ngo 1.22\n' > "$fixture/go.mod"
-cat > "$fixture/cmd/telimus/main.go" <<'GO'
+cat > "$fixture/cmd/trew/main.go" <<'GO'
 package main
 
 var version = "dev"
@@ -189,7 +189,7 @@ if [[ ! -s "$scratch/build.sh" ]] || ! (
   cat "$scratch/build.log" >&2
 else
   for target in linux-amd64 linux-arm64 darwin-arm64 darwin-amd64; do
-    binary="$fixture/attested/telimus-$target"
+    binary="$fixture/attested/trew-$target"
     if ! go version -m "$binary" > "$scratch/metadata" 2>&1; then
       fail "$target has no readable Go build metadata"
     elif ! grep -Fq "vcs.revision=$revision" "$scratch/metadata"; then

@@ -8,7 +8,7 @@
  *
  * That is not a small gap. `.obsidian/plugins/<any>/main.js` is executed by
  * Obsidian on the next reload, in a renderer with Node integration, so an
- * arbitrary write there is arbitrary code execution as the user. `.telimus/`
+ * arbitrary write there is arbitrary code execution as the user. `.trew/`
  * holds this client's own pairing secret and server URL, and `.git/hooks/` runs
  * on the next checkout.
  *
@@ -39,7 +39,7 @@ afterEach(async () => {
 });
 
 async function nodeVault(): Promise<NodeVault> {
-  const root = await mkdtemp(join(tmpdir(), "telimus-inbound-"));
+  const root = await mkdtemp(join(tmpdir(), "trew-inbound-"));
   made.push(root);
   return new NodeVault(root);
 }
@@ -50,10 +50,10 @@ const times = { mtime: 1_700_000_000_000, ctime: 1_700_000_000_000 };
 /** Paths no vault should ever be talked into touching. */
 const forbidden = [
   ".obsidian/plugins/dataview/main.js",
-  ".obsidian/plugins/telimus-sync/data.json",
+  ".obsidian/plugins/trew-sync/data.json",
   ".obsidian/app.json",
-  ".telimus/config.json",
-  ".telimus/index.json",
+  ".trew/config.json",
+  ".trew/index.json",
   ".git/hooks/post-checkout",
   ".trash/something.md",
 ];

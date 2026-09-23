@@ -95,7 +95,7 @@ function refuse(response: ServerResponse, status: number): void {
     return;
   }
   response.statusCode = status;
-  response.setHeader("WWW-Authenticate", 'Bearer realm="telimus"');
+  response.setHeader("WWW-Authenticate", 'Bearer realm="trew"');
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("X-Content-Type-Options", "nosniff");
   if (status === 429) response.setHeader("Retry-After", "1");

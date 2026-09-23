@@ -73,7 +73,7 @@ import type {
  * constant. The two are checked against each other by
  * `cli/config-dir.test.ts`, which is cheaper than the cycle.
  */
-const STATE_FOLDER = ".telimus";
+const STATE_FOLDER = ".trew";
 
 /**
  * Where a deletion arriving from another device goes, rather than away.
@@ -103,7 +103,7 @@ async function occupied(file: string): Promise<boolean> {
  * Names this client leaves alone on top of the rule in core/paths.ts.
  *
  * Every dot-prefixed segment is already refused there: the config folder,
- * `.telimus` (this client's own bookkeeping, and syncing it would sync the
+ * `.trew` (this client's own bookkeeping, and syncing it would sync the
  * index to itself), the trash, `.git`. What is left is the one name a headless
  * client meets that Obsidian does not.
  *
@@ -181,7 +181,7 @@ export interface NodeVaultOptions {
    * `list` is a scan and is not observational: it reaps the temporary files a
    * crashed run left behind, and it re-spells names into their normal form,
    * both of which are writes. That is right for a pass, which is going to
-   * write anyway and wants the vault tidy first. It is wrong for `telimus
+   * write anyway and wants the vault tidy first. It is wrong for `trew
    * status`, which takes no lock, may run beside a watcher, and is described
    * to people as a question rather than an action.
    *
@@ -384,7 +384,7 @@ export async function retireName(
   try {
     await link(spare, kept);
   } catch {
-    // `link` cannot cross a filesystem, and staging is `<root>/.telimus/tmp`,
+    // `link` cannot cross a filesystem, and staging is `<root>/.trew/tmp`,
     // which is a separate mount on any vault assembled out of several. The
     // copy is verified and refuses an occupied name, so it keeps both halves
     // of what `link` was chosen for.
@@ -465,7 +465,7 @@ async function freeSiblingName(full: string, why: string): Promise<string> {
  *
  * Module-level and shared, because the containment rule was on the vault
  * adapter and three writers were not going through it. The config, the index
- * and the lock all live under `.telimus`, and a `.telimus` that is a symlink out
+ * and the lock all live under `.trew`, and a `.trew` that is a symlink out
  * of the vault sent this device's recovery material somewhere else with
  * nothing said. One implementation, so the next writer added under there gets
  * the rule by using the same door.
@@ -561,7 +561,7 @@ export class NodeVault implements Vault {
       ...(opts.alsoIgnore ?? []).map((name) => this.normal(name)),
     ]);
     this.ledger = new DisplacedLedger(new NodeDisplacedFiles(this.root), (m) =>
-      console.warn(`telimus: ${m}`),
+      console.warn(`trew: ${m}`),
     );
   }
 
@@ -732,7 +732,7 @@ export class NodeVault implements Vault {
 
   /**
    * An agent can name a file no scan has seen. The ordinary read's cached
-   * directory check accepted an alias into .telimus, including after a folder
+   * directory check accepted an alias into .trew, including after a folder
    * changed to a link. Ask each segment afresh before following it, and keep
    * this lookup out of the engine's spelling caches.
    */
@@ -952,7 +952,7 @@ export class NodeVault implements Vault {
     // way in, so the two directions disagreed: a peer naming
     // `.obsidian/plugins/<any>/main.js` had it written, and Obsidian runs
     // that file on the next reload in a renderer with Node integration.
-    // `.telimus/config.json` holds this device's own secret and server URL,
+    // `.trew/config.json` holds this device's own secret and server URL,
     // and `.git/hooks/` runs on the next checkout.
     //
     // Then it was read on the way in for the first segment only, while
@@ -1006,11 +1006,11 @@ export class NodeVault implements Vault {
    * A vault-relative path in this vault's normal form, spelled the way the
    * disk has each segment.
    *
-   * The map used to be filled only by `list`, and `telimus restore` never
+   * The map used to be filled only by `list`, and `trew restore` never
    * calls `list` (R9). On a disk that keeps the two spellings apart that made
    * restore invisible to itself: the file was there under the disk's NFD
    * name, `exists` asked for the NFC one and was told no, restore wrote a
-   * second file, and the next `telimus sync` refused the whole vault with "two
+   * second file, and the next `trew sync` refused the whole vault with "two
    * files in this vault are the same path once normalized" until a person
    * renamed one of two names that look identical. So resolving a path asks
    * the disk when it has to, rather than depending on another call having
@@ -1296,7 +1296,7 @@ export class NodeVault implements Vault {
    * than one that was deleted, so the scan counts them and `status` says so.
    *
    * Two kinds end up here and they are in different places: what an
-   * interrupted normalisation parks in `.telimus/tmp`, and what a failed
+   * interrupted normalisation parks in `.trew/tmp`, and what a failed
    * preservation claim leaves beside the note it came from (R46). Both are
    * written the same way, relative to the vault root, because the only thing
    * anybody does with this list is go and look.
@@ -1326,7 +1326,7 @@ export class NodeVault implements Vault {
     // and is the only thing that tells anybody a preserved version is waiting.
     //
     // This walks a directory and deletes things in it, and it did so without
-    // ever asking whether the directory is inside the vault. A `.telimus/tmp`
+    // ever asking whether the directory is inside the vault. A `.trew/tmp`
     // that is a symlink somewhere else therefore had its contents deleted by
     // an ordinary scan: no race, no hostile process, just a filesystem laid
     // out in a way nobody checked. It is the most destructive loop in this
@@ -1353,7 +1353,7 @@ export class NodeVault implements Vault {
       if (!disposableTemp(name) && !liveTemps.has(join(this.staging, name))) {
         // Relative to the vault, like the ones the walk finds (R50). Two
         // conventions in one list is a list nothing can print: `status` said
-        // every entry was in `.telimus/tmp` because that used to be the only
+        // every entry was in `.trew/tmp` because that used to be the only
         // place they came from, and sent people to an empty directory for the
         // ones that are beside their note.
         this.stranded.push(relative(this.root, join(this.staging, name)));
@@ -1739,7 +1739,7 @@ export class NodeVault implements Vault {
    * `insideForReal`. Reading did not, and that was defensible while the only
    * caller was the engine: it reads paths its own `list` produced, and `list`
    * does not follow links. It stops being defensible as soon as a path
-   * arrives from somewhere that is not this device, and `telimus mcp` hands an
+   * arrives from somewhere that is not this device, and `trew mcp` hands an
    * agent's path straight to the adapter.
    *
    * Two different holes, so two different answers. An ancestor that is a link
@@ -1748,7 +1748,7 @@ export class NodeVault implements Vault {
    * the note should be goes straight through it.
    *
    * The leaf is refused rather than resolved, because resolving it is not
-   * enough either. A link inside the vault pointing at `.telimus/config.json`
+   * enough either. A link inside the vault pointing at `.trew/config.json`
    * resolves to a path under the root, so a containment test would pass it
    * and hand over the device credential. `list` omits links and `stat`
    * lstats deliberately, so a link is already not a note anywhere else here;
@@ -1878,7 +1878,7 @@ export class NodeVault implements Vault {
    * (F24).
    *
    * Note destinations were validated and the internal directories were not,
-   * so a `.telimus` that is a link somewhere else staged every note this
+   * so a `.trew` that is a link somewhere else staged every note this
    * device wrote outside the vault, in plaintext, on the way in. Checked once
    * and remembered: it is the same path for the life of the process, and
    * asking `realpath` per write would be a syscall on the hot path for an
@@ -2005,7 +2005,7 @@ export class NodeVault implements Vault {
       // On the destination's filesystem, decided before the original moves
       // (R37).
       //
-      // `link` cannot cross a filesystem, and `.telimus/tmp` is a separate
+      // `link` cannot cross a filesystem, and `.trew/tmp` is a separate
       // mount on any vault assembled out of several. The old order staged
       // there, moved the note aside, and only then found out: the note's own
       // name was empty, the bytes were at a conflict path, and the incoming
@@ -2351,7 +2351,7 @@ export class NodeVault implements Vault {
     // The source's parents were validated and the trash path was then built
     // and used without the same question being asked of it. A `.trash` that
     // is a symlink out of the vault therefore moved notes outside it, which
-    // is the deletion path quietly becoming an export. `.telimus` and the
+    // is the deletion path quietly becoming an export. `.trew` and the
     // staging directory get the same treatment where they are made.
     await this.insideForReal(target);
     const had = await this.deepestExisting(target);
@@ -2445,8 +2445,8 @@ export class NodeVault implements Vault {
    * the worst one.
    *
    * In the vault root, which is the one directory that is always already
-   * there. It used to make `.telimus/` on the way, and every command goes
-   * through here: `telimus status` reads and prints and should leave nothing
+   * there. It used to make `.trew/` on the way, and every command goes
+   * through here: `trew status` reads and prints and should leave nothing
    * behind, and on a read-only mount the mkdir was a failure where there had
    * been none (R9). The name is dot-prefixed, so both clients pass over it by
    * the dot rule for the moment it exists, and carries the pid so two runs
@@ -2457,11 +2457,11 @@ export class NodeVault implements Vault {
    */
   probeCase(): Promise<void> {
     return (this.probed ??= (async () => {
-      const probe = join(this.root, `.telimus-CaseProbe-${process.pid}`);
+      const probe = join(this.root, `.trew-CaseProbe-${process.pid}`);
       try {
         await (await open(probe, "wx")).close();
         try {
-          await access(join(this.root, `.telimus-caseprobe-${process.pid}`), constants.F_OK);
+          await access(join(this.root, `.trew-caseprobe-${process.pid}`), constants.F_OK);
           this.foldsCaseSync = true;
         } catch {
           this.foldsCaseSync = false;
@@ -2489,7 +2489,7 @@ export class NodeVault implements Vault {
     await this.insideForReal(full);
     // The staging directory too (R11). `write` checks it and this did not, so
     // the one write that must not clobber anything staged its bytes through a
-    // directory nothing had asked about: a `.telimus/tmp` that is a link out of
+    // directory nothing had asked about: a `.trew/tmp` that is a link out of
     // the vault put a conflict copy's contents outside it on the way past.
     await this.checkStaging();
     const had = await this.deepestExisting(full);
@@ -2667,7 +2667,7 @@ export class JsonIndexStore implements IndexStore {
       // Loud by default, and on stderr, because everything this reports is a
       // thing the person running the client would want to know about their
       // index. A caller with somewhere better to put it passes one in.
-      log: (message: string, ...rest: unknown[]) => console.warn(`telimus: ${message}`, ...rest),
+      log: (message: string, ...rest: unknown[]) => console.warn(`trew: ${message}`, ...rest),
       ...opts,
     });
   }
@@ -2802,7 +2802,7 @@ async function read(path: string, what: string): Promise<string | undefined> {
  *
  * A vault is somebody's own directory and they can name a file whatever they
  * like, so the suffix alone is not enough: the temp name used to be exactly
- * `<file>.telimus-tmp`, and a real attachment sitting at that path would be
+ * `<file>.trew-tmp`, and a real attachment sitting at that path would be
  * overwritten by the next write of `<file>` and then renamed away. Unique names
  * make that a coincidence rather than a certainty, and creating them
  * exclusively makes it impossible.
@@ -2813,7 +2813,7 @@ async function read(path: string, what: string): Promise<string | undefined> {
  * the destination is on another filesystem and a rename from the staging
  * folder would not work.
  */
-export const TEMP_MARK = ".telimus-tmp-";
+export const TEMP_MARK = ".trew-tmp-";
 
 /**
  * The one staged name the reaper may delete (R21, R35).
@@ -2880,14 +2880,14 @@ export const STALE_TEMP_MS = 60 * 60 * 1000;
 /**
  * Whether a directory entry is one of this client's temporary files.
  *
- * Exactly, not by containing the marker. `notes.telimus-tmp-1.md` is a note
+ * Exactly, not by containing the marker. `notes.trew-tmp-1.md` is a note
  * with an odd name, and it used to vanish from the listing for the life of the
  * vault. A temporary of ours ends with the marker and its counter and nothing
  * after, and while it is being written this process knows its full path.
  */
 export function isTemporary(name: string, full?: string): boolean {
   if (full !== undefined && liveTemps.has(full)) return true;
-  return /\.telimus-tmp-[0-9a-z]+(-\d+)?$/.test(name);
+  return /\.trew-tmp-[0-9a-z]+(-\d+)?$/.test(name);
 }
 
 let tempCounter = 0;
@@ -3165,7 +3165,7 @@ async function removeMatching(source: string, target: string): Promise<string[]>
     // it does not it is put back where it came from.
     // A name of its own for every attempt (R36).
     //
-    // It used to be the one fixed `<source>..telimus-tmp-moving`. When the walk
+    // It used to be the one fixed `<source>..trew-tmp-moving`. When the walk
     // cannot put a displaced version back it leaves it at that name and
     // reports the move as incomplete, and the retry a person then runs renamed
     // the next file straight onto it: `rename` replaces, so attempt two
@@ -3386,7 +3386,7 @@ export async function syncDirectoryIfSupported(
 /**
  * The displaced-version log, on a Node filesystem.
  *
- * Beside the index in `.telimus`, under the name both shells use, so that a
+ * Beside the index in `.trew`, under the name both shells use, so that a
  * support answer can say where it is without asking which client wrote it.
  */
 class NodeDisplacedFiles implements DisplacedFiles {

@@ -122,7 +122,7 @@ export async function expecting(body: string): Promise<ExpectedContent> {
 /**
  * Every file in the vault, including the places a version is parked.
  *
- * `.telimus` and `.trash` are walked, unlike the harness's `fingerprint`, and
+ * `.trew` and `.trash` are walked, unlike the harness's `fingerprint`, and
  * that is the point: the whole question is whether a displaced version reached
  * one of them.
  */
@@ -161,7 +161,7 @@ async function everything(dir: string): Promise<Map<string, string>> {
  * bury the seam that actually broke.
  */
 export async function permute(scenario: Scenario, it: Seam): Promise<Outcome> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-faults-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-faults-"));
   const faults: string[] = [];
   let refused: string | undefined;
   let fired = false;
@@ -225,9 +225,9 @@ export async function permute(scenario: Scenario, it: Seam): Promise<Outcome> {
 
     const findable = holding.some((at) => {
       // At a name a listing shows: the note's own path, or a conflict copy.
-      // Anything under `.telimus` is this client's own bookkeeping and is only
+      // Anything under `.trew` is this client's own bookkeeping and is only
       // findable if something says where it is.
-      if (!at.startsWith(".telimus/") && !isParked(at)) return true;
+      if (!at.startsWith(".trew/") && !isParked(at)) return true;
       return reported.has(at);
     });
     if (!findable) {
@@ -245,7 +245,7 @@ export async function permute(scenario: Scenario, it: Seam): Promise<Outcome> {
 
 /** Whether a path is one of the marks preservation parks a version under. */
 function isParked(at: string): boolean {
-  return at.includes(".telimus-tmp-");
+  return at.includes(".trew-tmp-");
 }
 
 /**
@@ -275,14 +275,14 @@ export function losses(outcomes: readonly Outcome[]): string[] {
  * a `finally` is skipped by a SIGKILL, and no test had ever skipped one.
  *
  * What is checked afterwards is checked by a *new* vault object on the same
- * directory, because that is what the next `telimus sync` is: the question is
+ * directory, because that is what the next `trew sync` is: the question is
  * not what the dead process knew but what its successor can find.
  */
 export async function crashSweep(scenario: Scenario, seamName: string): Promise<Outcome> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-crash-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-crash-"));
   // Outside the vault, so the vault's own walk never sees it and so a killed
   // child can still leave a mark. See `faults-child.ts`.
-  const signals = await mkdtemp(join(tmpdir(), "telimus-crash-signal-"));
+  const signals = await mkdtemp(join(tmpdir(), "trew-crash-signal-"));
   const faults: string[] = [];
   const token = `interloper-${Math.random().toString(36).slice(2, 10)}`;
   try {
@@ -373,7 +373,7 @@ export async function crashSweep(scenario: Scenario, seamName: string): Promise<
         continue;
       }
       const findable = holding.some(
-        (at) => (!at.startsWith(".telimus/") && !isParked(at)) || reported.has(at),
+        (at) => (!at.startsWith(".trew/") && !isParked(at)) || reported.has(at),
       );
       if (!findable) {
         faults.push(

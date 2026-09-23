@@ -21,7 +21,7 @@ import { deferred, within } from "../core/test-async.ts";
 let root: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "telimus-vault-"));
+  root = await mkdtemp(join(tmpdir(), "trew-vault-"));
 });
 
 afterEach(async () => {
@@ -86,9 +86,9 @@ describe("listing", () => {
   });
 
   it("leaves the directories that must never sync alone", async () => {
-    // Plugin and settings sync is refused, and .telimus is this client's own
+    // Plugin and settings sync is refused, and .trew is this client's own
     // bookkeeping: syncing it would sync the index to itself.
-    for (const dir of [".obsidian", ".telimus", ".git", ".trash", "node_modules"]) {
+    for (const dir of [".obsidian", ".trew", ".git", ".trash", "node_modules"]) {
       await mkdir(join(root, dir), { recursive: true });
       await writeFile(join(root, dir, "inside.md"), "x");
     }
@@ -110,7 +110,7 @@ describe("listing", () => {
   it("does not follow a symlink out of the vault", async () => {
     // Following one would sync a file that is not in the vault, and copying
     // it as a link would sync a path that means nothing anywhere else.
-    const outside = await mkdtemp(join(tmpdir(), "telimus-outside-"));
+    const outside = await mkdtemp(join(tmpdir(), "trew-outside-"));
     try {
       await writeFile(join(outside, "secret.md"), "not yours");
       await symlink(outside, join(root, "linked"));
@@ -346,9 +346,9 @@ describe("what this disk files a name under", () => {
   });
 
   /**
-   * R9. Every command asks this at startup, `telimus status` included, and a
+   * R9. Every command asks this at startup, `trew status` included, and a
    * command that only reads must leave the vault as it found it: the probe
-   * used to make `.telimus/` on its way, which is a write into somebody's
+   * used to make `.trew/` on its way, which is a write into somebody's
    * vault to print two lines and a failure on a read-only mount.
    */
   it("leaves nothing behind in the vault, not even a folder (R9)", async () => {
@@ -358,7 +358,7 @@ describe("what this disk files a name under", () => {
   });
 
   it("keeps the safe default when the vault cannot be written to (R9)", async () => {
-    const readOnly = await mkdtemp(join(tmpdir(), "telimus-ro-"));
+    const readOnly = await mkdtemp(join(tmpdir(), "trew-ro-"));
     await chmod(readOnly, 0o555);
     try {
       const v = new NodeVault(readOnly);
@@ -383,13 +383,13 @@ describe("the index on disk", () => {
   });
 
   it("round trips", async () => {
-    const store = new JsonIndexStore(join(root, ".telimus", "index.json"));
+    const store = new JsonIndexStore(join(root, ".trew", "index.json"));
     await store.save(state(7));
     expect(await store.load()).toEqual(state(7));
   });
 
   it("reports nothing when there is nothing yet", async () => {
-    const store = new JsonIndexStore(join(root, ".telimus", "index.json"));
+    const store = new JsonIndexStore(join(root, ".trew", "index.json"));
     expect(await store.load()).toBeUndefined();
   });
 
@@ -399,7 +399,7 @@ describe("the index on disk", () => {
    * so both halves have to be true: the same string, and a file still there.
    */
   it("does not write an index it has just read, and does write one that has gone", async () => {
-    const file = join(root, ".telimus", "index.json");
+    const file = join(root, ".trew", "index.json");
     await new JsonIndexStore(file).save(state(7));
 
     // A restart over a settled vault: the first pass produces the state that
@@ -428,7 +428,7 @@ describe("the index on disk", () => {
    * rest of the session. Both stores now share `LastIndexWrite` in core.
    */
   it("writes again when the index has been overwritten in place (R3)", async () => {
-    const file = join(root, ".telimus", "index.json");
+    const file = join(root, ".trew", "index.json");
     const store = new JsonIndexStore(file);
     await store.save(state(7));
 
@@ -441,7 +441,7 @@ describe("the index on disk", () => {
   });
 
   it("writes again when a same-size overwrite lands under it (R3)", async () => {
-    const file = join(root, ".telimus", "index.json");
+    const file = join(root, ".trew", "index.json");
     const store = new JsonIndexStore(file);
     await store.save(state(7));
 
@@ -582,7 +582,7 @@ describe("deleting, which must be recoverable", () => {
  */
 describe("writing durably", () => {
   it("leaves the destination correct and no temporary files behind", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "telimus-durable-"));
+    const dir = await mkdtemp(join(tmpdir(), "trew-durable-"));
     try {
       const at = join(dir, "note.md");
       await writeDurably(at, new TextEncoder().encode("the contents"));
@@ -596,16 +596,16 @@ describe("writing durably", () => {
   });
 
   // A vault is somebody's own directory and they can name a file anything.
-  // The temp name used to be exactly `<file>.telimus-tmp`, so a real note at
+  // The temp name used to be exactly `<file>.trew-tmp`, so a real note at
   // that path was truncated by the next write of `<file>` and then renamed
   // out of existence: two of somebody's files destroyed by a write to a
   // third. The property is broader than that one name, so the test is too.
   it("touches nothing in the directory except the file it was asked to write", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "telimus-durable-"));
+    const dir = await mkdtemp(join(tmpdir(), "trew-durable-"));
     try {
       const bystanders: Record<string, string> = {
-        "note.md.telimus-tmp": "the name this client used to use",
-        "note.md.telimus-tmp-0": "and the shape it uses now",
+        "note.md.trew-tmp": "the name this client used to use",
+        "note.md.trew-tmp-0": "and the shape it uses now",
         "note.md.backup": "somebody's own copy",
         "note.md": "the old contents",
         "other.md": "an unrelated note",
@@ -627,7 +627,7 @@ describe("writing durably", () => {
   });
 
   it("keeps a write in flight out of the listing", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "telimus-durable-"));
+    const dir = await mkdtemp(join(tmpdir(), "trew-durable-"));
     try {
       await writeFile(join(dir, "real.md"), "a note");
       await writeFile(join(dir, `real.md${TEMP_MARK}7`), "half a note");
@@ -658,7 +658,7 @@ describe("reading a file in blocks and in ranges", () => {
   };
 
   it("streams exactly what reading it whole would give", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "telimus-stream-"));
+    const dir = await mkdtemp(join(tmpdir(), "trew-stream-"));
     try {
       const bytes = body(700_000);
       await writeFile(join(dir, "big.bin"), bytes);
@@ -683,7 +683,7 @@ describe("reading a file in blocks and in ranges", () => {
   // The block buffer is reused, so a generator yielding views rather than
   // copies would hand out blocks that are rewritten before they are used.
   it("gives blocks that survive the next block being read", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "telimus-stream-"));
+    const dir = await mkdtemp(join(tmpdir(), "trew-stream-"));
     try {
       await writeFile(join(dir, "big.bin"), body(400_000));
       const vault = new NodeVault(dir);
@@ -703,7 +703,7 @@ describe("reading a file in blocks and in ranges", () => {
   });
 
   it("reads a range, and reports a short one rather than padding it", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "telimus-stream-"));
+    const dir = await mkdtemp(join(tmpdir(), "trew-stream-"));
     try {
       const bytes = body(10_000);
       await writeFile(join(dir, "big.bin"), bytes);
@@ -766,7 +766,7 @@ describe("a symlinked folder is not a way out of the vault", () => {
    * then built from it and used without the same question being asked, so a
    * `.trash` that is a link out of the vault turned the deletion path into
    * an export: notes moved outside, in plaintext, by a sync doing what it
-   * was told. `.telimus`, where every write is staged, is the same shape
+   * was told. `.trew`, where every write is staged, is the same shape
    * one step earlier.
    */
   it("refuses to move a note into a trash that leaves the vault", async () => {
@@ -789,7 +789,7 @@ describe("a symlinked folder is not a way out of the vault", () => {
     const { symlink, mkdir: mkdirp, readdir: rd } = await import("node:fs/promises");
     const outside = join(root, "..", `outside-state-${Date.now()}`);
     await mkdirp(outside, { recursive: true });
-    await symlink(outside, join(root, ".telimus"));
+    await symlink(outside, join(root, ".trew"));
 
     const vault = new NodeVault(root);
     await expect(
@@ -834,7 +834,7 @@ describe("the index is not rewritten when it has not changed", () => {
   const state = { cursor: 7, entries: {}, remote: {}, pending: [] } as never;
 
   it("leaves the file alone on an identical save", async () => {
-    const file = join(root, ".telimus", "index.json");
+    const file = join(root, ".trew", "index.json");
     const store = new JsonIndexStore(file);
     await store.save(state);
     const first = await stat(file);
@@ -850,8 +850,8 @@ describe("the index is not rewritten when it has not changed", () => {
     // The whole point of the journal: an ordinary pass costs one record, not a
     // rewrite of the index. The snapshot not moving is the property; the state
     // coming back is what makes that safe rather than a silent loss.
-    const file = join(root, ".telimus", "index2.json");
-    const log = join(root, ".telimus", "index2.log");
+    const file = join(root, ".trew", "index2.json");
+    const log = join(root, ".trew", "index2.log");
     const store = new JsonIndexStore(file);
     await store.save(state);
     const first = await stat(file);
@@ -919,7 +919,7 @@ describe("symlinks in the listing", () => {
   });
 
   it("writing over a link replaces the link and leaves what it pointed at alone", async () => {
-    const outside = await mkdtemp(join(tmpdir(), "telimus-target-"));
+    const outside = await mkdtemp(join(tmpdir(), "trew-target-"));
     try {
       const target = join(outside, "target.md");
       await writeFile(target, "the target's own text\n");
@@ -962,7 +962,7 @@ describe("an --ignore spelled the way a Mac shell spells it", () => {
     ["a typed spelling (NFC)", nfcName],
   ] as const) {
     it(`keeps the folder off the server when --ignore uses ${how}`, async () => {
-      const root = await mkdtemp(join(tmpdir(), "telimus-ignore-nfc-"));
+      const root = await mkdtemp(join(tmpdir(), "trew-ignore-nfc-"));
       await mkdir(join(root, nfdName), { recursive: true });
       await writeFile(join(root, nfdName, "private.md"), "not for the server");
       await writeFile(join(root, "shared.md"), "fine");

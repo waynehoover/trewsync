@@ -40,9 +40,9 @@ const loops: Promise<Error>[] = [];
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const samples: Record<string, number[]> = {};
 const passes: Record<string, number> = {};
-const baselineNotes = Number(process.env["TELIMUS_BENCH_NOTES"] ?? 0);
-const clientCount = Number(process.env["TELIMUS_BENCH_CLIENTS"] ?? 2);
-const sampleCount = Number(process.env["TELIMUS_BENCH_SAMPLES"] ?? 5);
+const baselineNotes = Number(process.env["TREW_BENCH_NOTES"] ?? 0);
+const clientCount = Number(process.env["TREW_BENCH_CLIENTS"] ?? 2);
+const sampleCount = Number(process.env["TREW_BENCH_SAMPLES"] ?? 5);
 if (
   !Number.isSafeInteger(clientCount) ||
   clientCount < 2 ||
@@ -52,10 +52,10 @@ if (
   sampleCount > 100
 )
   throw new Error("Invalid benchmark client or sample count");
-const prioritizeActive = process.env["TELIMUS_BENCH_PRIORITY"] !== "0";
+const prioritizeActive = process.env["TREW_BENCH_PRIORITY"] !== "0";
 let activePath: string | undefined;
 if (!Number.isSafeInteger(baselineNotes) || baselineNotes < 0)
-  throw new Error("Invalid TELIMUS_BENCH_NOTES");
+  throw new Error("Invalid TREW_BENCH_NOTES");
 try {
   await server.start();
   const secret = new Uint8Array(32).fill(95);
@@ -166,7 +166,7 @@ try {
       {
         commit: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
         dirty: execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).length > 0,
-        variant: process.env["TELIMUS_BENCH_VARIANT"] ?? "current",
+        variant: process.env["TREW_BENCH_VARIANT"] ?? "current",
         runtime: execFileSync(process.execPath, ["--version"], { encoding: "utf8" }).trim(),
         hardware: `${platform()} ${arch()} ${cpus()[0]?.model ?? "unknown"}`,
         environment:

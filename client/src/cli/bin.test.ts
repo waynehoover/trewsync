@@ -19,12 +19,12 @@ afterEach(async () => {
 
 it("the packaged entrypoint flushes a large JSON preview before exiting through a pipe", async () => {
   vi.spyOn(console, "info").mockImplementation(() => undefined);
-  const buildDir = await mkdtemp(join(tmpdir(), "telimus-bin-output-"));
+  const buildDir = await mkdtemp(join(tmpdir(), "trew-bin-output-"));
   dirs.push(buildDir);
   const bundle = await buildMcp(buildDir);
   server = new TestServer();
   await server.start();
-  const vault = await mkdtemp(join(tmpdir(), "telimus-bin-vault-"));
+  const vault = await mkdtemp(join(tmpdir(), "trew-bin-vault-"));
   dirs.push(vault);
   const init = await run(["init", server.setup, "--dir", vault], { out: () => {}, err: () => {} });
   expect(init).toBe(0);

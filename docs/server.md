@@ -1,4 +1,4 @@
-# Set up your Telimus server
+# Set up your Trew server
 
 [Documentation](index.md) · [Maintenance](server-operations.md) · [Command reference](server-reference.md)
 
@@ -6,8 +6,8 @@ Run one server for your personal vault, then connect your devices through the
 Obsidian plugin. The server stores encrypted notes and history; you provide
 storage, a secure connection, and backups.
 
-**Put Tailscale Serve or an HTTPS reverse proxy in front of Telimus.** Your devices
-connect to the proxy; Telimus's own port stays private. For a personal homelab,
+**Put Tailscale Serve or an HTTPS reverse proxy in front of Trew.** Your devices
+connect to the proxy; Trew's own port stays private. For a personal homelab,
 we recommend [Tailscale Serve](#tailscale-recommended). If you already use a domain
 and an HTTPS proxy, [use that instead](#caddy).
 
@@ -21,10 +21,10 @@ route. Keep the data directory off NFS, SMB, and other network filesystems.
 From a copy of this repository:
 
 ```bash
-git clone https://github.com/waynehoover/telimus.git
-cd telimus-sync
+git clone https://github.com/waynehoover/trew.git
+cd trew-sync
 docker compose up -d
-docker compose logs telimus
+docker compose logs trew
 ```
 
 The included [compose.yaml](../compose.yaml) pins a server image and its digest,
@@ -34,10 +34,10 @@ loopback interface.
 For a quick trial without cloning:
 
 ```bash
-docker run -d --name telimus --restart unless-stopped --stop-timeout 30 \
-  -p 127.0.0.1:3003:3003 -v telimus-data:/data \
-  ghcr.io/waynehoover/telimus:latest
-docker logs telimus
+docker run -d --name trew --restart unless-stopped --stop-timeout 30 \
+  -p 127.0.0.1:3003:3003 -v trew-data:/data \
+  ghcr.io/waynehoover/trew:latest
+docker logs trew
 ```
 
 Use the pinned Compose setup for a server you keep. Next, configure
@@ -51,22 +51,22 @@ removing it removes the server's notes and history.
 ### A binary
 
 Download the matching binary from a
-[server release](https://github.com/waynehoover/telimus/releases?q=server):
+[server release](https://github.com/waynehoover/trew/releases?q=server):
 Linux amd64/arm64 or macOS amd64/arm64. Make it executable and run it with a
 writable data directory:
 
 ```bash
-chmod +x telimus-linux-amd64
-./telimus-linux-amd64 serve -data ./telimus-data -addr 127.0.0.1:3003
+chmod +x trew-linux-amd64
+./trew-linux-amd64 serve -data ./trew-data -addr 127.0.0.1:3003
 ```
 
 Use your downloaded filename on macOS. For a persistent Linux service, install
-the binary as `/usr/local/bin/telimus`, create a dedicated `telimus` account and
-writable `/var/lib/telimus` directory, then run:
+the binary as `/usr/local/bin/trew`, create a dedicated `trew` account and
+writable `/var/lib/trew` directory, then run:
 
 ```bash
-telimus service -data /var/lib/telimus -addr 127.0.0.1:3003 \
-  -user telimus -binary /usr/local/bin/telimus
+trew service -data /var/lib/trew -addr 127.0.0.1:3003 \
+  -user trew -binary /usr/local/bin/trew
 ```
 
 This prints a systemd unit and installation commands; review and follow them.
@@ -75,17 +75,17 @@ handling and a 30-second shutdown allowance.
 
 ## Secure access
 
-Telimus does not provide HTTPS itself. Tailscale Serve or your reverse proxy
+Trew does not provide HTTPS itself. Tailscale Serve or your reverse proxy
 provides the secure connection:
 
-**Your devices → Tailscale Serve or HTTPS proxy → Telimus**
+**Your devices → Tailscale Serve or HTTPS proxy → Trew**
 
 Use the proxy's `wss://` address in the plugin. Keep the raw server port private;
 note encryption does not protect device credentials sent over plain `ws://`.
 
 ### Tailscale (recommended)
 
-This keeps Telimus accessible only to devices allowed on your Tailscale network,
+This keeps Trew accessible only to devices allowed on your Tailscale network,
 without a public domain or router port forwarding. Install and connect Tailscale
 on the server and each device, including your phone.
 
@@ -95,7 +95,7 @@ On the server, check for existing routes first:
 tailscale serve status
 ```
 
-If the default HTTPS address is free, publish Telimus there:
+If the default HTTPS address is free, publish Trew there:
 
 ```bash
 tailscale serve --bg 3003
@@ -109,13 +109,13 @@ access. See [Tailscale's Serve guide](https://tailscale.com/docs/reference/tails
 
 If another app already uses that address, choose a free HTTPS port with
 `tailscale serve --bg --https=8443 3003`, and include `:8443` in the plugin's
-address. The final `3003` is Telimus's internal port, not the port you necessarily
+address. The final `3003` is Trew's internal port, not the port you necessarily
 enter on your phone.
 
 ### Caddy
 
 For an internet-accessible endpoint, point a domain to your server and let Caddy
-handle HTTPS. With Caddy running on the same host as Telimus, use:
+handle HTTPS. With Caddy running on the same host as Trew, use:
 
 ```caddyfile
 sync.example.org {
@@ -128,11 +128,11 @@ Reload Caddy and use `wss://sync.example.org`. The usual Caddy setup needs ports
 Caddy handles WebSockets automatically. See [Caddy's reverse-proxy guide](https://caddyserver.com/docs/quick-starts/reverse-proxy).
 
 An existing proxy is fine too: it must provide a trusted HTTPS certificate and
-support WebSockets. If the proxy runs in Docker, connect it to Telimus over a
+support WebSockets. If the proxy runs in Docker, connect it to Trew over a
 private Docker network; `127.0.0.1` inside the proxy container refers to that
 container, not the host.
 
-For a test entirely on one machine, `telimus serve -localhost` provides a
+For a test entirely on one machine, `trew serve -localhost` provides a
 loopback `ws://` address. The first-device token is still required.
 
 ## The first device
@@ -145,7 +145,7 @@ wss://homelab.example.ts.net#TOKEN
 ```
 
 1. [Install the plugin](plugin.md#install) on your first device.
-2. Open Telimus, paste the setup string into **Invite or setup line**, and press
+2. Open Trew, paste the setup string into **Invite or setup line**, and press
    **Start a new vault**.
 3. Save the recovery key somewhere safe and separate, then press
    **I have written it down**.
@@ -156,8 +156,8 @@ wss://homelab.example.ts.net#TOKEN
 The setup token claims the server once. It is not your recovery key. Once the
 vault is claimed, new devices join through invites or the recovery key.
 
-Find the startup log with `docker compose logs telimus`, `docker logs telimus`,
-or `journalctl -u telimus`, depending on how you installed it.
+Find the startup log with `docker compose logs trew`, `docker logs trew`,
+or `journalctl -u trew`, depending on how you installed it.
 
 ## Check your setup
 
@@ -168,12 +168,12 @@ Open version history to confirm you can find the earlier version.
 For the server itself:
 
 ```bash
-docker compose exec telimus /telimus health
-docker compose exec telimus /telimus stats
+docker compose exec trew /trew health
+docker compose exec trew /trew stats
 ```
 
-With a binary installation, use `telimus health` and
-`telimus stats -data /path/to/telimus-data`.
+With a binary installation, use `trew health` and
+`trew stats -data /path/to/trew-data`.
 
 Before relying on the service, set up
 [backups and a restore rehearsal](server-operations.md#backup). History grows
@@ -196,7 +196,7 @@ release, then run `docker compose pull` and `docker compose up -d`. Preserve
 the data volume and any customized flags, especially the file-size limit.
 Never use `docker compose down -v` to upgrade.
 
-Use `telimus version` to check the server build and the plugin panel to check
+Use `trew version` to check the server build and the plugin panel to check
 what each device connected to. The [protocol reference](protocol.md) describes
 the version used by this source tree.
 
@@ -210,7 +210,7 @@ wss://homelab.example.ts.net#TOKEN#work
 ```
 
 Paste that whole line into the plugin under **Start a new vault**, or give it to
-`telimus init`. The panel shows which vault and which server the line claims
+`trew init`. The panel shows which vault and which server the line claims
 before you press the button. Other devices learn the name from the invite, so
 they need nothing extra.
 

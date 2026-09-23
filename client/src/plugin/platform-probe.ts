@@ -1,5 +1,5 @@
 /**
- * A self-check of this device's filesystem against the rules Telimus syncs by.
+ * A self-check of this device's filesystem against the rules Trew syncs by.
  *
  * Adapted from LiteSync's platform probe (github.com/KJoner/litesync,
  * src/diagnostics/platform-probe.ts, MIT licence, copyright 2026 KJoner). Its
@@ -68,7 +68,7 @@ export interface ProbeOptions {
   readonly nonce?: string;
 }
 
-const MARKER = new TextEncoder().encode("telimus-probe");
+const MARKER = new TextEncoder().encode("trew-probe");
 
 async function remove(adapter: DataAdapter, path: string): Promise<void> {
   try {
@@ -290,7 +290,7 @@ export async function runPlatformProbe(opts: ProbeOptions): Promise<ProbeReport>
 export function renderProbeReport(report: ProbeReport): string {
   const yes = (b: boolean) => (b ? "yes" : "no");
   const lines = [
-    "# Telimus platform self-check",
+    "# Trew platform self-check",
     "",
     `- Device: **${report.platform}**`,
     `- Obsidian: ${report.appVersion}`,
