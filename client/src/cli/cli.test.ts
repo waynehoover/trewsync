@@ -34,6 +34,7 @@ import {
 import type { SyncReport } from "../core/engine.ts";
 import { loadConfig, saveConfig } from "./config.ts";
 import {
+  asTyped,
   deviceNameFor,
   run,
   exitCodeFor,
@@ -1660,6 +1661,14 @@ describe("the device list", () => {
    * as an option. Ids made here no longer do, and `--` says "the next word is
    * a word" for the ones that arrive from anywhere else.
    */
+  it("prints an id that looks like an option after --, so it can be copied as printed", () => {
+    expect(asTyped("-not-a-real-id")).toBe("-- -not-a-real-id");
+    expect(asTyped("PudXvjePIw")).toBe("PudXvjePIw");
+    // And what it prints is what the parser reads as the one argument.
+    const parsed = parseArgs(["uninvite", "--dir", "/tmp/x", ...asTyped("-Xy").split(" ")]);
+    expect(parsed.rest).toEqual(["-Xy"]);
+  });
+
   it("takes a device id that looks like an option, after --", async () => {
     await fresh();
     const { a } = await twoDevices();
@@ -1778,7 +1787,9 @@ describe("the device list", () => {
     // Cancelled, and the string stops working, which is the point of seeing
     // it in the first place.
     const id = row["id"] as string;
-    const cancelled = await cli("uninvite", id, "--dir", a);
+    // After `--`, because an id from the server is base64url and may begin
+    // with a dash, which would read as an option (see asTyped).
+    const cancelled = await cli("uninvite", "--dir", a, "--", id);
     expect(cancelled.code, cancelled.all).toBe(0);
     expect(cancelled.stdout).toMatch(/no longer adds a device/);
 
@@ -1792,7 +1803,7 @@ describe("the device list", () => {
     // And cancelling it twice says there is nothing to cancel, in one answer
     // that an unknown identifier also gets: telling them apart would tell
     // somebody guessing that they had found a real one.
-    const again = await cli("uninvite", id, "--dir", a);
+    const again = await cli("uninvite", "--dir", a, "--", id);
     expect(again.code).toBe(1);
     expect(again.all).toMatch(/no outstanding invite/);
     expect(again.all).toMatch(/trew devices/);

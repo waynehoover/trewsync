@@ -491,7 +491,7 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
     io.out(`Paired ${args.dir} with ${paired.url} as "${paired.device}". Run trew sync.`);
     io.out(
       `This device has its own credential, and nothing else here opens the vault: ` +
-        `trew revoke ${paired.deviceId} on any device stops it connecting.`,
+        `trew revoke ${asTyped(paired.deviceId!)} on any device stops it connecting.`,
     );
   }
   return 0;
@@ -621,8 +621,8 @@ async function cmdInvite(args: Args, io: Console): Promise<number> {
   io.out(`Paste it into trew pair, or into the Trew panel, on the new device.`);
   io.out(
     issued.expiresAt === null
-      ? `It works once and does not expire. trew uninvite ${issued.id} cancels it.`
-      : `It works once, until ${when(issued.expiresAt)}. trew uninvite ${issued.id} cancels it ` +
+      ? `It works once and does not expire. trew uninvite ${asTyped(issued.id)} cancels it.`
+      : `It works once, until ${when(issued.expiresAt)}. trew uninvite ${asTyped(issued.id)} cancels it ` +
           `sooner.`,
   );
   return 0;
@@ -1942,14 +1942,14 @@ async function cmdUnlink(args: Args, io: Console): Promise<number> {
     io.out(
       `The pairing here had not finished. If the server registered it, the vault's device list ` +
         `has a row ${config.deviceId} that has never connected, and nothing here can remove it ` +
-        `now: run trew revoke ${config.deviceId} on a device that still syncs.`,
+        `now: run trew revoke ${asTyped(config.deviceId)} on a device that still syncs.`,
     );
   } else if (config?.deviceId !== undefined) {
     io.out("");
     io.out(
       `This device is still in the vault's device list as ${config.deviceId}. Nothing here can ` +
         `remove it now, because the credential for it has just been forgotten: run ` +
-        `trew revoke ${config.deviceId} on a device that still syncs.`,
+        `trew revoke ${asTyped(config.deviceId)} on a device that still syncs.`,
     );
   }
   return 0;
@@ -2417,6 +2417,19 @@ async function mustLoad(dir: string): Promise<Config> {
   if (!config) throw new Error(notPaired(dir));
   if (isPendingPairing(config)) throw new NoCredential(unfinishedPairing(dir));
   return config;
+}
+
+/**
+ * An id as it has to be typed after a command.
+ *
+ * Base64url's alphabet includes `-`, and an id beginning with one is read as
+ * an option: `trew uninvite -Xy...` was refused with "no such option". Ids this
+ * client and the server make avoid a leading dash, and one from anywhere else
+ * still can have one, so a command printed for a person to copy puts `--`
+ * before it, which is what every word after it being a word means.
+ */
+export function asTyped(id: string): string {
+  return id.startsWith("-") ? `-- ${id}` : id;
 }
 
 /** What every command says in a vault that is not paired, with the way to pair it. */
