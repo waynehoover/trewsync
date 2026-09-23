@@ -1730,24 +1730,32 @@ export class Engine {
     // before this pass writes anything: later, a case-only rename or a folder
     // replacing a deleted file can legitimately occupy the old physical path.
     // Full reconciliation decides those cases from the refreshed inventory.
+    //
+    // Every missing name is asked about before the vault lists again, and the
+    // ones that are there go with the request. The plugin lists from
+    // Obsidian's index, which can be behind the disk, and cannot afford to
+    // walk the disk on every forced pass; named, it reads them from the disk.
+    // This used to list again at the first one found and name none, and the
+    // plugin answered from the same index: a file another program had written
+    // again was sent to every device as deleted.
     const omittedRefusals = new Map<string, unknown>();
-    let refreshed = false;
+    const present: string[] = [];
     for (const [path, entry] of this.entries) {
       if (onDisk.has(path) || (entry.synchash === "" && entry.synctime <= 0)) continue;
       try {
-        if ((await this.opts.vault.exists(path)) && !refreshed) {
-          stats = await this.opts.vault.list({ forceFull: true });
-          onDisk = new Map(stats.map((s) => [s.path, s]));
-          refreshed = true;
-        }
+        if (await this.opts.vault.exists(path)) present.push(path);
       } catch (err) {
         const code = (err as { code?: string })?.code;
         // Excluded is not absent. Route explicit path refusals through the
         // ordinary reporting below; an unreadable presence check still stops
-        // the pass. Check every omitted entry, even after a forced rescan.
+        // the pass. Check every omitted entry.
         if (code !== "ignored" && code !== "neversync") throw err;
         omittedRefusals.set(path, err);
       }
+    }
+    if (present.length > 0) {
+      stats = await this.opts.vault.list({ forceFull: true, present });
+      onDisk = new Map(stats.map((s) => [s.path, s]));
     }
     // Before anything reads the entries: the folder-deletion check, the
     // preview and every decision below have to see a case-only rename the

@@ -320,8 +320,8 @@ export class ObsidianVault implements Vault {
    */
   private readonly actualName = new Map<string, string>();
   /**
-   * Names this client renamed something onto, which Obsidian's index may not
-   * show yet.
+   * Names this client renamed something onto, or the engine found on the disk
+   * and missing from a listing, which Obsidian's index may not show yet.
    *
    * Read out of 1.13.7, both adapters: `rename` moves the adapter's record of
    * the source to the destination and reports that, and a source it never
@@ -334,7 +334,14 @@ export class ObsidianVault implements Vault {
    * once the watcher caught up (M3 acceptance, 2026-09-23). The window is
    * reached because the plugin's own events during a pass ask the engine for
    * another round at once. Writes and removals put their own path into the
-   * index before they return, so renames are all that is recorded.
+   * index before they return, so of this client's own changes renames are
+   * all that is recorded.
+   *
+   * Another program's write is in the index only once the watcher reports
+   * it, too, and one that deletes a synced file and writes it again leaves
+   * the name out in between. The engine asks `exists` about each synced name
+   * a listing leaves out and names the ones it finds (`list`'s `present`),
+   * and those are recorded here as well.
    */
   private readonly unlisted = new Set<string>();
   private readonly ignore: Set<string>;
@@ -550,8 +557,21 @@ export class ObsidianVault implements Vault {
    * entry at a time and what is done about it applies to the whole group. The
    * ignore filter runs first, as it does in the CLI: a name this device is not
    * looking at is not a name it has an opinion about.
+   *
+   * `forceFull` is not a walk here, because the plugin is asked for one on
+   * every thirty-second pass and a walk is the per-file cost described above.
+   * What it exists to prevent is a stale index becoming a deletion, and the
+   * engine names each synced path it would treat as deleted that `exists`
+   * finds (`present`). Those are read from the disk, as the names this client
+   * renamed into place are (`unlisted`), and nothing else in a listing can
+   * become a deletion.
    */
-  async list(): Promise<FileStat[]> {
+  async list(
+    options: { forceFull?: boolean; present?: readonly string[] } = {},
+  ): Promise<FileStat[]> {
+    // Resolved before the spellings are forgotten below, so a name the disk
+    // spells differently is read under its own spelling.
+    for (const path of options.present ?? []) this.unlisted.add(this.resolve(path));
     this.actualName.clear();
     this.ambiguousPaths = [];
     const items = this.vault.getAllLoadedFiles();
@@ -637,13 +657,16 @@ export class ObsidianVault implements Vault {
   }
 
   /**
-   * Adds to a listing what this client renamed into place and the index does
-   * not show yet, asked of the adapter (see `unlisted`).
+   * Adds to a listing what the disk holds and the index does not show yet,
+   * asked of the adapter (see `unlisted`).
    *
    * A name is dropped once the index has it, under any spelling this disk
-   * treats as the same one, or once the adapter finds no file there. A stat
-   * that fails fails the listing (rule 2): leaving the name out instead is the
-   * deletion this exists to prevent.
+   * treats as the same one, or once the adapter finds nothing there. The
+   * respelling is the listing's to decide: on a folding disk `exists` answers
+   * for a note renamed only in case, and the engine pairs the two names as a
+   * rename from what the index says. A stat that fails fails the listing
+   * (rule 2): leaving the name out instead is the deletion this exists to
+   * prevent.
    */
   private async addUnlisted(indexed: ReadonlyMap<string, unknown>, out: FileStat[]): Promise<void> {
     let folded: Set<string> | undefined;
@@ -661,19 +684,52 @@ export class ObsidianVault implements Vault {
         }
       }
       const stat = await this.adapter.stat(raw);
-      if (stat === null || stat.type !== "file") {
+      if (stat === null || (stat.type !== "file" && stat.type !== "folder")) {
         this.unlisted.delete(raw);
         continue;
       }
       if (path !== raw) this.actualName.set(path, raw);
-      out.push({ path, folder: false, mtime: stat.mtime, ctime: stat.ctime, size: stat.size });
+      out.push(
+        stat.type === "folder"
+          ? { path, folder: true, mtime: 0, ctime: 0, size: 0 }
+          : { path, folder: false, mtime: stat.mtime, ctime: stat.ctime, size: stat.size },
+      );
     }
   }
 
-  /** `adapter.rename`, remembering a destination the index may not show (see `unlisted`). */
+  /**
+   * `adapter.rename`, for every rename this client makes.
+   *
+   * It remembers a destination the index may not show (see `unlisted`), and
+   * it holds the pair while the adapter has it, which is when Obsidian reports
+   * the rename to plugins (see `ownRename`).
+   */
   private async move(from: string, to: string): Promise<void> {
-    await this.adapter.rename(from, to);
+    this.renaming.set(from, to);
+    try {
+      await this.adapter.rename(from, to);
+    } finally {
+      this.renaming.delete(from);
+    }
     if (!this.ignored(to)) this.unlisted.add(to);
+  }
+
+  /** Each rename in hand, from its source to its destination. */
+  private readonly renaming = new Map<string, string>();
+
+  /**
+   * Whether a rename Obsidian reports is one this client is making.
+   *
+   * None of them is a person's. Moving the old bytes aside before a binary
+   * replacement, putting back a version it could not identify, respelling a
+   * name to match the server: the engine decided each one and accounts for it
+   * itself. Told of one as a rename, it moved the entry of the note it had
+   * just written onto the name of the copy it had moved aside. The shipped
+   * adapter reports a rename from inside the call (read out of 1.13.7), so
+   * the pair is held for exactly as long as it can be reported.
+   */
+  ownRename(from: string, to: string): boolean {
+    return this.renaming.get(from) === to;
   }
 
   /** Paths the last `list` left out because two names in the index claim them. */
@@ -1153,7 +1209,7 @@ export class ObsidianVault implements Vault {
 
     try {
       await this.adapter.mkdir(folder);
-      await this.adapter.rename(from, aside);
+      await this.move(from, aside);
     } catch {
       // Could not be moved, so it cannot be identified either. Left where it
       // is rather than deleted on an unproven decision.

@@ -450,9 +450,15 @@ export default class TrewPlugin extends Plugin {
       // Through the client rather than straight to the engine, so it
       // waits for the pass in flight rather than moving an entry that
       // pass has in hand.
+      //
+      // Not for a rename this client is making itself, such as moving the
+      // old bytes of an attachment aside before writing the new ones. The
+      // engine decided that one and was told the note stayed where it was.
       this.registerEvent(
         this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
-          void this.client?.noteRename(oldPath, file.path);
+          if (!this.liveVault?.ownRename(oldPath, file.path)) {
+            void this.client?.noteRename(oldPath, file.path);
+          }
           this.nudge();
         }),
       );

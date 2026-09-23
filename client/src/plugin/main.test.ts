@@ -1440,7 +1440,10 @@ describe("a device that only receives, while Obsidian's index catches up", () =>
     await settleBoth(phone.plugin, mac.plugin);
 
     // Then whole, with the source file's older mtime, and the Mac's watcher
-    // slower than the round its own events ask for.
+    // slower than the round its own events ask for. Nobody renames anything,
+    // so the engine must not hear of the rename that moves the empty file
+    // aside as if somebody had.
+    const renames = vi.spyOn(clientOf(mac.plugin), "noteRename");
     mac.app.vault.adapter.holdWatcher();
     await phone.app.vault.adapter.writeBinary("m3-photo.jpg", jpeg.slice().buffer, {
       mtime: 1_790_192_356_000,
@@ -1461,6 +1464,7 @@ describe("a device that only receives, while Obsidian's index catches up", () =>
     expect(phone.app.vault.adapter.trashedLocally).toEqual([]);
     expect(notes(mac.app)).toEqual(["m3-photo.jpg"]);
     expect(notes(phone.app)).toEqual(["m3-photo.jpg"]);
+    expect(renames.mock.calls, "the engine was told of a rename").toEqual([]);
   }, 300_000);
 
   it("does not delete a new note it received in the pass that updated another", async () => {

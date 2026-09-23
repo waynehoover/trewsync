@@ -185,9 +185,13 @@ the listing. Periodic scans, content verification, and inspection use a full wal
 Recovery inventory remains fresh on every pass. The plugin uses Obsidian's file
 inventory instead of this filesystem cache.
 Before reconciling, the engine checks missing paths that were previously synced.
-A restored path triggers a full scan instead of trusting a cached absence. This
-happens before writes, so case-only renames and file/folder transitions retain
-their normal ordering.
+Restored paths trigger one forced listing that names every one of them, instead
+of trusting a cached absence. The CLI walks the disk for it; the plugin, asked
+for a forced listing on every periodic pass, reads the named paths from the
+adapter rather than walking, because Obsidian's index can be behind the disk
+when another program deletes a file and writes it again. This happens before
+writes, so case-only renames and file/folder transitions retain their normal
+ordering.
 
 Foreground, focus, and network-online events check the socket immediately and
 interrupt local reconnect backoff. An idle socket gets a two-second probe;
