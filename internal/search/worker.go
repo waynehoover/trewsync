@@ -304,6 +304,7 @@ func (x *Index) finishBuild(b *generation) error {
 	}
 	x.mu.Lock()
 	x.active, x.building, x.distrust = &next, nil, ""
+	x.advance()
 	x.mu.Unlock()
 	x.log.Info("the search index switched generation", "generation", next.gen, "indexedHead", next.through, "notes", next.notes)
 	return nil
@@ -360,6 +361,9 @@ func (x *Index) commit(g, next *generation, fn func(*sql.Tx) error) error {
 	}
 	x.mu.Lock()
 	*g = *next
+	if g == x.active {
+		x.advance()
+	}
 	x.mu.Unlock()
 	return nil
 }
@@ -371,13 +375,16 @@ type doc struct {
 	reason    string
 	tags      []string
 	tagError  string
+	links     []string
+	linkError string
 }
 
-// prepare reads a note's text and tags for the index. Nothing here fails the
-// batch: a note that cannot be read is held as unreadable with its reason, and
-// one whose tags cannot be read as such, and both are scanned by every search
-// that could match them, which reports what it met (PLAN.md section 2.5).
-func (x *Index) prepare(e store.Entry) (d doc) {
+// prepare reads a note's text, tags and link keys for the index. Nothing here
+// fails the batch: a note that cannot be read is held as unreadable with its
+// reason, and one whose tags or links cannot be read as such, and each is
+// scanned by every search, and read by every plan, that could depend on it,
+// which reports what it met (PLAN.md section 2.5).
+func (x *Index) prepare(e store.Entry) doc {
 	if e.Size > notes.NoteBytes {
 		return doc{reason: "note_too_large"}
 	}
@@ -393,32 +400,60 @@ func (x *Index) prepare(e store.Entry) (d doc) {
 		}
 		return doc{reason: "unreadable"}
 	}
-	d = doc{text: indexText(source), contentOK: true}
+	d := doc{text: indexText(source), contentOK: true}
+	d.tags, d.tagError = x.tagsOf(e.UID, source)
+	d.links, d.linkError = x.linksOf(e, source)
+	return d
+}
+
+// tagsOf is a note's tags, folded, each once, or why they could not be read.
+func (x *Index) tagsOf(uid int64, source string) (tags []string, why string) {
 	defer func() {
 		// The parser is new code on hostile input. A panic in it limits
 		// this note's tags, as a parse failure does, and stops nothing else.
 		if p := recover(); p != nil {
-			x.log.Error("the tag parser failed on a note", "uid", e.UID, "panic", fmt.Sprint(p))
-			d.tags, d.tagError = nil, "internal"
+			x.log.Error("the tag parser failed on a note", "uid", uid, "panic", fmt.Sprint(p))
+			tags, why = nil, "internal"
 		}
 	}()
 	occ, err := notes.TagOccurrences(source)
 	if err != nil {
-		var r *notes.Refusal
-		d.tagError = "invalid_frontmatter"
-		if errors.As(err, &r) {
-			d.tagError = r.Code
-		}
-		return d
+		return nil, refusalCode(err, "invalid_frontmatter")
 	}
 	seen := map[string]bool{}
 	for _, o := range occ {
 		if tag := notes.FoldTag(o.Tag); !seen[tag] {
 			seen[tag] = true
-			d.tags = append(d.tags, tag)
+			tags = append(tags, tag)
 		}
 	}
-	return d
+	return tags, ""
+}
+
+// linksOf is a note's link keys, or why its links could not be read. A note
+// whose links could not be read is held without keys and with the reason, and
+// every plan that could depend on it reads it (Backlinks).
+func (x *Index) linksOf(e store.Entry, source string) (keys []string, why string) {
+	defer func() {
+		if p := recover(); p != nil {
+			x.log.Error("the link parser failed on a note", "uid", e.UID, "panic", fmt.Sprint(p))
+			keys, why = nil, "internal"
+		}
+	}()
+	keys, err := notes.LinkKeys(source, e.Path)
+	if err != nil {
+		return nil, refusalCode(err, "invalid_frontmatter")
+	}
+	return keys, ""
+}
+
+// refusalCode is a parser's refusal as the code it carries, or def.
+func refusalCode(err error, def string) string {
+	var r *notes.Refusal
+	if errors.As(err, &r) {
+		return r.Code
+	}
+	return def
 }
 
 // assemble is a version's bytes, each chunk checked against its name as the
@@ -444,8 +479,8 @@ func put(tx *sql.Tx, t tables, g *generation, path string, uid int64, d doc) err
 	if err := remove(tx, t, g, path); err != nil {
 		return err
 	}
-	res, err := tx.Exec(`INSERT INTO `+t.notes+` (path, uid, content_ok, reason, tag_error) VALUES (?, ?, ?, ?, ?)`,
-		path, uid, d.contentOK, d.reason, d.tagError)
+	res, err := tx.Exec(`INSERT INTO `+t.notes+` (path, uid, content_ok, reason, tag_error, link_error)
+	  VALUES (?, ?, ?, ?, ?, ?)`, path, uid, d.contentOK, d.reason, d.tagError, d.linkError)
 	if err != nil {
 		return err
 	}
@@ -472,6 +507,15 @@ func put(tx *sql.Tx, t tables, g *generation, path string, uid int64, d doc) err
 		}
 		g.tags++
 	}
+	if d.linkError != "" {
+		g.linkFailures++
+	}
+	for _, key := range d.links {
+		if _, err := tx.Exec(`INSERT INTO `+t.links+` (note_id, key) VALUES (?, ?)`, id, key); err != nil {
+			return err
+		}
+		g.links++
+	}
 	return nil
 }
 
@@ -479,9 +523,9 @@ func put(tx *sql.Tx, t tables, g *generation, path string, uid int64, d doc) err
 func remove(tx *sql.Tx, t tables, g *generation, path string) error {
 	var id, uid int64
 	var contentOK bool
-	var tagError string
-	err := tx.QueryRow(`SELECT id, uid, content_ok, tag_error FROM `+t.notes+` WHERE path = ?`, path).
-		Scan(&id, &uid, &contentOK, &tagError)
+	var tagError, linkError string
+	err := tx.QueryRow(`SELECT id, uid, content_ok, tag_error, link_error FROM `+t.notes+` WHERE path = ?`, path).
+		Scan(&id, &uid, &contentOK, &tagError, &linkError)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -496,6 +540,9 @@ func remove(tx *sql.Tx, t tables, g *generation, path string) error {
 		if tagError != "" {
 			g.tagFailures--
 		}
+		if linkError != "" {
+			g.linkFailures--
+		}
 	} else {
 		g.unreadable--
 	}
@@ -508,6 +555,14 @@ func remove(tx *sql.Tx, t tables, g *generation, path string) error {
 		return err
 	}
 	g.tags -= n
+	res, err = tx.Exec(`DELETE FROM `+t.links+` WHERE note_id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, err = res.RowsAffected(); err != nil {
+		return err
+	}
+	g.links -= n
 	if _, err := tx.Exec(`DELETE FROM `+t.notes+` WHERE id = ?`, id); err != nil {
 		return err
 	}
@@ -539,33 +594,47 @@ func (x *Index) checkDeep(g *generation) string {
 	}
 	held := map[string]int64{}
 	digest := ""
-	var unreadable, tagFailures int64
-	rows, err := tx.Query(`SELECT path, uid, content_ok, tag_error FROM ` + t.notes)
+	var unreadable, tagFailures, linkFailures int64
+	rows, err := tx.Query(`SELECT path, uid, content_ok, tag_error, link_error FROM ` + t.notes)
 	if err != nil {
 		return "the index notes cannot be read: " + err.Error()
 	}
 	for rows.Next() {
-		var path, tagError string
+		var path, tagError, linkError string
 		var uid int64
 		var ok bool
-		if err := rows.Scan(&path, &uid, &ok, &tagError); err != nil {
+		if err := rows.Scan(&path, &uid, &ok, &tagError, &linkError); err != nil {
 			rows.Close()
 			return "the index notes cannot be read: " + err.Error()
 		}
 		held[path] = uid
 		digest = xorDigest(digest, digestOf(path, uid))
-		if !ok {
+		switch {
+		case !ok:
 			unreadable++
-		} else if tagError != "" {
-			tagFailures++
+		default:
+			if tagError != "" {
+				tagFailures++
+			}
+			if linkError != "" {
+				linkFailures++
+			}
 		}
 	}
 	rows.Close()
 	if !sameDigest(digest, current.digest) {
 		return "the index notes do not add up to the digest it recorded"
 	}
-	if unreadable != current.unreadable || tagFailures != current.tagFailures {
+	if unreadable != current.unreadable || tagFailures != current.tagFailures || linkFailures != current.linkFailures {
 		return "the index's counts of unreadable notes do not match its rows"
+	}
+	var strays int64
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM ` + t.links + ` l WHERE NOT EXISTS (SELECT 1 FROM ` + t.notes +
+		` n WHERE n.id = l.note_id AND n.content_ok = 1 AND n.link_error = '')`).Scan(&strays); err != nil {
+		return "the index link keys cannot be read: " + err.Error()
+	}
+	if strays != 0 {
+		return fmt.Sprintf("%d link keys belong to no note the index read the links of", strays)
 	}
 	var orphans int64
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM ` + t.notes + ` n WHERE n.content_ok = 1

@@ -24,6 +24,15 @@
 // could not be indexed are always scanned. So a lagging index costs speed and
 // never a result.
 //
+// It keeps the links too. Every note's link keys (notes.LinkKeys) are held
+// beside its tags, so a move or a deletion that rewrites backlinks can read
+// only the notes that may link to the path it changes (PLAN.md M5 task 6).
+// The same two rules hold there: the keys only narrow, and every note a plan
+// edits is read from the store; and a plan narrows by them only when the
+// generation has indexed exactly the head it reads, checked in the same read
+// as the keys (Backlinks), so a lagging index costs a scan and never a
+// backlink.
+//
 // It is generational and checked. A rebuild captures a head, indexes the
 // vault as it stood then in bounded batches, replays the entries after it,
 // verifies the result against the store, and only then becomes the generation
@@ -55,10 +64,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// IndexVersion is what this build's index is: the tokenizer, the fold and
-// the tag parser together. A generation of another version is not trusted to
-// propose candidates, and is rebuilt.
-const IndexVersion = 1
+// IndexVersion is what this build's index is: the tokenizer, the fold, the
+// tag parser and the link keys together. A generation of another version is
+// not trusted to propose candidates, and is rebuilt. Version 2 added the link
+// keys.
+const IndexVersion = 2
 
 // FileName is the index's database, in the data directory beside the store.
 // It is derived and never backed up: a lost or damaged one is rebuilt from the
@@ -77,6 +87,11 @@ type Index struct {
 	building *generation // a build in progress, or nil
 	distrust string      // why the active generation is not trusted, or ""
 	failed   string      // the last error the worker met, or ""
+
+	// advanced is closed and replaced, under mu, whenever the generation
+	// queries use moves on or is distrusted, so a caller waiting for the
+	// index to reach a head (Await) is woken to look again.
+	advanced chan struct{}
 
 	sub  store.Committed
 	wake chan struct{}
@@ -111,10 +126,10 @@ type generation struct {
 	// through is indexed_through_uid: every entry at or below it is in.
 	through int64
 	// The counters and the digest the checks compare the tables against.
-	notes, fts, tags        int64
-	digest                  string
-	unreadable, tagFailures int64
-	createdAt               int64
+	notes, fts, tags, links               int64
+	digest                                string
+	unreadable, tagFailures, linkFailures int64
+	createdAt                             int64
 }
 
 const metaSchema = `
@@ -133,16 +148,18 @@ CREATE TABLE IF NOT EXISTS generations (
   digest       TEXT    NOT NULL DEFAULT '',
   unreadable   INTEGER NOT NULL DEFAULT 0,
   tag_failures INTEGER NOT NULL DEFAULT 0,
-  created_at   INTEGER NOT NULL
+  created_at   INTEGER NOT NULL,
+  links         INTEGER NOT NULL DEFAULT 0,
+  link_failures INTEGER NOT NULL DEFAULT 0
 );
 `
 
 // tables are one generation's table names.
-type tables struct{ notes, tags, fts string }
+type tables struct{ notes, tags, fts, links string }
 
 func tablesOf(gen int64) tables {
 	p := fmt.Sprintf("g%d_", gen)
-	return tables{notes: p + "notes", tags: p + "tags", fts: p + "fts"}
+	return tables{notes: p + "notes", tags: p + "tags", fts: p + "fts", links: p + "links"}
 }
 
 func (t tables) create(q execer) error {
@@ -153,7 +170,8 @@ CREATE TABLE IF NOT EXISTS ` + t.notes + ` (
   uid        INTEGER NOT NULL,
   content_ok INTEGER NOT NULL,
   reason     TEXT    NOT NULL,
-  tag_error  TEXT    NOT NULL
+  tag_error  TEXT    NOT NULL,
+  link_error TEXT    NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ` + t.tags + ` (
   note_id INTEGER NOT NULL,
@@ -161,6 +179,12 @@ CREATE TABLE IF NOT EXISTS ` + t.tags + ` (
   PRIMARY KEY (note_id, tag)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS ` + t.tags + `_by_tag ON ` + t.tags + `(tag);
+CREATE TABLE IF NOT EXISTS ` + t.links + ` (
+  note_id INTEGER NOT NULL,
+  key     TEXT    NOT NULL,
+  PRIMARY KEY (note_id, key)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS ` + t.links + `_by_key ON ` + t.links + `(key);
 CREATE VIRTUAL TABLE IF NOT EXISTS ` + t.fts + ` USING fts5(body, content='', contentless_delete=1,
   tokenize='trigram case_sensitive 1');
 `)
@@ -168,7 +192,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS ` + t.fts + ` USING fts5(body, content='', co
 }
 
 func (t tables) drop(q execer) error {
-	_, err := q.Exec(`DROP TABLE IF EXISTS ` + t.fts + `; DROP TABLE IF EXISTS ` + t.tags + `; DROP TABLE IF EXISTS ` + t.notes + `;`)
+	_, err := q.Exec(`DROP TABLE IF EXISTS ` + t.fts + `; DROP TABLE IF EXISTS ` + t.tags + `; DROP TABLE IF EXISTS ` +
+		t.links + `; DROP TABLE IF EXISTS ` + t.notes + `;`)
 	return err
 }
 
@@ -198,7 +223,7 @@ func Open(dataDir string, st *store.Store, vault string, log *slog.Logger) (*Ind
 		return nil, err
 	}
 	x := &Index{
-		db: db, st: st, vault: vault, log: log,
+		db: db, st: st, vault: vault, log: log, advanced: make(chan struct{}),
 		wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
 		verifyEvery: 10 * time.Minute,
 	}
@@ -213,6 +238,9 @@ func Open(dataDir string, st *store.Store, vault string, log *slog.Logger) (*Ind
 // for another store, and checks the active one.
 func (x *Index) load() error {
 	if _, err := x.db.Exec(metaSchema); err != nil {
+		return err
+	}
+	if err := x.upgradeMeta(); err != nil {
 		return err
 	}
 	belongs := x.st.Epoch() + "\x00" + x.vault
@@ -256,6 +284,60 @@ func (x *Index) load() error {
 	return nil
 }
 
+// upgradeMeta starts the index again when its generations table predates the
+// link counters. Everything in it is derived from the store, so the older
+// generations are dropped and rebuilt rather than migrated; search scans
+// until the first new one is built.
+func (x *Index) upgradeMeta() error {
+	columns, err := x.column(`SELECT name FROM pragma_table_info('generations')`)
+	if err != nil {
+		return err
+	}
+	has := map[string]bool{}
+	for _, c := range columns {
+		has[c] = true
+	}
+	if has["links"] && has["link_failures"] {
+		return nil
+	}
+	gens, err := x.column(`SELECT gen FROM generations`)
+	if err != nil {
+		return err
+	}
+	for _, g := range gens {
+		var gen int64
+		if _, err := fmt.Sscan(g, &gen); err != nil {
+			return err
+		}
+		if err := tablesOf(gen).drop(x.db); err != nil {
+			return err
+		}
+	}
+	if _, err := x.db.Exec(`DROP TABLE generations`); err != nil {
+		return err
+	}
+	_, err = x.db.Exec(metaSchema)
+	return err
+}
+
+// column is the first column of every row a query returns, as text.
+func (x *Index) column(query string) ([]string, error) {
+	rows, err := x.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (x *Index) dropAll() error {
 	gens, err := x.generations()
 	if err != nil {
@@ -296,22 +378,23 @@ func (x *Index) generations() ([]*generation, error) {
 }
 
 const genCols = `gen, version, state, phase, built_head, cursor, through, notes, fts, tags, digest,
-  unreadable, tag_failures, created_at`
+  unreadable, tag_failures, created_at, links, link_failures`
 
 type scanner interface{ Scan(...any) error }
 
 func scanGeneration(r scanner) (*generation, error) {
 	g := &generation{}
 	err := r.Scan(&g.gen, &g.version, &g.state, &g.phase, &g.builtHead, &g.cursor, &g.through,
-		&g.notes, &g.fts, &g.tags, &g.digest, &g.unreadable, &g.tagFailures, &g.createdAt)
+		&g.notes, &g.fts, &g.tags, &g.digest, &g.unreadable, &g.tagFailures, &g.createdAt, &g.links, &g.linkFailures)
 	return g, err
 }
 
 func (g *generation) save(q execer) error {
 	_, err := q.Exec(`UPDATE generations SET state = ?, phase = ?, built_head = ?, cursor = ?, through = ?,
-	  notes = ?, fts = ?, tags = ?, digest = ?, unreadable = ?, tag_failures = ? WHERE gen = ?`,
+	  notes = ?, fts = ?, tags = ?, digest = ?, unreadable = ?, tag_failures = ?, links = ?, link_failures = ?
+	  WHERE gen = ?`,
 		g.state, g.phase, g.builtHead, g.cursor, g.through, g.notes, g.fts, g.tags, g.digest,
-		g.unreadable, g.tagFailures, g.gen)
+		g.unreadable, g.tagFailures, g.links, g.linkFailures, g.gen)
 	return err
 }
 
@@ -321,8 +404,15 @@ func (x *Index) distrusted(why string) {
 	x.log.Warn("the search index is not trusted; search scans until it is rebuilt", "why", why)
 	x.mu.Lock()
 	x.distrust = why
+	x.advance()
 	x.mu.Unlock()
 	x.nudge()
+}
+
+// advance wakes every Await. Called with mu held.
+func (x *Index) advance() {
+	close(x.advanced)
+	x.advanced = make(chan struct{})
 }
 
 func (x *Index) nudge() {
@@ -381,6 +471,9 @@ type Status struct {
 	Notes       int64 `json:"notes"`
 	Unreadable  int64 `json:"unreadable"`
 	TagFailures int64 `json:"tagFailures"`
+	// LinkFailures is how many it could not read the links of. Each is read
+	// by every move or deletion that rewrites backlinks.
+	LinkFailures int64 `json:"linkFailures"`
 	// Error is the last error the worker met, or empty.
 	Error string `json:"error,omitempty"`
 }
@@ -392,7 +485,7 @@ func (x *Index) Status() Status {
 	s := Status{Distrust: x.distrust, Error: x.failed}
 	if g := x.active; g != nil {
 		s.Generation, s.IndexedHead = g.gen, g.through
-		s.Notes, s.Unreadable, s.TagFailures = g.notes, g.unreadable, g.tagFailures
+		s.Notes, s.Unreadable, s.TagFailures, s.LinkFailures = g.notes, g.unreadable, g.tagFailures, g.linkFailures
 		s.Usable = x.distrust == "" && g.version == IndexVersion
 		if g.version != IndexVersion && s.Distrust == "" {
 			s.Distrust = fmt.Sprintf("the index is version %d and this build reads version %d", g.version, IndexVersion)
@@ -577,6 +670,163 @@ func (x *Index) Propose(ctx context.Context, q notes.Query, folder, from string)
 	return p, nil
 }
 
+// Backlinks is what the link index says, for a plan reading the vault at one
+// head, about which notes may link to a target (PLAN.md M5 task 6).
+type Backlinks struct {
+	// Generation and IndexedHead are the generation that answered, and how
+	// far it had indexed.
+	Generation  int64
+	IndexedHead int64
+	// Current says the generation is trusted and had indexed exactly the
+	// head asked about, checked in the same read as its keys, so it may rule
+	// notes out. When it is not, Why says why, and every note may link.
+	Current bool
+	Why     string
+	notes   map[string]linked
+	hits    map[string]bool
+}
+
+// linked is one note as the link index holds it: its version, and whether
+// its links were read.
+type linked struct {
+	uid int64
+	ok  bool
+}
+
+// MayLink reports whether the note at path, in its version uid, may hold a
+// link to the target the keys were asked for: always, unless the index is
+// current, holds that very version, read its links, and found none of the
+// target's keys among them.
+func (b Backlinks) MayLink(path string, uid int64) bool {
+	if !b.Current {
+		return true
+	}
+	ix, ok := b.notes[path]
+	if !ok || ix.uid != uid || !ix.ok {
+		return true
+	}
+	return b.hits[path]
+}
+
+// Backlinks asks the index which notes may hold a link with one of keys
+// (notes.TargetKeys of the path a plan moves or deletes), for a plan that
+// reads the vault at head. It narrows only when the generation queries use is
+// trusted, of this version, and has indexed exactly head: an index behind the
+// head has not seen a backlink written since, and one past it describes notes
+// the plan does not read. Both are checked in the one read that takes the
+// keys, with the counters, so a generation that moves on or is truncated
+// meanwhile cannot answer for a head it no longer describes.
+func (x *Index) Backlinks(ctx context.Context, head int64, keys []string) (Backlinks, error) {
+	var b Backlinks
+	x.mu.Lock()
+	var g *generation
+	if x.active != nil {
+		copied := *x.active
+		g = &copied
+	}
+	distrust := x.distrust
+	x.mu.Unlock()
+	switch {
+	case g == nil:
+		b.Why = "the index has not been built yet"
+		return b, nil
+	case distrust != "":
+		b.Why = distrust
+		return b, nil
+	case g.version != IndexVersion:
+		b.Why = "the index is of another version"
+		return b, nil
+	}
+	tx, err := x.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return b, err
+	}
+	defer tx.Rollback()
+	now, err := scanGeneration(tx.QueryRow(`SELECT `+genCols+` FROM generations WHERE gen = ?`, g.gen))
+	if err != nil {
+		b.Why = "the index generation changed while it was being read"
+		return b, nil
+	}
+	b.Generation, b.IndexedHead = now.gen, now.through
+	if now.through != head {
+		b.Why = fmt.Sprintf("the index has indexed through uid %d, and the plan reads the vault at uid %d", now.through, head)
+		return b, nil
+	}
+	t := tablesOf(now.gen)
+	if why := cheapCheck(tx, t, now); why != "" {
+		x.distrusted(why)
+		b.Why = why
+		return b, nil
+	}
+	b.notes = map[string]linked{}
+	rows, err := tx.Query(`SELECT path, uid, content_ok, link_error FROM ` + t.notes)
+	if err != nil {
+		return b, err
+	}
+	for rows.Next() {
+		var path, linkError string
+		var ix linked
+		var contentOK bool
+		if err := rows.Scan(&path, &ix.uid, &contentOK, &linkError); err != nil {
+			rows.Close()
+			return b, err
+		}
+		ix.ok = contentOK && linkError == ""
+		b.notes[path] = ix
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return b, err
+	}
+	b.hits = map[string]bool{}
+	if len(keys) > 0 {
+		marks := strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",")
+		args := make([]any, len(keys))
+		for i, k := range keys {
+			args[i] = k
+		}
+		rows, err = tx.Query(`SELECT DISTINCT n.path FROM `+t.links+` l JOIN `+t.notes+` n ON n.id = l.note_id
+		  WHERE l.key IN (`+marks+`)`, args...)
+		if err != nil {
+			return b, err
+		}
+		for rows.Next() {
+			var path string
+			if err := rows.Scan(&path); err != nil {
+				rows.Close()
+				return b, err
+			}
+			b.hits[path] = true
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return b, err
+		}
+	}
+	b.Current = true
+	return b, nil
+}
+
+// Await waits until the generation queries use is trusted and has indexed at
+// least head, and reports whether it got there before ctx ended. The worker is
+// nudged by every commit, so an index a moment behind a write catches up in
+// the time a batch takes; a caller that cannot wait longer scans.
+func (x *Index) Await(ctx context.Context, head int64) bool {
+	for {
+		x.mu.Lock()
+		g, distrust, advanced := x.active, x.distrust, x.advanced
+		x.mu.Unlock()
+		if g != nil && distrust == "" && g.version == IndexVersion && g.through >= head {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-advanced:
+		}
+	}
+}
+
 // indexText is what the index holds for a note's text, and what a query is
 // looked up as: every character through the matcher's case fold, and NUL,
 // which FTS5 cannot take inside a query, as U+FFFF. Both maps take one
@@ -594,14 +844,14 @@ func ftsPhrase(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) 
 // recorded, inside the caller's read, so a truncated table is caught by the
 // next query whatever its version says.
 func cheapCheck(q execer, t tables, g *generation) string {
-	var notesN, ftsN, tagsN int64
+	var notesN, ftsN, tagsN, linksN int64
 	if err := q.QueryRow(`SELECT (SELECT COUNT(*) FROM `+t.notes+`), (SELECT COUNT(*) FROM `+t.fts+`),
-	  (SELECT COUNT(*) FROM `+t.tags+`)`).Scan(&notesN, &ftsN, &tagsN); err != nil {
+	  (SELECT COUNT(*) FROM `+t.tags+`), (SELECT COUNT(*) FROM `+t.links+`)`).Scan(&notesN, &ftsN, &tagsN, &linksN); err != nil {
 		return "the index tables cannot be read: " + err.Error()
 	}
-	if notesN != g.notes || ftsN != g.fts || tagsN != g.tags {
-		return fmt.Sprintf("the index holds %d notes, %d texts and %d tags where it recorded %d, %d and %d",
-			notesN, ftsN, tagsN, g.notes, g.fts, g.tags)
+	if notesN != g.notes || ftsN != g.fts || tagsN != g.tags || linksN != g.links {
+		return fmt.Sprintf("the index holds %d notes, %d texts, %d tags and %d link keys where it recorded %d, %d, %d and %d",
+			notesN, ftsN, tagsN, linksN, g.notes, g.fts, g.tags, g.links)
 	}
 	return ""
 }
