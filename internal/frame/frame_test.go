@@ -161,6 +161,28 @@ func TestEncodeRoundTripsAndOnlyDeflatesWhenShorter(t *testing.T) {
 	}
 }
 
+// An incompressible chunk skips the whole-chunk deflate, a compressible one does
+// not, and a chunk whose head is incompressible but whose body compresses is
+// sent raw: the probe only ever chooses raw, which is always a valid frame.
+func TestTheProbeSkipsDeflatingIncompressibleChunks(t *testing.T) {
+	noise := sha256CTR("probe", 64*1024)
+	if f := Encode(noise); f[0] != MarkerRaw || len(f) != len(noise)+1 {
+		t.Fatalf("an incompressible chunk was not sent raw")
+	}
+	text := bytes.Repeat([]byte("compressible text "), 4000)
+	if f := Encode(text); f[0] != MarkerDeflate {
+		t.Fatalf("a compressible chunk was not deflated")
+	}
+	mixed := append(append([]byte{}, noise[:probeBytes]...), text...)
+	f := Encode(mixed)
+	if f[0] != MarkerRaw {
+		t.Fatalf("a chunk with an incompressible head was deflated whole")
+	}
+	if out, err := Decode(f, 1<<20); err != nil || !bytes.Equal(out, mixed) {
+		t.Fatalf("the raw frame did not round-trip: %v", err)
+	}
+}
+
 // A corrupted vector must fail on the consuming side (PLAN.md M0.5).
 func TestACorruptedVectorIsCaught(t *testing.T) {
 	f := load(t)

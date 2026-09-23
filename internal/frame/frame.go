@@ -33,10 +33,22 @@ var (
 	ErrCorrupt  = errors.New("frame: undecodable deflate stream")
 )
 
+// probeBytes is how much of a chunk is tried before deflating all of it, the
+// same probe the TypeScript encoder uses (client/src/core/frame.ts).
+const probeBytes = 4096
+
 // Encode frames raw bytes for the wire: deflated at level 6 when that is
 // shorter, raw otherwise. The rule "deflate only when shorter" is what keeps a
 // frame within maxRaw + 1 bytes for any chunk the receiver will accept.
+//
+// A chunk over twice the probe size is only deflated whole when its first
+// probeBytes compress: attachments are mostly incompressible, and deflating a
+// megabyte of JPEG to learn that costs CPU on every fetch for nothing. The probe
+// is an optimisation only; the output rule above still decides.
 func Encode(raw []byte) []byte {
+	if len(raw) > 2*probeBytes && !deflates(raw[:probeBytes]) {
+		return rawFrame(raw)
+	}
 	var buf bytes.Buffer
 	buf.WriteByte(MarkerDeflate)
 	w, err := flate.NewWriter(&buf, 6)
@@ -49,10 +61,30 @@ func Encode(raw []byte) []byte {
 	if err == nil && buf.Len()-1 < len(raw) {
 		return buf.Bytes()
 	}
+	return rawFrame(raw)
+}
+
+func rawFrame(raw []byte) []byte {
 	out := make([]byte, 1+len(raw))
 	out[0] = MarkerRaw
 	copy(out[1:], raw)
 	return out
+}
+
+// deflates reports whether deflating b at level 6 makes it shorter.
+func deflates(b []byte) bool {
+	var buf bytes.Buffer
+	w, err := flate.NewWriter(&buf, 6)
+	if err != nil {
+		return false
+	}
+	if _, err := w.Write(b); err != nil {
+		return false
+	}
+	if err := w.Close(); err != nil {
+		return false
+	}
+	return buf.Len() < len(b)
 }
 
 // Decode returns the raw chunk a frame carries, refusing anything that is not
