@@ -188,6 +188,10 @@ run "this runner folds case" "" folds_case
 run "install" client bun install --frozen-lockfile
 run "format" client bun run format:check
 run "typecheck" client bun run typecheck
+# The community directory's own review of the plugin bundle. It re-reviews
+# every release and an error makes that release uninstallable, so an error
+# here fails. Warnings pass with the reasons docs/development.md gives.
+run "lint" client bun run lint
 run "test" client bun run test
 run "build" client bun run build
 run "gallery screenshots contain PNG images" "" node "$root/scripts/check-screenshots.mjs"
