@@ -3697,7 +3697,7 @@ class TrewPanel {
       b.setButtonText("Show devices").onClick(show);
     });
 
-    list = contentEl.createEl("div");
+    list = contentEl.createDiv();
     said = later(contentEl, "trew-advice");
   }
 
