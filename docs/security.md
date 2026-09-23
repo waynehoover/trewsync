@@ -4,9 +4,11 @@
 
 Trew is designed for one person's trusted devices and a server they control.
 **The server can read your notes.** It stores their contents, their filenames
-and every earlier version in plaintext, which is what lets it keep and serve
-your history without a device in the loop. There is no end-to-end encryption.
-If you need a server that cannot read what it stores, Trew is the wrong tool.
+and every earlier version in plaintext. That is deliberate: it is what lets the
+server check everything it holds, hand a note back with nothing but the server
+itself (`trew cat`), and host the planned built-in agent that reads and edits
+the same notes. There is no end-to-end encryption. If you need a server that
+cannot read what it stores, Trew is the wrong tool.
 
 ## What the server holds
 

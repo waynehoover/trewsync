@@ -99,9 +99,10 @@ own `deviceId` (16 random bytes, base64url) and `token` (32 random bytes).
 Before sending, it saves them as a pending pairing, with the server address,
 the vault and the invite. On `redeemed` it replaces the pending pairing with
 its device configuration, which no longer holds the invite; the server closes
-the connection and the device reconnects as a device session. On a refusal it
-deletes the pending pairing, so nothing is left saved. On a lost reply it keeps
-the pending pairing and retries with the same `deviceId` and `token`.
+the connection and the device reconnects as a device session. On a refusal, or
+when the connection never opened, it deletes the pending pairing, so nothing is
+left saved. On a lost reply, after the redemption was sent, it keeps the
+pending pairing and retries with the same `deviceId` and `token`.
 
 The server redeems in one transaction: it spends the invite and inserts the
 device row, or does neither. A retry from the device that spent the invite,

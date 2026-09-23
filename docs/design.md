@@ -303,9 +303,9 @@ beyond the notes themselves:
   Trew has none. SHA-256 chunk names give consistency, not authorship: devices
   trust the server's word about what a note says and which device wrote it.
 - **Chunk names are a presence oracle.** A name is the SHA-256 of plaintext, so
-  anyone holding a chunk inventory can confirm guessed content. Names therefore
-  stay out of logs, metrics and unauthenticated endpoints, and deduplication is
-  scoped to the vault.
+  anyone holding a chunk inventory can confirm guessed content. Names must
+  therefore stay out of logs, metrics and unauthenticated endpoints, and
+  deduplication stays scoped to the vault.
 
 **Ordering and completeness remain trusted**, as they were in Basalt. The
 server assigns UIDs. It can replay an older version under a newer UID, causing
@@ -336,8 +336,8 @@ written to a private file in the data directory, never to the log.
 
 ## Credentials, and who holds which
 
-Every credential is random, and the server stores only its SHA-256. These are
-random keys, not user-chosen passwords.
+Every credential is random, and whatever checks it stores only its SHA-256.
+These are random keys, not user-chosen passwords.
 
 | Credential | Held by | Purpose |
 |---|---|---|
