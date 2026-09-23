@@ -25,14 +25,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "./core/client.ts";
 import { MemoryIndexStore, MemoryVault } from "./core/vault.ts";
 import { TestServer, serverBinary } from "./core/test-server.ts";
-import { testWrapped } from "./core/test-keys.ts";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
 });
-
-const SECRET = new Uint8Array(32).fill(41);
 
 async function device(
   server: TestServer,
@@ -43,7 +40,7 @@ async function device(
     vault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(SECRET, await testWrapped(SECRET), name)),
+    ...(await server.deviceCredentials(name)),
     vaultId: "default",
     device: name,
     timeoutMs: 60_000,

@@ -31,7 +31,7 @@ it.each([false, true])(
     server = new TestServer();
     await server.start();
     dir = await mkdtemp(join(tmpdir(), "trew-recovery-outcome-"));
-    expect((await cli("init", server.setup, "--json")).code).toBe(0);
+    expect((await cli("pair", await server.firstInvite(), "--json")).code).toBe(0);
     await writeFile(join(dir, "note.md"), "Visible agreed version.\n");
     expect((await cli("sync")).code).toBe(0);
     const at = ".trew/tmp/preserved.unsent-edit";
@@ -87,7 +87,7 @@ it.each([false, true])(
     server = new TestServer();
     await server.start();
     dir = await mkdtemp(join(tmpdir(), "trew-recovery-unreadable-"));
-    expect((await cli("init", server.setup, "--json")).code).toBe(0);
+    expect((await cli("pair", await server.firstInvite(), "--json")).code).toBe(0);
     await writeFile(join(dir, "note.md"), "Visible agreed version.\n");
     expect((await cli("sync")).code).toBe(0);
     const staging = join(dir, ".trew", "tmp");

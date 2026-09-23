@@ -40,11 +40,13 @@ async function paired() {
   server = new TestServer();
   await server.start();
   const dir = await directory();
-  const init = await cli("init", server.setup, "--dir", dir, "--json");
-  expect(init.code, init.err).toBe(0);
+  const pair = await cli("pair", await server.firstInvite(), "--dir", dir, "--json");
+  expect(pair.code, pair.err).toBe(0);
   const credential = await cli("mcp-token", "--dir", dir);
   expect(credential.code).toBe(0);
-  return { dir, key: JSON.parse(init.out).recoveryKey as string, token: credential.out.trim() };
+  // This device's own token, which no log line may carry either.
+  const key = (await loadConfig(dir))!.deviceToken!;
+  return { dir, key, token: credential.out.trim() };
 }
 async function host(dir: string, token: string, flags: string[] = [], modern = false) {
   const result = await openHttp(bundle, dir, token, flags, modern);
@@ -135,12 +137,13 @@ it.each([false, true])(
     ).toMatchObject({ applied: false, error: { code: "stale" } });
     await settled(owner.client);
     const phone = await directory();
-    expect((await cli("pair", key, "--dir", phone, "--device", "phone")).code).toBe(0);
+    const invite = await server!.invite();
+    expect((await cli("pair", invite, "--dir", phone, "--device", "phone")).code).toBe(0);
     const synced = await cli("sync", "--dir", phone);
     expect(synced.code, synced.err).toBe(0);
     expect(await readFile(join(phone, name), "utf8")).toBe(expected);
     expect(await readFile(join(phone, edited.beforeImage), "utf8")).toBe(original);
-    for (const secret of [token, key, "UNSENT PRIVATE MARKER"])
+    for (const secret of [token, key, invite, "UNSENT PRIVATE MARKER"])
       expect(owner.stderr()).not.toContain(secret);
   },
 );

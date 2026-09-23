@@ -15,7 +15,6 @@ import { join } from "node:path";
 import { Client as Host, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Client, type ClientOptions } from "../core/client.ts";
 import { MemoryIndexStore } from "../core/vault.ts";
-import { testWrapped } from "../core/test-keys.ts";
 import { TestServer } from "../core/test-server.ts";
 import { NodeVault, STALE_TEMP_MS } from "./vault.ts";
 import { McpReader } from "./mcp-read.ts";
@@ -40,12 +39,11 @@ beforeEach(async () => {
   await reader.vault.probeCase();
   server = new TestServer();
   await server.start();
-  const secret = new Uint8Array(32).fill(79);
   options = {
     vault: writer,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(secret, await testWrapped(secret))),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device: "history",
     coalesceWrites: false,
@@ -425,8 +423,7 @@ it("reports device checkpoints without claiming an offline or unconfirmed device
       { ...row, name: "offline", online: false, applied: null },
       { ...row, name: "unknown", applied: null },
     ],
-    maxDevices: 10,
-    invites: [{ id: "private invite", expiresAt: 100 }],
+    invites: [{ invite: "private invite", label: "private label", expiresAt: 100 }],
   });
   const ready = vi.spyOn(client, "deliveryReady", "get").mockReturnValue(true);
   const result = await tool(host, "delivery_status");

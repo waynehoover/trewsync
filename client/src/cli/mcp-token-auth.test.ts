@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { authenticateMcp, readMcpToken } from "./mcp-token.ts";
 import { saveConfig } from "./config.ts";
+import { generateDeviceId, generateDeviceToken } from "../core/pairing.ts";
 import { NodeVault, writeDurably } from "./vault.ts";
 import { McpReader } from "./mcp-read.ts";
 import { cli } from "./mcp-test.ts";
@@ -36,7 +37,8 @@ beforeEach(async () => {
     url: "ws://127.0.0.1:1",
     vaultId: "default",
     device: "test",
-    secret: new Uint8Array(32).fill(7),
+    deviceId: generateDeviceId(),
+    deviceToken: generateDeviceToken(),
   });
   path = join(root, ".trew/mcp-token.json");
   const issued = await cli("mcp-token", "--dir", root);

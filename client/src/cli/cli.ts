@@ -368,9 +368,12 @@ function clipToBytes(name: string, limit: number): string {
  * pairing holding exactly the credential the server registered, and `trew pair`
  * again, with the same invite or with none, finishes it under the same ids;
  * that works even after the invite has expired, because the server recognises
- * its own redemption. A refusal, or a server never reached, removes what was
- * saved, so nothing is left behind and the invite is not spent (hazard 2 in
- * plan/strip-ledger.md). "Paired" is said only once `redeemed` has come back.
+ * its own redemption. A refusal no retry changes, or a first attempt that
+ * never reached its server, removes what was saved, so nothing is left behind
+ * and the invite is not spent (hazard 2 in plan/strip-ledger.md). Finishing a
+ * pending pairing against a server that cannot be reached keeps it, since the
+ * attempt that saved it may have been registered. "Paired" is said only once
+ * `redeemed` has come back.
  *
  * What to do after a pairing that did not finish comes from
  * `adviseAfterPairing`, which the panel takes its words from too, and it is
@@ -394,9 +397,14 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
   const invite = given === undefined ? undefined : parseInvite(given);
   const held = await loadConfig(args.dir);
   let pending: PendingPairing;
+  // Whether this finishes a pairing an earlier run started. That run may have
+  // been answered with the answer lost, so this id and token may already be a
+  // row, and a server that cannot be reached now is no reason to forget them.
+  let resuming = false;
   if (held !== undefined && isPendingPairing(held)) {
     refuseAnotherPairing(args, held, invite);
     pending = held;
+    resuming = true;
     if (!args.json) io.err(`Finishing the pairing already started here, as "${held.device}".`);
   } else if (held !== undefined) {
     // Pairing over a paired vault would throw away this device's credential,
@@ -426,14 +434,16 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
 
   let notDurable: string | undefined;
   let paired: Config;
+  const how = {
+    timeoutMs: args.timeout,
+    resuming,
+    ...(args.verbose ? { log: (m: string) => io.err(`  ${m}`) } : {}),
+  };
   try {
     paired = await pairWithInvite(
       pending,
       pairingStore(args.dir, (why) => (notDurable = why)),
-      {
-        timeoutMs: args.timeout,
-        ...(args.verbose ? { log: (m: string) => io.err(`  ${m}`) } : {}),
-      },
+      how,
     );
   } catch (err) {
     // What the disk holds now, in the four states the counsellor knows, rather
@@ -666,7 +676,9 @@ async function cmdDevices(args: Args, io: Console): Promise<number> {
     );
   }
   io.out("");
-  io.out(`${devices.length} ${devices.length === 1 ? "device" : "devices"}. trew revoke ID stops one.`);
+  io.out(
+    `${devices.length} ${devices.length === 1 ? "device" : "devices"}. trew revoke ID stops one.`,
+  );
   const stale = devices.filter((d) => d.lastSeen === 0);
   if (stale.length > 0) {
     io.out(

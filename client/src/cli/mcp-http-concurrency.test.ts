@@ -1,17 +1,56 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "../core/client.ts";
 import { MemoryIndexStore } from "../core/vault.ts";
 import { TestServer, removeTree } from "../core/test-server.ts";
-import { testWrapped } from "../core/test-keys.ts";
 import { deferred, within } from "../core/test-async.ts";
 import { seamNamed } from "../core/seam.ts";
 import { httpFixture, initialize } from "./mcp-http-test.ts";
 import { cli, tool } from "./mcp-test.ts";
 import { readMcpToken, authenticateMcp } from "./mcp-token.ts";
-import { NodeVault } from "./vault.ts";
-import { device, settle, SUITE_SECRET, type Device } from "../stress/harness.ts";
+import { JsonIndexStore, NodeVault } from "./vault.ts";
+
+/**
+ * A device on its own directory, connected, as the stress harness makes one.
+ *
+ * Here rather than imported from `../stress/harness.ts`, so this file loads
+ * whatever state that suite is in: it needs a paired device and a settle
+ * loop, and nothing else of the stress suite.
+ */
+interface Device {
+  readonly c: Client;
+  readonly dir: string;
+}
+async function device(
+  server: TestServer,
+  name: string,
+  dirs: string[],
+  open: Client[],
+): Promise<Device> {
+  const dir = await mkdtemp(join(tmpdir(), `trew-mcp-${name}-`));
+  dirs.push(dir);
+  const c = new Client({
+    vault: new NodeVault(dir),
+    store: new JsonIndexStore(join(dir, ".trew", "index.json")),
+    url: server.wsUrl,
+    ...(await server.deviceCredentials(name)),
+    vaultId: "default",
+    device: name,
+    timeoutMs: 120_000,
+    coalesceWrites: false,
+  });
+  open.push(c);
+  await c.connect();
+  return { c, dir };
+}
+/** Syncs every device, in turn, until nothing changes or the rounds run out. */
+async function settle(devices: Device[], rounds = 6): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
+    for (const d of devices) await d.c.settle({}, 16);
+  }
+}
 
 let server: TestServer | undefined;
 let host: Awaited<ReturnType<typeof httpFixture>> | undefined;
@@ -39,7 +78,7 @@ async function setup(now?: () => number) {
     vault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(SUITE_SECRET, await testWrapped(SUITE_SECRET), "agent")),
+    ...(await server.deviceCredentials("agent")),
     vaultId: "default",
     device: "agent",
     coalesceWrites: false,

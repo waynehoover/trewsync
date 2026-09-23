@@ -38,8 +38,8 @@ export async function smokeMcpArtifact(artifact: string, runtime: string, denyRe
   });
   try {
     await server.start();
-    const initialized = await cli("pair", await server.firstInvite(), "--dir", dir);
-    assert.equal(initialized.code, 0, initialized.err);
+    const first = await cli("pair", await server.firstInvite(), "--dir", dir);
+    assert.equal(first.code, 0, first.err);
     const original = "UNSENT ARTIFACT MARKER\n- [ ] exact task\n";
     await writeFile(join(dir, "note.md"), original);
     const started = performance.now();

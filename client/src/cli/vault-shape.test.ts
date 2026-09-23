@@ -20,15 +20,11 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "../core/client.ts";
-import { testWrapped } from "../core/test-keys.ts";
 import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
 import { JsonIndexStore, NodeVault } from "./vault.ts";
 
-const SECRET = new Uint8Array(32).fill(23);
-let wrapped: string;
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 afterAll(async () => await cleanupBinary());
 
@@ -49,7 +45,7 @@ async function device(name: string): Promise<{ c: Client; dir: string }> {
     vault: new NodeVault(dir),
     store: new JsonIndexStore(join(dir, ".trew", "index.json")),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(SECRET, wrapped)),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device: name,
     timeoutMs: 60_000,

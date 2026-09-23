@@ -28,8 +28,8 @@ async function paired() {
   await server.start();
   const dir = await mkdtemp(join(tmpdir(), "trew-multivault-"));
   roots.push(dir);
-  const init = await cli("init", server.setup, "--dir", dir, "--json");
-  expect(init.code, init.err).toBe(0);
+  const first = await cli("pair", await server.firstInvite(), "--dir", dir, "--json");
+  expect(first.code, first.err).toBe(0);
   return dir;
 }
 async function settled(client: Client, vault: string) {

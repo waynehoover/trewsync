@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NodeVault } from "./vault.ts";
 import { removeTree } from "../core/test-server.ts";
-import { generateSecret } from "../core/crypto.ts";
+import { generateDeviceId, generateDeviceToken } from "../core/pairing.ts";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -171,8 +171,8 @@ describe("a write the filesystem cuts short", () => {
 });
 
 /**
- * The config is the only copy of the root secret, and the
- * first device claims the server the moment after writing it. It goes through
+ * The config is the only copy of this device's token, and a pairing writes it
+ * before the redemption that registers the token goes out. It goes through
  * the same durable path as a note, and a failure at any step leaves either the
  * previous config or none, never a temporary and never a partial file.
  */
@@ -181,7 +181,8 @@ describe("the config on disk", () => {
     url: "ws://127.0.0.1:1",
     vaultId: "default",
     device: "d",
-    secret: generateSecret(),
+    deviceId: generateDeviceId(),
+    deviceToken: generateDeviceToken(),
   });
 
   it("is owner-readable only, complete, and alone in its directory", async () => {
@@ -189,7 +190,7 @@ describe("the config on disk", () => {
     await saveConfig(root, c);
     const file = join(root, ".trew", "config.json");
     expect(((await stat(file)).mode & 0o777).toString(8)).toBe("600");
-    expect(Buffer.compare((await loadConfig(root))!.secret!, c.secret!)).toBe(0);
+    expect((await loadConfig(root))!.deviceToken).toBe(c.deviceToken);
     expect(await stateDir()).toEqual(["config.json"]);
   });
 
@@ -202,7 +203,7 @@ describe("the config on disk", () => {
       throw err;
     });
     await expect(saveConfig(root, config())).rejects.toThrow(/EIO/);
-    expect(Buffer.compare((await loadConfig(root))!.secret!, first.secret!)).toBe(0);
+    expect((await loadConfig(root))!.deviceToken).toBe(first.deviceToken);
     // Nothing beside the config: no temporary under any name.
     expect(await stateDir()).toEqual(["config.json"]);
   });
@@ -211,7 +212,7 @@ describe("the config on disk", () => {
     shortWrites(5);
     const c = config();
     await saveConfig(root, c);
-    expect(Buffer.compare((await loadConfig(root))!.secret!, c.secret!)).toBe(0);
+    expect((await loadConfig(root))!.deviceToken).toBe(c.deviceToken);
   });
 });
 

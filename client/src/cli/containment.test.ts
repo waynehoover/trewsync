@@ -4,10 +4,10 @@
  * F24 gave `NodeVault.write` a containment check and the trash a pair of them,
  * and stopped there. The config, the index, the lock and the exclusive-create
  * path all write under `.trew` and none of them asked. A `.trew` that is a
- * symlink to somewhere else therefore put this device's recovery material,
- * its index and its lock outside the vault, and no race was needed to arrange
- * it: an ordinary pre-existing filesystem layout does it, which is why this is
- * about accidents as much as about a hostile process.
+ * symlink to somewhere else therefore put this device's credential, its index
+ * and its lock outside the vault, and no race was needed to arrange it: an
+ * ordinary pre-existing filesystem layout does it, which is why this is about
+ * accidents as much as about a hostile process.
  */
 
 import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
@@ -15,10 +15,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { STATE_DIR, saveConfig, removeIndex, removeState } from "./config.ts";
+import {
+  STATE_DIR,
+  removeConfig,
+  removeIndex,
+  removeState,
+  saveAttention,
+  saveConfig,
+} from "./config.ts";
 import { lockVault } from "./lock.ts";
 import { NodeVault } from "./vault.ts";
-import { generateSecret } from "../core/crypto.ts";
+import { generateDeviceToken } from "../core/pairing.ts";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -42,8 +49,7 @@ const config = () => ({
   vaultId: "default",
   device: "d",
   deviceId: "d1",
-  deviceSecret: generateSecret(),
-  dataKey: generateSecret(),
+  deviceToken: generateDeviceToken(),
 });
 
 describe("a .trew that leaves the vault", () => {
@@ -63,6 +69,16 @@ describe("a .trew that leaves the vault", () => {
     const { vault } = await vaultWithEscapingState();
     await expect(removeIndex(vault)).rejects.toThrow(/leaves the vault/);
     await expect(removeState(vault)).rejects.toThrow(/leaves the vault/);
+    // And by the removal a refused pairing makes of what it saved.
+    await expect(removeConfig(vault)).rejects.toThrow(/leaves the vault/);
+  });
+
+  it("is refused by the record of what needs attention, and writes nothing outside", async () => {
+    const { vault, elsewhere } = await vaultWithEscapingState();
+    await expect(saveAttention(vault, { at: 1, count: 0, paths: [] })).rejects.toThrow(
+      /leaves the vault/,
+    );
+    expect(await readdir(elsewhere), "the record was written outside the vault").toEqual([]);
   });
 });
 

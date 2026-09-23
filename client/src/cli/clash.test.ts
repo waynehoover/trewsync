@@ -15,16 +15,12 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "../core/client.ts";
-import { testWrapped } from "../core/test-keys.ts";
 import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "../core/vault.ts";
 import { JsonIndexStore, NodeVault } from "./vault.ts";
 
-const SECRET = new Uint8Array(32).fill(11);
-let wrapped: string;
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 afterAll(async () => await cleanupBinary());
 
@@ -45,7 +41,7 @@ async function device(name: string): Promise<{ c: Client; dir: string }> {
     vault: new NodeVault(dir),
     store: new JsonIndexStore(join(dir, ".trew", "index.json")),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(SECRET, wrapped)),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device: name,
     timeoutMs: 20_000,
@@ -371,7 +367,7 @@ describe("a never-synced name nested inside an ordinary folder", () => {
       vault,
       store: new MemoryIndexStore(),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(SECRET, wrapped)),
+      ...(await server.deviceCredentials()),
       vaultId: "default",
       device: name,
       timeoutMs: 20_000,
@@ -456,10 +452,11 @@ describe("a never-synced name nested inside an ordinary folder", () => {
  * Two notes whose names differ only by case, created on two devices.
  *
  * `Note.md` on a device whose disk keeps case apart and `note.md` on one whose
- * disk does not are two files to the server and one to the second device. The
- * case-only rename is covered above; this is two people writing two notes. The
- * folding device cannot hold both, and the one thing it must not do is let the
- * arriving one land on top of the one it has.
+ * disk does not are one name to the server now (protocol 1 folds case), and
+ * were two files to it and one to the second device before. The case-only
+ * rename is covered above; this is two people writing two notes. The folding
+ * device cannot hold both, and the one thing that must not happen is either
+ * text being lost, or landing on top of the other.
  */
 describe("two notes that differ only by case, one written on each device", () => {
   /**
@@ -482,7 +479,7 @@ describe("two notes that differ only by case, one written on each device", () =>
       vault,
       store: new MemoryIndexStore(),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(SECRET, wrapped)),
+      ...(await server.deviceCredentials()),
       vaultId: "default",
       device: name,
       timeoutMs: 20_000,
@@ -508,12 +505,12 @@ describe("two notes that differ only by case, one written on each device", () =>
     await linux.vault.edit("Note.md", "written on linux\n");
 
     let macReport = await mac.c.settle();
-    await linux.c.settle();
+    let linuxReport = await linux.c.settle();
     for (let i = 0; i < 4; i++) {
       await receiveCommitted(mac.c.transport);
       macReport = await mac.c.settle();
       await receiveCommitted(linux.c.transport);
-      await linux.c.settle();
+      linuxReport = await linux.c.settle();
     }
 
     // Rule 1. The Mac's note is the Mac's note, untouched.
@@ -528,9 +525,18 @@ describe("two notes that differ only by case, one written on each device", () =>
     const deleted = (await mac.c.deleted()).notes.map((n) => n.path);
     expect(deleted).toEqual([]);
 
-    // The Mac says what it could not do and names the file in the way, rather
-    // than settling quietly with one note short.
-    expect(macReport.blocked, `mac: ${JSON.stringify(macReport)}`).toBeGreaterThan(0);
-    expect(macReport.inTheWay).toContainEqual({ path: "Note.md", blockedBy: "note.md" });
+    // Protocol 1 refuses the second of two names that fold alike, at the
+    // server (PLAN.md section 4.1, "the cost, accepted"), so the vault holds
+    // one note under that name. The device whose note was refused says so and
+    // names the live path it folds like, rather than settling quietly with one
+    // note short; it used to be the Mac, blocked by a name the server had
+    // accepted, and now nothing reaches the Mac that it cannot hold.
+    const why = linuxReport.needsAttention.find((n) => n.path === "Note.md")?.why;
+    expect(why, `linux: ${JSON.stringify(linuxReport)}`).toMatch(/^collision: .*"note\.md"/);
+    expect(linuxReport.skipped, `linux: ${JSON.stringify(linuxReport)}`).toBeGreaterThan(0);
+    expect(
+      { blocked: macReport.blocked, skipped: macReport.skipped },
+      `mac: ${JSON.stringify(macReport)}`,
+    ).toEqual({ blocked: 0, skipped: 0 });
   }, 120_000);
 });

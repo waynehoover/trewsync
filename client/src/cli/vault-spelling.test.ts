@@ -27,7 +27,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { JsonIndexStore, NodeVault, midRespell } from "./vault.ts";
 import { Client } from "../core/client.ts";
-import { testWrapped } from "../core/test-keys.ts";
 import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
 
 /** The disk's spelling of the name, and the one this vault reports. */
@@ -315,15 +314,12 @@ describe("a vault nothing has listed", () => {
 });
 
 /** Everything below runs a real client against a real server. */
-const SECRET = new Uint8Array(32).fill(43);
-let wrapped: string;
 let server: TestServer;
 const open: Client[] = [];
 const extra: string[] = [];
 
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 afterAll(async () => await cleanupBinary());
 
@@ -338,7 +334,7 @@ async function client(dir = root, device = "mac", form = normalForm): Promise<Cl
     vault: new NodeVault(dir, { normalForm: form }),
     store: new JsonIndexStore(join(dir, ".trew", "index.json")),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(SECRET, wrapped)),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device,
     timeoutMs: 20_000,

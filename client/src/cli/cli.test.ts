@@ -208,8 +208,9 @@ class LossyRelay {
     this.net = createServer((device) => this.relay(device));
   }
 
-  async start(): Promise<void> {
-    await new Promise<void>((resolve) => this.net.listen(0, "127.0.0.1", resolve));
+  /** Listens, on `port` when given, so a relay can come back where it was. */
+  async start(port = 0): Promise<void> {
+    await new Promise<void>((resolve) => this.net.listen(port, "127.0.0.1", resolve));
     const address = this.net.address();
     this.port = typeof address === "object" && address !== null ? address.port : 0;
   }
@@ -1191,7 +1192,13 @@ describe("what a paired device holds", () => {
     expect((await cli("sync", "--dir", a, "--json")).code).toBe(0);
 
     const after = JSON.parse(await read(a, ".trew/config.json")) as Record<string, string>;
-    expect(Object.keys(after).sort()).toEqual(["device", "deviceId", "deviceToken", "url", "vaultId"]);
+    expect(Object.keys(after).sort()).toEqual([
+      "device",
+      "deviceId",
+      "deviceToken",
+      "url",
+      "vaultId",
+    ]);
     // The token is the 32 random bytes the server insists on, and nothing else.
     expect(base64urlDecode(after["deviceToken"]!)).toHaveLength(32);
 
@@ -1491,6 +1498,57 @@ describe("adding a device", () => {
       expect(await read(b, "note.md")).toBe("for the late one\n");
     } finally {
       await relay.stop();
+    }
+  }, 120_000);
+
+  /**
+   * Finishing a pending pairing while the server cannot be reached keeps it.
+   *
+   * A first attempt that never reached anything sent nothing, and removing it
+   * is right (above). A retry is different: the attempt that saved this
+   * pairing may have been registered with its answer lost, so this id and
+   * token may be a live row whose invite is now spent, and forgetting them
+   * over a dropped connection would leave that row with nothing that can
+   * connect as it. `trew pair` says it is resuming, and the pairing stays for
+   * the next try.
+   */
+  it("keeps a pending pairing when finishing it cannot reach the server", async () => {
+    await fresh();
+    await firstDevice();
+    const relay = new LossyRelay(server.port);
+    await relay.start();
+    const port = relay.port;
+    let back: LossyRelay | undefined;
+    try {
+      const printed = await server.cli("invite", "-url", relay.url);
+      const invite = /trew1i_[A-Za-z0-9_-]+/.exec(printed)![0];
+      const b = await vaultDir("b");
+      expect((await cli("pair", invite, "--dir", b, "--device", "b")).code).toBe(1);
+      const id = (await loadConfig(b))!.deviceId;
+
+      // Nothing listening where the invite points.
+      await relay.stop();
+      const unreachable = await cli("pair", "--dir", b, "--timeout", "3000");
+      expect(unreachable.code, unreachable.all).toBe(1);
+      expect(unreachable.all).not.toMatch(/Paired/);
+      const kept = await loadConfig(b);
+      expect(kept && isPendingPairing(kept), "a dropped connection threw the pairing away").toBe(
+        true,
+      );
+      expect(kept!.deviceId).toBe(id);
+      expect(unreachable.all).toMatch(/run trew pair here again/);
+
+      // And when the server can be reached again, it finishes under that row.
+      back = new LossyRelay(server.port);
+      back.losing = false;
+      await back.start(port);
+      const done = await cli("pair", "--dir", b, "--json");
+      expect(done.code, done.all).toBe(0);
+      expect(done.json()["deviceId"]).toBe(id);
+    } finally {
+      // Stopping a relay twice is harmless, and this one may still be up.
+      await relay.stop();
+      await back?.stop();
     }
   }, 120_000);
 
@@ -2397,7 +2455,9 @@ describe("the commands", () => {
     ]) {
       expect(() => parseArgs(["sync", flag]), flag).toThrow(new RegExp(`no such option: ${flag}`));
     }
-    expect(USAGE).not.toMatch(/recovery key|rotat|data key|seal|HOST:PORT#TOKEN|start a new vault/i);
+    expect(USAGE).not.toMatch(
+      /recovery key|rotat|data key|seal|HOST:PORT#TOKEN|start a new vault/i,
+    );
     // And it says where the first device's invite is.
     expect(USAGE).toMatch(/<data>\/first-invite/);
   });
@@ -2410,8 +2470,8 @@ describe("the commands", () => {
  * characters produced a sixty-six byte default, the server refuses anything
  * over sixty-four, and every pairing test on that runner failed with
  * "the device name is 66 bytes". Nobody had chosen that name -- it is the
- * hostname plus a random tail -- so `trew init` failed on a machine whose
- * only unusual property was what it is called.
+ * hostname plus a random tail -- so pairing failed on a machine whose only
+ * unusual property was what it is called.
  *
  * The split is between a name somebody typed and one this program derived. A
  * typed name is theirs and a long one is refused, because it goes beside their

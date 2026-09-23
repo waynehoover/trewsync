@@ -26,8 +26,11 @@ it("the packaged entrypoint flushes a large JSON preview before exiting through 
   await server.start();
   const vault = await mkdtemp(join(tmpdir(), "trew-bin-vault-"));
   dirs.push(vault);
-  const init = await run(["init", server.setup, "--dir", vault], { out: () => {}, err: () => {} });
-  expect(init).toBe(0);
+  const first = await run(["pair", await server.firstInvite(), "--dir", vault], {
+    out: () => {},
+    err: () => {},
+  });
+  expect(first).toBe(0);
   const count = 1500;
   await Promise.all(
     Array.from({ length: count }, (_, i) =>
