@@ -2,7 +2,6 @@ import { afterEach, expect, it } from "vitest";
 import { Client } from "./client.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 import { TestServer } from "./test-server.ts";
-import { testWrapped } from "./test-keys.ts";
 import { receiveCommitted } from "./test-async.ts";
 
 let server: TestServer;
@@ -16,12 +15,11 @@ it("returns to an edited open note before preparing the remaining attachments", 
   await server.start();
   const vault = new MemoryVault(),
     order: string[] = [];
-  const secret = new Uint8Array(32).fill(55);
   client = new Client({
     vault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(secret, await testWrapped(secret))),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device: "phone",
     inspect: true,
@@ -60,7 +58,6 @@ it("does not restart the whole pass for every save to the open note", async () =
   server = new TestServer();
   await server.start();
   const vault = new MemoryVault();
-  const secret = new Uint8Array(32).fill(57);
   let listings = 0;
   const list = vault.list.bind(vault);
   vault.list = async () => {
@@ -71,7 +68,7 @@ it("does not restart the whole pass for every save to the open note", async () =
     vault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(secret, await testWrapped(secret))),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device: "phone",
     activePath: () => "note.md",
@@ -110,14 +107,12 @@ it.each(["oversized", "unreadable"] as const)(
     server = new TestServer();
     server.extraArgs = ["-max-file", "64"];
     await server.start();
-    const secret = new Uint8Array(32).fill(56),
-      wrapped = await testWrapped(secret);
     const source = new MemoryVault();
     const writer = new Client({
       vault: source,
       store: new MemoryIndexStore(),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(secret, wrapped, "writer")),
+      ...(await server.deviceCredentials("writer")),
       vaultId: "default",
       device: "writer",
       coalesceWrites: false,
@@ -141,7 +136,7 @@ it.each(["oversized", "unreadable"] as const)(
         vault,
         store: new MemoryIndexStore(),
         url: server.wsUrl,
-        ...(await server.deviceCredentials(secret, wrapped, "reader")),
+        ...(await server.deviceCredentials("reader")),
         vaultId: "default",
         device: "reader",
         inspect: true,
@@ -167,14 +162,12 @@ it.each(["oversized", "unreadable"] as const)(
 it("prioritizes a remote edit arriving while the active note is being read", async () => {
   server = new TestServer();
   await server.start();
-  const secret = new Uint8Array(32).fill(57),
-    wrapped = await testWrapped(secret);
   const source = new MemoryVault();
   const writer = new Client({
     vault: source,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(secret, wrapped, "writer")),
+    ...(await server.deviceCredentials("writer")),
     vaultId: "default",
     device: "writer",
     coalesceWrites: false,
@@ -188,7 +181,7 @@ it("prioritizes a remote edit arriving while the active note is being read", asy
       vault,
       store: new MemoryIndexStore(),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(secret, wrapped, "reader")),
+      ...(await server.deviceCredentials("reader")),
       vaultId: "default",
       device: "reader",
       inspect: true,

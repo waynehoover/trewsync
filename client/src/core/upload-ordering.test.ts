@@ -3,7 +3,6 @@ import { Client } from "./client.ts";
 import type { SocketLike } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 import { TestServer } from "./test-server.ts";
-import { testWrapped } from "./test-keys.ts";
 import { receiveCommitted } from "./test-async.ts";
 
 const clients: Client[] = [];
@@ -16,8 +15,6 @@ afterEach(async () => {
 it("covers delayed main updates before checkpointing an auxiliary upload", async () => {
   server = new TestServer();
   await server.start();
-  const secret = new Uint8Array(32).fill(84);
-  const wrapped = await testWrapped(secret);
   const vault = new MemoryVault();
   const store = new MemoryIndexStore();
   const sockets: WebSocket[] = [];
@@ -27,7 +24,7 @@ it("covers delayed main updates before checkpointing an auxiliary upload", async
     vault,
     store,
     url: server.wsUrl,
-    ...(await server.deviceCredentials(secret, wrapped, "writer")),
+    ...(await server.deviceCredentials("writer")),
     vaultId: "default",
     device: "writer",
     inspect: true,
@@ -94,7 +91,7 @@ it("covers delayed main updates before checkpointing an auxiliary upload", async
     vault: peerVault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(secret, wrapped, "peer")),
+    ...(await server.deviceCredentials("peer")),
     vaultId: "default",
     device: "peer",
     inspect: true,

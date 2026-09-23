@@ -17,7 +17,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { BINARY_SIZES, TEXT_EXTENSIONS, chunkBytes, looksLikeText, sizesFor } from "./chunk.ts";
+import { TEXT_EXTENSIONS, chunkBytes, looksLikeText, sizesFor } from "./chunk.ts";
 import {
   CORPUS_A,
   CORPUS_A_HEADER,
@@ -29,7 +29,6 @@ import {
   type Chunker,
   type Entry,
 } from "./chunk-fixtures.ts";
-import { SEAL_OVERHEAD } from "./crypto.ts";
 
 const text = readFileSync(FIXTURE_PATH, "utf8");
 const fixtures = readFixtures();
@@ -155,21 +154,18 @@ describe("corpus B has teeth", () => {
   }
 });
 
-describe("sizesForV1: the protocol 1 rule, which Go's SizesFor implements now", () => {
-  // PLAN M2 task 2 removes SEAL_OVERHEAD from sizesFor, and from then on these
-  // cases are checked against sizesFor as it is. Until then the client is still
-  // end-to-end encrypted and keeps the overhead, and the protocol 1 rule is
-  // today's sizesFor with the overhead handed back: a ceiling raised by
-  // SEAL_OVERHEAD comes out at exactly the ceiling. A missing ceiling is
-  // defaulted first, because today's default path takes the overhead off too.
+describe("sizesForV1: the protocol 1 rule, which sizesFor and Go's SizesFor both implement", () => {
+  // Checked against sizesFor as it is, with nothing handed back: the ceiling
+  // bounds raw bytes and nothing is reserved below it (PLAN M2 task 2). A
+  // ceiling of 0 or less is passed through too, because standing for the
+  // server not having said is part of the rule and sizesFor's own business.
   it("has cases to check", () => {
     expect(fixtures.sizesForV1.cases.length).toBeGreaterThanOrEqual(20);
   });
 
   for (const c of fixtures.sizesForV1.cases) {
     it(c.name, () => {
-      const ceiling = c.serverChunkMax > 0 ? c.serverChunkMax : BINARY_SIZES.max;
-      expect(sizesFor(c.size, c.isText, ceiling + SEAL_OVERHEAD)).toEqual(c.expected);
+      expect(sizesFor(c.size, c.isText, c.serverChunkMax)).toEqual(c.expected);
     });
   }
 });

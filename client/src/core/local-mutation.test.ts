@@ -2,17 +2,13 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { Client, type ClientOptions } from "./client.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 import { TestServer, serverBinary, cleanupBinary } from "./test-server.ts";
-import { testWrapped } from "./test-keys.ts";
 import { deferred, nextTurn, within } from "./test-async.ts";
 
-const SECRET = new Uint8Array(32).fill(27);
-let wrapped: string;
 let server: TestServer;
 const clients: Client[] = [];
 const releases: (() => void)[] = [];
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 afterAll(cleanupBinary);
 afterEach(async () => {
@@ -29,7 +25,7 @@ async function ready(extra: Partial<ClientOptions> = {}, settle = true) {
     vault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(SECRET, wrapped)),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device: "agent",
     timeoutMs: 20_000,
@@ -226,7 +222,7 @@ it("drains the admitted write before reconnect starts another engine on its stor
       vault,
       store,
       url: server.wsUrl,
-      ...(await server.deviceCredentials(SECRET, wrapped)),
+      ...(await server.deviceCredentials()),
       vaultId: "default",
       device: "agent",
       coalesceWrites: false,

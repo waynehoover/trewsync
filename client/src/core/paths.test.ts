@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { configFolderName, foldsTogether, isNeverSynced, spellOut, splitName } from "./paths.ts";
+import { fold } from "./fold.ts";
+import { pathReason } from "./path-policy.ts";
+import {
+  configFolderName,
+  foldPath,
+  foldsTogether,
+  isNeverSynced,
+  spellOut,
+  splitName,
+} from "./paths.ts";
 
 const none: ReadonlySet<string> = new Set();
 
@@ -31,6 +40,33 @@ describe("what never syncs", () => {
     expect(isNeverSynced("proj/node_modules/lib.md", extra)).toBe(true);
     expect(isNeverSynced("config/app.json", extra)).toBe(true);
     expect(isNeverSynced("proj/lib.md", extra)).toBe(false);
+  });
+});
+
+/**
+ * The names that break sync implementations, which Basalt's suite sealed and
+ * opened again. A path is its own identity on the wire now (plan/protocol.md,
+ * "Paths"), so what is left to hold them to is the path policy the server
+ * enforces at put: every one of these is an ordinary note that must sync, and
+ * the backslash is the one Obsidian's normalizePath would turn into a slash,
+ * which the server refuses by name. The contract's generated cases cover
+ * spaces, accents and astral characters; these add the rest of the corpus.
+ */
+describe("the characters that break sync implementations", () => {
+  it("are paths the policy lets through, all but the backslash", () => {
+    for (const path of [
+      "note.md",
+      "folder/sub folder/note.md",
+      "notes/2026-08-27 meeting: with a colon.md",
+      "emoji \u{1f5ff} trew.md",
+      "accents \u00e9\u00e0\u00fc and a ' quote.md",
+      'a "double quoted" name.md',
+      "very/" + "deep/".repeat(20) + "note.md",
+      "trailing space .md",
+    ]) {
+      expect(pathReason(path), path).toBeUndefined();
+    }
+    expect(pathReason("a\\backslash.md")).toBe("backslash");
   });
 });
 
@@ -86,6 +122,22 @@ describe("folding two paths together", () => {
   it("folds case and Unicode normalisation", () => {
     expect(foldsTogether("Note.md", "note.md")).toBe(true);
     expect(foldsTogether("a/Caf\u00e9.md", "a/Cafe\u0301.md")).toBe(true);
+  });
+
+  /**
+   * The protocol's fold is full case folding (plan/protocol.md, "Paths"), and
+   * the full half is what simple folding and `toLowerCase` both miss: the
+   * sharp s folds to two letters, so these are one file to the server, and a
+   * disk that folds case would hold them as one. A fold that kept them apart
+   * would upload a second note the server then refuses as a collision.
+   */
+  it("folds the way the protocol does, including a letter that folds to two", () => {
+    expect(foldsTogether("Stra\u00dfe.md", "STRASSE.md")).toBe(true);
+    expect(foldPath("Stra\u00dfe.md")).toBe("strasse.md");
+    expect(foldPath("Stra\u00dfe.md")).toBe(fold("Stra\u00dfe.md"));
+    // Dotted capital I, where Go and JavaScript lower-case differently and
+    // neither runtime's answer is the specification.
+    expect(foldsTogether("\u0130.md", "i\u0307.md")).toBe(true);
   });
 
   it("keeps two real files apart", () => {

@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { base64urlDecode } from "./crypto.ts";
+import { base64urlDecode } from "./digest.ts";
 import { fold, foldTable } from "./fold.ts";
 import { FOLD_TABLE_DIGEST, FOLD_TABLE_UNICODE_VERSION } from "./fold-table.ts";
 import { FrameError, MARKER_DEFLATE, MARKER_RAW, decodeFrame, encodeFrame } from "./frame.ts";

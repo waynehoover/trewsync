@@ -11,15 +11,11 @@ import { nextTurn } from "./test-async.ts";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client, restoredCopyPath } from "./client.ts";
-import { testWrapped } from "./test-keys.ts";
 import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
-const SECRET = new Uint8Array(32).fill(23);
-let wrapped: string;
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 afterAll(async () => {
   await cleanupBinary();
@@ -42,7 +38,7 @@ async function ready(): Promise<{ client: Client; vault: MemoryVault }> {
     vault,
     store: new MemoryIndexStore(),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(SECRET, wrapped)),
+    ...(await server.deviceCredentials()),
     vaultId: "default",
     device: "a",
     timeoutMs: 20_000,
@@ -141,7 +137,7 @@ describe("restoring onto an occupied path", () => {
       vault,
       store: new MemoryIndexStore(),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(SECRET, wrapped)),
+      ...(await server.deviceCredentials()),
       vaultId: "default",
       device: "a",
       timeoutMs: 20_000,

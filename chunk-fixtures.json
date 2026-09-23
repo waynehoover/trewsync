@@ -3161,7 +3161,7 @@
   },
   "sizesForV1": {
     "note": [
-      "Chunk sizes under the protocol 1 rule, which Go's SizesFor implements.",
+      "Chunk sizes under the protocol 1 rule, which Go's SizesFor and TypeScript's sizesFor implement.",
       "",
       "base is textSizesFor(size) for text below TEXT_AS_BINARY_ABOVE (4 MiB), otherwise BINARY_SIZES.",
       "max = min(base.max, serverChunkMax), with nothing reserved below the ceiling: chunkMax bounds",
@@ -3169,10 +3169,9 @@
       "max is then raised to at least WINDOW * 4 = 192, and min and avg are clamped to max. A",
       "serverChunkMax of 0 or less means the server has not said, and stands for BINARY_SIZES.max.",
       "",
-      "TypeScript's sizesFor still subtracts SEAL_OVERHEAD, because the client stays end-to-end",
-      "encrypted until the M2 strip and changing its ceiling before then would break it. Until then",
-      "its test checks these cases against sizesFor with the overhead handed back; PLAN M2 task 2",
-      "removes the overhead and checks sizesFor against them directly.",
+      "TypeScript's sizesFor follows the rule as stated, and its test checks these cases against it",
+      "directly, with nothing handed back: PLAN M2 task 2 removed the seal overhead Basalt reserved",
+      "below the ceiling.",
       "",
       "The expected values were computed from this statement of the rule, not from either",
       "implementation."
