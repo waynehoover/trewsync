@@ -1689,9 +1689,19 @@ func (s *Session) readBodies(want []string, allowance int64) error {
 	closed := false
 	defer func() {
 		if !closed {
+			if s.srv.abandonBodies != nil {
+				s.srv.abandonBodies()
+			}
 			// The caller is abandoning this exchange. The chunks that did land
 			// are harmless: a chunk no entry references is what the sweep
 			// collects, and one that is referenced later is one fewer to send.
+			//
+			// Closed here, on the session goroutine, and not left to finish on
+			// its own: Close is what joins the writers, and Handle forgets the
+			// session only after this returns, so Server.Shutdown cannot return
+			// while a body of this exchange is still being written. A backup
+			// or a restart that follows a stop sees every body whole or not at
+			// all, never a temp file some goroutine is still filling.
 			_ = w.Close()
 		}
 	}()

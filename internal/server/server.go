@@ -279,6 +279,17 @@ type Server struct {
 	// an invariant that holds only because a disk is slow is not one to rely on.
 	afterAppend func(uid int64)
 
+	// abandonBodies runs when readBodies gives up on an exchange part way,
+	// after the refusal has been queued and before the batch writer is closed,
+	// and is nil in every non-test build.
+	//
+	// The refusal leaves first, so a client can read it while a body it sent
+	// earlier in the exchange is still on its way to the disk. That window is
+	// as wide as one body write and there is no telling from outside when it
+	// has closed, so a test holds it open here to see that nothing treats the
+	// session as over, Shutdown included, until the writer has been closed.
+	abandonBodies func()
+
 	// commitMu makes appending an entry and announcing it one step.
 	//
 	// Without it two devices can commit uid 5 and uid 6 and reach the hub in
