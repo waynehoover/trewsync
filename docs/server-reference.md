@@ -19,6 +19,7 @@ for installed usage.
 | `purge -confirm VAULT -backup DIR` | Remove old versions and unused content. | No. |
 | `service` | Print a systemd unit and installation instructions. | Prints only. |
 | `health` | Check a running server. | Yes. |
+| `mcp-token -label L` | Mint, list (`-list`) or revoke (`-revoke ID`) a token for the MCP endpoint. | Yes; it goes through the running server. |
 | `version` | Print version, platform, and toolchain. | Independent of serving. |
 
 ## serve
@@ -32,6 +33,7 @@ for installed usage.
 | `-max-batch-bytes` | `16777216` | Upload batch budget: 16 MiB; may be lowered, not raised. |
 | `-max-fetch-bytes` | `67108864` | Download body budget: 64 MiB; maximum 256 MiB. |
 | `-allow-origin` | No extras | Additional exact browser origin; repeatable. |
+| `-mcp` | Off | Also serve the MCP endpoint at `/mcp` for agents; see below. |
 | `-v` | Off | Verbose logging. |
 
 Batch and fetch budgets cannot be smaller than one maximum-sized chunk.
@@ -51,6 +53,34 @@ Larger files cost more client memory, especially on phones. The server refuses
 to start if its file limit is below a current live file already stored. Raise
 the limit to start it; to lower it later, first delete or shrink those files
 through a client and let the changes sync. Purge alone keeps current files.
+
+## The MCP endpoint
+
+`serve -mcp` answers MCP's streamable HTTP at `/mcp` on the same port, with
+read tools over the notes the server stores: `vault_status`, `list_notes`,
+`read_note`, `search_notes`, `note_history`, `deleted_notes`,
+`compare_versions` and `delivery_status`. A client authenticates with
+`Authorization: Bearer <token>`:
+
+```bash
+trew mcp-token -label "Claude on Mac"                   # prints the token once
+trew mcp-token -label "Claude on Mac" -key-out FILE     # or writes it, mode 0600
+trew mcp-token -list                                    # ids, scopes, expiry, use counts
+trew mcp-token -revoke ID
+```
+
+A token reads the whole vault, and what it reads reaches the agent's model
+provider. It has read scope unless minted with `-scope write`, and expires
+after 90 days unless `-ttl` says otherwise (`-ttl 0` never expires). Every
+note-derived string in a result arrives under `untrusted_content`, apart from
+what the server vouches for under `trusted`.
+
+With `-addr 0.0.0.0` or the default `:3003` the endpoint listens on every
+interface, and the server logs a warning saying so: keep `/mcp` behind
+Tailscale or an identity-aware proxy. A request from a browser must carry an
+`Origin` given with `-allow-origin`. The endpoint keeps its search index in
+`search.db` in the data directory; it is derived, rebuilt from the store when
+it is missing or damaged, and not part of a backup.
 
 ## backup, verify, purge, stats
 
