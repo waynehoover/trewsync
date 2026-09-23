@@ -39,6 +39,7 @@ type markdownRecord struct {
 	fenceEnds   map[ast.Node]int       // fenced code blocks: end of the last line they hold
 	links       []linkRecord           // inline links, images and definitions
 	definitions map[ast.Node]bool
+	lazyChains  map[ast.Node][]ast.Node // HTML blocks opened on a lazy line: the containers it left
 }
 
 // linkRecord is one link, image or definition: its whole extent and its
@@ -195,6 +196,7 @@ func parseMarkdown(source string, start int) *markdownDocument {
 		fenceStarts: map[ast.Node]int{},
 		fenceEnds:   map[ast.Node]int{},
 		definitions: map[ast.Node]bool{},
+		lazyChains:  map[ast.Node][]ast.Node{},
 	}
 	pc := parser.NewContext()
 	pc.Set(markdownRecordKey, rec)

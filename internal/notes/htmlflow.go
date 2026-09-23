@@ -7,6 +7,7 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 // HTML blocks start where micromark says they start. goldmark's start
@@ -193,15 +194,75 @@ func (h htmlFlowParser) Open(parent ast.Node, reader text.Reader, pc parser.Cont
 	if pos < 0 || pos >= len(line) {
 		return nil, parser.NoChildren
 	}
-	interrupt := ast.IsParagraph(pc.LastOpenedBlock().Node)
-	kind := htmlFlowKind(line[pos:], interrupt)
+	// A paragraph deeper than parent means this line did not continue the
+	// paragraph's containers: it is a lazy line. micromark lets a complete
+	// tag start a block on a lazy line, though not when interrupting a
+	// paragraph in its own container.
+	last := pc.LastOpenedBlock().Node
+	lazy := ast.IsParagraph(last) && last.Parent() != parent
+	kind := htmlFlowKind(line[pos:], ast.IsParagraph(last) && !lazy)
 	if kind == 0 {
 		return nil, parser.NoChildren
 	}
 	node := ast.NewHTMLBlock(ast.HTMLBlockType(kind))
 	reader.AdvanceToEOL()
 	node.Lines().Append(segment)
+	if r := recordOf(pc); lazy && kind == 7 && r != nil {
+		// The block belongs to the containers the lazy line left: it ends
+		// at the first line that does not continue them.
+		var chain []ast.Node
+		for c := last.Parent(); c != nil && c != parent; c = c.Parent() {
+			chain = append([]ast.Node{c}, chain...)
+		}
+		r.lazyChains[node] = chain
+	}
 	return node, parser.NoChildren
+}
+
+func (h htmlFlowParser) Continue(node ast.Node, reader text.Reader, pc parser.Context) parser.State {
+	if r := recordOf(pc); r != nil {
+		if chain, ok := r.lazyChains[node]; ok {
+			if line, _ := reader.PeekLine(); !util.IsBlank(line) && !continuesChain(line, chain) {
+				return parser.Close
+			}
+		}
+	}
+	return h.BlockParser.Continue(node, reader, pc)
+}
+
+// continuesChain reports whether line, from where its parent containers'
+// markers end, carries the markers of chain as well: a ">" for each quote,
+// and for each list item at least its content's indentation. It is goldmark's
+// own continuation rule for those containers, applied without consuming.
+func continuesChain(line []byte, chain []ast.Node) bool {
+	i := 0
+	for _, c := range chain {
+		switch n := c.(type) {
+		case *ast.Blockquote:
+			j := i
+			for j < len(line) && j-i < 3 && line[j] == ' ' {
+				j++
+			}
+			if j >= len(line) || line[j] != '>' {
+				return false
+			}
+			j++
+			if j < len(line) && (line[j] == ' ' || line[j] == '\t') {
+				j++
+			}
+			i = j
+		case *ast.ListItem:
+			if w, _ := util.IndentWidth(line[i:], 0); w < n.Offset {
+				return false
+			}
+			p, _ := util.IndentPosition(line[i:], 0, n.Offset)
+			if p < 0 {
+				return false
+			}
+			i += p
+		}
+	}
+	return true
 }
 
 // listStartParser is goldmark's list parser with micromark's rule for a list
