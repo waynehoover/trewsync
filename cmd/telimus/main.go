@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/telimus/internal/control"
 	"github.com/waynehoover/telimus/internal/dirlock"
 	"github.com/waynehoover/telimus/internal/server"
 	"github.com/waynehoover/telimus/internal/store"
@@ -99,11 +100,20 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return cmdHealth(rest, out)
 		case "stats":
 			return cmdStats(rest, out)
+		case "invite":
+			return cmdInvite(rest, out)
+		case "devices":
+			return cmdDevices(rest, out)
+		case "revoke":
+			return cmdRevoke(rest, out)
+		case "uninvite":
+			return cmdUninvite(rest, out)
 		case "version":
 			fmt.Fprintf(out, "telimus %s %s/%s %s\n", resolveVersion(version, moduleVersion()), runtime.GOOS, runtime.GOARCH, runtime.Version())
 			return nil
 		default:
-			return fmt.Errorf("unknown command %q (try serve, backup, verify, purge, stats, service, health, version)", cmd)
+			return fmt.Errorf("unknown command %q (try serve, invite, devices, revoke, uninvite, backup, verify, "+
+				"purge, stats, service, health, version)", cmd)
 		}
 	}
 	return cmdServe(ctx, args, out)
@@ -442,6 +452,15 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		ln.Close()
 		return err
 	}
+	// The operator's socket, before "listening on" is printed, so `telimus
+	// invite` and the rest work from the moment anybody is told the server is
+	// up. Closed before the store is, by the order of the defers.
+	ctl, err := control.Listen(*dataDir, &operator{srv: srv, vault: *vault, urls: urls}, log)
+	if err != nil {
+		ln.Close()
+		return err
+	}
+	defer ctl.Close()
 	// The path and the expiry, never the string: a container log is not a
 	// private place, and the string adds a device to the vault.
 	switch {
