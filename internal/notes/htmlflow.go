@@ -222,7 +222,11 @@ func (h htmlFlowParser) Open(parent ast.Node, reader text.Reader, pc parser.Cont
 func (h htmlFlowParser) Continue(node ast.Node, reader text.Reader, pc parser.Context) parser.State {
 	if r := recordOf(pc); r != nil {
 		if chain, ok := r.lazyChains[node]; ok {
-			if line, _ := reader.PeekLine(); !util.IsBlank(line) && !continuesChain(line, chain) {
+			// A line that does not carry the containers' markers, or is
+			// blank after them, ends the block: it is lazy, or it is the
+			// blank line that ends a complete-tag block.
+			line, _ := reader.PeekLine()
+			if at, ok := continuesChain(line, chain); !util.IsBlank(line) && (!ok || util.IsBlank(line[at:])) {
 				return parser.Close
 			}
 		}
@@ -231,10 +235,11 @@ func (h htmlFlowParser) Continue(node ast.Node, reader text.Reader, pc parser.Co
 }
 
 // continuesChain reports whether line, from where its parent containers'
-// markers end, carries the markers of chain as well: a ">" for each quote,
-// and for each list item at least its content's indentation. It is goldmark's
-// own continuation rule for those containers, applied without consuming.
-func continuesChain(line []byte, chain []ast.Node) bool {
+// markers end, carries the markers of chain as well, and where they end: a
+// ">" for each quote, and for each list item at least its content's
+// indentation. It is goldmark's own continuation rule for those containers,
+// applied without consuming.
+func continuesChain(line []byte, chain []ast.Node) (int, bool) {
 	i := 0
 	for _, c := range chain {
 		switch n := c.(type) {
@@ -244,7 +249,7 @@ func continuesChain(line []byte, chain []ast.Node) bool {
 				j++
 			}
 			if j >= len(line) || line[j] != '>' {
-				return false
+				return i, false
 			}
 			j++
 			if j < len(line) && (line[j] == ' ' || line[j] == '\t') {
@@ -253,16 +258,16 @@ func continuesChain(line []byte, chain []ast.Node) bool {
 			i = j
 		case *ast.ListItem:
 			if w, _ := util.IndentWidth(line[i:], 0); w < n.Offset {
-				return false
+				return i, false
 			}
 			p, _ := util.IndentPosition(line[i:], 0, n.Offset)
 			if p < 0 {
-				return false
+				return i, false
 			}
 			i += p
 		}
 	}
-	return true
+	return i, true
 }
 
 // listStartParser is goldmark's list parser with micromark's rule for a list
@@ -334,7 +339,9 @@ func interruptedFlow(parent ast.Node, reader text.Reader) bool {
 // the next line interrupting.
 func codeAfterClosedContainer(code *ast.CodeBlock, src []byte) bool {
 	prev := code.PreviousSibling()
-	if prev == nil || code.Lines().Len() == 0 {
+	// Only while the code is that one lazy line: the next line of code is an
+	// ordinary one, and from it on the block interrupts as any other.
+	if prev == nil || code.Lines().Len() != 1 {
 		return false
 	}
 	switch prev.(type) {

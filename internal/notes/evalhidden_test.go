@@ -24,7 +24,11 @@ func TestEvalHidden(t *testing.T) {
 	results := make([][2][][2]int, len(inputs))
 	for i, s := range inputs {
 		for j, p := range []bool{false, true} {
-			for _, r := range MarkdownHidden(s, 0, p) {
+			ranges, err := MarkdownHidden(s, 0, p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range ranges {
 				results[i][j] = append(results[i][j], [2]int{r.Start, r.End})
 			}
 		}

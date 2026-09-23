@@ -68,7 +68,10 @@ func linkSpans(source string) ([]linkSpan, error) {
 		return nil, err
 	}
 	body := f.body
-	hidden := markdownHidden(source, body, false)
+	hidden, err := markdownHidden(source, body, false)
+	if err != nil {
+		return nil, err
+	}
 	blocked := func(start, end int) bool {
 		for _, r := range hidden {
 			if start < r.end && end > r.start {
@@ -77,12 +80,15 @@ func linkSpans(source string) ([]linkSpan, error) {
 		}
 		return false
 	}
-	d := parseMarkdown(source, body)
+	d, err := parseMarkdown(source, body)
+	if err != nil {
+		return nil, err
+	}
 	var spans []linkSpan
 	records := append([]linkRecord(nil), d.record.links...)
 	sortLinkRecords(records)
 	for _, l := range records {
-		if l.dest.start < 0 || l.dest.end <= l.dest.start || !d.present(l.node) {
+		if l.dest.start < 0 || l.dest.end <= l.dest.start || !d.present(l.node) || d.whole(l).start < 0 {
 			continue
 		}
 		start, end := l.dest.start+d.offset, l.dest.end+d.offset

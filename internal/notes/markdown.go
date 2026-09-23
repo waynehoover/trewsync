@@ -165,8 +165,17 @@ type markdownDocument struct {
 	record *markdownRecord
 }
 
-// parseMarkdown parses source[start:] as CommonMark.
-func parseMarkdown(source string, start int) *markdownDocument {
+// parseMarkdown parses source[start:] as CommonMark. goldmark, and the
+// wrappers here that follow micromark, are not expected to panic on any
+// input; if one does, the note is refused as internal rather than taking
+// the server down with it, and the fuzz test in fuzz_test.go looks for such
+// inputs.
+func parseMarkdown(source string, start int) (d *markdownDocument, err error) {
+	defer func() {
+		if recover() != nil {
+			d, err = nil, refuse("internal", "the note's Markdown could not be parsed")
+		}
+	}()
 	// micromark drops a byte-order mark at the start of what it parses, and
 	// Basalt parsed a note's body alone, so a body that begins with one (after
 	// frontmatter) is parsed as if it did not. goldmark would read the mark as
@@ -201,7 +210,7 @@ func parseMarkdown(source string, start int) *markdownDocument {
 	pc := parser.NewContext()
 	pc.Set(markdownRecordKey, rec)
 	root := markdownParser.Parse(text.NewReader(src), parser.WithContext(pc))
-	return &markdownDocument{src: src, orig: source[start:], offset: start, root: root, record: rec}
+	return &markdownDocument{src: src, orig: source[start:], offset: start, root: root, record: rec}, nil
 }
 
 // hidden returns the extents, in note byte offsets, of the nodes Basalt's
@@ -301,8 +310,11 @@ func linesRange(src []byte, lines *text.Segments) byteRange {
 // ranges of source, from start, that hidden nodes and %% comments cover. A
 // %% that begins inside code or HTML (or, with protectLinks, a link) opens
 // no comment; a comment runs to the next %% wherever that is, or to the end.
-func markdownHidden(source string, start int, protectLinks bool) []byteRange {
-	d := parseMarkdown(source, start)
+func markdownHidden(source string, start int, protectLinks bool) ([]byteRange, error) {
+	d, err := parseMarkdown(source, start)
+	if err != nil {
+		return nil, err
+	}
 	hidden := d.hidden(protectLinks)
 	protected := mergeRanges(hidden)
 	index := 0
@@ -321,7 +333,7 @@ func markdownHidden(source string, start int, protectLinks bool) []byteRange {
 		hidden = append(hidden, byteRange{at, end})
 		at = indexFrom(source, "%%", end)
 	}
-	return mergeRanges(hidden)
+	return mergeRanges(hidden), nil
 }
 
 // indexFrom is String.prototype.indexOf(sub, from).
@@ -342,14 +354,17 @@ type Range struct{ Start, End int }
 // MarkdownHidden is Basalt's markdownHidden: the ranges of the note, from
 // UTF-16 offset start, that tags and links are not looked for in, merged and
 // in order.
-func MarkdownHidden(source string, start int, protectLinks bool) []Range {
+func MarkdownHidden(source string, start int, protectLinks bool) ([]Range, error) {
 	x := newUnitIndex(source)
-	ranges := markdownHidden(source, byteAtUnit(source, start), protectLinks)
+	ranges, err := markdownHidden(source, byteAtUnit(source, start), protectLinks)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]Range, len(ranges))
 	for i, r := range ranges {
 		out[i] = Range{x.at(r.start), x.at(r.end)}
 	}
-	return out
+	return out, nil
 }
 
 func sortRanges(r []byteRange) {

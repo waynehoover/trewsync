@@ -731,7 +731,10 @@ func coverage(source string, ranges [][2]int) map[int]bool {
 }
 
 func checkHidden(v hiddenVector) error {
-	got := MarkdownHidden(string(v.Source), v.Start, v.ProtectLinks)
+	got, err := MarkdownHidden(string(v.Source), v.Start, v.ProtectLinks)
+	if err != nil {
+		return err
+	}
 	var pairs [][2]int
 	for _, r := range got {
 		pairs = append(pairs, [2]int{r.Start, r.End})
@@ -764,7 +767,11 @@ type inlineVector struct {
 }
 
 func checkInline(v inlineVector) error {
-	return compareTags(InlineTags(string(v.Source), v.Start), v.Want)
+	got, err := InlineTags(string(v.Source), v.Start)
+	if err != nil {
+		return err
+	}
+	return compareTags(got, v.Want)
 }
 
 type validateVector struct {
@@ -1146,10 +1153,10 @@ var oracleBugs = []oracleBug{
 }
 
 func wantHidden(source string, start int, plain, links []Range) error {
-	if got := MarkdownHidden(source, start, false); plain != nil && !reflect.DeepEqual(got, plain) {
+	if got, err := MarkdownHidden(source, start, false); err != nil || plain != nil && !reflect.DeepEqual(got, plain) {
 		return fmt.Errorf("without links: got %v, want %v", got, plain)
 	}
-	if got := MarkdownHidden(source, start, true); !reflect.DeepEqual(got, links) {
+	if got, err := MarkdownHidden(source, start, true); err != nil || !reflect.DeepEqual(got, links) {
 		return fmt.Errorf("with links: got %v, want %v", got, links)
 	}
 	return nil

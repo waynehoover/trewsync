@@ -205,6 +205,9 @@ func (s *mdLinkParser) Parse(parent ast.Node, block text.Reader, pc parser.Conte
 	}
 
 	if link == nil {
+		// A reference link has no destination of its own: forget the one a
+		// failed inline attempt may have read.
+		destination = byteRange{-1, -1}
 		// maybe shortcut reference link
 		block.SetPosition(l, pos)
 		ssegment := text.NewSegment(last.Segment.Stop, segment.Start)

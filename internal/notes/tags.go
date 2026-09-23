@@ -300,19 +300,30 @@ func tagOccurrences(source string) ([]tagOcc, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(found, inlineTags(source, f.body)...), nil
+	inline, err := inlineTags(source, f.body)
+	if err != nil {
+		return nil, err
+	}
+	return append(found, inline...), nil
 }
 
 // InlineTags is Basalt's inlineTags: the hashtags in the body from UTF-16
 // offset start, outside code, inline code, HTML, links, images, reference
 // definitions, %% comments and wiki links.
-func InlineTags(source string, start int) []TagOccurrence {
-	return tagOccurrencesInUnits(source, inlineTags(source, byteAtUnit(source, start)))
+func InlineTags(source string, start int) ([]TagOccurrence, error) {
+	found, err := inlineTags(source, byteAtUnit(source, start))
+	if err != nil {
+		return nil, err
+	}
+	return tagOccurrencesInUnits(source, found), nil
 }
 
-func inlineTags(source string, start int) []tagOcc {
+func inlineTags(source string, start int) ([]tagOcc, error) {
 	body := source[start:]
-	hidden := markdownHidden(source, start, true)
+	hidden, err := markdownHidden(source, start, true)
+	if err != nil {
+		return nil, err
+	}
 	for _, w := range wikiMatches(body) {
 		hidden = append(hidden, byteRange{start + w.start, start + w.end})
 	}
@@ -332,7 +343,7 @@ func inlineTags(source string, start int) []tagOcc {
 			found = append(found, tagOcc{Tag: tag, start: at, end: start + m.end, location: "content"})
 		}
 	}
-	return found
+	return found, nil
 }
 
 // hashtagMatch is one match of Basalt's hashtag expression

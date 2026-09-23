@@ -28,7 +28,10 @@ func TestASTDump(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, in := range inputs {
-		d := parseMarkdown(in, 0)
+		d, err := parseMarkdown(in, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var b strings.Builder
 		_ = ast.Walk(d.root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 			if !entering {
@@ -63,6 +66,15 @@ func TestASTDump(t *testing.T) {
 			}
 			return ast.WalkContinue, nil
 		})
-		t.Logf("=== %q\n%s hidden %v\nstock goldmark:\n%s", in, b.String(), MarkdownHidden(in, 0, true), s.String())
+		t.Logf("=== %q\n%s hidden %v\nstock goldmark:\n%s", in, b.String(), mustHidden(t, in, 0, true), s.String())
 	}
+}
+
+func mustHidden(t *testing.T, source string, start int, protectLinks bool) []Range {
+	t.Helper()
+	r, err := MarkdownHidden(source, start, protectLinks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
