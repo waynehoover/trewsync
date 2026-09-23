@@ -8,7 +8,8 @@
 // them, so a revoke done that way leaves the revoked device receiving notes.
 // The socket carries `invite`, `devices`, `revoke` and `uninvite` to the server,
 // which does each through the same code a device's request goes through: the
-// same commit lock, the same eviction.
+// same commit lock, the same eviction. It carries the MCP token commands too
+// (`mcp-token`, `mcp-tokens`, `mcp-revoke`), under the same lock.
 //
 // The socket is a unix socket in the data directory, mode 0600, so whoever can
 // reach it can already read the database beside it: the socket is not a new
@@ -44,12 +45,15 @@ const requestTimeout = 30 * time.Second
 
 // Request is one operation the operator asks of the running server.
 type Request struct {
-	// Op is "invite", "devices", "revoke" or "uninvite".
+	// Op is "invite", "devices", "revoke", "uninvite", "mcp-token",
+	// "mcp-tokens" or "mcp-revoke".
 	Op string `json:"op"`
 
-	// invite. TTLMs is the lifetime, and Never says the invite does not
-	// expire, which only the operator may ask for. URL, when set, is the
-	// address the invite strings carry instead of the server's own.
+	// invite and mcp-token. TTLMs is the lifetime, and Never says the
+	// credential does not expire, which only the operator may ask for. URL,
+	// when set, is the address the invite strings carry instead of the
+	// server's own. Label names the invite, or the token and the author its
+	// writes are recorded as.
 	TTLMs int64  `json:"ttlMs,omitempty"`
 	Never bool   `json:"never,omitempty"`
 	Label string `json:"label,omitempty"`
@@ -63,6 +67,11 @@ type Request struct {
 	DeviceID string `json:"deviceId,omitempty"`
 	// uninvite.
 	Invite string `json:"invite,omitempty"`
+
+	// mcp-token: "read", the default, or "write".
+	Scope string `json:"scope,omitempty"`
+	// mcp-revoke.
+	TokenID string `json:"tokenId,omitempty"`
 }
 
 // Reply is the answer to one Request: exactly one of its parts is set, and
@@ -74,6 +83,30 @@ type Reply struct {
 	Devices  *Devices  `json:"devices,omitempty"`
 	Revoked  *Revoked  `json:"revoked,omitempty"`
 	Canceled *Canceled `json:"uninvited,omitempty"`
+
+	MCPToken   *MCPToken   `json:"mcpToken,omitempty"`
+	MCPTokens  *MCPTokens  `json:"mcpTokens,omitempty"`
+	MCPRevoked *MCPRevoked `json:"mcpRevoked,omitempty"`
+}
+
+// MCPToken is a minted MCP token: the listing row and, once, the token itself.
+// The token reaches nothing but the operator who asked, over this socket.
+type MCPToken struct {
+	Token json.RawMessage `json:"token"` // the listing row, in the store's shape
+	// Secret is the bearer credential, 43 characters of base64url.
+	Secret string `json:"secret"`
+	Vault  string `json:"vault"`
+}
+
+// MCPTokens is a vault's MCP tokens, in the store's listing shape.
+type MCPTokens struct {
+	Tokens json.RawMessage `json:"tokens"`
+	Vault  string          `json:"vault"`
+}
+
+// MCPRevoked is an MCP token taken off the vault.
+type MCPRevoked struct {
+	TokenID string `json:"tokenId"`
 }
 
 // ErrorReply is a refused request: a code a script can match and a message a
@@ -129,6 +162,7 @@ const (
 	CodeBadRequest = "badrequest"
 	CodeNoDevice   = "nodevice"
 	CodeNoInvite   = "noinvite"
+	CodeNoToken    = "notoken"
 	CodeInternal   = "internal"
 )
 
