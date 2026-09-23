@@ -199,6 +199,59 @@ func checkCollision(q querier, vaultID string, e Entry) error {
 	return nil
 }
 
+// ErrFolderNotEmpty is a deletion of a path that live paths still lie beneath:
+// a folder deleted while something is in it, answered `stale`.
+//
+// # Why the server refuses it rather than taking it
+//
+// Folder deletions travel (2026-09-23; docs/design.md, "Folders"). A device
+// that removes a folder sends the deletions of everything in it first and the
+// folder's own deletion after they are committed, so a folder deletion this
+// refuses is one a write beat: another device put a note in the folder after
+// the deleting device last heard, or one of the file deletions was itself
+// refused. Taking it anyway would leave the history saying the folder went
+// while a note in it stayed, and a device reading that history cannot tell a
+// note written in the race from a file deletion still to come, which want
+// opposite answers: keep the folder, or remove it once the deletion lands.
+// Refused, a folder deletion in the history always came after everything in
+// the folder had gone, so what a device finds in a deleted folder is either
+// something it has not sent or something written after the deletion, and
+// either one keeps the folder. The note is never at stake either way: no
+// device removes a folder that holds anything.
+//
+// `stale` rather than a code of its own, because it is the same condition
+// seen from the folder: the write was prepared against a vault that has
+// changed since, and the answer is the one every stale refusal gets, reading
+// what arrived and deciding again. Only an explicit deletion is asked. A
+// rename's retirement of its source is not, because a case-only folder rename
+// moves the folder entry and its files one move at a time, across batches
+// (plan/protocol.md, "Paths", collision rule 1).
+var ErrFolderNotEmpty = fmt.Errorf("%w: the folder still holds live paths", ErrStale)
+
+// checkEmptied applies that rule to one entry, against the live set as it
+// stands in the caller's transaction, so a batch that deletes a folder's
+// files ahead of the folder commits all of it.
+func checkEmptied(q querier, vaultID string, e Entry) error {
+	if !e.Deleted {
+		return nil
+	}
+	// Every live path beneath is a key in [path + "/", path + "0"): "/" is
+	// 0x2F and "0" the byte after it, and the table compares bytes, so a
+	// sibling such as `path.md`, `path-old/a.md` or `path0/a.md` is outside
+	// the range and a descendant never is.
+	var held string
+	err := q.QueryRow(`SELECT path FROM live_paths WHERE vault_id = ? AND path > ? AND path < ?
+	                    ORDER BY path LIMIT 1`, vaultID, e.Path+"/", e.Path+"0").Scan(&held)
+	if errNoRow(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %q cannot be deleted while %q is live in it; a folder is deleted after everything in it",
+		ErrFolderNotEmpty, e.Path, held)
+}
+
 // Collides reports whether an entry would collide with the live set as it
 // stands now, as ErrCollision, and changes nothing.
 //
