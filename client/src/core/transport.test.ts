@@ -19,17 +19,38 @@ import { deferred, nextTurn } from "./test-async.ts";
 
 afterEach(() => vi.useRealTimers());
 
-import { chunkName } from "./crypto.ts";
-import { FakeSocket, RIG_SECRET, engineOnFakeSocket, ready, settle } from "./fake-socket.ts";
-import { testKeys } from "./test-keys.ts";
+import { chunkName } from "./digest.ts";
+import {
+  FakeSocket,
+  RIG_EPOCH,
+  engineOnFakeSocket,
+  rawFrame,
+  ready,
+  settle,
+} from "./fake-socket.ts";
+import { MARKER_DEFLATE, MARKER_RAW, decodeFrame, encodeFrame } from "./frame.ts";
 import {
   Backoff,
   ConnectionError,
+  LOCAL_MAX_CHUNK_BYTES,
   PROTO,
   ProtocolError,
   Transport,
+  entryBudget,
   type Batch,
 } from "./transport.ts";
+
+/** Random bytes, which do not compress, so they travel in a raw frame. */
+function noise(n: number): Uint8Array {
+  const out = new Uint8Array(n);
+  for (let at = 0; at < n; at += 65536) {
+    crypto.getRandomValues(out.subarray(at, Math.min(at + 65536, n)));
+  }
+  return out;
+}
+
+/** The raw chunk inside a frame this device sent. */
+const opened = (frame: Uint8Array): Uint8Array => decodeFrame(frame, LOCAL_MAX_CHUNK_BYTES);
 
 /** A connected transport and the socket behind it. */
 async function connected(
@@ -64,12 +85,13 @@ async function helloed(cursor = 0, opts: Parameters<typeof connected>[0] = {}) {
 }
 
 /**
- * No authenticator, for the puts below that are about the transport rather
- * than about the entry. `put` takes it rather than defaulting it, so that a
- * caller that has one cannot forget to pass it; a test that deliberately has
- * none says so here.
+ * The conditions of a first write, for the puts below that are about the
+ * transport rather than about the entry: no live version at the path. `put`
+ * takes its conditions rather than defaulting them, so that a caller with a
+ * base cannot forget to pass it; a test that deliberately writes against
+ * nothing says so here.
  */
-const unsigned = { mac: "", parent: "" };
+const noBase = { base: 0 };
 
 describe("transfer byte progress", () => {
   it.each(["put", "putmany"])(
@@ -84,7 +106,11 @@ describe("transfer byte progress", () => {
       }
       const socket = new BufferedSocket();
       const { t } = await helloed(0, { socket });
-      const body = new Uint8Array(100);
+      // Incompressible, so the frame is the chunk and one marker byte, and the
+      // numbers below are the frame's.
+      const body = noise(100);
+      const frame = encodeFrame(body);
+      expect(frame[0]).toBe(MARKER_RAW);
       const name = await chunkName(body);
       const reused = await chunkName(new Uint8Array([1]));
       const seen: number[] = [];
@@ -93,8 +119,8 @@ describe("transfer byte progress", () => {
       let done = false;
       const putting = (
         op === "put"
-          ? t.put("p", meta, [name, reused], produce, unsigned, (n) => seen.push(n))
-          : t.putMany([{ path: "p", meta, names: [name, reused], ...unsigned }], produce, (n) =>
+          ? t.put("p", meta, [name, reused], produce, noBase, (n) => seen.push(n))
+          : t.putMany([{ path: "p", meta, names: [name, reused], ...noBase }], produce, (n) =>
               seen.push(n),
             )
       ).then((r) => {
@@ -104,18 +130,20 @@ describe("transfer byte progress", () => {
       try {
         socket.reply({ res: "want", chunks: [name] });
         await settle();
-        expect(socket.sentBinary).toEqual([body]);
+        // The body goes up framed, and the framing is done here.
+        expect(socket.sentBinary).toEqual([frame]);
         expect(seen).toEqual([0]);
         socket.bufferedAmount = 60;
-        await expect.poll(() => seen.at(-1)).toBe(40);
+        await expect.poll(() => seen.at(-1)).toBe(frame.length - 60);
         socket.bufferedAmount = 0;
-        await expect.poll(() => seen.at(-1)).toBe(100);
+        await expect.poll(() => seen.at(-1)).toBe(frame.length);
         expect(done).toBe(false);
         expect(produce).toHaveBeenCalledTimes(1);
         socket.reply(
           op === "put" ? { res: "ack", uid: 1 } : { res: "acks", results: [{ uid: 1 }] },
         );
-        expect(await putting).toMatchObject({ bytes: 100, uploaded: 1 });
+        // What went on the wire is what is counted: frame bytes.
+        expect(await putting).toMatchObject({ bytes: frame.length, uploaded: 1 });
       } finally {
         t.close();
         await putting.catch(() => {});
@@ -143,10 +171,12 @@ describe("transfer byte progress", () => {
     }
     const socket = new CountingSocket();
     const { t } = await helloed(0, { socket });
-    const body = new Uint8Array(8 * 1024 * 1024); // over UPLOAD_HIGH_WATER
+    // Over UPLOAD_HIGH_WATER once framed, which it only is if it does not
+    // compress: a frame of zeroes would be a few kilobytes.
+    const body = noise(8 * 1024 * 1024);
     const name = await chunkName(body);
     const meta = { size: body.length, ctime: 0, mtime: 0 };
-    const putting = t.put("p", meta, [name], async () => body, unsigned);
+    const putting = t.put("p", meta, [name], async () => body, noBase);
     try {
       socket.reply({ res: "want", chunks: [name] });
       await expect.poll(() => reads > 0).toBe(true);
@@ -181,13 +211,14 @@ describe("transfer byte progress", () => {
       });
     try {
       socket.reply({ res: "bodies", count: 2 });
-      socket.body(bodies[0]!);
+      // Frames, a marker byte each, and what is counted is what arrived.
+      socket.body(rawFrame(bodies[0]!));
       await settle();
-      expect(seen).toEqual([0, 3]);
+      expect(seen).toEqual([0, 4]);
       expect(done).toBe(false);
-      socket.body(bodies[1]!);
+      socket.body(rawFrame(bodies[1]!));
       expect(await fetching).toEqual(bodies);
-      expect(seen).toEqual([0, 3, 5]);
+      expect(seen).toEqual([0, 4, 7]);
     } finally {
       t.close();
       await fetching.catch(() => {});
@@ -222,8 +253,8 @@ describe("upload acknowledgments behind metadata verification", () => {
     const meta = { size: 3, ctime: 1, mtime: 1 };
     const write =
       res === "acks"
-        ? t.putMany([{ path: "p", meta, names: [name], ...unsigned }], async () => body)
-        : t.put("p", meta, [name], async () => body, unsigned);
+        ? t.putMany([{ path: "p", meta, names: [name], ...noBase }], async () => body)
+        : t.put("p", meta, [name], async () => body, noBase);
     let completed = false;
     const result = write.then((value) => {
       completed = true;
@@ -254,7 +285,7 @@ describe("upload acknowledgments behind metadata verification", () => {
     const { t, socket } = await helloed(0, {
       onBatch: async () => {
         await settle();
-        throw new Error("metadata authentication failed");
+        throw new Error("the batch before this write could not be applied");
       },
     });
     const write = t.put(
@@ -262,9 +293,11 @@ describe("upload acknowledgments behind metadata verification", () => {
       { size: 0, ctime: 1, mtime: 1 },
       [],
       async () => new Uint8Array(),
-      unsigned,
+      noBase,
     );
-    const checked = expect(write).rejects.toThrow("metadata authentication failed");
+    const checked = expect(write).rejects.toThrow(
+      "the batch before this write could not be applied",
+    );
     socket.reply({ op: "batch", from: 1, to: 1, entries: [] });
     socket.reply({ res: "have", uid: 2 });
     await checked;
@@ -447,134 +480,116 @@ describe("the handshake", () => {
     expect(t.isClosed).toBe(true);
   });
 
-  it("sends its protocol version, a device id, an id, and the crypto suite it implements", async () => {
-    // A client that names a scheme it does not implement gets a session it
-    // cannot decrypt anything in.
+  /**
+   * The frame is exactly the fields protocol 1 names, and nothing else: no
+   * `crypto` suite, which Basalt's hello carried and a Trew server has no use
+   * for, and no `epoch` on a device that has not been told one.
+   */
+  it("sends its protocol version, a device id and an id, and no crypto suite", async () => {
     const { t, socket } = await connected();
     void t
-      .hello({ vault: "v", deviceId: "dev", token: "t", device: "d", cursor: 0 })
+      .hello({ vault: "v", deviceId: "dev", token: "t", device: "d", cursor: 7 })
       .catch(() => {});
     await settle();
-    expect(socket.sentText[0]).toMatchObject({
+    expect(socket.sentText[0]).toEqual({
       op: "hello",
+      id: 1,
       proto: PROTO,
-      crypto: "basalt/hkdf-aes-gcm/1",
+      vault: "v",
+      deviceId: "dev",
+      token: "t",
+      device: "d",
+      cursor: 7,
     });
-    expect(socket.sentText[0]!["id"]).toBe(1);
+    expect(PROTO).toBe(1);
+    expect("crypto" in socket.sentText[0]!).toBe(false);
   });
 
-  it("reads every ceiling ready carries, and the wrapped key", async () => {
+  it("sends the epoch its cursor was read under, and only when there is one", async () => {
+    // Absent, the server takes the cursor as it is; present, a server whose
+    // history is not that one replays the vault from uid 1 instead of
+    // refusing a cursor it never issued (plan/protocol.md, "Device session").
+    for (const epoch of [undefined, "an-epoch"]) {
+      const { t, socket } = await connected();
+      void t
+        .hello({ vault: "v", deviceId: "dev", token: "t", device: "d", cursor: 3, epoch })
+        .catch(() => {});
+      await settle();
+      const sent = socket.sentText[0]!;
+      if (epoch === undefined) expect("epoch" in sent, "an epoch nobody gave was sent").toBe(false);
+      else expect(sent["epoch"]).toBe(epoch);
+      t.close();
+    }
+  });
+
+  it("reads every ceiling ready carries, and the epoch", async () => {
     const { t, socket } = await connected();
     const hello = t.hello({ vault: "v", deviceId: "dev", token: "t", device: "d", cursor: 0 });
     socket.reply(
       ready({
         minProto: 3,
         serverVersion: "1.2.3",
+        epoch: "the-store's-epoch",
+        cursor: 44,
+        perFileMax: 999,
+        chunkMax: 4096,
+        maxChunks: 17,
         maxBatchBytes: 1234,
         maxFetchBytes: 5678,
-        wrapped: "AAAA",
       }),
     );
-    expect(await hello).toMatchObject({
+    // Every field, and no other: there is no data key to read any more.
+    expect(await hello).toEqual({
       proto: PROTO,
       minProto: 3,
       serverVersion: "1.2.3",
+      epoch: "the-store's-epoch",
+      cursor: 44,
+      perFileMax: 999,
+      chunkMax: 4096,
+      maxChunks: 17,
       maxBatchBytes: 1234,
       maxFetchBytes: 5678,
-      wrapped: "AAAA",
     });
     expect(t.serverLimits?.maxBatchBytes).toBe(1234);
+    expect(t.serverLimits?.epoch).toBe("the-store's-epoch");
   });
 
   /**
-   * Every vault has a data key, so a `ready` without one is not a second
-   * kind of vault: it is a server telling this device to derive its content
-   * keys some other way, and the only other way was from the root. A device
-   * that accepted it would seal its notes under keys no other device on the
-   * vault derives, and both ends would report success. Refused here, before
-   * a path is sealed, and the session ends.
+   * Every store has an epoch, so a `ready` without one is not a second kind of
+   * server: it is one this device cannot tell apart from a restored copy of
+   * itself, and a cursor into a reissued uid sequence skips, without a word,
+   * the versions that replaced the ones it saw. Refused, and the session ends.
    */
-  it("ends the session on a ready with no wrapped data key", async () => {
-    for (const missing of [{ wrapped: undefined }, { wrapped: "" }]) {
+  it("ends the session on a ready with no epoch", async () => {
+    for (const missing of [{ epoch: undefined }, { epoch: "" }, { epoch: 7 }, { epoch: null }]) {
       const { t, socket } = await connected();
       const hello = t.hello({ vault: "v", deviceId: "dev", token: "t", device: "d", cursor: 0 });
       socket.reply(ready(missing));
-      await expect(hello).rejects.toMatchObject({ code: "protostate" });
-      await expect(hello).rejects.toThrow(/no wrapped data key/);
-      expect(t.isClosed, "carried on without the vault's keys").toBe(true);
+      await expect(hello, JSON.stringify(missing)).rejects.toMatchObject({ code: "protostate" });
+      await expect(hello).rejects.toThrow(/no epoch/);
+      expect(t.isClosed, "carried on without knowing which history it serves").toBe(true);
     }
   });
 
-  /**
-   * The pin. `ready.wrapped` used to be believed on the grounds that it
-   * unwrapped under this root, and the client handed the server a freshly
-   * wrapped candidate on every hello, claimed vault or not. A hostile server
-   * could echo that candidate back as the vault's own: it unwraps perfectly,
-   * the device installs a schedule no other device on the vault derives, and
-   * the server has split the vault in two without learning a key. Nothing on
-   * the wire tells that from the real blob, so what tells it is having seen the
-   * real blob before.
-   */
-  it("reports the wrapped key ready carries, which a paired device does not use", async () => {
-    // Carried and reported, and nothing here derives a key from it: a device
-    // holds the data key itself, handed over when it was registered by the
-    // session that could unwrap this. What the field is still good for is the
-    // refusal above, which says the vault is one an older build wrote.
+  it("caps the chunk ceiling at the most this device will decode", async () => {
+    // A frame is refused on its length before anything is inflated, and that
+    // bound is this number, so a server does not get to raise it.
     const { t, socket } = await connected();
     const hello = t.hello({ vault: "v", deviceId: "dev", token: "t", device: "d", cursor: 0 });
-    socket.reply(ready({ wrapped: "FIRST-SIGHT" }));
-    expect((await hello).wrapped).toBe("FIRST-SIGHT");
+    socket.reply(ready({ chunkMax: LOCAL_MAX_CHUNK_BYTES * 64 }));
+    expect((await hello).chunkMax).toBe(LOCAL_MAX_CHUNK_BYTES);
   });
 
-  it("sends the claim and its wrapped data key together, or neither", async () => {
-    const { t, socket } = await connected();
-    void t
-      .helloAsRegistrar({
-        vault: "v",
-        token: "t",
-        device: "d",
-        claim: { auth: "AUTH", wrapped: "WRAPPED" },
-      })
-      .catch(() => {});
-    await settle();
-    // One argument on the way in, two fields on the wire, and no way to
-    // express a claim that would bind a vault with no data key.
-    expect(socket.sentText[0]).toMatchObject({ claim: "AUTH", wrapped: "WRAPPED" });
-
-    const bare = await connected();
-    void bare.t.helloAsRegistrar({ vault: "v", token: "t", device: "d" }).catch(() => {});
-    await settle();
-    expect("claim" in bare.socket.sentText[0]!).toBe(false);
-    expect("wrapped" in bare.socket.sentText[0]!).toBe(false);
-  });
-
-  /**
-   * A device hello names a row and a registrar hello does not, and that one
-   * field is what decides whether the session may sync. Two methods rather
-   * than a flag, so a caller cannot ask for the wrong one by leaving an
-   * argument out. docs/protocol.md, "Authentication".
-   */
-  it("names the device on a device hello and no device on a registrar hello", async () => {
+  it("names the device on a device hello", async () => {
+    // The row the session speaks for. There is no other kind of hello that
+    // syncs, and a redemption is a separate call with its own frame.
     const { t, socket } = await connected();
     void t
       .hello({ vault: "v", deviceId: "dev-1", token: "t", device: "d", cursor: 0 })
       .catch(() => {});
     await settle();
     expect(socket.sentText[0]).toMatchObject({ op: "hello", proto: PROTO, deviceId: "dev-1" });
-
-    const reg = await connected();
-    void reg.t.helloAsRegistrar({ vault: "v", token: "t", device: "d" }).catch(() => {});
-    await settle();
-    expect("deviceId" in reg.socket.sentText[0]!).toBe(false);
-  });
-
-  it("refuses a registrar reply that is not a registrar", async () => {
-    const { t, socket } = await connected();
-    const hello = t.helloAsRegistrar({ vault: "v", token: "t", device: "d" });
-    // A `ready` here would be a server handing the vault's own credential a
-    // syncing session, which is exactly what protocol 4 took away.
-    socket.reply(ready());
-    await expect(hello).rejects.toMatchObject({ code: "protostate" });
   });
 
   /**
@@ -624,6 +639,87 @@ describe("the handshake", () => {
   });
 });
 
+/**
+ * A `ready` from a store whose history is not the one this device's cursor
+ * was read from (plan/protocol.md, "Device session"; PLAN.md section 2.8).
+ *
+ * The hello carried the epoch the cursor belongs to, and the server, seeing
+ * another, replays the whole vault from uid 1. So the transport's own cursor
+ * has to start again from zero, and it has to do so the moment `ready`
+ * lands: the first batch of the replay can be queued behind it before the
+ * caller of `hello` has heard anything, and read against the old cursor it
+ * would be refused as a gap.
+ */
+describe("a ready in another epoch", () => {
+  const helloIn = (t: Transport, epoch: string | undefined, cursor = 7) =>
+    t.hello({ vault: "v", deviceId: "dev", token: "t", device: "d", cursor, epoch });
+
+  it("is read as a history replaced, and the cursor starts again from zero", async () => {
+    const { t, socket, batches } = await connected();
+    const hello = helloIn(t, "the-old-epoch");
+    socket.reply(ready({ epoch: "a-new-epoch", cursor: 3 }));
+    const limits = await hello;
+    expect(limits.epoch).toBe("a-new-epoch");
+    expect(t.historyReplaced, "a replaced history read as the same one").toBe(true);
+    expect(t.appliedCursor, "the cursor of the old history was kept").toBe(0);
+
+    // The replay, from uid 1, is taken as continuing a cursor of zero.
+    socket.raw({ op: "batch", from: 1, to: 3, entries: [] });
+    socket.raw({ op: "caught-up", cursor: 3 });
+    await t.drainReceived();
+    expect(batches.map((b) => [b.from, b.to])).toEqual([[1, 3]]);
+    expect(t.appliedCursor).toBe(3);
+    expect(t.isClosed).toBe(false);
+  });
+
+  it("takes the replay's first batch even when it lands with the ready, before hello returns", async () => {
+    const { t, socket, batches } = await connected();
+    const hello = helloIn(t, "the-old-epoch");
+    await settle();
+    // Both frames in one turn, which is how a loopback server delivers them:
+    // nothing between them gives the caller of `hello` a chance to act.
+    const id = socket.lastId;
+    socket.raw(ready({ id, epoch: "a-new-epoch", cursor: 1 }));
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [] });
+    await hello;
+    await t.drainReceived();
+    expect(t.isClosed, "the replay's first batch was refused as a gap").toBe(false);
+    expect(batches.map((b) => b.from)).toEqual([1]);
+    expect(t.appliedCursor).toBe(1);
+  });
+
+  it("continues the cursor when the epoch is the one the hello carried", async () => {
+    const { t, socket, batches } = await connected();
+    const hello = helloIn(t, RIG_EPOCH);
+    socket.reply(ready({ epoch: RIG_EPOCH, cursor: 9 }));
+    await hello;
+    expect(t.historyReplaced).toBe(false);
+    expect(t.appliedCursor).toBe(7);
+    socket.raw({ op: "batch", from: 8, to: 9, entries: [] });
+    await t.drainReceived();
+    expect(batches.map((b) => [b.from, b.to])).toEqual([[8, 9]]);
+
+    // And a batch from 1 in the same history is the gap it always was.
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [] });
+    await settle();
+    expect(t.isClosed, "a restart of the history was taken without a new epoch").toBe(true);
+  });
+
+  it("takes the cursor as it is on a hello that carried no epoch", async () => {
+    // A device's first connect has nothing to compare, and the server takes
+    // its cursor as given; nothing about that is a replaced history.
+    const { t, socket, batches } = await connected();
+    const hello = helloIn(t, undefined);
+    socket.reply(ready({ epoch: "whatever-this-store-has", cursor: 8 }));
+    await hello;
+    expect(t.historyReplaced).toBe(false);
+    socket.raw({ op: "batch", from: 8, to: 8, entries: [] });
+    await t.drainReceived();
+    expect(batches).toHaveLength(1);
+    expect(t.appliedCursor).toBe(8);
+  });
+});
+
 describe("put, against a server that answers oddly", () => {
   it("sends bodies in the order the server asked for", async () => {
     // The server matches each body by hashing it, so a wrong order is caught
@@ -641,7 +737,7 @@ describe("put, against a server that answers oddly", () => {
       { size: 3, ctime: 0, mtime: 0 },
       chunks.map((c) => c.name),
       async (n) => chunks.find((c) => c.name === n)!.bytes,
-      unsigned,
+      noBase,
     );
     await settle();
     // Asked for out of order, and only two of the three.
@@ -650,7 +746,13 @@ describe("put, against a server that answers oddly", () => {
     socket.reply({ res: "ack", uid: 5 });
 
     expect(await put).toMatchObject({ uid: 5, uploaded: 2 });
-    expect(socket.sentBinary.map((b) => b[0])).toEqual([3, 1]);
+    expect(socket.sentBinary.map((b) => opened(b)[0])).toEqual([3, 1]);
+    // Each one framed as it went, and framed the one way: what encodeFrame
+    // makes of those bytes.
+    expect(socket.sentBinary).toEqual([
+      encodeFrame(new Uint8Array([3])),
+      encodeFrame(new Uint8Array([1])),
+    ]);
   });
 
   it("refuses to invent a body the server asked for", async () => {
@@ -660,7 +762,7 @@ describe("put, against a server that answers oddly", () => {
       { size: 1, ctime: 0, mtime: 0 },
       ["a".repeat(64)],
       async () => new Uint8Array([1]),
-      unsigned,
+      noBase,
     );
     await settle();
     socket.reply({ res: "want", chunks: ["z".repeat(64)] });
@@ -674,7 +776,7 @@ describe("put, against a server that answers oddly", () => {
       { size: 1, ctime: 0, mtime: 0 },
       ["a".repeat(64)],
       async () => new Uint8Array([1]),
-      unsigned,
+      noBase,
     );
     await settle();
     socket.reply({ res: "have", uid: 9 });
@@ -689,7 +791,7 @@ describe("put, against a server that answers oddly", () => {
       { size: 0, ctime: 0, mtime: 0 },
       [],
       async () => new Uint8Array(0),
-      unsigned,
+      noBase,
     );
     await settle();
     socket.reply({ res: "chunks", uid: 1, size: 0, chunks: [] });
@@ -699,7 +801,7 @@ describe("put, against a server that answers oddly", () => {
   it("carries prev only when there is a rename", async () => {
     const { t, socket } = await helloed(0);
     void t
-      .put("new", { size: 0, ctime: 0, mtime: 0 }, [], async () => new Uint8Array(0), unsigned)
+      .put("new", { size: 0, ctime: 0, mtime: 0 }, [], async () => new Uint8Array(0), noBase)
       .catch(() => {});
     await settle();
     expect(socket.sentText.at(-1)?.["meta"]).not.toHaveProperty("prev");
@@ -712,11 +814,85 @@ describe("put, against a server that answers oddly", () => {
         { size: 0, ctime: 0, mtime: 0, prev: "old" },
         [],
         async () => new Uint8Array(0),
-        unsigned,
+        noBase,
       )
       .catch(() => {});
     await settle();
     expect(socket.sentText.at(-1)?.["meta"]).toMatchObject({ prev: "old" });
+  });
+
+  /**
+   * The conditional-write fields, as protocol 1 puts them on the wire:
+   * `base` on every write, zero for no live entry, and `prevBase` only on a
+   * rename, which is the only write that has a source (plan/protocol.md,
+   * "Writing"). The transcripts pin the same shapes against the server.
+   */
+  it("sends base always, and prevBase only with a rename", async () => {
+    const { t, socket } = await helloed(0);
+    const sent = async (
+      meta: { size: number; ctime: number; mtime: number; prev?: string },
+      cond: { base?: number; prevBase?: number },
+    ) => {
+      void t.put("p.md", meta, [], async () => new Uint8Array(0), cond).catch(() => {});
+      await settle();
+      const frame = socket.sentText.at(-1)!;
+      socket.reply({ res: "have", uid: 1 });
+      await settle();
+      return frame;
+    };
+    const plain = { size: 0, ctime: 1, mtime: 2 };
+
+    // A first write: a base of zero, sent, and nothing about a source.
+    expect(await sent(plain, {})).toEqual({
+      op: "put",
+      id: 2,
+      path: "p.md",
+      meta: { size: 0, ctime: 1, mtime: 2, folder: false, deleted: false },
+      chunks: [],
+      base: 0,
+    });
+    // A write on top of a version.
+    const edit = await sent(plain, { base: 5 });
+    expect(edit["base"]).toBe(5);
+    expect("prevBase" in edit, "a prevBase went out with no rename").toBe(false);
+    // A prevBase handed to a write that is not a rename is not sent either.
+    expect("prevBase" in (await sent(plain, { base: 5, prevBase: 3 }))).toBe(false);
+    // A rename carries both, and its source's defaults to zero.
+    const move = await sent({ ...plain, prev: "old.md" }, { base: 0, prevBase: 3 });
+    expect(move).toMatchObject({ base: 0, prevBase: 3, meta: { prev: "old.md" } });
+    const blind = await sent({ ...plain, prev: "old.md" }, {});
+    expect(blind).toMatchObject({ base: 0, prevBase: 0 });
+  });
+
+  it("gives every entry of a batch the same shape a put has", async () => {
+    const { t, socket } = await helloed(0);
+    const meta = { size: 0, ctime: 1, mtime: 2 };
+    void t
+      .putMany(
+        [
+          { path: "new.md", meta, names: [] },
+          { path: "edit.md", meta, names: [], base: 4, prevBase: 9 },
+          { path: "moved.md", meta: { ...meta, prev: "old.md" }, names: [], base: 0, prevBase: 6 },
+        ],
+        async () => new Uint8Array(0),
+      )
+      .catch(() => {});
+    await settle();
+    const frame = socket.sentText.at(-1)!;
+    expect(frame["op"]).toBe("putmany");
+    const shape = { folder: false, deleted: false, size: 0, ctime: 1, mtime: 2 };
+    expect(frame["entries"]).toEqual([
+      { path: "new.md", meta: shape, chunks: [], base: 0 },
+      { path: "edit.md", meta: shape, chunks: [], base: 4 },
+      {
+        path: "moved.md",
+        meta: { ...shape, prev: "old.md" },
+        chunks: [],
+        base: 0,
+        prevBase: 6,
+      },
+    ]);
+    t.close();
   });
 });
 
@@ -792,7 +968,7 @@ describe("an acknowledgement that arrives as fast as a loopback server sends it"
       { size: 2, ctime: 0, mtime: 0 },
       [one.name, two.name],
       async (n) => (n === one.name ? one.bytes : two.bytes),
-      unsigned,
+      noBase,
     );
     await settle();
     socket.reply({ res: "want", chunks: [one.name, two.name] });
@@ -809,8 +985,6 @@ describe("an acknowledgement that arrives as fast as a loopback server sends it"
       path,
       meta: { size: 1, ctime: 0, mtime: 0 },
       names: [name],
-      mac: "m",
-      parent: "",
     });
     const putting = t.putMany([entry("p", one.name), entry("q", two.name)], async (n) =>
       n === one.name ? one.bytes : two.bytes,
@@ -830,16 +1004,11 @@ describe("an acknowledgement that arrives as fast as a loopback server sends it"
     socket.stepMs = 5;
     const t = await rig(socket);
     const body = new Uint8Array(20);
-    const put = t.put(
-      "p",
-      { size: 20, ctime: 0, mtime: 0 },
-      [one.name],
-      async () => body,
-      unsigned,
-    );
+    const put = t.put("p", { size: 20, ctime: 0, mtime: 0 }, [one.name], async () => body, noBase);
     await settle();
     socket.reply({ res: "want", chunks: [one.name] });
-    expect(await put).toMatchObject({ uid: 8, uploaded: 1, bytes: 20 });
+    // The bytes counted are the frame's, which is what went on the wire.
+    expect(await put).toMatchObject({ uid: 8, uploaded: 1, bytes: encodeFrame(body).length });
     expect(t.isClosed).toBe(false);
   });
 
@@ -852,14 +1021,10 @@ describe("an acknowledgement that arrives as fast as a loopback server sends it"
     socket.stepBytes = 1;
     socket.stepMs = 10;
     const t = await rig(socket, 100);
-    const body = new Uint8Array(40); // 400 ms of drain against a 100 ms timeout
-    const put = t.put(
-      "p",
-      { size: 40, ctime: 0, mtime: 0 },
-      [one.name],
-      async () => body,
-      unsigned,
-    );
+    // 410 ms of drain against a 100 ms timeout. Incompressible, because a
+    // frame of forty zeroes is a few bytes and would drain inside one.
+    const body = noise(40);
+    const put = t.put("p", { size: 40, ctime: 0, mtime: 0 }, [one.name], async () => body, noBase);
     await settle();
     socket.reply({ res: "want", chunks: [one.name] });
     expect(await put).toMatchObject({ uid: 9, uploaded: 1 });
@@ -877,7 +1042,7 @@ describe("an acknowledgement that arrives as fast as a loopback server sends it"
       { size: 4, ctime: 0, mtime: 0 },
       [one.name],
       async () => new Uint8Array(4),
-      unsigned,
+      noBase,
     );
     await settle();
     socket.reply({ res: "want", chunks: [one.name] });
@@ -908,19 +1073,23 @@ describe("errors", () => {
   });
 
   it("knows which codes end a session", () => {
-    for (const code of [
-      "proto",
-      "auth",
-      "cursor",
-      "busy",
-      "protostate",
-      "nospace",
-      "internal",
-      "rotated",
-    ]) {
+    for (const code of ["proto", "auth", "cursor", "busy", "protostate", "nospace", "internal"]) {
       expect(new ProtocolError(code, "x").endsSession, code).toBe(true);
     }
-    for (const code of ["badentry", "badname", "toolarge", "nouid", "nocontent", "nochunk"]) {
+    // `rotated` ended one in Basalt; protocol 1 has no rotation and no such
+    // code. The path and collision refusals reject an entry and no more.
+    for (const code of [
+      "badentry",
+      "badname",
+      "toolarge",
+      "nouid",
+      "nocontent",
+      "nochunk",
+      "badpath",
+      "collision",
+      "stale",
+      "rotated",
+    ]) {
       expect(new ProtocolError(code, "x").endsSession, code).toBe(false);
     }
   });
@@ -1111,7 +1280,7 @@ describe("errors", () => {
       { size: 1, ctime: 0, mtime: 0 },
       [name],
       async () => new Uint8Array([1]),
-      unsigned,
+      noBase,
     );
     await settle();
     const id = socket.sentText.at(-1)!["id"];
@@ -1222,7 +1391,7 @@ describe("bodies", () => {
   /**
    * Bodies arrive as bare binary frames with nothing tying them to a request,
    * so the only thing connecting one to a name is the order it came in. A body
-   * left over from an abandoned fetch would be taken by the next one, decrypt
+   * left over from an abandoned fetch would be taken by the next one, decode
    * perfectly, being a real chunk of a real file, and be assembled into the
    * wrong note. The name is a hash of exactly those bytes, so this is exact.
    */
@@ -1315,7 +1484,7 @@ describe("a success reply that is not the shape it should be", () => {
         { size: 1, ctime: 0, mtime: 0 },
         [name],
         async () => new Uint8Array(1),
-        unsigned,
+        noBase,
       );
       await settle();
       socket.reply({ res: "have", ...(uid === undefined ? {} : { uid }) });
@@ -1332,7 +1501,7 @@ describe("a success reply that is not the shape it should be", () => {
         { size: 1, ctime: 0, mtime: 0 },
         [name],
         async () => new Uint8Array(1),
-        unsigned,
+        noBase,
       );
       await settle();
       socket.reply({ res: "want", chunks: [name] });
@@ -1351,7 +1520,7 @@ describe("a success reply that is not the shape it should be", () => {
         { size: 1, ctime: 0, mtime: 0 },
         [name],
         async () => new Uint8Array(1),
-        unsigned,
+        noBase,
       );
       await settle();
       socket.reply({ res: "want", ...(chunks === undefined ? {} : { chunks }) });
@@ -1366,8 +1535,6 @@ describe("a success reply that is not the shape it should be", () => {
       path: "p",
       meta: { size: 0, ctime: 0, mtime: 0 },
       names: [],
-      mac: "m",
-      parent: "",
     };
     for (const results of [[{ uid: 0 }], [{}], [{ uid: "3" }], [null], [{ code: 7 }]]) {
       const { t, socket } = await helloed(0);
@@ -1422,7 +1589,7 @@ describe("a success reply that is not the shape it should be", () => {
       { uid: 2, path: "p" },
     ]) {
       const { t, socket } = await helloed(0);
-      const asking = t.history("sealed");
+      const asking = t.history("p");
       await settle();
       socket.reply({ res: "history", entries: [entry] });
       await expect(asking, JSON.stringify(entry)).rejects.toMatchObject({ code: "protostate" });
@@ -1492,23 +1659,25 @@ describe("reconnect pacing", () => {
  * looking for a note they have lost.
  */
 describe("recovery answers from a server that answers badly", () => {
-  it("asks with the sealed path and reads back what it is given", async () => {
+  it("asks with the path and reads back what it is given", async () => {
+    // The path itself, as the vault spells it: protocol 1 carries plaintext.
+    const path = "Notes/a note, as it is spelled.md";
     const { t, socket } = await helloed();
-    const asked = t.history("SEALED-PATH", { before: 40, limit: 5 });
+    const asked = t.history(path, { before: 40, limit: 5 });
     await settle();
     expect(socket.sentText.at(-1)).toMatchObject({
       op: "history",
-      path: "SEALED-PATH",
+      path,
       before: 40,
       limit: 5,
     });
 
     socket.reply({
       res: "history",
-      path: "SEALED-PATH",
+      path,
       entries: [
-        { uid: 3, path: "SEALED-PATH", chunks: [] },
-        { uid: 2, path: "SEALED-PATH", chunks: [] },
+        { uid: 3, path, chunks: [] },
+        { uid: 2, path, chunks: [] },
       ],
     });
     expect((await asked).map((e) => e.uid)).toEqual([3, 2]);
@@ -1528,7 +1697,7 @@ describe("recovery answers from a server that answers badly", () => {
     // here -- the suite finishes first -- and it failed CI three runs in a row
     // as `ConnectionError: no history within 1000ms`, blamed on an unrelated
     // test in another file. Only the loaded runner was slow enough to see it.
-    const never = t.history("SEALED");
+    const never = t.history("p");
     never.catch(() => {});
     await settle();
     const sent = socket.sentText.at(-1)!;
@@ -1578,9 +1747,9 @@ describe("recovery answers from a server that answers badly", () => {
 
   it("refuses a history answer with no list in it", async () => {
     const { t, socket } = await helloed();
-    const asked = t.history("SEALED");
+    const asked = t.history("p");
     await settle();
-    socket.reply({ res: "history", path: "SEALED", entries: null });
+    socket.reply({ res: "history", path: "p", entries: null });
     await expect(asked).rejects.toThrow(/without a list of entries/);
   });
 
@@ -1594,7 +1763,7 @@ describe("recovery answers from a server that answers badly", () => {
 
   it("passes on a refusal rather than reporting an empty vault", async () => {
     const { t, socket } = await helloed();
-    const asked = t.history("SEALED");
+    const asked = t.history("p");
     await settle();
     socket.reply({ res: "err", code: "internal", msg: "could not read history" });
     await expect(asked).rejects.toThrow(/could not read history/);
@@ -1638,9 +1807,8 @@ describe("a download against what the server said it would store", () => {
     socket.reply({ res: "chunks", uid: 1, size: 3, chunks: [name] });
     await settle();
     socket.bodies(body);
-    // It gets as far as decrypting, which is where a body that is not a
-    // sealed chunk fails. That is past the bound, which is the point.
-    await expect(asked).rejects.not.toThrow(/stores at most/);
+    // Past the bound, and all the way to the bytes.
+    expect(await asked).toEqual(body);
   });
 });
 
@@ -1662,8 +1830,8 @@ describe("cutting to the ceiling the server advertised", () => {
     await vault.write("clip.raw", bytes, { mtime: 1000, ctime: 1000 });
 
     const syncing = engine.sync();
-    // Sealing a megabyte takes real time, so this waits for the put rather
-    // than for one turn of the event loop.
+    // Chunking and naming a megabyte takes real time, so this waits for the
+    // put rather than for one turn of the event loop.
     for (let i = 0; i < 200 && !socket.sentText.some((m) => m["op"] === "putmany"); i++) {
       await new Promise((r) => setTimeout(r, 10));
     }
@@ -1683,11 +1851,19 @@ describe("cutting to the ceiling the server advertised", () => {
     socket.reply({ res: "acks", results: entries.map((_, i) => ({ uid: i + 1 })) });
     await syncing.catch(() => undefined);
 
-    const worst = Math.max(...socket.sentBinary.map((b) => b.length));
+    // The ceiling bounds the raw chunk, and a frame is one marker byte more
+    // (plan/protocol.md, "Chunk bodies"), so the two are held to their own
+    // numbers: a chunk over the ceiling is refused at the server however it
+    // is framed, and a frame over the ceiling plus one is refused before it
+    // is looked at.
+    expect(socket.sentBinary.length, "no body went up, so this proves nothing").toBe(names.length);
+    const worst = Math.max(...socket.sentBinary.map((b) => opened(b).length));
     expect(
       worst,
-      `the largest body sent was ${worst} against a ceiling of ${ceiling}`,
+      `the largest chunk sent was ${worst} against a ceiling of ${ceiling}`,
     ).toBeLessThanOrEqual(ceiling);
+    const widest = Math.max(...socket.sentBinary.map((b) => b.length));
+    expect(widest, `the largest frame sent was ${widest}`).toBeLessThanOrEqual(ceiling + 1);
   });
 });
 
@@ -1804,6 +1980,11 @@ describe("a batch frame that cannot be trusted", () => {
       frame: { op: "batch", from: 1, to: 3, entries: [{ uid: 2, chunks: [] }] },
     },
     {
+      // The wire path is the name in protocol 1, so an empty one names no file.
+      why: "an entry whose path is empty",
+      frame: { op: "batch", from: 1, to: 3, entries: [{ uid: 2, path: "", chunks: [] }] },
+    },
+    {
       why: "an entry with no chunks array",
       frame: { op: "batch", from: 1, to: 3, entries: [{ uid: 2, path: "p" }] },
     },
@@ -1841,7 +2022,7 @@ describe("a batch frame that cannot be trusted", () => {
 
 /**
  * review finding I3. `ready` carries two caps on a batched write, the encoded
- * frame and the summed ciphertext budget, and one on a fetch. The engine used
+ * frame and the summed size budget, and one on a fetch. The engine used
  * a constant of its own, so a server advertising something smaller was ignored
  * and the batch refused with `toolarge`, which the engine reads as permanent
  * and wrote every note in the batch off for good.
@@ -1864,28 +2045,32 @@ describe("keeping to the caps the server advertised", () => {
 
   /** Every putmany frame this socket saw, with its encoded size and summed budget. */
   function batches(socket: FakeSocket) {
-    const { entryBudget } = require_transport();
     return socket.sentText
       .filter((m) => m["op"] === "putmany")
       .map((m) => {
         const entries = m["entries"] as { meta: { size: number }; chunks: string[] }[];
         return {
           count: entries.length,
-          encoded: JSON.stringify(m).length,
-          budget: entries.reduce((n, e) => n + entryBudget(e.meta.size, e.chunks.length), 0),
+          encoded: new TextEncoder().encode(JSON.stringify(m)).length,
+          budget: entries.reduce((n, e) => n + entryBudget(e.meta.size), 0),
         };
       });
   }
-  function require_transport(): { entryBudget: (size: number, chunks: number) => number } {
-    return { entryBudget: (size, chunks) => size + 256 * chunks };
-  }
+
+  it("counts an entry at its declared size, which is what the server adds up", () => {
+    // The sum of its chunks' raw lengths (plan/protocol.md, "Limits"). Basalt
+    // added an allowance per chunk for the sealing it charged, and there is
+    // none now.
+    expect(entryBudget(0)).toBe(0);
+    expect(entryBudget(4096)).toBe(4096);
+  });
 
   it("splits a batched write by the summed budget cap", async () => {
     const cap = 6000;
     const { engine, socket, vault } = await engineOnFakeSocket({ maxBatchBytes: cap });
     acceptEverything(socket);
-    // Each note is one chunk of about 400 bytes: a budget of about 656, so
-    // nine fit under the cap and thirty need four batches.
+    // Each note is one chunk of about 400 bytes, and costs exactly that, so
+    // fifteen fit under the cap and thirty need more than one batch.
     for (let i = 0; i < 30; i++) {
       await vault.edit(`note-${String(i).padStart(2, "0")}.md`, `note ${i}\n${"x".repeat(390)}\n`);
     }
@@ -1904,20 +2089,25 @@ describe("keeping to the caps the server advertised", () => {
 
   it("splits a batched write by the encoded frame cap", async () => {
     // Empty notes cost no budget at all, so only the frame size can fill a
-    // batch: each entry encodes to a few hundred bytes of sealed path, mac
-    // and parent.
+    // batch. A plaintext entry is short, so the names are long: each entry
+    // is a couple of hundred bytes of path, and eighty of them are several
+    // frames' worth.
     const cap = 4096;
     const { engine, socket, vault } = await engineOnFakeSocket({ maxBatchBytes: cap });
     acceptEverything(socket);
-    for (let i = 0; i < 40; i++) await vault.edit(`empty-${String(i).padStart(2, "0")}.md`, "");
+    const count = 80;
+    for (let i = 0; i < count; i++) {
+      await vault.edit(`a folder with a long name/empty note ${String(i).padStart(2, "0")}.md`, "");
+    }
     const report = await engine.sync();
-    expect(report.uploaded).toBe(40);
+    expect(report.uploaded).toBe(count + 1); // and the folder
     const sent = batches(socket);
-    expect(sent.length).toBeGreaterThan(1);
+    expect(sent.length, JSON.stringify(sent)).toBeGreaterThan(2);
     for (const b of sent) {
+      expect(b.budget, "an empty note cost budget").toBe(0);
       expect(b.encoded, `a batch of ${b.count} encoded to ${b.encoded}`).toBeLessThanOrEqual(cap);
     }
-    expect(sent.reduce((n, b) => n + b.count, 0)).toBe(40);
+    expect(sent.reduce((n, b) => n + b.count, 0)).toBe(count + 1);
   });
 
   it("sends a file whose own budget is over the cap with put, and the notes beside it as a batch", async () => {
@@ -1966,60 +2156,37 @@ describe("keeping to the caps the server advertised", () => {
   });
 
   it("downloads a batch of files in fetches that each keep under the server's cap", async () => {
-    const { macEntry, sealChunks, sealPath } = await import("./crypto.ts");
     const cap = 3000;
-    const { engine, socket, vault, keys, logs } = await engineOnFakeSocket({ maxFetchBytes: cap });
+    const { engine, socket, vault, logs } = await engineOnFakeSocket({ maxFetchBytes: cap });
 
-    // Ten files of a kilobyte, one chunk each, so each costs 1000 + 256 and
-    // two fit under the cap.
-    const files: {
-      path: string;
-      sealedPath: string;
-      body: Uint8Array;
-      name: string;
-      text: Uint8Array;
-    }[] = [];
+    // Ten files of a kilobyte, one chunk each, so each costs its 997 bytes and
+    // three fit under the cap.
+    const files: { path: string; name: string; text: Uint8Array }[] = [];
     for (let i = 0; i < 10; i++) {
       const text = new TextEncoder().encode(`file ${i}\n${"y".repeat(990)}`);
-      const [chunk] = await sealChunks(keys, [text]);
-      files.push({
-        path: `f${i}.md`,
-        sealedPath: await sealPath(keys, `f${i}.md`),
-        body: chunk!.bytes,
-        name: chunk!.name,
-        text,
-      });
+      files.push({ path: `f${i}.md`, name: await chunkName(text), text });
     }
-    const byName = new Map(files.map((f) => [f.name, f.body]));
+    const byName = new Map(files.map((f) => [f.name, f.text]));
     socket.autoReply = (frame, s) => {
       if (frame["op"] === "fetch") {
         const asked = frame["chunks"] as string[];
         s.bodies(...asked.map((n) => byName.get(n)!));
       }
     };
-    const entries = await Promise.all(
-      files.map(async (f, i) => {
-        const facts = {
-          path: f.sealedPath,
-          size: f.text.length,
-          ctime: 1000,
-          mtime: 1000,
-          folder: false,
-          deleted: false,
-          chunks: [f.name],
-          parent: "",
-        };
-        return {
-          uid: i + 1,
-          ...facts,
-          device: "other",
-          mac: await macEntry(keys, facts),
-        };
-      }),
-    );
+    const entries = files.map((f, i) => ({
+      uid: i + 1,
+      path: f.path,
+      size: f.text.length,
+      ctime: 1000,
+      mtime: 1000,
+      folder: false,
+      deleted: false,
+      chunks: [f.name],
+      device: "other",
+    }));
     socket.raw({ op: "batch", from: 1, to: 10, entries });
-    // Accepting a batch verifies every authenticator, which is WebCrypto and
-    // takes more than one turn of the event loop.
+    // Accepted on the transport's own turn, which is more than one turn of
+    // the event loop away.
     for (let i = 0; i < 200 && engine.status().pending < 10; i++) await settle();
     expect(engine.status().pending, logs.join("\n")).toBe(10);
     const report = await engine.sync();
@@ -2027,10 +2194,14 @@ describe("keeping to the caps the server advertised", () => {
 
     const fetches = socket.sentText.filter((m) => m["op"] === "fetch");
     expect(fetches.length, "one fetch carried everything").toBeGreaterThan(1);
+    const sizeOf = new Map(files.map((f) => [f.name, f.text.length]));
     for (const f of fetches) {
       const asked = f["chunks"] as string[];
-      expect(asked.length * (1000 + 256), `a fetch of ${asked.length}`).toBeLessThanOrEqual(cap);
+      const bytes = asked.reduce((n, name) => n + sizeOf.get(name)!, 0);
+      expect(bytes, `a fetch of ${asked.length} chunks`).toBeLessThanOrEqual(cap);
     }
+    // Split, not starved: a fetch holds as many as fit, not one at a time.
+    expect(Math.max(...fetches.map((f) => (f["chunks"] as string[]).length))).toBe(3);
     expect(fetches.flatMap((f) => f["chunks"] as string[]).sort()).toEqual(
       files.map((f) => f.name).sort(),
     );
@@ -2158,24 +2329,80 @@ describe("a server that sends faster than this device can apply", () => {
  * A chunk that inflates to whatever the writer chose (F28).
  *
  * `inflateSync` has no output limit, and the engine checked the assembled size
- * only after every chunk had been expanded, so a small authenticated body
- * could make a device allocate as much as its writer liked. Producing one
- * needs the data key, so this bounds a compromised or buggy writer rather than
- * a keyless server, and on a phone that is the difference between a note and a
- * dead app.
+ * only after every chunk had been expanded, so a small body could make a
+ * device allocate as much as its writer liked. In Basalt producing one needed
+ * the data key; a frame needs nothing, so any server can send this, and on a
+ * phone that is the difference between a note and a dead app.
  */
 describe("a chunk that inflates far beyond a chunk", () => {
   it("is refused rather than held", async () => {
-    const { MAX_CHUNK_PLAINTEXT, openChunk, sealChunk } = await import("./crypto.ts");
-    const keys = await testKeys(RIG_SECRET);
-
-    // Sealed the way a writer seals one, so this is the real path and not a
+    // Framed the way a writer frames one, so this is the real path and not a
     // hand-built frame: zeroes compress to almost nothing and expand past the
     // ceiling.
-    const huge = new Uint8Array(MAX_CHUNK_PLAINTEXT + 1024);
-    const sealed = await sealChunk(keys, huge);
-    expect(sealed.length, "the body has to be small to be worth refusing").toBeLessThan(100_000);
+    const huge = new Uint8Array(LOCAL_MAX_CHUNK_BYTES + 1024);
+    const frame = encodeFrame(huge);
+    expect(frame[0], "zeroes are sent deflated").toBe(MARKER_DEFLATE);
+    expect(frame.length, "the body has to be small to be worth refusing").toBeLessThan(100_000);
+    expect(() => decodeFrame(frame, LOCAL_MAX_CHUNK_BYTES)).toThrow(/inflates past/);
 
-    await expect(openChunk(keys, sealed)).rejects.toThrow(/over the .* a chunk may hold/);
+    // And on the wire: the fetch that receives it ends the session with
+    // `toolarge`, and nothing past the ceiling was kept.
+    const { t, socket } = await helloed(0);
+    const fetching = t.fetch([await chunkName(huge)]);
+    socket.reply({ res: "bodies", count: 1 });
+    socket.body(frame);
+    await expect(fetching).rejects.toMatchObject({ code: "toolarge" });
+    await expect(fetching).rejects.toThrow(/does not decode/);
+    expect(t.isClosed).toBe(true);
+  });
+});
+
+/**
+ * A body frame this device cannot read (plan/protocol.md, "Chunk bodies").
+ *
+ * Framing lives at the transport, so this is the one place a frame that is not
+ * a frame can be caught: above it everything is a verified raw chunk. A body
+ * that does not decode leaves the two ends disagreeing about what was sent, and
+ * the bodies behind it can no longer be matched to names, so the session ends,
+ * as it does on a body that hashes wrong.
+ */
+describe("a body frame that does not decode", () => {
+  const text = new TextEncoder().encode("a note long enough that deflating it pays. ".repeat(40));
+  const deflated = encodeFrame(text);
+
+  it.each([
+    ["an empty frame", new Uint8Array(0)],
+    ["a raw frame with no chunk in it", new Uint8Array([MARKER_RAW])],
+    ["an unknown marker", new Uint8Array([2, 1, 2, 3])],
+    ["a deflate stream cut short", deflated.subarray(0, deflated.length - 4)],
+    ["a deflate stream of no bytes at all", new Uint8Array([MARKER_DEFLATE])],
+  ])("ends the session on %s, as badchunk", async (_what, frame) => {
+    expect(deflated[0], "the text is meant to go deflated").toBe(MARKER_DEFLATE);
+    const { t, socket } = await helloed(0);
+    const fetching = t.fetch([await chunkName(text)]);
+    socket.reply({ res: "bodies", count: 1 });
+    socket.body(frame);
+    await expect(fetching).rejects.toMatchObject({ code: "badchunk" });
+    expect(t.isClosed, "a body nobody can read left the session open").toBe(true);
+  });
+
+  it("still takes the whole stream, deflated, and hands back the raw chunk", async () => {
+    const { t, socket } = await helloed(0);
+    const fetching = t.fetch([await chunkName(text)]);
+    socket.reply({ res: "bodies", count: 1 });
+    socket.body(deflated);
+    expect(await fetching).toEqual([text]);
+    expect(t.isClosed).toBe(false);
+    t.close();
+  });
+
+  it("checks the hash against the decoded bytes, never the frame", async () => {
+    // A frame whose bytes are named correctly and whose decoded bytes are not
+    // is still the wrong chunk: the name is over the raw bytes.
+    const { t, socket } = await helloed(0);
+    const fetching = t.fetch([await chunkName(deflated)]);
+    socket.reply({ res: "bodies", count: 1 });
+    socket.body(deflated);
+    await expect(fetching).rejects.toMatchObject({ code: "badchunk" });
   });
 });
