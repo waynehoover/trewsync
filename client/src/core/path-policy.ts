@@ -69,7 +69,7 @@ export function pathReason(path: string): PathReason | undefined {
   if (utf8.encode(path).length > MAX_PATH_BYTES) return "toolong";
   if (path.split("/").some((s) => utf8.encode(s).length > MAX_SEGMENT_BYTES))
     return "segmenttoolong";
-  // eslint-disable-next-line no-control-regex
+  // eslint-disable-next-line no-control-regex -- control characters are what this refuses
   if (/[\u0000-\u001f\u007f]/u.test(path)) return "control";
   if (path.normalize("NFC") !== path) return "nfc";
   if (/[\u00a0\u202f]/u.test(path)) return "nbsp";
