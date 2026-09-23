@@ -66,7 +66,10 @@ The CLI uses local filesystem link/rename behavior. For new files and binary
 replacements, the plugin stages content and relies on Obsidian's adapters
 refusing occupied rename destinations, as inspected in Obsidian 1.13.7. The
 mobile path also rechecks a destination before rename, which narrows a race
-without proving exclusion.
+without proving exclusion. A staged copy renamed into place is missing from
+Obsidian's index until its file watcher reports it, so the plugin lists each
+name it renamed onto from the adapter until the index has it. Listing from the
+index alone read a file just downloaded as a local deletion.
 
 Text replacements keep the original file at its path so open editors continue
 showing that note. The plugin creates and verifies a visible backup, then uses

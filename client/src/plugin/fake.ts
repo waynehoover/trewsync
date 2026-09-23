@@ -36,6 +36,10 @@
  *     vault root as a folder called `/`.
  *   - The desktop `trashSystem` lets Electron's refusal throw; the Capacitor
  *     one catches it and answers false.
+ *   - Writes, removals and trashes put their own path into the index before
+ *     they resolve. `rename` only moves a record the adapter already held, so
+ *     a staged copy renamed into place is on the disk and missing from the
+ *     index until the filesystem watcher reports it.
  *
  * ## What it still cannot tell you
  *
@@ -104,11 +108,27 @@ function fold(path: string): string {
   return path.normalize("NFC").toLowerCase();
 }
 
+/**
+ * The test the shipped adapter applies before it will hold a path in its
+ * table: no segment may start with a dot.
+ */
+function hidden(path: string): boolean {
+  return path.split("/").some((part) => part.startsWith("."));
+}
+
 interface FakeFile {
   binary: Uint8Array;
   ctime: number;
   mtime: number;
 }
+
+/**
+ * What the shipped adapter reports to the vault, by the names it uses. The
+ * vault turns each into the event a plugin sees: `create`, `modify`, `delete`
+ * or `rename`.
+ */
+export type AdapterEvent =
+  "file-created" | "folder-created" | "modified" | "file-removed" | "renamed";
 
 /** The adapter operations a test can make fail. */
 export type FaultOp =
@@ -222,6 +242,118 @@ export class FakeAdapter implements DataAdapter {
 
   /** Every operation, in order, for a test that cares about sequence. */
   readonly calls: { op: FaultOp; path: string; to?: string }[] = [];
+
+  /**
+   * Paths on the disk that the adapter's own table does not hold yet, and so
+   * Obsidian's index does not either.
+   *
+   * Read out of 1.13.7, both adapters. Every write, removal, trash and mkdir
+   * reconciles its own path before it resolves, so what those do is in the
+   * index when the call returns. `rename` does not reconcile: it moves the
+   * table's record from the old name to the new one, and a source the table
+   * never held has no record to move, so nothing is reported and the new name
+   * is on the disk, answers `exists` and `stat`, and is missing from
+   * `getAllLoadedFiles` until the filesystem watcher gets to it. The table
+   * never holds a dot-prefixed path that was written as one, which makes every
+   * staged copy the plugin renames into place such a source.
+   */
+  private readonly unindexed = new Set<string>();
+  /**
+   * The dot-prefixed paths the table does hold: the ones a rename carried a
+   * record to, which is how a note moved into a hidden folder stays known.
+   */
+  private readonly tabledHidden = new Set<string>();
+  private watcherHeld = false;
+  private watcherDue = false;
+
+  /**
+   * Where the adapter's reports go, as `watch` hands them to the vault in the
+   * shipped app. Called synchronously from inside the operation that caused
+   * the report, as the shipped adapter's `trigger` is. Unset, nobody is told.
+   */
+  handler: ((kind: AdapterEvent, path: string, oldPath?: string) => void) | undefined;
+
+  /**
+   * Holds the filesystem watcher's reports until `releaseWatcher`.
+   *
+   * The shipped watcher is `fs.watch` on desktop and a native plugin on
+   * mobile, and both report after the call that changed the disk has
+   * returned, by however long the platform takes. Unheld, this one reports on
+   * the next turn of the event loop, which is sooner than either. Held, a test
+   * can run a pass inside the window a real device has, which is the window a
+   * staged landing is missing from the index for.
+   */
+  holdWatcher(): void {
+    this.watcherHeld = true;
+  }
+
+  /** Delivers what the watcher was holding, and stops holding. */
+  releaseWatcher(): void {
+    this.watcherHeld = false;
+    this.reportUnindexed();
+  }
+
+  /**
+   * What opening the vault again does: the whole disk is listed into the
+   * table, so nothing is waiting for the watcher any more, and nobody is told.
+   */
+  reopen(): void {
+    this.unindexed.clear();
+  }
+
+  private watcherLater(): void {
+    if (this.watcherHeld || this.watcherDue) return;
+    this.watcherDue = true;
+    setTimeout(() => {
+      this.watcherDue = false;
+      if (!this.watcherHeld) this.reportUnindexed();
+    }, 0);
+  }
+
+  /** What the watcher's report does: each path is reconciled into the table. */
+  private reportUnindexed(): void {
+    for (const path of [...this.unindexed]) {
+      this.unindexed.delete(path);
+      if (this.files.has(path)) this.trigger("file-created", path);
+      else if (this.folders.has(path)) this.trigger("folder-created", path);
+    }
+  }
+
+  private trigger(kind: AdapterEvent, path: string, oldPath?: string): void {
+    this.handler?.(kind, path, oldPath);
+  }
+
+  /** Whether the adapter's table holds a path, which is what the index is made of. */
+  private tabled(path: string): boolean {
+    return hidden(path) ? this.tabledHidden.has(path) : !this.unindexed.has(path);
+  }
+
+  /** A path that has left the disk, and so the table, reported if it was held. */
+  private forgotten(path: string): void {
+    const known = this.tabled(path);
+    this.unindexed.delete(path);
+    this.tabledHidden.delete(path);
+    if (known) this.trigger("file-removed", path);
+  }
+
+  /**
+   * What `reconcileInternalFile` does after a write: the path is looked at
+   * again and the table made to agree with the disk, except that a
+   * dot-prefixed path is dropped from it rather than added.
+   */
+  private reconciled(path: string, existed: boolean, folder: boolean): void {
+    if (hidden(path)) {
+      if (this.tabledHidden.delete(path)) this.trigger("file-removed", path);
+      return;
+    }
+    const known = existed && !this.unindexed.has(path);
+    this.unindexed.delete(path);
+    if (folder) {
+      if (!known) this.trigger("folder-created", path);
+    } else {
+      this.trigger(known ? "modified" : "file-created", path);
+    }
+  }
 
   private check(op: FaultOp, path: string, to?: string): number | undefined {
     this.calls.push(to === undefined ? { op, path } : { op, path, to });
@@ -355,6 +487,8 @@ export class FakeAdapter implements DataAdapter {
       ctime: options?.ctime ?? existing?.ctime ?? this.now,
       mtime: options?.mtime ?? this.now,
     });
+    // In a `finally` in the shipped adapter, so a failed write reconciles too.
+    this.reconciled(normalizedPath, existing !== undefined, false);
     if (short !== undefined) {
       throw new Error(`ENOSPC: wrote ${short} of ${bytes.length} bytes to '${normalizedPath}'`);
     }
@@ -415,6 +549,7 @@ export class FakeAdapter implements DataAdapter {
       ctime: options?.ctime ?? existing?.ctime ?? this.now,
       mtime: options?.mtime ?? this.now,
     });
+    this.reconciled(normalizedPath, existing !== undefined, false);
     if (short !== undefined) {
       throw new Error(`ENOSPC: appended ${short} of ${bytes.length} bytes to '${normalizedPath}'`);
     }
@@ -439,7 +574,10 @@ export class FakeAdapter implements DataAdapter {
 
   async mkdir(normalizedPath: string): Promise<void> {
     this.check("mkdir", normalizedPath);
-    this.folders.add(this.real(normalizedPath));
+    const at = this.real(normalizedPath);
+    const existed = this.folders.has(at);
+    this.folders.add(at);
+    this.reconciled(at, existed, true);
   }
 
   /**
@@ -513,15 +651,19 @@ export class FakeAdapter implements DataAdapter {
     const under = `${from}/`;
     const at = (path: string): string | undefined =>
       to === undefined ? undefined : to + path.slice(from.length);
+    // Into `.trash` or off the disk, and both are out of the table: the
+    // shipped trashes reconcile the path they took the note from.
     for (const [path, file] of [...this.files]) {
       if (path !== from && !path.startsWith(under)) continue;
       this.files.delete(path);
+      this.forgotten(path);
       const dest = at(path);
       if (dest !== undefined) this.files.set(dest, file);
     }
     for (const path of [...this.folders]) {
       if (path !== from && !path.startsWith(under)) continue;
       this.folders.delete(path);
+      this.forgotten(path);
       const dest = at(path);
       if (dest !== undefined) this.folders.add(dest);
     }
@@ -529,20 +671,27 @@ export class FakeAdapter implements DataAdapter {
 
   async rmdir(normalizedPath: string, recursive: boolean): Promise<void> {
     this.folders.delete(normalizedPath);
+    this.forgotten(normalizedPath);
     if (!recursive) return;
     for (const path of [...this.files.keys()]) {
-      if (path.startsWith(`${normalizedPath}/`)) this.files.delete(path);
+      if (path.startsWith(`${normalizedPath}/`)) {
+        this.files.delete(path);
+        this.forgotten(path);
+      }
     }
     for (const path of [...this.folders]) {
-      if (path.startsWith(`${normalizedPath}/`)) this.folders.delete(path);
+      if (path.startsWith(`${normalizedPath}/`)) {
+        this.folders.delete(path);
+        this.forgotten(path);
+      }
     }
   }
 
   async remove(normalizedPath: string): Promise<void> {
     this.check("remove", normalizedPath);
     const at = this.real(normalizedPath);
-    this.files.delete(at);
-    this.folders.delete(at);
+    const was = this.files.delete(at) || this.folders.delete(at);
+    if (was) this.forgotten(at);
   }
 
   /**
@@ -566,6 +715,10 @@ export class FakeAdapter implements DataAdapter {
    * `renamed` for the folder and then once more for every path beneath it,
    * and each one reaches a plugin as its own `rename`. `renameFolder` in the
    * event suite fires them the way the application does.
+   *
+   * Only for a source the adapter's table held. The shipped rename moves the
+   * table's record and reports that; with no record there is nothing to move
+   * or report, and the destination waits for the watcher (see `unindexed`).
    */
   async rename(normalizedPath: string, normalizedNewPath: string): Promise<void> {
     await this.beforeRename?.(normalizedPath, normalizedNewPath);
@@ -585,18 +738,26 @@ export class FakeAdapter implements DataAdapter {
     // A rename spells the destination the way it was asked for, folding or
     // not: that is what makes it the way to correct a name's case.
     const to = normalizedNewPath;
+    const known = this.tabled(from);
     const file = this.files.get(from);
     if (file) {
       this.files.delete(from);
       this.files.set(to, file);
+      this.carried(from, to, known);
       return;
     }
     if (!this.folders.has(from)) {
       throw new Error(`ENOENT: no such file or directory, rename '${normalizedPath}'`);
     }
+    const under = `${from}/`;
+    const moves: [string, string, boolean][] = [[from, to, known]];
+    for (const path of [...this.folders, ...this.files.keys()]) {
+      if (path.startsWith(under)) {
+        moves.push([path, to + path.slice(from.length), known && this.tabled(path)]);
+      }
+    }
     this.folders.delete(from);
     this.folders.add(to);
-    const under = `${from}/`;
     for (const path of [...this.folders]) {
       if (path.startsWith(under)) {
         this.folders.delete(path);
@@ -609,17 +770,40 @@ export class FakeAdapter implements DataAdapter {
         this.files.set(to + path.slice(from.length), f);
       }
     }
+    for (const [old, now, held] of moves) this.carried(old, now, held);
+  }
+
+  /** Moves what the table knows about one path to another, as a rename does. */
+  private carried(from: string, to: string, known: boolean): void {
+    this.unindexed.delete(from);
+    this.tabledHidden.delete(from);
+    if (known) {
+      if (hidden(to)) this.tabledHidden.add(to);
+      else this.unindexed.delete(to);
+      this.trigger("renamed", to, from);
+    } else if (!hidden(to)) {
+      this.unindexed.add(to);
+      this.watcherLater();
+    }
   }
 
   async copy(normalizedPath: string, normalizedNewPath: string): Promise<void> {
     this.check("copy", normalizedPath, normalizedNewPath);
     const file = this.files.get(this.real(normalizedPath));
-    if (file) this.files.set(normalizedNewPath, { ...file, binary: file.binary.slice() });
+    if (!file) return;
+    const existed = this.files.has(normalizedNewPath);
+    this.files.set(normalizedNewPath, { ...file, binary: file.binary.slice() });
+    this.reconciled(normalizedNewPath, existed, false);
   }
 
   /* Test conveniences, outside the interface. */
 
-  /** Puts a file there the way Obsidian would, creating the folders above it. */
+  /**
+   * Puts a file there the way Obsidian would, creating the folders above it.
+   *
+   * As somebody else's write that the watcher has already reported: in the
+   * index at once, and with no event, because a test that wants one fires it.
+   */
   seed(path: string, text: string, mtime = this.now): void {
     const parts = path.split("/");
     parts.pop();
@@ -627,8 +811,11 @@ export class FakeAdapter implements DataAdapter {
     for (const part of parts) {
       at = at === "" ? part : `${at}/${part}`;
       this.folders.add(at);
+      this.unindexed.delete(at);
     }
     this.files.set(path, { binary: new TextEncoder().encode(text), ctime: mtime, mtime });
+    this.unindexed.delete(path);
+    this.tabledHidden.delete(path);
   }
 
   text(path: string): string | undefined {
@@ -670,17 +857,21 @@ export class FakeAdapter implements DataAdapter {
    * invisible to `getAllLoadedFiles`, however plainly they exist on disk.
    * That is the whole reason a write under such a name can never be allowed:
    * it would land, never be listed, and be reported deleted on the next scan.
+   *
+   * Nor is a path the adapter's table does not hold yet, which is what a
+   * rename from a hidden name leaves until the watcher reports it
+   * (`unindexed`).
    */
   index(): TAbstractFile[] {
-    const hidden = (path: string): boolean =>
-      this.indexHidesDotfiles && path.split("/").some((part) => part.startsWith("."));
+    const leftOut = (path: string): boolean =>
+      (this.indexHidesDotfiles && hidden(path)) || this.unindexed.has(path);
     const out: TAbstractFile[] = [{ path: "/", name: "" } as TAbstractFile];
     for (const path of this.folders) {
-      if (hidden(path)) continue;
+      if (leftOut(path)) continue;
       out.push({ path, name: path.split("/").pop() ?? path } as TAbstractFile);
     }
     for (const [path, f] of this.files) {
-      if (hidden(path)) continue;
+      if (leftOut(path)) continue;
       out.push({
         path,
         name: path.split("/").pop() ?? path,
