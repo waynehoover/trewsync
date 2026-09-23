@@ -31,6 +31,7 @@ import {
   modals,
   notices,
   resetStub,
+  setApiVersion,
 } from "./stub.ts";
 import TrewPlugin, { connectionDetail, describeConnection, describeDeleted } from "./main.ts";
 import { describeRestore } from "./history.ts";
@@ -4048,6 +4049,37 @@ describe("an older Obsidian", () => {
     // The four vault events and the file-menu entry, all after the guard.
     expect(plugin.registeredEvents.length).toBe(5);
     expect([...plugin.cliHandlers.keys()]).toEqual([]);
+  });
+
+  /**
+   * The same host told apart by the version it reports, which is the check the
+   * community directory's review reads: an API newer than `minAppVersion` has
+   * to sit behind `requireApiVersion`. So that check has to hold on its own,
+   * on an app that still has every method and says it is the oldest release
+   * the manifest admits.
+   */
+  it("keeps the newer APIs behind the version it reports", async () => {
+    const { plugin } = await load();
+    expect([...plugin.cliHandlers.keys()].sort()).toEqual(["trew:history", "trew:restore"]);
+    choosePairing(plugin);
+    expect(modals.at(-1)!.contentEl.querySelector(".setting-group")).toBeDefined();
+
+    const { readFile } = await import("node:fs/promises");
+    const manifest = JSON.parse(await readFile("../manifest.json", "utf8")) as {
+      minAppVersion: string;
+    };
+    resetStub();
+    setApiVersion(manifest.minAppVersion);
+    const older = (await load()).plugin;
+    expect(older.commands.length).toBe(plugin.commands.length);
+    expect(older.registeredEvents.length).toBe(5);
+    expect([...older.cliHandlers.keys()]).toEqual([]);
+    choosePairing(older);
+    expect(modals.at(-1)!.contentEl.querySelector(".setting-group")).toBeUndefined();
+    expect(
+      built.some((s) => s.buttons.some((b) => b.label === "Pair")),
+      "the pairing form lost its button on flat rows",
+    ).toBe(true);
   });
 });
 

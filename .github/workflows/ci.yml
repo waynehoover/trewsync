@@ -399,6 +399,15 @@ jobs:
         working-directory: client
         run: bun run typecheck
 
+      # The community directory reviews every release with
+      # eslint-plugin-obsidianmd's recommended config, and an error there
+      # makes the release uninstallable. The same config, over the plugin
+      # bundle's own source, failing on any error. Warnings pass with the
+      # reasons in docs/development.md.
+      - name: lint
+        working-directory: client
+        run: bun run lint
+
       - name: test
         working-directory: client
         run: bun run test

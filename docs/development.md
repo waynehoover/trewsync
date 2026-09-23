@@ -44,6 +44,7 @@ scripts, and Node 22 or newer for the shipped CLI.
 cd client
 bun install
 bun run typecheck
+bun run lint
 bun run test
 bun run stress
 bun run build
@@ -240,6 +241,8 @@ For plugin reviewers: the repository also contains a Node CLI. Its imports do
 not imply Node dependencies in the plugin bundle. Shared code uses `globalThis`
 and platform-neutral timers; local-resource `fetch` is used for attachment
 streaming. Review the built plugin and resolved types as well as source scans.
+The warnings the directory's review prints for these are the
+[accepted warnings](#accepted-warnings) below, each with its reason.
 
 Check actual open-editor behavior in an unpaired test vault:
 
@@ -318,6 +321,63 @@ Phone layout previews (desktop rendering with mobile styles):
 | Version comparison | [View](assets/screenshots/changes-phone.png) | [View](assets/screenshots/changes-phone-dark.png) |
 
 </details>
+
+## The community directory review
+
+The Obsidian community directory reviews every release, not only the first,
+with `eslint-plugin-obsidianmd`'s `recommended` config. An error makes that
+release uninstallable; a warning passes with a written reason. `bun run lint`
+runs the same config, unchanged, and fails on any error. It is a step of
+`scripts/check.sh` and of CI's client job, both named `lint`.
+
+The versions are pinned: eslint 9.39.5 and eslint-plugin-obsidianmd 0.4.2, the
+newest release when the gate landed (2026-09-23). A newer plugin release can
+add rules, so move the pin deliberately and read what it finds before
+releasing on it.
+
+It reads the plugin bundle's source: the 43 files under `client/src/plugin`
+and `client/src/core` that `src/plugin/main.ts` reaches, type-only imports
+included. Tests are left out by name, and the fourteen other files of those
+folders are listed in [client/eslint.config.mjs](../client/eslint.config.mjs)
+with the reason each exists: test scaffolding, the fuzzers, the headless
+client's outcomes and fault seams, and the platform probe, which `main.ts` does
+not import yet. The config walks the imports from `main.ts` every run and
+refuses to lint when a listed file has joined the bundle, when a listed file
+is gone, or when a file of those folders is neither reached nor listed.
+
+It runs from the repository root, which `bun run lint` changes to, because the
+plugin reads `manifest.json` from the working directory. Without the
+manifest's `minAppVersion`, `no-unsupported-api`, the rule that decides whether
+an older Obsidian can load the plugin, switches itself off. The config refuses
+to run anywhere else.
+
+No rule is switched off in the config, and none can be by comment: the
+recommended config makes a comment that disables any `obsidianmd` rule,
+`no-console`, `no-restricted-globals`, `@typescript-eslint/no-deprecated` and
+several others an error of its own. An Obsidian API newer than `minAppVersion`
+goes behind `requireApiVersion("X.Y.Z")`, with the version from its `@since`
+tag, which is the guard `no-unsupported-api` recognises. Keep a `typeof` check
+after it where the API is optional. `registerCliHandler` (1.12.2) and
+`SettingGroup` (1.11.0) are guarded that way in `main.ts`.
+
+### Accepted warnings
+
+The warnings the review will print, and why each stays. When a warning is
+added or removed, change this table in the same commit.
+
+| Rule | Count | Where | Why it stays |
+|---|---|---|---|
+| `obsidianmd/prefer-window-timers` | 20 | `core/client.ts` (12), `core/transport.ts` (8) | `core` is also the headless client's engine, and Node has no `window`. |
+| `obsidianmd/prefer-window-timers` | 9 | `plugin/main.ts` (6), `plugin/visible-poll.ts` (3) | The plugin's tests run in Node, where there is no `window`; they drive these timers with fake timers on the globals, and some replace `window` with a bare `EventTarget`. The plugin's code runs in Obsidian's main window, so a bare timer is already that window's. `main.ts` records the choice where the save-to-sync timer is set. |
+| `obsidianmd/no-global-this` | 3 | `core/digest.ts` (2, `crypto`), `core/transport.ts` (1, `WebSocket`) | Shared with the headless client. The global object is the one place both runtimes keep WebCrypto and WebSocket. |
+| `obsidianmd/no-global-this` | 9 | `plugin/activity.ts` (2), `plugin/delivery.ts` (1), `plugin/main.ts` (3), `plugin/resume.ts` (2), `plugin/visible-poll.ts` (1) | Each reads `document`, `window`, `navigator` or `location` so that a missing one is `undefined` rather than a thrown error, because the tests run in Node and supply them with `vi.stubGlobal`. Where an element is at hand the panel already uses its `ownerDocument` and that document's window, which is what keeps it right in a popout; the global is the fallback. |
+| `obsidianmd/no-global-this` | 1 | `electronFs` in `plugin/vault.ts` | Node's `fs` for the durable fsync on desktop, through the `require` Electron provides as a global. Written as `require("fs")` the bundler would resolve it and the plugin would name a Node module, which the build test refuses. |
+| `no-restricted-globals` (`fetch`) | 2 | `readBlocks` and `readRange` in `plugin/vault.ts` | They fetch the vault's own resource URL, not the network, to read a large attachment as a stream and by range. `requestUrl` returns whole bodies and does not read resource URLs. |
+| `@typescript-eslint/no-deprecated` (`setWarning`) | 5 | `plugin/main.ts` | Its replacement, `setDestructive`, arrived in 1.13.0 and the manifest admits 1.7.2, so using it would be a `no-unsupported-api` error. |
+| `obsidianmd/ui/sentence-case` | 6 | `plugin/main.ts` | Two are the plugin's name, "Trew Sync", one is "Which platforms Trew supports", one is the literal invite prefix `trew1i_...`, and two are the example device name `laptop` in a placeholder, spelled as device names are everywhere else. |
+| `obsidianmd/settings-tab/prefer-setting-definitions` | 1 | the settings tab in `plugin/main.ts` | `getSettingDefinitions` is the declarative settings API of 1.13.0. Until it is adopted, the tab's settings do not appear in Obsidian's settings search on 1.13 or later. |
+
+That is 56 warnings, and no errors, at the commit that added the gate.
 
 ## Performance work
 

@@ -14,6 +14,7 @@ import {
   PluginSettingTab,
   Setting,
   SettingGroup,
+  requireApiVersion,
   setIcon,
   type ButtonComponent,
   type MarkdownView,
@@ -399,16 +400,19 @@ export default class TrewPlugin extends Plugin {
     // A block rather than an early return, because returning would skip the
     // vault event registration below and leave an older Obsidian syncing
     // only on the timer. The first version of this guard did exactly that.
-    // eslint-disable-next-line obsidianmd/no-unsupported-api -- the typeof feature detection itself
-    if (typeof this.registerCliHandler === "function") {
-      // eslint-disable-next-line obsidianmd/no-unsupported-api -- feature-detected with typeof above
+    //
+    // Two checks. `requireApiVersion` is the one the community directory's
+    // review reads: it refuses any API newer than `minAppVersion` unless it
+    // sits behind that call, and it refuses a comment that disables it too.
+    // `typeof` stays because it is the one that asks the object itself, and a
+    // build can report a version without carrying everything it promises.
+    if (requireApiVersion("1.12.2") && typeof this.registerCliHandler === "function") {
       this.registerCliHandler(
         "trew:history",
         "List Trew version history for a note",
         { path: { value: "<path>", description: "Vault path" } },
         async (flags) => this.cliHistory(String(flags["path"] ?? "")),
       );
-      // eslint-disable-next-line obsidianmd/no-unsupported-api -- feature-detected with typeof above
       this.registerCliHandler(
         "trew:restore",
         "Restore a Trew version",
@@ -3130,10 +3134,16 @@ const LISTED_IN_PANEL = 5;
 
 const DOCS = "https://github.com/waynehoover/trew/blob/main/docs/plugin.md";
 
-/** Native settings groups on current Obsidian; flat rows on older releases. */
+/**
+ * Native settings groups on current Obsidian; flat rows on older releases.
+ *
+ * Behind both checks for the reason the command line handlers are: the version
+ * is what the directory's review recognises, and `typeof` is what asks.
+ */
 function settingGroup(host: HTMLElement): HTMLElement {
-  // eslint-disable-next-line obsidianmd/no-unsupported-api -- feature-detected with typeof on the same line
-  return typeof SettingGroup === "function" ? new SettingGroup(host).listEl : host.createDiv();
+  return requireApiVersion("1.11.0") && typeof SettingGroup === "function"
+    ? new SettingGroup(host).listEl
+    : host.createDiv();
 }
 
 /** A native row, with a short description only when the action needs context. */
@@ -3687,7 +3697,7 @@ class TrewPanel {
       b.setButtonText("Show devices").onClick(show);
     });
 
-    list = contentEl.createEl("div");
+    list = contentEl.createDiv();
     said = later(contentEl, "trew-advice");
   }
 
