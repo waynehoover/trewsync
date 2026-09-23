@@ -21,6 +21,7 @@ import (
 
 	"github.com/waynehoover/trew/internal/chunks"
 	"github.com/waynehoover/trew/internal/frame"
+	"github.com/waynehoover/trew/internal/search"
 	"github.com/waynehoover/trew/internal/store"
 	"github.com/waynehoover/trew/internal/wire"
 )
@@ -30,6 +31,12 @@ import (
 func servingMCP(t *testing.T, extra ...string) (dir, addr string) {
 	t.Helper()
 	dir = t.TempDir()
+	return dir, serveMCPOn(t, dir, extra...)
+}
+
+// serveMCPOn is servingMCP on a directory the caller chose.
+func serveMCPOn(t *testing.T, dir string, extra ...string) (addr string) {
+	t.Helper()
 	addr = fmt.Sprintf("127.0.0.1:%d", freeTestPort(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	out := &safeBuffer{}
@@ -48,7 +55,33 @@ func servingMCP(t *testing.T, extra ...string) (dir, addr string) {
 		}
 	})
 	waitForServer(t, addr, out)
-	return dir, addr
+	return addr
+}
+
+// A damaged search index never keeps the server from starting: it is
+// derived, so it is set aside, kept for inspection, and made again, and
+// search works on the new one.
+func TestServeStartsWhenTheSearchIndexIsDamaged(t *testing.T) {
+	dir := t.TempDir()
+	serveInBackground(t, dir)()
+	if err := os.WriteFile(filepath.Join(dir, search.FileName), []byte("whatever this was, it is not a database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	addr := serveMCPOn(t, dir)
+	if _, err := os.Stat(filepath.Join(dir, search.FileName+".broken")); err != nil {
+		t.Fatalf("the damaged index was not kept: %v", err)
+	}
+	key := filepath.Join(t.TempDir(), "key")
+	mustRun(t, "mcp-token", "-data", dir, "-label", "after the damage", "-key-out", key)
+	token, err := os.ReadFile(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _, body := postMCP(t, "http://"+addr+"/mcp", strings.TrimSpace(string(token)),
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_notes","arguments":{"query":"anything"}}}`)
+	if status != http.StatusOK || bytes.Contains(body, []byte(`"isError":true`)) {
+		t.Fatalf("search after the damage: %d %s", status, body)
+	}
 }
 
 func postMCP(t *testing.T, url, token, body string) (int, http.Header, []byte) {

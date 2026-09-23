@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/waynehoover/trew/internal/mcp"
 	"github.com/waynehoover/trew/internal/search"
@@ -23,24 +26,57 @@ type mcpEndpoint struct {
 }
 
 // startMCP opens the search index, starts its worker, and builds the
-// endpoint.
-func startMCP(dataDir string, srv *server.Server, vault string, origins []string, log *slog.Logger) (*mcpEndpoint, error) {
+// endpoint. It does not fail: the index is derived, so an index that cannot
+// be opened is set aside and made again, and if even that fails the endpoint
+// serves without one and search scans. A damaged derived file must never be
+// why the server that holds the notes does not start (PLAN.md section 2.5).
+func startMCP(dataDir string, srv *server.Server, vault string, origins []string, log *slog.Logger) *mcpEndpoint {
 	idx, err := search.Open(dataDir, srv.Store(), vault, log)
 	if err != nil {
-		return nil, err
+		log.Warn("the search index could not be opened; setting it aside and building a new one", "err", err)
+		if err := setAsideIndex(dataDir); err != nil {
+			log.Warn("the search index could not be set aside", "err", err)
+		}
+		idx, err = search.Open(dataDir, srv.Store(), vault, log)
+		if err != nil {
+			log.Error("the search index could not be made; search_notes scans every note", "err", err)
+			idx = nil
+		}
 	}
-	idx.Start()
-	h := mcp.New(mcp.Config{
-		Server: srv, Vault: vault, Index: idx, AllowOrigins: origins, Log: log, Version: srv.Version(),
-	})
-	return &mcpEndpoint{handler: h, index: idx}, nil
+	cfg := mcp.Config{Server: srv, Vault: vault, AllowOrigins: origins, Log: log, Version: srv.Version()}
+	if idx != nil {
+		// Only a real index goes in the interface: a typed nil there would be
+		// an index that is not nil and panics.
+		idx.Start()
+		cfg.Index = idx
+	}
+	return &mcpEndpoint{handler: mcp.New(cfg), index: idx}
+}
+
+// setAsideIndex renames the index's files to a .broken name, replacing an
+// older one, so the next open starts fresh and the damaged copy is still
+// there to look at.
+func setAsideIndex(dataDir string) error {
+	var first error
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		from := filepath.Join(dataDir, search.FileName+suffix)
+		if _, err := os.Stat(from); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := os.Rename(from, filepath.Join(dataDir, search.FileName+".broken"+suffix)); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // close writes the held token counts and stops the index. Call it after the
 // listener has stopped and before the store closes.
 func (m *mcpEndpoint) close() {
 	m.handler.Close()
-	_ = m.index.Close()
+	if m.index != nil {
+		_ = m.index.Close()
+	}
 }
 
 // withMCP mounts the endpoint at /mcp in front of the devices' handler.

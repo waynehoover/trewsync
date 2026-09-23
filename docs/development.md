@@ -552,8 +552,11 @@ answers meanwhile with its own indexed head. Every proposal compares the
 tables with the generation's recorded counters in the same read, so rows
 truncated under a matching `index_version` are caught at once, and a digest
 and a comparison with the store at open and every ten minutes catch what
-consistent counters would hide. Search matches Basalt's scan over every query
-of the oracle corpus in `mcp-fixtures.json`, with the index and without it.
+consistent counters would hide. A `search.db` that cannot be opened at all is
+renamed `search.db.broken` and made again, and if even that fails the endpoint
+serves with no index and search scans: a derived file is never the reason the
+server does not start. Search matches Basalt's scan over every query of the
+oracle corpus in `mcp-fixtures.json`, with the index and without it.
 
 **Decisions the spec did not settle.** `invalid_arguments` is the code for a
 wrong type, an unknown or a missing argument, and `invalid_limit` for a number

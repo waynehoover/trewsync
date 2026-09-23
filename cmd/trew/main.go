@@ -421,10 +421,7 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		// The index and the endpoint stop after the listener and before the
 		// store, by the order of the defers: the endpoint writes the use
 		// counts it holds, and the index finishes the batch it is in.
-		agents, err = startMCP(*dataDir, srv, *vault, allowOrigin, log)
-		if err != nil {
-			return err
-		}
+		agents = startMCP(*dataDir, srv, *vault, allowOrigin, log)
 		defer agents.close()
 		handler = withMCP(handler, agents)
 		logMCP(log, st, *vault, *addr)

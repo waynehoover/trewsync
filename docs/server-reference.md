@@ -80,7 +80,8 @@ interface, and the server logs a warning saying so: keep `/mcp` behind
 Tailscale or an identity-aware proxy. A request from a browser must carry an
 `Origin` given with `-allow-origin`. The endpoint keeps its search index in
 `search.db` in the data directory; it is derived, rebuilt from the store when
-it is missing or damaged, and not part of a backup.
+it is missing or damaged, and not part of a backup. A `search.db` that cannot
+be opened is kept as `search.db.broken` for inspection and may be deleted.
 
 ## backup, verify, purge, stats
 
