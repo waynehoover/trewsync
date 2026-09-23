@@ -115,9 +115,9 @@ fixed by this change.
 
 The evidence for the first is the **quiet ticker passes**, not the save passes.
 A phone has one JavaScript thread, so Obsidian's own reaction to a save runs
-interleaved with Trew's and lands inside whichever phase holds the event
+interleaved with TrewSync's and lands inside whichever phase holds the event
 loop; a save pass therefore cannot say whose time it was. A quiet pass has
-Trew alone on the thread. If the quiet-pass shares and the desktop shares
+TrewSync alone on the thread. If the quiet-pass shares and the desktop shares
 disagree, that disagreement goes in [research.md](research.md) and this rewrite
 does not start on the strength of it.
 

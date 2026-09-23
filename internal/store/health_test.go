@@ -60,7 +60,7 @@ func TestHealthOnAStoreThatWorks(t *testing.T) {
 // branch is driven with one, on a handle that believes it is writable.
 //
 // It used to be driven with `OpenForInspection`, and that stand-in was the
-// confusion itself: every inspection command opens that way, so `trew
+// confusion itself: every inspection command opens that way, so `trewd
 // stats` reported every healthy server as unable to take a note. The two
 // answers are told apart here and in the test below.
 func TestHealthNoticesADatabaseThatRefusesWrites(t *testing.T) {

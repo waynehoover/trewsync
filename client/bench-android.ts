@@ -38,7 +38,7 @@
  *
  * The phone has one JavaScript thread and Obsidian is on it, so a phase that
  * held the event loop while Obsidian reacted to the same save is charged for
- * it. That is why the **quiet ticker passes**, where Trew is alone on the
+ * it. That is why the **quiet ticker passes**, where TrewSync is alone on the
  * thread, are the evidence for the phase split, and the save passes are used
  * only for the end-to-end figure.
  */
@@ -279,7 +279,7 @@ async function atSize(size: number): Promise<void> {
     console.log(`  1. Obsidian, vault switcher, "Open folder as vault", pick ${VAULT}`);
     console.log("     (it exists now: this step is why it did not before)");
     console.log("  2. Settings, Community plugins, turn off Restricted mode");
-    console.log("  3. Trew, Paste an invite, and paste this:");
+    console.log("  3. TrewSync, Paste an invite, and paste this:");
     console.log(`\n     ${invite.invite}\n`);
     console.log(`     It must say it joins ${endpoint}. If it names anything else, stop.`);
     console.log("  4. Leave Obsidian open, in the foreground, screen on");
@@ -323,7 +323,7 @@ async function atSize(size: number): Promise<void> {
     await adb("shell", "touch", TIMING_LOG);
     // Obsidian in front, or there are no passes to collect.
     //
-    // Android suspends a backgrounded WebView, and Trew's own guide says
+    // Android suspends a backgrounded WebView, and TrewSync's own guide says
     // sync runs on Android only while Obsidian is open in the foreground. A
     // collection window with the phone on a home screen gathers nothing at
     // all, which is what two runs did. `obsidian://open` brings it forward and

@@ -818,6 +818,19 @@ export class FakeAdapter implements DataAdapter {
     this.tabledHidden.delete(path);
   }
 
+  /**
+   * Somebody else's delete and rewrite of a file, of which the watcher has
+   * reported the delete and not yet the write: a camera app saving again, or
+   * a sync tool replacing the file. On the disk, and out of the index until
+   * the watcher gets to it.
+   */
+  writeUnreported(path: string, bytes: Uint8Array, mtime = this.now): void {
+    if (this.files.has(path) && this.tabled(path)) this.trigger("file-removed", path);
+    this.files.set(path, { binary: bytes.slice(), ctime: mtime, mtime });
+    this.unindexed.add(path);
+    this.watcherLater();
+  }
+
   text(path: string): string | undefined {
     const file = this.files.get(path);
     return file ? new TextDecoder().decode(file.binary) : undefined;

@@ -898,7 +898,7 @@ func renameTag(c *call, a *args) outcome {
 // lookupOperation resolves a reply that never arrived (PLAN.md section 4.8):
 // one of this token's operations, by id, as the oplog recorded it. Only the
 // token's own: another agent's operations are the operator's to read, with
-// `trew audit`, and an id that is not this token's is answered exactly as one
+// `trewd audit`, and an id that is not this token's is answered exactly as one
 // that was never committed.
 func lookupOperation(c *call, a *args) outcome {
 	id, present := a.text("opId", 64)

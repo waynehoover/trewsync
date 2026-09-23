@@ -68,7 +68,7 @@ it("restores the selected deletion's content when a peer has since reused its na
   const a = await load();
   a.app.vault.adapter.seed("Note.md", "the deleted note\n");
   // The first device from the invite the server wrote, confirming the merge a
-  // vault with a note in it asks for; the second from `trew invite`.
+  // vault with a note in it asks for; the second from `trewd invite`.
   await a.plugin.pair(await server.firstInvite(), "laptop", true);
   await synced(a.plugin);
   const b = await load();

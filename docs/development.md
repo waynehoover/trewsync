@@ -1,4 +1,4 @@
-# Develop Trew
+# Develop TrewSync
 
 [Documentation](index.md)
 
@@ -23,7 +23,7 @@ use, start with the [server](server.md), [plugin](plugin.md), or
 ## Repository layout
 
 ```text
-go.mod, cmd/, internal/  trew: server, store, backup, verification, purge
+go.mod, cmd/, internal/  trewd: server, store, backup, verification, purge
 client/src/core/         shared sync engine, chunking, merging, transport
 client/src/plugin/       Obsidian plugin and Vault adapter
 client/src/node/          trew CLI and filesystem adapter
@@ -380,10 +380,11 @@ added or removed, change this table in the same commit.
 | `obsidianmd/no-global-this` | 1 | `electronFs` in `plugin/vault.ts` | Node's `fs` for the durable fsync on desktop, through the `require` Electron provides as a global. Written as `require("fs")` the bundler would resolve it and the plugin would name a Node module, which the build test refuses. |
 | `no-restricted-globals` (`fetch`) | 2 | `readBlocks` and `readRange` in `plugin/vault.ts` | They fetch the vault's own resource URL, not the network, to read a large attachment as a stream and by range. `requestUrl` returns whole bodies and does not read resource URLs. |
 | `@typescript-eslint/no-deprecated` (`setWarning`) | 5 | `plugin/main.ts` | Its replacement, `setDestructive`, arrived in 1.13.0 and the manifest admits 1.7.2, so using it would be a `no-unsupported-api` error. |
-| `obsidianmd/ui/sentence-case` | 6 | `plugin/main.ts` | Two are the plugin's name, "Trew Sync", one is "Which platforms Trew supports", one is the literal invite prefix `trew1i_...`, and two are the example device name `laptop` in a placeholder, spelled as device names are everywhere else. |
+| `obsidianmd/ui/sentence-case` | 15 | `plugin/main.ts` | Twelve are the product's name, TrewSync, whose capital S the rule reads as a second word to lowercase: the plugin's name on the ribbon and in the panel's title, "Which platforms TrewSync supports", the file menu's "TrewSync: version history", and eight notices that name it. One is the literal invite prefix `trew1i_...`, and two are the example device name `laptop` in a placeholder, spelled as device names are everywhere else. |
 | `obsidianmd/settings-tab/prefer-setting-definitions` | 1 | the settings tab in `plugin/main.ts` | `getSettingDefinitions` is the declarative settings API of 1.13.0. Until it is adopted, the tab's settings do not appear in Obsidian's settings search on 1.13 or later. |
 
-That is 56 warnings, and no errors, at the commit that added the gate.
+That was 56 warnings, and no errors, at the commit that added the gate. Writing
+the name TrewSync added nine of the sentence-case kind, so it is 65.
 
 ## Performance work
 
@@ -419,7 +420,7 @@ gh attestation verify main.js --repo waynehoover/trew
 An attestation identifies the build source. It is not a security audit or proof
 that the application is defect-free.
 
-The current source speaks protocol 1, Trew's own; Basalt's releases speak
+The current source speaks protocol 1, TrewSync's own; Basalt's releases speak
 protocol 7, and the two refuse each other at hello, naming both numbers. Build
 the server and clients together for local testing. No compatibility fallback is
 provided. Tests exercise preserved bytes across concurrent writers, not just
@@ -432,17 +433,17 @@ native Android acceptance.
 
 ## The fork from Basalt (M0)
 
-Trew began as a copy of Basalt Sync at commit `664a963` (Basalt Sync 0.10.0,
+TrewSync began as a copy of Basalt Sync at commit `664a963` (Basalt Sync 0.10.0,
 protocol 7), renamed, with every Basalt check passing before anything was
 removed. The steps, each gated by a full `scripts/check.sh` run:
 
 1. A faithful copy, same layout, still named Basalt: 32 passed, 0 failed,
    0 skipped (two checks are CI only: systemd's verdict on the unit and the
    loopback filesystem).
-2. The rename (first to Telimus, then the same day to Trew, the name it
-   has now). `basalt`, `Basalt`, `BASALT` and `basaltd` became `trew`,
-   `Trew`, `TREW` and `trew`; the module became
-   `github.com/waynehoover/trew`; the invite protocol action became
+2. The rename (first to Telimus, then the same day to Trew). `basalt`,
+   `Basalt`, `BASALT` and `basaltd` became `trew`, `Trew`, `TREW` and
+   `trew`; the module became `github.com/waynehoover/trew`; the invite
+   protocol action became
    `obsidian://trew`; the manifest description was rewritten to pass the
    community directory's rules (no "Obsidian", ends with a period).
 3. The Go module moved from `server/` to the repository root, so
@@ -464,12 +465,32 @@ can say that it is Basalt's, and in the fixtures' refused invite vectors.
 Basalt's history, copied verbatim with a provenance note, because the review
 IDs they define are cited throughout the code.
 
+### TrewSync and trewd (2026-09-23)
+
+The day after the fork the owner settled how the name is written (PLAN §10).
+The product is **TrewSync**, one word, wherever a person reads it: the
+manifest's `name`, the plugin's notices, titles and tooltips, what the server
+and the headless client print, and the docs. The server's command is `trewd`:
+`cmd/trew` moved to `cmd/trewd`, so `go build ./cmd/trewd` and
+`go install github.com/waynehoover/trew/cmd/trewd@latest` make it, and the
+image, the release assets and the test harnesses name it. Until then the
+server and the headless client both installed a `trew`. The headless client
+keeps `trew`.
+
+No identifier moved: the module path, `TREW_DATA`, the `.trew` folders and
+`.trew-tmp-` marks, the `trew1i_` prefix, `obsidian://trew`, the plugin id and
+npm package `trew-sync`, the store's product id, the systemd unit and its
+account, the image and compose service names, the MCP server name and the
+release tag formats. Records written before the change, such as the
+acceptance runs below and the status lines in PLAN.md, keep the names they
+were written with.
+
 ### Inventory at the fork
 
-Counted with the same method at Basalt `664a963` and at the Trew fork; the
+Counted with the same method at Basalt `664a963` and at the TrewSync fork; the
 only difference is the FTS5 probe below.
 
-| Area | Basalt `664a963` | Trew at M0 |
+| Area | Basalt `664a963` | TrewSync at M0 |
 |---|---|---|
 | Go non-test | 13,588 lines in 18 files | 13,588 lines in 18 files |
 | Go test | 22,895 lines in 73 files, 536 top-level `Test` functions | 22,941 lines in 74 files, 537 |
@@ -575,15 +596,22 @@ Findings:
    Fixed separately with regression tests; see the fix's commit.
 2. A revoked device's panel says to pair again with a new invite but draws
    the paired panel, with no invite field; the way on is Manage this vault,
-   then Unlink.
+   then Unlink. Fixed: a stop on `auth` or `nodevice` carries the
+   `pair-again` recovery, and the panel draws the pairing form in place of
+   the paired panel. Pairing from it confirms the merge, writes the new
+   pending pairing over the refused one, and only then removes the old index,
+   which any save of a pending pairing now does, so a crash between the two
+   cannot finish the new pairing on the old cursor.
 3. After unlinking, the pairing form's Invite field was filled with the
-   first QR's invite, already used.
+   first QR's invite, already used. Fixed: the panel forgets a link's invite
+   once a pairing holds the vault.
 4. The "Trew has stopped: this device was revoked" notice stayed on screen
-   after re-pairing.
+   after re-pairing. Fixed: the notice is taken down when the state leaves
+   that stop, by pairing again, unlinking or a recovery.
 5. Folder deletions do not travel (a deliberate rule inherited from Basalt,
    `client/src/core/engine.ts`, "Folder deletions do not travel"): empty
    folders deleted on the Mac stayed on the phone.
-6. Not Trew: a meeting-notes exporter on this Mac ran `obsidian create
+6. Not TrewSync: a meeting-notes exporter on this Mac ran `obsidian create
    vault=NAME ...` with `vault=` after the command, which the CLI ignores,
    so it created an empty note in whichever vault was active (the test
    vault, while it had focus) before writing the real note into the right
@@ -605,7 +633,7 @@ an implementation that is not this one. Linking its `mcp` package into the
 server was measured and rejected: it pulls `golang.org/x/oauth2`,
 `google/jsonschema-go`, segmentio's assembly-accelerated JSON and base64,
 `uritemplate` and `x/time/rate` into the binary, beside a 12,000-line
-streamable transport. Test-only imports are not linked into `trew`, and
+streamable transport. Test-only imports are not linked into `trewd`, and
 `TestTheSDKIsImportedOnlyByTests` checks no server file imports it.
 
 Two eras are spoken, because 2026-07-28 removed the handshake:
@@ -743,12 +771,15 @@ running server's control socket, and drives `/mcp` with the SDK client at
 three protocol versions while a second connection keeps writing:
 
 ```bash
-go build -o /tmp/trew ./cmd/trew
-/tmp/trew serve --mcp -localhost -addr 127.0.0.1:3013 -data /tmp/accept-data &
+go build -o /tmp/trewd ./cmd/trewd
+/tmp/trewd serve --mcp -localhost -addr 127.0.0.1:3013 -data /tmp/accept-data &
 TREW_ACCEPT_DATA=/tmp/accept-data TREW_ACCEPT_ADDR=127.0.0.1:3013 \
-  go test ./cmd/trew -run TestMCPAcceptanceExternal -v -count=1
-/tmp/trew mcp-token -data /tmp/accept-data -list
+  go test ./cmd/trewd -run TestMCPAcceptanceExternal -v -count=1
+/tmp/trewd mcp-token -data /tmp/accept-data -list
 ```
+
+The transcript below was recorded before the server command was renamed
+`trewd`, so its one command line still says `trew`.
 
 ```text
 serving MCP at /mcp with no token yet, so every request is refused
@@ -800,7 +831,7 @@ runs the same in the test process on every `go test`.
 ### Agent operations: the commit boundary, the log and the pins (M5)
 
 The store half of M5 tasks 1, 2, 3 and 10 (`internal/store/oplog.go`). The
-write tools call it (below, "The MCP write tools"); `cmd/trew/audit_test.go`
+write tools call it (below, "The MCP write tools"); `cmd/trewd/audit_test.go`
 also commits through it directly.
 
 **The commit boundary.** `Store.CommitOperation(Operation) (OpResult, error)`
@@ -846,7 +877,7 @@ vault's previous operation), `op_entries` (every path changed, with its uid
 before and the uid that changed it; a move is a `write` row and a `source`
 row), `op_pins` and `op_keys`. No bearer token, token hash or note body is
 stored, which a test checks column by column. Revoking a token deletes its
-token and author rows and none of this. `trew audit` reads it, through the
+token and author rows and none of this. `trewd audit` reads it, through the
 control socket while `serve` runs. The version is 2 and not just new tables
 because the build before would open such a store and purge every pinned
 before-image it cannot see; at version 2 it refuses the store instead.
@@ -1033,7 +1064,7 @@ narrowing and requires the same plan; keying only the first lookup of a wiki
 link fails its companion test.
 
 **Authors (task 8).** Entries carry the token's label as their device, so
-`note_history`, `trew audit` and the batches a device receives name the agent,
+`note_history`, `trewd audit` and the batches a device receives name the agent,
 and authors are never in the device list or delivery status. A device that
 meets an agent's edit to text it changed offline keeps both, the agent's
 bytes in a conflict copy named after the device that kept it, which is the

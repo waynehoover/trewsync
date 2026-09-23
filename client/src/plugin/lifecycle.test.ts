@@ -67,7 +67,7 @@ it("a retired reconnect loop must not erase the replacement loop's wake handle",
     await server.start(port);
     notices.length = 0;
     await plugin.syncNow();
-    expect(notices.some(({ message }) => message === "Trew: reconnecting…")).toBe(true);
+    expect(notices.some(({ message }) => message === "TrewSync: reconnecting…")).toBe(true);
     expect(state.wakeLoop).toBe(newWake);
     await stateIs("synced");
   } finally {

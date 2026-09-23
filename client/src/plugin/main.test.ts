@@ -69,7 +69,7 @@ type Testable = TrewPlugin & StubPlugin;
 
 /**
  * Pairs the vault's first device, the way the first device pairs: from the
- * invite `trew serve` wrote to `<data>/first-invite` on a store with no
+ * invite `trewd serve` wrote to `<data>/first-invite` on a store with no
  * devices.
  *
  * With the merge confirmed, because a first device is usually a vault full of
@@ -81,7 +81,7 @@ async function startVault(plugin: Testable, name = "laptop", on?: TestServer): P
 }
 
 /**
- * An invite for another device, minted with `trew invite` on the server, the
+ * An invite for another device, minted with `trewd invite` on the server, the
  * way an operator mints one. A paired device's panel mints them too, and the
  * tests about that go through `createInvite`.
  */
@@ -239,7 +239,7 @@ describe("loading", () => {
   it("comes up unpaired, and says so", async () => {
     const { plugin } = await load();
     expect(plugin.paired).toBe(false);
-    expect(status(plugin)).toBe("Trew Sync: Not paired.");
+    expect(status(plugin)).toBe("TrewSync: Not paired.");
     expect(statusIcon(plugin)).toBe("link");
   });
 
@@ -256,7 +256,7 @@ describe("loading", () => {
       "verify-contents",
       "version-history",
     ]);
-    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["Trew Sync"]);
+    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["TrewSync"]);
     expect(plugin.statusBarItems.length).toBe(1);
     // create, modify, delete, rename. Without these it only syncs on a timer.
     expect(app.vault.handlerCount()).toBe(4);
@@ -408,14 +408,14 @@ describe("where its own state goes", () => {
     await until("it to give up", () => plugin.currentState.kind === "stopped");
     expect(notices.map((n) => n.message).join(" ")).toMatch(/would sync/);
     expect(statusIcon(plugin)).toBe("alert-triangle");
-    expect(status(plugin)).toMatch(/^Trew Sync: Stopped:/);
+    expect(status(plugin)).toMatch(/^TrewSync: Stopped:/);
   }, 300_000);
 });
 
 describe("pairing", () => {
   /**
    * The first device pairs the way every other one does, from an invite: the
-   * one `trew serve` wrote to its data folder on a store with no devices.
+   * one `trewd serve` wrote to its data folder on a store with no devices.
    */
   it("pairs the first device from the invite the server wrote, and syncs it", async () => {
     await fresh();
@@ -433,7 +433,7 @@ describe("pairing", () => {
     expect(plugin.deviceName).toBe("laptop");
     expect(statusIcon(plugin)).toBe("cloud-check");
     expect(summaries).toContain("1 sent");
-    expect(status(plugin)).toMatch(/^Trew Sync: (?:1 sent|Up to date), as of /);
+    expect(status(plugin)).toMatch(/^TrewSync: (?:1 sent|Up to date), as of /);
     // Saved in a form that survives the JSON round trip Obsidian does, and
     // exactly the device's own credential: its row and the token for it. No
     // invite: that is held only while a pairing is pending.
@@ -628,7 +628,7 @@ describe("pairing instructions", () => {
     // Where the first device's invite comes from, which a device with no other
     // device to ask has to be told.
     expect(field.desc).toMatch(/first-invite/);
-    expect(field.desc).toMatch(/trew invite on the server/);
+    expect(field.desc).toMatch(/trewd invite on the server/);
     expect(field.nameEl.children).toEqual([]);
   }, 300_000);
 });
@@ -893,7 +893,7 @@ describe("when things go wrong", () => {
     await plugin.syncNow();
     expect(plugin.currentState.kind).toBe("failed");
     expect(notices.some((n) => n.message.includes("editor disk full"))).toBe(true);
-    expect(notices.some((n) => n.message === "Trew: up to date")).toBe(false);
+    expect(notices.some((n) => n.message === "TrewSync: up to date")).toBe(false);
   });
 
   it("shows one busy action and one result for repeated manual sync requests", async () => {
@@ -919,7 +919,7 @@ describe("when things go wrong", () => {
       expect(button.disabled).toBe(true);
       release();
       await Promise.all([first, second]);
-      expect(notices.filter((n) => n.message === "Trew: up to date")).toHaveLength(1);
+      expect(notices.filter((n) => n.message === "TrewSync: up to date")).toHaveLength(1);
       expect(button.label).toBe("Sync now");
       expect(button.disabled).toBe(false);
       expect(app.vault.adapter.filePaths().filter((p) => !p.startsWith(".obsidian/"))).toEqual([]);
@@ -1007,7 +1007,7 @@ describe("when things go wrong", () => {
       () => plugin.currentState.kind === "offline",
     );
     expect(statusIcon(plugin)).toBe("cloud-off");
-    expect(status(plugin)).toMatch(/^Trew Sync: Offline:/);
+    expect(status(plugin)).toMatch(/^TrewSync: Offline:/);
   }, 300_000);
 
   /**
@@ -1234,7 +1234,7 @@ describe("on a platform the tests do not reach", () => {
     expect(
       plugin.statusBarItems[0]!.children.some((c) => c.cls.includes("trew-status-platform")),
     ).toBe(false);
-    expect(status(plugin)).toBe("Trew Sync: Not paired.");
+    expect(status(plugin)).toBe("TrewSync: Not paired.");
     choosePairing(plugin);
     expect(panelText()).not.toMatch(/not supported|untested/);
     expect(supportLink()).toBeUndefined();
@@ -1440,7 +1440,10 @@ describe("a device that only receives, while Obsidian's index catches up", () =>
     await settleBoth(phone.plugin, mac.plugin);
 
     // Then whole, with the source file's older mtime, and the Mac's watcher
-    // slower than the round its own events ask for.
+    // slower than the round its own events ask for. Nobody renames anything,
+    // so the engine must not hear of the rename that moves the empty file
+    // aside as if somebody had.
+    const renames = vi.spyOn(clientOf(mac.plugin), "noteRename");
     mac.app.vault.adapter.holdWatcher();
     await phone.app.vault.adapter.writeBinary("m3-photo.jpg", jpeg.slice().buffer, {
       mtime: 1_790_192_356_000,
@@ -1461,6 +1464,7 @@ describe("a device that only receives, while Obsidian's index catches up", () =>
     expect(phone.app.vault.adapter.trashedLocally).toEqual([]);
     expect(notes(mac.app)).toEqual(["m3-photo.jpg"]);
     expect(notes(phone.app)).toEqual(["m3-photo.jpg"]);
+    expect(renames.mock.calls, "the engine was told of a rename").toEqual([]);
   }, 300_000);
 
   it("does not delete a new note it received in the pass that updated another", async () => {
@@ -1552,7 +1556,7 @@ describe("unlinking", () => {
     expect(plugin.paired).toBe(false);
     expect(plugin.savedData).toBe(null);
     expect(statusIcon(plugin)).toBe("link");
-    expect(status(plugin)).toBe("Trew Sync: Not paired.");
+    expect(status(plugin)).toBe("TrewSync: Not paired.");
     expect(app.vault.adapter.text("keep.md")).toBe("still here");
 
     // The index goes too. It records what this device believes it has
@@ -1608,7 +1612,7 @@ describe("the panel, which is a modal and a settings tab", () => {
    * It was reachable from the ribbon, the status bar and the command palette,
    * and nowhere else, because the plugin registered no settings tab. Obsidian
    * draws a plugin's gear in Settings only for a plugin that calls
-   * `addSettingTab`, so Settings had no Trew entry at all and somebody
+   * `addSettingTab`, so Settings had no TrewSync entry at all and somebody
    * looking for the plugin's interface where every other plugin keeps it
    * found nothing and concluded there was none. Reported by the one person
    * running it, who could not find the settings screen.
@@ -1620,7 +1624,7 @@ describe("the panel, which is a modal and a settings tab", () => {
     const { plugin } = await load();
     expect(
       plugin.settingTabs.length,
-      "the plugin registers no settings tab, so Settings shows no Trew entry at all",
+      "the plugin registers no settings tab, so Settings shows no TrewSync entry at all",
     ).toBe(1);
 
     const tab = plugin.settingTabs[0]!;
@@ -1737,7 +1741,7 @@ describe("the panel, which is a modal and a settings tab", () => {
     const listed = built.find((s) => s.name.startsWith("laptop"))!;
     expect(listed.name).toMatch(/\(this device\)/);
     // The vault's only device, and it can still be revoked: the last device
-    // may be, and `trew invite` on the server is the way back. What revoking
+    // may be, and `trewd invite` on the server is the way back. What revoking
     // it says is in "the device list in the panel", below.
     expect(listed.buttons.map((b) => b.label)).toEqual(["Unlink from the server"]);
   }, 300_000);
@@ -2058,14 +2062,14 @@ describe("on a device with no status bar", () => {
     await fresh();
     const { plugin } = await load();
     const ribbon = plugin.ribbonIcons[0]!;
-    expect(ribbon.title).toBe("Trew Sync");
+    expect(ribbon.title).toBe("TrewSync");
 
     await startVault(plugin, "laptop");
     await synced(plugin);
 
     // The same sentence the status bar carries, somewhere a phone shows it.
     const label = ribbon.el.attributes.get("aria-label") ?? "";
-    expect(label, `the ribbon says ${JSON.stringify(label)}`).toMatch(/^Trew: /);
+    expect(label, `the ribbon says ${JSON.stringify(label)}`).toMatch(/^TrewSync: /);
     expect(label).not.toMatch(/connecting/);
     expect(ribbon.el.attributes.get("data-icon")).toBe("cloud-check");
   }, 300_000);
@@ -2311,7 +2315,10 @@ function holdIndexLoad(plugin: Testable, app: App) {
     "runLoop",
   );
   adapter.exists = async (path: string) => {
-    if (path.endsWith("/index.json") && !held) {
+    // Once the run loop has started, so it is the load that is held and not
+    // the pairing's own check for an index an earlier pairing left, which
+    // asks the same question before there is a run.
+    if (path.endsWith("/index.json") && !held && runs.mock.calls.length > 0) {
       held = true;
       began.resolve();
       await gate.promise;
@@ -3448,8 +3455,12 @@ describe("pairing honestly", () => {
    * and offers the way out, and never "syncing". Here the row it was paired
    * with is revoked before it ever connected, which is the ordinary way a
    * pairing turns out to be wrong now that there is no claim to refuse.
+   *
+   * The way out was "unlink, then pair again" until M3 found nobody guesses
+   * that on a phone; the panel draws the pairing form itself now, and the
+   * notice sends people there.
    */
-  it("offers unlink when a new device is refused for good the first time it connects", async () => {
+  it("offers pairing again when a new device is refused for good the first time it connects", async () => {
     await fresh();
     const { deviceId, token } = await server.deviceCredentials("laptop");
     // Another device revokes it, before it has ever connected.
@@ -3480,9 +3491,12 @@ describe("pairing honestly", () => {
     await until("it to stop", () => plugin.currentState.kind === "stopped");
     const said = notices.map((n) => n.message).join(" ");
     expect(said).toMatch(/could not join/);
-    expect(said).toMatch(/unlink/i);
+    expect(said).toMatch(/open the TrewSync panel and pair it again/);
     expect(said).toMatch(/new invite/);
     expect(said).not.toMatch(/syncing/);
+    choosePairing(plugin);
+    expect(built.some((s) => s.name === "Invite")).toBe(true);
+    expect(panelText()).toMatch(/Pair this device again/);
   }, 300_000);
 
   it("runs one pairing at a time", async () => {
@@ -3587,7 +3601,7 @@ describe("on a phone", () => {
       expect(plugin.statusBarItems).toHaveLength(0);
       await startVault(plugin, "phone");
       await until("a sync", () => plugin.currentState.kind === "synced");
-      expect(plugin.ribbonIcons[0]!.el.attributes.get("aria-label")).toMatch(/^Trew: .*as of/);
+      expect(plugin.ribbonIcons[0]!.el.attributes.get("aria-label")).toMatch(/^TrewSync: .*as of/);
     } finally {
       Platform.isMobileApp = false;
     }
@@ -3844,7 +3858,7 @@ describe("version history on the file menu (P-D8)", () => {
 
     const { menu, items } = fakeMenu();
     app.workspace.fire("file-menu", menu, { path: "daily/note.md", extension: "md" });
-    expect(items.map((i) => i.title)).toEqual(["Trew: version history"]);
+    expect(items.map((i) => i.title)).toEqual(["TrewSync: version history"]);
     expect(items[0]!.icon).toBe("history");
 
     modals.length = 0;
@@ -4060,7 +4074,7 @@ describe("what is still in flight when a vault is unlinked (P-D2, P-D3)", () => 
     gate.release();
     await pass;
 
-    // Unpaired is the truth. "Trew has stopped" or a summary of a pass
+    // Unpaired is the truth. "TrewSync has stopped" or a summary of a pass
     // over a vault that is gone are both louder than the truth and wrong.
     expect(plugin.currentState.kind).toBe("unpaired");
     expect(notices.map((n) => n.message).join(" ")).toBe("");
@@ -4184,7 +4198,7 @@ describe("an older Obsidian", () => {
       "verify-contents",
       "version-history",
     ]);
-    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["Trew Sync"]);
+    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["TrewSync"]);
     expect(plugin.statusBarItems.length).toBe(1);
     // The four vault events and the file-menu entry, all after the guard.
     expect(plugin.registeredEvents.length).toBe(5);
@@ -4253,7 +4267,7 @@ describe("what the status bar shows", () => {
       expect(icon, `${state.kind} chose no glyph`).not.toBe("");
       expect(plugin.statusBarItems[0]!.allText()).toBe("");
       expect(plugin.statusBarItems[0]!.children).toHaveLength(1);
-      expect(status(plugin), `${state.kind} has no tooltip`).toMatch(/^Trew Sync: \S/);
+      expect(status(plugin), `${state.kind} has no tooltip`).toMatch(/^TrewSync: \S/);
       seen.add(icon);
     }
     // Not all the same glyph, or the bar would say nothing by changing.
@@ -4272,7 +4286,7 @@ describe("what the status bar shows", () => {
     const { plugin } = await load();
     for (const state of states) {
       (plugin as unknown as { setState(s: unknown): void }).setState(state);
-      const sentence = status(plugin).replace(/^Trew Sync: /, "");
+      const sentence = status(plugin).replace(/^TrewSync: /, "");
       expect(sentence, `${state.kind} opens mid-sentence`).toMatch(/^[A-Z0-9]/);
     }
   });
@@ -4722,6 +4736,302 @@ describe("adding a device from the panel", () => {
 });
 
 /**
+ * A device the server has revoked, and the way back from it: M3's findings 2,
+ * 3 and 4, from a real Pixel on 2026-09-23.
+ *
+ * The phone said it had been revoked and should be paired again with a new
+ * invite, and drew the paired panel under that: Sync now, Create invite, the
+ * device list, and no invite field anywhere. The way on was Manage this vault,
+ * then Unlink, which nobody guesses. The form unlinking drew held the invite
+ * the phone had first been paired from, already spent, and the "has stopped"
+ * notice was still on screen minutes after the phone had paired again.
+ */
+describe("a device the server has revoked", () => {
+  type Loaded = Awaited<ReturnType<typeof load>>;
+  const INDEX = ".obsidian/plugins/trew/index.json";
+
+  /** The rows the open panel draws now, rather than every row any render built. */
+  const drawn = () => {
+    const panel = modals.at(-1)?.contentEl;
+    return panel ? built.filter((s) => containsElement(panel, s.settingEl)) : [];
+  };
+  const drawnButtons = () =>
+    drawn()
+      .flatMap((s) => s.buttons)
+      .filter((b) => !b.buttonEl.hidden);
+  const press = async (label: string) => {
+    const button = drawnButtons().find((b) => b.label === label);
+    if (!button) throw new Error(`the panel has no ${label} button: ${panelText()}`);
+    await button.click();
+  };
+  const inviteField = () => drawn().find((s) => s.name === "Invite")?.texts[0];
+
+  /** A laptop with a note, and a phone paired from it that has the note too. */
+  async function laptopAndPhone(): Promise<{ laptop: Loaded; phone: Loaded }> {
+    await fresh();
+    const laptop = await load();
+    laptop.app.vault.adapter.seed("From the laptop.md", "Written on the laptop\n");
+    await startVault(laptop.plugin, "laptop");
+    await synced(laptop.plugin);
+    const phone = await load();
+    await phone.plugin.pair((await laptop.plugin.createInvite()).invite, "phone");
+    await synced(phone.plugin);
+    await until(
+      "the laptop's note to reach the phone",
+      () => phone.app.vault.adapter.text("From the laptop.md") === "Written on the laptop\n",
+    );
+    return { laptop, phone };
+  }
+
+  /** The laptop revokes the phone while it is connected, as on the Pixel. */
+  async function revoke(laptop: Loaded, phone: Loaded): Promise<void> {
+    await laptop.plugin.revoke(phone.plugin.deviceId!);
+    await until(
+      "the phone to hear it was revoked",
+      () => phone.plugin.currentState.kind === "stopped",
+    );
+  }
+
+  it("leads with pairing again, and offers nothing that needs a credential", async () => {
+    const { laptop, phone } = await laptopAndPhone();
+    // Open when the revocation arrives, as the phone's panel was.
+    choosePairing(phone.plugin);
+    expect(drawnButtons().map((b) => b.label)).toContain("Sync now");
+    await revoke(laptop, phone);
+    await until("the panel to redraw", () => inviteField() !== undefined, 10_000).catch(
+      (err: Error) => {
+        throw new Error(`${err.message}; the panel says:\n${panelText()}`);
+      },
+    );
+
+    const shown = () => {
+      const said = panelText();
+      expect(said).toMatch(/Pair this device again/);
+      expect(said).toMatch(/revok/);
+      expect(said).toMatch(/notes stay .*on this device and on the server/);
+      expect(inviteField()!.getValue(), "a spent invite was offered").toBe("");
+      const labels = drawnButtons().map((b) => b.label);
+      expect(labels).toContain("Pair");
+      // Everything here needs the credential the server has just refused.
+      for (const dead of ["Sync now", "Create invite", "Browse deleted", "Show devices", "Send"]) {
+        expect(labels, `a revoked device was offered ${dead}`).not.toContain(dead);
+      }
+      // And pairing again is what unlinking was the way to, so it is not a
+      // second step somebody has to find first.
+      expect(labels).not.toContain("Unlink");
+      expect(said).not.toMatch(/Add another device|Manage this vault|Recover a deleted note/);
+    };
+    shown();
+    // Drawn the same when opened afresh, and when Sync now is asked for
+    // anywhere else, which opens it rather than failing.
+    modals.at(-1)!.close();
+    choosePairing(phone.plugin);
+    shown();
+    const before = modals.length;
+    await phone.plugin.syncNow();
+    expect(modals.length).toBe(before + 1);
+    shown();
+    expect(phone.app.vault.adapter.text("From the laptop.md")).toBe("Written on the laptop\n");
+  }, 300_000);
+
+  it("pairs again from there, confirming the merge first, and keeps every note", async () => {
+    const { laptop, phone } = await laptopAndPhone();
+    // A folder the phone leaves alone, which pairing again must not start
+    // downloading.
+    await phone.plugin.setIgnoredNames(["Big"]);
+    await synced(phone.plugin);
+    laptop.app.vault.adapter.seed("Big/huge.md", "Too large for the phone\n");
+    await laptop.plugin.syncNow();
+    await revoke(laptop, phone);
+    const adapter = phone.app.vault.adapter;
+    // Written while revoked, so this device is the only one that has it.
+    adapter.seed("Written while revoked.md", "Only on the phone\n");
+    const notes = () =>
+      new Map(
+        adapter
+          .filePaths()
+          .filter((path) => !path.startsWith(".obsidian/"))
+          .map((path) => [path, adapter.text(path)]),
+      );
+    const before = notes();
+    expect([...before.keys()].sort()).toEqual(["From the laptop.md", "Written while revoked.md"]);
+    const old = structuredClone(phone.plugin.savedData) as Record<string, string>;
+    expect(adapter.filePaths()).toContain(INDEX);
+
+    // What touches the disk, in order.
+    const touched: string[] = [];
+    const save = phone.plugin.saveData.bind(phone.plugin);
+    phone.plugin.saveData = async (data: unknown) => {
+      touched.push(
+        data === null
+          ? "forget"
+          : "invite" in (data as Record<string, unknown>)
+            ? "save pending"
+            : "save device",
+      );
+      await save(data);
+    };
+    const remove = adapter.remove.bind(adapter);
+    adapter.remove = async (path: string) => {
+      touched.push(`remove ${path}`);
+      await remove(path);
+    };
+
+    // A new invite, scanned off the laptop's panel.
+    const invite = (await laptop.plugin.createInvite()).invite;
+    built.length = 0;
+    phone.plugin.protocolHandlers.get(INVITE_ACTION)!({ invite });
+    expect(panelText()).toMatch(/Pair this device again/);
+    expect(inviteField()!.getValue()).toBe(invite);
+    expect(panelText()).toContain(`Joins ${server.wsUrl}`);
+    await press("Pair");
+
+    // The vault holds notes, so combining them is asked first, and nothing
+    // has been touched by the asking.
+    expect(drawn().some((s) => s.name === "Confirm merge")).toBe(true);
+    expect(touched).toEqual([]);
+    expect(phone.plugin.savedData).toEqual(old);
+    expect(adapter.filePaths()).toContain(INDEX);
+    await press("Continue");
+    await synced(phone.plugin);
+
+    // The new pairing was written before anything was removed, and what was
+    // removed is the old pairing's index, never a note.
+    const log = touched.join("\n");
+    expect(touched[0], log).toBe("save pending");
+    expect(touched, log).toContain(`remove ${INDEX}`);
+    expect(
+      touched.filter((t) => t.startsWith("remove ") && !t.startsWith("remove .obsidian/plugins/")),
+      log,
+    ).toEqual([]);
+    const now = phone.plugin.savedData as Record<string, string>;
+    expect(Object.keys(now).sort()).toEqual([...DEVICE_CONFIG_KEYS, "ignore"].sort());
+    expect(now["deviceId"]).not.toBe(old["deviceId"]);
+    expect(now["deviceToken"]).not.toBe(old["deviceToken"]);
+
+    // Every note this device held is still here, byte for byte, and it syncs
+    // both ways as the new device it now is.
+    for (const [path, text] of before) expect(adapter.text(path), path).toBe(text);
+    await until(
+      "the note written while revoked to reach the laptop",
+      () => laptop.app.vault.adapter.text("Written while revoked.md") === "Only on the phone\n",
+    );
+    laptop.app.vault.adapter.seed("After pairing again.md", "From the laptop, afterwards\n");
+    await laptop.plugin.syncNow();
+    await until(
+      "a new note to reach the phone",
+      () => adapter.text("After pairing again.md") === "From the laptop, afterwards\n",
+    );
+    expect(laptop.app.vault.adapter.text("From the laptop.md")).toBe("Written on the laptop\n");
+    const listed = (await laptop.plugin.devices()).devices.map((d) => d.id).sort();
+    expect(listed).toEqual([laptop.plugin.deviceId, now["deviceId"]].sort());
+    // The same machine under the same name, still skipping what it skipped.
+    expect(phone.plugin.deviceName).toBe("phone");
+    expect(phone.plugin.ignoredNames).toEqual(["Big"]);
+    expect(adapter.text("Big/huge.md")).toBeUndefined();
+  }, 300_000);
+
+  it("forgets an invite that came in on a link once it has been used", async () => {
+    await fresh();
+    const laptop = await load();
+    await startVault(laptop.plugin, "laptop");
+    await synced(laptop.plugin);
+    const phone = await load();
+
+    // Scanned, paired, and the panel left open, as on the phone.
+    const invite = (await laptop.plugin.createInvite()).invite;
+    phone.plugin.protocolHandlers.get(INVITE_ACTION)!({ invite });
+    const panel = modals.at(-1)!;
+    expect(inviteField()!.getValue()).toBe(invite);
+    await press("Pair");
+    await synced(phone.plugin);
+
+    // Unlinked from the same panel: the form it draws next starts empty.
+    expect(modals.at(-1)).toBe(panel);
+    await drawn()
+      .find((s) => s.name === "Unlink this vault")!
+      .buttons.find((b) => b.label === "Unlink")!
+      .click();
+    expect(phone.plugin.paired).toBe(false);
+    expect(inviteField()!.getValue(), "the spent invite was offered again").toBe("");
+
+    // And revoked from the laptop after pairing from a second link: the way
+    // back it draws does not offer that link's invite either.
+    const again = (await laptop.plugin.createInvite()).invite;
+    phone.plugin.protocolHandlers.get(INVITE_ACTION)!({ invite: again });
+    expect(inviteField()!.getValue()).toBe(again);
+    await press("Pair");
+    await synced(phone.plugin);
+    await revoke(laptop, phone);
+    await until("the panel to redraw", () => inviteField() !== undefined, 10_000);
+    expect(inviteField()!.getValue(), "the spent invite was offered again").toBe("");
+  }, 300_000);
+
+  it.each(["unlinking", "unlinking and pairing again", "pairing again"])(
+    "takes the stopped notice down on %s",
+    async (how) => {
+      const { laptop, phone } = await laptopAndPhone();
+      await revoke(laptop, phone);
+      const told = notices.filter((n) => /has stopped/.test(n.message));
+      expect(told, notices.map((n) => n.message).join("\n")).toHaveLength(1);
+      // No timeout: it stays until something takes it down.
+      expect(told[0]!.duration).toBe(0);
+      expect(told[0]!.hidden).toBe(false);
+
+      if (how.startsWith("unlinking")) {
+        await phone.plugin.unlink();
+        expect(phone.plugin.currentState.kind).toBe("unpaired");
+      }
+      if (how.endsWith("pairing again")) {
+        await phone.plugin.pair((await laptop.plugin.createInvite()).invite, "phone", true);
+        await synced(phone.plugin);
+      }
+      expect(told[0]!.hidden, `still on screen: ${told[0]!.message}`).toBe(true);
+      expect(phone.app.vault.adapter.text("From the laptop.md")).toBe("Written on the laptop\n");
+    },
+    300_000,
+  );
+
+  /**
+   * Pairing again writes the new pairing first and removes the old index after
+   * it, so for a moment both are on disk, and a crash in that moment leaves a
+   * pending pairing beside the revoked pairing's index. Finishing it must not
+   * start from that index. The merge that was confirmed says files deleted
+   * elsewhere may come back; carrying on from the old cursor instead applies
+   * every deletion made while this device was revoked to the notes it still
+   * holds, which is the one thing the confirmation did not say would happen.
+   */
+  it("never finishes a pending pairing on the index of the pairing it replaced", async () => {
+    const { laptop, phone } = await laptopAndPhone();
+    await revoke(laptop, phone);
+    // Deleted on the laptop while the phone could not hear of it.
+    await laptop.app.vault.adapter.remove("From the laptop.md");
+    await laptop.plugin.syncNow();
+    const invite = (await laptop.plugin.createInvite()).invite;
+
+    // The crash: a pending pairing written over the revoked one, with the
+    // revoked pairing's index still beside it.
+    phone.plugin.onunload();
+    await phone.plugin.closing;
+    expect(phone.app.vault.adapter.filePaths()).toContain(INDEX);
+    const restarted = makePlugin(phone.app);
+    (restarted as unknown as { confirmSync: () => Promise<boolean> }).confirmSync = async () =>
+      true;
+    restarted.savedData = encodeConfig(startPairing(parseInvite(invite), "phone"));
+    loaded.push(restarted);
+    await restarted.onload();
+    await synced(restarted);
+    await restarted.syncNow();
+
+    expect(restarted.paired).toBe(true);
+    expect(
+      phone.app.vault.adapter.text("From the laptop.md"),
+      "a pairing that said it would combine deleted a note this device held",
+    ).toBe("Written on the laptop\n");
+  }, 300_000);
+});
+
+/**
  * The pairing form's device name, and the connection line under the status.
  *
  * Both are the same complaint from the same evening: the panel is the whole
@@ -4802,7 +5112,7 @@ describe("what the panel knows and used to keep to itself", () => {
     expect(to.server!.version, "the build is the fallback, not what ready said").not.toBe(
       "unknown",
     );
-    expect(shown).toContain(`Protocol ${PROTO}, trew ${to.server!.version}.`);
+    expect(shown).toContain(`Protocol ${PROTO}, trewd ${to.server!.version}.`);
     expect(shown).not.toContain("Not connected");
     // A hop with no TLS shows its warning in the server details, and without
     // end-to-end encryption the warning is about the notes as well as the
@@ -4824,7 +5134,7 @@ describe("what the panel knows and used to keep to itself", () => {
       url: "wss://homelab.tailnet.ts.net",
       server: { proto: 4, version: "0.3.4" },
     });
-    expect(on).toContain("Protocol 4, trew 0.3.4.");
+    expect(on).toContain("Protocol 4, trewd 0.3.4.");
     // The scheme is the whole of what is known about the hop, and wss is the
     // only thing that says something terminated TLS in front.
     //
@@ -4993,7 +5303,7 @@ describe("the device list in the panel", () => {
   });
   /**
    * The last device may be revoked (plan/strip-ledger.md, hazard 4, decided):
-   * nothing a device holds is needed to add one back, because `trew invite` on
+   * nothing a device holds is needed to add one back, because `trewd invite` on
    * the server is the way back into a vault with no devices. So the last row
    * has its button, and the confirmation says what it leaves.
    */
@@ -5022,7 +5332,7 @@ describe("the device list in the panel", () => {
     await button.click();
     expect(button.label).toBe("Yes, revoke");
     expect(panelText()).toMatch(/last device/);
-    expect(panelText()).toMatch(/trew invite on the server/);
+    expect(panelText()).toMatch(/trewd invite on the server/);
     expect((await plugin.devices()).devices).toHaveLength(1);
 
     // The second does it: the server takes its last row away, and this device
@@ -5030,7 +5340,7 @@ describe("the device list in the panel", () => {
     await button.click();
     await until("this device to be stopped", () => plugin.currentState.kind === "stopped");
     expect((plugin.currentState as { why: string }).why).toMatch(/revoked/);
-    // And a device paired afterwards, from `trew invite`, finds itself alone.
+    // And a device paired afterwards, from `trewd invite`, finds itself alone.
     const next = await load();
     await next.plugin.pair(await anInvite(), "phone");
     await synced(next.plugin);
@@ -5113,7 +5423,7 @@ describe("the device list in the panel", () => {
     expect(notices.map((n) => n.message).join(" ")).toMatch(/can no longer add a device/);
     expect((await first.plugin.devices()).invites).toHaveLength(0);
 
-    // An invite that never expires, which only `trew invite -ttl 0` on the
+    // An invite that never expires, which only `trewd invite -ttl 0` on the
     // server makes, says so rather than showing a date, and its label is on
     // the row.
     await server.invite({ ttl: "0", label: "for the tablet" });
@@ -5479,6 +5789,11 @@ describe("rejoining a server that lost history (I10, plugin)", () => {
 
     await button.click();
     await synced(first.plugin);
+    // Recovered, so the notice that said it had stopped is not still saying
+    // so beside "up to date" (M3's fourth finding, by the recovery route).
+    const stoppedNotices = notices.filter((n) => /has stopped/.test(n.message));
+    expect(stoppedNotices.length).toBeGreaterThan(0);
+    expect(stoppedNotices.filter((n) => !n.hidden).map((n) => n.message)).toEqual([]);
 
     // What only this device held is on the server again, as a second device
     // joining from scratch shows, and so is what the backup already had.

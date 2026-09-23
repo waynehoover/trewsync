@@ -48,8 +48,8 @@ func TestAnUnknownDeviceAndAWrongKeyAreOneRefusal(t *testing.T) {
 // devices_test.go:121, the half that stays. A store with history and no
 // devices at all is not a lost vault: the operator mints an invite on the
 // server, a new device redeems it, and everything the old devices wrote is
-// there. Basalt's way back was the recovery key; Trew's is this, and the
-// control socket's `trew invite` is the same CreateInvite.
+// there. Basalt's way back was the recovery key; TrewSync's is this, and the
+// control socket's `trewd invite` is the same CreateInvite.
 func TestAStoreWithHistoryAndNoDevicesGetsOneBackFromAnInvite(t *testing.T) {
 	r := newRig(t)
 	first := r.dial("a")
@@ -280,7 +280,7 @@ func TestADeviceMayRevokeItselfAndTheSessionEnds(t *testing.T) {
 // devices_test.go:532, decided (hazard 4). A device may revoke the last device
 // on the vault, itself included (plan/protocol.md, "Devices and invites").
 // Basalt refused it, because what it left was a vault only the recovery key
-// opened. Trew has no key a device holds that the server cannot reissue, so
+// opened. TrewSync has no key a device holds that the server cannot reissue, so
 // the way back from an empty device list is an invite from the server, and a
 // refusal would protect nothing and strand a person who meant it.
 func TestADeviceMayRevokeTheLastDevice(t *testing.T) {

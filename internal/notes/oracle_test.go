@@ -276,7 +276,7 @@ type tokenVector struct {
 }
 
 // basaltToken builds Basalt's cursor layout from this package's pieces:
-// {"query":fingerprint,"at":{"path":base64url,"line":L,"column":C}}. Trew
+// {"query":fingerprint,"at":{"path":base64url,"line":L,"column":C}}. TrewSync
 // uses its own layout; what carries over, and what this pins, is the
 // fingerprint and the path encoding.
 func basaltToken(options []Option, path string, line, column int64) string {

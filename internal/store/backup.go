@@ -78,7 +78,7 @@ type BackupReport struct {
 	// store it came from: the last good copy was never refreshed, and `purge
 	// -backup` could then never be satisfied either, so the safety net was cut
 	// by the thing holding it. (Basalt met it with entries whose authenticator
-	// predated F20; Trew has no authenticator and keeps the mechanism.)
+	// predated F20; TrewSync has no authenticator and keeps the mechanism.)
 	//
 	// So a fault the source has as well is reported and does not block. A
 	// fault the source does not have is the copy being wrong, and that still
@@ -132,7 +132,7 @@ type BackupMeta struct {
 	// Still 2 after `Database.Change` was added, deliberately. The field is
 	// additive: an older build ignores it and reads everything else correctly,
 	// and a newer build treats its absence as "not recorded" rather than as a
-	// mismatch. Bumping would make every older trew refuse a backup it can
+	// mismatch. Bumping would make every older trewd refuse a backup it can
 	// read perfectly well, which is a worse failure than the one it would
 	// announce.
 	Format int `json:"format"`
@@ -387,7 +387,7 @@ func ReadBackupMeta(dir string) (BackupMeta, error) {
 		return meta, fmt.Errorf(
 			"%s describes a %d byte database and the one beside it is %d bytes, so it is not a summary of "+
 				"this snapshot: something republished the database without rewriting the coverage. "+
-				"Run `trew backup` into this directory again, or read the database itself",
+				"Run `trewd backup` into this directory again, or read the database itself",
 			BackupMetaFile, meta.Database.Bytes, stamp.Bytes)
 	}
 	// The change counter, which catches a database written to in place. Skipped
@@ -398,7 +398,7 @@ func ReadBackupMeta(dir string) (BackupMeta, error) {
 			"%s describes a database at change %d and the one beside it is at change %d. They are the same "+
 				"size, so this is a different snapshot of the same store rather than a truncated file: "+
 				"something republished the database without rewriting the coverage. "+
-				"Run `trew backup` into this directory again, or read the database itself",
+				"Run `trewd backup` into this directory again, or read the database itself",
 			BackupMetaFile, meta.Database.Change, stamp.Change)
 	}
 	// And the digest, which is what actually identifies the snapshot (R14).
@@ -427,7 +427,7 @@ func ReadBackupMeta(dir string) (BackupMeta, error) {
 			return meta, fmt.Errorf(
 				"%s describes a database whose contents hash to %s and the one beside it hashes to %s, "+
 					"so it is a different snapshot: something republished the database without "+
-					"rewriting the coverage. Run `trew backup` into this directory again, or read "+
+					"rewriting the coverage. Run `trewd backup` into this directory again, or read "+
 					"the database itself",
 				BackupMetaFile, short(meta.Database.Digest), short(stamp.Digest))
 		}
@@ -797,7 +797,7 @@ func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 // or rollback journal. Publishing a new database beside those files lets
 // SQLite replay old pages over a snapshot we just verified. Keep the recovery
 // copy intact; the caller holds its exclusive data lock throughout this check
-// and publication, so another Trew process cannot create a journal here.
+// and publication, so another TrewSync process cannot create a journal here.
 func refuseDestinationRecovery(destDir string) error {
 	dbPath, _ := DataDir(destDir)
 	for _, suffix := range []string{"-wal", "-journal"} {
@@ -902,7 +902,7 @@ func ResolveForLock(path string) (string, error) { return resolvePath(path) }
 //
 // `refuseOverlap` above answers this for a backup being written. The same
 // question has to be asked of a backup being *read* as proof that a purge is
-// safe, and it was not: `trew purge -backup` accepted the store's own data
+// safe, and it was not: `trewd purge -backup` accepted the store's own data
 // directory, compared its maximum uid against itself, found it equal, and
 // reported that the history it had just destroyed was safely held by the
 // directory it had destroyed it in. Aliases do it too, so this resolves rather

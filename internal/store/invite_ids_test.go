@@ -8,7 +8,7 @@ import (
 // pairing.test.ts:605 in plan/strip-ledger.md, which came here with the
 // minting: no invite id begins with "-".
 //
-// An invite id is what a person types to cancel an invite, as `trew uninvite
+// An invite id is what a person types to cancel an invite, as `trewd uninvite
 // ID`, and Go's flag package takes arguments as flags until the first
 // positional one. An id beginning with a dash therefore never becomes the
 // positional argument: it is refused as an unknown flag, and the invite
@@ -38,7 +38,7 @@ func TestNoInviteIDBeginsWithADash(t *testing.T) {
 		}
 	}
 	if len(bad) > 0 {
-		t.Fatalf("%d of %d invite ids began with a dash, which `trew uninvite` reads as a flag: %q",
+		t.Fatalf("%d of %d invite ids began with a dash, which `trewd uninvite` reads as a flag: %q",
 			len(bad), many, bad)
 	}
 }

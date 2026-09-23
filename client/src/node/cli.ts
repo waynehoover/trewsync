@@ -102,7 +102,7 @@ export interface Console {
   err(line: string): void;
 }
 
-export const USAGE = `trew: self-hosted sync for Obsidian
+export const USAGE = `trew: the TrewSync command-line client, self-hosted sync for Obsidian
 
   trew pair INVITE                        add this device to a vault with an invite (- reads it
                                             from standard input); trew pair alone finishes a
@@ -126,9 +126,9 @@ export const USAGE = `trew: self-hosted sync for Obsidian
   trew unlock                             clear a lock left behind by a trew that crashed
   trew --version                          which release this is
 
-The first device pairs from the invite trew serve writes to <data>/first-invite on the
-server, or from trew invite run there. Later devices pair from trew invite on any paired
-device, or on the server again.
+The first device pairs from the invite trewd serve writes to <data>/first-invite on the
+server, or from trewd invite run there. Later devices pair from trew invite on any paired
+device, or from trewd invite on the server again.
 
 Options
   --dir DIR        the vault (default: the current directory)
@@ -356,11 +356,12 @@ function clipToBytes(name: string, limit: number): string {
  * Adds this device to a vault by redeeming an invite (plan/protocol.md,
  * "Invite redemption").
  *
- * The invite is a `trew1i_` string. The first device's is the one `trew serve`
- * writes to <data>/first-invite on the server; `trew invite` makes more, on the
- * server or on any paired device. Redeeming it registers this device's own row,
- * under an id and a 32-byte token made here, and nothing else on this disk
- * authenticates: revoking that row is the whole of taking the device away.
+ * The invite is a `trew1i_` string. The first device's is the one `trewd serve`
+ * writes to <data>/first-invite on the server; `trewd invite` on the server
+ * makes more, and so does `trew invite` on any paired device. Redeeming it
+ * registers this device's own row, under an id and a 32-byte token made here,
+ * and nothing else on this disk authenticates: revoking that row is the whole
+ * of taking the device away.
  *
  * The order is `pairWithInvite`'s, in core, and it is what makes each way this
  * can stop recoverable. The pairing is saved and read back before a byte goes
@@ -502,9 +503,9 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
  * has to say.
  */
 const WHERE_INVITES_COME_FROM =
-  "The first device pairs from the invite trew serve writes to <data>/first-invite on the " +
-  "server, or from trew invite run there; later devices pair from trew invite on any paired " +
-  "device, or on the server again.";
+  "The first device pairs from the invite trewd serve writes to <data>/first-invite on the " +
+  "server, or from trewd invite run there; later devices pair from trew invite on any paired " +
+  "device, or from trewd invite on the server again.";
 
 /**
  * Refuses to change a pairing that has not finished into a different one.
@@ -618,7 +619,7 @@ async function cmdInvite(args: Args, io: Console): Promise<number> {
   }
   io.out(issued.invite);
   io.out("");
-  io.out(`Paste it into trew pair, or into the Trew panel, on the new device.`);
+  io.out(`Paste it into trew pair, or into the TrewSync panel, on the new device.`);
   io.out(
     issued.expiresAt === null
       ? `It works once and does not expire. trew uninvite ${asTyped(issued.id)} cancels it.`
@@ -843,7 +844,7 @@ async function cmdRename(args: Args, io: Console): Promise<number> {
  *
  * Any device may do this to any other, to itself, and to the last one
  * (plan/protocol.md, "Devices and invites"). Nothing a device holds is needed
- * to get back in afterwards: `trew invite` on the server makes an invite
+ * to get back in afterwards: `trewd invite` on the server makes an invite
  * whatever is left, so a vault with no devices is one invite from having one
  * again. Revoking a device also cancels the invites it issued, so an invite
  * minted on a laptop before it was stolen cannot add the thief's next device.
@@ -878,7 +879,7 @@ async function cmdRevoke(args: Args, io: Console): Promise<number> {
     io.out(
       `That was this device. It has stopped syncing; run trew unlink here to forget the ` +
         `pairing, then trew pair with a new invite to add it again: from trew invite on another ` +
-        `device, or, if no device is left, from trew invite on the server.`,
+        `device, or, if no device is left, from trewd invite on the server.`,
     );
   }
   return 0;
@@ -1520,7 +1521,7 @@ async function cmdStatus(args: Args, io: Console): Promise<number> {
 /**
  * Sends the server bodies it has lost, without writing a version (I14).
  *
- * `trew verify` finds a chunk the disk rotted or the server quarantined, and
+ * `trewd verify` finds a chunk the disk rotted or the server quarantined, and
  * says it is waiting for a device to resend it. Nothing did. A device whose copy
  * of the note has not changed is correct to consider it synced: the entry is
  * committed, the hashes agree, and a pass has nothing to do. It is holding the
@@ -1576,7 +1577,7 @@ async function cmdRepair(args: Args, io: Console): Promise<number> {
     io.out("");
     io.out(
       "This repairs what this device holds. Run it on your other devices too, then " +
-        "`trew verify` on the server for what is still missing: history this device " +
+        "`trewd verify` on the server for what is still missing: history this device " +
         "never had is not visible from here.",
     );
     return wrong ? 1 : 0;
@@ -2480,7 +2481,7 @@ function visible(path: string): string {
  *
  * Bounded above by what the server allows, an hour, which is also its
  * default, so the answer is one it will give rather than one it will quietly
- * cap. Nothing here asks for an invite that never expires: that is `trew
+ * cap. Nothing here asks for an invite that never expires: that is `trewd
  * invite -ttl 0` on the server, a deliberate act by whoever runs it.
  */
 export function parseDuration(text: string): number {

@@ -28,7 +28,7 @@ export interface Device {
  * A new device on its own directory, paired and connected.
  *
  * It joins the vault the way a person's device does: an invite minted by
- * `trew invite` through the running server, redeemed by `pairWithInvite`,
+ * `trewd invite` through the running server, redeemed by `pairWithInvite`,
  * which is the call both shells make (plan/protocol.md, "Invite redemption").
  * The finished pairing is saved where the headless client keeps its own,
  * `.trew/config.json`, so the suite's devices come to exist through the same

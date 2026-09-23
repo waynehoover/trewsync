@@ -2516,7 +2516,7 @@ async function planVectors() {
         let want: unknown;
         try {
           const preview = await previewOperation(observer, operation);
-          // Bases here are uids, which is what Trew measures a plan with.
+          // Bases here are uids, which is what TrewSync measures a plan with.
           const numbered = preview.changes.map((c) => ({ ...c, base: uid.get(c.path)! }));
           want = {
             changes: preview.changes,
@@ -2546,7 +2546,7 @@ async function planVectors() {
   return { plans: out, samePlan: same };
 }
 
-/** A planned change with a uid for its base, as Trew writes one. */
+/** A planned change with a uid for its base, as TrewSync writes one. */
 type Numbered = Omit<PlannedChange, "base"> & { base: number };
 
 /** A plan against altered copies of itself, and whether samePlan takes each. */

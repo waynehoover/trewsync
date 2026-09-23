@@ -142,8 +142,15 @@ export interface Vault {
    * of one note for ever. Both real vaults normalise here and map back on
    * the way in; the engine's own folding is the fallback for one that does
    * not, and it errs towards refusing rather than overwriting.
+   *
+   * `forceFull` asks for a listing no cache has answered. `present` names
+   * paths that `exists` found and the last listing left out, which the engine
+   * is about to treat as deleted: a vault that lists from something that can
+   * lag the disk reads each of these from the disk, and one whose `forceFull`
+   * walks the disk has them already. Leaving one out is a deletion, so a read
+   * that fails fails the listing.
    */
-  list(options?: { forceFull?: boolean }): Promise<FileStat[]>;
+  list(options?: { forceFull?: boolean; present?: readonly string[] }): Promise<FileStat[]>;
   /**
    * Paths the last `list` left out because two names on disk claim them.
    *

@@ -889,6 +889,94 @@ describe("a file renamed into place, before Obsidian's index has it", () => {
 });
 
 /**
+ * A name the engine found on the disk that the index does not have.
+ *
+ * `forceFull` is asked for on every thirty-second pass, so it is not a walk
+ * here. What it guards is the engine's deletion of a synced name the listing
+ * left out, and the engine names each one `exists` finds (`present`).
+ */
+describe("a name the engine found on the disk and the index does not have", () => {
+  const byPath = async (options?: { forceFull?: boolean; present?: readonly string[] }) =>
+    new Map((await vault.list(options)).map((f) => [f.path, f]));
+
+  it("reads it from the disk, and keeps reading it until the index has it", async () => {
+    adapter.seed("photo.jpg", "old");
+    adapter.holdWatcher();
+    adapter.writeUnreported("photo.jpg", enc.encode("taken again"), 5000);
+    expect((await byPath()).has("photo.jpg")).toBe(false);
+
+    const asked = await byPath({ present: ["photo.jpg"] });
+    expect(asked.get("photo.jpg")).toMatchObject({ folder: false, size: 11, mtime: 5000 });
+    // The next pass lists without naming it and must not lose it again.
+    expect((await byPath()).has("photo.jpg")).toBe(true);
+    adapter.releaseWatcher();
+    const stats = adapter.calls.filter((c) => c.op === "stat" && c.path === "photo.jpg").length;
+    expect((await byPath()).has("photo.jpg")).toBe(true);
+    expect(adapter.calls.filter((c) => c.op === "stat" && c.path === "photo.jpg").length).toBe(
+      stats,
+    );
+  });
+
+  it("reads a folder as a folder", async () => {
+    await adapter.mkdir("Photos");
+    expect((await byPath({ present: ["Photos"] })).get("Photos")).toMatchObject({ folder: true });
+  });
+
+  it("does not walk the vault to do it", async () => {
+    for (let i = 0; i < 3000; i++) adapter.seed(`folder${i % 30}/note-${i}.md`, "x");
+    adapter.holdWatcher();
+    adapter.writeUnreported("folder0/note-0.md", enc.encode("again"));
+    await vault.list();
+    const before = adapter.calls.length;
+    expect((await byPath({ forceFull: true, present: ["folder0/note-0.md"] })).size).toBe(3030);
+    // The one stat the name costs and the recovery log's, and no call per note.
+    const cost = adapter.calls.slice(before).map((c) => c.op);
+    expect(cost.filter((op) => op === "list")).toEqual([]);
+    expect(cost.filter((op) => op === "stat").length).toBeLessThanOrEqual(2);
+  });
+
+  it("leaves a respelling the index already shows to the listing", async () => {
+    // On a folding disk `exists` answers for a note renamed only in case, and
+    // the engine pairs the two names as that rename from what is listed.
+    adapter.insensitive = true;
+    adapter.seed("NOTE.md", "renamed in case");
+    expect([...(await byPath({ present: ["Note.md"] })).keys()]).toEqual(["NOTE.md"]);
+  });
+
+  it("fails the listing when the disk cannot be asked", async () => {
+    adapter.holdWatcher();
+    adapter.writeUnreported("photo.jpg", enc.encode("taken again"));
+    adapter.fault = (op, path) =>
+      op === "stat" && path === "photo.jpg" ? new Error("EIO: stat failed") : undefined;
+    await expect(vault.list({ present: ["photo.jpg"] })).rejects.toThrow(/EIO/);
+  });
+});
+
+describe("a rename this client makes, as Obsidian reports it", () => {
+  it("is known as its own for as long as the adapter has it in hand", async () => {
+    await adapter.writeBinary("photo.jpg", new Uint8Array([1]).buffer, { mtime: 1, ctime: 1 });
+    const reported: [string, string, boolean][] = [];
+    // Where the shipped adapter reports it: inside the call.
+    adapter.handler = (kind, path, oldPath) => {
+      if (kind === "renamed") reported.push([oldPath!, path, vault.ownRename(oldPath!, path)]);
+    };
+    await vault.replace(
+      "photo.jpg",
+      undefined,
+      new Uint8Array([2, 3]),
+      { mtime: 2, ctime: 2 },
+      "photo (kept).jpg",
+    );
+    expect(reported).toEqual([["photo.jpg", "photo (kept).jpg", true]]);
+    expect(vault.ownRename("photo.jpg", "photo (kept).jpg")).toBe(false);
+
+    // And a person's rename of the same pair afterwards is theirs.
+    await adapter.rename("photo (kept).jpg", "renamed.jpg");
+    expect(reported.at(-1)).toEqual(["photo (kept).jpg", "renamed.jpg", false]);
+  });
+});
+
+/**
  *  Two raw names in Obsidian's index that normalize
  * to one path used to be one entry in the map, the second winning silently.
  *

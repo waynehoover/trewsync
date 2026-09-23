@@ -2,7 +2,7 @@
 
 [Documentation](index.md) · [Setup](server.md) · [Maintenance](server-operations.md)
 
-`trew` runs the server and its maintenance commands. Commands that use a
+`trewd` runs the server and its maintenance commands. Commands that use a
 store, plus `service`, accept `-data DIR`; the default is `$TREW_DATA`, then
 `~/.trew`. `health` uses an address instead, and `version` needs neither.
 Only `serve` creates a new server data directory. Use each subcommand's `-h`
@@ -78,10 +78,10 @@ with `-scope write` also gets the write tools, below. A client authenticates
 with `Authorization: Bearer <token>`:
 
 ```bash
-trew mcp-token -label "Claude on Mac"                   # prints the token once
-trew mcp-token -label "Claude on Mac" -key-out FILE     # or writes it, mode 0600
-trew mcp-token -list                                    # ids, scopes, expiry, use counts
-trew mcp-token -revoke ID
+trewd mcp-token -label "Claude on Mac"                   # prints the token once
+trewd mcp-token -label "Claude on Mac" -key-out FILE     # or writes it, mode 0600
+trewd mcp-token -list                                    # ids, scopes, expiry, use counts
+trewd mcp-token -revoke ID
 ```
 
 A token reads the whole vault, and what it reads reaches the agent's model
@@ -106,7 +106,7 @@ A write token adds `create_note`, `create_directory`, `edit_note`,
 operation: all of it commits or none of it, as a new version of every path it
 changes, which every device receives like any other. What an agent writes is
 recorded with the token's label as its author, so `note_history` and
-`trew audit` name it. A version an agent's write displaces is kept for at
+`trewd audit` name it. A version an agent's write displaces is kept for at
 least 30 days, whatever purge is asked to do, and `read_note` with its uid
 reads it back.
 
@@ -155,7 +155,7 @@ is named after the device that kept it.
 
 ## audit
 
-`trew audit` lists every write an agent made through the MCP endpoint, oldest
+`trewd audit` lists every write an agent made through the MCP endpoint, oldest
 first: when it committed by the server's clock, the tool, the token's label and
 id, the operation id, and each path it changed with its version before and
 after. A version an edit displaced is listed as pinned, with the date until
@@ -179,7 +179,7 @@ These administer the vault's devices. While `serve` runs they go through its
 control socket, a private socket in the data directory, so a revoke takes
 effect in the running server at once; with no server running they open the
 store directly. All take `-data DIR` and `-vault NAME`, which go before an ID:
-`trew revoke -data /var/lib/trew DEVICE_ID`.
+`trewd revoke -data /var/lib/trew DEVICE_ID`.
 
 | Flag | Command | Meaning |
 |---|---|---|
@@ -192,7 +192,7 @@ store directly. All take `-data DIR` and `-vault NAME`, which go before an ID:
 An invite works once and expires after one hour by default. Anyone holding it
 before it is used can add a device, so hand it over privately. Revoking a
 device stops it receiving and sending at once, and cancels the invites it
-created; the last device can be revoked too, and `trew invite` pairs a new one.
+created; the last device can be revoked too, and `trewd invite` pairs a new one.
 
 ## backup, verify, purge, stats
 
@@ -249,7 +249,7 @@ needed before starting it again.
 
 ## health
 
-`trew health` requests `/health` and exits non-zero on failure. Its flags are
+`trewd health` requests `/health` and exits non-zero on failure. Its flags are
 `-addr` (default `127.0.0.1:3003`) and `-timeout` (default `5s`).
 
 | HTTP response | Meaning |
@@ -288,7 +288,7 @@ These are implementation limits for operators and client authors.
 | Connections awaiting a handshake | 32. |
 | Handshake timeout | 10 seconds. |
 | Vault and device names | 64 bytes, no control characters. |
-| Invite lifetime | One hour by default, and at most one hour when a device asks; `trew invite -ttl 0` on the server makes one that never expires. |
+| Invite lifetime | One hour by default, and at most one hour when a device asks; `trewd invite -ttl 0` on the server makes one that never expires. |
 | Deleted entries per protocol page | 1,000, with continuation information. |
 
 ## Stopping it

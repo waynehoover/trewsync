@@ -380,8 +380,14 @@ export class App {
  * Notices
  * ---------------------------------------------------------------- */
 
-/** Everything shown to the user, in order, for asserting on what was said. */
-export const notices: { message: string; duration: number | undefined }[] = [];
+/**
+ * Everything shown to the user, in order, for asserting on what was said.
+ *
+ * `hidden` is whether the plugin took it down again. A notice with no timeout
+ * stays on screen until something hides it, so whether anything did is as
+ * much a part of what was said as the words.
+ */
+export const notices: { message: string; duration: number | undefined; hidden: boolean }[] = [];
 
 /**
  * Obsidian's icon helper, which sets a glyph inside an element.
@@ -395,11 +401,14 @@ export function setIcon(el: FakeEl, name: string): void {
 }
 
 export class Notice {
+  private readonly shown: (typeof notices)[number];
+
   constructor(
     message: string,
     public duration?: number,
   ) {
-    notices.push({ message: String(message), duration });
+    this.shown = { message: String(message), duration, hidden: false };
+    notices.push(this.shown);
   }
 
   setMessage(): this {
@@ -407,7 +416,7 @@ export class Notice {
   }
 
   hide(): void {
-    /* nothing to hide */
+    this.shown.hidden = true;
   }
 }
 

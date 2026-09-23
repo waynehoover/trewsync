@@ -46,7 +46,7 @@ export function platformStanding(p: PlatformFlags): PlatformStanding | undefined
       short: "iOS untested",
       title: "iOS is untested",
       detail:
-        "Trew runs the same code here as on Android, where it is tested, but no test has run " +
+        "TrewSync runs the same code here as on Android, where it is tested, but no test has run " +
         "on an iPhone or iPad. Untested: iOS suspending Obsidian in the background, vaults " +
         "kept in iCloud Drive, and the iOS file system.",
     };
@@ -56,7 +56,7 @@ export function platformStanding(p: PlatformFlags): PlatformStanding | undefined
       short: "Windows unsupported",
       title: "Windows is not supported",
       detail:
-        "None of Trew's tests run on Windows. Untested: file locking, path length limits, how " +
+        "None of TrewSync's tests run on Windows. Untested: file locking, path length limits, how " +
         "Windows compares names, and the file watcher. A note whose name Windows cannot hold, " +
         "such as CON or a name with a colon, is listed as needing attention rather than synced.",
     };

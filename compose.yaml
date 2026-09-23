@@ -1,4 +1,4 @@
-# Trew on a homelab.
+# TrewSync on a homelab.
 #
 # No TLS here on purpose: no key material lives in this binary. Put
 # `tailscale serve`, Caddy or a tunnel in front, and leave this published only
@@ -40,7 +40,7 @@ services:
     # unacked put is retried and SQLite's write-ahead log recovers, but "the
     # deadline is exactly the budget" is not a margin.
     #
-    # Thirty, matching TimeoutStopSec in the systemd unit `trew service`
+    # Thirty, matching TimeoutStopSec in the systemd unit `trewd service`
     # writes, so a stop behaves the same whichever way this is run.
     # TestEveryStopDeadlineOutlastsTheShutdownBudget keeps the three numbers in
     # step.
@@ -75,7 +75,7 @@ services:
     # /data/first-invite, mode 0600, and logs only where it is and when it
     # expires, never the string. Behind a TLS proxy that invite names addresses
     # no device can reach, so make one naming the address devices do use:
-    #   docker compose exec trew /trew invite -url wss://homelab.example.ts.net
+    #   docker compose exec trew /trewd invite -url wss://homelab.example.ts.net
     logging:
       driver: json-file
       options:

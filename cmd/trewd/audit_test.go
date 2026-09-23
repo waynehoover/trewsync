@@ -69,7 +69,7 @@ func agentWrote(t *testing.T, dir string) (tokenID string, ops []string) {
 	return tok.ID, ops
 }
 
-// `trew audit` lists every operation with who made it, what it changed and
+// `trewd audit` lists every operation with who made it, what it changed and
 // what it pinned, with no server running and through a running one, and it
 // still lists a revoked token's operations under the name they were made
 // with. -since narrows it; -json carries the same records.

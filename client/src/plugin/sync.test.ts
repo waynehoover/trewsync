@@ -143,7 +143,7 @@ describe("a vault reaching another device", () => {
     const b = await device("b");
 
     a.adapter.seed("Meeting notes.md", "# Meeting\n\nDiscussed the thing.\n");
-    a.adapter.seed("Projects/Trew.md", "# Trew\n\nA sync tool.\n");
+    a.adapter.seed("Projects/TrewSync.md", "# TrewSync\n\nA sync tool.\n");
     const bytes = new Uint8Array(5000);
     for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 37) & 0xff;
     await a.adapter.writeBinary("attachment.bin", bytes.slice().buffer as ArrayBuffer, {
@@ -152,9 +152,13 @@ describe("a vault reaching another device", () => {
 
     await converge(a, b);
 
-    expect(b.notes().sort()).toEqual(["Meeting notes.md", "Projects/Trew.md", "attachment.bin"]);
+    expect(b.notes().sort()).toEqual([
+      "Meeting notes.md",
+      "Projects/TrewSync.md",
+      "attachment.bin",
+    ]);
     expect(b.text("Meeting notes.md")).toBe("# Meeting\n\nDiscussed the thing.\n");
-    expect(b.text("Projects/Trew.md")).toBe("# Trew\n\nA sync tool.\n");
+    expect(b.text("Projects/TrewSync.md")).toBe("# TrewSync\n\nA sync tool.\n");
     expect([...new Uint8Array(await b.adapter.readBinary("attachment.bin"))]).toEqual([...bytes]);
     // And the folder came too, so an empty one would as well.
     expect(await b.adapter.exists("Projects")).toBe(true);
@@ -494,6 +498,57 @@ describe("a restore whose name is taken in the gap", () => {
   }, 300_000);
 });
 
+const enc = new TextEncoder();
+
+/** Bytes that are not text and do not repeat, as a photo's are not. */
+function photoBytes(size: number, seed: number): Uint8Array {
+  const out = new Uint8Array(size);
+  let x = seed >>> 0;
+  for (let i = 0; i < size; i++) {
+    x = (Math.imul(x, 1_103_515_245) + 12_345) >>> 0;
+    out[i] = x >>> 24;
+  }
+  out.set([0xff, 0xd8, 0xff, 0xe0]);
+  return out;
+}
+
+async function holds(d: Device, path: string, bytes: Uint8Array): Promise<boolean> {
+  if (!(await d.adapter.exists(path))) return false;
+  const now = new Uint8Array(await d.adapter.readBinary(path));
+  return now.length === bytes.length && now.every((b, i) => b === bytes[i]);
+}
+
+async function arrives(d: Device, path: string, bytes: Uint8Array): Promise<void> {
+  const deadline = Date.now() + 60_000;
+  while (!(await holds(d, path, bytes))) {
+    if (Date.now() > deadline) throw new Error(`${d.name} never received ${path}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+/** Every version `d` put on the server under these paths after `after`. */
+async function writtenBy(d: Device, paths: readonly string[], after = 0): Promise<string[]> {
+  const out: string[] = [];
+  for (const path of paths) {
+    for (const v of await d.client.history(path, { limit: 50 })) {
+      if (v.device !== d.name || v.uid <= after) continue;
+      out.push(`${v.deleted ? "deleted" : "wrote"} ${path} as ${v.uid}`);
+    }
+  }
+  return out;
+}
+
+/** Every deletion the server holds for these paths, whoever made it. */
+async function deletions(d: Device, paths: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const path of paths) {
+    for (const v of await d.client.history(path, { limit: 50 })) {
+      if (v.deleted) out.push(`${path} by ${v.device} as ${v.uid}`);
+    }
+  }
+  return out;
+}
+
 /**
  * A device that only receives, while Obsidian's index is behind its disk.
  *
@@ -511,57 +566,6 @@ describe("a restore whose name is taken in the gap", () => {
  * with the bytes that were sent.
  */
 describe("a device that only receives, while Obsidian's index catches up", () => {
-  const enc = new TextEncoder();
-
-  /** Bytes that are not text and do not repeat, as a photo's are not. */
-  function photoBytes(size: number, seed: number): Uint8Array {
-    const out = new Uint8Array(size);
-    let x = seed >>> 0;
-    for (let i = 0; i < size; i++) {
-      x = (Math.imul(x, 1_103_515_245) + 12_345) >>> 0;
-      out[i] = x >>> 24;
-    }
-    out.set([0xff, 0xd8, 0xff, 0xe0]);
-    return out;
-  }
-
-  async function holds(d: Device, path: string, bytes: Uint8Array): Promise<boolean> {
-    if (!(await d.adapter.exists(path))) return false;
-    const now = new Uint8Array(await d.adapter.readBinary(path));
-    return now.length === bytes.length && now.every((b, i) => b === bytes[i]);
-  }
-
-  async function arrives(d: Device, path: string, bytes: Uint8Array): Promise<void> {
-    const deadline = Date.now() + 60_000;
-    while (!(await holds(d, path, bytes))) {
-      if (Date.now() > deadline) throw new Error(`${d.name} never received ${path}`);
-      await new Promise((r) => setTimeout(r, 20));
-    }
-  }
-
-  /** Every version `d` put on the server under these paths after `after`. */
-  async function writtenBy(d: Device, paths: readonly string[], after = 0): Promise<string[]> {
-    const out: string[] = [];
-    for (const path of paths) {
-      for (const v of await d.client.history(path, { limit: 50 })) {
-        if (v.device !== d.name || v.uid <= after) continue;
-        out.push(`${v.deleted ? "deleted" : "wrote"} ${path} as ${v.uid}`);
-      }
-    }
-    return out;
-  }
-
-  /** Every deletion the server holds for these paths, whoever made it. */
-  async function deletions(d: Device, paths: readonly string[]): Promise<string[]> {
-    const out: string[] = [];
-    for (const path of paths) {
-      for (const v of await d.client.history(path, { limit: 50 })) {
-        if (v.deleted) out.push(`${path} by ${v.device} as ${v.uid}`);
-      }
-    }
-    return out;
-  }
-
   /**
    * `path` reaches the receiver, and its index, as `first`. Then `second`
    * arrives while the index is behind, and the receiver passes again before
@@ -727,5 +731,50 @@ describe("a device that only receives, while Obsidian's index catches up", () =>
       { bytes: after, mtime: 3_000_000 },
     );
     await nothingWasLost(phone, mac, "recording.m4a", after);
+  }, 300_000);
+});
+
+/**
+ * A synced file another program deletes and writes again, while Obsidian's
+ * watcher has reported the delete and not the write.
+ *
+ * The index has lost the name and the disk has the file. The engine checks
+ * every synced name missing from a listing with `exists` and asks the vault
+ * to list those from the disk before anything is treated as deleted, and the
+ * plugin used to answer from the same index. So a camera app saving a photo
+ * again, or a sync tool replacing one, could send a deletion to every device.
+ */
+describe("a synced file another program writes again while Obsidian's index is behind", () => {
+  it("sends the new bytes, keeps the unchanged one, and deletes nothing", async () => {
+    await fresh();
+    const phone = await device("phone");
+    const mac = await device("Mac");
+    const before = photoBytes(40_000, 7);
+    const unchanged = photoBytes(30_000, 8);
+    await phone.adapter.writeBinary("camera.jpg", before.slice().buffer, { mtime: 2_000_000 });
+    await phone.adapter.writeBinary("kept.jpg", unchanged.slice().buffer, { mtime: 2_000_000 });
+    await converge(phone, mac);
+    expect(await holds(mac, "kept.jpg", unchanged)).toBe(true);
+
+    // Two, because the engine asks about every missing name before it lists
+    // again, and a second one missed would be deleted all the same.
+    mac.adapter.holdWatcher();
+    const after = photoBytes(45_000, 9);
+    mac.adapter.writeUnreported("camera.jpg", after, 3_000_000);
+    mac.adapter.writeUnreported("kept.jpg", unchanged, 2_000_000);
+    await mac.client.settle();
+    mac.adapter.releaseWatcher();
+    await converge(phone, mac);
+
+    expect(await deletions(phone, ["camera.jpg", "kept.jpg"])).toEqual([]);
+    expect(await writtenBy(mac, ["kept.jpg"]), "an unchanged file went up again").toEqual([]);
+    const [latest] = await phone.client.history("camera.jpg", { limit: 1 });
+    expect(latest).toMatchObject({ device: "Mac", deleted: false, size: after.length });
+    for (const d of [phone, mac]) {
+      expect(await holds(d, "camera.jpg", after), `${d.name}'s camera.jpg`).toBe(true);
+      expect(await holds(d, "kept.jpg", unchanged), `${d.name}'s kept.jpg`).toBe(true);
+      expect(d.notes().sort(), d.name).toEqual(["camera.jpg", "kept.jpg"]);
+    }
+    expect(phone.adapter.trashedLocally).toEqual([]);
   }, 300_000);
 });

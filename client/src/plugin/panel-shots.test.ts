@@ -72,6 +72,7 @@ const EXPECTED = [
   "join-confirm",
   "paired",
   "stopped-offering-rejoin",
+  "stopped-revoked",
   "devices-listed-last-device",
   "invite-created",
   "devices-listed",
@@ -310,7 +311,7 @@ describe("the panel walk", () => {
     const body = of("devices-listed-last-device");
     expect(body).toContain("Received latest changes");
     // The last device may be revoked (hazard 4, decided): the way back into a
-    // vault with no devices is `trew invite` on the server, so the row keeps
+    // vault with no devices is `trewd invite` on the server, so the row keeps
     // its button like any other. It is this device, so the button says so.
     expect(body).toContain("button  [Unlink from the server] (warning)");
     expect(prose("devices-listed-last-device")).toContain("1 device");
@@ -339,6 +340,16 @@ describe("the panel walk", () => {
     // The rejoin row is drawn rather than updated, so a panel left open when
     // this happens has to redraw itself to offer it.
     expect(of("stopped-offering-rejoin")).toMatch(/[Rr]ejoin/);
+  });
+
+  it("offers a revoked device the pairing form, and none of the paired panel", () => {
+    const body = of("stopped-revoked");
+    expect(body).toContain("Pair this device again");
+    expect(prose("stopped-revoked")).toMatch(/notes stay where they are/);
+    expect(body).toContain("button  [Pair]");
+    for (const dead of ["[Sync now]", "[Create invite]", "[Browse deleted]", "[Unlink]"]) {
+      expect(body, `a revoked device was offered ${dead}`).not.toContain(dead);
+    }
   });
 
   /**

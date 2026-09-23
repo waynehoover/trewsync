@@ -91,7 +91,8 @@ import { checkFirstSync, MergeConfirmationRequired } from "./first-sync.ts";
  * notices carry everything a person has to act on; this is for the one
  * attaching a debugger.
  */
-const log = (message: string, ...rest: unknown[]): void => console.debug("Trew:", message, ...rest);
+const log = (message: string, ...rest: unknown[]): void =>
+  console.debug("TrewSync:", message, ...rest);
 
 /** What the status bar is saying, which is also what the modal shows. */
 export type State =
@@ -188,14 +189,19 @@ export type State =
   /**
    * Stopped, and whether there is a recovery to offer for it.
    *
-   * `rejoin` is set for the one refusal that has a button behind it: the
-   * server is behind this device, which is what a restore from an older
-   * backup looks like. The panel showed the reason and nothing else, and the
-   * reason pointed at docs/server.md, which is not somewhere a phone goes at
-   * the moment its notes have stopped syncing. See `recoveryFor`.
+   * `rejoin` is set for a refusal that has a button behind it: the server is
+   * behind this device, which is what a restore from an older backup looks
+   * like. The panel showed the reason and nothing else, and the reason pointed
+   * at docs/server.md, which is not somewhere a phone goes at the moment its
+   * notes have stopped syncing.
+   *
+   * `pair-again` is the other: the server refuses this device's own
+   * credential, which is what revoking it does. The only way on is a new
+   * pairing, and the panel draws that instead of the paired panel, whose
+   * every action needs the credential that was refused. See `recoveryFor`.
    */
   | { kind: "paused" }
-  | { kind: "stopped"; why: string; recovery?: "rejoin" };
+  | { kind: "stopped"; why: string; recovery?: "rejoin" | "pair-again" };
 
 export default class TrewPlugin extends Plugin {
   private config: DeviceConfig | undefined;
@@ -271,6 +277,15 @@ export default class TrewPlugin extends Plugin {
   private failedPairing: string | undefined;
   /** What the notices have already said, so they say it once. */
   private announced = { attention: "", waiting: "", unknown: "" };
+  /**
+   * The notice `stop` put up, which has no timeout, and the reason it gave.
+   *
+   * Taken down by `setState` once the state is no longer that stop. It used
+   * to stay up until somebody dismissed it: a phone revoked and paired again
+   * showed "TrewSync has stopped: this device was revoked" minutes later, beside
+   * "TrewSync: up to date" (M3's fourth finding).
+   */
+  private stoppedNotice: { notice: Notice; why: string } | undefined;
   /** What `onunload` started and could not wait for, for anything that can. */
   closing: Promise<void> | undefined;
   /**
@@ -313,12 +328,12 @@ export default class TrewPlugin extends Plugin {
         }
       });
     }
-    this.ribbonEl = this.addRibbonIcon("refresh-cw", "Trew Sync", (event) => this.showMenu(event));
+    this.ribbonEl = this.addRibbonIcon("refresh-cw", "TrewSync", (event) => this.showMenu(event));
     this.ribbonEl.addClass("trew-sync-ribbon");
     // Settings is where somebody looks for a plugin's interface, and Obsidian
     // draws the gear there only for a plugin that registers a tab. Without
     // this the panel existed on the ribbon, the status bar and the command
-    // palette, and Settings said Trew had no interface at all.
+    // palette, and Settings said TrewSync had no interface at all.
     this.addSettingTab(new TrewSettingTab(this));
 
     this.addCommand({
@@ -381,7 +396,7 @@ export default class TrewPlugin extends Plugin {
         if (!("extension" in file)) return;
         menu.addItem((item) =>
           item
-            .setTitle("Trew: version history")
+            .setTitle("TrewSync: version history")
             .setIcon("history")
             .onClick(() => this.openHistory(file.path)),
         );
@@ -409,13 +424,13 @@ export default class TrewPlugin extends Plugin {
     if (requireApiVersion("1.12.2") && typeof this.registerCliHandler === "function") {
       this.registerCliHandler(
         "trew:history",
-        "List Trew version history for a note",
+        "List TrewSync version history for a note",
         { path: { value: "<path>", description: "Vault path" } },
         async (flags) => this.cliHistory(String(flags["path"] ?? "")),
       );
       this.registerCliHandler(
         "trew:restore",
-        "Restore a Trew version",
+        "Restore a TrewSync version",
         {
           path: { value: "<path>", description: "Vault path" },
           uid: { value: "<n>", description: "Version uid", required: true },
@@ -450,9 +465,15 @@ export default class TrewPlugin extends Plugin {
       // Through the client rather than straight to the engine, so it
       // waits for the pass in flight rather than moving an entry that
       // pass has in hand.
+      //
+      // Not for a rename this client is making itself, such as moving the
+      // old bytes of an attachment aside before writing the new ones. The
+      // engine decided that one and was told the note stayed where it was.
       this.registerEvent(
         this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
-          void this.client?.noteRename(oldPath, file.path);
+          if (!this.liveVault?.ownRename(oldPath, file.path)) {
+            void this.client?.noteRename(oldPath, file.path);
+          }
           this.nudge();
         }),
       );
@@ -471,7 +492,7 @@ export default class TrewPlugin extends Plugin {
       // copy of a live row's token.
       this.unreadable = (err as Error).message;
       this.setState({ kind: "stopped", why: this.unreadable });
-      new Notice(`Trew: ${this.unreadable}`, 10_000);
+      new Notice(`TrewSync: ${this.unreadable}`, 10_000);
     }
 
     // A link opens the form, filled in, and never pairs by itself: the panel
@@ -487,12 +508,12 @@ export default class TrewPlugin extends Plugin {
         } catch (err) {
           throw new Error(
             `This invite link is invalid: ${(err as Error).message}. Create a new invite on a ` +
-              `paired device, or with trew invite on the server.`,
+              `paired device, or with trewd invite on the server.`,
           );
         }
         new TrewModal(this, invite).open();
       } catch (err) {
-        new Notice(`Trew: ${(err as Error).message}`, 10_000);
+        new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
       }
     });
 
@@ -517,6 +538,9 @@ export default class TrewPlugin extends Plugin {
     this.previewModal = undefined;
     for (const close of this.panelClosers) close();
     this.panelClosers.clear();
+    // A plugin that is not running has nothing left to say about why it stopped.
+    this.stoppedNotice?.notice.hide();
+    this.stoppedNotice = undefined;
     this.stopResume?.();
     this.stopResume = undefined;
     this.running = false;
@@ -600,7 +624,7 @@ export default class TrewPlugin extends Plugin {
         // Whichever it was, this names the state and how to leave it.
         new Notice(
           "Sync is paused until you review these changes. " +
-            "Choose Resume sync from the Trew menu to continue.",
+            "Choose Resume sync from the TrewSync menu to continue.",
           10_000,
         );
         void this.togglePause();
@@ -762,7 +786,7 @@ export default class TrewPlugin extends Plugin {
     // boolean was not enough: unlinking cleared it, pairing again set it,
     // and the *previous* run woke from its backoff, read the new run's
     // flag, and carried on with the old pairing's credential. It
-    // reconnected, was refused, and its refusal put "Trew has stopped: not
+    // reconnected, was refused, and its refusal put "TrewSync has stopped: not
     // authorised for this vault" on screen while the real client was
     // syncing perfectly well behind it.
     const mine = ++this.generation;
@@ -880,7 +904,9 @@ export default class TrewPlugin extends Plugin {
     const current = () => this.running && mine === this.generation;
     const backoff = new Backoff();
     const store: PairingStore = {
-      save: (config) => this.saveDuringRun(mine, config),
+      // The same save a pairing from the panel makes, so a pending pairing a
+      // crash left beside an earlier pairing's index is finished without it.
+      save: (config) => this.savePairing(mine, config),
       // Decided below, by what the refusal was. See the comment above.
       forget: async () => {},
     };
@@ -958,7 +984,7 @@ export default class TrewPlugin extends Plugin {
       `The pairing could not be finished: ${refusal.message}. ` +
       adviseAfterPairing({ remains: { kind: "nothing" }, surface: "panel", where: this.dataPath });
     this.setState({ kind: "unpaired" });
-    new Notice(`Trew: ${this.failedPairing}`, 20_000);
+    new Notice(`TrewSync: ${this.failedPairing}`, 20_000);
   }
 
   /** One `runForever`, resolving with the refusal that ended it, if one did. */
@@ -1031,6 +1057,9 @@ export default class TrewPlugin extends Plugin {
    *
    * On a pairing that has never connected, the likeliest cause is the
    * pairing itself, and the one thing that fixes that is offered by name.
+   *
+   * The notice has no timeout, and one is up at a time: `setState` takes it
+   * down when the state stops being this one.
    */
   private stop(cause: Error): void {
     this.working(undefined);
@@ -1040,16 +1069,24 @@ export default class TrewPlugin extends Plugin {
       why: cause.message,
       ...(recovery !== undefined ? { recovery } : {}),
     });
-    new Notice(
-      recovery !== undefined
-        ? `Trew has stopped: ${cause.message}. ${REJOIN_ADVICE}`
-        : this.everConnected
-          ? `Trew has stopped: ${cause.message}`
-          : `Trew could not join this vault: ${cause.message}. ` +
-            `If the invite was for another vault, or this device was revoked, unlink this vault ` +
-            `from the Trew panel and pair it again with a new invite.`,
+    this.stoppedNotice?.notice.hide();
+    const notice = new Notice(
+      recovery === "rejoin"
+        ? `TrewSync has stopped: ${cause.message}. ${REJOIN_ADVICE}`
+        : recovery === "pair-again"
+          ? this.everConnected
+            ? `TrewSync has stopped: ${cause.message}. ${PAIR_AGAIN_ADVICE}`
+            : `TrewSync could not join this vault: ${cause.message}. If the invite was for another ` +
+              `vault, or this device was revoked, open the TrewSync panel and pair it again with a ` +
+              `new invite. This device's notes are kept.`
+          : this.everConnected
+            ? `TrewSync has stopped: ${cause.message}`
+            : `TrewSync could not join this vault: ${cause.message}. ` +
+              `If the invite was for another vault, or this device was revoked, unlink this vault ` +
+              `from the TrewSync panel and pair it again with a new invite.`,
       0,
     );
+    this.stoppedNotice = { notice, why: cause.message };
   }
 
   /**
@@ -1397,7 +1434,7 @@ export default class TrewPlugin extends Plugin {
       // `quiet` and then `start`, which is what rebase does and for a related
       // reason: a run that is merely disconnected reconnects, and a pass
       // in flight is still writing under the old name. `stop` is not the way to
-      // do this, because it puts "Trew has stopped" and a cause on screen, and
+      // do this, because it puts "TrewSync has stopped" and a cause on screen, and
       // nothing here has gone wrong.
       await this.quiet();
       if (this.generation === mine + 1) this.start();
@@ -1535,7 +1572,14 @@ export default class TrewPlugin extends Plugin {
 
   private async syncOnDemand(verifyContents = false): Promise<void> {
     if (!this.config) {
-      new Notice("Trew: this vault is not paired yet.");
+      new Notice("TrewSync: this vault is not paired yet.");
+      new TrewModal(this).open();
+      return;
+    }
+    // The same for a device the server has refused: the panel is where the way
+    // back is, and a sync that cannot happen is not something to try.
+    if (offersPairAgain(this.state)) {
+      new Notice(`TrewSync: ${this.whyNoClient()}`);
       new TrewModal(this).open();
       return;
     }
@@ -1548,7 +1592,7 @@ export default class TrewPlugin extends Plugin {
       if (this.running && this.state.kind === "offline" && this.wakeLoop) {
         this.setState({ kind: "connecting" });
         this.wakeLoop();
-        new Notice("Trew: reconnecting…");
+        new Notice("TrewSync: reconnecting…");
         return;
       }
       // The same for a pairing waiting out its backoff: somebody who has just
@@ -1561,10 +1605,10 @@ export default class TrewPlugin extends Plugin {
       ) {
         this.setState({ kind: "pairing" });
         this.wakeLoop();
-        new Notice("Trew: trying to finish the pairing again…");
+        new Notice("TrewSync: trying to finish the pairing again…");
         return;
       }
-      new Notice(`Trew: ${this.whyNoClient()}`);
+      new Notice(`TrewSync: ${this.whyNoClient()}`);
       return;
     }
     // Numbered like every other run. A pass takes as long as it takes, and
@@ -1594,13 +1638,13 @@ export default class TrewPlugin extends Plugin {
       // Both callers discarded this promise, so a pass that threw was a
       // person pressing a button and nothing happening.
       this.passFailed((err as Error).message);
-      new Notice(`Trew: sync failed: ${(err as Error).message}`, 10_000);
+      new Notice(`TrewSync: sync failed: ${(err as Error).message}`, 10_000);
       return;
     }
     if (mine !== this.generation) return;
     // The state was set by onPass, once per pass. This is the feedback the
     // command owes.
-    new Notice(`Trew: ${summarise(report)}`);
+    new Notice(`TrewSync: ${summarise(report)}`);
   }
 
   private passFailed(why: string): void {
@@ -1619,15 +1663,17 @@ export default class TrewPlugin extends Plugin {
   private whyNoClient(): string {
     switch (this.state.kind) {
       case "paused":
-        return "Sync is paused. Resume it from the Trew menu.";
+        return "Sync is paused. Resume it from the TrewSync menu.";
       case "stopped":
-        return `Trew has stopped: ${this.state.why}. It will not reconnect until that is fixed.`;
+        return this.state.recovery === "pair-again"
+          ? `TrewSync has stopped: ${this.state.why}. ${PAIR_AGAIN_ADVICE}`
+          : `TrewSync has stopped: ${this.state.why}. It will not reconnect until that is fixed.`;
       case "connecting":
         return "still connecting to the server.";
       case "loading":
         return "loading sync history. Keep Obsidian open; your notes will sync next.";
       case "pairing":
-        return "this vault's pairing has not finished yet. Trew is finishing it and will sync once it has.";
+        return "this vault's pairing has not finished yet. TrewSync is finishing it and will sync once it has.";
       case "unpaired":
         return "this vault is not paired yet.";
       default:
@@ -1657,7 +1703,7 @@ export default class TrewPlugin extends Plugin {
       if (why !== this.announced.unknown) {
         this.announced.unknown = why;
         new Notice(
-          `Trew cannot tell whether any notes are waiting to be recovered: ${why}. ` +
+          `TrewSync cannot tell whether any notes are waiting to be recovered: ${why}. ` +
             `Notes may be sitting in a hidden folder with nothing pointing at them.`,
           30_000,
         );
@@ -1677,7 +1723,7 @@ export default class TrewPlugin extends Plugin {
         const first = waiting[0]!;
         const rest = waiting.length - 1;
         new Notice(
-          `Trew kept ${waiting.length} ${waiting.length === 1 ? "version" : "versions"} ` +
+          `TrewSync kept ${waiting.length} ${waiting.length === 1 ? "version" : "versions"} ` +
             `somewhere Obsidian does not show. ${first.from} is at ${first.at}` +
             `${rest > 0 ? `, and ${rest} more` : ""}. ${first.why}.`,
           30_000,
@@ -1687,7 +1733,7 @@ export default class TrewPlugin extends Plugin {
     if (report.conflicted > 0) {
       const n = report.conflicted;
       new Notice(
-        `Trew kept both versions of ${n} ${n === 1 ? "file" : "files"}. ` +
+        `TrewSync kept both versions of ${n} ${n === 1 ? "file" : "files"}. ` +
           `Look for "Conflicted copy" in the name.`,
         10_000,
       );
@@ -1717,7 +1763,7 @@ export default class TrewPlugin extends Plugin {
         // of it. A report that named nothing still says the count.
         const detail = attentionLines(report).join(" ");
         new Notice(
-          `Trew cannot sync ${count} file(s).${detail === "" ? "" : ` ${detail}`}`,
+          `TrewSync cannot sync ${count} file(s).${detail === "" ? "" : ` ${detail}`}`,
           20_000,
         );
       }
@@ -1734,7 +1780,7 @@ export default class TrewPlugin extends Plugin {
     // failed read or JSON parse. The latter must not permit a new pairing.
     if (raw === undefined) throw new Error(`Obsidian could not read ${this.dataPath}`);
     if (raw === null) return undefined;
-    return decodeConfig(raw, "the Trew plugin's saved settings");
+    return decodeConfig(raw, "the TrewSync plugin's saved settings");
   }
 
   /**
@@ -1747,6 +1793,10 @@ export default class TrewPlugin extends Plugin {
    * being made from the panel: two presses of the button used to make two
    * credentials, the second winning on disk while the first was the one
    * running.
+   *
+   * The one paired vault that may pair again is one the server has refused
+   * for good (`pair-again`): its credential opens nothing now, so writing
+   * the new pairing over it strands nothing this device could still use.
    */
   private refuseUnlessPairable(): void {
     if (this.unlinking) throw new Error("This vault is being unlinked.");
@@ -1759,10 +1809,12 @@ export default class TrewPlugin extends Plugin {
     if (this.pendingPairing !== undefined) {
       throw new Error(
         "this vault has a pairing that is still being finished. Wait for it, or unlink this " +
-          "vault in the Trew panel to give it up and pair again.",
+          "vault in the TrewSync panel to give it up and pair again.",
       );
     }
-    if (this.paired) throw new Error("this vault is already paired");
+    if (this.paired && !offersPairAgain(this.state)) {
+      throw new Error("this vault is already paired");
+    }
     if (this.pairing) throw new Error("a pairing is already in progress");
   }
 
@@ -1789,16 +1841,45 @@ export default class TrewPlugin extends Plugin {
    */
   private pairingStore(mine: number): PairingStore {
     return {
-      save: (config) => this.saveDuringRun(mine, config),
+      save: (config) => this.savePairing(mine, config),
       forget: () => this.forgetDuringRun(mine),
     };
   }
 
   /**
+   * Saves a pairing, and after a pending one, removes any index beside it.
+   *
+   * An index beside a pending pairing is always another pairing's: nothing
+   * syncs until the pending one is finished, so nothing has written an index
+   * for it. Pairing again over a revoked pairing leaves exactly that for a
+   * moment, because the new pairing is written first and the old index removed
+   * after it (rule 3: nothing goes before what replaces it is on disk, read
+   * back). A crash in that moment, finished on the next load, would otherwise
+   * carry on from the revoked pairing's cursor: every deletion made while this
+   * device could not hear of it would land on notes it still holds, after a
+   * merge that said such files may come back. So the index goes here, on every
+   * save of a pending pairing and before its redemption is sent, and a failure
+   * to remove it is a failure to save.
+   */
+  private async savePairing(mine: number, config: DeviceConfig): Promise<void> {
+    await this.saveDuringRun(mine, config);
+    if (!isPendingPairing(config)) return;
+    if (mine !== this.generation) throw new Error("this vault is no longer paired");
+    try {
+      await this.trackStateWrite(this.indexStore().remove());
+    } catch (err) {
+      throw new Error(
+        `the index a previous pairing left in ${this.pluginDir()} could not be removed: ` +
+          (err as Error).message,
+      );
+    }
+  }
+
+  /**
    * Joins a vault by redeeming an invite.
    *
-   * Every device pairs this way, the first one included: `trew serve` writes
-   * the first device's invite to `first-invite` in its data folder, `trew
+   * Every device pairs this way, the first one included: `trewd serve` writes
+   * the first device's invite to `first-invite` in its data folder, `trewd
    * invite` on the server makes more, and a paired device's panel mints them
    * over the wire. What comes back is this device's own row and the token for
    * it, and nothing else that authenticates, which is what makes revoking this
@@ -1818,6 +1899,14 @@ export default class TrewPlugin extends Plugin {
    * The files already in this vault are checked first, before anything is
    * saved or sent, because an invite is spent by the redemption and combining
    * a populated vault is a choice somebody makes (`checkFirstSync`).
+   *
+   * A device the server has refused for good pairs again through here too,
+   * and it is what unlinking and pairing did in two steps, in an order that
+   * removes nothing first: the merge is confirmed, what is left of the refused
+   * run is retired, the new pending pairing is written over the old one and
+   * read back, and only then is the old index removed (`savePairing`). A
+   * refusal or an unreachable server leaves the vault unpaired, since the
+   * pairing it held opened nothing any more; no note is touched either way.
    */
   async pair(
     inviteText: string,
@@ -1837,13 +1926,17 @@ export default class TrewPlugin extends Plugin {
     await this.onePairing(async () => {
       const name = deviceName(device);
       const skip = [...new Set(ignore.map((n) => n.trim()))].filter(isIgnorableName).sort();
-      const mine = this.generation;
+      // Only ever a pairing the server refused: `onePairing` lets no other
+      // paired vault this far.
+      const replacing = this.paired ? this.config : undefined;
+      let mine = this.generation;
       // Read before anything else is looked at, so a string that is not an
       // invite, a Basalt string among them, is refused in its own words.
       const invite = parseInvite(inviteText);
       await checkFirstSync(this.app.vault.adapter, this.app.vault.configDir, mergeConfirmed);
       if (mine !== this.generation)
         throw new Error("Pairing was cancelled while checking local files.");
+      if (replacing !== undefined) mine = await this.retireRefusedPairing(replacing);
       this.failedPairing = undefined;
       const pending = startPairing(invite, name, skip.length > 0 ? { ignore: skip } : {});
       let paired: DeviceConfig;
@@ -1865,6 +1958,31 @@ export default class TrewPlugin extends Plugin {
   }
 
   /**
+   * Retires what is left of a pairing the server refused, before pairing
+   * again over it, and returns the generation the new pairing writes under.
+   *
+   * The refused run has already ended, but `quiet` is what makes sure: a save
+   * in flight is waited for, and nothing of the old run can write after it.
+   * Refused if anything else changed the pairing meanwhile, the way a settings
+   * change is (`setIgnoredNames`), so an unlink that started during the wait
+   * is never written over.
+   */
+  private async retireRefusedPairing(refused: DeviceConfig): Promise<number> {
+    const mine = this.generation + 1;
+    await this.quiet();
+    if (
+      this.unlinking !== undefined ||
+      this.generation !== mine ||
+      this.config !== refused ||
+      !offersPairAgain(this.state)
+    ) {
+      throw new Error("Pairing was cancelled: this vault's pairing changed while it was waiting.");
+    }
+    this.paused = false;
+    return mine;
+  }
+
+  /**
    * What a pairing that did not finish leaves, and the error that says so.
    *
    * Answered from what the disk holds rather than from which step threw (rule
@@ -1881,7 +1999,9 @@ export default class TrewPlugin extends Plugin {
    *    (rule 2).
    *  - **nothing**: refused, or the server was never reached. Nothing is
    *    saved, the invite was not spent by this attempt, and the panel says so
-   *    above the form that tries again.
+   *    above the form that tries again. A pairing that was replacing one the
+   *    server refused leaves the vault unpaired: the new pending pairing was
+   *    written over the old one, and is gone again.
    *
    * Nothing is started or stopped for a run that has been retired while this
    * was asking the disk: `unlink` has waited for it and is about to remove
@@ -1906,11 +2026,17 @@ export default class TrewPlugin extends Plugin {
       });
     } else {
       this.failedPairing = `The pairing did not finish: ${err.message}. ${advice}`;
+      if (this.config !== undefined) {
+        this.config = undefined;
+        this.setState({ kind: "unpaired" });
+      }
     }
     // A lost reply says so itself, in words that already carry its cause; the
     // counsellor's version of the same sentence would only repeat it.
     if (err instanceof PairingInterrupted && remains.kind === "pending") {
-      return new Error(`${err.message} Trew is finishing it now, and keeps trying until it has.`);
+      return new Error(
+        `${err.message} TrewSync is finishing it now, and keeps trying until it has.`,
+      );
     }
     return new Error(`${err.message}. ${advice}`);
   }
@@ -2215,7 +2341,7 @@ export default class TrewPlugin extends Plugin {
    */
   openHistory(path: string): void {
     if (!this.client) {
-      new Notice(`Trew: ${this.whyNoClient()} There is no history to show.`, 8_000);
+      new Notice(`TrewSync: ${this.whyNoClient()} There is no history to show.`, 8_000);
       return;
     }
     new HistoryModal(this.app, this.historySource(), path).open();
@@ -2261,7 +2387,7 @@ export default class TrewPlugin extends Plugin {
    */
   private async cliHistory(path: string): Promise<string> {
     if (!path) return "Which note? trew:history needs a path.";
-    if (!this.client) return `Trew is ${this.whyNoClient()}`;
+    if (!this.client) return `TrewSync is ${this.whyNoClient()}`;
     try {
       const versions = await this.client.history(path, { limit: 50 });
       if (versions.length === 0) return `No history found for ${path}.`;
@@ -2269,14 +2395,14 @@ export default class TrewPlugin extends Plugin {
         .map((v) => `${v.uid}\t${new Date(v.mtime).toISOString()}\t${v.size} B\t${v.device}`)
         .join("\n");
     } catch (err) {
-      return `Trew could not ask: ${(err as Error).message}`;
+      return `TrewSync could not ask: ${(err as Error).message}`;
     }
   }
 
   private async cliRestore(path: string, uid: number): Promise<string> {
     if (!path) return "Which note? trew:restore needs a path.";
     if (!Number.isInteger(uid) || uid <= 0) return "Which version? trew:restore needs a uid.";
-    if (!this.client) return `Trew is ${this.whyNoClient()}`;
+    if (!this.client) return `TrewSync is ${this.whyNoClient()}`;
     try {
       // Paged as far back as it has to go. One page of two hundred used to
       // be all that was looked at, and a version older than that was one
@@ -2285,7 +2411,7 @@ export default class TrewPlugin extends Plugin {
       if (!version) return `No version ${uid} of ${path}.`;
       return describeRestore(version, await this.restoreAndSend(version));
     } catch (err) {
-      return `Trew could not restore: ${(err as Error).message}`;
+      return `TrewSync could not restore: ${(err as Error).message}`;
     }
   }
 
@@ -2360,7 +2486,7 @@ export default class TrewPlugin extends Plugin {
    * anything new and stops writing, and the panel says so beside the button.
    *
    * Any device may be revoked, the last one included, and no flag is needed
-   * for that: a vault with no devices gets one back from `trew invite` on the
+   * for that: a vault with no devices gets one back from `trewd invite` on the
    * server, and nothing a device holds is needed for it.
    */
   async revoke(deviceId: string): Promise<{ self: boolean }> {
@@ -2370,13 +2496,13 @@ export default class TrewPlugin extends Plugin {
     if (self) {
       // Revoking this device is what unlinking is, from the server's side.
       // The connection is already closing behind the reply, so the run is
-      // retired here rather than left to discover it by being refused.
+      // retired here rather than left to discover it by being refused, and
+      // the panel offers what a device revoked from elsewhere is offered.
       await this.quiet();
       this.setState({
         kind: "stopped",
-        why:
-          "this device was revoked and may no longer sync this vault. Unlink it to forget the " +
-          "pairing, then pair it again with a new invite if it should sync",
+        why: "this device was revoked and may no longer sync this vault",
+        recovery: "pair-again",
       });
     }
     return { self };
@@ -2706,6 +2832,14 @@ export default class TrewPlugin extends Plugin {
 
   private setState(state: State): void {
     this.state = state;
+    // A notice saying TrewSync has stopped is true until the state says otherwise,
+    // and no longer: pairing again, unlinking and every recovery leave through
+    // here.
+    const told = this.stoppedNotice;
+    if (told !== undefined && (state.kind !== "stopped" || state.why !== told.why)) {
+      told.notice.hide();
+      this.stoppedNotice = undefined;
+    }
     if (this.statusEl) paintStatus(this.statusEl, state);
     // Where a phone can see it. `aria-label` is what Obsidian renders as a
     // ribbon tooltip, and it is also what a screen reader reads out.
@@ -2723,7 +2857,7 @@ export default class TrewPlugin extends Plugin {
       const standing = platformStanding(Platform);
       this.ribbonEl.setAttribute(
         "aria-label",
-        `Trew: ${longStatus(state)}${standing ? ` ${standing.title}.` : ""}`,
+        `TrewSync: ${longStatus(state)}${standing ? ` ${standing.title}.` : ""}`,
       );
     }
     this.announceOnAPhone(state);
@@ -2767,7 +2901,7 @@ export default class TrewPlugin extends Plugin {
     const at = Date.now();
     if (at - this.lastToldOnAPhone < PHONE_NOTICE_GAP_MS) return;
     this.lastToldOnAPhone = at;
-    new Notice(`Trew: ${longStatus(state)} Tap the Trew icon for details.`, 10_000);
+    new Notice(`TrewSync: ${longStatus(state)} Tap the TrewSync icon for details.`, 10_000);
   }
 
   private readonly listeners = new Set<(state: State) => void>();
@@ -2888,13 +3022,13 @@ function retiredPairing(remains: PairingRemains, where: string): Error {
       );
     case "pending":
       return new Error(
-        "Trew stopped before this pairing finished. It is saved, and the next time Trew " +
+        "TrewSync stopped before this pairing finished. It is saved, and the next time TrewSync " +
           "loads it finishes the pairing with the same credential.",
       );
     case "credential":
       return new Error(
-        "Trew stopped before this pairing finished here. It is saved, and the next time " +
-          "Trew loads it connects as this device.",
+        "TrewSync stopped before this pairing finished here. It is saved, and the next time " +
+          "TrewSync loads it connects as this device.",
       );
     default:
       return new Error(adviseAfterPairing({ remains, surface: "panel", where }));
@@ -2914,9 +3048,39 @@ function offersRejoin(state: State): boolean {
   return state.kind === "stopped" && state.recovery === "rejoin";
 }
 
-function recoveryFor(cause: Error): "rejoin" | undefined {
-  return cause instanceof ProtocolError && cause.code === "cursor" ? "rejoin" : undefined;
+/** Whether the panel should offer a new pairing in place of the paired panel. */
+function offersPairAgain(state: State): boolean {
+  return state.kind === "stopped" && state.recovery === "pair-again";
 }
+
+/**
+ * The recovery a refusal has a way out for, if any.
+ *
+ * `pair-again` for the server refusing this device's own credential for good:
+ * `auth`, which a revoke sends a connected device and every later hello gets,
+ * and `nodevice`, which a request gets when the row went while its connection
+ * was open. The server says only "not authorised" at a hello, deliberately, so
+ * a device revoked while it was offline and one whose row the server never had
+ * look alike; either way the credential this device holds opens nothing, and
+ * a new pairing is the only thing that changes that.
+ */
+function recoveryFor(cause: Error): "rejoin" | "pair-again" | undefined {
+  if (!(cause instanceof ProtocolError)) return undefined;
+  if (cause.code === "cursor") return "rejoin";
+  if (cause.fatal && (cause.code === "auth" || cause.code === "nodevice")) return "pair-again";
+  return undefined;
+}
+
+/**
+ * What a device the server has refused for good is told, beside the refusal.
+ *
+ * The finding it answers (M3's second) was a phone told to pair again with a
+ * new invite and shown nothing to pair with: the way on was Manage this vault,
+ * then Unlink. The panel draws the pairing form itself now, so this points at
+ * the panel and says the one thing somebody wants to know first.
+ */
+const PAIR_AGAIN_ADVICE =
+  "This device's notes are kept, here and on the server. Open the TrewSync panel to pair it again.";
 
 /**
  * The name this device goes by, from what was typed or from the suggestion.
@@ -3041,7 +3205,7 @@ function paintStatus(el: HTMLElement, state: State): void {
   else (word ?? el.createSpan({ cls: "trew-status-platform" })).setText(standing.short);
   // Both, because Obsidian styles aria-label as its own tooltip and a plain
   // title is what shows if it ever stops.
-  const tip = `Trew Sync: ${longStatus(state)}${standing ? ` ${standing.title}.` : ""}`;
+  const tip = `TrewSync: ${longStatus(state)}${standing ? ` ${standing.title}.` : ""}`;
   el.setAttribute("aria-label", tip);
   el.setAttribute("title", tip);
 }
@@ -3208,9 +3372,25 @@ class TrewPanel {
     private readonly plugin: TrewPlugin,
     private readonly host: HTMLElement,
     private readonly dismiss: () => void,
-    private readonly incomingInvite?: string,
+    private incomingInvite?: string,
   ) {
     this.unwatchUnload = plugin.watchUnload(() => this.teardown());
+  }
+
+  /**
+   * Forgets the invite a link brought, and anything typed into the form, once
+   * a pairing holds this vault.
+   *
+   * An invite fills the field for the pairing it arrived for and no other. The
+   * panel a QR opened stayed open on a phone through its pairing, its
+   * revocation and an unlink, and the form the unlink drew was filled in with
+   * that first invite, long since spent (M3's third finding). Called whenever
+   * a pairing is being finished or is in use, which is every way one reaches
+   * the disk, the background finish of an interrupted one included.
+   */
+  private forgetInvite(): void {
+    this.incomingInvite = undefined;
+    this.joinDraft = undefined;
   }
 
   teardown(): void {
@@ -3254,6 +3434,7 @@ class TrewPanel {
     // device list to a vault that has not been told it may connect.
     const pending = this.plugin.pendingPairing;
     if (pending !== undefined) {
+      this.forgetInvite();
       this.renderFinishing(contentEl, pending);
       return;
     }
@@ -3262,6 +3443,16 @@ class TrewPanel {
       this.watchShape();
       return;
     }
+    // A device the server refuses gets the way back and nothing else. Every row
+    // of the paired panel needs the credential that was refused, and a phone
+    // told to pair again used to be shown all of them and no invite field: the
+    // way on was Manage this vault, then Unlink (M3's second finding).
+    if (offersPairAgain(this.plugin.currentState)) {
+      this.renderPairing(contentEl, true);
+      this.watchShape();
+      return;
+    }
+    this.forgetInvite();
 
     const primary = settingGroup(contentEl);
     const sync = row(primary, "Sync status");
@@ -3370,7 +3561,7 @@ class TrewPanel {
         // where the modal would have been, which is what `syncNow` and
         // `createInvite` already do.
         if (!this.plugin.paired) {
-          new Notice("Trew: this vault is not paired yet. There is nothing to recover.");
+          new Notice("TrewSync: this vault is not paired yet. There is nothing to recover.");
           return;
         }
         this.dismiss();
@@ -3421,9 +3612,9 @@ class TrewPanel {
             "Do this on your other devices too. Anything still missing is history this " +
               "device never had.",
           );
-          new Notice(`Trew: ${parts.join(" ")}`, 15_000);
+          new Notice(`TrewSync: ${parts.join(" ")}`, 15_000);
         } catch (err) {
-          new Notice(`Trew: ${(err as Error).message}`, 10_000);
+          new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
         } finally {
           b.setDisabled(false).setButtonText("Send");
         }
@@ -3442,13 +3633,13 @@ class TrewPanel {
           try {
             await this.plugin.unlink();
           } catch (err) {
-            new Notice(`Trew: ${(err as Error).message}`, 10_000);
+            new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
           }
           this.render();
         }),
     );
 
-    docsLink(contentEl.createEl("p", { cls: "trew-advice" }), "Trew documentation");
+    docsLink(contentEl.createEl("p", { cls: "trew-advice" }), "TrewSync documentation");
   }
 
   /**
@@ -3466,7 +3657,7 @@ class TrewPanel {
     setting.settingEl.addClass("trew-platform-standing");
     setting.descEl.createEl("br");
     setting.descEl
-      .createEl("a", { text: "Which platforms Trew supports" })
+      .createEl("a", { text: "Which platforms TrewSync supports" })
       .setAttribute("href", SUPPORT_TABLE);
   }
 
@@ -3526,6 +3717,7 @@ class TrewPanel {
         this.plugin.pendingPairing !== undefined,
         this.plugin.pairingFailure,
         offersRejoin(this.plugin.currentState),
+        offersPairAgain(this.plugin.currentState),
       ]);
     const drawn = shape();
     this.unwatch = this.plugin.watchState(() => {
@@ -3555,7 +3747,7 @@ class TrewPanel {
           say(said, "");
           try {
             await this.plugin.changeServerAddress(address.getValue());
-            new Notice("Trew: server address saved.");
+            new Notice("TrewSync: server address saved.");
             this.render();
           } catch (err) {
             say(said, (err as Error).message);
@@ -3599,7 +3791,7 @@ class TrewPanel {
       list.empty();
       // Every row can be revoked, the last one included, which reading the
       // list at all means is this device. The way back into a vault with no
-      // devices is `trew invite` on the server, and the confirmation says so
+      // devices is `trewd invite` on the server, and the confirmation says so
       // on that row rather than the panel hiding the button.
       const last = answer.devices.length === 1;
       heading.setDesc(
@@ -3642,7 +3834,7 @@ class TrewPanel {
                     `readable there, in plaintext.` +
                     (last
                       ? " It is the vault's last device, so adding one back takes an invite " +
-                        "from trew invite on the server."
+                        "from trewd invite on the server."
                       : "") +
                     " Press again to revoke.",
                 );
@@ -3732,12 +3924,12 @@ class TrewPanel {
           codeField.setValue(issued.invite);
           codeField.inputEl.scrollLeft = 0;
           codeRow.settingEl.show();
-          let scanAdvice = "Copy the invite into Trew on the new device.";
+          let scanAdvice = "Copy the invite into TrewSync on the new device.";
           try {
             qr.setAttribute("src", inviteQrImage(issued.invite));
             qr.show();
             scanAdvice =
-              "Scan with your phone's camera. Trew must be installed and enabled in Obsidian.";
+              "Scan with your phone's camera. TrewSync must be installed and enabled in Obsidian.";
           } catch {
             // Long server addresses can exceed QR capacity. Copy still works.
             qr.hide();
@@ -3748,9 +3940,12 @@ class TrewPanel {
               ? `${scanAdvice} It does not expire, so cancel it from the device list once it is used.`
               : `${scanAdvice} Expires at ${when(issued.expiresAt)}.`,
           );
-          await copyToClipboard(issued.invite, "Copied. Paste it into Trew on the other device.");
+          await copyToClipboard(
+            issued.invite,
+            "Copied. Paste it into TrewSync on the other device.",
+          );
         } catch (err) {
-          new Notice(`Trew: ${(err as Error).message}`, 10_000);
+          new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
         }
       }),
     );
@@ -3762,7 +3957,7 @@ class TrewPanel {
     const codeRow = row(
       contentEl,
       "Pairing code",
-      "Paste this into the Invite field of Trew on your other device.",
+      "Paste this into the Invite field of TrewSync on your other device.",
     );
     codeRow.settingEl.addClass("trew-invite-code");
     codeRow.settingEl.hide();
@@ -3778,7 +3973,10 @@ class TrewPanel {
         button.buttonEl.setAttribute("aria-label", "Copy pairing code");
         button.onClick(async () => {
           if (currentInvite === "") return;
-          await copyToClipboard(currentInvite, "Copied. Paste it into Trew on the other device.");
+          await copyToClipboard(
+            currentInvite,
+            "Copied. Paste it into TrewSync on the other device.",
+          );
         });
       });
   }
@@ -3812,7 +4010,7 @@ class TrewPanel {
               say(
                 said,
                 `This device is at version ${at.local} and the server is at ${at.server}. ` +
-                  `Take a backup of the server first (trew backup). Press again to rejoin.`,
+                  `Take a backup of the server first (trewd backup). Press again to rejoin.`,
               );
               return;
             }
@@ -3823,11 +4021,11 @@ class TrewPanel {
               `Rejoined the server: ${summarise(report)}. Nothing was deleted, and where the ` +
                 `two sides disagreed both versions were kept.`,
             );
-            new Notice(`Trew rejoined the server: ${summarise(report)}`, 10_000);
+            new Notice(`TrewSync rejoined the server: ${summarise(report)}`, 10_000);
             this.render();
           } catch (err) {
             say(said, "");
-            new Notice(`Trew: ${(err as Error).message}`, 10_000);
+            new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
           }
         }),
     );
@@ -3879,7 +4077,7 @@ class TrewPanel {
           new Notice(`This device is now ${said} in the device list.`);
           this.render();
         } catch (err) {
-          new Notice(`Trew: ${(err as Error).message}`, 10_000);
+          new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
           b.setDisabled(false).setButtonText("Rename");
         }
       }),
@@ -3916,7 +4114,7 @@ class TrewPanel {
         await this.plugin.setIgnoredNames(wanted);
         this.render();
       } catch (err) {
-        new Notice(`Trew: ${(err as Error).message}`, 10_000);
+        new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
         button.setDisabled(false).setButtonText(was);
       }
     };
@@ -3924,11 +4122,11 @@ class TrewPanel {
       b.setButtonText("Skip").onClick(async () => {
         const wanted = (field?.getValue() ?? "").trim();
         if (!isIgnorableName(wanted)) {
-          new Notice("Trew: give one folder or file name, with no slashes in it.");
+          new Notice("TrewSync: give one folder or file name, with no slashes in it.");
           return;
         }
         if (names.includes(wanted)) {
-          new Notice(`Trew: ${wanted} is already skipped on this device.`);
+          new Notice(`TrewSync: ${wanted} is already skipped on this device.`);
           return;
         }
         await change([...names, wanted], b, "Skip");
@@ -3973,7 +4171,7 @@ class TrewPanel {
       "Versions kept out of sight",
       unknown === undefined
         ? `${waiting} ${waiting === 1 ? "version is" : "versions are"} under a name Obsidian does not show.`
-        : `Trew cannot tell what is waiting: ${unknown}`,
+        : `TrewSync cannot tell what is waiting: ${unknown}`,
     ).addButton((b) =>
       b.setButtonText("Look").onClick(() => {
         this.dismiss();
@@ -3990,7 +4188,7 @@ class TrewPanel {
    * and the path.
    */
   private renderUnreadable(contentEl: HTMLElement, problem: string): void {
-    contentEl.createEl("p", { text: `Trew has stopped: ${problem}` });
+    contentEl.createEl("p", { text: `TrewSync has stopped: ${problem}` });
     contentEl.createEl("p", {
       text:
         `Pairing again would replace the credential in ${this.plugin.dataPath}, so nothing here ` +
@@ -4005,8 +4203,8 @@ class TrewPanel {
    * reason: it asked somebody to choose between kinds of string before it
    * would draw a form, when the string in their clipboard had already made
    * the choice. There is one kind now. Every device pairs from an invite, the
-   * first one included: `trew serve` writes the first device's invite to
-   * `first-invite` in its data folder, `trew invite` on the server prints
+   * first one included: `trewd serve` writes the first device's invite to
+   * `first-invite` in its data folder, `trewd invite` on the server prints
    * more, and a paired device's panel mints them.
    *
    * The line under the field says where the invite points before anything
@@ -4021,8 +4219,21 @@ class TrewPanel {
    * the skip list, which stays on this screen rather than moving to the paired
    * panel because pairing starts the download immediately and a phone joining
    * a vault of attachments has to be able to say no before that (Codex-05).
+   *
+   * `again` is the same form for a device the server has refused, led by what
+   * happened and what it leaves: `pair` writes the new pairing over the
+   * refused one and removes the old index after it, which is what unlinking
+   * did as a separate step, and the merge is confirmed first as for any vault
+   * that holds notes.
    */
-  private renderPairing(host: HTMLElement): void {
+  private renderPairing(host: HTMLElement, again = false): void {
+    // And what it skipped, once, before the first draw: a phone that left a
+    // large attachments folder alone would otherwise download all of it the
+    // moment it paired again (Codex-05's reason for the list being here).
+    if (again && !this.joinSkipSeeded) {
+      this.joinSkip = [...this.plugin.ignoredNames];
+      this.joinSkipSeeded = true;
+    }
     if (this.confirmMerge && this.joinDraft) {
       const draft = this.joinDraft;
       new Setting(host).setName("Confirm merge").setHeading();
@@ -4062,7 +4273,30 @@ class TrewPanel {
       return;
     }
 
-    new Setting(host).setName("Set up sync").setHeading();
+    if (again) {
+      // What happened, what it leaves, and what to do, in that order and
+      // before anything else: somebody whose phone has just stopped syncing
+      // wants to know first whether their notes are still there.
+      const state = this.plugin.currentState;
+      const said = state.kind === "stopped" ? ` The server said: ${state.why}.` : "";
+      new Setting(host).setName("Pair this device again").setHeading();
+      host
+        .createEl("p", {
+          cls: "trew-advice",
+          text:
+            "This device can no longer sync: the server refuses its pairing, which is what " +
+            `revoking it does.${said}`,
+        })
+        .setAttribute("role", "alert");
+      host.createEl("p", {
+        cls: "trew-advice",
+        text:
+          "Its notes stay where they are, on this device and on the server. Pair it again " +
+          "with a new invite and it syncs as a new device.",
+      });
+    } else {
+      new Setting(host).setName("Set up sync").setHeading();
+    }
     // Why the last pairing did not finish, above the form that tries again.
     // A pairing refused while it was being finished in the background has no
     // other place to say so for longer than a notice lasts.
@@ -4076,9 +4310,12 @@ class TrewPanel {
     row(
       contentEl,
       "Invite",
-      "Paste an invite from a paired device's Trew panel. For the first device, use the one " +
-        "trew serve wrote to first-invite in its data folder, or make one with trew invite on " +
-        "the server.",
+      again
+        ? "Paste a new invite from a paired device's TrewSync panel, or make one with trewd invite " +
+            "on the server."
+        : "Paste an invite from a paired device's TrewSync panel. For the first device, use the one " +
+            "trewd serve wrote to first-invite in its data folder, or make one with trewd invite on " +
+            "the server.",
     ).addText((t) => {
       t.setPlaceholder("trew1i_...");
       t.inputEl.setAttribute("aria-label", "Invite");
@@ -4163,7 +4400,10 @@ class TrewPanel {
       (t) => {
         t.setPlaceholder("laptop");
         t.inputEl.setAttribute("aria-label", "Device name");
-        t.setValue(this.joinDraft?.device ?? suggestedDeviceName());
+        // Pairing again keeps the name this device already had: it is the same
+        // machine, and its conflict copies should go on saying so.
+        const kept = again ? this.plugin.deviceName : "";
+        t.setValue(this.joinDraft?.device ?? (kept !== "" ? kept : suggestedDeviceName()));
         deviceField = t;
       },
     );
@@ -4225,7 +4465,7 @@ class TrewPanel {
           try {
             await this.plugin.unlink();
           } catch (err) {
-            new Notice(`Trew: ${(err as Error).message}`, 10_000);
+            new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
           }
           this.render();
         }),
@@ -4243,6 +4483,8 @@ class TrewPanel {
    * moment it can still prevent a download rather than undo one.
    */
   private joinSkip: string[] = [];
+  /** Whether `joinSkip` has been filled from a refused pairing's own list. */
+  private joinSkipSeeded = false;
 
   /**
    * The skip list, on the pairing screen.
@@ -4269,7 +4511,7 @@ class TrewPanel {
       b.setButtonText("Skip").onClick(() => {
         const wanted = (field?.getValue() ?? "").trim();
         if (!isIgnorableName(wanted)) {
-          new Notice("Trew: give one folder or file name, with no slashes in it.");
+          new Notice("TrewSync: give one folder or file name, with no slashes in it.");
           return;
         }
         if (!this.joinSkip.includes(wanted)) this.joinSkip.push(wanted);
@@ -4300,9 +4542,10 @@ class TrewPanel {
     this.joinDraft = { invite, device };
     try {
       await this.plugin.pair(invite, device, mergeConfirmed, ignore);
-      this.joinDraft = undefined;
+      // Spent: the next form this panel draws starts empty.
+      this.forgetInvite();
       this.confirmMerge = false;
-      new Notice("Paired. Trew is connecting.");
+      new Notice("Paired. TrewSync is connecting.");
       this.render();
     } catch (err) {
       if (this.closed) return;
@@ -4310,7 +4553,7 @@ class TrewPanel {
         this.confirmMerge = true;
         this.render();
       } else {
-        new Notice(`Trew: ${(err as Error).message}`, 10_000);
+        new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
         // Redrawn, so the reason stays on the panel after the notice has
         // gone, and a pairing kept to finish is drawn as the state it is in.
         this.confirmMerge = false;
@@ -4335,7 +4578,7 @@ class TrewModal extends Modal {
   }
 
   override onOpen(): void {
-    this.setTitle("Trew Sync");
+    this.setTitle("TrewSync");
     this.modalEl.addClass("mod-trew-panel");
     this.panel = new TrewPanel(
       this.plugin,
@@ -4359,7 +4602,7 @@ class TrewModal extends Modal {
  * options to put in one, and that is still true: nothing below is a
  * preference. What it got wrong is what the tab is for. Obsidian shows a
  * plugin's gear in Settings only if it registers one, so refusing the tab
- * meant Settings had no Trew entry at all, and somebody looking for the
+ * meant Settings had no TrewSync entry at all, and somebody looking for the
  * plugin's interface in the one place every other plugin keeps it found
  * nothing and concluded there was none. That is a discoverability bug
  * wearing a principle's clothes.
@@ -4613,7 +4856,7 @@ class RecoverModal extends Modal {
                 if (lost.length > 0) {
                   parts.push(`${lost.length} could not be restored: ${lost[0]!.why}`);
                 }
-                new Notice(`Trew: ${parts.join(" ")}`, 15_000);
+                new Notice(`TrewSync: ${parts.join(" ")}`, 15_000);
                 for (const note of chosen) {
                   if (lost.some((r) => r.path === note.path)) continue;
                   this.picked.delete(note.uid);
@@ -4622,7 +4865,7 @@ class RecoverModal extends Modal {
                 }
                 this.list();
               } catch (err) {
-                new Notice(`Trew: ${(err as Error).message}`, 10_000);
+                new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
               } finally {
                 this.bulk = false;
               }
@@ -4673,7 +4916,7 @@ class RecoverModal extends Modal {
               if (at >= 0) this.loaded.splice(at, 1);
               this.list();
             } catch (err) {
-              new Notice(`Trew: ${(err as Error).message}`, 10_000);
+              new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
             } finally {
               this.restoring.delete(version.uid);
               b.setDisabled(false).setButtonText("Restore");
@@ -4757,7 +5000,7 @@ class StrandedModal extends Modal {
     contentEl.createEl("p", {
       cls: "trew-advice",
       text:
-        "These are versions Trew took off a name and could not put back beside it. " +
+        "These are versions TrewSync took off a name and could not put back beside it. " +
         "Recovering one writes a visible copy next to the note it came from. The hidden " +
         "copy is left where it is.",
     });
@@ -4777,12 +5020,12 @@ class StrandedModal extends Modal {
               try {
                 const at = await this.plugin.recoverDisplaced(version);
                 new Notice(
-                  `Trew: recovered to ${at}. The hidden copy is still at ${version.at}.`,
+                  `TrewSync: recovered to ${at}. The hidden copy is still at ${version.at}.`,
                   15_000,
                 );
                 await this.load();
               } catch (err) {
-                new Notice(`Trew: ${(err as Error).message}`, 10_000);
+                new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
                 b.setDisabled(false).setButtonText("Recover a visible copy");
               } finally {
                 this.working.delete(version.at);
@@ -4871,7 +5114,7 @@ export interface Connection {
 export function describeConnection(at: Connection): string {
   return at.server === undefined
     ? `Not connected to ${at.url}.`
-    : `Connected to ${at.url}. Protocol ${at.server.proto}, trew ${at.server.version}.`;
+    : `Connected to ${at.url}. Protocol ${at.server.proto}, trewd ${at.server.version}.`;
 }
 
 /**
@@ -4884,7 +5127,7 @@ export function describeConnection(at: Connection): string {
  * `panel-shots.test.ts` guards this line as one of the things "paid for in
  * incidents". What it says is the opposite of what Basalt's said: Basalt could
  * tell somebody on a plain hop that their notes were still sealed and only the
- * credential was exposed. Trew has no end-to-end encryption, so a hop without
+ * credential was exposed. TrewSync has no end-to-end encryption, so a hop without
  * TLS exposes the notes themselves as well as the device credential, and a
  * line that named only the credential would understate it.
  *
@@ -4948,7 +5191,7 @@ function longStatus(state: State): string {
       // Last, and unconditional on the count, because it is the sentence that
       // says the count may be wrong.
       if (state.recoveryUnknown !== undefined) {
-        parts.push(`Trew cannot tell what is waiting: ${state.recoveryUnknown}.`);
+        parts.push(`TrewSync cannot tell what is waiting: ${state.recoveryUnknown}.`);
       }
       return parts.join(" ");
     }

@@ -49,7 +49,7 @@
  * check: that the walk really reached every state and captured something real
  * in each.
  *
- * Everything here runs against the stub in `stub.ts` and a real `trew`, so
+ * Everything here runs against the stub in `stub.ts` and a real `trewd`, so
  * the panel being captured is the panel the plugin builds, not a description
  * of it.
  */
@@ -405,7 +405,7 @@ const setState = (plugin: Testable, state: unknown): void =>
 /**
  * Every panel state, walked and captured.
  *
- * Against a real `trew`, because the paired states are the ones with rows
+ * Against a real `trewd`, because the paired states are the ones with rows
  * in them and a paired panel is one that talked to a server. The caller owns
  * the server and the returned plugins: `onunload` on each, in reverse, and
  * then the server.
@@ -512,6 +512,23 @@ export async function walkPanelStates(
     ),
   );
   closePanel();
+
+  // Revoked: the pairing form in place of the paired panel, whose every row
+  // needs the credential the server has just refused (M3's second finding).
+  setState(laptop, {
+    kind: "stopped",
+    why: "this device was revoked and may no longer sync this vault; pair it again with a new invite",
+    recovery: "pair-again",
+  });
+  openPanel(laptop);
+  shots.push(
+    shotOfOpenPanel(
+      "stopped-revoked",
+      "The server refuses this device's credential. The panel says so, says the notes are kept, " +
+        "and offers the pairing form, and nothing that needs the refused credential.",
+    ),
+  );
+  closePanel();
   setState(laptop, {
     kind: "synced",
     summary: "up to date",
@@ -534,7 +551,7 @@ export async function walkPanelStates(
   shots.push(
     shotOfOpenPanel(
       "devices-listed-last-device",
-      "One device, and its row can be revoked too: the last device may be, and trew invite on the server brings one back.",
+      "One device, and its row can be revoked too: the last device may be, and trewd invite on the server brings one back.",
     ),
   );
   closePanel();
@@ -694,7 +711,7 @@ export async function walkPanelStates(
 }
 
 const HEADER = [
-  "The Trew panel, in every state it has.",
+  "The TrewSync panel, in every state it has.",
   "",
   "Not a screenshot, and it cannot be one: a picture of this panel needs Obsidian,",
   "which is proprietary and is not on a CI runner, and every pixel of its",
@@ -748,7 +765,7 @@ export function asHtml(shots: Shot[]): string {
   return [
     "<!doctype html>",
     '<html lang="en"><head><meta charset="utf-8">',
-    "<title>Trew panel states</title>",
+    "<title>TrewSync panel states</title>",
     "<style>",
     "body{font:14px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;color:#222}",
     "pre{background:#f6f6f6;padding:1rem;overflow-x:auto;font:12px/1.45 ui-monospace,monospace}",
@@ -757,7 +774,7 @@ export function asHtml(shots: Shot[]): string {
     "header p{white-space:pre-wrap}",
     "@media(prefers-color-scheme:dark){body{background:#181818;color:#ddd}pre{background:#222}.why{color:#aaa}}",
     "</style></head><body>",
-    "<h1>Trew panel states</h1>",
+    "<h1>TrewSync panel states</h1>",
     `<header><p>${escape(HEADER)}</p></header>`,
     `<nav><ol>\n${nav}\n</ol></nav>`,
     body,

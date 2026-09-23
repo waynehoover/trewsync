@@ -1,4 +1,4 @@
-// Package server speaks the Trew protocol over a WebSocket.
+// Package server speaks the TrewSync protocol over a WebSocket.
 //
 // It owns session state and message dispatch. Durability lives in the store and
 // the chunk layer below it; this package's whole contribution to "do not lose a
@@ -69,7 +69,7 @@ const (
 	// other device and pair it, and short enough that an invite left in a chat
 	// or a log is dead soon after. An invite token is a bearer credential for
 	// the whole vault, so a device is not allowed to mint a longer one; the
-	// operator can, with `trew invite -ttl`, including one that never
+	// operator can, with `trewd invite -ttl`, including one that never
 	// expires, on the server, where the choice is deliberate.
 	DefaultInviteTTL = time.Hour
 	MaxInviteTTL     = time.Hour
@@ -278,6 +278,17 @@ type Server struct {
 	// what rules it out, but no amount of concurrency reliably produces it, and
 	// an invariant that holds only because a disk is slow is not one to rely on.
 	afterAppend func(uid int64)
+
+	// abandonBodies runs when readBodies gives up on an exchange part way,
+	// after the refusal has been queued and before the batch writer is closed,
+	// and is nil in every non-test build.
+	//
+	// The refusal leaves first, so a client can read it while a body it sent
+	// earlier in the exchange is still on its way to the disk. That window is
+	// as wide as one body write and there is no telling from outside when it
+	// has closed, so a test holds it open here to see that nothing treats the
+	// session as over, Shutdown included, until the writer has been closed.
+	abandonBodies func()
 
 	// commitMu makes appending an entry and announcing it one step.
 	//
@@ -544,7 +555,7 @@ func (s *Server) SetPerFileMax(max int64) {
 // read and chunked the file to find out. There is no floor beyond one byte: a
 // ceiling set low only refuses files, and refusing is the safe direction.
 //
-// Exported because `trew service` writes the flag into a unit and has to
+// Exported because `trewd service` writes the flag into a unit and has to
 // check it against the vault first, and two copies of this arithmetic would be
 // two answers to "what will this unit actually run with".
 func ClampPerFileMax(max int64) int64 {

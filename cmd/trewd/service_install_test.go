@@ -27,7 +27,7 @@ func TestServiceInstallKeepsReviewedUnit(t *testing.T) {
 	dir := t.TempDir()
 	reviewed := mustRun(t, "service", "-data", filepath.Join(dir, "my notes"),
 		"-addr", "127.0.0.1:4312", "-vault", "personal notes", "-user", "trew",
-		"-binary", "/opt/my tools/trew", "-max-file", "134217728")
+		"-binary", "/opt/my tools/trewd", "-max-file", "134217728")
 	if err := os.WriteFile(filepath.Join(dir, "trew.service"), []byte(reviewed), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestServiceInstallKeepsReviewedUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrapper := "#!/bin/sh\nexec \"$TREW_SERVICE_TEST_BINARY\" -test.run=^TestServiceInstallKeepsReviewedUnit$ -- \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "trew"), []byte(wrapper), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "trewd"), []byte(wrapper), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("sh", "-c", command)
