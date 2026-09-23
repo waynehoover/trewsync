@@ -873,7 +873,24 @@ export class Engine {
    * too large shortens it. Without the fingerprint the path stayed written
    * off until the application restarted, and nothing said so.
    */
-  private readonly skipped = new Map<string, { why: string; fingerprint: string }>();
+  private readonly skipped = new Map<
+    string,
+    { why: string; fingerprint: string; code?: string | undefined }
+  >();
+
+  /**
+   * Whether a path has left the server's live set since the last pass: a
+   * deletion or a move arrived, or this device committed one.
+   *
+   * A `collision` is written off against this device's file, and its cause is
+   * a live path somewhere else. When that path goes, renamed or deleted on
+   * whichever device holds it, nothing about the file here changes, so a
+   * write-off that waited for the file to change waited for ever and the note
+   * never synced (cli/clash.test.ts, "syncs once the disagreement is
+   * resolved"). So a pass after the live set shrinks tries every collision
+   * again, once; one that still collides is written off again.
+   */
+  private liveSetShrank = false;
 
   /**
    * Paths from other devices this one will not act on, and why. Counted as
@@ -1365,6 +1382,9 @@ export class Engine {
       this.remote.set(path, state);
       this.pending.add(path);
     }
+    if (batch.entries.some((e) => e.deleted || (e.prev !== undefined && e.prev !== ""))) {
+      this.liveSetShrank = true;
+    }
     this.cursor = batch.to;
   }
 
@@ -1649,6 +1669,12 @@ export class Engine {
 
   private async pass(opts: SyncOptions = {}): Promise<SyncReport> {
     const report = emptyReport();
+    if (this.liveSetShrank) {
+      this.liveSetShrank = false;
+      for (const [path, skip] of this.skipped) {
+        if (skip.code === "collision") this.skipped.delete(path);
+      }
+    }
     // One closure per pass, captured once. `phases` stays undefined when
     // timing is off, and `into` returns immediately, so the cost of carrying
     // this is one property read and one comparison per boundary.
@@ -1853,7 +1879,13 @@ export class Engine {
       // is the only place a non-canonical name can come from. Asking about
       // every path in the vault instead was 1.3 s of samples in a profile of
       // a settled pass, for a question whose answer is no for all of them.
-      const refused = onDisk.has(path) ? undefined : this.refusedName(path);
+      // And only for a name the server holds. A path this device wrote and the
+      // server refused is not a name from another device: once its file is
+      // renamed away, which is what the refusal asks for, it is nowhere, and
+      // reporting it as refused "from another device" on every pass after
+      // would keep a stranded path on screen that no longer exists.
+      const refused =
+        onDisk.has(path) || !this.remote.has(path) ? undefined : this.refusedName(path);
       if (refused !== undefined) {
         if (this.refusedInbound.get(path) !== refused) {
           this.log("refused a path from another device", path, refused);
@@ -1898,7 +1930,14 @@ export class Engine {
         continue;
       }
       const skip = this.skipped.get(path);
-      if (skip) {
+      // A write-off about a file this device holds, when the file is gone and
+      // the server never took it, is about nothing: the person did what the
+      // refusal asked and renamed or removed it. A write-off with a version on
+      // the server is about that version, and stays until the file changes.
+      if (skip && !onDisk.has(path) && !this.remote.has(path)) {
+        this.skipped.delete(path);
+        this.log("written-off file is gone, and the server never had it", path);
+      } else if (skip) {
         if (fingerprintOf(this.entries.get(path)) === skip.fingerprint) {
           noteSkipped(report, path);
           continue;
@@ -2818,6 +2857,9 @@ export class Engine {
       // peer edits it before the ack arrives. Record that local checkpoint
       // and any source retirement, while preserving the newer remote head.
       q.commit(result.uid, remoteIsNewer);
+      if (q.entry.meta.deleted === true || (q.entry.meta.prev ?? "") !== "") {
+        this.liveSetShrank = true;
+      }
       if (remoteIsNewer) {
         report.waiting++;
         this.again = true;
@@ -4686,9 +4728,13 @@ export class Engine {
       ["badentry", "badname", "toolarge", "neversync", "badpath", "collision"].includes(code);
 
     if (permanent) {
+      const next = nextStepFor(code);
       this.skipped.set(path, {
-        why: `${message} ${nextStepFor(code)}`.trim(),
+        // Two sentences, so the server's reason and the remedy do not run
+        // into each other: "... a control character. Rename it ...".
+        why: next === "" ? message : `${/[.!?]$/.test(message) ? message : `${message}.`} ${next}`,
         fingerprint: fingerprintOf(this.entries.get(path)),
+        code,
       });
       noteSkipped(report, path);
       this.log("skipped for good", path, message);
