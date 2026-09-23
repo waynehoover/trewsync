@@ -49,8 +49,8 @@ export interface IndexEntry {
    *
    * The same cache one level further on. Obsidian stops at the hash because it
    * uploads whole files; Trew uploads chunks, so re-deriving the chunk list
-   * for an unchanged file would mean re-reading, re-chunking, re-compressing
-   * and re-encrypting it to learn something already known.
+   * for an unchanged file would mean re-reading, re-chunking and re-hashing it
+   * to learn something already known.
    */
   chunks: string[];
   /** Content hash as of the last successful sync. The merge base. */

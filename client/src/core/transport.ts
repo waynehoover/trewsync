@@ -379,9 +379,11 @@ export class ProtocolError extends Error {
 function errorFrom(frame: Reply): ProtocolError {
   const retryable = frame["retryable"];
   const after = frame["retryAfterMs"];
+  const code = frame["code"];
+  const msg = frame["msg"];
   return new ProtocolError(
-    String(frame["code"] ?? "unknown"),
-    String(frame["msg"] ?? "no message"),
+    typeof code === "string" ? code : "unknown",
+    typeof msg === "string" ? msg : "no message",
     {
       retryable: typeof retryable === "boolean" ? retryable : undefined,
       retryAfterMs: typeof after === "number" && after > 0 ? after : undefined,
@@ -1885,7 +1887,7 @@ export class Transport {
     // somebody a short list that looks complete, and the note they are
     // looking for is exactly the one that might be missing from it.
     return {
-      entries: entriesOf(reply["entries"], "deleted") as WireDeletion[],
+      entries: entriesOf(reply["entries"], "deleted"),
       more: reply["more"] === true,
     };
   }
@@ -2250,7 +2252,7 @@ export class Transport {
       createdAt: num("createdAt"),
       lastSeen: num("lastSeen"),
       online: row["online"],
-      applied: row["applied"] as number | null,
+      applied: row["applied"],
     };
   }
 

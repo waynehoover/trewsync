@@ -20,7 +20,7 @@ export function deferred<T = void>(): {
 
 /**
  * Call after a peer's write has been acknowledged. Its broadcast is already
- * queued ahead of this pong; then wait for metadata authentication to finish.
+ * queued ahead of this pong; then wait for the engine to finish applying it.
  */
 export async function receiveCommitted(transport: Transport): Promise<void> {
   await transport.ping();

@@ -437,9 +437,8 @@ const CLAMPED_192: ChunkSizes = { min: 192, avg: 192, max: 192 };
 const CLAMPED_193: ChunkSizes = { min: 193, avg: 193, max: 193 };
 /**
  * Binary sizes as protocol 1's sizesFor gives them at the default ceiling: the
- * whole MiB, with no seal overhead reserved. Today's sizesFor still reserves
- * it (sizesForV1 in the fixture file says why); chunkBytes takes sizes as
- * given, so the corpus can pin the protocol 1 ones already.
+ * whole MiB, with nothing reserved below it, since `chunkMax` bounds raw bytes
+ * and a frame's marker byte sits on top.
  */
 const BINARY: ChunkSizes = BINARY_SIZES;
 

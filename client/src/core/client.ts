@@ -92,7 +92,7 @@ export interface ClientOptions {
   /** The path being worked on, and undefined when a pass ends. */
   readonly onProgress?: (path: string | undefined) => void;
   readonly onTransfer?: (activity: TransferActivity | undefined) => void;
-  /** Authenticated history loading, before connect() permits syncing. Cursors are not file counts. */
+  /** History loading, before connect() permits syncing. Cursors are not file counts. */
   readonly onCatchUp?: (at: { local: number; server: number }) => void;
   /**
    * Called with the report of every pass, whatever started it.

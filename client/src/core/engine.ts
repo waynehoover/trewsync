@@ -132,7 +132,7 @@ function packed(e: IndexEntry): Record<string, unknown> {
 
 /** The inverse, putting back what `packed` left to be derived. */
 function unpacked(path: string, raw: Record<string, unknown>): IndexEntry {
-  const e = { ...newEntry(path), ...raw } as IndexEntry;
+  const e: IndexEntry = { ...newEntry(path), ...raw };
   if (raw["hash"] === undefined) e.hash = contentId(e.chunks);
   if (raw["synchash"] === undefined) e.synchash = e.hash;
   return e;
@@ -1621,7 +1621,7 @@ export class Engine {
     if (!first && !removedFolders.length) return;
     const preview = await this.preview(stats);
     if (first) {
-      if (!(await this.opts.confirmFirstSync!(preview)))
+      if (!(await this.opts.confirmFirstSync(preview)))
         throw new Error("First sync paused for review.");
       this.firstSyncConfirmed = true;
     }
@@ -3410,7 +3410,7 @@ export class Engine {
         continue;
       }
       for (const d of group) {
-        const other = localInTheWay ? local! : group.find((g) => g.path !== d.path)!.path;
+        const other = localInTheWay ? local : group.find((g) => g.path !== d.path)!.path;
         report.blocked++;
         if (report.inTheWay.length < LISTED_PATHS) {
           report.inTheWay.push({ path: d.path, blockedBy: other });
