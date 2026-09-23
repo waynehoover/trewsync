@@ -1849,7 +1849,7 @@ export default class TrewPlugin extends Plugin {
       // and is about to remove, and starting a loop on it would put the
       // pairing back (F23, R10).
       if (mine !== this.generation) {
-        throw retiredPairing(await whatTheDiskHolds(() => this.readConfig()), this.dataPath);
+        throw this.retiredPairing(await whatTheDiskHolds(() => this.readConfig()));
       }
       this.config = paired;
       this.start();
@@ -1885,7 +1885,7 @@ export default class TrewPlugin extends Plugin {
     // A run retired while this was in flight, by an unlink or an unload, is
     // answered in its own words: what the disk holds is what the retirement
     // left, not what the server said.
-    if (mine !== this.generation) return retiredPairing(remains, this.dataPath);
+    if (mine !== this.generation) return this.retiredPairing(remains);
     const advice = adviseAfterPairing({ remains, surface: "panel", where: this.dataPath });
     if (remains.kind === "pending" || remains.kind === "credential") {
       this.config = remains.config;
@@ -1905,6 +1905,22 @@ export default class TrewPlugin extends Plugin {
       return new Error(`${err.message} Trew is finishing it now, and keeps trying until it has.`);
     }
     return new Error(`${err.message}. ${advice}`);
+  }
+
+  /**
+   * What a pairing retired under it says, from what the disk holds and
+   * whether an unlink is what retired it.
+   *
+   * An unlink in progress counts as an empty disk whatever the disk says at
+   * this moment, because it is about to remove the pending pairing: reading
+   * the file a moment before the unlink writes it would otherwise report as
+   * saved a pairing that is about to be gone.
+   */
+  private retiredPairing(remains: PairingRemains): Error {
+    return retiredPairing(
+      this.unlinking !== undefined ? { kind: "nothing" } : remains,
+      this.dataPath,
+    );
   }
 
   /* ------------------------------------------------------------ *

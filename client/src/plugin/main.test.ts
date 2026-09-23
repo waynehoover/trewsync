@@ -4800,6 +4800,23 @@ describe("the device list in the panel", () => {
     expect(notices.map((n) => n.message).join(" ")).toMatch(/can no longer add a device/);
     expect((await first.plugin.devices()).invites).toHaveLength(0);
 
+    // An invite that never expires, which only `trew invite -ttl 0` on the
+    // server makes, says so rather than showing a date, and its label is on
+    // the row.
+    await server.invite({ ttl: "0", label: "for the tablet" });
+    built.length = 0;
+    first.plugin.commands.find((c) => c.id === "show-status")!.callback!();
+    await built.find((s) => s.name === "Devices")!.buttons[0]!.click();
+    await until("the list to arrive", () =>
+      built.some((s) => s.name === "Outstanding invite: for the tablet"),
+    );
+    const forever = built.find((s) => s.name === "Outstanding invite: for the tablet")!;
+    expect(forever.desc).toMatch(/^Does not expire · ID /);
+    const listedNow = (await first.plugin.devices()).invites;
+    expect(listedNow.map((i) => [i.label, i.expiresAt])).toEqual([["for the tablet", null]]);
+    await forever.buttons.find((b) => b.label === "Cancel")!.click();
+    expect((await first.plugin.devices()).invites).toHaveLength(0);
+
     // And the string it cancelled no longer pairs anything.
     const second = await load();
     await expect(second.plugin.pair(issued.invite, "phone")).rejects.toThrow(/auth/i);
