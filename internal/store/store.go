@@ -1878,15 +1878,18 @@ type Fault struct {
 	Detail string
 }
 
+// String is the fault as a person reads it. The path is quoted: paths are in
+// the clear now, and one the policy refuses may hold a character that would
+// otherwise forge a line of the report it is printed in.
 func (f Fault) String() string {
 	switch {
 	case f.Row != "":
 		return fmt.Sprintf("vault %s %s: %s (%s)", f.VaultID, f.Row, f.Reason, f.Detail)
 	case f.Chunk == "":
-		return fmt.Sprintf("vault %s uid %d: %s (%s)", f.VaultID, f.UID, f.Reason, f.Detail)
+		return fmt.Sprintf("vault %s uid %d %q: %s (%s)", f.VaultID, f.UID, f.Path, f.Reason, f.Detail)
 	default:
-		return fmt.Sprintf("vault %s uid %d chunk %s: %s (%s)",
-			f.VaultID, f.UID, f.Chunk, f.Reason, f.Detail)
+		return fmt.Sprintf("vault %s uid %d %q chunk %s: %s (%s)",
+			f.VaultID, f.UID, f.Path, f.Chunk, f.Reason, f.Detail)
 	}
 }
 
@@ -1947,10 +1950,96 @@ func (s *Store) Verify(deep bool) (Verification, error) {
 		return v, err
 	}
 
+	// The size invariant, from what is on the disk, for every version whose
+	// chunks are all present and sound: a chunk already reported missing or
+	// corrupt has no length worth comparing, and a second fault for it would
+	// be noise on the one report somebody reads to find the first.
+	unsound := map[entryKey]bool{}
+	for _, f := range v.Faults {
+		if f.Chunk != "" {
+			unsound[entryKey{f.VaultID, f.UID}] = true
+		}
+	}
+	sizeFaults, err := s.verifySizes(unsound)
+	v.Faults = append(v.Faults, sizeFaults...)
+	if err != nil {
+		return v, err
+	}
+
 	registryFaults, rowsChecked, err := s.verifyRegistry()
 	v.Faults = append(v.Faults, registryFaults...)
 	v.Rows = rowsChecked
 	return v, err
+}
+
+// entryKey names one version across vaults.
+type entryKey struct {
+	vault string
+	uid   int64
+}
+
+// verifySizes is the size invariant, checked again from what is on the disk:
+// every version with a body declares exactly the sum of its chunks' lengths
+// (plan/protocol.md, "Chunk bodies"). The commit refuses one that does not
+// (ErrSizeMismatch), so a fault here is a row written behind the store's back,
+// or a body that is not the one its version was committed with, and a reader
+// assembling it gets a file of the wrong length.
+//
+// Lengths are stat sizes, once per distinct chunk: the deep pass before this
+// has read and hashed every body, so a body whose length is wrong is also a
+// body that failed its hash, and the stat is enough. The map is one entry per
+// distinct chunk, which is what a deep verify already walks.
+func (s *Store) verifySizes(skip map[entryKey]bool) ([]Fault, error) {
+	rows, err := s.db.Query(
+		`SELECT e.vault_id, e.uid, e.path, e.size, c.name
+		   FROM entries e JOIN entry_chunks c
+		     ON c.vault_id = e.vault_id AND c.uid = e.uid
+		  WHERE e.folder = 0 AND e.deleted = 0
+		  ORDER BY e.vault_id, e.uid, c.ord`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type chunkKey struct{ vault, name string }
+	sizes := map[chunkKey]int64{}
+	var faults []Fault
+	var cur Fault
+	var declared, sum int64
+	unknown, open := false, false
+	flush := func() {
+		if open && !unknown && !skip[entryKey{cur.VaultID, cur.UID}] && sum != declared {
+			f := cur
+			f.Reason = "badsize"
+			f.Detail = fmt.Sprintf("declares %d bytes and its chunks hold %d, so it assembles to a file of "+
+				"the wrong length", declared, sum)
+			faults = append(faults, f)
+		}
+	}
+	for rows.Next() {
+		var vault, path, name string
+		var uid, size int64
+		if err := rows.Scan(&vault, &uid, &path, &size, &name); err != nil {
+			return faults, err
+		}
+		if !open || vault != cur.VaultID || uid != cur.UID {
+			flush()
+			cur = Fault{VaultID: vault, UID: uid, Path: path}
+			declared, sum, unknown, open = size, 0, false, true
+		}
+		k := chunkKey{vault, name}
+		n, ok := sizes[k]
+		if !ok {
+			if n, ok = s.chunks.Size(vault, name); !ok {
+				// Missing, which the deep pass has reported already.
+				unknown = true
+				continue
+			}
+			sizes[k] = n
+		}
+		sum += n
+	}
+	flush()
+	return faults, rows.Err()
 }
 
 func (s *Store) verifyChunkRefs(deep bool) (faults []Fault, count int, err error) {
