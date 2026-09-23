@@ -27,6 +27,12 @@ import (
 //     space.
 //   - "</ div>" starts nothing to micromark and a type 6 block to goldmark.
 //   - "meta" is not a type 6 name to micromark.
+//   - A complete tag on a lazy line starts a type 7 block, inside the
+//     containers the line did not continue (keepLazy); to goldmark it is
+//     more of the paragraph.
+//
+// The same file holds the list rules that differ (listStartParser), since
+// the lazy-line rule reaches into the containers too.
 
 // htmlRawNames and htmlBlockNames are micromark-util-html-tag-name's lists.
 var (
@@ -194,80 +200,81 @@ func (h htmlFlowParser) Open(parent ast.Node, reader text.Reader, pc parser.Cont
 	if pos < 0 || pos >= len(line) {
 		return nil, parser.NoChildren
 	}
-	// A paragraph deeper than parent means this line did not continue the
-	// paragraph's containers: it is a lazy line. micromark lets a complete
-	// tag start a block on a lazy line, though not when interrupting a
-	// paragraph in its own container.
-	last := pc.LastOpenedBlock().Node
-	lazy := ast.IsParagraph(last) && last.Parent() != parent
-	kind := htmlFlowKind(line[pos:], ast.IsParagraph(last) && !lazy)
+	// A complete tag does not interrupt a paragraph, except on a lazy line
+	// (see keepLazy).
+	interrupt := ast.IsParagraph(pc.LastOpenedBlock().Node) && !lazyLine(reader, pc)
+	kind := htmlFlowKind(line[pos:], interrupt)
 	if kind == 0 {
 		return nil, parser.NoChildren
 	}
 	node := ast.NewHTMLBlock(ast.HTMLBlockType(kind))
 	reader.AdvanceToEOL()
 	node.Lines().Append(segment)
-	if r := recordOf(pc); lazy && kind == 7 && r != nil {
-		// The block belongs to the containers the lazy line left: it ends
-		// at the first line that does not continue them.
-		var chain []ast.Node
-		for c := last.Parent(); c != nil && c != parent; c = c.Parent() {
-			chain = append([]ast.Node{c}, chain...)
-		}
-		r.lazyChains[node] = chain
-	}
 	return node, parser.NoChildren
 }
 
-func (h htmlFlowParser) Continue(node ast.Node, reader text.Reader, pc parser.Context) parser.State {
-	if r := recordOf(pc); r != nil {
-		if chain, ok := r.lazyChains[node]; ok {
-			// A line that does not carry the containers' markers, or is
-			// blank after them, ends the block: it is lazy, or it is the
-			// blank line that ends a complete-tag block.
-			line, _ := reader.PeekLine()
-			if at, ok := continuesChain(line, chain); !util.IsBlank(line) && (!ok || util.IsBlank(line[at:])) {
-				return parser.Close
-			}
+// lazyKey marks the line keepLazy kept containers open for.
+var lazyKey = parser.NewContextKey()
+
+// keepLazy is how micromark reads a lazy line, one that does not carry the
+// markers of the containers a paragraph is in, when it starts a complete tag:
+// as an HTML block, inside those containers, interrupting the paragraph.
+// CommonMark, and goldmark, read the line as more of the paragraph. So in
+// "> a\n<b>\n> #t" the tag is inside HTML to Basalt, and in "2) a\n<b>\n\n\tc"
+// the last line is still in the list item. A container wrapper calls this
+// when goldmark would close the container for the line: it reports whether
+// to keep it open instead, and marks the line for htmlFlowParser.
+func keepLazy(node ast.Node, reader text.Reader, pc parser.Context) bool {
+	last := pc.LastOpenedBlock().Node
+	if last == nil || !ast.IsParagraph(last) {
+		return false
+	}
+	inside := false
+	for p := last.Parent(); p != nil; p = p.Parent() {
+		if p == node {
+			inside = true
+			break
 		}
 	}
-	return h.BlockParser.Continue(node, reader, pc)
+	line, _ := reader.PeekLine()
+	w, pos := util.IndentWidth(line, reader.LineOffset())
+	if !inside || w > 3 || pos >= len(line) || htmlFlowKind(line[pos:], false) != 7 {
+		return false
+	}
+	n, _ := reader.Position()
+	pc.Set(lazyKey, n)
+	return true
 }
 
-// continuesChain reports whether line, from where its parent containers'
-// markers end, carries the markers of chain as well, and where they end: a
-// ">" for each quote, and for each list item at least its content's
-// indentation. It is goldmark's own continuation rule for those containers,
-// applied without consuming.
-func continuesChain(line []byte, chain []ast.Node) (int, bool) {
-	i := 0
-	for _, c := range chain {
-		switch n := c.(type) {
-		case *ast.Blockquote:
-			j := i
-			for j < len(line) && j-i < 3 && line[j] == ' ' {
-				j++
-			}
-			if j >= len(line) || line[j] != '>' {
-				return i, false
-			}
-			j++
-			if j < len(line) && (line[j] == ' ' || line[j] == '\t') {
-				j++
-			}
-			i = j
-		case *ast.ListItem:
-			if w, _ := util.IndentWidth(line[i:], 0); w < n.Offset {
-				return i, false
-			}
-			p, _ := util.IndentPosition(line[i:], 0, n.Offset)
-			if p < 0 {
-				return i, false
-			}
-			i += p
-		}
+// lazyLine reports whether keepLazy marked the reader's line.
+func lazyLine(reader text.Reader, pc parser.Context) bool {
+	n, _ := reader.Position()
+	marked, ok := pc.Get(lazyKey).(int)
+	return ok && marked == n
+}
+
+// quoteParser is goldmark's blockquote parser, kept open for a lazy line
+// that starts an HTML block.
+type quoteParser struct{ parser.BlockParser }
+
+func (q quoteParser) Continue(node ast.Node, reader text.Reader, pc parser.Context) parser.State {
+	state := q.BlockParser.Continue(node, reader, pc)
+	if state&parser.Continue == 0 && keepLazy(node, reader, pc) {
+		return parser.Continue | parser.HasChildren
 	}
-	return i, true
+	return state
+}
+
+// itemParser is goldmark's list item parser, kept open for a lazy line that
+// starts an HTML block.
+type itemParser struct{ parser.BlockParser }
+
+func (l itemParser) Continue(node ast.Node, reader text.Reader, pc parser.Context) parser.State {
+	state := l.BlockParser.Continue(node, reader, pc)
+	if state&parser.Continue == 0 && keepLazy(node, reader, pc) {
+		return parser.Continue | parser.HasChildren
+	}
+	return state
 }
 
 // listStartParser is goldmark's list parser with micromark's rule for a list
@@ -280,8 +287,34 @@ func continuesChain(line []byte, chain []ast.Node) (int, bool) {
 //     (">-" after a paragraph line is a quote holding the text "-", not an
 //     empty list);
 //   - to a list that starts while an indented code block is still open, on
-//     the next line or after blank lines, until a line that is not indented.
+//     the next line or after blank lines, until a line that is not indented;
+//   - but not after an indented code block that began on the line that
+//     closed a quote or list (codeAfterClosedContainer).
 type listStartParser struct{ parser.BlockParser }
+
+// Continue is goldmark's, with two differences. goldmark marks an empty
+// item followed by a blank line in a flag every list shares, so an empty item
+// in a nested list closed the lists around it as well: in "- -\n\n    #t"
+// the tag is in the outer item to micromark, and was code to goldmark. And
+// the list stays open for a lazy line that starts an HTML block (keepLazy).
+func (l listStartParser) Continue(node ast.Node, reader text.Reader, pc parser.Context) parser.State {
+	line, _ := reader.PeekLine()
+	state := l.BlockParser.Continue(node, reader, pc)
+	if state&parser.Continue != 0 {
+		return state
+	}
+	if item, ok := node.LastChild().(*ast.ListItem); ok && item.ChildCount() > 0 && !util.IsBlank(line) {
+		// For a line that continues a last item with content, goldmark
+		// closes the list only for that shared flag.
+		if w, _ := util.IndentWidth(line, reader.LineOffset()); w >= item.Offset {
+			return parser.Continue | parser.HasChildren
+		}
+	}
+	if keepLazy(node, reader, pc) {
+		return parser.Continue | parser.HasChildren
+	}
+	return state
+}
 
 func (l listStartParser) Open(parent ast.Node, reader text.Reader, pc parser.Context) (ast.Node, parser.State) {
 	if line, _ := reader.PeekLine(); interruptedFlow(parent, reader) {
@@ -339,9 +372,16 @@ func interruptedFlow(parent ast.Node, reader text.Reader) bool {
 // the next line interrupting.
 func codeAfterClosedContainer(code *ast.CodeBlock, src []byte) bool {
 	prev := code.PreviousSibling()
-	// Only while the code is that one lazy line: the next line of code is an
-	// ordinary one, and from it on the block interrupts as any other.
-	if prev == nil || code.Lines().Len() != 1 {
+	// Only while the code is that one lazy line, and blank lines after it:
+	// the next line of code is an ordinary one, and from it on the block
+	// interrupts as any other.
+	lines, text := code.Lines(), 0
+	for i := 0; i < lines.Len(); i++ {
+		if line := lines.At(i); !util.IsBlank(src[line.Start:line.Stop]) {
+			text++
+		}
+	}
+	if prev == nil || text != 1 {
 		return false
 	}
 	switch prev.(type) {

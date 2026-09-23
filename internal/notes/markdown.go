@@ -1,6 +1,7 @@
 package notes
 
 import (
+	"bytes"
 	"sort"
 	"strings"
 
@@ -22,15 +23,22 @@ import (
 // markdown_test.go:
 //
 //   - A lone carriage return ends a line for micromark and not for goldmark,
-//     so goldmark is given a copy with each lone CR turned into LF. The byte
-//     offsets are unchanged.
-//   - Link destinations and titles: see goldmark_link.go.
+//     so goldmark is given a copy with each lone CR turned into LF, and the
+//     CR of a CRLF turned into a space. The byte offsets are unchanged.
+//   - An inline declaration may begin with a lowercase letter ("<!z>");
+//     goldmark wants a capital (rawHTMLParser).
+//   - HTML blocks and the lists around them: see htmlflow.go.
+//   - Link destinations, titles and definitions: see goldmark_link.go.
+//   - A fence after part of a tab a container consumed: goldmark's position
+//     for it is off by the rest of the tab (fenceParser).
 //
-// Range ends inside trailing whitespace are not always where micromark puts
-// them (it sometimes keeps a closing line ending in a code block, and a
-// definition's trailing spaces). No consumer can tell: every use asks whether
-// a "#", a "%%" or a link begins inside a range, and none of those begins
-// with whitespace.
+// Where a range starts or ends inside whitespace is not always where
+// micromark puts it: an indented code block starts at its indentation to
+// micromark and after it here, and micromark sometimes keeps a closing line
+// ending, or a definition's trailing spaces. No consumer can tell: every use
+// asks whether a "#", a "%%" or a link begins inside a range, and none of
+// those begins with whitespace, so the oracle compares the characters that
+// are not whitespace.
 
 // markdownRecord is what the wrapped parsers write down during one parse.
 type markdownRecord struct {
@@ -39,7 +47,6 @@ type markdownRecord struct {
 	fenceEnds   map[ast.Node]int       // fenced code blocks: end of the last line they hold
 	links       []linkRecord           // inline links, images and definitions
 	definitions map[ast.Node]bool
-	lazyChains  map[ast.Node][]ast.Node // HTML blocks opened on a lazy line: the containers it left
 }
 
 // linkRecord is one link, image or definition: its whole extent and its
@@ -86,6 +93,35 @@ func (s spanParser) Parse(parent ast.Node, block text.Reader, pc parser.Context)
 		}
 	}
 	return n
+}
+
+// rawHTMLParser is goldmark's inline HTML parser with micromark's rule for a
+// declaration: "<!" and an ASCII letter of either case, where goldmark wants
+// a capital, then anything up to the next ">", over lines if need be.
+type rawHTMLParser struct{ parser.InlineParser }
+
+func (r rawHTMLParser) Parse(parent ast.Node, block text.Reader, pc parser.Context) ast.Node {
+	line, _ := block.PeekLine()
+	if len(line) < 3 || line[1] != '!' || line[2] < 'a' || line[2] > 'z' {
+		return r.InlineParser.Parse(parent, block, pc)
+	}
+	savedLine, savedSegment := block.Position()
+	node := ast.NewRawHTML()
+	for {
+		line, segment := block.PeekLine()
+		if line == nil {
+			break
+		}
+		if i := bytes.IndexByte(line, '>'); i >= 0 {
+			node.Segments.Append(segment.WithStop(segment.Start + i + 1))
+			block.Advance(i + 1)
+			return node
+		}
+		node.Segments.Append(segment)
+		block.AdvanceLine()
+	}
+	block.SetPosition(savedLine, savedSegment)
+	return nil
 }
 
 // fenceParser wraps the fenced code block parser and records where each
@@ -139,6 +175,10 @@ func newMarkdownParser() parser.Parser {
 			b.Value = htmlFlowParser{p}
 		case parser.NewListParser():
 			b.Value = listStartParser{p}
+		case parser.NewListItemParser():
+			b.Value = itemParser{p}
+		case parser.NewBlockquoteParser():
+			b.Value = quoteParser{p}
 		}
 		blocks = append(blocks, b)
 	}
@@ -146,7 +186,7 @@ func newMarkdownParser() parser.Parser {
 		util.Prioritized(spanParser{parser.NewCodeSpanParser()}, 100),
 		util.Prioritized(&mdLinkParser{}, 200),
 		util.Prioritized(spanParser{parser.NewAutoLinkParser()}, 300),
-		util.Prioritized(spanParser{parser.NewRawHTMLParser()}, 400),
+		util.Prioritized(spanParser{rawHTMLParser{parser.NewRawHTMLParser()}}, 400),
 		util.Prioritized(parser.NewEmphasisParser(), 500),
 	}
 	return parser.NewParser(
@@ -205,7 +245,6 @@ func parseMarkdown(source string, start int) (d *markdownDocument, err error) {
 		fenceStarts: map[ast.Node]int{},
 		fenceEnds:   map[ast.Node]int{},
 		definitions: map[ast.Node]bool{},
-		lazyChains:  map[ast.Node][]ast.Node{},
 	}
 	pc := parser.NewContext()
 	pc.Set(markdownRecordKey, rec)
