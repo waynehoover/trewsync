@@ -122,7 +122,7 @@ func TestI23InvitesAreSingleUseAndExpire(t *testing.T) {
 // in a stable order, and carries nothing that would let a reader redeem one.
 //
 // The listing type has an id, a label and an expiry, which is the property and
-// not an accident of what this test asks for. A Trew invite token is the
+// not an accident of what this test asks for. A TrewSync invite token is the
 // whole credential, so a listing that carried it, or its digest, or anything
 // derived from it, would hand a working invite to every paired device.
 func TestInvitesListsWhatCanStillBeRedeemed(t *testing.T) {
@@ -428,7 +428,7 @@ func TestACrashBetweenRegisteringAndSpendingLeavesNeither(t *testing.T) {
 // leaves one half of a redemption behind, whichever way it lands.
 //
 // The never-empty half is gone with the last-device rule (plan/protocol.md,
-// "Devices and invites": revoking the last device is allowed, and `trew
+// "Devices and invites": revoking the last device is allowed, and `trewd
 // invite` on the server is the way back). What remains is the one that
 // matters: the invite is spent exactly when a device row came of it. The
 // invite is the revoked device's own, so the race has two real outcomes: the
@@ -436,7 +436,7 @@ func TestACrashBetweenRegisteringAndSpendingLeavesNeither(t *testing.T) {
 // cancels the invite, and the redemption is refused.
 //
 // Two handles, because the guarantee has to be in the SQL rather than in
-// writeMu: `trew backup` and `trew purge` run against a live server's
+// writeMu: `trewd backup` and `trewd purge` run against a live server's
 // directory, so the store is opened by more than one process.
 func TestARedeemRacingARevokeLeavesTheVaultConsistent(t *testing.T) {
 	for attempt := 0; attempt < 20; attempt++ {
@@ -601,7 +601,7 @@ func TestALostReplyRetrySucceedsEvenAfterExpiry(t *testing.T) {
 // read then a write atomic within one process, so a single-handle version of
 // this passes against an implementation that reads the invite in a deferred
 // transaction and then marks it. The store is opened by more than one process
-// in earnest anyway, since `trew backup` and `trew purge` run against a
+// in earnest anyway, since `trewd backup` and `trewd purge` run against a
 // live server's directory.
 func TestConcurrentRedemptionsOfOneInviteRegisterExactlyOneDevice(t *testing.T) {
 	const racers = 8

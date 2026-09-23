@@ -151,7 +151,7 @@ describe("a server restored from a backup this device has moved past", () => {
     expect(epochBefore, "the device never stored the epoch it synced under").toBeTruthy();
 
     // A backup, taken the way the runbook takes one: the server stopped and
-    // `trew backup` run against its data directory.
+    // `trewd backup` run against its data directory.
     const offsite = join(await mkdtemp(join(tmpdir(), "trew-epoch-")), "offsite");
     dirs.push(offsite);
     a.close();

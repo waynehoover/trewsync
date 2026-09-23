@@ -140,7 +140,7 @@ type NewInvite struct {
 // issuedBy is the device asking, or empty for the operator, who asks on the
 // server; revoking that device cancels the invite (see RevokeDevice). expiresAt
 // is milliseconds, or nil for an invite that never expires, which is the
-// deliberate choice `trew invite -ttl 0` makes. Sweeping at creation
+// deliberate choice `trewd invite -ttl 0` makes. Sweeping at creation
 // rather than on a timer keeps the table bounded by what was issued since the
 // last issue, with no goroutine to forget to start. Spent rows are not swept:
 // a redemption whose reply was lost is recognised by its row.
@@ -209,7 +209,7 @@ func (s *Store) CreateInvite(vaultID, label, issuedBy string, expiresAt *int64, 
 
 // newInviteID draws an invite id whose encoding does not begin with "-".
 //
-// The id is what a person types to cancel an invite, as `trew uninvite ID`,
+// The id is what a person types to cancel an invite, as `trewd uninvite ID`,
 // and Go's flag package takes arguments as flags until the first positional
 // one, so an id beginning with a dash is read as a flag and refused: the
 // invite could not be cancelled from the command line at all, only waited

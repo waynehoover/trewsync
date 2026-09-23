@@ -192,7 +192,7 @@ func (r *rig) device(name string) (id, key string) {
 	return id, key
 }
 
-// invite mints an invite on the test vault through the store, as `trew
+// invite mints an invite on the test vault through the store, as `trewd
 // invite` on the server would, living ttl from the rig's clock.
 func (r *rig) invite(ttl time.Duration) store.NewInvite {
 	r.t.Helper()

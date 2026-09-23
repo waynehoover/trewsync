@@ -213,7 +213,7 @@ func writeReclaimable(out io.Writer, rec store.Reclaimable, grace time.Duration)
 	// report with every collectible orphan in the tree unexamined.
 	if !rec.Complete {
 		fmt.Fprintln(out, "  the chunk walk stopped before the end of the store, so there is no reclaimable")
-		fmt.Fprintln(out, "  figure here; trew verify says what is in the way")
+		fmt.Fprintln(out, "  figure here; trewd verify says what is in the way")
 		return
 	}
 	// Four distinct answers, because "nothing would come back" has three

@@ -214,7 +214,7 @@ func TestI18PurgeRefusesABackupThatIsMissingHistory(t *testing.T) {
 	if !strings.Contains(err.Error(), "up to uid 6") || !strings.Contains(err.Error(), "at uid 7") {
 		t.Fatalf("the refusal does not give both uids: %v", err)
 	}
-	if !strings.Contains(err.Error(), "trew backup") {
+	if !strings.Contains(err.Error(), "trewd backup") {
 		t.Fatalf("the refusal does not say how to fix it: %v", err)
 	}
 }

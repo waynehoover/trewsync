@@ -32,7 +32,7 @@ func cmdService(args []string, out io.Writer) error {
 	addr := fs.String("addr", ":3003", "listen address the unit should use")
 	vault := fs.String("vault", "default", "the one vault this server serves")
 	runAs := fs.String("user", "", "user to run as (default: whoever is running this)")
-	binary := fs.String("binary", "", "path to the trew binary (default: this one)")
+	binary := fs.String("binary", "", "path to the trewd binary (default: this one)")
 	// The ceiling goes in the unit, because a unit that cannot carry it is how
 	// somebody who ran by hand with -max-file makes that permanent and silently
 	// drops it. serve then refuses to start on a vault holding a larger file,
@@ -53,7 +53,7 @@ func cmdService(args []string, out io.Writer) error {
 	// whoever is typing rather than whoever reads journals (rule 7: say what
 	// the vault holds, not what this command was told).
 	//
-	// Only when there is a data directory to read. `trew service` is
+	// Only when there is a data directory to read. `trewd service` is
 	// normally run before the first serve, on a directory that does not exist
 	// yet, and refusing to print a unit because there is nothing to check
 	// would be refusing the ordinary case. Shared, like verify: this reads and
@@ -73,7 +73,7 @@ func cmdService(args []string, out io.Writer) error {
 		// `openStore` creates the directory, runs `migrate`, applies the
 		// schema and stamps `user_version`. This opens the store to run one
 		// `SELECT`, and it was the last inspection command still writing to
-		// what it inspects: `trew service` silently migrated an older store
+		// what it inspects: `trewd service` silently migrated an older store
 		// just by being asked to print a unit, and could not print one at all
 		// against read-only media.
 		st, err := openForInspection(*dataDir, "read")
@@ -236,7 +236,7 @@ type unitArgs struct {
 func unit(a unitArgs) string {
 	return strings.Join([]string{
 		"[Unit]",
-		"Description=Trew, self-hosted sync for Obsidian",
+		"Description=TrewSync, self-hosted sync for Obsidian",
 		"Documentation=https://github.com/waynehoover/trew",
 		"After=network-online.target",
 		"Wants=network-online.target",

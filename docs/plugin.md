@@ -1,8 +1,8 @@
-# Use Trew in Obsidian
+# Use TrewSync in Obsidian
 
 [Documentation](index.md) · [Server setup](server.md) · [Security and privacy](security.md)
 
-Trew syncs your notes and attachments, shows sync status, and lets you recover
+TrewSync syncs your notes and attachments, shows sync status, and lets you recover
 earlier versions from inside Obsidian. Start with a
 [configured server](server.md) and Obsidian **1.7.2 or newer**.
 
@@ -18,11 +18,11 @@ services for that vault. Each device should have its own local copy.
 2. Create `<vault>/.obsidian/plugins/trew-sync/` and put the three files there.
    If you use a custom Obsidian configuration folder, use that folder instead
    of `.obsidian`.
-3. Reload Obsidian and enable **Trew Sync** under **Settings → Community plugins**.
-4. Open the Trew ribbon icon and choose **Sync settings**, or run
-   **Trew Sync: Show status** from the command palette.
+3. Reload Obsidian and enable **TrewSync** under **Settings → Community plugins**.
+4. Open the TrewSync ribbon icon and choose **Sync settings**, or run
+   **TrewSync: Show status** from the command palette.
 
-Manual installation is required while Trew is outside the community directory.
+Manual installation is required while TrewSync is outside the community directory.
 To upgrade, replace the same three files and reload Obsidian. When a release
 changes the protocol, upgrade the server before its clients.
 
@@ -45,9 +45,9 @@ field, **Invite**, and a **Pair** button.
 ### Start your first device
 
 1. Get the first invite from your server. It is in the `first-invite` file in
-   the server's data directory, or `trew invite` on the server prints a fresh
+   the server's data directory, or `trewd invite` on the server prints a fresh
    one; [server setup](server.md#the-first-device) shows both.
-2. Paste it into **Invite**. Trew reads it and says which server it points to,
+2. Paste it into **Invite**. TrewSync reads it and says which server it points to,
    and which vault if it is not `default`; check that address. **Pair** becomes
    available once the invite can be read.
 3. Press **Pair**, then wait for sync to finish before adding another device.
@@ -56,16 +56,16 @@ To name this device something other than the suggestion, or to skip a folder
 on this device, open **More options** first.
 
 There is no recovery key to write down. Your notes and their history live on
-the server, so losing every device loses no synced note: run `trew invite` on
+the server, so losing every device loses no synced note: run `trewd invite` on
 the server to pair a new one.
 
 ### Add another device
 
 1. On a paired device, open **Add another device → Create invite**.
-2. On your phone, install and enable Trew, then scan the QR code. Or copy the
+2. On your phone, install and enable TrewSync, then scan the QR code. Or copy the
    pairing code and paste it into **Invite** on the new device.
 3. Check the server (and vault) named under the field, then press **Pair**.
-4. If this vault already contains files, Trew asks you to confirm combining
+4. If this vault already contains files, TrewSync asks you to confirm combining
    them with your synced vault. An older copy can bring back files moved or
    deleted elsewhere. **Cancel** leaves your files and invite untouched.
 5. If **Review your first sync** appears, review the counts and choose
@@ -73,16 +73,16 @@ the server to pair a new one.
    Keep Obsidian open until it finishes.
 
 To download a fresh copy, create a new empty Obsidian vault and keep the old
-vault as a backup. Trew does not clear or move existing files during pairing.
+vault as a backup. TrewSync does not clear or move existing files during pairing.
 
 An invite works once and expires after one hour. If it expires, create a new
-one. If no paired device remains, run `trew invite` on the server and paste
+one. If no paired device remains, run `trewd invite` on the server and paste
 what it prints into the same field. There is no fixed device limit.
 
-If pairing is interrupted after the invite was sent, Trew keeps the pairing
+If pairing is interrupted after the invite was sent, TrewSync keeps the pairing
 and finishes it on the next attempt, even after the invite has expired. A
 refused invite (unknown, already used, expired or cancelled) leaves nothing
-saved. An invite or recovery key from Basalt Sync does not pair with Trew; the
+saved. An invite or recovery key from Basalt Sync does not pair with TrewSync; the
 field says so.
 
 <details>
@@ -97,7 +97,7 @@ field says so.
 
 ## What it does
 
-Trew syncs shortly after edits and checks periodically while Obsidian is open.
+TrewSync syncs shortly after edits and checks periodically while Obsidian is open.
 It reconnects after a dropped connection. Press **Sync now** to sync immediately,
 including retrying files after fixing a problem. Use **Reconnect** when offline
 or **Resume sync** when paused.
@@ -117,15 +117,15 @@ cannot confirm new changes until it reconnects.
 | Status | What to do |
 |---|---|
 | Unpaired | Pair this vault. |
-| Paused | Choose **Resume sync** from the Trew menu. |
+| Paused | Choose **Resume sync** from the TrewSync menu. |
 | Connecting, loading history, or syncing | Keep Obsidian open until sync finishes. |
 | Synced | No outstanding work was reported. |
 | Needs attention | Open the panel and follow the reason shown for each file. |
-| Failed or offline | Check the connection and the reported error; Trew retries temporary failures. |
+| Failed or offline | Check the connection and the reported error; TrewSync retries temporary failures. |
 | Stopped | Follow the panel's instructions. Repeated attempts alone will not fix this condition. |
 
 For a protocol mismatch, update the server and plugin to compatible releases.
-After the server is restored from a backup, Trew catches up by itself; see
+After the server is restored from a backup, TrewSync catches up by itself; see
 [rejoining a restored server](#rejoining-a-restored-server) for the one case
 that stops. If the panel reports unreadable local state, preserve that state
 and your notes before attempting recovery; deleting the plugin's files is not a
@@ -133,7 +133,7 @@ general troubleshooting step.
 
 ## Activity and quick actions
 
-Click the Trew status icon or tap its ribbon icon for **Sync activity**,
+Click the TrewSync status icon or tap its ribbon icon for **Sync activity**,
 **Review conflicts**, **Preview sync**, history, and settings. **Pause sync**
 stops this device until you resume it or restart Obsidian.
 
@@ -141,13 +141,13 @@ The activity log keeps the latest 300 events on this device across restarts.
 Search by filename or filter errors and conflicts. **Copy diagnostics** omits
 filenames; note contents and credentials are never recorded in this log.
 
-Before combining populated vaults, Trew shows upload, download, and preserved-copy
+Before combining populated vaults, TrewSync shows upload, download, and preserved-copy
 counts. Deleting an entire folder containing several synced
 files also opens a review. Choose **Pause sync** if the changes are unexpected.
 **Preview sync** lets you inspect planned changes at other times without writing
 notes. A preview is an estimate: files are checked again when sync runs.
 
-If a file changed outside Obsidian but did not sync, run **Trew Sync: Verify
+If a file changed outside Obsidian but did not sync, run **TrewSync: Verify
 vault contents**. This reads every file again and can take longer than a normal
 sync.
 
@@ -167,7 +167,7 @@ These phone layouts were captured in desktop Obsidian's mobile styles.
 
 ## Version history
 
-Run **Trew Sync: Show version history** for the open note, or use the note's
+Run **TrewSync: Show version history** for the open note, or use the note's
 right-click menu. Choose a version to read it or compare it with the local copy.
 Use **Load more** to go further back. Tab or the arrow keys move between
 versions. Attachments and large notes show their details without loading a text
@@ -205,11 +205,11 @@ connection fails, choose **Try again** after reconnecting.
 
 A deletion received from another device goes to the system trash, or the
 vault's `.trash` if necessary. If you edit a note while another device deletes
-it, Trew keeps the edit and sends it back as a new version.
+it, TrewSync keeps the edit and sends it back as a new version.
 
 ## Conflicts
 
-Trew tries to combine edits made on different devices. If its merge checks
+TrewSync tries to combine edits made on different devices. If its merge checks
 fail, it keeps both versions, for example:
 
 ```text
@@ -217,7 +217,7 @@ Meeting notes.md
 Meeting notes (Conflicted copy laptop 202608311412).md
 ```
 
-Choose **Review conflicts** from the Trew menu. Compare the original and
+Choose **Review conflicts** from the TrewSync menu. Compare the original and
 preserved copy, then keep either one or edit a combined version. **Decide later**
 leaves both files in place. If a file changes while you review it, refresh the
 comparison before choosing. The result syncs to your other devices.
@@ -242,7 +242,7 @@ both versions on a conflict is not a promise that sync never changes an open fil
 - Paths the server refuses because Obsidian could not hold them everywhere:
   longer than 1,024 bytes, a file or folder name longer than 255 bytes, control
   characters, backslashes, and a few more. A no-break space in a name is not
-  one of them: Obsidian reads it as an ordinary space, and so does Trew, so
+  one of them: Obsidian reads it as an ordinary space, and so does TrewSync, so
   the note syncs under that name and the file keeps its own.
 - A path that differs from another synced path only in letter case, such as
   `Notes/a.md` beside `notes/a.md`, because a case-insensitive disk would hold
@@ -265,7 +265,7 @@ browser origin, the panel shows an origin hint for the server operator; see
 ## Change the server address
 
 Open **Server → Server address**, enter the new address, and press **Save**.
-Trew checks the connection using this device's existing pairing before saving.
+TrewSync checks the connection using this device's existing pairing before saving.
 Use this when the same server moves to a new hostname or port. Notes and sync
 history are kept. Update the address on each device.
 
@@ -290,8 +290,8 @@ Under **Manage this vault**:
 
 When names match, the list shows device IDs to help you tell them apart.
 Rows marked **Never connected** may be left by an interrupted pairing. The
-server's host can do the same with `trew devices`, `trew revoke` and
-`trew uninvite`; see the
+server's host can do the same with `trewd devices`, `trewd revoke` and
+`trewd uninvite`; see the
 [server reference](server-reference.md#invite-devices-revoke-uninvite).
 
 <details>
@@ -308,13 +308,13 @@ Revoking a device stops it receiving and sending changes at once, and cancels
 any invites it created. It cannot erase notes already on that device: they stay
 readable there. See
 [what to do after losing a device](security.md#if-a-device-is-lost-or-stolen).
-You can revoke any device, including this one and the last one; `trew invite`
+You can revoke any device, including this one and the last one; `trewd invite`
 on the server pairs a device again afterwards.
 
 On the revoked device, the panel says it was revoked and shows **Pair this
 device again** with an Invite field in place of its usual controls. Its notes
 stay where they are, on that device and on the server. Paste or scan a new
-invite and press **Pair**: Trew asks before combining the vault's notes, then
+invite and press **Pair**: TrewSync asks before combining the vault's notes, then
 replaces the old pairing and sync index, as unlinking would, and syncs as a new
 device under the same name, still skipping what it skipped.
 
@@ -323,7 +323,7 @@ device under the same name, still skipping what it skipped.
 
 ## Rejoining a restored server
 
-When the operator restores the server from a `trew backup` snapshot, the
+When the operator restores the server from a `trewd backup` snapshot, the
 server starts a new history, and this device notices at its next connection.
 It then reads the restored history as a fresh listing, with nothing to press:
 files that match agree, files that differ are kept both ways as a conflict
@@ -335,7 +335,7 @@ The one case that stops is a server data directory copied back by hand rather
 than restored from a backup. The panel then shows **Stopped** and offers
 **Rejoin this server**. First have the operator back up the server and
 preserve local notes. Press **Rejoin this server**, review the two positions
-shown, then confirm. Trew rejoins and sends versions held only on this device,
+shown, then confirm. TrewSync rejoins and sends versions held only on this device,
 keeping both copies where they disagree. Prefer this action to unlinking and
 pairing again.
 
@@ -347,16 +347,16 @@ gone.
 
 If the operator confirms that the server is missing stored content, choose
 **Manage this vault → Send back what the server has lost** on a device that
-still has the notes. Trew resends missing content without creating new note
+still has the notes. TrewSync resends missing content without creating new note
 versions.
 
 Repeat on other devices that may have additional copies. The operator should
-then run `trew verify`; a successful repair on one device cannot establish
+then run `trewd verify`; a successful repair on one device cannot establish
 that all server history is recoverable.
 
 ## Durability
 
-Trew stages incoming files and checks the written bytes before putting them
+TrewSync stages incoming files and checks the written bytes before putting them
 in place. Desktop and mobile provide different guarantees during a power loss;
 keep independent backups of your notes.
 
@@ -379,12 +379,12 @@ record; use **Devices** when you want to remove access.
 
 | Command-palette action | Result |
 |---|---|
-| Trew Sync: Sync now | Run a sync. |
-| Trew Sync: Verify vault contents | Re-read every file, then sync. |
-| Trew Sync: Preview sync | Review planned changes without writing notes. |
-| Trew Sync: Show sync activity | Search recent activity. |
-| Trew Sync: Review conflicts | Compare and resolve preserved copies. |
-| Trew Sync: Pause or resume sync | Stop or restart syncing on this device. |
-| Trew Sync: Show status | Open the panel. |
-| Trew Sync: Show version history | View history for the open note. |
-| Trew Sync: Recover a deleted note | Browse deleted notes. |
+| TrewSync: Sync now | Run a sync. |
+| TrewSync: Verify vault contents | Re-read every file, then sync. |
+| TrewSync: Preview sync | Review planned changes without writing notes. |
+| TrewSync: Show sync activity | Search recent activity. |
+| TrewSync: Review conflicts | Compare and resolve preserved copies. |
+| TrewSync: Pause or resume sync | Stop or restart syncing on this device. |
+| TrewSync: Show status | Open the panel. |
+| TrewSync: Show version history | View history for the open note. |
+| TrewSync: Recover a deleted note | Browse deleted notes. |

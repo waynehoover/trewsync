@@ -115,7 +115,7 @@ func cmdMCPToken(args []string, out io.Writer) error {
 			reply.MCPToken.Vault, what, when, reply.MCPToken.Secret)
 		fmt.Fprintln(out, "Give it to the MCP client as the header  Authorization: Bearer <token>.")
 	}
-	fmt.Fprintf(out, "Id %s, fingerprint %s, label %q, scope %s. `trew mcp-token -revoke %s` revokes it.\n",
+	fmt.Fprintf(out, "Id %s, fingerprint %s, label %q, scope %s. `trewd mcp-token -revoke %s` revokes it.\n",
 		tok.ID, tok.Fingerprint, tok.Label, tok.Scope, tok.ID)
 	return nil
 }

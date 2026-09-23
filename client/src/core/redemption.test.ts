@@ -318,7 +318,7 @@ describe("redeeming an invite against the real server", () => {
     // Unknown: well formed, for this server and vault, and never issued.
     const unknown: InviteString = { token: randomBytes(16), url: server.wsUrl, vault: "default" };
 
-    // Cancelled with `trew uninvite` on the server, by the id it lists.
+    // Cancelled with `trewd uninvite` on the server, by the id it lists.
     const cancelled = parseInvite(await server.invite({ label: "to cancel" }));
     const listed = JSON.parse(await server.cli("devices", "-json")) as {
       invites: { invite: string; label: string }[];

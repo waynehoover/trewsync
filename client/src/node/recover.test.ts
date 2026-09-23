@@ -70,7 +70,7 @@ afterEach(async () => {
 
 /**
  * One paired vault against a fresh server, its first device paired from the
- * invite `trew serve` wrote to `<data>/first-invite`.
+ * invite `trewd serve` wrote to `<data>/first-invite`.
  */
 async function paired(): Promise<string> {
   server = new TestServer();

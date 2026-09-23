@@ -85,7 +85,7 @@ run "the protocol vectors are what the reference writes" "" \
 # Tests also read repository docs outside the Go module; the Go result cache
 # does not track those inputs. Always execute the release gate's server tests.
 run "test" "" go test -race -count=1 ./...
-run "the systemd unit verifies" "" go test -race -run 'TestService' ./cmd/trew/
+run "the systemd unit verifies" "" go test -race -run 'TestService' ./cmd/trewd/
 
 # ---- systemd's own opinion of that unit -------------------------------------
 #
@@ -96,9 +96,9 @@ run "the systemd unit verifies" "" go test -race -run 'TestService' ./cmd/trew/
 # run" and "passed" are different sentences, and exit 2 says which.
 systemd_accepts() {
   local unit; unit=$(mktemp)
-  go -C "$root" build -o "$(dirname "$unit")/trew" ./cmd/trew
-  "$(dirname "$unit")/trew" service -data /var/lib/trew -addr 0.0.0.0:3003 \
-    -vault default -user trew -binary /usr/local/bin/trew -max-file 134217728 > "$unit"
+  go -C "$root" build -o "$(dirname "$unit")/trewd" ./cmd/trewd
+  "$(dirname "$unit")/trewd" service -data /var/lib/trew -addr 0.0.0.0:3003 \
+    -vault default -user trew -binary /usr/local/bin/trewd -max-file 134217728 > "$unit"
   systemd-analyze verify "$unit"
 }
 if command -v systemd-analyze >/dev/null 2>&1; then
@@ -162,7 +162,7 @@ run "every action is pinned to a commit" "" \
 # runbook it executes is the one nobody finds out is wrong until the day the
 # live directory is gone.
 run "the backup restores, verifies and serves what it held" "" \
-  go test -tags rehearsal -run TestRestoreRehearsal -count=1 ./cmd/trew/
+  go test -tags rehearsal -run TestRestoreRehearsal -count=1 ./cmd/trewd/
 
 # ---- client ----------------------------------------------------------------
 # ---- the filesystem this is running on --------------------------------------

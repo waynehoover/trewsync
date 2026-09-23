@@ -174,7 +174,7 @@ func TestTheRefusalOffersOnlyRemediesAStoppedServerHas(t *testing.T) {
 	}
 	// It says where the flag goes when the server is not started by hand,
 	// which is the state anyone hitting this at three in the morning is in.
-	for _, want := range []string{"trew service -max-file 30", "Docker"} {
+	for _, want := range []string{"trewd service -max-file 30", "Docker"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("the refusal does not say %q:\n%s", want, msg)
 		}
@@ -190,7 +190,7 @@ func TestTheRefusalOffersOnlyRemediesAStoppedServerHas(t *testing.T) {
 	}
 }
 
-// `trew service` is the documented way to turn "run it by hand with
+// `trewd service` is the documented way to turn "run it by hand with
 // -max-file" into something permanent, and the unit it printed had no
 // -max-file in it at all. So the flag was dropped silently, the unit refused to
 // start, and Restart=always with RestartSec=5 and no start limit reprinted the
@@ -242,7 +242,7 @@ func TestServiceRefusesToWriteAUnitThatWouldNotStart(t *testing.T) {
 	}
 }
 
-// The ordinary case is a data directory that does not exist yet: `trew
+// The ordinary case is a data directory that does not exist yet: `trewd
 // service` is run before the first serve. There is nothing to check and
 // nothing to refuse.
 func TestServiceStillPrintsForADirectoryThatIsNotThereYet(t *testing.T) {

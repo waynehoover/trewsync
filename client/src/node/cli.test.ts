@@ -112,7 +112,7 @@ afterEach(async () => {
 });
 
 /**
- * Pairs a directory as the vault's first device, from the invite `trew serve`
+ * Pairs a directory as the vault's first device, from the invite `trewd serve`
  * wrote to `<data>/first-invite`, which is how a first device pairs.
  */
 async function firstDevice(name = "a"): Promise<string> {
@@ -289,10 +289,10 @@ describe("pairing a vault", () => {
   /**
    * cli.test.ts:173 in the ledger (SPLIT). `pair` takes the invite exactly as
    * it was handed over: the first device's straight out of the file serve
-   * wrote, trailing newline and all, and a later one as `trew invite` on the
+   * wrote, trailing newline and all, and a later one as `trewd invite` on the
    * server prints it, indented inside its sentence.
    */
-  it("takes the invite as serve wrote it and as trew invite printed it", async () => {
+  it("takes the invite as serve wrote it and as trewd invite printed it", async () => {
     await fresh();
     const a = await vaultDir("a");
     const first = await cli("pair", "--key-file", server.firstInvitePath, "--dir", a, "--json");
@@ -779,7 +779,7 @@ describe("status", () => {
  *
  * Each file is made directly on disk, the way such names arrive in a real
  * vault: from an editor, another sync tool or a shell, never through this
- * client. Each is a name Basalt allowed and Trew's server refuses (hazard 9 in
+ * client. Each is a name Basalt allowed and TrewSync's server refuses (hazard 9 in
  * plan/strip-ledger.md), and the refusal carries the server's reason, whose
  * code comes first (plan/protocol.md, "Paths").
  */
@@ -1779,7 +1779,7 @@ describe("the device list", () => {
   /**
    * cli.test.ts:1408 in the ledger, inverted (hazard 4, decided): a device
    * may revoke the last device, itself included, because nothing a device
-   * holds is needed to get back in. The way back is `trew invite` on the
+   * holds is needed to get back in. The way back is `trewd invite` on the
    * server, and this walks it to the end rather than trusting the sentence
    * that names it (rule 11): the notes are still on the server afterwards.
    */
@@ -1794,7 +1794,7 @@ describe("the device list", () => {
     const done = await cli("revoke", only, "--dir", a);
     expect(done.code, done.all).toBe(0);
     expect(done.stdout).toMatch(/That was this device/);
-    expect(done.stdout).toMatch(/trew invite on the server/);
+    expect(done.stdout).toMatch(/trewd invite on the server/);
     expect((await cli("sync", "--dir", a)).all).toMatch(/not authorised/);
     expect(JSON.parse(await server.cli("devices", "-json"))["devices"] ?? []).toEqual([]);
 
@@ -1893,7 +1893,7 @@ describe("the device list", () => {
   }, 60_000);
 
   /**
-   * A label and an invite that never expires, as `trew invite -label L -ttl 0`
+   * A label and an invite that never expires, as `trewd invite -label L -ttl 0`
    * on the server makes, are shown as they are: the name somebody gave it, and
    * "never" rather than a date, because an invite with no end is the one most
    * worth seeing.
@@ -2168,7 +2168,7 @@ describe("what the CLI says about itself and the vault", () => {
 
 /**
  * review finding I10, where `trew rebase` used to answer it. A restore through
- * `trew backup` starts a new epoch now, which the engine rejoins by itself; what
+ * `trewd backup` starts a new epoch now, which the engine rejoins by itself; what
  * is left is a data directory copied back behind the server's back, which keeps
  * the old epoch and so still looks, from a device that applied what it lost,
  * like a server behind its own clients.

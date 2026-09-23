@@ -131,7 +131,7 @@ describe("refusing a string it cannot read completely", () => {
   });
 
   /**
-   * Trew was forked from Basalt, whose recovery keys and invites look like
+   * TrewSync was forked from Basalt, whose recovery keys and invites look like
    * these and open nothing here. A person migrating will paste one, and the
    * answer they need is what it is and what to paste instead.
    */
@@ -418,7 +418,7 @@ describe("a config that cannot connect", () => {
     // wording that sent somebody looking for a server problem.
     expect(message).toMatch(/missing a device token/);
     expect(message).toMatch(/Pair this vault again with an invite/);
-    expect(message).toMatch(/trew invite on\s+the server/);
+    expect(message).toMatch(/trewd invite on\s+the server/);
     expect(message).not.toMatch(/authoris/i);
     // And both halves, when both are missing.
     expect(() => deviceCredential({ ...base })).toThrow(/missing a device id and a device token/);

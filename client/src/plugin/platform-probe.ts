@@ -1,5 +1,5 @@
 /**
- * A self-check of this device's filesystem against the rules Trew syncs by.
+ * A self-check of this device's filesystem against the rules TrewSync syncs by.
  *
  * Adapted from LiteSync's platform probe (github.com/KJoner/litesync,
  * src/diagnostics/platform-probe.ts, MIT licence, copyright 2026 KJoner). Its
@@ -290,7 +290,7 @@ export async function runPlatformProbe(opts: ProbeOptions): Promise<ProbeReport>
 export function renderProbeReport(report: ProbeReport): string {
   const yes = (b: boolean) => (b ? "yes" : "no");
   const lines = [
-    "# Trew platform self-check",
+    "# TrewSync platform self-check",
     "",
     `- Device: **${report.platform}**`,
     `- Obsidian: ${report.appVersion}`,

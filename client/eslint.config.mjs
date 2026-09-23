@@ -47,7 +47,7 @@ const notInTheBundle = {
   "src/core/outcome.ts": "the headless client's exit outcomes (src/node only)",
   "src/core/seam.ts": "fault-injection seams for the Node vault and the stress suite",
   "src/core/test-async.ts": "waiting helpers for tests",
-  "src/core/test-server.ts": "builds and runs a real trew for tests",
+  "src/core/test-server.ts": "builds and runs a real trewd for tests",
   "src/plugin/fake.ts": "an in-memory DataAdapter for tests",
   "src/plugin/stub.ts": "the obsidian module at runtime, for tests",
   "src/plugin/panel-shots.ts": "the panel walk behind panel-shots.test.ts",

@@ -203,7 +203,7 @@ function contentsOf(session: Session): string[] {
 
 /**
  * These are not tests of this project's code, and they fail if Obsidian
- * changes rather than if Trew does. They are here because every sequence
+ * changes rather than if TrewSync does. They are here because every sequence
  * below is only worth running if the fake answers the way the application
  * does, and "the fake is faithful" is a claim that has to be written down
  * somewhere a test runner can check it against the next version.

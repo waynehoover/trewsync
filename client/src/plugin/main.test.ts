@@ -69,7 +69,7 @@ type Testable = TrewPlugin & StubPlugin;
 
 /**
  * Pairs the vault's first device, the way the first device pairs: from the
- * invite `trew serve` wrote to `<data>/first-invite` on a store with no
+ * invite `trewd serve` wrote to `<data>/first-invite` on a store with no
  * devices.
  *
  * With the merge confirmed, because a first device is usually a vault full of
@@ -81,7 +81,7 @@ async function startVault(plugin: Testable, name = "laptop", on?: TestServer): P
 }
 
 /**
- * An invite for another device, minted with `trew invite` on the server, the
+ * An invite for another device, minted with `trewd invite` on the server, the
  * way an operator mints one. A paired device's panel mints them too, and the
  * tests about that go through `createInvite`.
  */
@@ -239,7 +239,7 @@ describe("loading", () => {
   it("comes up unpaired, and says so", async () => {
     const { plugin } = await load();
     expect(plugin.paired).toBe(false);
-    expect(status(plugin)).toBe("Trew Sync: Not paired.");
+    expect(status(plugin)).toBe("TrewSync: Not paired.");
     expect(statusIcon(plugin)).toBe("link");
   });
 
@@ -256,7 +256,7 @@ describe("loading", () => {
       "verify-contents",
       "version-history",
     ]);
-    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["Trew Sync"]);
+    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["TrewSync"]);
     expect(plugin.statusBarItems.length).toBe(1);
     // create, modify, delete, rename. Without these it only syncs on a timer.
     expect(app.vault.handlerCount()).toBe(4);
@@ -408,14 +408,14 @@ describe("where its own state goes", () => {
     await until("it to give up", () => plugin.currentState.kind === "stopped");
     expect(notices.map((n) => n.message).join(" ")).toMatch(/would sync/);
     expect(statusIcon(plugin)).toBe("alert-triangle");
-    expect(status(plugin)).toMatch(/^Trew Sync: Stopped:/);
+    expect(status(plugin)).toMatch(/^TrewSync: Stopped:/);
   }, 300_000);
 });
 
 describe("pairing", () => {
   /**
    * The first device pairs the way every other one does, from an invite: the
-   * one `trew serve` wrote to its data folder on a store with no devices.
+   * one `trewd serve` wrote to its data folder on a store with no devices.
    */
   it("pairs the first device from the invite the server wrote, and syncs it", async () => {
     await fresh();
@@ -433,7 +433,7 @@ describe("pairing", () => {
     expect(plugin.deviceName).toBe("laptop");
     expect(statusIcon(plugin)).toBe("cloud-check");
     expect(summaries).toContain("1 sent");
-    expect(status(plugin)).toMatch(/^Trew Sync: (?:1 sent|Up to date), as of /);
+    expect(status(plugin)).toMatch(/^TrewSync: (?:1 sent|Up to date), as of /);
     // Saved in a form that survives the JSON round trip Obsidian does, and
     // exactly the device's own credential: its row and the token for it. No
     // invite: that is held only while a pairing is pending.
@@ -628,7 +628,7 @@ describe("pairing instructions", () => {
     // Where the first device's invite comes from, which a device with no other
     // device to ask has to be told.
     expect(field.desc).toMatch(/first-invite/);
-    expect(field.desc).toMatch(/trew invite on the server/);
+    expect(field.desc).toMatch(/trewd invite on the server/);
     expect(field.nameEl.children).toEqual([]);
   }, 300_000);
 });
@@ -893,7 +893,7 @@ describe("when things go wrong", () => {
     await plugin.syncNow();
     expect(plugin.currentState.kind).toBe("failed");
     expect(notices.some((n) => n.message.includes("editor disk full"))).toBe(true);
-    expect(notices.some((n) => n.message === "Trew: up to date")).toBe(false);
+    expect(notices.some((n) => n.message === "TrewSync: up to date")).toBe(false);
   });
 
   it("shows one busy action and one result for repeated manual sync requests", async () => {
@@ -919,7 +919,7 @@ describe("when things go wrong", () => {
       expect(button.disabled).toBe(true);
       release();
       await Promise.all([first, second]);
-      expect(notices.filter((n) => n.message === "Trew: up to date")).toHaveLength(1);
+      expect(notices.filter((n) => n.message === "TrewSync: up to date")).toHaveLength(1);
       expect(button.label).toBe("Sync now");
       expect(button.disabled).toBe(false);
       expect(app.vault.adapter.filePaths().filter((p) => !p.startsWith(".obsidian/"))).toEqual([]);
@@ -1007,7 +1007,7 @@ describe("when things go wrong", () => {
       () => plugin.currentState.kind === "offline",
     );
     expect(statusIcon(plugin)).toBe("cloud-off");
-    expect(status(plugin)).toMatch(/^Trew Sync: Offline:/);
+    expect(status(plugin)).toMatch(/^TrewSync: Offline:/);
   }, 300_000);
 
   /**
@@ -1234,7 +1234,7 @@ describe("on a platform the tests do not reach", () => {
     expect(
       plugin.statusBarItems[0]!.children.some((c) => c.cls.includes("trew-status-platform")),
     ).toBe(false);
-    expect(status(plugin)).toBe("Trew Sync: Not paired.");
+    expect(status(plugin)).toBe("TrewSync: Not paired.");
     choosePairing(plugin);
     expect(panelText()).not.toMatch(/not supported|untested/);
     expect(supportLink()).toBeUndefined();
@@ -1556,7 +1556,7 @@ describe("unlinking", () => {
     expect(plugin.paired).toBe(false);
     expect(plugin.savedData).toBe(null);
     expect(statusIcon(plugin)).toBe("link");
-    expect(status(plugin)).toBe("Trew Sync: Not paired.");
+    expect(status(plugin)).toBe("TrewSync: Not paired.");
     expect(app.vault.adapter.text("keep.md")).toBe("still here");
 
     // The index goes too. It records what this device believes it has
@@ -1612,7 +1612,7 @@ describe("the panel, which is a modal and a settings tab", () => {
    * It was reachable from the ribbon, the status bar and the command palette,
    * and nowhere else, because the plugin registered no settings tab. Obsidian
    * draws a plugin's gear in Settings only for a plugin that calls
-   * `addSettingTab`, so Settings had no Trew entry at all and somebody
+   * `addSettingTab`, so Settings had no TrewSync entry at all and somebody
    * looking for the plugin's interface where every other plugin keeps it
    * found nothing and concluded there was none. Reported by the one person
    * running it, who could not find the settings screen.
@@ -1624,7 +1624,7 @@ describe("the panel, which is a modal and a settings tab", () => {
     const { plugin } = await load();
     expect(
       plugin.settingTabs.length,
-      "the plugin registers no settings tab, so Settings shows no Trew entry at all",
+      "the plugin registers no settings tab, so Settings shows no TrewSync entry at all",
     ).toBe(1);
 
     const tab = plugin.settingTabs[0]!;
@@ -1741,7 +1741,7 @@ describe("the panel, which is a modal and a settings tab", () => {
     const listed = built.find((s) => s.name.startsWith("laptop"))!;
     expect(listed.name).toMatch(/\(this device\)/);
     // The vault's only device, and it can still be revoked: the last device
-    // may be, and `trew invite` on the server is the way back. What revoking
+    // may be, and `trewd invite` on the server is the way back. What revoking
     // it says is in "the device list in the panel", below.
     expect(listed.buttons.map((b) => b.label)).toEqual(["Unlink from the server"]);
   }, 300_000);
@@ -2062,14 +2062,14 @@ describe("on a device with no status bar", () => {
     await fresh();
     const { plugin } = await load();
     const ribbon = plugin.ribbonIcons[0]!;
-    expect(ribbon.title).toBe("Trew Sync");
+    expect(ribbon.title).toBe("TrewSync");
 
     await startVault(plugin, "laptop");
     await synced(plugin);
 
     // The same sentence the status bar carries, somewhere a phone shows it.
     const label = ribbon.el.attributes.get("aria-label") ?? "";
-    expect(label, `the ribbon says ${JSON.stringify(label)}`).toMatch(/^Trew: /);
+    expect(label, `the ribbon says ${JSON.stringify(label)}`).toMatch(/^TrewSync: /);
     expect(label).not.toMatch(/connecting/);
     expect(ribbon.el.attributes.get("data-icon")).toBe("cloud-check");
   }, 300_000);
@@ -3491,7 +3491,7 @@ describe("pairing honestly", () => {
     await until("it to stop", () => plugin.currentState.kind === "stopped");
     const said = notices.map((n) => n.message).join(" ");
     expect(said).toMatch(/could not join/);
-    expect(said).toMatch(/open the Trew panel and pair it again/);
+    expect(said).toMatch(/open the TrewSync panel and pair it again/);
     expect(said).toMatch(/new invite/);
     expect(said).not.toMatch(/syncing/);
     choosePairing(plugin);
@@ -3601,7 +3601,7 @@ describe("on a phone", () => {
       expect(plugin.statusBarItems).toHaveLength(0);
       await startVault(plugin, "phone");
       await until("a sync", () => plugin.currentState.kind === "synced");
-      expect(plugin.ribbonIcons[0]!.el.attributes.get("aria-label")).toMatch(/^Trew: .*as of/);
+      expect(plugin.ribbonIcons[0]!.el.attributes.get("aria-label")).toMatch(/^TrewSync: .*as of/);
     } finally {
       Platform.isMobileApp = false;
     }
@@ -3858,7 +3858,7 @@ describe("version history on the file menu (P-D8)", () => {
 
     const { menu, items } = fakeMenu();
     app.workspace.fire("file-menu", menu, { path: "daily/note.md", extension: "md" });
-    expect(items.map((i) => i.title)).toEqual(["Trew: version history"]);
+    expect(items.map((i) => i.title)).toEqual(["TrewSync: version history"]);
     expect(items[0]!.icon).toBe("history");
 
     modals.length = 0;
@@ -4074,7 +4074,7 @@ describe("what is still in flight when a vault is unlinked (P-D2, P-D3)", () => 
     gate.release();
     await pass;
 
-    // Unpaired is the truth. "Trew has stopped" or a summary of a pass
+    // Unpaired is the truth. "TrewSync has stopped" or a summary of a pass
     // over a vault that is gone are both louder than the truth and wrong.
     expect(plugin.currentState.kind).toBe("unpaired");
     expect(notices.map((n) => n.message).join(" ")).toBe("");
@@ -4198,7 +4198,7 @@ describe("an older Obsidian", () => {
       "verify-contents",
       "version-history",
     ]);
-    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["Trew Sync"]);
+    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["TrewSync"]);
     expect(plugin.statusBarItems.length).toBe(1);
     // The four vault events and the file-menu entry, all after the guard.
     expect(plugin.registeredEvents.length).toBe(5);
@@ -4267,7 +4267,7 @@ describe("what the status bar shows", () => {
       expect(icon, `${state.kind} chose no glyph`).not.toBe("");
       expect(plugin.statusBarItems[0]!.allText()).toBe("");
       expect(plugin.statusBarItems[0]!.children).toHaveLength(1);
-      expect(status(plugin), `${state.kind} has no tooltip`).toMatch(/^Trew Sync: \S/);
+      expect(status(plugin), `${state.kind} has no tooltip`).toMatch(/^TrewSync: \S/);
       seen.add(icon);
     }
     // Not all the same glyph, or the bar would say nothing by changing.
@@ -4286,7 +4286,7 @@ describe("what the status bar shows", () => {
     const { plugin } = await load();
     for (const state of states) {
       (plugin as unknown as { setState(s: unknown): void }).setState(state);
-      const sentence = status(plugin).replace(/^Trew Sync: /, "");
+      const sentence = status(plugin).replace(/^TrewSync: /, "");
       expect(sentence, `${state.kind} opens mid-sentence`).toMatch(/^[A-Z0-9]/);
     }
   });
@@ -5112,7 +5112,7 @@ describe("what the panel knows and used to keep to itself", () => {
     expect(to.server!.version, "the build is the fallback, not what ready said").not.toBe(
       "unknown",
     );
-    expect(shown).toContain(`Protocol ${PROTO}, trew ${to.server!.version}.`);
+    expect(shown).toContain(`Protocol ${PROTO}, trewd ${to.server!.version}.`);
     expect(shown).not.toContain("Not connected");
     // A hop with no TLS shows its warning in the server details, and without
     // end-to-end encryption the warning is about the notes as well as the
@@ -5134,7 +5134,7 @@ describe("what the panel knows and used to keep to itself", () => {
       url: "wss://homelab.tailnet.ts.net",
       server: { proto: 4, version: "0.3.4" },
     });
-    expect(on).toContain("Protocol 4, trew 0.3.4.");
+    expect(on).toContain("Protocol 4, trewd 0.3.4.");
     // The scheme is the whole of what is known about the hop, and wss is the
     // only thing that says something terminated TLS in front.
     //
@@ -5303,7 +5303,7 @@ describe("the device list in the panel", () => {
   });
   /**
    * The last device may be revoked (plan/strip-ledger.md, hazard 4, decided):
-   * nothing a device holds is needed to add one back, because `trew invite` on
+   * nothing a device holds is needed to add one back, because `trewd invite` on
    * the server is the way back into a vault with no devices. So the last row
    * has its button, and the confirmation says what it leaves.
    */
@@ -5332,7 +5332,7 @@ describe("the device list in the panel", () => {
     await button.click();
     expect(button.label).toBe("Yes, revoke");
     expect(panelText()).toMatch(/last device/);
-    expect(panelText()).toMatch(/trew invite on the server/);
+    expect(panelText()).toMatch(/trewd invite on the server/);
     expect((await plugin.devices()).devices).toHaveLength(1);
 
     // The second does it: the server takes its last row away, and this device
@@ -5340,7 +5340,7 @@ describe("the device list in the panel", () => {
     await button.click();
     await until("this device to be stopped", () => plugin.currentState.kind === "stopped");
     expect((plugin.currentState as { why: string }).why).toMatch(/revoked/);
-    // And a device paired afterwards, from `trew invite`, finds itself alone.
+    // And a device paired afterwards, from `trewd invite`, finds itself alone.
     const next = await load();
     await next.plugin.pair(await anInvite(), "phone");
     await synced(next.plugin);
@@ -5423,7 +5423,7 @@ describe("the device list in the panel", () => {
     expect(notices.map((n) => n.message).join(" ")).toMatch(/can no longer add a device/);
     expect((await first.plugin.devices()).invites).toHaveLength(0);
 
-    // An invite that never expires, which only `trew invite -ttl 0` on the
+    // An invite that never expires, which only `trewd invite -ttl 0` on the
     // server makes, says so rather than showing a date, and its label is on
     // the row.
     await server.invite({ ttl: "0", label: "for the tablet" });

@@ -46,7 +46,7 @@ jobs:
       - name: test
         run: go test -race -count=1 ./...
 
-      # The systemd unit `trew service` prints is a deployment artifact, so
+      # The systemd unit `trewd service` prints is a deployment artifact, so
       # it is rendered here and checked by systemd itself rather than by eye.
       # The binary and user are real ones on this runner, because verify
       # checks that ExecStart exists and that User resolves. Skipped, saying
@@ -57,10 +57,10 @@ jobs:
             echo "systemd-analyze is not on this runner; skipping the unit check"
             exit 0
           fi
-          go build -o "$RUNNER_TEMP/trew" ./cmd/trew
-          "$RUNNER_TEMP/trew" service \
+          go build -o "$RUNNER_TEMP/trewd" ./cmd/trewd
+          "$RUNNER_TEMP/trewd" service \
             -data "$RUNNER_TEMP/trew-data" -addr 127.0.0.1:3003 \
-            -binary "$RUNNER_TEMP/trew" -user "$(id -un)" > "$RUNNER_TEMP/trew.service"
+            -binary "$RUNNER_TEMP/trewd" -user "$(id -un)" > "$RUNNER_TEMP/trew.service"
           cat "$RUNNER_TEMP/trew.service"
           systemd-analyze verify "$RUNNER_TEMP/trew.service"
 
@@ -175,7 +175,7 @@ jobs:
       # it holds against what it claims, start a server on it, and read every
       # version and every body back over a real socket.
       - name: the backup restores, verifies and serves what it held
-        run: go test -tags rehearsal -run TestRestoreRehearsal -count=1 ./cmd/trew/
+        run: go test -tags rehearsal -run TestRestoreRehearsal -count=1 ./cmd/trewd/
 
   # The same client suite on a case-folding filesystem (I18).
   #
@@ -189,7 +189,7 @@ jobs:
   # Its own job rather than a matrix on `client`, because the Linux one carries
   # the format check and the typecheck, and running those twice buys nothing.
   # What this adds is the filesystem.
-  # systemd's opinion of the unit `trew service` writes (I20).
+  # systemd's opinion of the unit `trewd service` writes (I20).
   #
   # `TestService` checks the unit's text against what this project meant to
   # write, which is a test of this repository agreeing with itself. Whether
@@ -216,13 +216,13 @@ jobs:
           set -euo pipefail
           systemd-analyze --version | head -1
 
-          go build -o /tmp/trew ./cmd/trew
+          go build -o /tmp/trewd ./cmd/trewd
           # The flags somebody would actually use, including the ceiling,
           # because that is the one a person adds by hand and the one most
           # likely to be written into the unit wrongly.
-          /tmp/trew service \
+          /tmp/trewd service \
             -data /var/lib/trew -addr 0.0.0.0:3003 -vault default \
-            -user trew -binary /usr/local/bin/trew -max-file 134217728 \
+            -user trew -binary /usr/local/bin/trewd -max-file 134217728 \
             > /tmp/trew.service
           cat /tmp/trew.service
 
@@ -235,7 +235,7 @@ jobs:
           # And put the binary where the unit says it is.
           #
           # Newer systemd checks that ExecStart names something executable and
-          # says "Command /usr/local/bin/trew is not executable: No such
+          # says "Command /usr/local/bin/trewd is not executable: No such
           # file or directory". The filter below was written against an older
           # version's wording and did not match it, so this job started failing
           # on a runner image bump with nothing wrong in the unit.
@@ -244,7 +244,7 @@ jobs:
           # would then be hiding the one thing this check should catch: a
           # `-binary` path that is wrong. With the file really there, systemd
           # resolving ExecStart is part of what passes.
-          sudo install -m 0755 /tmp/trew /usr/local/bin/trew
+          sudo install -m 0755 /tmp/trewd /usr/local/bin/trewd
 
           # Warnings about a user or a binary that does not exist on a runner
           # are expected and are not what this is looking for. Everything else
@@ -260,7 +260,7 @@ jobs:
             | grep -vi -e "user or group" -e "does not exist" -e "Cannot find user" \
             | grep -v -e "^$" || true)
           if [ -n "$real" ]; then
-            echo "systemd objects to the unit trew writes:" >&2
+            echo "systemd objects to the unit trewd writes:" >&2
             printf '%s\n' "$real" >&2
             exit 1
           fi
@@ -335,7 +335,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Both toolchains, because the client's tests build cmd/trew and talk
+      # Both toolchains, because the client's tests build cmd/trewd and talk
       # to it over a real socket.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -375,7 +375,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The client's tests build cmd/trew and talk to it over a real socket,
+      # The client's tests build cmd/trewd and talk to it over a real socket,
       # so this job needs both toolchains.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -461,7 +461,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The walk starts a vault and pairs a second device into it against a
-      # real trew, so this needs both toolchains for the same reason the
+      # real trewd, so this needs both toolchains for the same reason the
       # client job does.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

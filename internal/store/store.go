@@ -153,7 +153,7 @@ var (
 
 // Entry is one version of one file.
 //
-// There is no user or owner field. Trew syncs one person's devices, so
+// There is no user or owner field. TrewSync syncs one person's devices, so
 // identity would be a column that is always the same value, and the philosophy
 // doc refuses teams outright rather than half-building them.
 type Entry struct {
@@ -323,7 +323,7 @@ type Store struct {
 	// store that answers reads and refuses them (R15). Every inspection
 	// command opens read-only, deliberately, because a diagnostic that
 	// modifies what it is diagnosing is not one (I15). Both are right and
-	// together they made `trew stats` report every healthy server as unable
+	// together they made `trewd stats` report every healthy server as unable
 	// to take a note, with the free-space numbers it exists to print left at
 	// zero because the probe returned before reaching them.
 	readOnly bool
@@ -2267,7 +2267,7 @@ func (s *Store) verifyChunkRefs(deep bool) (faults []Fault, count int, err error
 //   - **Rows that are missing.** Nothing here can tell a device that was
 //     revoked from one that was lost, because a revocation is a delete and
 //     leaves nothing behind. Rule 6 is about entries and does not reach the
-//     registry; what answers a lost row is `trew backup`.
+//     registry; what answers a lost row is `trewd backup`.
 //
 // TestDeepVerifyDecodesTheRegistry.
 func (s *Store) verifyRegistry() ([]Fault, int, error) {
@@ -2788,7 +2788,7 @@ func insertDeviceTx(q execer, vaultID, deviceID, name, deviceHash string, now in
 }
 
 // Devices is every device registered to a vault, oldest first, for the list op
-// and for `trew devices`. A vault with none is an empty slice, not an error:
+// and for `trewd devices`. A vault with none is an empty slice, not an error:
 // a new vault has no devices until its first invite is redeemed, and that is not
 // a fault.
 //
@@ -2874,7 +2874,7 @@ func (s *Store) DeviceByID(vaultID, deviceID string) (d Device, authHash string,
 //
 // Revoking the last device is allowed (plan/protocol.md, "Devices and
 // invites"): no device holds anything the server cannot reissue, and the way
-// back is `trew invite` on the server. An unknown device is
+// back is `trewd invite` on the server. An unknown device is
 // ErrUnknownDevice, the ordinary state after a revoke rather than a fault.
 //
 // Closing that device's sessions is the server's half, under the same lock as

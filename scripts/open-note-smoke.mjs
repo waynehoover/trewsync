@@ -80,11 +80,11 @@ try {
     join(scratch, "manifest.json"),
     JSON.stringify({
       id,
-      name: "Trew editor check",
+      name: "TrewSync editor check",
       version: "0.0.0",
       minAppVersion: "1.6.0",
       description: "Temporary native editor regression test.",
-      author: "Trew",
+      author: "TrewSync",
       isDesktopOnly: true,
     }),
   );

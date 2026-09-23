@@ -202,12 +202,12 @@ func (c *call) versionBytes(e store.Entry) ([]byte, error) {
 			}
 			c.h.log.Error("a version's chunk could not be read", "uid", e.UID, "why", why)
 			return nil, &ToolError{Code: "internal", Message: "a chunk of this version is " + why +
-				" on the server; `trew verify -deep` says which"}
+				" on the server; `trewd verify -deep` says which"}
 		}
 		out = append(out, body...)
 	}
 	if int64(len(out)) != e.Size {
-		return nil, &ToolError{Code: "internal", Message: "this version's chunks do not add up to its size; `trew verify -deep` reports it"}
+		return nil, &ToolError{Code: "internal", Message: "this version's chunks do not add up to its size; `trewd verify -deep` reports it"}
 	}
 	return out, nil
 }
