@@ -7,7 +7,7 @@ import { receiveCommitted } from "../core/test-async.ts";
  * on a disk. This is the third adapter, and until this file existed nothing had
  * ever run the engine against Obsidian's interface at all.
  *
- * Everything here is real except Obsidian: real sealing, real chunking, a real
+ * Everything here is real except Obsidian: real chunking, real framing, a real
  * WebSocket, a real Go server writing real SQLite. What is faked is
  * `DataAdapter`, and `fake.ts` says what that is worth and what it is not.
  */
@@ -15,18 +15,13 @@ import { receiveCommitted } from "../core/test-async.ts";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "../core/client.ts";
-import { testWrapped } from "../core/test-keys.ts";
 import { TestServer, cleanupBinary, serverBinary } from "../core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "../core/vault.ts";
 import { FakeAdapter, FakeVaultIndex, asVault } from "./fake.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
 
-const SECRET = new Uint8Array(32).fill(77);
-let wrapped: string;
-
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 
 afterAll(async () => {
@@ -47,7 +42,7 @@ class Device {
       // `.obsidian`, which never syncs.
       store: new ObsidianIndexStore(this.adapter, ".obsidian/plugins/trew/index.json"),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(SECRET, wrapped)),
+      ...(await server.deviceCredentials(this.name)),
       vaultId: "default",
       device: this.name,
       timeoutMs: 20_000,
@@ -389,7 +384,7 @@ describe("a dotfile a headless peer holds", () => {
       vault: cliVault,
       store: new MemoryIndexStore(),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(SECRET, wrapped)),
+      ...(await server.deviceCredentials("cli")),
       vaultId: "default",
       device: "cli",
       timeoutMs: 20_000,
@@ -402,7 +397,7 @@ describe("a dotfile a headless peer holds", () => {
       vault: new ObsidianVault(asVault(new HidingIndex(adapter)), ".obsidian"),
       store: new ObsidianIndexStore(adapter, ".obsidian/plugins/trew/index.json"),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(SECRET, wrapped)),
+      ...(await server.deviceCredentials("phone")),
       vaultId: "default",
       device: "phone",
       timeoutMs: 20_000,

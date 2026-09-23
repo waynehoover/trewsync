@@ -11,7 +11,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { deferred, nextTurn } from "../core/test-async.ts";
 
 import { Client } from "../core/client.ts";
-import { testWrapped } from "../core/test-keys.ts";
 import { TestServer, cleanupBinary, serverBinary, until } from "../core/test-server.ts";
 import { FakeAdapter, FakeVaultIndex, asVault } from "./fake.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
@@ -19,14 +18,11 @@ import { App, notices } from "./stub.ts";
 import type { Version } from "../core/client.ts";
 import { HistoryModal, PAGE, diffLines, type HistorySource } from "./history.ts";
 
-const SECRET = new Uint8Array(32).fill(91);
-let wrapped: string;
 let server: TestServer;
 const clients: Client[] = [];
 
 beforeAll(async () => {
   await serverBinary();
-  wrapped = await testWrapped(SECRET);
 }, 180_000);
 
 afterAll(async () => {
@@ -48,7 +44,7 @@ async function device(): Promise<{ adapter: FakeAdapter; client: Client; source:
     vault: new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian"),
     store: new ObsidianIndexStore(adapter, ".obsidian/plugins/trew/index.json"),
     url: server.wsUrl,
-    ...(await server.deviceCredentials(SECRET, wrapped)),
+    ...(await server.deviceCredentials("laptop")),
     vaultId: "default",
     device: "laptop",
     timeoutMs: 20_000,
@@ -84,9 +80,9 @@ function version(uid: number, path: string, over: Partial<Version> = {}): Versio
 }
 
 it("follows a rename back into the note's earlier history", async () => {
-  // History matches one exact sealed path, so a note renamed today had a
-  // history that started today, however many months of it the server was
-  // still holding under the old name (Codex-06).
+  // History matched one exact path, so a note renamed today had a history
+  // that started today, however many months of it the server was still
+  // holding under the old name (Codex-06).
   const asked: { path: string; before?: number }[] = [];
   const source: HistorySource = {
     history: async (path, opts) => {

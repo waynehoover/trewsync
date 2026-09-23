@@ -31,7 +31,7 @@ async function stateIs(kind: string) {
 
 it("a retired reconnect loop must not erase the replacement loop's wake handle", async () => {
   resetStub();
-  vi.spyOn(console, "info").mockImplementation(() => undefined);
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
   server = new TestServer();
   await server.start();
   const app = new App();
@@ -43,7 +43,8 @@ it("a retired reconnect loop must not erase the replacement loop's wake handle",
     } as PluginManifest,
   );
   await plugin.onload();
-  await plugin.pairFirst(server.setup, "review-device");
+  // The first device, from the invite the server wrote on an empty store.
+  await plugin.pair(await server.firstInvite(), "review-device");
   await stateIs("synced");
   const state = plugin as unknown as { wakeLoop?: () => void };
   const oldWake = state.wakeLoop!;

@@ -17,8 +17,9 @@
  *   installs it. The local recipe is Electron's `capturePage` inside a running
  *   copy, on a machine somebody logged into.
  * - Native groups, rows, buttons and modal chrome come from Obsidian's theme.
- *   `styles.css` adds scoped layout for disclosures, recovery keys and narrow
- *   screens, so the complete appearance still needs the running application.
+ *   `styles.css` adds scoped layout for disclosures, the invite string and
+ *   narrow screens, so the complete appearance still needs the running
+ *   application.
  * - So a headless browser would need that stylesheet to draw anything true,
  *   and approximating it would produce a picture of a panel that does not
  *   exist. Rule: verify against the artifact, never infer. A rendering that
@@ -57,7 +58,8 @@ import { App, type FakeEl, Plugin as StubPlugin, Setting, built, modals } from "
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
 import TrewPlugin, { type State } from "./main.ts";
 import type { TestServer } from "../core/test-server.ts";
-import { INVITE_PREFIX } from "../core/pairing.ts";
+import { INVITE_PREFIX, formatInviteString } from "../core/invite-string.ts";
+import { encodeConfig, parseInvite, startPairing } from "../core/pairing.ts";
 
 /** One panel state, captured. */
 export interface Shot {
@@ -284,7 +286,7 @@ function closePanel(): void {
 }
 
 /**
- * The nine states the status glyph has, set directly.
+ * The states the status glyph has, set directly.
  *
  * Driven through the private setter rather than produced for real, which is
  * what `main.test.ts` does for the same table and for the same reason: three
@@ -297,6 +299,17 @@ function closePanel(): void {
 // said the pictures no longer covered it.
 const STATUSES: { name: string; state: State }[] = [
   { name: "unpaired", state: { kind: "unpaired" } },
+  // A pairing whose redemption went out and has not been answered, while an
+  // attempt is out and while it waits on one that got no answer.
+  { name: "pairing", state: { kind: "pairing" } },
+  {
+    name: "pairing-waiting",
+    state: {
+      kind: "pairing",
+      why: "could not connect to wss://homelab.example.ts.net",
+      retryAt: Date.now() + 30_000,
+    },
+  },
   { name: "connecting", state: { kind: "connecting" } },
   { name: "loading", state: { kind: "loading", local: 50, server: 100 } },
   { name: "syncing-started", state: { kind: "syncing", since: Date.now() } },
@@ -403,23 +416,29 @@ export async function walkPanelStates(
   const shots: Shot[] = [];
   const loaded: Testable[] = [];
 
-  // Not paired. The first thing anybody sees, and the only state that can
-  // start a vault.
+  // Not paired. The first thing anybody sees, and every device starts here,
+  // the first one included.
   const nobody = await load();
   loaded.push(nobody);
   openPanel(nobody);
   shots.push(
     shotOfOpenPanel(
       "unpaired",
-      "A fresh install. One field takes an invite, a recovery key or a setup line, " +
-        "and the line under it says where that string goes.",
+      "A fresh install. One field takes an invite, from a paired device or, for the first " +
+        "device, from the server, and the line under it says where the invite points.",
     ),
   );
   closePanel();
 
   // A config that cannot be read. Deliberately shows no pairing form: pairing
   // here would overwrite a credential that might be the only copy (rule 2).
-  const broken = await load({ url: "ws://x", vaultId: "default", device: "d", secret: "AAAA" });
+  const broken = await load({
+    url: "ws://x",
+    vaultId: "default",
+    device: "d",
+    deviceId: "AAAAAAAAAAAAAAAAAAAAAA",
+    deviceToken: "AAAA",
+  });
   loaded.push(broken);
   openPanel(broken);
   shots.push(
@@ -430,15 +449,41 @@ export async function walkPanelStates(
   );
   closePanel();
 
-  // Paired, connected, idle. Everything below hangs off this one.
+  // A pairing whose reply never came, being finished. Pointed at a port
+  // nothing listens on, so every attempt fails at once and the panel settles
+  // on the waiting state it is captured in.
+  const unanswered = formatInviteString({
+    token: new Uint8Array(16).fill(5),
+    url: "ws://127.0.0.1:9",
+    vault: "default",
+  });
+  const finishing = await load(encodeConfig(startPairing(parseInvite(unanswered), "tablet")));
+  loaded.push(finishing);
+  await until(
+    "the pairing to be waiting",
+    () => finishing.currentState.kind === "pairing" && finishing.currentState.retryAt !== undefined,
+  );
+  openPanel(finishing);
+  shots.push(
+    shotOfOpenPanel(
+      "pairing-finishing",
+      "A pairing whose invite went out and heard nothing. Not paired and not unpaired: the " +
+        "credential is saved, and the panel finishes it rather than offering to pair over it.",
+    ),
+  );
+  closePanel();
+  finishing.onunload();
+
+  // Paired, connected, idle. Everything below hangs off this one: the first
+  // device, pairing from the invite the server wrote on its empty store.
   const laptop = await load();
   loaded.push(laptop);
-  const recoveryKey = await laptop.pairFirst(server.setup, "laptop");
+  await laptop.pair(await server.firstInvite(), "laptop");
   await until("the first sync", () => laptop.currentState.kind === "synced");
 
   nobody.app.vault.adapter.seed("local.md", "An existing local note\n");
   openPanel(nobody);
-  built.find((s) => s.name === "Invite or setup line")!.texts[0]!.type(recoveryKey);
+  built.find((s) => s.name === "Invite")!.texts[0]!.type(await server.invite());
   await built
     .flatMap((s) => s.buttons)
     .find((b) => b.label === "Pair")!
@@ -450,27 +495,6 @@ export async function walkPanelStates(
 
   openPanel(laptop);
   shots.push(shotOfOpenPanel("paired", "Paired and up to date: the panel as it usually looks."));
-  closePanel();
-
-  // The recovery key, shown once and never again. Its own capture because it
-  // is the one screen somebody has to act on before closing the panel.
-  //
-  // The field is set rather than the vault started again, because the setup
-  // token this server printed has been spent by the pairing above and a second
-  // server would be a second vault. It is the same `render()` either way: the
-  // panel decides on the field and nothing else.
-  openPanel(laptop);
-  const shown = (
-    modals.at(-1) as unknown as { panel: { freshRecoveryKey?: string; render(): void } }
-  ).panel;
-  shown.freshRecoveryKey = recoveryKey;
-  shown.render();
-  shots.push(
-    shotOfOpenPanel(
-      "fresh-recovery-key",
-      "Just after starting a vault. The key is shown here once and no device keeps it.",
-    ),
-  );
   closePanel();
 
   // The rejoin row, which is drawn rather than updated: a panel left open when
@@ -497,7 +521,7 @@ export async function walkPanelStates(
   });
 
   // The device list on a vault with one device, which is not loaded until
-  // somebody asks for it and has no button on its only row.
+  // somebody asks for it. Its only row can be revoked like any other.
   openPanel(laptop);
   await pressRow("Devices", "Show devices");
   await until("the device rows", () =>
@@ -510,7 +534,7 @@ export async function walkPanelStates(
   shots.push(
     shotOfOpenPanel(
       "devices-listed-last-device",
-      "One device. Its row has no button: taking the last row off the server is the one revocation no device can undo, so it takes the recovery key.",
+      "One device, and its row can be revoked too: the last device may be, and trew invite on the server brings one back.",
     ),
   );
   closePanel();
@@ -534,9 +558,8 @@ export async function walkPanelStates(
   if (!issued) throw new Error("the panel showed no invite to redeem");
   closePanel();
 
-  // A second device, so the rows have a Revoke button at all: the only row on
-  // a one-device vault deliberately has none, because emptying the vault is
-  // the recovery key's to do.
+  // A second device, so there is another device's row to revoke rather than
+  // only this one's.
   const phone = await load();
   loaded.push(phone);
   await phone.pair(issued, "phone");
@@ -684,10 +707,10 @@ const HEADER = [
   "see is anything only a theme makes true, which is what the screenshots in",
   "docs/assets/screenshots are for.",
   "",
-  "The invite and recovery key below are real and are worthless: they belong to a",
-  "vault that a test server created at the start of this run and deleted at the",
-  "end of it. They are shown because whether a secret reaches the screen at all",
-  "is one of the things worth looking at here.",
+  "The invites below are real and are worthless: they belong to a vault that a",
+  "test server created at the start of this run and deleted at the end of it.",
+  "They are shown because whether a credential reaches the screen at all is one",
+  "of the things worth looking at here.",
   "",
 ].join("\n");
 

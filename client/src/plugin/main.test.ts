@@ -21,7 +21,7 @@ import type { App as ObsidianApp, PluginManifest } from "obsidian";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TestServer, cleanupBinary, serverBinary } from "../core/test-server.ts";
-import { PROTO, Transport } from "../core/transport.ts";
+import { ConnectionError, PROTO, Transport } from "../core/transport.ts";
 import {
   App,
   type FakeEl,
@@ -35,16 +35,17 @@ import {
 import TrewPlugin, { connectionDetail, describeConnection, describeDeleted } from "./main.ts";
 import { describeRestore } from "./history.ts";
 import { Engine, type SyncReport } from "../core/engine.ts";
-import { Client, redeemInvite } from "../core/client.ts";
+import { Client, pairWithInvite } from "../core/client.ts";
 import { ObsidianIndexStore } from "./vault.ts";
 import {
   DEFAULT_VAULT,
-  INVITE_ID_LENGTH,
-  INVITE_KEY_LENGTH,
-  formatInvite,
+  encodeConfig,
+  generateDeviceToken,
   parseInvite,
-  parsePairing,
+  startPairing,
 } from "../core/pairing.ts";
+import { base64urlEncode, randomBytes } from "../core/digest.ts";
+import { formatInviteString } from "../core/invite-string.ts";
 import { INVITE_ACTION, inviteLink, inviteQrImage } from "./invite-qr.ts";
 
 beforeAll(async () => {
@@ -65,25 +66,31 @@ afterAll(async () => {
 type Testable = TrewPlugin & StubPlugin;
 
 /**
- * The recovery key `pairFirst` returned, kept for the tests that add a second
- * device with it.
+ * Pairs the vault's first device, the way the first device pairs: from the
+ * invite `trew serve` wrote to `<data>/first-invite` on a store with no
+ * devices.
  *
- * It is shown once and no device holds it: a device that did could re-derive
- * the vault's credential and register itself again after being revoked, so
- * revoking it would stop nothing. These tests therefore write it down, which
- * is what a person is told to do.
+ * With the merge confirmed, because a first device is usually a vault full of
+ * notes and the populated-vault confirmation is somebody pressing Continue;
+ * the confirmation itself has its own tests below.
  */
-const writtenDown = new WeakMap<object, string>();
-async function startVault(plugin: Testable, name = "laptop", setup?: string): Promise<string> {
-  const key = await plugin.pairFirst(setup ?? server.setup, name);
-  writtenDown.set(plugin, key);
-  return key;
+async function startVault(plugin: Testable, name = "laptop", on?: TestServer): Promise<void> {
+  await plugin.pair(await (on ?? server).firstInvite(), name, true);
 }
-const keyOf = (plugin: Testable): string => {
-  const key = writtenDown.get(plugin);
-  if (key === undefined) throw new Error("this vault was not started by startVault");
-  return key;
-};
+
+/**
+ * An invite for another device, minted with `trew invite` on the server, the
+ * way an operator mints one. A paired device's panel mints them too, and the
+ * tests about that go through `createInvite`.
+ */
+const anInvite = (on?: TestServer): Promise<string> => (on ?? server).invite();
+
+/** An invite for this server that the server never minted, so redeeming it is refused. */
+const aStrangersInvite = (on?: TestServer): string =>
+  formatInviteString({ token: randomBytes(16), url: (on ?? server).wsUrl, vault: DEFAULT_VAULT });
+
+/** The keys a paired device's data.json holds, and only those (plan/reuse-map.md). */
+const DEVICE_CONFIG_KEYS = ["device", "deviceId", "deviceToken", "url", "vaultId"];
 
 function makePlugin(
   app: App,
@@ -164,21 +171,6 @@ async function until(what: string, cond: () => boolean, ms = 90_000): Promise<vo
 }
 
 /**
- * Waits for a promise that is supposed to settle, and says so when it does not.
- *
- * The failure being guarded is a wait left pending, so the symptom is a test
- * that never finishes. Left to the suite timeout that reads as "timed out
- * after 300000ms" five minutes later, with nothing about what was waiting.
- */
-async function settles(work: Promise<unknown>, what: string, ms = 5_000): Promise<void> {
-  await within(
-    work.catch(() => undefined),
-    what,
-    ms,
-  );
-}
-
-/**
  * `ms` because `until`'s default is fifteen seconds, and fifteen seconds is a
  * fact about the machine that wrote it.
  *
@@ -195,17 +187,19 @@ async function settles(work: Promise<unknown>, what: string, ms = 5_000): Promis
  * and the only thing a short deadline buys is this.
  */
 /**
- * Opens the panel on the pairing form.
- *
- * There is one form and one field now, and which of the three strings it holds
- * is read from the string. So this is only the open, and the `path` argument
- * survives because the callers read better for saying which kind they are
- * about to paste, not because the panel is told.
+ * Opens the panel on the pairing form: one field, "Invite", and one button,
+ * "Pair", whichever device this is.
  */
-function choosePairing(plugin: Testable, _path: "invite" | "first"): void {
+function choosePairing(plugin: Testable): void {
   built.length = 0;
   plugin.commands.find((c) => c.id === "show-status")!.callback!();
 }
+
+/** The Pair button of the newest render. */
+const pairButton = () =>
+  built
+    .find((s) => s.buttons.some((b) => b.label === "Pair"))!
+    .buttons.find((b) => b.label === "Pair")!;
 
 const synced = (p: Testable, ms?: number) =>
   until("a sync", () => p.currentState.kind === "synced", ms).catch((err: Error) => {
@@ -292,16 +286,14 @@ describe("loading", () => {
    * Rule 2, and the incident behind it: code that read a config, fell back to
    * an empty result on error and wrote that back disabled every plugin on a
    * device. Here the fallback would be worse: an unreadable config read as
-   * "unpaired" means the next pairing generates a new root secret, and
-   * everything already on the server stops being decryptable on this device.
+   * "unpaired" means the next pairing writes a new credential over a file
+   * that may hold the only copy of a live row's token.
    */
   it("refuses to start over from a config it cannot read", async () => {
     const { plugin } = await load({ url: "ws://x", token: "t", vaultId: "default", device: "d" });
     expect(plugin.paired).toBe(false);
     expect(plugin.currentState.kind).toBe("stopped");
-    expect(notices.map((n) => n.message).join(" ")).toMatch(
-      /neither the vault's recovery key nor this device's own credential/,
-    );
+    expect(notices.map((n) => n.message).join(" ")).toMatch(/holds no device id/);
     // And it did not quietly overwrite the config it could not read.
     expect(plugin.savedData).toEqual({
       url: "ws://x",
@@ -311,17 +303,44 @@ describe("loading", () => {
     });
   });
 
-  it("refuses a stored secret of the wrong length", async () => {
+  it("refuses a stored device token of the wrong length", async () => {
     const { plugin } = await load({
       url: "ws://x",
-      token: "t",
       vaultId: "default",
       device: "d",
-      secret: "AAAA",
+      deviceId: "AAAAAAAAAAAAAAAAAAAAAA",
+      deviceToken: "AAAA",
     });
     expect(plugin.currentState.kind).toBe("stopped");
-    expect(notices.map((n) => n.message).join(" ")).toMatch(/root secret is 32 bytes/);
+    expect(notices.map((n) => n.message).join(" ")).toMatch(/a device token is 32 bytes/);
   });
+
+  /**
+   * A config that reads but holds no credential is a refusal, in
+   * `deviceCredential`'s words, and not a loop that says "connecting" for ever
+   * about a connection nothing was going to make (plan/research/
+   * basalt-lessons.md section 6, item 7).
+   */
+  it("stops with the words for a config that has no credential, rather than retrying", async () => {
+    await fresh();
+    const { plugin } = await load({
+      url: server.wsUrl,
+      vaultId: "default",
+      device: "d",
+      deviceId: "AAAAAAAAAAAAAAAAAAAAAA",
+    });
+    await until("it to stop", () => plugin.currentState.kind === "stopped");
+    const why = (plugin.currentState as { why: string }).why;
+    expect(why).toMatch(/missing a device token/);
+    expect(why).toMatch(/Pair this vault again with an invite/);
+    // Still the paired panel, because that is where Unlink is, which is the
+    // way out the words name.
+    expect(plugin.paired, "a config with no token lost the panel that can unlink it").toBe(true);
+    // And it stays stopped: nothing about this changes on a retry.
+    await nextTurn();
+    expect(plugin.currentState.kind).toBe("stopped");
+    expect(plugin.savedData).not.toBe(null);
+  }, 300_000);
 });
 
 describe("where its own state goes", () => {
@@ -392,7 +411,11 @@ describe("where its own state goes", () => {
 });
 
 describe("pairing", () => {
-  it("starts a vault, and syncs it", async () => {
+  /**
+   * The first device pairs the way every other one does, from an invite: the
+   * one `trew serve` wrote to its data folder on a store with no devices.
+   */
+  it("pairs the first device from the invite the server wrote, and syncs it", async () => {
     await fresh();
     const { plugin, app } = await load();
     app.vault.adapter.seed("note.md", "# Hello\n");
@@ -401,8 +424,7 @@ describe("pairing", () => {
     plugin.watchState((state) => {
       if (state.kind === "synced") summaries.push(state.summary);
     });
-    const pairing = await startVault(plugin, "laptop");
-    expect(pairing).toMatch(/^basalt3_/);
+    await startVault(plugin, "laptop");
     await synced(plugin);
 
     expect(plugin.paired).toBe(true);
@@ -410,41 +432,35 @@ describe("pairing", () => {
     expect(statusIcon(plugin)).toBe("cloud-check");
     expect(summaries).toContain("1 sent");
     expect(status(plugin)).toMatch(/^Trew Sync: (?:1 sent|Up to date), as of /);
-    // Saved in a form that survives the JSON round trip Obsidian does.
-    // No token: the vault has one secret, and what authenticates is derived
-    // from it. The server's first-run token is kept only until the vault has
-    // been claimed with it, and by now it has.
-    await until("the spent bootstrap to be dropped", () => {
-      const saved = plugin.savedData as Record<string, unknown> | null;
-      return saved !== null && saved["bootstrap"] === undefined;
-    });
-    // What is left is this device's own credential and the data key it reads
-    // with. Not the vault's root: a device that held it could register itself
-    // again after being revoked, so revoking would stop nothing.
-    expect(Object.keys(plugin.savedData as object).sort()).toEqual([
-      "dataKey",
-      "device",
-      "deviceId",
-      "deviceSecret",
-      "url",
-      "vaultId",
-    ]);
+    // Saved in a form that survives the JSON round trip Obsidian does, and
+    // exactly the device's own credential: its row and the token for it. No
+    // invite: that is held only while a pairing is pending.
+    expect(Object.keys(plugin.savedData as object).sort()).toEqual(DEVICE_CONFIG_KEYS);
+    const saved = plugin.savedData as Record<string, string>;
+    expect(saved["url"]).toBe(server.wsUrl);
+    expect(saved["deviceId"]).toMatch(/^[A-Za-z0-9_][A-Za-z0-9_-]*$/);
+    // And the note is on the server, as a second device finds.
+    const second = await load();
+    await second.plugin.pair(await anInvite(), "desktop");
+    await until("the note to arrive", () => second.app.vault.adapter.text("note.md") !== undefined);
+    expect(second.app.vault.adapter.text("note.md")).toBe("# Hello\n");
   }, 300_000);
 
-  it("joins a vault another device started", async () => {
+  it("joins a vault another device paired first", async () => {
     await fresh();
     const first = await load();
     first.app.vault.adapter.seed("note.md", "# Hello\n");
-    const pairing = await startVault(first.plugin, "laptop");
+    await startVault(first.plugin, "laptop");
     await synced(first.plugin);
 
     const second = await load();
-    await second.plugin.pair(pairing, "desktop");
+    await second.plugin.pair(await anInvite(), "desktop");
     await synced(second.plugin);
     await until("the note to arrive", () => second.app.vault.adapter.text("note.md") !== undefined);
 
     expect(second.app.vault.adapter.text("note.md")).toBe("# Hello\n");
     expect(second.plugin.deviceName).toBe("desktop");
+    expect(Object.keys(second.plugin.savedData as object).sort()).toEqual(DEVICE_CONFIG_KEYS);
   }, 300_000);
 
   it("comes back paired after a restart", async () => {
@@ -464,61 +480,36 @@ describe("pairing", () => {
   }, 300_000);
 
   /**
-   * Re-pairing would replace the root secret. Everything already on the server
-   * would stop being decryptable here, the vault would look empty, and the
-   * local copies would then be uploaded under new keys. There is no coming
-   * back from that.
+   * Pairing again would write a new credential over the one this vault holds,
+   * which is the only copy of a live row's token: the row would be stranded
+   * and a second one made.
    */
   it("refuses to pair a vault that is already paired", async () => {
     await fresh();
     const { plugin } = await load();
-    const pairing = await startVault(plugin, "laptop");
+    await startVault(plugin, "laptop");
     await synced(plugin);
+    const saved = plugin.savedData;
 
-    await expect(startVault(plugin, "again")).rejects.toThrow(/already paired/);
-    await expect(plugin.pair(pairing, "again")).rejects.toThrow(/already paired/);
+    await expect(plugin.pair(await anInvite(), "again")).rejects.toThrow(/already paired/);
+    expect(plugin.savedData).toEqual(saved);
   }, 300_000);
 
-  it("refuses a pairing string that was mangled", async () => {
+  it("refuses a string that is not an invite, in the codec's words", async () => {
     const { plugin } = await load();
-    await expect(plugin.pair("hello", "d")).rejects.toThrow(/basalt3_/);
+    await expect(plugin.pair("hello", "d")).rejects.toThrow(/not an invite: .*trew1i_/);
     expect(plugin.paired).toBe(false);
     expect(plugin.savedData).toBe(null);
   });
 
-  it("needs a server to start a vault against", async () => {
+  it("names a Basalt string as Basalt's rather than calling it damaged", async () => {
     const { plugin } = await load();
-    await expect(plugin.pairFirst("#token", "d")).rejects.toThrow(/server address/);
-    await expect(plugin.pairFirst("ws://host#  ", "d")).rejects.toThrow(/token/);
-    await expect(plugin.pairFirst("ws://host", "d")).rejects.toThrow(/host:3003#TOKEN/);
+    for (const basalt of ["basalt3_AAAAAAAAAAAAAAAA", "basalt3i_AAAAAAAAAAAAAAAA"]) {
+      await expect(plugin.pair(basalt, "d")).rejects.toThrow(/Basalt string/);
+    }
     expect(plugin.paired).toBe(false);
+    expect(plugin.savedData).toBe(null);
   });
-
-  /**
-   * The key is shown once and no device keeps it. That is the feature rather
-   * than a gap: a device holding the root could re-derive the vault's
-   * credential and register itself again after being revoked, so revoking
-   * would stop nothing. The panel says so where the key used to be.
-   */
-  it("does not keep the recovery key, and the panel says so", async () => {
-    await fresh();
-    const { plugin } = await load();
-    await startVault(plugin, "laptop");
-    await synced(plugin);
-
-    const stored = plugin.savedData as Record<string, string>;
-    expect(stored["secret"], "the root secret is on this device").toBeUndefined();
-    expect(stored["deviceId"]).toMatch(/^[A-Za-z0-9_-]+$/);
-
-    built.length = 0;
-    plugin.commands.find((c) => c.id === "show-status")!.callback!();
-    const row = built.find((s) => s.name === "Recovery key")!;
-    expect(panelText()).toMatch(/Not stored on this device/);
-    // The description points to the user's saved copy.
-    expect(panelText()).toMatch(/Keep your saved copy safe/);
-    // And no button, because there is nothing for one to do.
-    expect(row.buttons, "the panel offers to show a key it does not have").toEqual([]);
-  }, 300_000);
 });
 
 describe("renaming this device from the panel", () => {
@@ -566,7 +557,7 @@ describe("renaming this device from the panel", () => {
     await synced(a.plugin);
 
     const b = await load();
-    await b.plugin.pair(keyOf(a.plugin), "desktop");
+    await b.plugin.pair(await anInvite(), "desktop");
     await synced(b.plugin);
     await until("the note to arrive", () => b.app.vault.adapter.text("note.md") !== undefined);
 
@@ -629,11 +620,14 @@ describe("pairing instructions", () => {
   it("shows the required guidance without a hover or extra click", async () => {
     await fresh();
     const { plugin } = await load();
-    choosePairing(plugin, "invite");
-    const key = built.find((s) => s.name === "Invite or setup line")!;
-    expect(key.desc).toMatch(/invite from a paired device/);
-    expect(key.desc).toMatch(/saved recovery key/);
-    expect(key.nameEl.children).toEqual([]);
+    choosePairing(plugin);
+    const field = built.find((s) => s.name === "Invite")!;
+    expect(field.desc).toMatch(/invite from a paired device/);
+    // Where the first device's invite comes from, which a device with no other
+    // device to ask has to be told.
+    expect(field.desc).toMatch(/first-invite/);
+    expect(field.desc).toMatch(/trew invite on the server/);
+    expect(field.nameEl.children).toEqual([]);
   }, 300_000);
 });
 
@@ -702,7 +696,7 @@ describe("syncing while it runs", () => {
       await startVault(a.plugin);
       await synced(a.plugin);
       const b = await load();
-      await b.plugin.pair(keyOf(a.plugin), "peer");
+      await b.plugin.pair(await anInvite(), "peer");
       await synced(b.plugin);
       a.app.vault.adapter.seed("resumed.md", "saved while the app was asleep\n");
       doc.dispatchEvent(new Event("visibilitychange"));
@@ -722,7 +716,7 @@ describe("syncing while it runs", () => {
     await startVault(a.plugin);
     await synced(a.plugin);
     const b = await load();
-    await b.plugin.pair(keyOf(a.plugin), "peer");
+    await b.plugin.pair(await anInvite(), "peer");
     await synced(b.plugin);
     const client = (a.plugin as unknown as { client: Client }).client;
     let body = "# Saved edits\n";
@@ -749,7 +743,7 @@ describe("syncing while it runs", () => {
     await startVault(plugin);
     await synced(plugin);
     const peer = await load();
-    await peer.plugin.pair(keyOf(plugin), "peer");
+    await peer.plugin.pair(await anInvite(), "peer");
     await synced(peer.plugin);
     app.vault.adapter.seed("busy.md", "a saved note during a busy vault\n");
     const events = setInterval(() => app.vault.fire("modify", { path: "note.md" }), 20);
@@ -772,7 +766,7 @@ describe("syncing while it runs", () => {
     await synced(a.plugin);
 
     const b = await load();
-    await b.plugin.pair(keyOf(a.plugin), "desktop");
+    await b.plugin.pair(await anInvite(), "desktop");
     await synced(b.plugin);
 
     // A note appears, and Obsidian says so. Nothing else prompts a sync
@@ -829,7 +823,7 @@ describe("syncing while it runs", () => {
     await synced(a.plugin);
 
     const b = await load();
-    await b.plugin.pair(keyOf(a.plugin), "desktop");
+    await b.plugin.pair(await anInvite(), "desktop");
     await synced(b.plugin);
     await until("the note to arrive", () => b.app.vault.adapter.text("note.md") !== undefined);
 
@@ -876,7 +870,7 @@ describe("when things go wrong", () => {
     });
     await plugin.syncNow();
     const peer = await load();
-    await peer.plugin.pair(keyOf(plugin), "peer");
+    await peer.plugin.pair(await anInvite(), "peer");
     await synced(peer.plugin);
     expect(peer.app.vault.adapter.text("draft.md")).toBe("the paragraph still in the editor\n");
   });
@@ -951,7 +945,7 @@ describe("when things go wrong", () => {
       1500,
     );
     const peer = await load();
-    await peer.plugin.pair(keyOf(plugin), "peer");
+    await peer.plugin.pair(await anInvite(), "peer");
     await until(
       "the offline edit to reach the peer",
       () => peer.app.vault.adapter.text("offline.md") === "saved while offline\n",
@@ -1045,6 +1039,63 @@ describe("when things go wrong", () => {
     // the status could be read, and what differs between them is the reason,
     // which the notice above carries.
     expect(status(plugin)).toMatch(/1 file needs attention\./);
+  }, 300_000);
+
+  /**
+   * A path the server refuses reaches the person, by name and with the
+   * server's reason, in the panel (PLAN.md section 4.9, M2 task 11).
+   *
+   * The server answers `badpath` with a message that starts with the reason
+   * code, and the engine writes the path off with that message and a next
+   * step. That has to arrive on the panel's list under the status for as long
+   * as it stays refused, not only in a notice that is gone in twenty seconds
+   * or a log nobody reads. The two plausible real cases, both made directly in
+   * the vault: a name over the 1,024 bytes the server holds, and a control
+   * character in a filename, which a Linux filesystem allows and Obsidian
+   * does not stop.
+   */
+  it("lists a path the server refuses in the panel, with the server's reason", async () => {
+    await fresh();
+    const { plugin, app } = await load();
+    const long = `${"n".repeat(1100)}.md`;
+    // Built rather than written as an escape, so the file holds the character
+    // the test means and not whatever an editor made of it.
+    const control = `bell${String.fromCharCode(7)}.md`;
+    app.vault.adapter.seed("fine.md", "this one is ok\n");
+    app.vault.adapter.seed(long, "too long a name\n");
+    app.vault.adapter.seed(control, "a control character in the name\n");
+    await startVault(plugin, "laptop");
+    await until(
+      "both refusals to be counted",
+      () => plugin.currentState.kind === "synced" && plugin.currentState.refused === 2,
+    );
+
+    built.length = 0;
+    plugin.commands.find((c) => c.id === "show-status")!.callback!();
+    const items: string[] = [];
+    const visit = (el: FakeEl): void => {
+      if (el.tag === "li" && !el.hidden) items.push(el.allText());
+      for (const child of el.children) visit(child);
+    };
+    visit(modals.at(-1)!.contentEl);
+    const line = (path: string) => items.find((text) => text.startsWith(`${path}: `));
+
+    // Each path, whole, with the reason the server gave first, the way the
+    // protocol puts it, and then what to do about it.
+    expect(line(long), `the panel listed: ${JSON.stringify(items)}`).toMatch(
+      /: toolong: the path is \d+ bytes/,
+    );
+    expect(line(control), `the panel listed: ${JSON.stringify(items)}`).toMatch(/: control: /);
+    for (const path of [long, control]) {
+      expect(line(path)).toMatch(/Rename it on this device to a name the server takes/);
+    }
+    // And the refusals held back nothing else: the note that was fine went.
+    const client = (plugin as unknown as { client: Client }).client;
+    const versions = await client.history("fine.md", { limit: 1 });
+    expect(new TextDecoder().decode(await client.contentAt(versions[0]!))).toBe("this one is ok\n");
+    // Nor did they touch the files themselves: both are where they were.
+    expect(app.vault.adapter.text(long)).toBe("too long a name\n");
+    expect(app.vault.adapter.text(control)).toBe("a control character in the name\n");
   }, 300_000);
 });
 
@@ -1248,14 +1299,14 @@ describe("unlinking", () => {
     const second = new TestServer();
     await second.start();
     try {
-      await startVault(plugin, "laptop-again", second.setup);
+      await startVault(plugin, "laptop-again", second);
       await synced(plugin);
       await plugin.syncNow();
 
       // The note must have been uploaded to the new server, not assumed
       // to be there already.
       const elsewhere = await load();
-      await elsewhere.plugin.pair(keyOf(plugin), "other");
+      await elsewhere.plugin.pair(await anInvite(second), "other");
       await synced(elsewhere.plugin);
       await until(
         "the note to arrive",
@@ -1309,20 +1360,17 @@ describe("the panel, which is a modal and a settings tab", () => {
   }, 300_000);
 
   it("asks for one string and works out the rest from it", async () => {
-    // Two designs failed here before this one. Both forms at once was the
-    // first: a name, an invite and Pair, then "Or start a new vault", a setup
-    // string and Start a new vault. Everything needed was there and nothing
-    // said which half was yours, reported from a phone.
-    //
-    // Asking first fixed that and cost a whole screen whose only content was
-    // the question. An invite starts basalt3i_, a recovery key basalt3_, and a
-    // setup line is neither, so the string answers it and nobody has to.
+    // Several designs failed here before this one, all the same way: the
+    // screen asked somebody to choose between kinds of string before it would
+    // draw a form, when the string in their clipboard had already made the
+    // choice. Every device pairs from an invite now, the first one included,
+    // so there is one field and no question in front of it.
     const { plugin } = await load();
     plugin.commands.find((c) => c.id === "show-status")!.callback!();
 
     const asked = built.map((s) => s.name);
     // The form, immediately, with no question in front of it.
-    expect(asked).toContain("Invite or setup line");
+    expect(asked).toContain("Invite");
     expect(asked).not.toContain("Join an existing vault");
     expect(asked).not.toContain("Set up a new vault");
 
@@ -1330,16 +1378,16 @@ describe("the panel, which is a modal and a settings tab", () => {
     // defect: on a phone there is no hover, so guidance behind a mark is not
     // reachable at all. Read off the row rather than out of `allText`, because
     // the fake keeps a description as a property.
-    const row = built.find((s) => s.name === "Invite or setup line")!;
-    // All three shapes the one field takes, so nobody holding a recovery key
-    // has to guess whether this is the place for it.
+    const row = built.find((s) => s.name === "Invite")!;
     expect(row.desc).toMatch(/invite from a paired device/i);
-    expect(row.desc).toMatch(/recovery key/i);
-    expect(row.desc).toMatch(/setup line from your server/i);
+    expect(row.desc).toMatch(/first device/i);
+    // And nothing about the strings that are gone: a recovery key and a setup
+    // line open nothing here, and naming them would send somebody looking.
+    expect(row.desc).not.toMatch(/recovery key|setup line/i);
     expect(row.nameEl.children.filter((c) => c.cls === "trew-help")).toEqual([]);
 
-    // One field holding the line the server printed, rather than a Server and
-    // a Token to split it into by hand.
+    // One field holding the string the server printed, rather than a Server
+    // and a Token to split it into by hand.
     expect(asked).not.toContain("Server");
     expect(asked).not.toContain("Token");
 
@@ -1357,18 +1405,15 @@ describe("the panel, which is a modal and a settings tab", () => {
   it("pairs from what was typed into it", async () => {
     await fresh();
     const first = await load();
-    const pairing = await startVault(first.plugin, "laptop");
+    await startVault(first.plugin, "laptop");
     await synced(first.plugin);
 
     const second = await load();
-    choosePairing(second.plugin, "invite");
+    choosePairing(second.plugin);
 
     built.find((s) => s.name === "Device name")!.texts[0]!.type("desktop");
-    built.find((s) => s.name === "Invite or setup line")!.texts[0]!.type(pairing);
-    await built
-      .find((s) => s.buttons.some((b) => b.label === "Pair"))!
-      .buttons.find((b) => b.label === "Pair")!
-      .click();
+    built.find((s) => s.name === "Invite")!.texts[0]!.type(await anInvite());
+    await pairButton().click();
 
     expect(second.plugin.paired).toBe(true);
     expect(second.plugin.deviceName).toBe("desktop");
@@ -1392,7 +1437,8 @@ describe("the panel, which is a modal and a settings tab", () => {
     expect(adding, "the panel offers no way to add a device").toBeDefined();
     expect(adding.buttons.map((b) => b.label)).toContain("Create invite");
     expect(adding.desc).toMatch(/one-time invite/);
-    expect(adding.desc).toMatch(/Expires in 10 minutes/);
+    // The server's default, which is also its cap (plan/protocol.md).
+    expect(adding.desc).toMatch(/Expires in one hour/);
     const row = built.find((s) => s.name === "Devices")!;
     expect(row, "the panel has no device list").toBeDefined();
     expect(row.desc).toMatch(/manage their access/);
@@ -1408,11 +1454,10 @@ describe("the panel, which is a modal and a settings tab", () => {
     );
     const listed = built.find((s) => s.name.startsWith("laptop"))!;
     expect(listed.name).toMatch(/\(this device\)/);
-    // No button on it, because it is the vault's only device and emptying the
-    // vault takes the recovery key. What the panel offers instead is in "the
-    // device list in the panel", below; the row with a Revoke button on it is
-    // there too.
-    expect(listed.buttons).toEqual([]);
+    // The vault's only device, and it can still be revoked: the last device
+    // may be, and `trew invite` on the server is the way back. What revoking
+    // it says is in "the device list in the panel", below.
+    expect(listed.buttons.map((b) => b.label)).toEqual(["Unlink from the server"]);
   }, 300_000);
 
   it("does not rebuild a closed panel when a settings request finishes", async () => {
@@ -1457,19 +1502,21 @@ describe("the panel, which is a modal and a settings tab", () => {
     const names = built.map((s) => s.name);
     expect(names).toContain("Sync status");
     expect(names).toContain("Devices");
-    expect(names).toContain("Recovery key");
     expect(names).toContain("Unlink this vault");
+    // Nothing is left of the vault-wide secret: no row for a key no device
+    // holds, and no way to replace one.
+    expect(names).not.toContain("Recovery key");
+    expect(names).not.toContain("Replace the vault's secret");
   }, 300_000);
 
   /**
    * The rare rows behind a press, and the everyday ones not.
    *
    * design.md: a thing that matters only when something specific happens
-   * appears in that moment. Devices, the recovery key, replacing the secret
-   * and unlinking are rare and three of the four cannot be undone, so they are
-   * inside a `<details>`. A `<details>` and not a tab or a second modal
-   * because it needs no code and holds no state, which is the whole reason the
-   * panel can be the whole interface.
+   * appears in that moment. Devices and unlinking are rare and cannot be
+   * undone, so they are inside a `<details>`. A `<details>` and not a tab or a
+   * second modal because it needs no code and holds no state, which is the
+   * whole reason the panel can be the whole interface.
    *
    * Pairing, server details and management each have a named disclosure.
    * Only sync and recovery actions are visible by default.
@@ -1506,12 +1553,7 @@ describe("the panel, which is a modal and a settings tab", () => {
 
     const inside = (name: string): boolean =>
       containsElement(manage, built.find((s) => s.name === name)!.settingEl);
-    for (const row of [
-      "Devices",
-      "Recovery key",
-      "Replace the vault's secret",
-      "Unlink this vault",
-    ])
+    for (const row of ["Devices", "Unlink this vault"])
       expect(inside(row), `"${row}" is on the everyday panel`).toBe(true);
     for (const row of ["Sync status", "Add another device", "Recover a deleted note"])
       expect(inside(row), `"${row}" is behind the disclosure`).toBe(false);
@@ -1529,21 +1571,29 @@ describe("the panel, which is a modal and a settings tab", () => {
 
   it("says what went wrong rather than failing quietly", async () => {
     const { plugin } = await load();
-    choosePairing(plugin, "invite");
-    built
-      .find((s) => s.name === "Invite or setup line")!
-      .texts[0]!.type("this is not a pairing string");
+    choosePairing(plugin);
+    built.find((s) => s.name === "Invite")!.texts[0]!.type("this is not a pairing string");
     notices.length = 0;
-    const pair = built
-      .find((s) => s.buttons.some((b) => b.label === "Pair"))!
-      .buttons.find((b) => b.label === "Pair")!;
-    // On screen, where the string was typed, and the button is not offered:
-    // pairing points a vault at a server, so nothing is pressable until the
-    // panel can say which one (R083-05).
-    expect(modals.at(-1)!.contentEl.allText()).toMatch(/basalt3_/);
+    const pair = pairButton();
+    // On screen, where the string was typed, in the codec's words, and the
+    // button is not offered: pairing points a vault at a server, so nothing
+    // is pressable until the panel can say which one (R083-05).
+    expect(modals.at(-1)!.contentEl.allText()).toMatch(/Cannot read that: not an invite/);
+    expect(modals.at(-1)!.contentEl.allText()).toMatch(/trew1i_/);
     expect(pair.disabled).toBe(true);
     await pair.click();
     expect(plugin.paired).toBe(false);
+    expect(plugin.savedData).toBe(null);
+  });
+
+  it("names a pasted Basalt string as Basalt's, and offers nothing to press", async () => {
+    const { plugin } = await load();
+    choosePairing(plugin);
+    built.find((s) => s.name === "Invite")!.texts[0]!.type("basalt3i_AAAAAAAAAAAAAAAAAAAA");
+    const shown = modals.at(-1)!.contentEl.allText();
+    expect(shown).toMatch(/Cannot read that: that is a Basalt string/);
+    expect(pairButton().disabled).toBe(true);
+    expect(plugin.savedData).toBe(null);
   });
 
   it("carries a skip list chosen before pairing into the vault it pairs", async () => {
@@ -1552,7 +1602,7 @@ describe("the panel, which is a modal and a settings tab", () => {
     // vault holding gigabytes of attachments meant racing your own sync to the
     // settings screen (Codex-05).
     const { plugin } = await load();
-    choosePairing(plugin, "invite");
+    choosePairing(plugin);
     const skip = built.find((s) => s.name === "Skip on this device")!;
     skip.texts[0]!.type("Attachments");
     await skip.buttons.find((b) => b.label === "Skip")!.click();
@@ -1562,63 +1612,52 @@ describe("the panel, which is a modal and a settings tab", () => {
       carried = ignore;
     };
     built
-      .find((s) => s.name === "Invite or setup line")!
+      .find((s) => s.name === "Invite")!
       .texts[0]!.type(
-        formatInvite({
+        formatInviteString({
+          token: new Uint8Array(16).fill(4),
           url: "wss://homelab.example.ts.net",
-          vaultId: "default",
-          id: new Uint8Array(INVITE_ID_LENGTH).fill(3),
-          key: new Uint8Array(INVITE_KEY_LENGTH).fill(4),
+          vault: DEFAULT_VAULT,
         }),
       );
-    await built
-      .find((s) => s.buttons.some((b) => b.label === "Pair"))!
-      .buttons.find((b) => b.label === "Pair")!
-      .click();
+    await pairButton().click();
 
     expect(carried, "the skip list did not reach the pairing").toEqual(["Attachments"]);
   });
 
   it("names the vault and server an invite would join, before pairing", async () => {
     const { plugin } = await load();
-    choosePairing(plugin, "invite");
-    const field = built.find((s) => s.name === "Invite or setup line")!.texts[0]!;
-    const pair = () =>
-      built
-        .find((s) => s.buttons.some((b) => b.label === "Pair"))!
-        .buttons.find((b) => b.label === "Pair")!;
-    expect(pair().disabled, "nothing typed, so nothing to join").toBe(true);
+    choosePairing(plugin);
+    const field = built.find((s) => s.name === "Invite")!.texts[0]!;
+    expect(pairButton().disabled, "nothing typed, so nothing to join").toBe(true);
 
     field.type(
-      formatInvite({
+      formatInviteString({
+        token: new Uint8Array(16).fill(9),
         url: "wss://someone-elses.example.org",
-        vaultId: "their-vault",
-        id: new Uint8Array(INVITE_ID_LENGTH).fill(7),
-        key: new Uint8Array(INVITE_KEY_LENGTH).fill(9),
+        vault: "their-vault",
       }),
     );
     const shown = modals.at(-1)!.contentEl.allText();
     expect(shown).toContain("their-vault");
     expect(shown).toContain("wss://someone-elses.example.org");
-    expect(pair().disabled).toBe(false);
+    expect(pairButton().disabled).toBe(false);
 
     // A vault nobody named is not named back. "default" is the value assumed
-    // when a string carries none, and the server leaves it out of a setup line
-    // for the same reason: it is a default, not a choice, and quoting it here
-    // reads as a placeholder that leaked into the one line somebody is meant
-    // to check the server address on.
+    // when a string carries none, and quoting it here reads as a placeholder
+    // that leaked into the one line somebody is meant to check the server
+    // address on.
     field.type(
-      formatInvite({
+      formatInviteString({
+        token: new Uint8Array(16).fill(9),
         url: "wss://homelab.example.ts.net",
-        vaultId: DEFAULT_VAULT,
-        id: new Uint8Array(INVITE_ID_LENGTH).fill(7),
-        key: new Uint8Array(INVITE_KEY_LENGTH).fill(9),
+        vault: DEFAULT_VAULT,
       }),
     );
     const plain = modals.at(-1)!.contentEl.allText();
     expect(plain).toContain("wss://homelab.example.ts.net");
     expect(plain).not.toContain("default");
-    expect(pair().disabled, "still perfectly joinable").toBe(false);
+    expect(pairButton().disabled, "still perfectly joinable").toBe(false);
   });
 });
 
@@ -1823,7 +1862,7 @@ describe("saying what it is working on", () => {
       await startVault(a.plugin, "sender");
       await synced(a.plugin);
       const b = await load();
-      await b.plugin.pair(keyOf(a.plugin), "receiver");
+      await b.plugin.pair(await anInvite(), "receiver");
       await synced(b.plugin);
       const subject = direction === "upload" ? a.plugin : b.plugin;
       const client = (subject as unknown as { client: Client }).client;
@@ -1909,10 +1948,10 @@ describe("saying what it is working on", () => {
       if (s.kind === "syncing" && s.path !== undefined) seen.push(s.path);
     });
 
-    // Incompressible and large enough that sealing it reliably outlasts the
-    // threshold. A compressible file seals in a few milliseconds and the
-    // state never fires, which made an earlier version of this pass or fail
-    // depending on how loaded the machine was.
+    // Incompressible and large enough that chunking, naming and sending it
+    // reliably outlasts the threshold. A compressible file is done in a few
+    // milliseconds and the state never fires, which made an earlier version
+    // of this pass or fail depending on how loaded the machine was.
     const big = new Uint8Array(24 * 1024 * 1024);
     for (let at = 0; at < big.length; at += 65536) {
       crypto.getRandomValues(big.subarray(at, Math.min(at + 65536, big.length)));
@@ -2008,7 +2047,7 @@ function holdIndexLoad(plugin: Testable, app: App) {
  *  A run inside `connect` used to survive `unlink`:
  * the shell was handed the client only once the handshake had succeeded, so
  * a vault unlinked during a slow handshake had nothing to close, and the
- * connection went on to complete with the old secret. The two tests this
+ * connection went on to complete with the old credential. The two tests this
  * replaces asserted that a counter had moved, which is not the property.
  */
 describe("unlinking during the handshake", () => {
@@ -2020,7 +2059,7 @@ describe("unlinking during the handshake", () => {
       app.vault.adapter.seed("secret-note.md", "must never reach the old server after unlink");
       const { began, release, finished } = holdIndexLoad(plugin, app);
 
-      const oldPairing = await startVault(plugin, "laptop");
+      await startVault(plugin, "laptop");
       await began;
       expect(plugin.currentState.kind).toBe("connecting");
       await plugin.unlink();
@@ -2038,19 +2077,15 @@ describe("unlinking during the handshake", () => {
       expect(plugin.currentState.kind).toBe("unpaired");
 
       // The old server holds nothing. It has heard from this device, because
-      // starting a vault claims it and registers a row rather than writing a
+      // pairing redeems an invite and registers a row rather than writing a
       // config and contacting nobody, but not one note went up: the run was
       // retired before its first pass.
-      const { Client } = await import("../core/client.ts");
-      const { parsePairing } = await import("../core/pairing.ts");
-      const { testWrapped } = await import("../core/test-keys.ts");
       const { MemoryIndexStore, MemoryVault } = await import("../core/vault.ts");
-      const secret = parsePairing(oldPairing).secret;
       const checker = new Client({
         vault: new MemoryVault(),
         store: new MemoryIndexStore(),
         url: server.wsUrl,
-        ...(await server.deviceCredentials(secret, await testWrapped(secret), "checker")),
+        ...(await server.deviceCredentials("checker")),
         vaultId: "default",
         device: "checker",
       });
@@ -2165,7 +2200,7 @@ describe("unlink, in order and all the way", () => {
     await startVault(a.plugin, "laptop");
     await synced(a.plugin);
     const b = await load();
-    await b.plugin.pair(keyOf(a.plugin), "desktop");
+    await b.plugin.pair(await anInvite(), "desktop");
     await synced(b.plugin);
 
     // A download on b that takes a while, and an unlink in the middle of it.
@@ -2278,181 +2313,395 @@ describe("unlink, in order and all the way", () => {
 });
 
 /**
- * The first device claims the vault
- * with the server's bootstrap token and then drops the token. If the drop
- * never saved, or the claim's reply was lost, the next start offered the
- * spent token first and was refused for ever.
- */
-/**
- * What protocol 4 leaves of it.
+ * A pairing is saved before its redemption is sent (plan/protocol.md, "Invite
+ * redemption"), and this is what each outcome leaves.
  *
- * Starting a vault writes the root to `data.json` and reads it back before the
- * claim goes out, because the claim binds the server to that secret for good
- * and a secret that never reached the disk is a vault nobody can open. If the
- * registration after it fails, that is what is left: a root, no row, and a
- * phone. Nothing resumes from that and retries the spent token, so the whole
- * of the answer has to be in what the phone shows, and it is tested for the
- * key itself rather than for advice about it.
+ * Persist-before-send is what makes a lost reply recoverable: the credential
+ * the server may register is on disk before a byte goes out. It is also what
+ * the tests elsewhere in this file that say "nothing is saved" are restated
+ * against (plan/strip-ledger.md, hazard 2): the early credential lives in a
+ * pending pairing, which is neither paired nor unpaired, and a definite
+ * refusal removes it.
  */
-describe("a vault that was started and never joined", () => {
-  it("stops with the recovery key on screen rather than retrying for ever", async () => {
+describe("a pairing saved before it is sent", () => {
+  /** Holds the redemption after this one, so a test can look at what is kept. */
+  function redeemAs(
+    ...steps: ((this: Transport, args: RedeemArgs) => Promise<{ deviceId: string }>)[]
+  ) {
+    const spy = vi.spyOn(Transport.prototype, "redeem");
+    for (const step of steps) spy.mockImplementationOnce(step);
+    return spy;
+  }
+  type RedeemArgs = Parameters<Transport["redeem"]>[0];
+  const realRedeem = Transport.prototype.redeem;
+
+  it("saves the pending pairing, read back, before the redemption goes out", async () => {
     await fresh();
     const first = await load();
     await startVault(first.plugin, "laptop");
     await synced(first.plugin);
-    const recoveryKey = keyOf(first.plugin);
 
-    // What a registration that failed after the claim committed leaves on
-    // disk: the config as it was saved before the claim, root and all.
-    const { parsePairing } = await import("../core/pairing.ts");
-    const { base64urlEncode } = await import("../core/crypto.ts");
-    const saved = first.plugin.savedData as Record<string, unknown>;
-    const stale = {
-      url: saved["url"],
-      vaultId: saved["vaultId"],
-      device: saved["device"],
-      secret: base64urlEncode(parsePairing(recoveryKey).secret),
-    };
-    first.plugin.onunload();
-    await first.plugin.closing;
-
-    const again = await load(stale);
-    await until("it to stop", () => again.plugin.currentState.kind === "stopped");
-    const why = (again.plugin.currentState as { why: string }).why;
-    expect(why).toMatch(/never registered itself/);
-    // The key, on screen. This config is the only copy of it, so a phone that
-    // said "could not connect" and no more would be a lost vault.
-    expect(why).toContain(recoveryKey);
-    expect(why).toMatch(/unlink this vault and pair again with it/);
-    // Stopped, not offline: nothing here is going to change on a retry, and a
-    // status bar saying "connecting" about that is the lie rule 7 is about.
-    expect(again.plugin.savedData).not.toBe(null);
+    const second = await load();
+    const seen: { saved: unknown; sent: string }[] = [];
+    const spy = redeemAs(async function (this: Transport, args) {
+      seen.push({ saved: structuredClone(second.plugin.savedData), sent: args.deviceId });
+      return realRedeem.call(this, args);
+    });
+    try {
+      await second.plugin.pair(await anInvite(), "phone");
+    } finally {
+      spy.mockRestore();
+    }
+    // At the moment the redemption went out, the disk already held it: this
+    // device's id and token, and the invite they redeem.
+    expect(seen).toHaveLength(1);
+    const pending = seen[0]!.saved as Record<string, string>;
+    expect(Object.keys(pending).sort()).toEqual([...DEVICE_CONFIG_KEYS, "invite"].sort());
+    expect(pending["deviceId"], "the id sent is not the id saved").toBe(seen[0]!.sent);
+    // And the finished device is that same credential, without the invite.
+    const finished = second.plugin.savedData as Record<string, string>;
+    expect(Object.keys(finished).sort()).toEqual(DEVICE_CONFIG_KEYS);
+    expect(finished["deviceId"]).toBe(pending["deviceId"]);
+    expect(finished["deviceToken"]).toBe(pending["deviceToken"]);
+    await synced(second.plugin);
   }, 300_000);
 
   /**
-   * F02. The recovery key has to leave this device before anything that can
-   * lose it.
-   *
-   * The registration replaces the root on disk with this device's own
-   * credential, and the connection that proves that credential comes after
-   * the replacement. So every failure from the registration onwards used to
-   * end with a working device, no root anywhere, and an error with no key in
-   * it; a crash in the same window did it silently. Returning the key at the
-   * end cannot fix that, because the end is the part that does not happen.
+   * Hazard 3's lost reply, from the plugin's side: the server commits the
+   * redemption and the answer never arrives. Whether the row exists is exactly
+   * what this device does not know, so the pending pairing is kept, and the
+   * retry with the same id and token is answered `redeemed` again.
    */
-  it("hands the recovery key over while the root is still the thing on disk", async () => {
+  it("keeps a pairing whose reply was lost, and finishes it with the same row", async () => {
     await fresh();
-    const { plugin } = await load();
+    const first = await load();
+    await startVault(first.plugin, "laptop");
+    await synced(first.plugin);
 
-    const seen: { key: string; rootOnDisk: boolean; sent: number }[] = [];
-    let sent = 0;
-    const realSave = plugin.saveData.bind(plugin);
-    plugin.saveData = async (data) => {
-      sent++;
-      return realSave(data);
-    };
+    const second = await load();
+    let sent: string | undefined;
+    const retrying = deferred();
+    const release = deferred();
+    const spy = redeemAs(
+      async function (this: Transport, args) {
+        await realRedeem.call(this, args);
+        sent = args.deviceId;
+        throw new ConnectionError("the connection closed: code 1006");
+      },
+      async function (this: Transport, args) {
+        retrying.resolve();
+        await release.promise;
+        return realRedeem.call(this, args);
+      },
+    );
+    try {
+      const said = await second.plugin.pair(await anInvite(), "phone").then(
+        () => undefined,
+        (err: Error) => err,
+      );
+      expect(said?.message, "a lost reply was reported as a pairing").toMatch(
+        /no answer came back/,
+      );
+      expect(said?.message).toMatch(/finishing it now/);
 
-    const key = await plugin.pairFirst(server.setup, "laptop", (k) => {
-      const held = plugin.savedData as Record<string, unknown> | null;
-      seen.push({ key: k, rootOnDisk: held?.["secret"] !== undefined, sent });
-    });
+      // Kept, while the retry is out: not paired, not unpaired, and the
+      // credential the server registered is the one on disk.
+      await within(retrying.promise, "the pairing to be tried again");
+      expect(second.plugin.paired).toBe(false);
+      expect(second.plugin.currentState.kind).toBe("pairing");
+      const kept = second.plugin.savedData as Record<string, string>;
+      expect(kept["invite"], "the pending pairing was not kept").toBeDefined();
+      expect(kept["deviceId"]).toBe(sent);
+      // The panel is neither the form nor the paired panel.
+      choosePairing(second.plugin);
+      expect(panelText()).toMatch(/Finishing pairing/);
+      expect(panelText()).toMatch(/Joining ws:\/\/127\.0\.0\.1/);
+      expect(
+        built.some((s) => s.name === "Invite"),
+        "the form offered to pair over it",
+      ).toBe(false);
+      expect(built.some((s) => s.name === "Sync status")).toBe(false);
+      modals.at(-1)!.close();
+    } finally {
+      release.resolve();
+      spy.mockRestore();
+    }
 
-    expect(seen, "the key was never handed over before the call returned").toHaveLength(1);
-    expect(seen[0]!.key, "a different key was handed over").toBe(key);
-    expect(
-      seen[0]!.rootOnDisk,
-      "the key was handed over after the root had already left the disk",
-    ).toBe(true);
-    // And the vault ends up in the state it always did: the credential on
-    // disk, the root gone, which is what makes revoking this device mean
-    // something.
-    const held = plugin.savedData as Record<string, unknown>;
-    expect(held["deviceId"]).toBeDefined();
-    expect(held["secret"], "a paired device kept the vault's root").toBeUndefined();
+    await synced(second.plugin);
+    const finished = second.plugin.savedData as Record<string, string>;
+    expect(Object.keys(finished).sort()).toEqual(DEVICE_CONFIG_KEYS);
+    expect(finished["deviceId"], "the retry registered another device").toBe(sent);
+    // One row for it, not two: the retry recognised its own redemption.
+    const rows = (await first.plugin.devices()).devices;
+    expect(rows.map((d) => d.id).sort()).toEqual([first.plugin.deviceId!, sent!].sort());
   }, 300_000);
 
-  it("keeps the root when the claim went through and the credential could not be saved", async () => {
-    // The save that records this device's credential is the one that cannot be
-    // taken on trust: it lands between a registration the server has committed
-    // and a phone with nothing to show for it.
+  it("finishes a kept pairing on the next load, with the same device id", async () => {
     await fresh();
-    const { plugin } = await load();
+    const first = await load();
+    first.app.vault.adapter.seed("note.md", "# From the first device\n");
+    await startVault(first.plugin, "laptop");
+    await synced(first.plugin);
+
+    // The reply is lost and Obsidian goes away before anything retries: a
+    // phone killed at the wrong moment.
+    const second = await load();
+    let sent: string | undefined;
+    const spy = redeemAs(async function (this: Transport, args) {
+      await realRedeem.call(this, args);
+      sent = args.deviceId;
+      second.plugin.onunload();
+      throw new ConnectionError("the connection closed: code 1006");
+    });
+    try {
+      await second.plugin.pair(await anInvite(), "phone").catch(() => undefined);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(second.plugin.paired).toBe(false);
+    expect((second.plugin as unknown as { client?: unknown }).client).toBeUndefined();
+    const kept = second.plugin.savedData as Record<string, string>;
+    expect(kept["invite"]).toBeDefined();
+    expect(kept["deviceId"]).toBe(sent);
+
+    // The next load finishes it: the same id and token, answered `redeemed`
+    // again although the invite is spent.
+    const again = await load(kept);
+    await synced(again.plugin);
+    const finished = again.plugin.savedData as Record<string, string>;
+    expect(Object.keys(finished).sort()).toEqual(DEVICE_CONFIG_KEYS);
+    expect(finished["deviceId"]).toBe(sent);
+    expect(finished["deviceToken"]).toBe(kept["deviceToken"]);
+    expect((await first.plugin.devices()).devices).toHaveLength(2);
+    await until("the note to arrive", () => again.app.vault.adapter.text("note.md") !== undefined);
+    expect(again.app.vault.adapter.text("note.md")).toBe("# From the first device\n");
+  }, 300_000);
+
+  /**
+   * A refusal writes nothing on the server, so a pending pairing it refuses
+   * holds a credential that opens nothing, and it goes. Here the invite is one
+   * the server never minted: what a pairing whose invite was cancelled, or
+   * expired unredeemed, meets on its retry.
+   */
+  it("removes a pending pairing the server refuses on load, and says why", async () => {
+    await fresh();
+    const pending = startPairing(parseInvite(aStrangersInvite()), "phone");
+    const { plugin } = await load(encodeConfig(pending));
+    await until("the refusal", () => plugin.currentState.kind === "unpaired");
+    expect(plugin.savedData, "a refused pairing was left on disk").toBe(null);
+    expect(plugin.paired).toBe(false);
+    expect(notices.map((n) => n.message).join(" ")).toMatch(
+      /could not be finished: not authorised for this vault/,
+    );
+
+    // The panel says why, above the form that tries again.
+    choosePairing(plugin);
+    expect(panelText()).toMatch(/could not be finished: not authorised for this vault/);
+    expect(panelText()).toMatch(/Nothing was registered/);
+    expect(
+      built.some((s) => s.name === "Invite"),
+      "no way to pair again",
+    ).toBe(true);
+  }, 300_000);
+
+  /**
+   * The difference from a first attempt. `pairWithInvite` forgets a pairing
+   * whose connection never opened, which is right the first time, when nothing
+   * can have been sent. A pending pairing on disk is one whose redemption went
+   * out in an earlier attempt and may have committed, so a server that cannot
+   * be reached now is no reason to throw away the only copy of that row's
+   * token.
+   */
+  it("keeps a pending pairing while the server cannot be reached, and finishes it after", async () => {
+    await fresh();
+    const first = await load();
+    await startVault(first.plugin, "laptop");
+    await synced(first.plugin);
+    const pending = startPairing(parseInvite(await anInvite()), "phone");
+    const saved = encodeConfig(pending);
+    const port = server.port;
+    await server.stop();
+
+    const { plugin } = await load(saved);
+    await until(
+      "an attempt that could not reach the server",
+      () => plugin.currentState.kind === "pairing" && plugin.currentState.retryAt !== undefined,
+    );
+    expect(plugin.savedData, "an unreachable server made it forget the pairing").toEqual(saved);
+    expect(plugin.paired).toBe(false);
+    expect(status(plugin)).toMatch(/Finishing the pairing: could not connect/);
+    expect(statusIcon(plugin)).toBe("cloud-off");
+    // Not a pairable vault either: pairing over it would strand the row.
+    await expect(plugin.pair(aStrangersInvite(), "other")).rejects.toThrow(/still being finished/);
+    expect(plugin.savedData).toEqual(saved);
+
+    // The server comes back, Try now does not wait out the backoff, and the
+    // pairing finishes with the credential it was saved with.
+    await server.start(port);
+    choosePairing(plugin);
+    await built
+      .find((s) => s.name === "Pairing status")!
+      .buttons.find((b) => b.label === "Try now")!
+      .click();
+    await synced(plugin);
+    const finished = plugin.savedData as Record<string, string>;
+    expect(Object.keys(finished).sort()).toEqual(DEVICE_CONFIG_KEYS);
+    expect(finished["deviceId"]).toBe(pending.deviceId);
+    expect(finished["deviceToken"]).toBe(pending.deviceToken);
+  }, 300_000);
+
+  it("gives up a pending pairing when unlinked, and says what may be left", async () => {
+    await fresh();
+    const pending = startPairing(parseInvite(aStrangersInvite()), "phone");
+    const port = server.port;
+    await server.stop();
+    const { plugin } = await load(encodeConfig(pending));
+    await until("the pairing to be waiting", () => plugin.currentState.kind === "pairing");
+
+    choosePairing(plugin);
+    const unlink = built.find((s) => s.name === "Unlink this vault")!;
+    expect(unlink.desc).toMatch(/never connected/);
+    await unlink.buttons.find((b) => b.label === "Unlink")!.click();
+    expect(plugin.savedData).toBe(null);
+    expect(plugin.currentState.kind).toBe("unpaired");
+    await server.start(port);
+    // And nothing wakes up afterwards to finish what was given up.
+    await plugin.syncNow();
+    expect(plugin.savedData).toBe(null);
+  }, 300_000);
+
+  /**
+   * A save that fails before anything is sent leaves nothing registered and
+   * the invite unspent, and the words say so (the SPLIT half of
+   * main.test.ts:2374 in the strip ledger: the root that used to be kept is
+   * gone, and "leaves the invite unspent" is what survives).
+   */
+  it("leaves the invite unspent when the pairing cannot be saved before it is sent", async () => {
+    await fresh();
+    const first = await load();
+    await startVault(first.plugin, "laptop");
+    await synced(first.plugin);
+    const invite = await anInvite();
+
+    const second = await load();
     let failing = true;
-    const realSave = plugin.saveData.bind(plugin);
-    plugin.saveData = async (data) => {
+    const realSave = second.plugin.saveData.bind(second.plugin);
+    second.plugin.saveData = async (data: unknown) => {
       const record = data as Record<string, unknown> | null;
       if (failing && record !== null && record["deviceId"] !== undefined) {
         throw new Error("EIO: data.json");
       }
       return realSave(data);
     };
-    const failed = await startVault(plugin, "laptop").then(
-      () => undefined,
-      (err: Error) => err,
-    );
-    expect(failed?.message, "starting the vault succeeded").toMatch(/could not register itself/);
-    // The row the registration may already have committed, named. A phone
-    // told only to pair again registers a second row without learning
-    // that the first one is there.
-    expect(failed?.message).toMatch(/device row was registered/);
-    expect(failed?.message).toMatch(/never connected/);
-    expect(failed?.message).toMatch(/Write the recovery key shown in the Trew panel down/);
-
-    // On disk and in memory, the root is still there: the claim may have
-    // committed, and throwing it away is a vault nothing will ever open.
-    const held = plugin.savedData as Record<string, unknown>;
-    expect(held["secret"], "the root went with the failed save").toBeDefined();
-    await until("it to stop", () => plugin.currentState.kind === "stopped");
-    const why = (plugin.currentState as { why: string }).why;
-    expect(why).toMatch(/never registered itself/);
-    // And the key is on the panel, which is where the person was sent.
-    const printed = why.match(/basalt3_[A-Za-z0-9_-]+/)![0];
-    const { parsePairing } = await import("../core/pairing.ts");
-    expect(parsePairing(printed).vaultId).toBe("default");
-
-    // The way out the words name: forget this pairing, and pair with the key.
-    failing = false;
-    await plugin.unlink();
-    const rejoined = await load();
-    await rejoined.plugin.pair(printed, "laptop");
-    await synced(rejoined.plugin);
-    const after = rejoined.plugin.savedData as Record<string, unknown>;
-    expect(after["secret"], "pairing with the recovery key kept it").toBeUndefined();
-    expect(after["deviceId"]).toBeDefined();
-  }, 300_000);
-
-  /**
-   * The panel's pairing form, at the same moment: the registration commits and
-   * the credential does not reach data.json.
-   *
-   * A row exists on the vault that nothing holds the key to, and the advice
-   * has to name it. Pairing again registers a second one, so a phone that is
-   * only told to try again leaves another unused row per attempt. The words come from `adviseAfterRegistering`,
-   * which the CLI's `init` and `pair` also take theirs from.
-   */
-  it("names the row the panel's pairing left when the credential could not be saved", async () => {
-    await fresh();
-    const first = await load();
-    const key = await startVault(first.plugin, "laptop");
-    await synced(first.plugin);
-
-    const second = await load();
-    const realSave = second.plugin.saveData.bind(second.plugin);
-    second.plugin.saveData = async (data: unknown) => {
-      const record = data as Record<string, unknown> | null;
-      if (record !== null && record["deviceId"] !== undefined) throw new Error("EIO: data.json");
-      return realSave(data);
-    };
-    const failed = await second.plugin.pair(key, "desktop").then(
+    const failed = await second.plugin.pair(invite, "phone").then(
       () => undefined,
       (err: Error) => err,
     );
     expect(failed?.message, "the pairing succeeded").toMatch(/EIO/);
-    expect(failed?.message).toMatch(/device row was registered/);
-    expect(failed?.message).toMatch(/never connected/);
-    expect(failed?.message).toMatch(/nothing can connect as that device/);
-    // Nothing here claims to be paired, because nothing here can connect.
+    expect(failed?.message).toMatch(/Nothing was registered/);
+    expect(failed?.message).toMatch(/invite was not spent/);
     expect(second.plugin.savedData).toBe(null);
+    expect(second.plugin.paired).toBe(false);
+    expect((await first.plugin.devices()).devices).toHaveLength(1);
+
+    // And the words are true: the same invite pairs once the disk takes it.
+    failing = false;
+    await second.plugin.pair(invite, "phone");
+    await synced(second.plugin);
+    expect((await first.plugin.devices()).devices).toHaveLength(2);
+  }, 300_000);
+
+  /**
+   * The redemption commits and the finished device's save fails: the row is
+   * real, and its token is on disk in the pending pairing, so nothing is
+   * orphaned. It is kept and finished with the same row once the disk takes
+   * the write (the SPLIT half of main.test.ts:2433 in the strip ledger: the
+   * orphan row it used to name no longer exists to be named).
+   */
+  it("keeps the pending pairing when the finished credential cannot be saved", async () => {
+    await fresh();
+    const first = await load();
+    await startVault(first.plugin, "laptop");
+    await synced(first.plugin);
+    const invite = await anInvite();
+
+    const second = await load();
+    let failing = true;
+    const realSave = second.plugin.saveData.bind(second.plugin);
+    second.plugin.saveData = async (data: unknown) => {
+      const record = data as Record<string, unknown> | null;
+      // The finished device: the pending pairing without its invite.
+      if (failing && record !== null && record["invite"] === undefined) {
+        throw new Error("EIO: data.json");
+      }
+      return realSave(data);
+    };
+    const failed = await second.plugin.pair(invite, "desktop").then(
+      () => undefined,
+      (err: Error) => err,
+    );
+    expect(failed?.message, "the pairing succeeded").toMatch(/EIO/);
+    // Nothing to revoke: the row's token is here.
+    expect(failed?.message).not.toMatch(/revoke/);
+    const kept = second.plugin.savedData as Record<string, string>;
+    expect(kept["invite"], "the pending pairing went with the failed save").toBeDefined();
+    expect(second.plugin.paired).toBe(false);
+
+    await until(
+      "the retry to wait",
+      () =>
+        second.plugin.currentState.kind === "pairing" &&
+        second.plugin.currentState.retryAt !== undefined,
+    );
+    failing = false;
+    await second.plugin.syncNow();
+    await synced(second.plugin);
+    const finished = second.plugin.savedData as Record<string, string>;
+    expect(finished["deviceId"], "a second row was registered").toBe(kept["deviceId"]);
+    const rows = (await first.plugin.devices()).devices;
+    expect(rows).toHaveLength(2);
+    expect(
+      rows.filter((d) => d.lastSeen === 0),
+      "a row nothing connected under",
+    ).toEqual([]);
+  }, 300_000);
+
+  /**
+   * The one way a row can still be left that nothing connects as: the vault is
+   * unlinked while its redemption is in flight. Unlink removes the pending
+   * pairing whatever the server did, so the words cannot be the ones for an
+   * empty disk, "nothing was registered", and the row they name is really
+   * there and really goes (the SPLIT half of main.test.ts:2433 in the strip
+   * ledger that survives: a pairing that may have left a row names it).
+   */
+  it("names the row an unlink during the redemption may leave, and it can be revoked", async () => {
+    await fresh();
+    const first = await load();
+    await startVault(first.plugin, "laptop");
+    await synced(first.plugin);
+    const invite = await anInvite();
+
+    const second = await load();
+    const spy = redeemAs(async function (this: Transport, args) {
+      const answer = await realRedeem.call(this, args);
+      await second.plugin.unlink();
+      return answer;
+    });
+    let failed: Error | undefined;
+    try {
+      failed = await second.plugin.pair(invite, "phone").then(
+        () => undefined,
+        (err: Error) => err,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(failed?.message, "the pairing succeeded").toMatch(/unlinked while it was being paired/);
+    expect(failed?.message).toMatch(/never connected/);
+    expect(failed?.message, "it said nothing was registered").not.toMatch(/Nothing was registered/);
+    expect(second.plugin.savedData).toBe(null);
+    expect(second.plugin.paired).toBe(false);
+    expect(second.plugin.currentState.kind).toBe("unpaired");
 
     // And the row it names is really there, and really goes.
     const rows = (await first.plugin.devices()).devices;
@@ -2473,8 +2722,9 @@ describe("a vault that was started and never joined", () => {
   it("will not name a row for revoking when data.json refuses to read back", async () => {
     await fresh();
     const first = await load();
-    const key = await startVault(first.plugin, "laptop");
+    await startVault(first.plugin, "laptop");
     await synced(first.plugin);
+    const invite = await anInvite();
 
     const second = await load();
     let breaking = false;
@@ -2482,14 +2732,17 @@ describe("a vault that was started and never joined", () => {
     const realSave = second.plugin.saveData.bind(second.plugin);
     second.plugin.saveData = async (data: unknown) => {
       const record = data as Record<string, unknown> | null;
-      if (record !== null && record["deviceId"] !== undefined) breaking = true;
+      // The finished device, after the server has answered: its only token.
+      if (record !== null && record["deviceId"] !== undefined && record["invite"] === undefined) {
+        breaking = true;
+      }
       return realSave(data);
     };
     second.plugin.loadData = async () => {
       if (breaking) throw new Error("EIO: data.json");
       return realLoad();
     };
-    const failed = await second.plugin.pair(key, "desktop").then(
+    const failed = await second.plugin.pair(invite, "desktop").then(
       () => undefined,
       (err: Error) => err,
     );
@@ -2499,32 +2752,75 @@ describe("a vault that was started and never joined", () => {
     // The credential really was written, and it is the row's only key.
     expect((second.plugin.savedData as Record<string, unknown>)["deviceId"]).toBeDefined();
     expect((await first.plugin.devices()).devices).toHaveLength(2);
+    // And nothing here will pair over it, as for a data.json unreadable at load.
+    expect(second.plugin.configProblem).toMatch(/EIO/);
+    await expect(second.plugin.pair(aStrangersInvite(), "again")).rejects.toThrow(
+      /could not be read/,
+    );
+  }, 300_000);
+
+  /**
+   * R40's rule, that every wait answers on every way out of it, checked for
+   * the populated-vault confirmation, which is the one step of pairing that
+   * waits on a person (plan/strip-ledger.md, main.test.ts:4167).
+   */
+  it("holds nothing waiting when the panel is closed on the merge confirmation", async () => {
+    await fresh();
+    const first = await load();
+    await startVault(first.plugin, "laptop");
+    await synced(first.plugin);
+    const invite = await anInvite();
+
+    const second = await load();
+    second.app.vault.adapter.seed("mine.md", "a note of my own\n");
+    choosePairing(second.plugin);
+    built.find((s) => s.name === "Invite")!.texts[0]!.type(invite);
+    const pair = pairButton();
+    built.length = 0;
+    await pair.click();
+    expect(built.find((s) => s.name === "Confirm merge")).toBeDefined();
+    // Closed instead of answered.
+    modals.at(-1)!.close();
+    expect(second.plugin.savedData).toBe(null);
+    expect((await first.plugin.devices()).devices).toHaveLength(1);
+
+    // Nothing is holding a pairing open: the next one is not refused as in
+    // progress, and it can still go ahead.
+    await second.plugin.pair(invite, "phone", true);
+    await synced(second.plugin);
+    expect(second.app.vault.adapter.text("mine.md")).toBe("a note of my own\n");
   }, 300_000);
 });
 
 /**
  * An unreadable data.json set the state to stopped, but the
  * panel branched on `paired` and offered the pairing form, and pairing
- * overwrote the file with a new secret.
+ * overwrote the file with a new credential.
  */
 describe("a config that cannot be read", () => {
   it("refuses to pair over it, and the panel shows why and where instead of the form", async () => {
     await fresh();
-    const unreadable = { url: "ws://x", vaultId: "default", device: "d", secret: "AAAA" };
+    const unreadable = {
+      url: "ws://x",
+      vaultId: "default",
+      device: "d",
+      deviceId: "AAAAAAAAAAAAAAAAAAAAAA",
+      deviceToken: "AAAA",
+    };
     const { plugin } = await load(unreadable);
     expect(plugin.currentState.kind).toBe("stopped");
 
     built.length = 0;
     plugin.commands.find((c) => c.id === "show-status")!.callback!();
-    expect(built.map((s) => s.name)).not.toContain("Pairing string");
+    expect(built.map((s) => s.name)).not.toContain("Invite");
     const shown = modals.at(-1)!.contentEl.allText();
-    expect(shown).toMatch(/root secret is 32 bytes/);
+    expect(shown).toMatch(/a device token is 32 bytes/);
     expect(shown).toContain(".obsidian/plugins/trew/data.json");
 
     await expect(startVault(plugin, "laptop")).rejects.toThrow(/could not be read/);
-    await expect(plugin.pair("basalt3_whatever", "laptop")).rejects.toThrow(/could not be read/);
+    await expect(plugin.pair(aStrangersInvite(), "laptop")).rejects.toThrow(/could not be read/);
     const before = modals.length;
-    plugin.protocolHandlers.get(INVITE_ACTION)!({ invite: "basalt3i_invalid" });
+    plugin.protocolHandlers.get(INVITE_ACTION)!({ invite: aStrangersInvite() });
     expect(modals).toHaveLength(before);
     expect(notices.at(-1)!.message).toMatch(/could not be read/);
     expect(plugin.savedData).toEqual(unreadable);
@@ -2550,7 +2846,7 @@ describe("passes the plugin did not start", () => {
       if (path.includes("slow.md")) await writeGate.promise;
       return realWrite(path, data, options);
     };
-    await b.plugin.pair(keyOf(a.plugin), "desktop");
+    await b.plugin.pair(await anInvite(), "desktop");
     await synced(b.plugin);
 
     const seen: string[] = [];
@@ -2720,13 +3016,13 @@ describe("what is said while stopped", () => {
     first.plugin.onunload();
     await first.plugin.closing;
 
-    // The same server and the same row, a different device secret: refused
+    // The same server and the same row, a different device token: refused
     // for good, because a credential the vault does not know is not something
     // another attempt improves on.
-    const { decodeConfig, encodeConfig } = await import("../core/pairing.ts");
+    const { decodeConfig } = await import("../core/pairing.ts");
     const wrong = encodeConfig({
       ...decodeConfig(saved, "test"),
-      deviceSecret: new Uint8Array(32).fill(7),
+      deviceToken: generateDeviceToken(),
     });
     const other = await load(wrong);
     await until("it to stop", () => other.plugin.currentState.kind === "stopped");
@@ -2815,27 +3111,39 @@ describe("restoring by uid from the command line", () => {
 });
 
 /**
- * md. A pairing string was saved and
- * announced as paired before the server had been reached, and two presses of
- * Pair made two secrets.
+ * A pairing string was saved and announced as paired before the server had
+ * been reached, and two presses of Pair made two credentials.
+ *
+ * The pairing is saved before it is sent now, on purpose (plan/protocol.md,
+ * "Invite redemption"), so "saves nothing" is restated against what is left
+ * afterwards (plan/strip-ledger.md, hazard 2): the pending pairing is saved,
+ * and an unreachable server or a refusal removes it again, read back.
  */
 describe("pairing honestly", () => {
   it("reaches the server before saving a pairing, and saves nothing it could not reach", async () => {
     await fresh();
     const first = await load();
-    const pairing = await startVault(first.plugin, "laptop");
+    await startVault(first.plugin, "laptop");
     await synced(first.plugin);
 
-    // A server that is not there.
-    const dead = pairing;
+    // An invite for a server that is not there by the time it is used.
+    const dead = await anInvite();
     const second = await load();
-    const { url } = { url: server.wsUrl };
+    const writes: unknown[] = [];
+    const realSave = second.plugin.saveData.bind(second.plugin);
+    second.plugin.saveData = async (data: unknown) => {
+      writes.push(structuredClone(data));
+      return realSave(data);
+    };
     await server.cleanup();
     await expect(second.plugin.pair(dead, "desktop")).rejects.toThrow(/could not connect|closed/);
     expect(second.plugin.paired).toBe(false);
     expect(second.plugin.savedData).toBe(null);
     expect(second.plugin.currentState.kind).toBe("unpaired");
-    void url;
+    // Saved before the attempt, and removed after it: nothing was sent, so
+    // nothing can have been registered.
+    expect(writes.map((w) => (w === null ? "removed" : "pending"))).toEqual(["pending", "removed"]);
+    expect((writes[0] as Record<string, unknown>)["invite"]).toBeDefined();
   }, 300_000);
 
   it("refuses a pairing the server refuses, and saves nothing", async () => {
@@ -2844,55 +3152,83 @@ describe("pairing honestly", () => {
     await startVault(first.plugin, "laptop");
     await synced(first.plugin);
 
-    // A string for the same server with a secret the vault was not claimed with.
-    const { formatPairing } = await import("../core/pairing.ts");
-    const wrong = formatPairing({
-      url: server.wsUrl,
-      vaultId: "default",
-      secret: new Uint8Array(32).fill(9),
-    });
+    // An invite for this server that it never minted: an unknown invite gets
+    // the one refusal every bad invite gets.
     const second = await load();
-    await expect(second.plugin.pair(wrong, "desktop")).rejects.toThrow(/auth/i);
+    await expect(second.plugin.pair(aStrangersInvite(), "desktop")).rejects.toThrow(/auth/i);
     expect(second.plugin.paired).toBe(false);
     expect(second.plugin.savedData).toBe(null);
+    expect((await first.plugin.devices()).devices).toHaveLength(1);
   }, 300_000);
 
-  it("offers unlink when a new vault's claim is refused for good", async () => {
+  /**
+   * A device whose first connection is refused for good says "could not join"
+   * and offers the way out, and never "syncing". Here the row it was paired
+   * with is revoked before it ever connected, which is the ordinary way a
+   * pairing turns out to be wrong now that there is no claim to refuse.
+   */
+  it("offers unlink when a new device is refused for good the first time it connects", async () => {
     await fresh();
-    const { plugin } = await load();
-    // A setup string with the wrong token: the claim is refused, for ever.
-    // Reported to whoever asked rather than left to a retry that cannot win.
-    await expect(plugin.pairFirst(`${server.wsUrl}#not-the-token`, "laptop")).rejects.toThrow(
-      /could not register itself/,
+    const { deviceId, token } = await server.deviceCredentials("laptop");
+    // Another device revokes it, before it has ever connected.
+    const { MemoryIndexStore, MemoryVault } = await import("../core/vault.ts");
+    const other = new Client({
+      vault: new MemoryVault(),
+      store: new MemoryIndexStore(),
+      url: server.wsUrl,
+      ...(await server.deviceCredentials("phone")),
+      vaultId: DEFAULT_VAULT,
+      device: "phone",
+    });
+    try {
+      await other.connect();
+      await other.revoke(deviceId);
+    } finally {
+      await other.close();
+    }
+    const { plugin } = await load(
+      encodeConfig({
+        url: server.wsUrl,
+        vaultId: DEFAULT_VAULT,
+        device: "laptop",
+        deviceId,
+        deviceToken: token,
+      }),
     );
     await until("it to stop", () => plugin.currentState.kind === "stopped");
     const said = notices.map((n) => n.message).join(" ");
     expect(said).toMatch(/could not join/);
     expect(said).toMatch(/unlink/i);
+    expect(said).toMatch(/new invite/);
     expect(said).not.toMatch(/syncing/);
   }, 300_000);
 
   it("runs one pairing at a time", async () => {
     await fresh();
     const { plugin } = await load();
-    const [a, b] = await Promise.allSettled([startVault(plugin, "one"), startVault(plugin, "two")]);
+    const invite = await server.firstInvite();
+    const [a, b] = await Promise.allSettled([
+      plugin.pair(invite, "one", true),
+      plugin.pair(invite, "two", true),
+    ]);
     const outcomes = [a.status, b.status].sort();
     expect(outcomes).toEqual(["fulfilled", "rejected"]);
     const rejected = [a, b].find((r) => r.status === "rejected") as PromiseRejectedResult;
     expect(String(rejected.reason)).toMatch(/already/);
-    // One secret, on disk and running.
+    // One credential, on disk and running.
     await synced(plugin);
     const saved = plugin.savedData as Record<string, string>;
     expect(saved["device"]).toBe(plugin.deviceName);
+    expect(plugin.deviceName).toBe("one");
   }, 300_000);
 
   it("makes up a device name that tells two blank ones apart", async () => {
     await fresh();
     const a = await load();
-    const pairing = await startVault(a.plugin, "   ");
+    await startVault(a.plugin, "   ");
     await synced(a.plugin);
     const b = await load();
-    await b.plugin.pair(pairing, "");
+    await b.plugin.pair(await anInvite(), "");
     await synced(b.plugin);
     expect(a.plugin.deviceName).toMatch(/^obsidian-[0-9a-f]{4}$/);
     expect(b.plugin.deviceName).toMatch(/^obsidian-[0-9a-f]{4}$/);
@@ -2930,7 +3266,6 @@ describe("on a phone", () => {
     vi.spyOn(plugin, "cursors").mockReturnValue({ local: 0, server: 0 });
     const requests = vi.spyOn(plugin, "devices").mockResolvedValue({
       devices: [],
-      maxDevices: 0,
       invites: [],
       thisDevice: "phone",
     });
@@ -3673,63 +4008,55 @@ it("tints only the state that is actually wrong", async () => {
 });
 
 /**
- * Adding a device from the panel: an invite from a device that has the vault,
- * and the recovery key when there is no such device left.
+ * Adding a device from the panel: an invite from a device that has the vault.
  *
- * The invite is the ordinary path. What it carries is the vault's data key,
- * which is what a device holds anyway, and the redemption registers the new
- * device's own row; no root reaches either end, which is what makes revoking
- * one of them mean something. The recovery key stays written down and offline,
- * and the panel says so where it used to be shown.
+ * The invite is how every device is added. It carries this server's address,
+ * this vault and a one-time token, and the redemption registers the new
+ * device's own row, which is what makes revoking one of them mean something.
  */
 describe("adding a device from the panel", () => {
-  it.each(["invite", "recovery key"])(
-    "requires confirmation before spending a %s in a populated vault",
-    async (kind) => {
-      await fresh();
-      const first = await load();
-      first.app.vault.adapter.seed("Organized/note.md", "Keep this note\n");
-      await startVault(first.plugin, "laptop");
-      await synced(first.plugin);
-      const invite = (await first.plugin.createInvite()).invite;
-      const key = kind === "invite" ? invite : keyOf(first.plugin);
-      const second = await load();
-      second.app.vault.adapter.seed("Inbox/note.md", "Keep this note\n");
-      await second.app.vault.adapter.writeBinary(
-        "old.pdf",
-        new Uint8Array([37, 80, 68, 70, 0, 255]).buffer,
-      );
+  it("requires confirmation before spending an invite in a populated vault", async () => {
+    await fresh();
+    const first = await load();
+    first.app.vault.adapter.seed("Organized/note.md", "Keep this note\n");
+    await startVault(first.plugin, "laptop");
+    await synced(first.plugin);
+    const invite = (await first.plugin.createInvite()).invite;
+    const second = await load();
+    second.app.vault.adapter.seed("Inbox/note.md", "Keep this note\n");
+    await second.app.vault.adapter.writeBinary(
+      "old.pdf",
+      new Uint8Array([37, 80, 68, 70, 0, 255]).buffer,
+    );
 
-      await expect(second.plugin.pair(key, "phone")).rejects.toThrow(/Confirm merging/);
-      expect(second.plugin.savedData).toBe(null);
-      expect(second.plugin.paired).toBe(false);
-      expect(second.app.vault.adapter.text("Inbox/note.md")).toBe("Keep this note\n");
-      expect(new Uint8Array(await second.app.vault.adapter.readBinary("old.pdf"))).toEqual(
-        new Uint8Array([37, 80, 68, 70, 0, 255]),
-      );
-      expect((await first.plugin.devices()).devices).toHaveLength(1);
-      expect(await first.plugin.historySource().history("Inbox/note.md", {})).toEqual([]);
+    await expect(second.plugin.pair(invite, "phone")).rejects.toThrow(/Confirm merging/);
+    expect(second.plugin.savedData).toBe(null);
+    expect(second.plugin.paired).toBe(false);
+    expect(second.app.vault.adapter.text("Inbox/note.md")).toBe("Keep this note\n");
+    expect(new Uint8Array(await second.app.vault.adapter.readBinary("old.pdf"))).toEqual(
+      new Uint8Array([37, 80, 68, 70, 0, 255]),
+    );
+    expect((await first.plugin.devices()).devices).toHaveLength(1);
+    expect(await first.plugin.historySource().history("Inbox/note.md", {})).toEqual([]);
 
-      // The refusal did not consume the one-time invite: an empty device can still use it.
-      const third = await load();
-      await third.plugin.pair(invite, "empty-phone");
-      await synced(third.plugin);
-      await until(
-        "the organized note to download",
-        () => third.app.vault.adapter.text("Organized/note.md") === "Keep this note\n",
-      );
-      expect(third.app.vault.adapter.text("Inbox/note.md")).toBeUndefined();
-      third.app.vault.adapter.seed("new.md", "Written after downloading\n");
-      await third.plugin.syncNow();
-      await until(
-        "normal uploads after initial download",
-        () => first.app.vault.adapter.text("new.md") === "Written after downloading\n",
-      );
-    },
-    300_000,
-  );
+    // The refusal did not consume the one-time invite: an empty device can still use it.
+    const third = await load();
+    await third.plugin.pair(invite, "empty-phone");
+    await synced(third.plugin);
+    await until(
+      "the organized note to download",
+      () => third.app.vault.adapter.text("Organized/note.md") === "Keep this note\n",
+    );
+    expect(third.app.vault.adapter.text("Inbox/note.md")).toBeUndefined();
+    third.app.vault.adapter.seed("new.md", "Written after downloading\n");
+    await third.plugin.syncNow();
+    await until(
+      "normal uploads after initial download",
+      () => first.app.vault.adapter.text("new.md") === "Written after downloading\n",
+    );
+  }, 300_000);
 
-  it.each(["QR", "pasted invite", "recovery key"])(
+  it.each(["QR", "pasted invite"])(
     "confirms combining a populated vault during %s pairing",
     async (source) => {
       await fresh();
@@ -3738,17 +4065,16 @@ describe("adding a device from the panel", () => {
       await startVault(first.plugin, "laptop");
       await synced(first.plugin);
       const invite = (await first.plugin.createInvite()).invite;
-      const pairingValue = source === "recovery key" ? keyOf(first.plugin) : invite;
       const second = await load();
       second.app.vault.adapter.seed("Inbox/note.md", "Keep this note\n");
       const pdf = new Uint8Array([37, 80, 68, 70, 0, 255]);
       await second.app.vault.adapter.writeBinary("local.pdf", pdf.buffer);
       built.length = 0;
       if (source === "QR") second.plugin.protocolHandlers.get(INVITE_ACTION)!({ invite });
-      else choosePairing(second.plugin, "invite");
+      else choosePairing(second.plugin);
       expect(built.find((s) => s.name === "First sync")).toBeUndefined();
-      const keyField = built.find((s) => s.name === "Invite or setup line")!.texts[0]!;
-      if (source !== "QR") keyField.type(pairingValue);
+      const keyField = built.find((s) => s.name === "Invite")!.texts[0]!;
+      if (source !== "QR") keyField.type(invite);
       built.find((s) => s.name === "Device name")!.texts[0]!.type("Phone");
       const pair = built.flatMap((s) => s.buttons).find((b) => b.label === "Pair")!;
       built.length = 0;
@@ -3761,9 +4087,7 @@ describe("adding a device from the panel", () => {
       const cancel = built.flatMap((s) => s.buttons).find((b) => b.label === "Cancel")!;
       built.length = 0;
       await cancel.click();
-      expect(built.find((s) => s.name === "Invite or setup line")!.texts[0]!.getValue()).toBe(
-        pairingValue,
-      );
+      expect(built.find((s) => s.name === "Invite")!.texts[0]!.getValue()).toBe(invite);
       expect(built.find((s) => s.name === "Device name")!.texts[0]!.getValue()).toBe("Phone");
       const retry = built.flatMap((s) => s.buttons).find((b) => b.label === "Pair")!;
       built.length = 0;
@@ -3783,7 +4107,7 @@ describe("adding a device from the panel", () => {
       const cancelDisabled = cancelPending.disabled;
       release();
       await connecting;
-      expect(cancelDisabled, "Cancel must not imply an in-flight registration can be undone").toBe(
+      expect(cancelDisabled, "Cancel must not imply an in-flight redemption can be undone").toBe(
         true,
       );
       await synced(second.plugin);
@@ -3847,6 +4171,13 @@ describe("adding a device from the panel", () => {
     expect((await first.plugin.devices()).devices).toHaveLength(1);
   }, 300_000);
 
+  /**
+   * The whole of adding a device through the panel, and the one rule the
+   * link has to keep: `obsidian://trew?invite=...` never pairs by itself. It
+   * opens the form filled in, the line under it says where the invite points,
+   * and nothing changes until somebody presses Pair (plan/research/README.md
+   * section 5).
+   */
   it("opens a scanned invite for confirmation and syncs after Pair", async () => {
     await fresh();
     const first = await load();
@@ -3868,7 +4199,11 @@ describe("adding a device from the panel", () => {
     const field = pairingCode!.texts[0]!;
     expect(field.inputEl.attributes.has("readonly")).toBe(true);
     const invite = field.getValue();
-    expect(invite).toMatch(/^basalt3i_/);
+    expect(invite).toMatch(/^trew1i_/);
+    // Where it points is this device's own server and vault.
+    expect(parseInvite(invite).url).toBe(server.wsUrl);
+    // And what it is good for, said beside it: an hour.
+    expect(panelText()).toMatch(/Expires at /);
     const copied: string[] = [];
     vi.stubGlobal("navigator", {
       clipboard: {
@@ -3891,36 +4226,35 @@ describe("adding a device from the panel", () => {
     visit(modals.at(-1)!.contentEl);
     expect(images).toHaveLength(1);
     expect(images[0]!.hidden).toBe(false);
+    // The QR is of the obsidian://trew link over this very string.
     expect(images[0]!.attributes.get("src")).toBe(inviteQrImage(invite));
+    expect(inviteLink(invite)).toBe(`obsidian://trew?invite=${encodeURIComponent(invite)}`);
 
     const second = await load();
     built.length = 0;
     const link = new URL(inviteLink(invite));
     second.plugin.protocolHandlers.get(INVITE_ACTION)!(Object.fromEntries(link.searchParams));
+    // Opened, filled in, pointing where the invite points, and nothing done.
     expect(second.plugin.paired).toBe(false);
     expect(second.plugin.savedData).toBe(null);
     expect((await first.plugin.devices()).devices).toHaveLength(1);
-    expect(built.find((s) => s.name === "Invite or setup line")!.texts[0]!.getValue()).toBe(invite);
+    expect(built.find((s) => s.name === "Invite")!.texts[0]!.getValue()).toBe(invite);
+    expect(modals.at(-1)!.contentEl.allText()).toContain(`Joins ${server.wsUrl}`);
     built.find((s) => s.name === "Device name")!.texts[0]!.type("phone");
-    await built
-      .find((s) => s.buttons.some((b) => b.label === "Pair"))!
-      .buttons.find((b) => b.label === "Pair")!
-      .click();
+    await pairButton().click();
     expect(second.plugin.paired).toBe(true);
     await synced(second.plugin);
     await until("the note to arrive", () => second.app.vault.adapter.text("note.md") !== undefined);
     expect(second.app.vault.adapter.text("note.md")).toBe("# From the first device\n");
 
-    // Two devices, two credentials, one data key, and no root on either. The
-    // invite handed over the data key and nothing that could add a third
-    // device or rewrap the vault.
+    // Two devices, two credentials, each exactly a device's: its row and its
+    // token, and nothing that could add a third device.
     const a = first.plugin.savedData as Record<string, string>;
     const b = second.plugin.savedData as Record<string, string>;
-    expect(a["secret"], "the first device is holding the vault's root").toBeUndefined();
-    expect(b["secret"], "an invite handed over the vault's root").toBeUndefined();
+    expect(Object.keys(a).sort()).toEqual(DEVICE_CONFIG_KEYS);
+    expect(Object.keys(b).sort()).toEqual(DEVICE_CONFIG_KEYS);
     expect(b["deviceId"]).not.toBe(a["deviceId"]);
-    expect(b["deviceSecret"]).not.toBe(a["deviceSecret"]);
-    expect(b["dataKey"]).toBe(a["dataKey"]);
+    expect(b["deviceToken"]).not.toBe(a["deviceToken"]);
 
     // And each is a row the other can see and cut off.
     const listed = await first.plugin.devices();
@@ -3930,7 +4264,12 @@ describe("adding a device from the panel", () => {
   it("rejects invalid invite links without opening a form or writing settings", async () => {
     const { plugin } = await load();
     const before = modals.length;
-    for (const params of [{}, { invite: "basalt3i_invalid" }, { invite: "https://example.com" }]) {
+    for (const params of [
+      {},
+      { invite: "trew1i_invalid" },
+      { invite: "basalt3i_invalid" },
+      { invite: "https://example.com" },
+    ]) {
       plugin.protocolHandlers.get(INVITE_ACTION)!(params);
     }
     expect(modals).toHaveLength(before);
@@ -3964,6 +4303,8 @@ describe("adding a device from the panel", () => {
     await second.plugin.pair(invite, "phone");
     expect(second.plugin.paired).toBe(true);
 
+    // Refused, and the pending pairing saved before it was sent is removed
+    // again (hazard 2): nothing is left on disk after a refusal.
     const third = await load();
     await expect(third.plugin.pair(invite, "tablet")).rejects.toThrow(/auth/i);
     expect(third.plugin.paired).toBe(false);
@@ -3980,9 +4321,12 @@ describe("adding a device from the panel", () => {
    * while one is in flight. This wrote its config and started a sync loop
    * unconditionally when it came back, so a redemption that finished after
    * `onunload` left a save, a client and a ticker belonging to a plugin that
-   * had been retired. The root registration path next door has used the
-   * generation guard since it was written; this one reached straight for the
-   * raw save.
+   * had been retired.
+   *
+   * What is on disk afterwards is the pending pairing, saved before the
+   * redemption went out while the plugin was still running, and it is not a
+   * pairing: the vault is unpaired and nothing was started (hazard 2 restated
+   * from "nothing is saved"). The next load finishes it with the same row.
    */
   it("does not save or start when an invite is redeemed after unload", async () => {
     await fresh();
@@ -3995,11 +4339,13 @@ describe("adding a device from the panel", () => {
     // Retire the plugin before the completed redemption reaches its caller.
     // The empty-vault preflight now runs before the network starts.
     const redeem = Transport.prototype.redeem;
+    let sent: string | undefined;
     const delayed = vi.spyOn(Transport.prototype, "redeem").mockImplementationOnce(async function (
       this: Transport,
       args,
     ) {
       const answer = await redeem.call(this, args);
+      sent = args.deviceId;
       second.plugin.onunload();
       await second.plugin.closing;
       return answer;
@@ -4008,255 +4354,37 @@ describe("adding a device from the panel", () => {
       await expect(
         second.plugin.pair(invite, "phone"),
         "a pairing completed into a plugin that was gone",
-      ).rejects.toThrow(/no longer paired|unlinked while the invite/);
+      ).rejects.toThrow(/stopped before this pairing finished. It is saved/);
     } finally {
       delayed.mockRestore();
     }
-    expect(second.plugin.savedData, "a retired plugin saved a pairing").toBe(null);
     expect(second.plugin.paired).toBe(false);
+    expect((second.plugin as unknown as { client?: unknown }).client).toBeUndefined();
+    const kept = second.plugin.savedData as Record<string, string>;
+    expect(Object.keys(kept).sort(), "a retired plugin saved a finished pairing").toEqual(
+      [...DEVICE_CONFIG_KEYS, "invite"].sort(),
+    );
+    expect(kept["deviceId"]).toBe(sent);
     expect((await first.plugin.devices()).devices).toHaveLength(2);
-  }, 300_000);
 
-  it("adds one with the recovery key, and neither device keeps it", async () => {
-    await fresh();
-    const first = await load();
-    first.app.vault.adapter.seed("note.md", "# From the first device\n");
-    const key = await startVault(first.plugin, "laptop");
-    await synced(first.plugin);
-
-    const second = await load();
-    choosePairing(second.plugin, "invite");
-    built.find((s) => s.name === "Device name")!.texts[0]!.type("phone");
-    built.find((s) => s.name === "Invite or setup line")!.texts[0]!.type(key);
-    await built
-      .find((s) => s.buttons.some((b) => b.label === "Pair"))!
-      .buttons.find((b) => b.label === "Pair")!
-      .click();
-    expect(second.plugin.paired).toBe(true);
-    await synced(second.plugin);
-    await until("the note to arrive", () => second.app.vault.adapter.text("note.md") !== undefined);
-    expect(second.app.vault.adapter.text("note.md")).toBe("# From the first device\n");
-
-    // Two devices, two credentials, one data key, and the root on neither.
-    const a = first.plugin.savedData as Record<string, string>;
-    const b = second.plugin.savedData as Record<string, string>;
-    expect(a["secret"], "the first device is holding the vault's root").toBeUndefined();
-    expect(b["secret"], "the second device is holding the vault's root").toBeUndefined();
-    expect(b["deviceId"]).not.toBe(a["deviceId"]);
-    expect(b["deviceSecret"]).not.toBe(a["deviceSecret"]);
-    // The same data key, or one of them would be sealing under a schedule the
-    // other cannot derive.
-    expect(b["dataKey"]).toBe(a["dataKey"]);
-
-    // And each is a row the other can see and cut off.
-    const listed = await first.plugin.devices();
-    expect(listed.devices.map((d) => d.name).sort()).toEqual(["laptop", "phone"]);
+    // And the next load finishes it with that row rather than making another.
+    const again = await load(kept);
+    await synced(again.plugin);
+    expect((again.plugin.savedData as Record<string, string>)["deviceId"]).toBe(sent);
+    expect((await first.plugin.devices()).devices).toHaveLength(2);
   }, 300_000);
 
   it("refuses a damaged invite string, and saves nothing", async () => {
     await fresh();
     const { plugin } = await load();
-    await expect(plugin.pair("basalt3i_notreallyaninvite", "tablet")).rejects.toThrow(
-      /this invite is damaged/,
-    );
+    const good = await anInvite();
+    // One character changed in the middle: the checksum catches it.
+    const at = Math.floor(good.length / 2);
+    const damaged = good.slice(0, at) + (good[at] === "A" ? "B" : "A") + good.slice(at + 1);
+    await expect(plugin.pair(damaged, "tablet")).rejects.toThrow(/this invite is damaged/);
+    await expect(plugin.pair("trew1i_notreallyaninvite", "tablet")).rejects.toThrow(/this invite/);
     expect(plugin.paired).toBe(false);
     expect(plugin.savedData).toBe(null);
-  }, 300_000);
-
-  it("leaves nothing behind when the recovery key is not the vault's", async () => {
-    // I13. A key the server does not know used to be saved and announced
-    // as paired, and the first sign of it was a status bar saying stopped.
-    await fresh();
-    const first = await load();
-    const key = await startVault(first.plugin, "laptop");
-    await synced(first.plugin);
-    const { parsePairing, formatPairing } = await import("../core/pairing.ts");
-    const stranger = formatPairing({ ...parsePairing(key), secret: new Uint8Array(32).fill(9) });
-
-    const second = await load();
-    await expect(second.plugin.pair(stranger, "phone")).rejects.toThrow(/auth/i);
-    expect(second.plugin.paired).toBe(false);
-    expect(second.plugin.savedData, "a refused pairing was left on disk").toBe(null);
-  }, 300_000);
-
-  it("shows the recovery key once when a vault is started, and says to write it down", async () => {
-    await fresh();
-    const { plugin } = await load();
-    choosePairing(plugin, "first");
-    built.find((s) => s.name === "Invite or setup line")!.texts[0]!.type(server.setup);
-    built.find((s) => s.name === "Device name")!.texts[0]!.type("laptop");
-    // Not awaited yet. The pairing now holds the vault's claim until somebody
-    // says they have the key (R02), so awaiting the click here would wait for
-    // the acknowledgement clicked further down.
-    const starting = built
-      .find((s) => s.buttons.some((b) => b.label === "Start a new vault"))!
-      .buttons.find((b) => b.label === "Start a new vault")!
-      .click();
-    await until("the recovery key to be shown", () => panelText().includes("Write this down"));
-
-    const shown = panelText();
-    expect(shown).toMatch(/Write this down/);
-    expect(shown).toMatch(/somewhere safe and separate/);
-    expect(shown).toMatch(/only way back/);
-    expect(shown).toMatch(/Anyone with it can access your vault/);
-    // The key itself, taken off the screen, because this is the one moment it
-    // exists anywhere: no device keeps it and nothing reprints it.
-    const key = shown.split(/\s+/).find((w) => w.startsWith("basalt3_"))!;
-    expect(key, "no recovery key was shown").toBeDefined();
-    const beforeScan = modals.length;
-    plugin.protocolHandlers.get(INVITE_ACTION)!({ invite: "basalt3i_invalid" });
-    expect(modals).toHaveLength(beforeScan);
-    expect(notices.at(-1)!.message).toMatch(/pairing is already in progress/);
-    expect(plugin.pendingFirstPairing()).toBe(key);
-
-    // And a way to get it off the device, which is the whole point of showing
-    // it. "Write it down" is hardest to follow exactly where this plugin is
-    // most used: a phone has no second screen to read from, and the paragraph
-    // was not selectable because Obsidian turns selection off across its UI. So
-    // the button copies, and it copies the key rather than anything near it.
-    const copied: string[] = [];
-    vi.stubGlobal("navigator", {
-      clipboard: {
-        writeText: async (t: string) => {
-          copied.push(t);
-        },
-      },
-    });
-    try {
-      // Copy is on the key's own row now, beside the key, and the
-      // acknowledgement is a row of its own: a button that dismisses the only
-      // copy of a secret should not sit a thumb's width from one that does not.
-      const copy = built.flatMap((s) => s.buttons).find((b) => b.label === "Copy");
-      expect(copy, "the recovery key was shown with no way to copy it").toBeDefined();
-      await copy!.click();
-      expect(copied, "Copy did not put the recovery key on the clipboard").toEqual([key]);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-
-    // Acknowledged, it is gone from the panel, and reopening does not bring
-    // it back on its own.
-    await built
-      .find((s) => s.buttons.some((b) => b.label === "I have written it down"))!
-      .buttons.find((b) => b.label === "I have written it down")!
-      .click();
-    // And now the pairing may finish.
-    await starting;
-    expect(modals.at(-1)!.contentEl.allText()).not.toContain(key);
-    modals.at(-1)!.close();
-    built.length = 0;
-    plugin.commands.find((c) => c.id === "show-status")!.callback!();
-    expect(modals.at(-1)!.contentEl.allText()).not.toContain(key);
-    await synced(plugin);
-  }, 300_000);
-
-  /**
-   * The panel closed while the key is on screen and nothing has been claimed.
-   *
-   * The handoff is a wait, and a wait needs an answer for every way out of it.
-   * `teardown` cleared the key and emptied the host and left the promise the
-   * pairing is awaiting pending for ever, so `onePairing` never let go: the
-   * plugin refused every later attempt with "a pairing is already in
-   * progress", for the life of the session, and the only way out was reloading
-   * it. Nothing was lost, because the root is on disk before the wait, and
-   * nothing worked either.
-   *
-   * Abandoning has to be an outcome. The pairing ends, says why, and the next
-   * load finds the root in the config and offers the key again.
-   */
-  it("lets go when the panel is closed instead of acknowledged", async () => {
-    await fresh();
-    const { plugin } = await load();
-
-    choosePairing(plugin, "first");
-    built.find((s) => s.name === "Invite or setup line")!.texts[0]!.type(server.setup);
-    const starting = built
-      .find((s) => s.buttons.some((b) => b.label === "Start a new vault"))!
-      .buttons.find((b) => b.label === "Start a new vault")!
-      .click();
-    await until("the recovery key to be shown", () =>
-      built.some((s) => s.buttons.some((b) => b.label === "I have written it down")),
-    );
-
-    // Closed rather than acknowledged, which is what somebody does when they
-    // are interrupted or think they are done.
-    modals.at(-1)!.close();
-
-    // The click's promise settles rather than hanging on a wait nothing will
-    // ever answer. Bounded, because the way this regresses is by never
-    // finishing, and a test that hangs reports a timeout rather than a reason.
-    await settles(starting, "the pairing is still waiting for an acknowledgement nobody can give");
-
-    // The key is on disk, which is what makes abandoning cost nothing.
-    expect(
-      plugin.pendingFirstPairing(),
-      "the root is not on disk, so the interrupted pairing lost the key",
-    ).toBeDefined();
-
-    // And the vault is *pairable*, which is a different claim and the one that
-    // was not being made. `paired` meant "a config exists", and `pairFirst`
-    // writes the root before it shows the key, so an abandoned pairing read as
-    // paired: the panel drew the whole synced interface over a vault that will
-    // never connect, and every retry was answered "this vault is already
-    // paired", which is untrue and names no way out.
-    expect(plugin.paired, "an abandoned first pairing reads as a paired vault").toBe(false);
-    expect(plugin.currentState.kind).toBe("unpaired");
-
-    choosePairing(plugin, "first");
-    // The key is offered again, from the config, next to the form that lets
-    // somebody start over.
-    await until("the key to be offered again", () =>
-      built.some((s) => s.buttons.some((b) => b.label === "I have written it down")),
-    );
-    expect(
-      built.some((s) => s.name === "Invite or setup line"),
-      "there is no way to try again: the panel offers no pairing form",
-    ).toBe(true);
-    await built
-      .find((s) => s.buttons.some((b) => b.label === "I have written it down"))!
-      .buttons.find((b) => b.label === "I have written it down")!
-      .click();
-
-    // And starting over actually works, rather than being refused.
-    choosePairing(plugin, "first");
-    built.find((s) => s.name === "Invite or setup line")!.texts[0]!.type(server.setup);
-    const start = built
-      .find((s) => s.buttons.some((b) => b.label === "Start a new vault"))!
-      .buttons.find((b) => b.label === "Start a new vault")!;
-    // Cleared here, so what appears below is the render this click causes and
-    // not the one that drew the key from the abandoned attempt. Waiting on the
-    // stale one acknowledges a promise nothing is holding, and the pairing
-    // then waits for ever on the promise it makes a moment later.
-    built.length = 0;
-    const again = start.click();
-    await until("the recovery key of the second attempt", () =>
-      built.some((s) => s.buttons.some((b) => b.label === "I have written it down")),
-    );
-    await built
-      .find((s) => s.buttons.some((b) => b.label === "I have written it down"))!
-      .buttons.find((b) => b.label === "I have written it down")!
-      .click();
-    await settles(again, "the second pairing never finished");
-    expect(plugin.paired, "the vault could not be paired after an abandoned attempt").toBe(true);
-    await synced(plugin);
-  }, 300_000);
-
-  it("says where the recovery key is rather than offering to show it", async () => {
-    await fresh();
-    const { plugin } = await load();
-    await startVault(plugin, "laptop");
-    await synced(plugin);
-    built.length = 0;
-    plugin.commands.find((c) => c.id === "show-status")!.callback!();
-
-    const key = keyOf(plugin);
-    expect(modals.at(-1)!.contentEl.allText(), "the key was on screen unasked").not.toContain(key);
-    const setting = built.find((s) => s.name === "Recovery key")!;
-    // After the handoff, the panel explains that this device has no saved key.
-    expect(panelText()).toMatch(/Not stored on this device/);
-    expect(panelText()).toMatch(/Keep your saved copy safe/);
-    expect(setting.buttons, "the panel offers to show a key it does not have").toEqual([]);
-    expect(modals.at(-1)!.contentEl.allText()).not.toContain(key);
   }, 300_000);
 
   it("shows both cursors in the panel (I11)", async () => {
@@ -4298,29 +4426,15 @@ describe("what the panel knows and used to keep to itself", () => {
     const { plugin } = await load();
     Platform.isMacOS = true;
     try {
-      // Either path draws the name field, since it is shared; this one is the
-      // one the rest of the test uses.
-      choosePairing(plugin, "first");
+      choosePairing(plugin);
       // In the field, not behind it as a placeholder. A placeholder is not a
       // value: the field was empty and so was what got used.
       const suggested = nameField().getValue();
       expect(suggested).toMatch(/^mac-[0-9a-f]{4}$/);
 
-      built.find((s) => s.name === "Invite or setup line")!.texts[0]!.type(server.setup);
-      // The pairing holds until the key is acknowledged (R02), so the
-      // acknowledgement comes before the await.
-      const starting = built
-        .find((s) => s.buttons.some((b) => b.label === "Start a new vault"))!
-        .buttons.find((b) => b.label === "Start a new vault")!
-        .click();
-      await until("the recovery key to be shown", () =>
-        built.some((s) => s.buttons.some((b) => b.label === "I have written it down")),
-      );
-      await built
-        .find((s) => s.buttons.some((b) => b.label === "I have written it down"))!
-        .buttons.find((b) => b.label === "I have written it down")!
-        .click();
-      await starting;
+      // The first device, pairing from the invite the server wrote.
+      built.find((s) => s.name === "Invite")!.texts[0]!.type(await server.firstInvite());
+      await pairButton().click();
       await synced(plugin);
 
       // Used, and used where it is read: the row in the device list, which is
@@ -4343,7 +4457,7 @@ describe("what the panel knows and used to keep to itself", () => {
     Platform.isTablet = true;
     Platform.isMacOS = true;
     try {
-      choosePairing(plugin, "first");
+      choosePairing(plugin);
       expect(nameField().getValue()).toMatch(/^ipad-[0-9a-f]{4}$/);
     } finally {
       Platform.isIosApp = false;
@@ -4377,9 +4491,11 @@ describe("what the panel knows and used to keep to itself", () => {
     );
     expect(shown).toContain(`Protocol ${PROTO}, trew ${to.server!.version}.`);
     expect(shown).not.toContain("Not connected");
-    // An unencrypted connection shows its warning in the server details.
-    expect(panelText()).toMatch(/notes are still sealed, the device credential is not/);
-    expect(panelText()).toMatch(/the device credential is not/);
+    // A hop with no TLS shows its warning in the server details, and without
+    // end-to-end encryption the warning is about the notes as well as the
+    // credential (plan/strip-ledger.md, hazard 8).
+    expect(panelText()).toMatch(/No TLS on this hop/);
+    expect(panelText()).toMatch(/your notes and the device credential both cross it in the clear/);
   }, 300_000);
 
   it("says the protocol and the build are unknown rather than leaving a gap", () => {
@@ -4403,9 +4519,10 @@ describe("what the panel knows and used to keep to itself", () => {
     // spend three sentences on what encryption covers and where to read more,
     // in a panel whose last row is a link to that guide.
     expect(connectionDetail({ url: "wss://homelab.tailnet.ts.net" })).toBe("");
-    expect(connectionDetail({ url: "ws://192.168.1.20:3003" })).toMatch(
-      /notes are still sealed, the device credential is not/,
-    );
+    const plain = connectionDetail({ url: "ws://192.168.1.20:3003" });
+    expect(plain).toMatch(/your notes and the device credential both cross it in the clear/);
+    // The sentence Basalt could say and this cannot: nothing is sealed here.
+    expect(plain).not.toMatch(/sealed|encrypted/);
   });
 });
 
@@ -4561,7 +4678,13 @@ describe("the device list in the panel", () => {
     expect(button.disabled).toBe(false);
     expect(panelText()).toContain("connection interrupted");
   });
-  it("keeps the last device registered and the list concise", async () => {
+  /**
+   * The last device may be revoked (plan/strip-ledger.md, hazard 4, decided):
+   * nothing a device holds is needed to add one back, because `trew invite` on
+   * the server is the way back into a vault with no devices. So the last row
+   * has its button, and the confirmation says what it leaves.
+   */
+  it("lets the last device be revoked, and says what brings one back", async () => {
     await fresh();
     const { plugin } = await load();
     await startVault(plugin, "laptop");
@@ -4573,20 +4696,32 @@ describe("the device list in the panel", () => {
 
     const row = built.find((s) => s.name.startsWith("laptop"))!;
     expect(row, "the panel did not list this device").toBeDefined();
-    expect(
-      row.buttons.map((b) => b.label),
-      "the last row offered a button that cannot work",
-    ).toEqual([]);
-
     expect(built.find((s) => s.name === "Devices")!.desc).toBe("1 device");
     expect(row.desc).toBe("Received latest changes");
     expect(row.desc).not.toContain((await plugin.devices()).thisDevice);
-    expect(panelText()).not.toMatch(/--allow-last|Revoking stops|at most/);
+    // No flag to ask for, and no command line to be sent to.
+    expect(panelText()).not.toMatch(/--allow-last|at most/);
     expect(built.find((s) => s.name === "Unlink this vault")!.buttons[0]!.label).toBe("Unlink");
-    // And the row is still there, because nothing was pressed and nothing was
-    // sent: a panel that said this while the vault emptied itself would be
-    // worse than one that said nothing.
+
+    const button = row.buttons.find((b) => b.label === "Unlink from the server")!;
+    expect(button, "the last row offered no way to revoke it").toBeDefined();
+    // One press asks, and sends nothing.
+    await button.click();
+    expect(button.label).toBe("Yes, revoke");
+    expect(panelText()).toMatch(/last device/);
+    expect(panelText()).toMatch(/trew invite on the server/);
     expect((await plugin.devices()).devices).toHaveLength(1);
+
+    // The second does it: the server takes its last row away, and this device
+    // stops, because it was the row.
+    await button.click();
+    await until("this device to be stopped", () => plugin.currentState.kind === "stopped");
+    expect((plugin.currentState as { why: string }).why).toMatch(/revoked/);
+    // And a device paired afterwards, from `trew invite`, finds itself alone.
+    const next = await load();
+    await next.plugin.pair(await anInvite(), "phone");
+    await synced(next.plugin);
+    expect((await next.plugin.devices()).devices.map((d) => d.name)).toEqual(["phone"]);
   }, 300_000);
 
   /**
@@ -4647,11 +4782,39 @@ describe("the device list in the panel", () => {
 
     const row = built.find((s) => s.name === "Outstanding invite")!;
     expect(row.desc).toMatch(/^Expires /);
-    // Never the string, which is the only thing that could redeem it.
-    expect(modals.at(-1)!.contentEl.allText()).not.toContain(issued.invite);
+    // Named by its id, which is what cancelling it takes, and never by the
+    // string or the token inside it, which are the only things that redeem it
+    // (plan/strip-ledger.md, hazard 1).
+    expect(row.desc).toContain(`ID ${issued.id}`);
+    const token = base64urlEncode(parseInvite(issued.invite).token);
+    const shown = `${modals.at(-1)!.contentEl.allText()}\n${panelText()}`;
+    expect(shown).not.toContain(issued.invite);
+    expect(shown, "the listing carried the invite's token").not.toContain(token);
+    const listed = (await first.plugin.devices()).invites;
+    expect(listed).toEqual([{ invite: issued.id, label: "", expiresAt: issued.expiresAt }]);
+    // An hour, the server's default, from the moment it was made.
+    expect(issued.expiresAt! - Date.now()).toBeGreaterThan(55 * 60_000);
+    expect(issued.expiresAt! - Date.now()).toBeLessThanOrEqual(60 * 60_000);
 
     await row.buttons.find((b) => b.label === "Cancel")!.click();
     expect(notices.map((n) => n.message).join(" ")).toMatch(/can no longer add a device/);
+    expect((await first.plugin.devices()).invites).toHaveLength(0);
+
+    // An invite that never expires, which only `trew invite -ttl 0` on the
+    // server makes, says so rather than showing a date, and its label is on
+    // the row.
+    await server.invite({ ttl: "0", label: "for the tablet" });
+    built.length = 0;
+    first.plugin.commands.find((c) => c.id === "show-status")!.callback!();
+    await built.find((s) => s.name === "Devices")!.buttons[0]!.click();
+    await until("the list to arrive", () =>
+      built.some((s) => s.name === "Outstanding invite: for the tablet"),
+    );
+    const forever = built.find((s) => s.name === "Outstanding invite: for the tablet")!;
+    expect(forever.desc).toMatch(/^Does not expire · ID /);
+    const listedNow = (await first.plugin.devices()).invites;
+    expect(listedNow.map((i) => [i.label, i.expiresAt])).toEqual([["for the tablet", null]]);
+    await forever.buttons.find((b) => b.label === "Cancel")!.click();
     expect((await first.plugin.devices()).invites).toHaveLength(0);
 
     // And the string it cancelled no longer pairs anything.
@@ -4664,10 +4827,10 @@ describe("the device list in the panel", () => {
    * A row nothing ever connected under is flagged, because it is the
    * reclaimable one.
    *
-   * A redemption registers the row before the new device saves anything, so a
-   * crash in that window strands a row rather than a device that believes it
-   * is paired: the right way round, and the reason the rows that fill the cap
-   * are the ones nothing signed in under. The panel says so rather than
+   * A device saves its pairing before the redemption goes out, so a crash
+   * leaves a pairing it can finish rather than a stranded row; what does leave
+   * one is a pairing somebody gave up on after its reply was lost, or a
+   * device that never finished and was wiped. The panel says so rather than
    * leaving it to be inferred from a missing date.
    */
   it("flags a row nothing has ever connected under", async () => {
@@ -4676,9 +4839,13 @@ describe("the device list in the panel", () => {
     await startVault(first.plugin, "laptop");
     await synced(first.plugin);
 
-    // A pairing that reached the server and then crashed.
+    // A pairing that reached the server and was then given up: redeemed, and
+    // nothing ever connected under it.
     const issued = await first.plugin.createInvite();
-    await redeemInvite(parseInvite(issued.invite), "the-one-that-crashed");
+    await pairWithInvite(startPairing(parseInvite(issued.invite), "the-one-that-crashed"), {
+      save: async () => {},
+      forget: async () => {},
+    });
 
     built.length = 0;
     first.plugin.commands.find((c) => c.id === "show-status")!.callback!();
@@ -4702,8 +4869,7 @@ describe("the device list in the panel", () => {
 
   /**
    * The ordinary case, which stays a device's to do: a phone cuts off a stolen
-   * laptop without anybody finding the recovery key. Two presses, and the
-   * second one means it.
+   * laptop. Two presses, and the second one means it.
    */
   it("revokes another device, behind a second press", async () => {
     await fresh();
@@ -4727,8 +4893,14 @@ describe("the device list in the panel", () => {
     expect(button.label).toBe("Yes, revoke");
     expect((await first.plugin.devices()).devices).toHaveLength(2);
     expect(modals.at(-1)!.contentEl.allText()).toMatch(/will stop syncing/);
-    expect(modals.at(-1)!.contentEl.allText()).toMatch(/keeps its decryption key/);
-    expect(modals.at(-1)!.contentEl.allText()).toMatch(/can still read copies of your notes/);
+    // What revoking does not do, which is the half that must not be
+    // overstated: nothing that device already synced is taken back, and
+    // without end-to-end encryption it is readable there as it is.
+    expect(modals.at(-1)!.contentEl.allText()).toMatch(/Revoking does not un-read anything/);
+    expect(modals.at(-1)!.contentEl.allText()).toMatch(/stay readable there, in plaintext/);
+    expect(modals.at(-1)!.contentEl.allText()).not.toMatch(/decryption key/);
+    // It is not the last device, so nothing is said about bringing one back.
+    expect(modals.at(-1)!.contentEl.allText()).not.toMatch(/last device/);
 
     // The second does it, and the revoked device finds out by being stopped.
     await button.click();
@@ -4961,10 +5133,10 @@ describe("rejoining a server that lost history (I10, plugin)", () => {
     const stopped = first.plugin.currentState;
     expect(stopped.kind === "stopped" && stopped.recovery).toBe("rejoin");
     // The reason names the way out, rather than a documentation path (I10).
-    expect(status(first.plugin)).toMatch(/trew rebase --backup-taken/);
     expect(status(first.plugin)).toMatch(/Rejoin this server/);
+    expect(status(first.plugin)).toMatch(/pair it again with a new invite/);
     expect(status(first.plugin)).toMatch(/conflict copies instead of merging/);
-    expect(notices.map((n) => n.message).join("\n")).toMatch(/trew rebase --backup-taken/);
+    expect(notices.map((n) => n.message).join("\n")).toMatch(/Rejoin this server/);
 
     // The panel offers it, and the first press is a question rather than an
     // answer: nothing has been touched by it.
@@ -4998,7 +5170,7 @@ describe("rejoining a server that lost history (I10, plugin)", () => {
     // What only this device held is on the server again, as a second device
     // joining from scratch shows, and so is what the backup already had.
     const second = await load();
-    await second.plugin.pair(keyOf(first.plugin), "phone");
+    await second.plugin.pair(await anInvite(), "phone");
     await synced(second.plugin);
     await until(
       "both notes to arrive",
@@ -5027,95 +5199,6 @@ describe("rejoining a server that lost history (I10, plugin)", () => {
     expect(report.kind).toBe("synced");
     expect(plugin.paired).toBe(true);
   }, 300_000);
-});
-
-/**
- * A recovery key on screen is not a recovery key somebody has (R02).
- *
- * Starting a vault writes the root to disk, shows it, claims the server, and
- * then replaces the root with this device's own credential. F02 moved the
- * display in front of the claim, which was the important half. What it did not
- * change is that showing it and carrying straight on is not a handoff:
- * registration retires the only copy of a key nothing can reissue, and
- * returning from a callback is not evidence that anybody read the screen.
- *
- * Two things make it a stage. The pairing waits for the callback, so a surface
- * that asks for confirmation holds the vault's claim until it has one; and
- * because nothing is claimed while it waits, an abandoned pairing leaves the
- * root on disk where the panel finds it and offers it again.
- */
-describe("handing over the first recovery key", () => {
-  it("does not claim the vault until the key has been taken", async () => {
-    await fresh();
-    const { plugin } = await load();
-
-    let release: (() => void) | undefined;
-    const offered = deferred<string>();
-    let shown = "";
-    const pairing = plugin
-      .pairFirst(server.setup, "laptop", async (key: string) => {
-        shown = key;
-        offered.resolve(key);
-        await new Promise<void>((go) => {
-          release = go;
-        });
-      })
-      .catch(() => undefined);
-
-    // Wait for the key to be offered.
-    await offered.promise;
-    expect(shown, "no key was offered before the claim").toMatch(/^basalt3_/);
-
-    // Still waiting, so nothing has been registered: the config holds the root
-    // and no device credential.
-    await nextTurn();
-    expect(
-      plugin.pendingFirstPairing(),
-      "the pairing went ahead before anybody said they had the key",
-    ).toBe(shown);
-
-    release?.();
-    await pairing;
-  }, 60_000);
-
-  /**
-   * The abandoned case, which is what a reload in the middle looks like.
-   *
-   * Nothing was claimed, so the config still holds the root, and the root is
-   * the recovery key. The panel offers it rather than leaving somebody with a
-   * key they were shown once and a vault they cannot open.
-   */
-  it("can still produce the key after an interrupted pairing", async () => {
-    await fresh();
-    const { plugin } = await load();
-
-    const offered = deferred<string>();
-    let shown = "";
-    void plugin
-      .pairFirst(server.setup, "laptop", async (key: string) => {
-        shown = key;
-        offered.resolve(key);
-        await new Promise<void>(() => {}); // the panel was closed
-      })
-      .catch(() => undefined);
-    await offered.promise;
-
-    const again = plugin.pendingFirstPairing();
-    expect(again, "an interrupted pairing left no way back to the key").toBeDefined();
-    expect(again, "the key offered afterwards is not the one that was shown").toBe(shown);
-    expect(() => parsePairing(again!)).not.toThrow();
-  }, 60_000);
-
-  /** A finished pairing holds no root, so there is nothing to offer. */
-  it("offers nothing once the device has its own credential", async () => {
-    await fresh();
-    const { plugin } = await load();
-    await startVault(plugin);
-    expect(
-      plugin.pendingFirstPairing(),
-      "a paired device is still holding the vault's root",
-    ).toBeUndefined();
-  }, 60_000);
 });
 
 /**
@@ -5227,150 +5310,6 @@ describe("what a restore is allowed to claim", () => {
       "the note never reached the server, so this proves nothing",
     ).toBe(true);
   }, 60_000);
-});
-
-/**
- * A pairing that finishes after the plugin is gone must not restart it (R10).
- *
- * F23 guarded the invite branch. The recovery-key branch and the first-pairing
- * branch call `start()` after their registration returns without asking again,
- * and both had recovery paths that read the disk, which is another await, and
- * then started a loop from whatever they found. Unloading during any of that
- * left a retired plugin syncing.
- *
- * The credential the registration created is real either way; what must not
- * happen is a loop for a vault somebody has just put down.
- */
-describe("a pairing that outlives the plugin", () => {
-  /**
-   * Unloaded in the window the review named: after the device credential has
-   * been saved and before the registration returns.
-   *
-   * Earlier than that and `saveDuringRun` refuses the save, which is a guard
-   * that already existed. This is the gap after it.
-   */
-  function unloadAfterCredentialSaved(plugin: Testable): void {
-    const save = plugin.saveData.bind(plugin);
-    plugin.saveData = async (data: unknown) => {
-      await save(data);
-      const record = data as { deviceId?: unknown } | null;
-      if (record !== null && typeof record === "object" && record.deviceId !== undefined) {
-        plugin.saveData = save;
-        plugin.onunload();
-      }
-    };
-  }
-
-  it("does not start a loop after unload, pairing with a recovery key", async () => {
-    await fresh();
-    const first = await load();
-    await startVault(first.plugin);
-    const key = keyOf(first.plugin);
-
-    const second = await load();
-    unloadAfterCredentialSaved(second.plugin);
-    const out = await second.plugin.pair(key, "second").catch((err: Error) => err);
-
-    expect(
-      (second.plugin as unknown as { client?: unknown }).client,
-      "an unloaded plugin was started by a pairing that finished after it",
-    ).toBeUndefined();
-    // And it says what happened rather than looking like an ordinary failure:
-    // the row may be on the server.
-    expect(out instanceof Error ? out.message : "", "it finished quietly").toMatch(
-      /unlinked|no longer|revoke/i,
-    );
-  }, 90_000);
-
-  it("does not start a loop after unload, starting a vault", async () => {
-    await fresh();
-    const { plugin } = await load();
-    unloadAfterCredentialSaved(plugin);
-
-    let shown = "";
-    const out = await plugin
-      .pairFirst(server.setup, "laptop", (k: string) => {
-        shown = k;
-      })
-      .catch((err: Error) => err);
-
-    expect(
-      (plugin as unknown as { client?: unknown }).client,
-      "an unloaded plugin was started by a pairing that finished after it",
-    ).toBeUndefined();
-    // The key has to reach somebody: the vault was claimed, and nothing else
-    // holds it.
-    const said = out instanceof Error ? out.message : "";
-    expect(`${shown}|${said}`, "the recovery key was not offered anywhere").toMatch(/basalt3_/);
-  }, 90_000);
-});
-
-/**
- * Rotation waits for the new key to be taken, exactly as first pairing does
- * (R24).
- *
- * The panel's rotation callback set the key, re-rendered, and returned, so the
- * request went out immediately. `rotateVault` documents its callback as the
- * step that makes everything after it survivable and awaits it; a callback
- * that returns before anybody has read the screen satisfies the type and not
- * the obligation.
- *
- * Rotation is the worse of the two to get wrong. It retires the key that was
- * written down, so a reload between the candidate appearing and somebody
- * copying it leaves a vault with no way back at all.
- */
-describe("handing over a replacement recovery key", () => {
-  it("does not send the rotation until the key has been taken", async () => {
-    await fresh();
-    const { plugin } = await load();
-    await startVault(plugin);
-    const key = keyOf(plugin);
-
-    let release: (() => void) | undefined;
-    const offered = deferred<string>();
-    let shown = "";
-    const rotating = plugin
-      .rotate(key, async (candidate: string) => {
-        shown = candidate;
-        offered.resolve(candidate);
-        await new Promise<void>((go) => {
-          release = go;
-        });
-      })
-      .catch((err: Error) => err);
-
-    await offered.promise;
-    expect(shown, "no candidate was offered").toMatch(/^basalt3_/);
-
-    // Still waiting, so the vault must still answer to the *old* key. That is
-    // the direct observation: rotation retires it, and a device credential
-    // keeps working either way, so asking the vault anything as a device
-    // proves nothing at all.
-    const { Registrar } = await import("../core/client.ts");
-    const { parsePairing } = await import("../core/pairing.ts");
-    const old = parsePairing(key);
-    const stillOpens = await Registrar.open({
-      url: old.url,
-      vaultId: old.vaultId,
-      device: "probe",
-      secret: old.secret,
-      timeoutMs: 10_000,
-    })
-      .then((r) => {
-        r.close();
-        return true;
-      })
-      .catch(() => false);
-    expect(
-      stillOpens,
-      "the old recovery key had already been retired, so the rotation went out before " +
-        "anybody said they had the new one",
-    ).toBe(true);
-
-    release?.();
-    const out = await rotating;
-    expect(out instanceof Error ? out.message : "rotated").toBeTruthy();
-  }, 90_000);
 });
 
 describe("compact sync menu", () => {
