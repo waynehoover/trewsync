@@ -1097,6 +1097,68 @@ describe("when things go wrong", () => {
     expect(app.vault.adapter.text(long)).toBe("too long a name\n");
     expect(app.vault.adapter.text(control)).toBe("a control character in the name\n");
   }, 300_000);
+
+  /**
+   * A name Windows cannot hold, made on a Mac, reaching the plugin on Windows
+   * (PLAN.md section 4.12, M2 task 14).
+   *
+   * The server takes all three, since every other platform can hold them. The
+   * Windows device must list each in the panel with what Windows objects to,
+   * write none of them, and leave the Mac's notes exactly where they are: a
+   * name this device cannot hold is not a note this device deleted.
+   */
+  it("lists a name Windows cannot hold in the panel on Windows, and leaves the note alone", async () => {
+    await fresh();
+    const mac = await load();
+    const names = {
+      "a:b.md": 'Windows does not allow < > : " | ? * in a file or folder name',
+      "CON.md": "Windows reserves this name for a device (CON, PRN, AUX, NUL, COM and LPT names)",
+      "ends in a dot.": "Windows does not allow a file or folder name to end with a dot or a space",
+    };
+    for (const name of Object.keys(names)) {
+      mac.app.vault.adapter.seed(name, `made on a Mac as ${name}\n`);
+    }
+    mac.app.vault.adapter.seed("fine.md", "a note every platform holds\n");
+    await startVault(mac.plugin, "mac");
+    await synced(mac.plugin);
+
+    Platform.isWin = true;
+    try {
+      const win = await load();
+      await win.plugin.pair(await anInvite(), "windows");
+      await until(
+        "the three names to be listed as needing attention",
+        () => win.plugin.currentState.kind === "synced" && win.plugin.currentState.refused === 3,
+      );
+      expect(win.app.vault.adapter.text("fine.md")).toBe("a note every platform holds\n");
+      for (const name of Object.keys(names)) {
+        expect(win.app.vault.adapter.text(name), `${name} was written on Windows`).toBeUndefined();
+      }
+
+      built.length = 0;
+      win.plugin.commands.find((c) => c.id === "show-status")!.callback!();
+      const items: string[] = [];
+      const visit = (el: FakeEl): void => {
+        if (el.tag === "li" && !el.hidden) items.push(el.allText());
+        for (const child of el.children) visit(child);
+      };
+      visit(modals.at(-1)!.contentEl);
+      for (const [name, why] of Object.entries(names)) {
+        expect(items, `the panel listed: ${JSON.stringify(items)}`).toContain(`${name}: ${why}`);
+      }
+
+      // A sync from the Mac afterwards finds all three where it left them, and
+      // so does the server: nothing on Windows reported them deleted.
+      await mac.plugin.syncNow();
+      await synced(mac.plugin);
+      for (const name of Object.keys(names)) {
+        expect(mac.app.vault.adapter.text(name), name).toBe(`made on a Mac as ${name}\n`);
+        expect(await server.cli("cat", "-path", name), name).toBe(`made on a Mac as ${name}\n`);
+      }
+    } finally {
+      Platform.isWin = false;
+    }
+  }, 300_000);
 });
 
 describe("recovering a deleted note from the app", () => {

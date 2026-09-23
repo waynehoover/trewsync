@@ -1122,6 +1122,9 @@ export default class TrewPlugin extends Plugin {
       // Which row this device connects as and which token proves it, worked
       // out in core so that both shells cannot answer it differently.
       ...credentialsFor(config),
+      // A name Windows cannot hold arrives as a stranded path with its reason
+      // rather than as a write that fails for ever (PLAN.md section 4.12).
+      ...(Platform.isWin ? { windows: true } : {}),
       confirmFirstSync: (preview) => this.confirmSync(preview, "Review your first sync", current),
       confirmDeletions: (preview) => this.confirmSync(preview, "Review folder deletions", current),
       onActivity: (event) => {

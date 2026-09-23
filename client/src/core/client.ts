@@ -84,6 +84,8 @@ export interface ClientOptions {
   readonly merge?: boolean;
   /** Whether this device may send anything to the server. Default false (I29). */
   readonly readOnly?: boolean;
+  /** Whether this device files notes on Windows. See EngineOptions. */
+  readonly windows?: boolean;
   readonly log?: (message: string, ...rest: unknown[]) => void;
   readonly onActivity?: (activity: Activity) => void;
   readonly confirmFirstSync?: (preview: SyncPreview) => Promise<boolean>;
@@ -252,6 +254,7 @@ export class Client {
       ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
       ...(opts.merge !== undefined ? { merge: opts.merge } : {}),
       ...(opts.readOnly !== undefined ? { readOnly: opts.readOnly } : {}),
+      ...(opts.windows !== undefined ? { windows: opts.windows } : {}),
       ...(opts.log !== undefined ? { log: opts.log } : {}),
       ...(opts.confirmFirstSync ? { confirmFirstSync: opts.confirmFirstSync } : {}),
       ...(opts.confirmDeletions ? { confirmDeletions: opts.confirmDeletions } : {}),

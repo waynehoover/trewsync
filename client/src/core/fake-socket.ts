@@ -170,7 +170,7 @@ export async function engineOnFakeSocket(
     cursor?: number;
     epoch?: string;
   } = {},
-  opts: { vault?: MemoryVault; store?: MemoryIndexStore } = {},
+  opts: { vault?: MemoryVault; store?: MemoryIndexStore; windows?: boolean } = {},
 ): Promise<{
   engine: Engine;
   socket: FakeSocket;
@@ -204,6 +204,7 @@ export async function engineOnFakeSocket(
     vaultId: "v",
     deviceId: "rig-device",
     token: "t",
+    ...(opts.windows ? { windows: true } : {}),
     log: (m, ...rest) => void logs.push(`${m} ${rest.map((r) => JSON.stringify(r)).join(" ")}`),
   });
   const started = engine.start();

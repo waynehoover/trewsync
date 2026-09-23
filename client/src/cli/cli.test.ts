@@ -940,6 +940,89 @@ describe("a path the server will not hold (PLAN.md section 4.9)", () => {
   }, 120_000);
 });
 
+/**
+ * PLAN.md section 4.12 and M2 task 14: a name Windows cannot hold, made on
+ * another device, reaches the headless client on Windows as a path in `trew
+ * status` with what Windows objects to, and is never written or reported
+ * deleted.
+ *
+ * The receiving device is this process told it is on Windows, which is what
+ * `clientOptions` asks. The disk underneath is still this machine's, so it
+ * would have held every one of these names; that is the point, since a disk
+ * that refused them would not show whether the client asked first.
+ */
+describe("a name Windows cannot hold, on Windows (PLAN.md section 4.12)", () => {
+  type Attention = { at: number; count: number; paths: { path: string; why: string }[] };
+
+  /** Runs `work` with `process.platform` saying win32, and puts it back. */
+  async function onWindows<T>(work: () => Promise<T>): Promise<T> {
+    const was = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...was, value: "win32" });
+    try {
+      return await work();
+    } finally {
+      Object.defineProperty(process, "platform", was);
+    }
+  }
+
+  it("names each one in status, with its reason, and leaves the notes alone", async () => {
+    await fresh();
+    const a = await firstDevice("mac");
+    const names = {
+      "a:b.md": 'Windows does not allow < > : " | ? * in a file or folder name',
+      "CON.md": "Windows reserves this name for a device (CON, PRN, AUX, NUL, COM and LPT names)",
+      "ends in a space ":
+        "Windows does not allow a file or folder name to end with a dot or a space",
+    };
+    for (const name of Object.keys(names)) await write(a, name, `made as ${name}\n`);
+    await write(a, "fine.md", "a note every platform holds\n");
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+
+    const b = await vaultDir("windows");
+    const invite = await inviteFrom(a);
+    const { synced, status } = await onWindows(async () => {
+      expect((await cli("pair", invite, "--dir", b, "--device", "windows")).code).toBe(0);
+      return {
+        synced: await cli("sync", "--dir", b, "--json"),
+        status: await cli("status", "--dir", b, "--json"),
+      };
+    });
+
+    expect(synced.code, "a sync that left three names unwritten exited 0").toBe(1);
+    const needs = synced.json()["needsAttention"] as { path: string; why: string }[];
+    expect(status.code, "status called the vault clean").toBe(1);
+    const attention = status.json()["attention"] as Attention;
+    expect(attention.count, JSON.stringify(attention)).toBe(3);
+    for (const [name, why] of Object.entries(names)) {
+      expect(needs, synced.all).toContainEqual({ path: name, why });
+      expect(attention.paths, JSON.stringify(attention)).toContainEqual({ path: name, why });
+      await expect(read(b, name), `${name} was written`).rejects.toThrow(/ENOENT/);
+    }
+    expect(await read(b, "fine.md")).toBe("a note every platform holds\n");
+
+    // And not deleted anywhere: the Mac syncs again and still has each one,
+    // and so does the server.
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    for (const name of Object.keys(names)) {
+      expect(await read(a, name)).toBe(`made as ${name}\n`);
+      expect(await server.cli("cat", "-path", name)).toBe(`made as ${name}\n`);
+    }
+  }, 120_000);
+
+  it("syncs the same names normally anywhere else", async () => {
+    await fresh();
+    const a = await firstDevice("mac");
+    await write(a, "a:b.md", "made as a:b.md\n");
+    await write(a, "CON.md", "made as CON.md\n");
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    const b = await vaultDir("linux");
+    expect((await cli("pair", await inviteFrom(a), "--dir", b)).code).toBe(0);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    expect(await read(b, "a:b.md")).toBe("made as a:b.md\n");
+    expect(await read(b, "CON.md")).toBe("made as CON.md\n");
+  }, 120_000);
+});
+
 describe("renaming this device", () => {
   /**
    * Protocol 5. The name was chosen once at pairing and then fixed, so a typo
