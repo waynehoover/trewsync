@@ -270,8 +270,10 @@ func canonicalNumbers(v any) any {
 }
 
 // newEntry is a version this call writes: the token's label as its device,
-// which is how a conflict copy on a device and note_history name the agent
-// (PLAN.md section 2.4), the server's clock as its mtime (section 4.11).
+// which is how note_history, the audit and the batches a device receives name
+// the agent (PLAN.md section 2.4; a device names a conflict copy after itself,
+// plan/mcp-tools.md, "Authentication and authorship"), and the server's clock
+// as its mtime (section 4.11).
 func (c *call) newEntry(path string) store.Entry {
 	now := c.h.now().UnixMilli()
 	return store.Entry{Path: path, CTime: now, MTime: now, Device: c.cred.token.Label, Chunks: []string{}}
