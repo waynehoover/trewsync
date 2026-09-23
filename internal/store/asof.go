@@ -93,6 +93,9 @@ type AsOfRange struct {
 	// After, when not empty, starts the listing at the first path greater
 	// than it: a page's continuation.
 	After string
+	// From, when not empty, starts it at the first path at or after it: a
+	// continuation that resumes inside the path it stopped at.
+	From string
 	// Folder, when not empty, keeps only paths beneath it, at any depth, and
 	// not the folder's own entry: the paths beginning "Folder/".
 	Folder string
@@ -120,6 +123,7 @@ func (s *Store) EachAsOf(vaultID string, head int64, r AsOfRange, fn func(Entry)
 	q := `SELECT ` + asOfCols + ` FROM entries e
 	  WHERE e.vault_id = ?1
 	    AND e.path > ?3
+	    AND e.path >= ?6
 	    AND (?4 = '' OR (e.path >= ?4 AND e.path < ?5))
 	    AND e.uid = (SELECT MAX(x.uid) FROM entries x
 	                  WHERE x.vault_id = ?1 AND x.path = e.path AND x.uid <= ?2)
@@ -127,7 +131,7 @@ func (s *Store) EachAsOf(vaultID string, head int64, r AsOfRange, fn func(Entry)
 	                     WHERE moved.vault_id = ?1 AND moved.prev_path = e.path
 	                       AND moved.uid > e.uid AND moved.uid <= ?2)
 	  ORDER BY e.path`
-	rows, err := s.db.Query(q, vaultID, head, r.After, lo, hi)
+	rows, err := s.db.Query(q, vaultID, head, r.After, lo, hi, r.From)
 	if err != nil {
 		return err
 	}
