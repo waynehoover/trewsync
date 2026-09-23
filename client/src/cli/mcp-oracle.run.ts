@@ -72,15 +72,20 @@ function failure(error: unknown): { error: string } {
   throw error;
 }
 
-// A fixed-seed generator for the generated corpus (mulberry32).
-let seed = 0x7e11a5;
-function random(): number {
-  seed = (seed + 0x6d2b79f5) | 0;
-  let t = seed;
-  t = Math.imul(t ^ (t >>> 15), t | 1);
-  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+// Fixed-seed generators for the generated corpus (mulberry32). Each kind of
+// input added later draws from a generator of its own, so that adding one
+// leaves the inputs of the others as they were.
+function mulberry32(start: number): () => number {
+  let seed = start;
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
+const random = mulberry32(0x7e11a5);
 const pick = <T>(list: readonly T[]): T => list[Math.floor(random() * list.length)]!;
 
 // ---------------------------------------------------------------------------
@@ -1016,6 +1021,57 @@ const INLINE = [
   "[see `Old`](Old.md) #t [a `[`](Old.md) #u",
 ];
 
+// The inputs internal/notes/markdown_test.go and frontmatter_test.go use to
+// show where goldmark and yaml.v3 read a note differently from micromark and
+// npm yaml, so the oracle holds Basalt's answer for each of them too.
+const DIVERGENCES = [
+  "x\r\r    #a",
+  "- a\r\n-\r\n      #b",
+  "-\r\n    #a",
+  "[r]: u (()",
+  "[r]: u (#x()",
+  "[a](b (#x()) #y",
+  "[a](\u000cb) #x",
+  "[a](b(\n) #x",
+  "[](0[0](0 0\r* [0]:00000000000000000000(000)0",
+  "[r]:\n#u\n'' x",
+  "</script>\n#a",
+  "<script/>\n\n#a",
+  "<!doctype\n\n#a",
+  "x\n<div\t\n#a",
+  "</ div>\n#a",
+  "x\n<meta>\n#a",
+  "> a\n<b>\n> #t",
+  "> a\n<b>\n#c",
+  "a\n>-\n    #b",
+  "    code\n2) x\n\n    #b",
+  ">\n    >\n2) x\n\n    #e",
+  "[r]: u\n-\n    #a",
+  ">\t```\n>\t#a\n>\t```",
+  "&Abreve; [a](&Abreve;.md)",
+  "---\ntags: a\rb: c\n---\n",
+  "---\ntags: [a]\nx: p\u0001q\n---\n",
+  "---\ntags: [a]\nx: p\ufffeq\n---\n",
+  "---\ntags: !!str a # c\n---\n",
+  "---\ntags:\n  - !!str b   # c\n  - 'q' \n---\n",
+  "---\ntags: a\nx: {k: 1, k: 2}\n---\n",
+  "---\ntags: [a]\nb: &k: c\n---\n",
+  "---\ntags: [a]\nb: &k c\nd: *k:\n---\n",
+  "---\ntags: [a]\nb: &k.x c\nd: *k.x\n---\n",
+  "---\ntags: [a]\nb: &k:x c\n---\n",
+  "---\ntags: [a]\nb: &\u00e9 c\nd: [*\u00e9]\n---\n",
+  "---\ntags: [a]\nb: !!str &k.x c\n---\n",
+  "---\ntags: [a]\ndescription: a long\n  *important* note\n---\n",
+  "---\ntags: [a]\ntitle: Notes, *draft*\n---\n",
+  "---\ntags: [a]\nb: [c\n  *d.e]\n---\n",
+  "---\ntags: [a]\nb: |\n  x\n\t\n  y\n---\n",
+  "---\na:\n\t\nb: c\ntags: [x]\n---\n",
+  '---\ntags: [x]\na: "p\n\t\n q"\n---\n',
+  "---\ntags: [a]\n\t\nb: c\n---\n",
+  "---\ntags:\n-\ta\n---\n",
+  "---\n?\ttags\n:\t[a]\n---\n",
+];
+
 /** Everything the read side derives from one note, in one record. */
 function noteVector(source: string) {
   const attempt = <T>(f: () => T): T | { error: string } => {
@@ -1256,11 +1312,72 @@ function randomFrontmatter(): string {
   return ["---", ...lines, "---", "#body #tags text"].join(newline) + newline;
 }
 
+// Random frontmatter with anchors and aliases: names libyaml reads
+// differently from npm yaml, in each place a property can stand, and plain
+// values whose continuation lines start with "*" or "&".
+const anchorRandom = mulberry32(0xa5c4);
+function randomAnchors(): string {
+  const choose = <T>(list: readonly T[]): T => list[Math.floor(anchorRandom() * list.length)]!;
+  const names = [
+    "k",
+    "k",
+    "k.x",
+    "k:x",
+    "k:",
+    "\u00e9",
+    "k#x",
+    "k*",
+    "a-b_c",
+    "x%",
+    "k'x",
+    "k!x",
+    "k&x",
+    "",
+  ];
+  const anchor = () => "&" + choose(names);
+  const alias = () => "*" + choose(names);
+  const shapes = [
+    () => `a: ${anchor()} v`,
+    () => `a: ${alias()}`,
+    () => `a: [${anchor()} v, ${alias()}]`,
+    () => `a: {${anchor()} k: v, b: ${alias()}}`,
+    () => `${anchor()} k: v`,
+    () => `${alias()} : v`,
+    () => `a: !!str ${anchor()} v`,
+    () => `a: ${anchor()} !!str v`,
+    () => `a: ${anchor()}\n  - x`,
+    () => `a: ${anchor()} |\n  x`,
+    () => `a: long text\n  ${alias()} more`,
+    () => `a: long text\n  ${anchor()} more`,
+    () => `a: x, ${alias()}`,
+    () => `a: x - ${alias()}`,
+    () => `a: [x\n  ${alias()}]`,
+    () => `a:\n  ${anchor()} v`,
+    () => `a:\n  - ${alias()}`,
+    () => `tags: ${anchor()} [x]`,
+    () => `tags: [${alias()}]`,
+    () => `tags: ${alias()}`,
+    () => `tags: [x, ${anchor()} y]`,
+    () => `a: '${alias()}'`,
+    () => `a: "q\n  ${alias()} r"`,
+    () => `a: v # ${alias()}`,
+    // A colon before a flow indicator, and implicit keys over lines.
+    () => choose(["tags: [x:]", "tags: [x:, y]", "tags: [x::]", "tags: [!!str x:]", "tags: [x: ]"]),
+    () => choose(["a: [x:]", "a: {x:}", "a: [x\n  y:]", "a: [x\n  y: z]", "a: {x\n  y: z}"]),
+  ];
+  const lines = anchorRandom() < 0.7 ? ["tags: [t]"] : [];
+  const count = 1 + Math.floor(anchorRandom() * 4);
+  for (let i = 0; i < count; i++)
+    lines.splice(Math.floor(anchorRandom() * (lines.length + 1)), 0, choose(shapes)());
+  return ["---", ...lines, "---", "#body"].join("\n") + "\n";
+}
+
 function tagVectors() {
   const notes: unknown[] = [];
   const add = (source: string) => notes.push(noteVector(source));
   for (const s of FRONTMATTER) add(s);
   for (const s of INLINE) add(s);
+  for (const s of DIVERGENCES) add(s);
   for (const s of MULTILINGUAL) add(s);
   for (const s of LINKS) add(s);
   add(MULTILINGUAL.map((s) => "#" + s.split(" ")[0]).join(" "));
@@ -1303,6 +1420,7 @@ function tagVectors() {
   const extra = Number(process.env["ORACLE_EXTRA"] ?? 0);
   for (let n = 0; n < 600 + extra; n++) add(randomMarkdown());
   for (let n = 0; n < 400 + extra; n++) add(randomFrontmatter());
+  for (let n = 0; n < 300 + extra; n++) add(randomAnchors());
 
   const inline: unknown[] = [];
   for (const s of INLINE.slice(0, 20))

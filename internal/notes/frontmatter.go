@@ -52,6 +52,7 @@ type yamlText struct {
 	bom      bool          // the text starts with U+FEFF, which yaml.v3 drops
 	lines    []int         // byte offset of each line's start in original
 	aliases  map[[2]int]bool
+	renamed  []int // where renameAnchors renamed a property: its "&" or "*"
 }
 
 // yamlSubstitute reports whether npm yaml reads the character r at text[i]
@@ -76,14 +77,23 @@ func yamlSubstitute(text string, i int, r rune) bool {
 }
 
 func prepareYAML(text string) (*yamlText, bool) {
+	names, refused := scanYAML(text)
+	if refused {
+		return nil, false
+	}
 	y := &yamlText{original: text, back: map[rune]rune{}}
 	y.bom = strings.HasPrefix(text, "\ufeff")
+	src, renamed, ok := renameAnchors(text, names)
+	if !ok {
+		return nil, false
+	}
+	y.renamed = renamed
 	forward := map[rune]rune{}
 	next := rune(yamlPlaceholderBase)
 	var b strings.Builder
-	b.Grow(len(text))
-	for i, r := range text {
-		if !yamlSubstitute(text, i, r) {
+	b.Grow(len(src))
+	for i, r := range src {
+		if !yamlSubstitute(src, i, r) {
 			b.WriteRune(r)
 			continue
 		}
@@ -104,7 +114,7 @@ func prepareYAML(text string) (*yamlText, bool) {
 	}
 	// A line of nothing but spaces and tabs is usually blank to npm yaml,
 	// and libyaml refuses one that starts with a tab. Spaces instead of those
-	// tabs keep every offset; yamlRefused catches the places npm yaml does
+	// tabs keep every offset; scanYAML catches the places npm yaml does
 	// not see a blank line.
 	// libyaml also refuses a tab in the space after a "-", "?" or ":"
 	// indicator that starts a line, which npm yaml takes as separation.
@@ -126,10 +136,124 @@ func prepareYAML(text string) (*yamlText, bool) {
 			y.lines = append(y.lines, i+1)
 		}
 	}
-	if yamlRefused(text) {
-		return nil, false
-	}
 	return y, true
+}
+
+// anchorAlphabet is the characters libyaml reads in an anchor name.
+const anchorAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+
+// renameAnchors gives every anchor and alias name that libyaml would read
+// differently from npm yaml ("k.x", "k:x", or one with a character outside
+// ASCII) a name libyaml reads whole: as many characters, so every column
+// stays where it was, and the same new name wherever the old one appears.
+// A new name is no name already in the text, nor any run of libyaml's name
+// characters after an "&" or "*" (which is what libyaml would read there),
+// so npm yaml would resolve the renamed text exactly as the original. It
+// returns the renamed text and where each renamed property begins, which
+// renamesVerified holds against what yaml.v3 read.
+func renameAnchors(text string, names []byteRange) (string, []int, bool) {
+	used := map[string]bool{}
+	for _, r := range names {
+		used[text[r.start:r.end]] = true
+	}
+	for i := 0; i < len(text); i++ {
+		if text[i] == '&' || text[i] == '*' {
+			j := i + 1
+			for j < len(text) && strings.IndexByte(anchorAlphabet, text[j]) >= 0 {
+				j++
+			}
+			used[text[i+1:j]] = true
+		}
+	}
+	given := map[string]string{}
+	var renamed []int
+	tried := map[int]int{} // candidates tried so far, by width
+	var b strings.Builder
+	last := 0
+	for _, r := range names {
+		name := text[r.start:r.end]
+		if strings.Trim(name, anchorAlphabet) == "" {
+			continue // libyaml reads it as npm yaml does, or refuses it if empty
+		}
+		to, ok := given[name]
+		for !ok {
+			width := utf8.RuneCountInString(name)
+			candidate, more := anchorName(tried[width], width)
+			if !more {
+				return "", nil, false
+			}
+			tried[width]++
+			if !used[candidate] {
+				to, ok = candidate, true
+				used[to] = true
+				given[name] = to
+			}
+		}
+		renamed = append(renamed, r.start-1)
+		b.WriteString(text[last:r.start])
+		b.WriteString(to)
+		last = r.end
+	}
+	b.WriteString(text[last:])
+	return b.String(), renamed, true
+}
+
+// anchorName is the index-th name of width characters from anchorAlphabet,
+// or false when there are not that many.
+func anchorName(index, width int) (string, bool) {
+	b := make([]byte, width)
+	for i := width - 1; i >= 0; i-- {
+		b[i] = anchorAlphabet[index%len(anchorAlphabet)]
+		index /= len(anchorAlphabet)
+	}
+	return string(b), index == 0
+}
+
+// renamesVerified reports whether yaml.v3 read an anchor or an alias at every
+// place renameAnchors renamed one. A rename anywhere else took text inside a
+// scalar for a property (a continuation line of a plain scalar can look like
+// the start of a node) and changed the value, so the text is refused.
+func (d *yamlDoc) renamesVerified() bool {
+	y := d.text
+	if len(y.renamed) == 0 {
+		return true
+	}
+	if d.root == nil {
+		return false
+	}
+	read := map[int]bool{}
+	for p := range y.aliases {
+		read[y.offset(p[0], p[1])] = true // aliases dropAlias replaced
+	}
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		at := y.offset(n.Line, n.Column)
+		if n.Kind == yaml.AliasNode {
+			read[at] = true
+		} else if n.Anchor != "" {
+			// A node's position is its first property's; the anchor is
+			// among the properties that begin there.
+			for at >= 0 && at < len(y.original) && (y.original[at] == '!' || y.original[at] == '&') {
+				if y.original[at] == '&' {
+					read[at] = true
+				}
+				at = propertyEnd(y.original, at)
+				for at < len(y.original) && isYAMLSpace(y.original[at]) {
+					at++
+				}
+			}
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(d.root)
+	for _, at := range y.renamed {
+		if !read[at] {
+			return false
+		}
+	}
+	return true
 }
 
 // untabIndicators replaces with spaces the tabs in the whitespace after the
@@ -466,7 +590,7 @@ func parseFrontmatterYAML(text string) (*yamlDoc, bool) {
 	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
 		d.root = doc.Content[0]
 	}
-	if d.root != nil && !d.check(d.root) {
+	if !d.renamesVerified() || d.root != nil && !d.check(d.root) {
 		return nil, false
 	}
 	return d, true
@@ -593,6 +717,11 @@ func frontmatterTags(source string, f frame) ([]tagOcc, error) {
 	var found []tagOcc
 	for _, item := range items {
 		if item.Kind != yaml.ScalarNode || item.Anchor != "" || d.text.isAlias(item) {
+			return nil, invalidTagsProperty()
+		}
+		if node.Style&yaml.FlowStyle != 0 && item.Style&^yaml.TaggedStyle == 0 && strings.HasSuffix(item.Value, ":") {
+			// A colon before a flow indicator ("[a:]") is a key to npm yaml,
+			// which makes the item a mapping, and text to libyaml.
 			return nil, invalidTagsProperty()
 		}
 		v, ok := d.scalar(item)

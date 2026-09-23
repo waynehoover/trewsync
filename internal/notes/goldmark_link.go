@@ -695,11 +695,16 @@ func parseMDLinkReferenceDefinition(block text.Reader, pc parser.Context) (*ast.
 		if !isNewLine {
 			return nil, -1, -1
 		}
-		ref := ast.NewLinkReferenceDefinition(label, destination, title)
+		// micromark (and CommonMark): text after a title on its own line
+		// makes the title part of the paragraph, and the definition ends
+		// with its destination's line. goldmark kept the title and ended
+		// the definition a line early, leaving a destination on a line of
+		// its own ("[r]:\nu\n'' x") in the paragraph.
+		ref := ast.NewLinkReferenceDefinition(label, destination, nil)
 		ref.Lines().Append(startPos)
-		pc.AddReference(parser.NewReference(label, destination, title))
+		pc.AddReference(parser.NewReference(label, destination, nil))
 		recordDefinition(pc, ref, startPos.Start, span)
-		return ref, startLine, endLine
+		return ref, startLine, endLine + 1
 	}
 
 	endLine, _ = block.Position()
