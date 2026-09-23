@@ -46,6 +46,11 @@ import (
 // The seams of a write, for Config.Seam: where the crash matrix (PLAN.md M5
 // task 9) kills the server, and what each one leaves behind.
 const (
+	// SeamUploading is in the middle of storing the bodies of a write that
+	// has more than one: the first is durable and the rest are not yet
+	// written. A kill here leaves some of the operation's chunks and not the
+	// others, named by nothing, which purge reclaims.
+	SeamUploading = "uploading"
 	// SeamBodies is after the bodies are durable and before the commit lock:
 	// a kill here leaves chunks nothing names, which purge reclaims.
 	SeamBodies = "bodies"
@@ -299,9 +304,20 @@ func (c *call) content(e *store.Entry, body []byte) [][]byte {
 // (PLAN.md section 4.3, step 3). Outside every lock: bodies are content
 // addressed, named by nothing until an entry commits, and reclaimed by purge
 // if none ever does.
+//
+// The first body is stored on its own and the rest after it, so that a write
+// of several has a moment at which some of its bodies are durable and the
+// others are not written: SeamUploading, where the crash matrix kills an
+// upload in the middle. It costs one more directory flush, at an agent's pace.
 func (c *call) storeBodies(bodies [][]byte) error {
 	if len(bodies) > 0 {
-		if err := c.h.st.Chunks().PutAll(c.h.vault, bodies); err != nil {
+		if err := c.h.st.Chunks().PutAll(c.h.vault, bodies[:1]); err != nil {
+			return err
+		}
+	}
+	if len(bodies) > 1 {
+		c.h.at(SeamUploading)
+		if err := c.h.st.Chunks().PutAll(c.h.vault, bodies[1:]); err != nil {
 			return err
 		}
 	}
