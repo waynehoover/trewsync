@@ -10,7 +10,7 @@ describe("what never syncs", () => {
       ".obsidian",
       ".obsidian/plugins/x/main.js",
       "notes/.git/hooks/post-checkout",
-      ".telimus/config.json",
+      ".trew/config.json",
       "a/b/.DS_Store",
       "deep/er/.hidden.md",
       ".trash/note.md",

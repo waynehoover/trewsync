@@ -18,9 +18,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // A mac of the right shape, standing in for a real writer's. The server holds
@@ -69,7 +69,7 @@ func newRigDerived(t *testing.T) *rig {
 func newRigWith(t *testing.T, auth func(*store.Store) Authenticator) *rig {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -78,7 +78,7 @@ func newRigWith(t *testing.T, auth func(*store.Store) Authenticator) *rig {
 	// Discard by default: a failing test prints what it asserts, and the
 	// server's own log would bury it.
 	var out io.Writer = io.Discard
-	if os.Getenv("TELIMUS_TEST_LOG") != "" {
+	if os.Getenv("TREW_TEST_LOG") != "" {
 		out = os.Stderr
 	}
 	log := slog.New(slog.NewTextHandler(out, nil))

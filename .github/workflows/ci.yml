@@ -46,7 +46,7 @@ jobs:
       - name: test
         run: go test -race -count=1 ./...
 
-      # The systemd unit `telimus service` prints is a deployment artifact, so
+      # The systemd unit `trew service` prints is a deployment artifact, so
       # it is rendered here and checked by systemd itself rather than by eye.
       # The binary and user are real ones on this runner, because verify
       # checks that ExecStart exists and that User resolves. Skipped, saying
@@ -57,12 +57,12 @@ jobs:
             echo "systemd-analyze is not on this runner; skipping the unit check"
             exit 0
           fi
-          go build -o "$RUNNER_TEMP/telimus" ./cmd/telimus
-          "$RUNNER_TEMP/telimus" service \
-            -data "$RUNNER_TEMP/telimus-data" -addr 127.0.0.1:3003 \
-            -binary "$RUNNER_TEMP/telimus" -user "$(id -un)" > "$RUNNER_TEMP/telimus.service"
-          cat "$RUNNER_TEMP/telimus.service"
-          systemd-analyze verify "$RUNNER_TEMP/telimus.service"
+          go build -o "$RUNNER_TEMP/trew" ./cmd/trew
+          "$RUNNER_TEMP/trew" service \
+            -data "$RUNNER_TEMP/trew-data" -addr 127.0.0.1:3003 \
+            -binary "$RUNNER_TEMP/trew" -user "$(id -un)" > "$RUNNER_TEMP/trew.service"
+          cat "$RUNNER_TEMP/trew.service"
+          systemd-analyze verify "$RUNNER_TEMP/trew.service"
 
   # The compose file is the example people copy, and its whole point is that
   # a pull cannot move you to an image nobody tested. A pin two releases stale
@@ -175,7 +175,7 @@ jobs:
       # it holds against what it claims, start a server on it, and read every
       # version and every body back over a real socket.
       - name: the backup restores, verifies and serves what it held
-        run: go test -tags rehearsal -run TestRestoreRehearsal -count=1 ./cmd/telimus/
+        run: go test -tags rehearsal -run TestRestoreRehearsal -count=1 ./cmd/trew/
 
   # The same client suite on a case-folding filesystem (I18).
   #
@@ -189,7 +189,7 @@ jobs:
   # Its own job rather than a matrix on `client`, because the Linux one carries
   # the format check, the typecheck and the compression golden, and running
   # those twice buys nothing. What this adds is the filesystem.
-  # systemd's opinion of the unit `telimus service` writes (I20).
+  # systemd's opinion of the unit `trew service` writes (I20).
   #
   # `TestService` checks the unit's text against what this project meant to
   # write, which is a test of this repository agreeing with itself. Whether
@@ -216,26 +216,26 @@ jobs:
           set -euo pipefail
           systemd-analyze --version | head -1
 
-          go build -o /tmp/telimus ./cmd/telimus
+          go build -o /tmp/trew ./cmd/trew
           # The flags somebody would actually use, including the ceiling,
           # because that is the one a person adds by hand and the one most
           # likely to be written into the unit wrongly.
-          /tmp/telimus service \
-            -data /var/lib/telimus -addr 0.0.0.0:3003 -vault default \
-            -user telimus -binary /usr/local/bin/telimus -max-file 134217728 \
-            > /tmp/telimus.service
-          cat /tmp/telimus.service
+          /tmp/trew service \
+            -data /var/lib/trew -addr 0.0.0.0:3003 -vault default \
+            -user trew -binary /usr/local/bin/trew -max-file 134217728 \
+            > /tmp/trew.service
+          cat /tmp/trew.service
 
           # Copied into a directory systemd looks in, because verify resolves a
           # unit by name and reports "not found" for a bare path in some
           # versions, which passes for the wrong reason.
           sudo mkdir -p /etc/systemd/system
-          sudo cp /tmp/telimus.service /etc/systemd/system/telimus.service
+          sudo cp /tmp/trew.service /etc/systemd/system/trew.service
 
           # And put the binary where the unit says it is.
           #
           # Newer systemd checks that ExecStart names something executable and
-          # says "Command /usr/local/bin/telimus is not executable: No such
+          # says "Command /usr/local/bin/trew is not executable: No such
           # file or directory". The filter below was written against an older
           # version's wording and did not match it, so this job started failing
           # on a runner image bump with nothing wrong in the unit.
@@ -244,23 +244,23 @@ jobs:
           # would then be hiding the one thing this check should catch: a
           # `-binary` path that is wrong. With the file really there, systemd
           # resolving ExecStart is part of what passes.
-          sudo install -m 0755 /tmp/telimus /usr/local/bin/telimus
+          sudo install -m 0755 /tmp/trew /usr/local/bin/trew
 
           # Warnings about a user or a binary that does not exist on a runner
           # are expected and are not what this is looking for. Everything else
           # is: a directive systemd does not know, a value it cannot parse, a
           # dependency that cannot be resolved.
-          out=$(systemd-analyze verify /etc/systemd/system/telimus.service 2>&1 || true)
+          out=$(systemd-analyze verify /etc/systemd/system/trew.service 2>&1 || true)
           echo "$out"
           # Grep out the two classes that are about this runner rather than
           # about the unit.
           real=$(printf '%s\n' "$out" \
             | grep -v -e "Unit configuration has fatal error" \
-            | grep -v -e "telimus.service: Failed to create" \
+            | grep -v -e "trew.service: Failed to create" \
             | grep -vi -e "user or group" -e "does not exist" -e "Cannot find user" \
             | grep -v -e "^$" || true)
           if [ -n "$real" ]; then
-            echo "systemd objects to the unit telimus writes:" >&2
+            echo "systemd objects to the unit trew writes:" >&2
             printf '%s\n' "$real" >&2
             exit 1
           fi
@@ -301,18 +301,18 @@ jobs:
           # 4 GiB, which is room for the stress suite's attachments with a wide
           # margin. A vault that filled the image would fail as a disk-full
           # error and read as a bug in this project.
-          dd if=/dev/zero of=/tmp/telimus.img bs=1M count=4096 status=none
-          mkfs.ext4 -q /tmp/telimus.img
-          sudo mkdir -p /mnt/telimus
-          sudo mount -o loop /tmp/telimus.img /mnt/telimus
-          sudo mkdir -p /mnt/telimus/tmp
-          sudo chown -R "$(id -u):$(id -g)" /mnt/telimus
+          dd if=/dev/zero of=/tmp/trew.img bs=1M count=4096 status=none
+          mkfs.ext4 -q /tmp/trew.img
+          sudo mkdir -p /mnt/trew
+          sudo mount -o loop /tmp/trew.img /mnt/trew
+          sudo mkdir -p /mnt/trew/tmp
+          sudo chown -R "$(id -u):$(id -g)" /mnt/trew
           # Asserted, not assumed. A mount that silently did not happen would
           # leave TMPDIR pointing at the root filesystem and this job would go
           # on passing while testing nothing new, which is the shape of failure
           # the case-folding job also guards against.
-          mountpoint -q /mnt/telimus
-          df -h /mnt/telimus
+          mountpoint -q /mnt/trew
+          df -h /mnt/trew
 
       - name: install
         working-directory: client
@@ -321,12 +321,12 @@ jobs:
       - name: test
         working-directory: client
         env:
-          TMPDIR: /mnt/telimus/tmp
+          TMPDIR: /mnt/trew/tmp
         run: |
           set -euo pipefail
           # The vaults land wherever the OS says temporary files go, so this is
           # the whole of the change.
-          test "$(node -p 'require("node:os").tmpdir()')" = /mnt/telimus/tmp
+          test "$(node -p 'require("node:os").tmpdir()')" = /mnt/trew/tmp
           bun run test
 
   client-case-folding:
@@ -335,7 +335,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Both toolchains, because the client's tests build cmd/telimus and talk
+      # Both toolchains, because the client's tests build cmd/trew and talk
       # to it over a real socket.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -375,7 +375,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The client's tests build cmd/telimus and talk to it over a real socket,
+      # The client's tests build cmd/trew and talk to it over a real socket,
       # so this job needs both toolchains.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -418,7 +418,7 @@ jobs:
         working-directory: client
         run: bun run build
 
-      # Everything between that build and a working `telimus` on somebody else's
+      # Everything between that build and a working `trew` on somebody else's
       # machine: what `files` ships, what `bin` points at, and whether the
       # bundle starts under node, which is the runtime the package claims and
       # the one nothing above uses. An npm version cannot be replaced once it
@@ -461,7 +461,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The walk starts a vault and pairs a second device into it against a
-      # real telimus, so this needs both toolchains for the same reason the
+      # real trew, so this needs both toolchains for the same reason the
       # client job does.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -520,7 +520,7 @@ jobs:
   # never runs. macOS takes a `flock` at `open` and Linux binds an abstract
   # socket, so `scripts/check.sh` passing on a Mac says nothing whatever about
   # this one (I27). The property is that the kernel gives the lock back when a
-  # telimus dies, and it is checked by killing one.
+  # trew dies, and it is checked by killing one.
   kernel-lock:
     name: the kernel lock on Linux
     runs-on: ubuntu-latest
@@ -534,7 +534,7 @@ jobs:
         working-directory: client
         run: bun install --frozen-lockfile
 
-      - name: the kernel gives the lock back when a telimus dies
+      - name: the kernel gives the lock back when a trew dies
         working-directory: client
         run: bun run ../scripts/kernel-lock.test.ts
 
@@ -544,9 +544,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: build the image
-        run: docker build -t telimus:ci .
+        run: docker build -t trew:ci .
       - name: it runs
-        run: docker run --rm telimus:ci version
+        run: docker run --rm trew:ci version
 
       # compose.yaml is what the docs tell people to run. A file that does not
       # parse is found here rather than on somebody's homelab.

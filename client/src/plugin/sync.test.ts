@@ -45,7 +45,7 @@ class Device {
       vault: new ObsidianVault(asVault(new FakeVaultIndex(this.adapter)), ".obsidian"),
       // Where the plugin puts it: inside its own folder, under
       // `.obsidian`, which never syncs.
-      store: new ObsidianIndexStore(this.adapter, ".obsidian/plugins/telimus/index.json"),
+      store: new ObsidianIndexStore(this.adapter, ".obsidian/plugins/trew/index.json"),
       url: server.wsUrl,
       ...(await server.deviceCredentials(SECRET, wrapped)),
       vaultId: "default",
@@ -148,7 +148,7 @@ describe("a vault reaching another device", () => {
     const b = await device("b");
 
     a.adapter.seed("Meeting notes.md", "# Meeting\n\nDiscussed the thing.\n");
-    a.adapter.seed("Projects/Telimus.md", "# Telimus\n\nA sync tool.\n");
+    a.adapter.seed("Projects/Trew.md", "# Trew\n\nA sync tool.\n");
     const bytes = new Uint8Array(5000);
     for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 37) & 0xff;
     await a.adapter.writeBinary("attachment.bin", bytes.slice().buffer as ArrayBuffer, {
@@ -157,9 +157,9 @@ describe("a vault reaching another device", () => {
 
     await converge(a, b);
 
-    expect(b.notes().sort()).toEqual(["Meeting notes.md", "Projects/Telimus.md", "attachment.bin"]);
+    expect(b.notes().sort()).toEqual(["Meeting notes.md", "Projects/Trew.md", "attachment.bin"]);
     expect(b.text("Meeting notes.md")).toBe("# Meeting\n\nDiscussed the thing.\n");
-    expect(b.text("Projects/Telimus.md")).toBe("# Telimus\n\nA sync tool.\n");
+    expect(b.text("Projects/Trew.md")).toBe("# Trew\n\nA sync tool.\n");
     expect([...new Uint8Array(await b.adapter.readBinary("attachment.bin"))]).toEqual([...bytes]);
     // And the folder came too, so an empty one would as well.
     expect(await b.adapter.exists("Projects")).toBe(true);
@@ -236,14 +236,14 @@ describe("a vault reaching another device", () => {
     // Under the name it had. A trash keeps a basename and drops every folder
     // above it, so the move that takes the note out of the way before it is
     // identified has to be into a folder rather than under a new name (R22):
-    // renamed, it reaches the trash as `.telimus-tmp-9f2c-doomed.md`, which is
+    // renamed, it reaches the trash as `.trew-tmp-9f2c-doomed.md`, which is
     // not what somebody looking for the note they deleted searches for.
     expect(b.adapter.trashedLocally.map(basename)).toContain("doomed.md");
     // Recoverable by hand, and not syncing back out to undo the deletion
     // everywhere else.
     expect(b.adapter.text(".trash/doomed.md")).toBe("here for now\n");
     // And nothing of that move is left behind.
-    expect(b.adapter.everything().filter((p) => p.includes(".telimus-tmp-"))).toEqual([]);
+    expect(b.adapter.everything().filter((p) => p.includes(".trew-tmp-"))).toEqual([]);
   }, 300_000);
 
   it("merges edits to different parts of one note", async () => {
@@ -400,7 +400,7 @@ describe("a dotfile a headless peer holds", () => {
     const adapter = new FakeAdapter();
     const plugin = new Client({
       vault: new ObsidianVault(asVault(new HidingIndex(adapter)), ".obsidian"),
-      store: new ObsidianIndexStore(adapter, ".obsidian/plugins/telimus/index.json"),
+      store: new ObsidianIndexStore(adapter, ".obsidian/plugins/trew/index.json"),
       url: server.wsUrl,
       ...(await server.deviceCredentials(SECRET, wrapped)),
       vaultId: "default",

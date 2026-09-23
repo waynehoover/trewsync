@@ -10,7 +10,7 @@ import { within } from "../core/test-async.ts";
 import { smokeMcpArtifact, smokeHttpArtifact } from "./mcp-artifact-test.ts";
 
 it("the actual production configuration builds an isolated single-file MCP and keeps the SDK out of the plugin", async () => {
-  const root = await mkdtemp(join(tmpdir(), "telimus-mcp-production-"));
+  const root = await mkdtemp(join(tmpdir(), "trew-mcp-production-"));
   const source = fileURLToPath(new URL("../..", import.meta.url));
   const staging = join(root, "staging", "client");
   const installation = join(root, "installation");
@@ -38,11 +38,11 @@ it("the actual production configuration builds an isolated single-file MCP and k
     }
     const plugin = await readFile(join(staging, "dist/plugin/main.js"), "utf8");
     expect(plugin).not.toMatch(/modelcontextprotocol|McpServer|StdioServerTransport/);
-    const artifact = join(installation, "telimus.mjs");
-    await copyFile(join(staging, "dist/telimus.mjs"), artifact);
+    const artifact = join(installation, "trew.mjs");
+    await copyFile(join(staging, "dist/trew.mjs"), artifact);
     // Remove build inputs from the installation's entire ancestry before launch.
     await removeTree(join(root, "staging"));
-    expect(await readdir(installation)).toEqual(["telimus.mjs"]);
+    expect(await readdir(installation)).toEqual(["trew.mjs"]);
     const measured = await smokeMcpArtifact(artifact, process.execPath, join(source, ".."));
     const http = await smokeHttpArtifact(artifact, process.execPath, join(source, ".."));
     console.info({

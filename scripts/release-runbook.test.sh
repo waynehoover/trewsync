@@ -93,7 +93,7 @@ done < <(printf '%s\n%s\n' "$with" "$without" | grep -o 'git tag -a [^ ]*' | sed
 cliversion=$(node -p "require('$here/../client/package.json').version")
 for out in "$with" "$without"; do
   case $out in
-    *"git tag -a cli/v$cliversion -m \"telimus CLI $cliversion\""*)
+    *"git tag -a cli/v$cliversion -m \"trew CLI $cliversion\""*)
       ok "the CLI command uses the package version $cliversion" ;;
     *) bad "the CLI tag command does not use the package version $cliversion" ;;
   esac

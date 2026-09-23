@@ -98,13 +98,13 @@ jobs:
           fi
           echo "publishing $pkg"
 
-      # `files` in package.json ships dist/telimus.mjs, which exists only after a
+      # `files` in package.json ships dist/trew.mjs, which exists only after a
       # build. Publishing without this puts an empty package on the registry.
       - name: build
         working-directory: client
         run: bun run build
 
-      # `test -s dist/telimus.mjs` used to be the whole of this: that a build
+      # `test -s dist/trew.mjs` used to be the whole of this: that a build
       # had produced a file. This packs the tarball, installs it somewhere with
       # no relationship to the checkout, and runs the command out of it under
       # node, which is what the next person to install this will do and the one

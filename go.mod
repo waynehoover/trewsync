@@ -1,4 +1,4 @@
-module github.com/waynehoover/telimus
+module github.com/waynehoover/trew
 
 go 1.27.0
 

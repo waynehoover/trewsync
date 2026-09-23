@@ -3,8 +3,8 @@ package server
 import (
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 func TestConditionalWriteChecksAgainAfterReceivingBodies(t *testing.T) {

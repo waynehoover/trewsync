@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 func TestRevokedDeviceCannotFinishMintingAnInvite(t *testing.T) {

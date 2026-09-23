@@ -2,7 +2,7 @@
 
 [Documentation](index.md) · [Plugin guide](plugin.md)
 
-Telimus is designed for one person's trusted devices and a server they control.
+Trew is designed for one person's trusted devices and a server they control.
 It encrypts note contents and filenames before uploading them. Your local vault
 remains ordinary, readable files, so your device's security matters too.
 
@@ -25,7 +25,7 @@ device and access the vault.
 
 Use an invite to add devices during normal use. An invite works once and
 expires after ten minutes by default. If every device is lost, use the recovery
-key to pair a replacement. Telimus cannot recover that key for you.
+key to pair a replacement. Trew cannot recover that key for you.
 
 A paired device keeps the credentials it needs to sync and decrypt your notes
 locally. Protect device accounts, disks, and copies of the plugin or CLI state.
@@ -50,19 +50,19 @@ above.
 
 ## What encryption does not guarantee
 
-Telimus checks that received content and its protected metadata authenticate
+Trew checks that received content and its protected metadata authenticate
 under the vault's key. A server without that key cannot create arbitrary valid
 note content. It can still withhold updates or replay a previously valid
-version. Telimus does not fully detect those actions.
+version. Trew does not fully detect those actions.
 
-Paired devices are trusted to change the vault and invite other devices. Telimus
+Paired devices are trusted to change the vault and invite other devices. Trew
 is not a system for sharing notes with people you do not trust. The CLI's
 read-only mode controls that client's sync behavior; it is not a restricted
 server credential.
 
 ## HTTP access for an agent
 
-`telimus mcp --listen` exposes readable notes from a paired device. The MCP client
+`trew mcp --listen` exposes readable notes from a paired device. The MCP client
 and any model service it uses can receive plaintext note content. Whoever
 terminates the HTTPS connection can see that content and the bearer credential.
 This differs from the sync relay, which receives encrypted notes.
@@ -73,12 +73,12 @@ TLS on the serving machine and restricts reachability to the tailnet and its
 network policy. The MCP bearer remains mandatory. A **Cloudflare Tunnel exposes
 plaintext notes to Cloudflare's TLS termination**. If you choose that arrangement,
 put an identity check such as Cloudflare Access in front of it and keep MCP's
-own bearer check. Forwarded identity or IP headers never authenticate to Telimus.
+own bearer check. Forwarded identity or IP headers never authenticate to Trew.
 
-Generate the separate random credential with `telimus mcp-token`. Keep it in the
+Generate the separate random credential with `trew mcp-token`. Keep it in the
 client's authentication configuration, outside the notes it can read. With
 `--key-out`, the CLI creates a new private file outside the vault and prints
-only its id and path. The server stores a SHA-256 hash in unsynced `.telimus`
+only its id and path. The server stores a SHA-256 hash in unsynced `.trew`
 state. A missing credential refuses access, as does an unreadable or malformed
 record. There is no auth bypass, OAuth server, multi-user account system or
 per-tool token scope.

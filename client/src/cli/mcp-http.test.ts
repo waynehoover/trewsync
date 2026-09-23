@@ -100,7 +100,7 @@ it("requires current authorization on POST, GET and DELETE, even for an existing
       headers: { ...headers, authorization: "" },
     });
     expect(response.status).toBe(401);
-    expect(response.headers.get("www-authenticate")).toBe('Bearer realm="telimus"');
+    expect(response.headers.get("www-authenticate")).toBe('Bearer realm="trew"');
     expect(await response.text()).toBe("unauthorized");
   }
   const rotated = await cli("mcp-token", "--dir", host.root);
@@ -118,7 +118,7 @@ it("requires current authorization on POST, GET and DELETE, even for an existing
   });
   expect(fresh.status).toBe(200);
   await fresh.text();
-  await rm(join(host.root, ".telimus/mcp-token.json"));
+  await rm(join(host.root, ".trew/mcp-token.json"));
   const revoked = await host.request(initialize(), {
     headers: { authorization: `Bearer ${rotated.out.trim()}` },
   });
@@ -165,7 +165,7 @@ it("refuses malformed and missing bearer headers before any tool runs, with fixe
     },
   });
   const headers = await legacy(host);
-  const record = JSON.parse(await readFile(join(host.root, ".telimus/mcp-token.json"), "utf8"));
+  const record = JSON.parse(await readFile(join(host.root, ".trew/mcp-token.json"), "utf8"));
   for (const authorization of [
     undefined,
     "Basic wrong",
@@ -185,7 +185,7 @@ it("refuses malformed and missing bearer headers before any tool runs, with fixe
       body: JSON.stringify(callStatus(10)),
     });
     expect(result.status).toBe(401);
-    expect(result.headers.get("www-authenticate")).toBe('Bearer realm="telimus"');
+    expect(result.headers.get("www-authenticate")).toBe('Bearer realm="trew"');
     const body = await result.text();
     expect(body).toBe("unauthorized");
     const responseHeaders: Record<string, string> = {};
@@ -215,7 +215,7 @@ it("an unreadable credential refuses HTTP with 503 before any tool runs", async 
   let dispatched = 0;
   const host = await fixture({ status: async () => ({ dispatched: ++dispatched }) });
   const headers = await legacy(host);
-  const path = join(host.root, ".telimus/mcp-token.json");
+  const path = join(host.root, ".trew/mcp-token.json");
   await chmod(path, 0);
   try {
     await expect(readFile(path)).rejects.toMatchObject({ code: "EACCES" });
@@ -274,8 +274,8 @@ it("does not expose the credential or administrative tools over authenticated HT
     "search_notes",
     "sync_status",
   ]);
-  const token = JSON.parse(await readFile(join(host.root, ".telimus/mcp-token.json"), "utf8"));
-  const read = await tool(client, "read_note", { path: ".telimus/mcp-token.json" });
+  const token = JSON.parse(await readFile(join(host.root, ".trew/mcp-token.json"), "utf8"));
+  const read = await tool(client, "read_note", { path: ".trew/mcp-token.json" });
   expect(read.error).toBeDefined();
   const status = await tool(client, "sync_status");
   for (const value of [host.token, token.hash, "private-http-vault", "ws://127.0.0.1:1"])
@@ -284,7 +284,7 @@ it("does not expose the credential or administrative tools over authenticated HT
 
 it("checks exact origins before auth and refuses every other route without exposing state", async () => {
   const host = await fixture({ allowOrigins: ["https://trusted.example"] });
-  await writeFile(join(host.root, ".telimus/mcp-token.json"), "invalid state");
+  await writeFile(join(host.root, ".trew/mcp-token.json"), "invalid state");
   for (const origin of [
     "null",
     "https://evil.example",
@@ -300,7 +300,7 @@ it("checks exact origins before auth and refuses every other route without expos
   });
   expect(permitted.status).toBe(503);
   expect(await permitted.text()).toBe("unavailable");
-  for (const path of ["/", "/health", "/mcp?key=secret", "/.telimus/mcp-token.json"]) {
+  for (const path of ["/", "/health", "/mcp?key=secret", "/.trew/mcp-token.json"]) {
     const result = await host.request(undefined, { method: "GET", path });
     expect(result.status).toBe(404);
     expect(await result.text()).toBe("");
@@ -589,7 +589,7 @@ it("times out unfinished headers near ten seconds without exposing diagnostics",
     await within(closed, "header timeout", 13000);
     expect(Date.now() - started).toBeGreaterThanOrEqual(9000);
     expect(data).toMatch(/^HTTP\/1.1 (400|408)/);
-    expect(data).not.toMatch(/telimus|vault|private|test/i);
+    expect(data).not.toMatch(/trew|vault|private|test/i);
   } finally {
     socket.destroy();
   }

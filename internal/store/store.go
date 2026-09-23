@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/trew/internal/chunks"
 
 	_ "modernc.org/sqlite"
 )
@@ -215,7 +215,7 @@ var (
 
 // Entry is one version of one file.
 //
-// There is no user or owner field. Telimus syncs one person's devices, so
+// There is no user or owner field. Trew syncs one person's devices, so
 // identity would be a column that is always the same value, and the philosophy
 // doc refuses teams outright rather than half-building them.
 type Entry struct {
@@ -488,7 +488,7 @@ type Store struct {
 	// store that answers reads and refuses them (R15). Every inspection
 	// command opens read-only, deliberately, because a diagnostic that
 	// modifies what it is diagnosing is not one (I15). Both are right and
-	// together they made `telimus stats` report every healthy server as unable
+	// together they made `trew stats` report every healthy server as unable
 	// to take a note, with the free-space numbers it exists to print left at
 	// zero because the probe returned before reaching them.
 	readOnly bool
@@ -813,7 +813,7 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 
 	committed := 0
 	for _, i := range pending {
-		name := fmt.Sprintf("telimus_entry_%d", i)
+		name := fmt.Sprintf("trew_entry_%d", i)
 		if _, err := tx.Exec("SAVEPOINT " + name); err != nil {
 			return nil, err
 		}
@@ -2157,7 +2157,7 @@ func (s *Store) verifyChunkRefs(deep bool) (faults []Fault, count int, err error
 //   - **Rows that are missing.** Nothing here can tell a device that was
 //     revoked from one that was lost, because a revocation is a delete and
 //     leaves nothing behind. Rule 6 is about entries and does not reach the
-//     registry; what answers a lost row is `telimus backup`.
+//     registry; what answers a lost row is `trew backup`.
 //
 // TestDeepVerifyDecodesTheRegistry.
 func (s *Store) verifyRegistry() ([]Fault, int, error) {
@@ -3316,7 +3316,7 @@ func insertDeviceTx(tx *sql.Tx, vaultID, deviceID, name, deviceHash, vaultHash s
 }
 
 // Devices is every device registered to a vault, oldest first, for the list op
-// and for `telimus devices`. A vault with none is an empty slice, not an error:
+// and for `trew devices`. A vault with none is an empty slice, not an error:
 // an unclaimed vault has no devices and that is not a fault.
 //
 // Ordered by created_at and then by device_id. created_at is a millisecond, so
@@ -3414,8 +3414,8 @@ func (s *Store) DeviceByID(vaultID, deviceID string) (d Device, authHash string,
 // Two devices revoking each other at the same moment would both read two rows,
 // both decide they were not the last, and both delete: the vault ends with zero
 // devices and neither caller was told. Holding writeMu would close that inside
-// one process, and the store is opened by more than one (`telimus backup` and
-// `telimus purge` run against a live server's directory), so the guarantee has
+// one process, and the store is opened by more than one (`trew backup` and
+// `trew purge` run against a live server's directory), so the guarantee has
 // to be in the SQL. TestConcurrentRevokesCannotEmptyTheVault is the test, and
 // it fails against the read-then-write version.
 func (s *Store) RevokeDevice(vaultID, deviceID, vaultHash string, allowLast bool) error {

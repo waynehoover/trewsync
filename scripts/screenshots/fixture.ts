@@ -4,7 +4,7 @@ import { SyncPreviewModal } from "../../client/src/plugin/preview";
 import { PROTO } from "../../client/src/core/transport";
 // Desktop-only sample provider for scripts/screenshots.mjs; never shipped.
 import { Plugin, PluginSettingTab } from "obsidian";
-import { TelimusPanel, TelimusModal, RecoverModal, paintStatus } from "../../client/src/plugin/main";
+import { TrewPanel, TrewModal, RecoverModal, paintStatus } from "../../client/src/plugin/main";
 import { HistoryModal } from "../../client/src/plugin/history";
 import { formatInvite } from "../../client/src/core/pairing";
 import { MergeConfirmationRequired } from "../../client/src/plugin/first-sync";
@@ -42,7 +42,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 250));
 class PreviewTab extends PluginSettingTab {
   display() {
     this.panel?.teardown();
-    this.panel = new TelimusPanel(this.plugin.model, this.containerEl, () => {});
+    this.panel = new TrewPanel(this.plugin.model, this.containerEl, () => {});
     this.panel.render();
   }
   hide() {
@@ -70,7 +70,7 @@ export default class Screenshots extends Plugin {
       pointerEvents: "none",
     });
     this.status = this.addStatusBarItem();
-    this.status.addClass("plugin-telimus-sync");
+    this.status.addClass("plugin-trew-sync");
     this.model = this.makeModel();
     this.tab = new PreviewTab(this.app, this);
     this.addSettingTab(this.tab);
@@ -270,7 +270,7 @@ export default class Screenshots extends Plugin {
         this.model.currentState = { kind: "loading", local: 960, server: 3826 };
         this.model.cursors = () => ({ local: 960, server: 3826 });
       }
-      this.modal = new TelimusModal(this.model);
+      this.modal = new TrewModal(this.model);
     }
     if (name === "preview") void this.modal.confirm();
     else this.modal.open();
@@ -295,19 +295,19 @@ export default class Screenshots extends Plugin {
       await settle();
     }
     if (name === "invite") {
-      content.querySelector(".telimus-add-device").open = true;
+      content.querySelector(".trew-add-device").open = true;
       press("Create invite");
       await settle();
-      this.target = content.querySelector(".telimus-add-device");
+      this.target = content.querySelector(".trew-add-device");
       this.target.scrollIntoView({ block: "center" });
     }
     if (name === "server") {
-      content.querySelector(".telimus-server").open = true;
-      this.target = content.querySelector(".telimus-server");
+      content.querySelector(".trew-server").open = true;
+      this.target = content.querySelector(".trew-server");
       this.target.scrollIntoView({ block: "center" });
     }
     if (name === "devices") {
-      content.querySelector(".telimus-manage").open = true;
+      content.querySelector(".trew-manage").open = true;
       const button = press("Show devices");
       await settle();
       this.target = button.closest(".setting-item").nextElementSibling;
@@ -391,9 +391,9 @@ export default class Screenshots extends Plugin {
 
   checkPhoneLayout() {
     const host = this.modal?.contentEl ?? this.tab.containerEl;
-    if (this.modal?.modalEl.hasClass("mod-telimus-history")) {
+    if (this.modal?.modalEl.hasClass("mod-trew-history")) {
       const sidebar = host.querySelector(".modal-sidebar").getBoundingClientRect();
-      const pane = host.querySelector(".telimus-history-content-container").getBoundingClientRect();
+      const pane = host.querySelector(".trew-history-content-container").getBoundingClientRect();
       const row = host.querySelector(".modal-sidebar-list-item")?.getBoundingClientRect();
       if (row && (sidebar.height < row.height || row.height < 44))
         throw new Error("Phone history clips the version controls");
@@ -405,14 +405,14 @@ export default class Screenshots extends Plugin {
     }
     if (host.scrollWidth > host.clientWidth + 1)
       throw new Error("Phone dialog overflows horizontally");
-    for (const row of host.querySelectorAll(".telimus-activity-list .setting-item")) {
+    for (const row of host.querySelectorAll(".trew-activity-list .setting-item")) {
       const info = row.querySelector(".setting-item-info");
       if (info?.getBoundingClientRect().width < 80)
         throw new Error("Activity filename has no readable width");
       if (row.scrollWidth > row.clientWidth + 1)
         throw new Error("Activity row overflows horizontally");
     }
-    if (!host.hasClass("telimus-panel")) return;
+    if (!host.hasClass("trew-panel")) return;
     for (const row of host.querySelectorAll(".setting-item")) {
       if (!row.getBoundingClientRect().height) continue;
       const info = row.querySelector(".setting-item-info");

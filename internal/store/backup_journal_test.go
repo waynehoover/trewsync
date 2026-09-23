@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/trew/internal/chunks"
 )
 
 func TestBackupRefusesDestinationWithPendingRecovery(t *testing.T) {
-	if dest := os.Getenv("TELIMUS_TEST_BACKUP_WAL_DEST"); dest != "" {
+	if dest := os.Getenv("TREW_TEST_BACKUP_WAL_DEST"); dest != "" {
 		db, cs := DataDir(dest)
 		s, err := Open(db, cs)
 		if err != nil {
@@ -35,7 +35,7 @@ func TestBackupRefusesDestinationWithPendingRecovery(t *testing.T) {
 	h.file(t, "new.md", "new source bytes")
 	dest := filepath.Join(t.TempDir(), "backup")
 	child := exec.Command(os.Args[0], "-test.run=^TestBackupRefusesDestinationWithPendingRecovery$")
-	child.Env = append(os.Environ(), "TELIMUS_TEST_BACKUP_WAL_DEST="+dest)
+	child.Env = append(os.Environ(), "TREW_TEST_BACKUP_WAL_DEST="+dest)
 	if out, err := child.CombinedOutput(); err != nil {
 		t.Fatalf("child: %v %s", err, out)
 	}

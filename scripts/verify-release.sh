@@ -25,7 +25,7 @@
 # for all of them at one number is how they get assumed to be in step.
 set -uo pipefail
 
-repo=${TELIMUS_REPO:-waynehoover/telimus}
+repo=${TREW_REPO:-waynehoover/trew}
 image=ghcr.io/$repo
 plugin= server= cli=
 
@@ -58,7 +58,7 @@ check_release() { # check_release <tag> <what>
   local required=() asset
   case "$what" in
     plugin) required=(main.js manifest.json styles.css) ;;
-    server) required=(telimus-linux-amd64 telimus-linux-arm64 telimus-darwin-amd64 telimus-darwin-arm64) ;;
+    server) required=(trew-linux-amd64 trew-linux-arm64 trew-darwin-amd64 trew-darwin-arm64) ;;
   esac
   printf '\n== %s, from the %s release\n' "$what" "$tag"
   mkdir -p "$dir"
@@ -235,17 +235,17 @@ if [ -n "$cli" ]; then
     # a date before" and named a time before the publish. A verifier that
     # reports a good release as broken is worse than no verifier, because the
     # next person to see it assumes the same.
-    if ! tgz=$(cd "$dir" && npm pack --prefer-online "telimus-sync@$cli" 2>"$dir/err" | tail -1); then
-      wrong "cannot fetch telimus-sync@$cli from npm. npm says:"
+    if ! tgz=$(cd "$dir" && npm pack --prefer-online "trew-sync@$cli" 2>"$dir/err" | tail -1); then
+      wrong "cannot fetch trew-sync@$cli from npm. npm says:"
       sed 's/^/    /' "$dir/err" >&2
     else
       note "$tgz, $(wc -c < "$dir/$tgz" | tr -d ' ') bytes"
       # npm's own record of what it served, which is the closest thing the
       # registry has to a checksum somebody else can quote.
-      note "registry integrity: $(npm view --prefer-online "telimus-sync@$cli" dist.integrity 2>/dev/null || echo unknown)"
+      note "registry integrity: $(npm view --prefer-online "trew-sync@$cli" dist.integrity 2>/dev/null || echo unknown)"
       if ( cd "$dir/elsewhere" && npm install --silent --no-audit --no-fund \
              --prefix "$dir/elsewhere" "$dir/$tgz" >/dev/null 2>&1 ); then
-        bin=$dir/elsewhere/node_modules/.bin/telimus
+        bin=$dir/elsewhere/node_modules/.bin/trew
         if got=$("$bin" --version 2>&1); then
           if [ "$got" = "$cli" ]; then
             note "installs and runs under node $(node --version): $got"

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/fsync"
+	"github.com/waynehoover/trew/internal/fsync"
 )
 
 // S17 and S25: the two ways a body could be on disk and not be durable, or be

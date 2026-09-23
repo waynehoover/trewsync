@@ -3,7 +3,7 @@ package server
 import (
 	"encoding/json"
 
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 // Test-only counters. Both were exported from the production build with no

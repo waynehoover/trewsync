@@ -201,7 +201,7 @@ it("purge preserves a moved note and permits reusing its old name after restart"
   await settle([before]);
   expect([...(await fingerprint(before.dir)).keys()]).toEqual(["moved.md"]);
   await Promise.all(open.map((client) => client.close()));
-  const backup = await mkdtemp(join(tmpdir(), "telimus-purge-preservation-"));
+  const backup = await mkdtemp(join(tmpdir(), "trew-purge-preservation-"));
   dirs.push(backup);
   await server.whileStopped(async () => {
     await server.cli("backup", "-to", join(backup, "snapshot"));

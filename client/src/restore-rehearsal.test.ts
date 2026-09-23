@@ -2,8 +2,8 @@
  * A backup, restored, read back by a device that has never seen the vault
  * (I16).
  *
- * `cmd/telimus/rehearsal_test.go` already executes the runbook and it is
- * the reason `telimus restore` is not a rumour: back up, lose the original,
+ * `cmd/trew/rehearsal_test.go` already executes the runbook and it is
+ * the reason `trew restore` is not a rumour: back up, lose the original,
  * copy the backup somewhere fresh, verify it deeply, start a server on it, and
  * read every version and every body back over a real socket. What it cannot do
  * is the last step of the actual disaster, because it is the server testing
@@ -17,7 +17,7 @@
  * end, so this does:
  *
  *   1. a device writes notes whose plaintext hashes are known here,
- *   2. `telimus backup` takes a copy,
+ *   2. `trew backup` takes a copy,
  *   3. the live directory is destroyed, which is the disaster,
  *   4. a server starts on the backup,
  *   5. a device that has never existed pairs with the recovery key alone,
@@ -106,7 +106,7 @@ describe("losing the server and getting the vault back", () => {
     ).toBe(written.size);
 
     // ---- the backup ---------------------------------------------------
-    const dest = await mkdtemp(join(tmpdir(), "telimus-restore-"));
+    const dest = await mkdtemp(join(tmpdir(), "trew-restore-"));
     cleanups.push(() => rm(dest, { recursive: true, force: true }));
     await live.cli("backup", "-to", dest, "-deep");
 
@@ -199,7 +199,7 @@ describe("losing the server and getting the vault back", () => {
     await vault.edit("note.md", "third and current\n");
     await a.settle({}, 4);
 
-    const dest = await mkdtemp(join(tmpdir(), "telimus-prepurge-"));
+    const dest = await mkdtemp(join(tmpdir(), "trew-prepurge-"));
     cleanups.push(() => rm(dest, { recursive: true, force: true }));
     await live.cli("backup", "-to", dest, "-deep");
     await live.cleanup();

@@ -33,7 +33,7 @@ const MaxSegmentBytes = 255
 // containing it is one of theirs mid-write, never a note.
 //
 // Derived from the product name, which is not final (PLAN.md section 10).
-const StagingMark = ".telimus-tmp-"
+const StagingMark = ".trew-tmp-"
 
 // Reason is why a path is refused. The values are the fixture's, and both
 // implementations must report the same one for the same path, so a refusal

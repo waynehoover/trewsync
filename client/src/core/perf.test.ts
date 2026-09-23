@@ -3,7 +3,7 @@
  *
  * Most of these assert **bytes on the wire**, not elapsed time, and that is
  * deliberate. Wall-clock assertions fail on a busy machine and pass on a fast
- * one, so they get loosened until they mean nothing; and the reason Telimus is
+ * one, so they get loosened until they mean nothing; and the reason Trew is
  * fast is not that its arithmetic is clever, it is that it sends less. That is a
  * property, and a property can be asserted exactly.
  *

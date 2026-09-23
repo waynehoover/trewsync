@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // Latency multiplies round trips. Two hundred paths were two hundred requests,

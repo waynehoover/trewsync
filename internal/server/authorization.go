@@ -4,7 +4,7 @@ import (
 	"crypto/subtle"
 	"errors"
 
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 var errSessionRevoked = errors.New("this device's credential was revoked; add this device again with an invite")

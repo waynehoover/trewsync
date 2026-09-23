@@ -5,13 +5,13 @@ import { checkFirstSync } from "./first-sync.ts";
 describe("first-sync file check", () => {
   it("allows an empty notes vault with configuration, trash and empty folders", async () => {
     const adapter = new FakeAdapter();
-    adapter.seed("Settings/plugins/telimus/data.json", "credentials");
+    adapter.seed("Settings/plugins/trew/data.json", "credentials");
     adapter.seed(".trash/old.md", "deleted note");
     adapter.seed(".obsidian/workspace.json", "{}");
     adapter.seed(".git/config", "git settings");
     await adapter.mkdir("Attachments");
     await expect(checkFirstSync(adapter, "Settings")).resolves.toBeUndefined();
-    expect(adapter.text("Settings/plugins/telimus/data.json")).toBe("credentials");
+    expect(adapter.text("Settings/plugins/trew/data.json")).toBe("credentials");
   });
 
   it.each(["Notes/deep/note.md", "Attachments/report.pdf", "README"])(

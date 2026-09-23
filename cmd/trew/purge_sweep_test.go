@@ -28,7 +28,7 @@ func TestPurgeDoesNotPrintAReportTheSweepDidNotFinish(t *testing.T) {
 		t.Fatalf("write stray: %v", err)
 	}
 
-	out, err := telimus(t, "purge", "-data", dir, "-confirm", "default", "-no-backup-check")
+	out, err := trew(t, "purge", "-data", dir, "-confirm", "default", "-no-backup-check")
 	if err == nil {
 		t.Fatalf("purge reported success over a chunk store it could not walk:\n%s", out)
 	}

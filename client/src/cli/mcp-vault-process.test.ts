@@ -13,7 +13,7 @@ const servers: TestServer[] = [],
   roots: string[] = [];
 const hosts: { client: Client; close(): Promise<unknown> }[] = [];
 beforeAll(async () => {
-  buildDir = await mkdtemp(join(tmpdir(), "telimus-multivault-build-"));
+  buildDir = await mkdtemp(join(tmpdir(), "trew-multivault-build-"));
   bundle = await buildMcp(buildDir);
 });
 afterAll(async () => removeTree(buildDir));
@@ -26,7 +26,7 @@ async function paired() {
   const server = new TestServer();
   servers.push(server);
   await server.start();
-  const dir = await mkdtemp(join(tmpdir(), "telimus-multivault-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-multivault-"));
   roots.push(dir);
   const init = await cli("init", server.setup, "--dir", dir, "--json");
   expect(init.code, init.err).toBe(0);
@@ -122,7 +122,7 @@ it("holds every root until an admitted HTTP write finishes during shutdown", asy
   const a = await paired(),
     b = await paired();
   const token = (await cli("mcp-token", "--dir", a)).out.trim();
-  const faultDir = await mkdtemp(join(tmpdir(), "telimus-multivault-fault-"));
+  const faultDir = await mkdtemp(join(tmpdir(), "trew-multivault-fault-"));
   roots.push(faultDir);
   const fault = await buildMcp(faultDir, "./mcp-fault-child.ts");
   const owner = await openHttp(fault, a, token, [

@@ -1,7 +1,7 @@
 /**
  * What a paired device remembers.
  *
- * Kept in `.telimus/` inside the vault, which is in the never-sync list, so it
+ * Kept in `.trew/` inside the vault, which is in the never-sync list, so it
  * neither travels to other devices nor appears as a note. A device's identity
  * and its server's token are local facts; the only thing here that is shared is
  * the root secret, and that arrives by pairing string rather than by sync.
@@ -20,7 +20,7 @@ import {
 } from "./vault.ts";
 
 /** The folder inside a vault that holds this client's state. */
-export const STATE_DIR = ".telimus";
+export const STATE_DIR = ".trew";
 
 /** What a paired device stores. Defined in core, so both shells agree. */
 export type Config = DeviceConfig;
@@ -86,7 +86,7 @@ export async function saveConfig(vault: string, config: Config): Promise<void> {
   // Before the directory is created, and before anything is written (R11).
   //
   // `NodeVault` has checked its writes for this since F24 and the config did
-  // not, which is the one file where it matters most: a `.telimus` that is a
+  // not, which is the one file where it matters most: a `.trew` that is a
   // symlink out of the vault wrote this device's recovery and device material
   // somewhere else, with nothing said, and no race was needed to arrange it.
   // The staging directory under it gets the same question for the same reason.

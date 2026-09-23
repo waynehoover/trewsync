@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/trew/internal/chunks"
 )
 
 // SchemaVersion is what this binary's schema is, written into the database as
@@ -30,8 +30,8 @@ import (
 // going back destructive.
 const SchemaVersion = 1
 
-// ErrFutureSchema is a database written by a newer telimus.
-var ErrFutureSchema = errors.New("this database was written by a newer telimus")
+// ErrFutureSchema is a database written by a newer trew.
+var ErrFutureSchema = errors.New("this database was written by a newer trew")
 
 // Mode says what opening a store is allowed to do to it.
 //
@@ -71,7 +71,7 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 			return nil, err
 		}
 	case Existing, ReadOnly:
-		// Named rather than created. `telimus verify -data /typo` used to make
+		// Named rather than created. `trew verify -data /typo` used to make
 		// an empty store and report it healthy, which is a true statement about
 		// a directory nobody wanted and a false answer to the question asked.
 		if _, err := os.Stat(dbPath); err != nil {
@@ -151,7 +151,7 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 // Zero is every database written before the version existed, and it is
 // accepted: those are readable, and refusing them would mean an upgrade that
 // cannot open the store it is upgrading. Anything above SchemaVersion is a
-// newer telimus's, and the refusal names both numbers because the answer is
+// newer trew's, and the refusal names both numbers because the answer is
 // always "run the newer one" and a message that does not say which is which
 // leaves somebody guessing at their own data.
 func checkSchemaVersion(db *sql.DB, dbPath string) error {
@@ -161,8 +161,8 @@ func checkSchemaVersion(db *sql.DB, dbPath string) error {
 	}
 	if got > SchemaVersion {
 		return fmt.Errorf(
-			"%w: %s is schema %d and this telimus understands %d. "+
-				"Run the newer telimus, or restore a backup taken before the upgrade. "+
+			"%w: %s is schema %d and this trew understands %d. "+
+				"Run the newer trew, or restore a backup taken before the upgrade. "+
 				"Opening it with this one would read rows it does not understand and write rows "+
 				"the newer one would not",
 			ErrFutureSchema, dbPath, got, SchemaVersion)

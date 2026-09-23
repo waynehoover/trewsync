@@ -23,7 +23,7 @@ export class ConflictsModal extends Modal {
   }
   override onOpen(): void {
     this.setTitle("Review conflicts");
-    this.modalEl.addClass("mod-telimus-conflicts");
+    this.modalEl.addClass("mod-trew-conflicts");
     this.list();
   }
   override onClose(): void {
@@ -97,13 +97,13 @@ export class ConflictsModal extends Modal {
             text: "Comparison shortened. Open both files to review all changes before choosing a version.",
           });
         this.contentEl.createEl("pre", {
-          cls: "telimus-conflict-preview",
+          cls: "trew-conflict-preview",
           text: comparison.slice(0, DIFF_PREVIEW_CHARS),
         });
         const edit = this.contentEl.createEl("details");
         editControls = edit;
         edit.createEl("summary", { text: "Edit a combined version" });
-        const field = edit.createEl("textarea", { cls: "telimus-conflict-editor" });
+        const field = edit.createEl("textarea", { cls: "trew-conflict-editor" });
         editor = field;
         field.value = draft ?? review.current!.text!;
         if (draft !== undefined) edit.open = true;
@@ -121,7 +121,7 @@ export class ConflictsModal extends Modal {
         text: "Choosing a version removes the extra copy and syncs your choice to other devices.",
       });
       const actions = new Setting(this.contentEl);
-      actions.settingEl.addClass("telimus-conflict-actions");
+      actions.settingEl.addClass("trew-conflict-actions");
       const apply = async (choice: ConflictChoice) => {
         if (this.busy) return;
         this.busy = true;

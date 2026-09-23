@@ -552,7 +552,7 @@ func TestACrashBetweenSpendingAnInviteAndRegisteringSpendsNeither(t *testing.T) 
 // device to show for it.
 //
 // Two handles, because the guarantee has to be in the SQL rather than in
-// writeMu: `telimus backup` and `telimus purge` run against a live server's
+// writeMu: `trew backup` and `trew purge` run against a live server's
 // directory, so the store is opened by more than one process.
 func TestARedeemRacingARevokeLeavesTheVaultConsistent(t *testing.T) {
 	for attempt := 0; attempt < 20; attempt++ {
@@ -734,8 +734,8 @@ func TestARedemptionOntoAnExistingIdChangesNothing(t *testing.T) {
 // TestConcurrentRevokesCannotEmptyTheVault gives: writeMu makes a read then a
 // write atomic within one process, so a single-handle version of this passes
 // against an implementation that reads the invite and then marks it. The store
-// is opened by more than one process in earnest anyway, since `telimus backup`
-// and `telimus purge` run against a live server's directory.
+// is opened by more than one process in earnest anyway, since `trew backup`
+// and `trew purge` run against a live server's directory.
 //
 // Checked to fail rather than assumed to: with spendInviteTx's UPDATE ...
 // RETURNING split into a SELECT and an UPDATE, the racers no longer agree and

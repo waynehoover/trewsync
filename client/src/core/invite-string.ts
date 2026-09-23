@@ -17,7 +17,7 @@ import { crc32Bytes } from "./crc32.ts";
 import { base64urlDecode, base64urlEncode } from "./crypto.ts";
 
 /** What every invite starts with. Derived from the product name, which is not final. */
-export const INVITE_PREFIX = "telimus1i_";
+export const INVITE_PREFIX = "trew1i_";
 /** The layout version the body starts with. */
 export const INVITE_VERSION = 1;
 /** The length of the redemption token an invite carries. */

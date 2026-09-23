@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"unicode/utf8"
 
-	"github.com/waynehoover/telimus/internal/paths"
+	"github.com/waynehoover/trew/internal/paths"
 )
 
 // Continuation cursors are opaque to the agent and self-describing to the

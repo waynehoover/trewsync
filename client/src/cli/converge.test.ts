@@ -67,7 +67,7 @@ let server: TestServer;
 const dirs: string[] = [];
 
 async function vaultDir(name: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), `telimus-${name}-`));
+  const dir = await mkdtemp(join(tmpdir(), `trew-${name}-`));
   dirs.push(dir);
   return dir;
 }
@@ -137,7 +137,7 @@ async function together(a: string, b: string, rounds = 3): Promise<void> {
 /**
  * Every file in a vault and its bytes, for comparing one directory to another.
  *
- * `.telimus` is left out because it is this device's own state: its config
+ * `.trew` is left out because it is this device's own state: its config
  * names the device and its index records what this device has seen, so two
  * converged vaults differ there and should.
  */
@@ -145,7 +145,7 @@ async function tree(dir: string): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const walk = async (at: string, prefix: string): Promise<void> => {
     for (const item of await readdir(at, { withFileTypes: true })) {
-      if (item.name === ".telimus" || item.name === ".trash") continue;
+      if (item.name === ".trew" || item.name === ".trash") continue;
       const path = prefix ? `${prefix}/${item.name}` : item.name;
       if (item.isDirectory()) await walk(join(at, item.name), path);
       else out.set(path, await readFile(join(at, item.name), "utf8"));

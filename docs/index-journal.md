@@ -21,7 +21,7 @@ Unreadable state is therefore not treated as a fresh vault.
 | `index.json` | `StoredState` snapshot plus its sequence number, `seq`. |
 | `index.log` | Changes after that snapshot. |
 
-These live in the CLI's `.telimus/` folder or the plugin's state folder. Older
+These live in the CLI's `.trew/` folder or the plugin's state folder. Older
 snapshots without `seq` can load, but no journal is applied to them. The first
 subsequent save writes a sequenced snapshot before journaling can begin.
 

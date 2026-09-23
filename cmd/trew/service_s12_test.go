@@ -17,9 +17,9 @@ func TestS12AControlCharacterInAnyFieldIsRefused(t *testing.T) {
 		{"service", "-data", dir, "-vault", inject},
 		{"service", "-data", dir, "-user", inject},
 		{"service", "-data", dir, "-addr", "127.0.0.1:3003\nUser=root"},
-		{"service", "-data", dir, "-binary", "/usr/bin/telimus\nExecStartPre=/x"},
+		{"service", "-data", dir, "-binary", "/usr/bin/trew\nExecStartPre=/x"},
 	} {
-		out, err := telimus(t, args...)
+		out, err := trew(t, args...)
 		if err == nil {
 			t.Fatalf("%v was accepted; the injected directive would land in the unit:\n%s", args, out)
 		}
@@ -40,13 +40,13 @@ func TestS12SpecialCharactersAreEscapedNotRejected(t *testing.T) {
 
 	// A space: the ExecStart argument and ReadWritePaths are double-quoted, so
 	// the path is one argument and one path rather than two.
-	spaced := "/srv/my notes/telimus"
+	spaced := "/srv/my notes/trew"
 	out := mustRun(t, "service", "-data", dir, "-vault", "with space")
 	if !strings.Contains(out, `-vault "with space"`) {
 		t.Fatalf("a vault name with a space was not quoted:\n%s", out)
 	}
 	out = mustRun(t, "service", "-data", dir, "-binary", spaced)
-	if !strings.Contains(out, `ExecStart="/srv/my notes/telimus" serve`) {
+	if !strings.Contains(out, `ExecStart="/srv/my notes/trew" serve`) {
 		t.Fatalf("a binary path with a space was not quoted:\n%s", out)
 	}
 

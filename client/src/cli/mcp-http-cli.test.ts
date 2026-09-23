@@ -13,7 +13,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await removeTree(root);
 });
 async function paired(readOnly = false) {
-  const root = await mkdtemp(join(tmpdir(), "telimus-http-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "trew-http-cli-"));
   roots.push(root);
   await saveConfig(root, {
     url: "ws://127.0.0.1:1",
@@ -56,7 +56,7 @@ it.each([
   ["mcp", "--listen", "127.0.0.1:65536"],
   ["mcp", "--listen", "--allow-origin", "https://app.example/path"],
 ])("refuses invalid HTTP usage before touching vault state: %j", async (...argv) => {
-  expect((await cli(...argv, "--dir", "/nonexistent-telimus-http-test-vault")).code).toBe(2);
+  expect((await cli(...argv, "--dir", "/nonexistent-trew-http-test-vault")).code).toBe(2);
 });
 it("requires a credential before starting HTTP", async () => {
   const result = await cli("mcp", "--listen", "--dir", await paired());

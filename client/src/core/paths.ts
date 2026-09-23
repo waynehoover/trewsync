@@ -12,7 +12,7 @@
  *
  * So one rule, here, and it is deliberately broader than a list: any segment
  * starting with a dot is never synced. That is what Obsidian itself does, it
- * covers every name that was on the lists (`.obsidian`, `.telimus`, `.trash`,
+ * covers every name that was on the lists (`.obsidian`, `.trew`, `.trash`,
  * `.git`, `.DS_Store`), and it is the same answer whichever shell is asking and
  * whichever way the path is travelling. A shell adds what only it knows: the
  * headless client's `node_modules`, and a config folder somebody renamed to

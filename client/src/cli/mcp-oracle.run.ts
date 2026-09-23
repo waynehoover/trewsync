@@ -605,7 +605,7 @@ async function searchVectors() {
 
   const out: unknown[] = [];
   for (const vault of vaults) {
-    const root = await mkdtemp(join(tmpdir(), "telimus-oracle-"));
+    const root = await mkdtemp(join(tmpdir(), "trew-oracle-"));
     try {
       for (const note of vault.notes) {
         await mkdir(join(root, dirname(note.path)), { recursive: true });

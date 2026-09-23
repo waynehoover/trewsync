@@ -1,4 +1,4 @@
-# Telimus on a homelab.
+# Trew on a homelab.
 #
 # No TLS here on purpose: no key material lives in this binary. Put
 # `tailscale serve`, Caddy or a tunnel in front, and leave this published only
@@ -8,7 +8,7 @@
 #   build: { context: ., args: { VERSION: dev } }
 
 services:
-  telimus:
+  trew:
     # Pinned to a release and to its digest, so `docker compose pull` cannot
     # quietly move you to an image nobody tested against your devices. To
     # upgrade, change both, and change the server before the clients. The
@@ -24,9 +24,9 @@ services:
     # fail every client-only release for no reason.
     #
     # The digest came from:
-    #   docker buildx imagetools inspect ghcr.io/waynehoover/telimus:0.9.0
-    image: ghcr.io/waynehoover/telimus:0.9.0@sha256:47180045d70e77ec2e20ccf0666bee4daea1146cfd37f68d587d0dced75d6c2b
-    container_name: telimus
+    #   docker buildx imagetools inspect ghcr.io/waynehoover/trew:0.9.0
+    image: ghcr.io/waynehoover/trew:0.9.0@sha256:47180045d70e77ec2e20ccf0666bee4daea1146cfd37f68d587d0dced75d6c2b
+    container_name: trew
     restart: unless-stopped
 
     # Long enough for the server's own shutdown to finish (I17).
@@ -40,7 +40,7 @@ services:
     # unacked put is retried and SQLite's write-ahead log recovers, but "the
     # deadline is exactly the budget" is not a margin.
     #
-    # Thirty, matching TimeoutStopSec in the systemd unit `telimus service`
+    # Thirty, matching TimeoutStopSec in the systemd unit `trew service`
     # writes, so a stop behaves the same whichever way this is run.
     # TestEveryStopDeadlineOutlastsTheShutdownBudget keeps the three numbers in
     # step.
@@ -52,7 +52,7 @@ services:
       - "127.0.0.1:3003:3003"
 
     volumes:
-      - telimus-data:/data
+      - trew-data:/data
 
     # The image's default is `serve -addr 0.0.0.0:3003`. Override it here to
     # add a flag, which is the only place a flag can go under compose. The one
@@ -72,7 +72,7 @@ services:
       - no-new-privileges:true
 
     # The line to paste into your first device is in here, once:
-    #   docker compose logs telimus | grep '#'
+    #   docker compose logs trew | grep '#'
     logging:
       driver: json-file
       options:
@@ -80,4 +80,4 @@ services:
         max-file: "3"
 
 volumes:
-  telimus-data:
+  trew-data:

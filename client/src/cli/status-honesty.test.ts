@@ -1,5 +1,5 @@
 /**
- * `telimus status` does not say "up to date" about files it never looked at
+ * `trew status` does not say "up to date" about files it never looked at
  * (R12).
  *
  * Two ways it did. A vault with no index returned zero unsent without scanning
@@ -33,7 +33,7 @@ afterEach(async () => {
 });
 
 async function pairedVault(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-status-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-status-"));
   dirs.push(dir);
   await saveConfig(dir, {
     url: "ws://127.0.0.1:1#nothing",
@@ -46,7 +46,7 @@ async function pairedVault(): Promise<string> {
   return dir;
 }
 
-/** Runs `telimus status --json` and returns what it printed. */
+/** Runs `trew status --json` and returns what it printed. */
 async function status(dir: string): Promise<{ unsent: number | string; stranded: string[] }> {
   const out: string[] = [];
   await run(["status", "--dir", dir, "--json", "--timeout", "300"], {
@@ -231,7 +231,7 @@ describe("a preserved version waiting in staging", () => {
    * R50. The one that is not in staging at all.
    *
    * A failed preservation claim leaves the displaced version beside the note
-   * it came from, and `status` printed `.telimus/tmp` for every entry because
+   * it came from, and `status` printed `.trew/tmp` for every entry because
    * that used to be the only place one could be. Somebody following that path
    * found an empty directory while their only unsent edit sat under `notes/`,
    * where the ordinary listing deliberately hides it.

@@ -33,7 +33,7 @@ export async function device(
   dirs: string[],
   open: Client[],
 ): Promise<Device> {
-  const dir = await mkdtemp(join(tmpdir(), `telimus-stress-${name}-`));
+  const dir = await mkdtemp(join(tmpdir(), `trew-stress-${name}-`));
   dirs.push(dir);
   return reopen(server, name, dir, open);
 }
@@ -53,7 +53,7 @@ export async function reopen(
 ): Promise<Device> {
   const c = new Client({
     vault: new NodeVault(dir),
-    store: new JsonIndexStore(join(dir, ".telimus", "index.json")),
+    store: new JsonIndexStore(join(dir, ".trew", "index.json")),
     url: server.wsUrl,
     ...(await server.deviceCredentials(SUITE_SECRET, await testWrapped(SUITE_SECRET), name)),
     vaultId: "default",
@@ -99,7 +99,7 @@ export async function fingerprint(dir: string): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const walk = async (at: string, prefix: string): Promise<void> => {
     for (const item of await readdir(at, { withFileTypes: true })) {
-      if (item.name === ".telimus" || item.name === ".trash") continue;
+      if (item.name === ".trew" || item.name === ".trash") continue;
       const path = prefix ? `${prefix}/${item.name}` : item.name;
       if (item.isDirectory()) await walk(join(at, item.name), path);
       else {

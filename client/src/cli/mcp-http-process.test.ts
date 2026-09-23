@@ -16,7 +16,7 @@ let buildDir: string, bundle: string, server: TestServer | undefined;
 const roots: string[] = [];
 const hosts: Awaited<ReturnType<typeof openHttp>>[] = [];
 beforeAll(async () => {
-  buildDir = await mkdtemp(join(tmpdir(), "telimus-http-build-"));
+  buildDir = await mkdtemp(join(tmpdir(), "trew-http-build-"));
   bundle = await buildMcp(buildDir, "./mcp-fault-child.ts");
 });
 afterAll(async () => removeTree(buildDir));
@@ -32,7 +32,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await removeTree(root);
 });
 async function directory() {
-  const root = await mkdtemp(join(tmpdir(), "telimus-http-process-"));
+  const root = await mkdtemp(join(tmpdir(), "trew-http-process-"));
   roots.push(root);
   return root;
 }

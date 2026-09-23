@@ -311,7 +311,7 @@ export interface Vault {
    * The same versions, with what is known about each.
    *
    * `stranded` is a list of paths and a path is not an explanation: somebody
-   * looking at `note.md..telimus-tmp-keep3f9c` has to guess which note it came
+   * looking at `note.md..trew-tmp-keep3f9c` has to guess which note it came
    * off and why it is not at its name. These are the records the adapter wrote
    * when it displaced them, so the answer is remembered rather than inferred.
    *

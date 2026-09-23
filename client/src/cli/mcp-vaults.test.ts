@@ -11,7 +11,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await removeTree(root);
 });
 async function root() {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-vault-roots-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-vault-roots-"));
   roots.push(dir);
   return dir;
 }

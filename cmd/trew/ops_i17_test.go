@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 /* ---------------------------------------------------------------- *
@@ -186,13 +186,13 @@ func TestI18PurgeRefusesWithoutConfirmationAndABackup(t *testing.T) {
 		{"confirm names another vault", []string{"-confirm", "defualt", "-no-backup-check"}, "does not match"},
 		{"neither backup nor no-backup-check", []string{"-confirm", "default"}, "-backup"},
 		{"both backup and no-backup-check", []string{"-confirm", "default", "-backup", "/nowhere", "-no-backup-check"}, "contradict"},
-		{"a backup path with no backup in it", []string{"-confirm", "default", "-backup", filepath.Join(os.TempDir(), "no-such-telimus-backup")}, "no backup at"},
+		{"a backup path with no backup in it", []string{"-confirm", "default", "-backup", filepath.Join(os.TempDir(), "no-such-trew-backup")}, "no backup at"},
 	}
 	for _, c := range cases {
 		t.Run(c.why, func(t *testing.T) {
 			dir := seeded(t)
 			before := countBodies(t, dir)
-			out, err := telimus(t, append([]string{"purge", "-data", dir}, c.args...)...)
+			out, err := trew(t, append([]string{"purge", "-data", dir}, c.args...)...)
 			if err == nil {
 				t.Fatalf("purge ran:\n%s", out)
 			}
@@ -235,14 +235,14 @@ func TestI18PurgeRefusesABackupThatIsMissingHistory(t *testing.T) {
 	}
 	st.Close()
 
-	out, err := telimus(t, "purge", "-data", dir, "-confirm", "default", "-backup", backup)
+	out, err := trew(t, "purge", "-data", dir, "-confirm", "default", "-backup", backup)
 	if err == nil {
 		t.Fatalf("purge ran over a stale backup:\n%s", out)
 	}
 	if !strings.Contains(err.Error(), "up to uid 6") || !strings.Contains(err.Error(), "at uid 7") {
 		t.Fatalf("the refusal does not give both uids: %v", err)
 	}
-	if !strings.Contains(err.Error(), "telimus backup") {
+	if !strings.Contains(err.Error(), "trew backup") {
 		t.Fatalf("the refusal does not say how to fix it: %v", err)
 	}
 }

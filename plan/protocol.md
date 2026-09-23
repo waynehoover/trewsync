@@ -61,7 +61,7 @@ There is no registrar session, no claim, no bootstrap token, no `crypto` field, 
 ### The invite string
 
 ```text
-telimus1i_ <base64url( version=1 || token[16] || len(url) || url || len(vault) || vault || crc32 )>
+trew1i_ <base64url( version=1 || token[16] || len(url) || url || len(vault) || vault || crc32 )>
 ```
 
 Settled in M0.5, and pinned by the `invite` section of `protocol-fixtures.json` (vectors from `scripts/protocol-vectors.py`, consumed by `internal/invite` and `client/src/core/invite-string.ts`):
@@ -75,7 +75,7 @@ Settled in M0.5, and pinned by the `invite` section of `protocol-fixtures.json` 
 - A decoder trims ASCII space, tab, CR and LF at both ends, and nothing else.
 - The prefix is derived from the product name, which is not final (PLAN §10); it lives in one constant on each side and in the fixtures.
 
-Created by `telimus invite` on the server host or by the wire `invite` op from a device. **Invites expire by default** (one hour, both routes), and `--ttl 0` is the deliberate, explicit way to make one that does not. Bootstrap credentials are written to a private path, not to stdout, because a never-expiring invite in a container log is a durable vault credential. The plugin renders it as a QR of `obsidian://telimus?invite=<string>`.
+Created by `trew invite` on the server host or by the wire `invite` op from a device. **Invites expire by default** (one hour, both routes), and `--ttl 0` is the deliberate, explicit way to make one that does not. Bootstrap credentials are written to a private path, not to stdout, because a never-expiring invite in a container log is a durable vault credential. The plugin renders it as a QR of `obsidian://trew?invite=<string>`.
 
 ## Paths
 
@@ -88,7 +88,7 @@ Every `path` and `prev` on the wire is the plaintext vault-relative path, `/`-se
 - leading or trailing `/`, or an empty segment
 - a segment equal to `.` or `..`
 - a segment beginning with `.`
-- a segment containing the staging mark `.telimus-tmp-`
+- a segment containing the staging mark `.trew-tmp-`
 - U+00A0 or U+202F anywhere, because Obsidian's `normalizePath` turns them into ordinary spaces and the server's keyspace is Obsidian's (PLAN §4.1)
 - a backslash anywhere, because `normalizePath` turns it into a slash
 
@@ -171,9 +171,9 @@ The batch budget is **not** `size + 64` per entry. That is not an exact wire-mem
 
 `invite` in a listing, in `invited` and in `uninvite` is the invite's **id**: 8 random bytes, base64url, minted with the invite and stored beside it. It is not the token and not derived from it. Basalt listed the redemption identifier itself, which was safe only because redeeming also needed a key that never reached the server; with a bearer token that listing would hand every paired device a working invite. Nothing in any listing can redeem an invite, and a test proves it field by field. `token` appears once, in `invited`, to the device that asked; the device formats the string with its own server URL and vault.
 
-**The first device.** `telimus serve` on a store with no devices and no outstanding invite mints one invite (one-hour TTL) and writes its string atomically, mode 0600, to `<data>/first-invite` (or `-invite-out FILE`). It logs that path and the expiry, never the string, because a container log is not a private place. `telimus invite` on the server host (through the control socket while `serve` runs) prints a fresh invite to stdout, or writes it to `-out FILE`.
+**The first device.** `trew serve` on a store with no devices and no outstanding invite mints one invite (one-hour TTL) and writes its string atomically, mode 0600, to `<data>/first-invite` (or `-invite-out FILE`). It logs that path and the expiry, never the string, because a container log is not a private place. `trew invite` on the server host (through the control socket while `serve` runs) prints a fresh invite to stdout, or writes it to `-out FILE`.
 
-`devices` includes MCP author rows so the panel shows agents. **Not as `id` starting with `mcp:`**, because `ValidDeviceID` accepts base64url (`basalt:server/internal/store/store.go:2595`), which has no colon, so that scheme is not the unchanged devices table it was described as. Author rows carry their own `kind` and a valid id, and they are refused as `hello` credentials. An author row must not present as an offline sync peer whose applied checkpoint other devices wait on. Revoking the last real device is allowed from a device session; recovery is `telimus invite` on the server, so `allowLast` is gone (settled in M0.5: without a vault key, no device holds anything the server cannot reissue). `register` and `rotate` are gone.
+`devices` includes MCP author rows so the panel shows agents. **Not as `id` starting with `mcp:`**, because `ValidDeviceID` accepts base64url (`basalt:server/internal/store/store.go:2595`), which has no colon, so that scheme is not the unchanged devices table it was described as. Author rows carry their own `kind` and a valid id, and they are refused as `hello` credentials. An author row must not present as an offline sync peer whose applied checkpoint other devices wait on. Revoking the last real device is allowed from a device session; recovery is `trew invite` on the server, so `allowLast` is gone (settled in M0.5: without a vault key, no device holds anything the server cannot reissue). `register` and `rotate` are gone.
 
 ## Errors
 
@@ -205,4 +205,4 @@ The four upload budgets, stated separately: **raw** bytes, the sum of declared s
 
 ## MCP over HTTP
 
-Not part of the WebSocket protocol, listed here because it shares the listener. `POST`/`GET`/`DELETE /mcp` per MCP streamable HTTP, `Authorization: Bearer <43 base64url chars>`, `WWW-Authenticate: Bearer realm="telimus"` on 401. Every other path without `Upgrade: websocket` is 426 as today, except `/health`.
+Not part of the WebSocket protocol, listed here because it shares the listener. `POST`/`GET`/`DELETE /mcp` per MCP streamable HTTP, `Authorization: Bearer <43 base64url chars>`, `WWW-Authenticate: Bearer realm="trew"` on 401. Every other path without `Upgrade: websocket` is 426 as today, except `/health`.

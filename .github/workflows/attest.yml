@@ -259,17 +259,17 @@ jobs:
           version="${TAG#server/v}"
           # Keep every build output outside the checkout until all targets
           # finish, so earlier binaries do not mark later builds as modified.
-          build_dir=$(mktemp -d "$RUNNER_TEMP/telimus-attest.XXXXXX")
+          build_dir=$(mktemp -d "$RUNNER_TEMP/trew-attest.XXXXXX")
           trap 'rm -rf "$build_dir"' EXIT
           for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
             goos="${target%/*}"
             goarch="${target#*/}"
             ( CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
                 go build -trimpath -ldflags "-s -w -X main.version=$version" \
-                -o "$build_dir/telimus-$goos-$goarch" ./cmd/telimus )
+                -o "$build_dir/trew-$goos-$goarch" ./cmd/trew )
           done
           mkdir -p attested
-          cp "$build_dir"/telimus-* attested/
+          cp "$build_dir"/trew-* attested/
           ls -l attested
 
       # Generated here rather than uploaded from a laptop, so it says something
@@ -277,7 +277,7 @@ jobs:
       - name: checksums
         working-directory: attested
         run: |
-          shasum -a 256 telimus-* > SHA256SUMS
+          shasum -a 256 trew-* > SHA256SUMS
           cat SHA256SUMS
 
       # A binary that reports a version other than the tag it ships under is
@@ -287,7 +287,7 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           want="${TAG#server/v}"
-          got=$(./attested/telimus-linux-amd64 version | awk '{print $2}')
+          got=$(./attested/trew-linux-amd64 version | awk '{print $2}')
           if [ "$want" != "$got" ]; then
             echo "release $TAG carries a binary calling itself $got" >&2
             exit 1
@@ -295,14 +295,14 @@ jobs:
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: attested/telimus-*
+          subject-path: attested/trew-*
 
       - name: upload
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
-          gh release upload "$TAG" attested/telimus-* attested/SHA256SUMS \
+          gh release upload "$TAG" attested/trew-* attested/SHA256SUMS \
             --clobber --repo "$GITHUB_REPOSITORY"
 
       # Last, and only now (R16). See the plugin job.

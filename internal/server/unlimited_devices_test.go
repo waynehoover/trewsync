@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 func TestMoreThanEightDevicesCanRegister(t *testing.T) {

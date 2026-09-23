@@ -54,11 +54,11 @@ async function credentials(name: string) {
 }
 
 async function diskDevice(name: string): Promise<{ c: Client; dir: string }> {
-  const dir = await mkdtemp(join(tmpdir(), `telimus-nfc-${name}-`));
+  const dir = await mkdtemp(join(tmpdir(), `trew-nfc-${name}-`));
   dirs.push(dir);
   const c = new Client({
     vault: new NodeVault(dir),
-    store: new JsonIndexStore(join(dir, ".telimus", "index.json")),
+    store: new JsonIndexStore(join(dir, ".trew", "index.json")),
     ...(await credentials(name)),
   });
   open.push(c);

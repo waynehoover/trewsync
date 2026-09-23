@@ -58,7 +58,7 @@ let root: string;
 const dirs: string[] = [];
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "telimus-journal-"));
+  root = await mkdtemp(join(tmpdir(), "trew-journal-"));
   dirs.push(root);
 });
 
@@ -67,7 +67,7 @@ afterEach(async () => {
 });
 
 /** A headless store over a fresh directory, with everything it says captured. */
-function cli(said: string[] = [], file = join(root, ".telimus", "index.json")) {
+function cli(said: string[] = [], file = join(root, ".trew", "index.json")) {
   return {
     store: new JsonIndexStore(file, { log: (m) => said.push(m) }),
     file,
@@ -78,7 +78,7 @@ function cli(said: string[] = [], file = join(root, ".telimus", "index.json")) {
 
 /** The plugin's store over the fake adapter, likewise. */
 function plugin(adapter = new FakeAdapter(), said: string[] = []) {
-  const file = ".obsidian/plugins/telimus/index.json";
+  const file = ".obsidian/plugins/trew/index.json";
   return {
     adapter,
     store: new ObsidianIndexStore(adapter, file, { log: (m) => said.push(m) }),

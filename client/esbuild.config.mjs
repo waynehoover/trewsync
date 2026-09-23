@@ -15,7 +15,7 @@ const production = process.argv.includes("production");
 
 /**
  * The release, from package.json, written into the headless client so that
- * `telimus --version` names the file somebody actually installed. Read at build
+ * `trew --version` names the file somebody actually installed. Read at build
  * time rather than at run time, because the single file has no package.json
  * beside it once it is copied somewhere.
  */
@@ -24,7 +24,7 @@ const { version } = JSON.parse(await readFile("package.json", "utf8"));
 /** The headless client, as one file a person can run. */
 const cli = {
   entryPoints: ["src/cli/bin.ts"],
-  outfile: "dist/telimus.mjs",
+  outfile: "dist/trew.mjs",
   platform: "node",
   target: "node20",
   format: "esm",
@@ -34,9 +34,9 @@ const cli = {
   // The YAML parser loads Node's process module from CommonJS. The isolated
   // installation test caught that require has no binding in an ESM bundle.
   banner: {
-    js: '#!/usr/bin/env node\nimport { createRequire as __telimusRequire } from "node:module"; const require = __telimusRequire(import.meta.url);',
+    js: '#!/usr/bin/env node\nimport { createRequire as __trewRequire } from "node:module"; const require = __trewRequire(import.meta.url);',
   },
-  define: { __TELIMUS_VERSION__: JSON.stringify(version) },
+  define: { __TREW_VERSION__: JSON.stringify(version) },
 };
 
 /**

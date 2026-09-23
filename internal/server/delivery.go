@@ -3,8 +3,8 @@ package server
 import (
 	"errors"
 
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // handleApplied records a device's claim after its local files and index are saved.

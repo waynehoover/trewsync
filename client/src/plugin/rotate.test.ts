@@ -28,7 +28,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { TestServer, cleanupBinary, serverBinary } from "../core/test-server.ts";
 import { App, Plugin as StubPlugin, built, modals, notices, resetStub } from "./stub.ts";
-import TelimusPlugin from "./main.ts";
+import TrewPlugin from "./main.ts";
 
 /**
  * Where the reply is lost, when a test says so.
@@ -72,7 +72,7 @@ afterAll(async () => {
   await cleanupBinary();
 });
 
-type Testable = TelimusPlugin & StubPlugin;
+type Testable = TrewPlugin & StubPlugin;
 
 let server: TestServer;
 const loaded: Testable[] = [];
@@ -100,11 +100,11 @@ async function fresh(): Promise<void> {
 
 async function load(saved: unknown = null): Promise<{ plugin: Testable; app: App }> {
   const app = new App();
-  const plugin = new TelimusPlugin(
+  const plugin = new TrewPlugin(
     app as unknown as ObsidianApp,
     {
-      id: "telimus",
-      dir: ".obsidian/plugins/telimus",
+      id: "trew",
+      dir: ".obsidian/plugins/trew",
     } as unknown as PluginManifest,
   ) as unknown as Testable;
   plugin.savedData = saved;

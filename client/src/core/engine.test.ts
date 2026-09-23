@@ -1606,7 +1606,7 @@ describe("a conflict copy whose name is taken in the gap", () => {
  * One catch used to cover the ancestor fetch, the local read, the incoming
  * fetch and the decoding, so every one of those failures became a conflict
  * copy labelled "not valid UTF-8". A purged ancestor is the case that happens
- * in practice: `telimus purge` keeps the newest version of each path, and a
+ * in practice: `trew purge` keeps the newest version of each path, and a
  * device that was away holds a base the server has since let go of.
  */
 /**
@@ -2999,7 +2999,7 @@ describe("a server that is behind this device", () => {
       thrown = err;
     }
     const message = (thrown as Error).message;
-    expect(message).toContain("telimus rebase --backup-taken");
+    expect(message).toContain("trew rebase --backup-taken");
     expect(message).toContain("Rejoin this server");
     expect(message).toMatch(/conflict copies instead of merging/);
     expect(message, "the recovery pushed the numbers out of the refusal").toMatch(/5.*9|9.*5/);
@@ -3464,7 +3464,7 @@ describe("an Excalidraw drawing two devices both drew on", () => {
         {
           type: "excalidraw",
           version: 2,
-          source: "telimus-test",
+          source: "trew-test",
           elements,
           appState: {},
           files: {},

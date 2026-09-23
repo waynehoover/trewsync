@@ -101,7 +101,7 @@ async function msAsync(f: () => Promise<void>, times = 5): Promise<number> {
   return runs.sort((a, b) => a - b)[Math.floor(times / 2)]!;
 }
 
-const dir = await mkdtemp(join(tmpdir(), "telimus-journal-"));
+const dir = await mkdtemp(join(tmpdir(), "trew-journal-"));
 const file = join(dir, "index.json");
 const log = indexLogPath(file);
 

@@ -522,7 +522,7 @@ func TestSawDeviceOnARevokedDeviceSaysSoAndDoesNotRecreateIt(t *testing.T) {
  * ---------------------------------------------------------------- */
 
 // Registration and revocation race with live sessions and with each other, and
-// the store is opened by more than one process (`telimus backup` and `telimus
+// the store is opened by more than one process (`trew backup` and `trew
 // purge` run against a live server's directory), so the guarantees have to be
 // in the SQL rather than in this process's mutex.
 
@@ -661,7 +661,7 @@ func TestConcurrentRegistrationsOfOneIDUnderTwoKeysCannotFlipTheRow(t *testing.T
 // guarantee has to survive. writeMu makes a read-then-write atomic within one
 // process, which is enough to make a single-handle version of this test pass
 // against the broken implementation, and the store is opened by more than one
-// process: `telimus backup` and `telimus purge` run against a live server's
+// process: `trew backup` and `trew purge` run against a live server's
 // directory. The atomicity has to be in the SQL, so the test has to be able to
 // see the SQL.
 func TestConcurrentRevokesCannotEmptyTheVault(t *testing.T) {

@@ -17,7 +17,7 @@ import (
 	"unicode"
 	"unicode/utf16"
 
-	"github.com/waynehoover/telimus/internal/paths"
+	"github.com/waynehoover/trew/internal/paths"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -276,7 +276,7 @@ type tokenVector struct {
 }
 
 // basaltToken builds Basalt's cursor layout from this package's pieces:
-// {"query":fingerprint,"at":{"path":base64url,"line":L,"column":C}}. Telimus
+// {"query":fingerprint,"at":{"path":base64url,"line":L,"column":C}}. Trew
 // uses its own layout; what carries over, and what this pins, is the
 // fingerprint and the path encoding.
 func basaltToken(options []Option, path string, line, column int64) string {

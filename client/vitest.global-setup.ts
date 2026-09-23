@@ -24,13 +24,13 @@ const GO_DIR = new URL("./..", import.meta.url).pathname;
 let dir: string | undefined;
 
 export async function setup(): Promise<void> {
-  dir = await mkdtemp(join(tmpdir(), "telimus-bin-"));
-  const binary = join(dir, "telimus");
-  await run("go", ["build", "-o", binary, "./cmd/telimus"], {
+  dir = await mkdtemp(join(tmpdir(), "trew-bin-"));
+  const binary = join(dir, "trew");
+  await run("go", ["build", "-o", binary, "./cmd/trew"], {
     cwd: GO_DIR,
     env: { ...process.env, CGO_ENABLED: "0" },
   });
-  process.env["TELIMUS_TEST_BINARY"] = binary;
+  process.env["TREW_TEST_BINARY"] = binary;
 }
 
 export async function teardown(): Promise<void> {

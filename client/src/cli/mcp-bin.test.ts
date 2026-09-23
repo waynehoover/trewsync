@@ -15,7 +15,7 @@ let buildDir: string, bundle: string, recoveryKey: string, server: TestServer | 
 const roots: string[] = [];
 const processes: ReturnType<typeof mcpProcess>[] = [];
 beforeAll(async () => {
-  buildDir = await mkdtemp(join(tmpdir(), "telimus-mcp-process-build-"));
+  buildDir = await mkdtemp(join(tmpdir(), "trew-mcp-process-build-"));
   bundle = await buildMcp(buildDir, "./mcp-fault-child.ts");
 });
 afterAll(async () => removeTree(buildDir));
@@ -28,7 +28,7 @@ afterEach(async () => {
 async function paired() {
   server = new TestServer();
   await server.start();
-  const dir = await mkdtemp(join(tmpdir(), "telimus-mcp-process-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-mcp-process-"));
   roots.push(dir);
   const result = await cli("init", server.setup, "--dir", dir, "--json");
   expect(result.code, result.err).toBe(0);
@@ -236,7 +236,7 @@ it.each(["EOF", "SIGTERM"])(
     const owner = start(dir);
     await owner.initialize();
     await owner.ready();
-    const phone = await mkdtemp(join(tmpdir(), "telimus-mcp-incoming-"));
+    const phone = await mkdtemp(join(tmpdir(), "trew-mcp-incoming-"));
     roots.push(phone);
     expect((await cli("pair", recoveryKey, "--dir", phone)).code).toBe(0);
     expect((await cli("sync", "--dir", phone)).code).toBe(0);

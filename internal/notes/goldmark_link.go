@@ -75,7 +75,7 @@ func (s *mdLinkLabelState) Text(source []byte) []byte {
 
 func (s *mdLinkLabelState) Dump(source []byte, level int) {}
 
-var kindMDLinkLabelState = ast.NewNodeKind("TelimusLinkLabelState")
+var kindMDLinkLabelState = ast.NewNodeKind("TrewLinkLabelState")
 
 func (s *mdLinkLabelState) Kind() ast.NodeKind {
 	return kindMDLinkLabelState

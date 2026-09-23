@@ -378,9 +378,9 @@
       "Name-derived strings and wire numbers both implementations assert they hold."
     ],
     "proto": 1,
-    "product": "telimus",
-    "invitePrefix": "telimus1i_",
-    "stagingMark": ".telimus-tmp-",
+    "product": "trew",
+    "invitePrefix": "trew1i_",
+    "stagingMark": ".trew-tmp-",
     "inviteTokenBytes": 16,
     "deviceTokenBytes": 32,
     "maxPathBytes": 1024,
@@ -402,25 +402,25 @@
     ],
     "good": [
       {
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS",
         "token": "AAECAwQFBgcICQoLDA0ODw",
         "url": "wss://homelab.example.ts.net:3003",
         "vault": "default"
       },
       {
-        "string": "telimus1i_Af____________________8Td3M6Ly8xMjcuMC4wLjE6MzExMwdzY3JhdGNo4F5n1Q",
+        "string": "trew1i_Af____________________8Td3M6Ly8xMjcuMC4wLjE6MzExMwdzY3JhdGNo4F5n1Q",
         "token": "_____________________w",
         "url": "ws://127.0.0.1:3113",
         "vault": "scratch"
       },
       {
-        "string": "telimus1i_AQEjRWeJq83v_ty6mHZUMhAbd3NzOi8veG4tLWJjaGVyLWt2YS5leGFtcGxlCndvcmsgbm90ZXNPUfgF",
+        "string": "trew1i_AQEjRWeJq83v_ty6mHZUMhAbd3NzOi8veG4tLWJjaGVyLWt2YS5leGFtcGxlCndvcmsgbm90ZXNPUfgF",
         "token": "ASNFZ4mrze_-3LqYdlQyEA",
         "url": "wss://xn--bcher-kva.example",
         "vault": "work notes"
       },
       {
-        "string": "\n  telimus1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS \t\r\n",
+        "string": "\n  trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS \t\r\n",
         "token": "AAECAwQFBgcICQoLDA0ODw",
         "url": "wss://homelab.example.ts.net:3003",
         "vault": "default"
@@ -429,7 +429,7 @@
     "bad": [
       {
         "why": "the wrong prefix",
-        "string": "telimus2i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS"
+        "string": "trew2i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS"
       },
       {
         "why": "a Basalt invite",
@@ -437,79 +437,79 @@
       },
       {
         "why": "padded base64",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS="
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS="
       },
       {
         "why": "a character outside base64url",
-        "string": "telimus1i_AQABAgMEBQ*HCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS"
+        "string": "trew1i_AQABAgMEBQYHC*kKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS"
       },
       {
         "why": "a dangling sextet",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXSA"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXSA"
       },
       {
         "why": "unused bits that are not zero",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzAnZ2jA8hpR"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzAnZ2jA8hpR"
       },
       {
         "why": "truncated",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSe"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSe"
       },
       {
         "why": "a flipped bit, so the CRC fails",
-        "string": "telimus1i_AQABAwMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS"
+        "string": "trew1i_AQABAwMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS"
       },
       {
         "why": "trailing bytes inside the checksum",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHQAukFMEA"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHQAukFMEA"
       },
       {
         "why": "version 2",
-        "string": "telimus1i_AgABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHQlxGvB"
+        "string": "trew1i_AgABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHQlxGvB"
       },
       {
         "why": "an empty url",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8AB2RlZmF1bHSYeM9l"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8AB2RlZmF1bHSYeM9l"
       },
       {
         "why": "an empty vault",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzAAC25Bs"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzAAC25Bs"
       },
       {
         "why": "an http url",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8SaHR0cDovL2V4YW1wbGUuY29tB2RlZmF1bHSIi5GO"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8SaHR0cDovL2V4YW1wbGUuY29tB2RlZmF1bHSIi5GO"
       },
       {
         "why": "a url with a trailing slash",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8Sd3NzOi8vZXhhbXBsZS5jb20vB2RlZmF1bHQVc6A1"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Sd3NzOi8vZXhhbXBsZS5jb20vB2RlZmF1bHQVc6A1"
       },
       {
         "why": "a url outside printable ASCII",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8Vd3NzOi8vYsO8Y2hlci5leGFtcGxlB2RlZmF1bHRxGEE4"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Vd3NzOi8vYsO8Y2hlci5leGFtcGxlB2RlZmF1bHRxGEE4"
       },
       {
         "why": "a vault name over 64 bytes",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzQXZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2GIYboQ"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzQXZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2GIYboQ"
       },
       {
         "why": "a vault name with a control character",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzA2EJYt78ABY"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzA2EJYt78ABY"
       },
       {
         "why": "a length that runs past the end",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDg_Id3NzOi8veAF2zseNpw"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg_Id3NzOi8veAF2zseNpw"
       },
       {
         "why": "a token one byte short",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwNDjVsvn0"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDjVsvn0"
       },
       {
         "why": "a newline inside, which Go's base64 decoder would silently skip",
-        "string": "telimus1i_AQABAgMEBQYHCAkKCwwN\nDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS"
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8\nhd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS"
       },
       {
         "why": "a non-breaking space before it, which is not trimmed",
-        "string": "\u00a0telimus1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS"
+        "string": "\u00a0trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS"
       }
     ]
   },
@@ -804,7 +804,7 @@
       },
       {
         "name": "a staging-looking name that is not the mark",
-        "hex": "74656c696d75732d746d702d2e6d64",
+        "hex": "747265772d746d702d2e6d64",
         "valid": true,
         "reason": null
       },
@@ -966,7 +966,7 @@
       },
       {
         "name": "a dotted folder deeper down",
-        "hex": "612f2e74656c696d75732f782e6d64",
+        "hex": "612f2e747265772f782e6d64",
         "valid": false,
         "reason": "dotprefix"
       },
@@ -978,7 +978,7 @@
       },
       {
         "name": "the staging mark inside a name",
-        "hex": "6e6f74652e6d642e74656c696d75732d746d702d6b65657033663963",
+        "hex": "6e6f74652e6d642e747265772d746d702d6b65657033663963",
         "valid": false,
         "reason": "staging"
       }

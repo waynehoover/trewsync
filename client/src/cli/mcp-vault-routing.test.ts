@@ -21,7 +21,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await removeTree(root);
 });
 async function vault(id: string, readOnly = false) {
-  const root = await mkdtemp(join(tmpdir(), "telimus-route-"));
+  const root = await mkdtemp(join(tmpdir(), "trew-route-"));
   roots.push(root);
   await writeFile(join(root, "same.md"), id + " secret content");
   const writer = new NodeVault(root),

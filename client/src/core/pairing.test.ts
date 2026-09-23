@@ -514,7 +514,7 @@ describe("a config that cannot connect", () => {
       thrown = err;
     }
     // Its own class, so a shell can tell "nothing to connect with" from "the
-    // server said no": telimus status reports the first as neither reachable
+    // server said no": trew status reports the first as neither reachable
     // nor refused.
     expect(thrown).toBeInstanceOf(NoCredential);
     const message = (thrown as Error).message;
@@ -581,7 +581,7 @@ describe("a config that cannot connect", () => {
  *
  * Base64url's alphabet includes it, and a word beginning with one is a word a
  * command line reads as an option. The rule was written for device ids and
- * applied only to them, so `telimus uninvite -Y-Ucn...` was refused with "no
+ * applied only to them, so `trew uninvite -Y-Ucn...` was refused with "no
  * such option" for about one invite in sixty-four: an invite nobody could
  * cancel except by waiting out its expiry, found by a test that flaked rather
  * than by anything asserting it.

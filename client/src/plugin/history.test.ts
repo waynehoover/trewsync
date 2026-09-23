@@ -46,7 +46,7 @@ async function device(): Promise<{ adapter: FakeAdapter; client: Client; source:
   const adapter = new FakeAdapter();
   const client = new Client({
     vault: new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian"),
-    store: new ObsidianIndexStore(adapter, ".obsidian/plugins/telimus/index.json"),
+    store: new ObsidianIndexStore(adapter, ".obsidian/plugins/trew/index.json"),
     url: server.wsUrl,
     ...(await server.deviceCredentials(SECRET, wrapped)),
     vaultId: "default",
@@ -286,11 +286,11 @@ it("marks up added and removed lines so the stylesheet can colour them", async (
   const toggle = buttons(modal).find((b) => b.text.includes("Show changes"));
   expect(toggle, "no toggle to switch to the diff").toBeDefined();
   toggle!.click();
-  await until("the version diff", () => classesIn(modal).has("telimus-added"));
+  await until("the version diff", () => classesIn(modal).has("trew-added"));
 
   const classes = classesIn(modal);
-  expect(classes).toContain("telimus-removed");
-  expect(classes).toContain("telimus-added");
+  expect(classes).toContain("trew-removed");
+  expect(classes).toContain("trew-added");
 });
 
 /** Every class token present anywhere under the modal. */

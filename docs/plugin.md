@@ -1,8 +1,8 @@
-# Use Telimus in Obsidian
+# Use Trew in Obsidian
 
 [Documentation](index.md) · [Server setup](server.md) · [Security and privacy](security.md)
 
-Telimus syncs your notes and attachments, shows sync status, and lets you recover
+Trew syncs your notes and attachments, shows sync status, and lets you recover
 earlier versions from inside Obsidian. Start with a
 [configured server](server.md) and Obsidian **1.7.2 or newer**.
 
@@ -13,16 +13,16 @@ services for that vault. Each device should have its own local copy.
 ## Install
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the newest stable
-   [plugin release](https://github.com/waynehoover/telimus/releases).
+   [plugin release](https://github.com/waynehoover/trew/releases).
    Plugin releases use a plain `X.Y.Z` version; skip `server/v…` and `cli/v…`.
-2. Create `<vault>/.obsidian/plugins/telimus-sync/` and put the three files there.
+2. Create `<vault>/.obsidian/plugins/trew-sync/` and put the three files there.
    If you use a custom Obsidian configuration folder, use that folder instead
    of `.obsidian`.
-3. Reload Obsidian and enable **Telimus Sync** under **Settings → Community plugins**.
-4. Open the Telimus ribbon icon and choose **Sync settings**, or run
-   **Telimus Sync: Show status** from the command palette.
+3. Reload Obsidian and enable **Trew Sync** under **Settings → Community plugins**.
+4. Open the Trew ribbon icon and choose **Sync settings**, or run
+   **Trew Sync: Show status** from the command palette.
 
-Manual installation is required while Telimus is outside the community directory.
+Manual installation is required while Trew is outside the community directory.
 To upgrade, replace the same three files and reload Obsidian. When a release
 changes the protocol, upgrade the server before its clients.
 
@@ -41,7 +41,7 @@ changes the protocol, upgrade the server before its clients.
 ### Start your first device
 
 1. Paste the server's setup string into **Invite or setup line**. With TLS
-   configured, it looks like `wss://homelab.example.ts.net#TOKEN`. Telimus reads
+   configured, it looks like `wss://homelab.example.ts.net#TOKEN`. Trew reads
    it and says which server it will start the vault on; check that address.
 2. Press **Start a new vault**, save the recovery key under **Write this down**,
    then press **I have written it down**.
@@ -51,7 +51,7 @@ To name this device something other than the suggestion, open **More options**
 first.
 
 Keep the recovery key somewhere safe and separate from your devices. It is how
-you regain access if every device is lost; Telimus cannot reissue it. Use an
+you regain access if every device is lost; Trew cannot reissue it. Use an
 invite for routine pairing.
 
 A server using a vault name other than `default` must be initialized once with
@@ -61,10 +61,10 @@ join it with an invite.
 ### Add another device
 
 1. On a paired device, open **Add another device → Create invite**.
-2. On your phone, install and enable Telimus, then scan the QR code. Or copy the
+2. On your phone, install and enable Trew, then scan the QR code. Or copy the
    pairing code and paste it into **Invite or setup line** on the new device.
 3. Check the vault and server named under the field, then press **Pair**.
-4. If this vault already contains files, Telimus asks you to confirm combining
+4. If this vault already contains files, Trew asks you to confirm combining
    them with your synced vault. An older copy can bring back files moved or
    deleted elsewhere. **Cancel** leaves your files and invite untouched.
 5. If **Review your first sync** appears, review the counts and choose
@@ -72,7 +72,7 @@ join it with an invite.
    Keep Obsidian open until it finishes.
 
 To download a fresh copy, create a new empty Obsidian vault and keep the old
-vault as a backup. Telimus does not clear or move existing files during pairing.
+vault as a backup. Trew does not clear or move existing files during pairing.
 
 An invite works once and expires after ten minutes. If it expires, create a new
 one. If no paired device remains, paste the recovery key into the same field.
@@ -90,7 +90,7 @@ There is no fixed device limit.
 
 ## What it does
 
-Telimus syncs shortly after edits and checks periodically while Obsidian is open.
+Trew syncs shortly after edits and checks periodically while Obsidian is open.
 It reconnects after a dropped connection. Press **Sync now** to sync immediately,
 including retrying files after fixing a problem. Use **Reconnect** when offline
 or **Resume sync** when paused.
@@ -110,11 +110,11 @@ cannot confirm new changes until it reconnects.
 | Status | What to do |
 |---|---|
 | Unpaired | Pair this vault. |
-| Paused | Choose **Resume sync** from the Telimus menu. |
+| Paused | Choose **Resume sync** from the Trew menu. |
 | Connecting, loading history, or syncing | Keep Obsidian open until sync finishes. |
 | Synced | No outstanding work was reported. |
 | Needs attention | Open the panel and follow the reason shown for each file. |
-| Failed or offline | Check the connection and the reported error; Telimus retries temporary failures. |
+| Failed or offline | Check the connection and the reported error; Trew retries temporary failures. |
 | Stopped | Follow the panel's instructions. Repeated attempts alone will not fix this condition. |
 
 For a protocol mismatch, update the server and plugin to compatible releases.
@@ -124,7 +124,7 @@ recovery; deleting the plugin's files is not a general troubleshooting step.
 
 ## Activity and quick actions
 
-Click the Telimus status icon or tap its ribbon icon for **Sync activity**,
+Click the Trew status icon or tap its ribbon icon for **Sync activity**,
 **Review conflicts**, **Preview sync**, history, and settings. **Pause sync**
 stops this device until you resume it or restart Obsidian.
 
@@ -132,13 +132,13 @@ The activity log keeps the latest 300 events on this device across restarts.
 Search by filename or filter errors and conflicts. **Copy diagnostics** omits
 filenames; note contents and credentials are never recorded in this log.
 
-Before combining populated vaults, Telimus shows upload, download, and preserved-copy
+Before combining populated vaults, Trew shows upload, download, and preserved-copy
 counts. Deleting an entire folder containing several synced
 files also opens a review. Choose **Pause sync** if the changes are unexpected.
 **Preview sync** lets you inspect planned changes at other times without writing
 notes. A preview is an estimate: files are checked again when sync runs.
 
-If a file changed outside Obsidian but did not sync, run **Telimus Sync: Verify
+If a file changed outside Obsidian but did not sync, run **Trew Sync: Verify
 vault contents**. This reads every file again and can take longer than a normal
 sync.
 
@@ -158,7 +158,7 @@ These phone layouts were captured in desktop Obsidian's mobile styles.
 
 ## Version history
 
-Run **Telimus Sync: Show version history** for the open note, or use the note's
+Run **Trew Sync: Show version history** for the open note, or use the note's
 right-click menu. Choose a version to read it or compare it with the local copy.
 Use **Load more** to go further back. Tab or the arrow keys move between
 versions. Attachments and large notes show their details without loading a text
@@ -196,11 +196,11 @@ connection fails, choose **Try again** after reconnecting.
 
 A deletion received from another device goes to the system trash, or the
 vault's `.trash` if necessary. If you edit a note while another device deletes
-it, Telimus keeps the edit and sends it back as a new version.
+it, Trew keeps the edit and sends it back as a new version.
 
 ## Conflicts
 
-Telimus tries to combine edits made on different devices. If its merge checks
+Trew tries to combine edits made on different devices. If its merge checks
 fail, it keeps both versions, for example:
 
 ```text
@@ -208,7 +208,7 @@ Meeting notes.md
 Meeting notes (Conflicted copy laptop 202608311412).md
 ```
 
-Choose **Review conflicts** from the Telimus menu. Compare the original and
+Choose **Review conflicts** from the Trew menu. Compare the original and
 preserved copy, then keep either one or edit a combined version. **Decide later**
 leaves both files in place. If a file changes while you review it, refresh the
 comparison before choosing. The result syncs to your other devices.
@@ -226,7 +226,7 @@ both versions on a conflict is not a promise that sync never changes an open fil
 - Obsidian's configuration folder: settings, plugins, themes, snippets, and
   workspace layout.
 - Files or folders whose names start with a dot, at any depth, including
-  `.git`, `.trash`, and `.telimus`.
+  `.git`, `.trash`, and `.trew`.
 - Files above the server's limit, **64 MiB by default**. The server operator
   can [adjust the limit](server-reference.md#serve).
 
@@ -246,7 +246,7 @@ browser origin, the panel shows an origin hint for the server operator; see
 ## Change the server address
 
 Open **Server → Server address**, enter the new address, and press **Save**.
-Telimus checks the connection using this device's existing pairing before saving.
+Trew checks the connection using this device's existing pairing before saving.
 Use this when the same server moves to a new hostname or port. Notes and sync
 history are kept. Update the address on each device.
 
@@ -310,23 +310,23 @@ After the server is restored from an older backup, the panel may show
 
 First have the operator back up the restored server and preserve local notes.
 Press **Rejoin this server**, review the two positions shown, then confirm.
-Telimus rejoins and sends versions held only on this device, keeping both copies
+Trew rejoins and sends versions held only on this device, keeping both copies
 where they disagree. Prefer this action to unlinking and pairing again.
 
 ## Sending back what the server has lost
 
 If the operator confirms that the server is missing stored content, choose
 **Manage this vault → Send back what the server has lost** on a device that
-still has the notes. Telimus resends missing content without creating new note
+still has the notes. Trew resends missing content without creating new note
 versions.
 
 Repeat on other devices that may have additional copies. The operator should
-then run `telimus verify`; a successful repair on one device cannot establish
+then run `trew verify`; a successful repair on one device cannot establish
 that all server history is recoverable.
 
 ## Durability
 
-Telimus stages incoming files and checks the written bytes before putting them
+Trew stages incoming files and checks the written bytes before putting them
 in place. Desktop and mobile provide different guarantees during a power loss;
 keep independent backups of your notes.
 
@@ -349,12 +349,12 @@ record; use **Devices** when you want to remove access.
 
 | Command-palette action | Result |
 |---|---|
-| Telimus Sync: Sync now | Run a sync. |
-| Telimus Sync: Verify vault contents | Re-read every file, then sync. |
-| Telimus Sync: Preview sync | Review planned changes without writing notes. |
-| Telimus Sync: Show sync activity | Search recent activity. |
-| Telimus Sync: Review conflicts | Compare and resolve preserved copies. |
-| Telimus Sync: Pause or resume sync | Stop or restart syncing on this device. |
-| Telimus Sync: Show status | Open the panel. |
-| Telimus Sync: Show version history | View history for the open note. |
-| Telimus Sync: Recover a deleted note | Browse deleted notes. |
+| Trew Sync: Sync now | Run a sync. |
+| Trew Sync: Verify vault contents | Re-read every file, then sync. |
+| Trew Sync: Preview sync | Review planned changes without writing notes. |
+| Trew Sync: Show sync activity | Search recent activity. |
+| Trew Sync: Review conflicts | Compare and resolve preserved copies. |
+| Trew Sync: Pause or resume sync | Stop or restart syncing on this device. |
+| Trew Sync: Show status | Open the panel. |
+| Trew Sync: Show version history | View history for the open note. |
+| Trew Sync: Recover a deleted note | Browse deleted notes. |

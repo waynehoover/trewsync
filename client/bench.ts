@@ -192,7 +192,7 @@ async function bandwidth() {
   console.log("\nbytes on the wire for one line inserted into a note");
   console.log("  Both columns carry the entry as well as the bodies, because both");
   console.log("  protocols send one. Theirs is a whole file and one hash.\n");
-  console.log("  note size    telimus      of that: entry   whole file    ratio    chunks");
+  console.log("  note size    trew      of that: entry   whole file    ratio    chunks");
   const keys = await testKeys(new Uint8Array(32).fill(11));
   for (const size of [4096, 32 * 1024, 128 * 1024, 512 * 1024, 2 * MIB]) {
     const original = note(size);
@@ -257,7 +257,7 @@ async function realVault(path: string) {
   );
 }
 
-console.log("telimus: chunking, sealing and bandwidth");
+console.log("trew: chunking, sealing and bandwidth");
 await chunking();
 await sealing();
 await bandwidth();

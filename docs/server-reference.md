@@ -2,9 +2,9 @@
 
 [Documentation](index.md) · [Setup](server.md) · [Maintenance](server-operations.md)
 
-`telimus` runs the server and its maintenance commands. Commands that use a
-store, plus `service`, accept `-data DIR`; the default is `$TELIMUS_DATA`, then
-`~/.telimus`. `health` uses an address instead, and `version` needs neither.
+`trew` runs the server and its maintenance commands. Commands that use a
+store, plus `service`, accept `-data DIR`; the default is `$TREW_DATA`, then
+`~/.trew`. `health` uses an address instead, and `version` needs neither.
 Only `serve` creates a new server data directory. Use each subcommand's `-h`
 for installed usage.
 
@@ -96,12 +96,12 @@ use `health` to check whether the running server can accept writes.
 | `-binary PATH` | Installed binary path; default is the running executable. |
 
 The generated unit uses a 30-second stop timeout and limits repeated restarts.
-After fixing a repeated startup failure, `systemctl reset-failed telimus` may be
+After fixing a repeated startup failure, `systemctl reset-failed trew` may be
 needed before starting it again.
 
 ## health
 
-`telimus health` requests `/health` and exits non-zero on failure. Its flags are
+`trew health` requests `/health` and exits non-zero on failure. Its flags are
 `-addr` (default `127.0.0.1:3003`) and `-timeout` (default `5s`).
 
 | HTTP response | Meaning |

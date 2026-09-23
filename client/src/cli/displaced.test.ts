@@ -32,7 +32,7 @@ afterEach(async () => {
 });
 
 async function vaultDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-displaced-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-displaced-"));
   made.push(dir);
   return dir;
 }
@@ -64,7 +64,7 @@ describe("the headless client, when a displaced version has nowhere to go", () =
     ).rejects.toThrow();
 
     // A different object over the same directory, which is what the next
-    // `telimus sync` is. Nothing carried over in memory.
+    // `trew sync` is. Nothing carried over in memory.
     const next = new NodeVault(dir);
     await next.list();
     expect(next.stranded, "the parked version was not reported at all").toHaveLength(1);
@@ -113,11 +113,11 @@ describe("the headless client, when a displaced version has nowhere to go", () =
     // dropping it in favour of the ledger would have lost them: the two
     // sources answer different halves.
     const dir = await vaultDir();
-    await writeFile(join(dir, `orphan.md..telimus-tmp-keepdeadbeef`), MINE);
+    await writeFile(join(dir, `orphan.md..trew-tmp-keepdeadbeef`), MINE);
 
     const vault = new NodeVault(dir);
     await vault.list();
-    expect(vault.stranded).toEqual(["orphan.md..telimus-tmp-keepdeadbeef"]);
+    expect(vault.stranded).toEqual(["orphan.md..trew-tmp-keepdeadbeef"]);
     // Reported, with nothing more said about it than that it is there, which
     // is all anybody can know about it.
     expect(vault.displaced).toEqual([]);

@@ -250,7 +250,7 @@ describe("the content cache, which is the whole cost of a routine scan", () => {
 
   /**
    * Obsidian caches the hash and stops there, because it uploads whole files.
-   * Telimus uploads chunks, so a cached hash with no chunk list still means
+   * Trew uploads chunks, so a cached hash with no chunk list still means
    * re-reading, re-chunking, re-compressing and re-encrypting the file to
    * learn something it already knows.
    */

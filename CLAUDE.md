@@ -1,8 +1,8 @@
-# Telimus
+# Trew
 
 Self-hosted vault sync with full version history, on a server you run.
 
-Telimus is a fork of Basalt Sync (`github.com/waynehoover/basalt-sync`, commit
+Trew is a fork of Basalt Sync (`github.com/waynehoover/basalt-sync`, commit
 `664a963`). The destination is a server that holds notes in plaintext, with an
 MCP endpoint built into it so agents read and edit the same notes devices sync.
 [PLAN.md](PLAN.md) is the plan and the milestones; read it, and the files in
@@ -19,10 +19,10 @@ key-derivation labels are deliberately unrenamed: they die with the crypto.
 
 | Path | What |
 |---|---|
-| `go.mod`, `cmd/telimus/`, `internal/` | Go server, `telimus`: store, chunks, sessions, backup, verify, purge |
+| `go.mod`, `cmd/trew/`, `internal/` | Go server, `trew`: store, chunks, sessions, backup, verify, purge |
 | `client/src/core/` | shared sync engine: reconciliation, merge, index journal, transport |
 | `client/src/plugin/` | Obsidian plugin and its preserving-write adapter |
-| `client/src/cli/` | headless client (`telimus-sync` on npm) and its filesystem adapter |
+| `client/src/cli/` | headless client (`trew-sync` on npm) and its filesystem adapter |
 | `client/src/stress/` | fault, crash, collision and scale suites |
 | `scripts/check.sh` | the full local gate, with a guard against drift from CI |
 | `docs/` | user and developer docs; `docs/findings.md` defines the review IDs cited in code |
@@ -56,7 +56,7 @@ clients.
 ## Documentation and prior art
 
 Write the README and user guides for people choosing, installing and using
-Telimus. Put implementation details in the
+Trew. Put implementation details in the
 [developer documentation](docs/development.md). [llm.md](llm.md) is the
 installation runbook for agents helping users.
 

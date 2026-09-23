@@ -19,9 +19,9 @@ func TestTheLongestCoveringMountWins(t *testing.T) {
 	}
 	for _, c := range []struct{ path, point, fsType string }{
 		{"/data", "/data", "ext4"},
-		{"/data/vault/telimus.db", "/data", "ext4"},
+		{"/data/vault/trew.db", "/data", "ext4"},
 		{"/database", "/", "overlay"}, // a sibling that shares a prefix is not under /data
-		{"/srv/telimus", "/", "overlay"},
+		{"/srv/trew", "/", "overlay"},
 		{"/dev/shm", "/dev", "tmpfs"},
 	} {
 		point, fsType := mountOf(c.path, mounts)

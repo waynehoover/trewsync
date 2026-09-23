@@ -107,7 +107,7 @@ afterEach(async () => {
 });
 
 async function vaultDir(name: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), `telimus-rotate-${name}-`));
+  const dir = await mkdtemp(join(tmpdir(), `trew-rotate-${name}-`));
   dirs.push(dir);
   return dir;
 }

@@ -37,7 +37,7 @@ afterEach(async () => {
 });
 
 async function tempDir(): Promise<string> {
-  const d = await mkdtemp(join(tmpdir(), "telimus-fsync-"));
+  const d = await mkdtemp(join(tmpdir(), "trew-fsync-"));
   dirs.push(d);
   return d;
 }

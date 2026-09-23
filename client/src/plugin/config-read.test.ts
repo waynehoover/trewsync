@@ -1,9 +1,9 @@
 import { afterEach, expect, it } from "vitest";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
-import TelimusPlugin from "./main.ts";
+import TrewPlugin from "./main.ts";
 import { App, resetStub } from "./stub.ts";
 
-let plugin: TelimusPlugin | undefined;
+let plugin: TrewPlugin | undefined;
 afterEach(async () => {
   plugin?.onunload();
   await plugin?.closing;
@@ -12,14 +12,14 @@ afterEach(async () => {
 
 it("refuses to pair when Obsidian returns undefined for an unreadable settings file", async () => {
   const app = new App();
-  const path = ".obsidian/plugins/telimus-sync/data.json";
+  const path = ".obsidian/plugins/trew-sync/data.json";
   const broken = '{"deviceKey":"the only credential is in this damaged file"';
   app.vault.adapter.seed(path, broken);
-  plugin = new TelimusPlugin(
+  plugin = new TrewPlugin(
     app as unknown as ObsidianApp,
     {
-      id: "telimus-sync",
-      dir: ".obsidian/plugins/telimus-sync",
+      id: "trew-sync",
+      dir: ".obsidian/plugins/trew-sync",
     } as PluginManifest,
   );
   // Native readPluginData returns null for ENOENT and undefined for read/JSON errors.

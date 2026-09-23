@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
-import TelimusPlugin from "./main.ts";
+import TrewPlugin from "./main.ts";
 import { App, built, modals, notices, resetStub, type Plugin as StubPlugin } from "./stub.ts";
 import { Client, type DeletedList } from "../core/client.ts";
 import { TestServer } from "../core/test-server.ts";
 import { nextTurn, receiveCommitted, within } from "../core/test-async.ts";
 
-type TestPlugin = TelimusPlugin & StubPlugin;
+type TestPlugin = TrewPlugin & StubPlugin;
 const plugins: TestPlugin[] = [];
 let server: TestServer | undefined;
 
@@ -26,11 +26,11 @@ afterEach(async () => {
 
 async function load() {
   const app = new App();
-  const plugin = new TelimusPlugin(
+  const plugin = new TrewPlugin(
     app as unknown as ObsidianApp,
     {
-      id: "telimus-sync",
-      dir: ".obsidian/plugins/telimus-sync",
+      id: "trew-sync",
+      dir: ".obsidian/plugins/trew-sync",
     } as PluginManifest,
   ) as TestPlugin;
   (plugin as unknown as { confirmSync(): Promise<boolean> }).confirmSync = async () => true;

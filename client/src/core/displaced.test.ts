@@ -67,7 +67,7 @@ describe("the displaced-version ledger", () => {
     files.onDisk.add("note.md..keep1");
     await new DisplacedLedger(files).record(record("note.md..keep1"));
 
-    // A different object over the same files, which is what the next `telimus
+    // A different object over the same files, which is what the next `trew
     // sync` is. Nothing is carried over in memory.
     const afterRestart = await new DisplacedLedger(files).waiting();
     expect(afterRestart.map((d) => d.at)).toEqual(["note.md..keep1"]);

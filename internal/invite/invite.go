@@ -11,7 +11,7 @@
 // endian, and nothing may follow the vault. The checksum catches a bad paste;
 // it is not a defence against anybody, which the token is.
 //
-// The server needs Format, for `telimus invite`; Parse is here so the Go side
+// The server needs Format, for `trew invite`; Parse is here so the Go side
 // consumes the same fixtures the TypeScript decoder does (PLAN.md M0.5).
 package invite
 
@@ -27,7 +27,7 @@ import (
 
 // Prefix begins every invite string. Derived from the product name, which is
 // not final (PLAN.md section 10).
-const Prefix = "telimus1i_"
+const Prefix = "trew1i_"
 
 // Version is the layout version the body starts with.
 const Version = 1

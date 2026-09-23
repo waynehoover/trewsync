@@ -32,14 +32,14 @@ untrusted-content envelope; no code of it is used.
 The requested tool coverage follows
 [StevenStavrakis/obsidian-mcp at bd90097](https://github.com/StevenStavrakis/obsidian-mcp/tree/bd900974adc6d7451f1f9d0f09d46b14307714f8).
 Its read/create/edit, search, tag, directory, namespace and explicit vault-selection tools informed the
-scope. Telimus retains mandatory revision bases, exact edits and independent
+scope. Trew retains mandatory revision bases, exact edits and independent
 verified before-images. Whole-file replacement and permanent deletion remain
 outside this contract. Namespace and batch tools expand the original MCP plan's
 deliberately narrower first release. Multi-vault selection also expands that
 plan: it composes separately paired clients without changing one server per
 vault or one writer per local directory.
 
-Telimus adds authenticated history comparison and device checkpoint inspection
+Trew adds authenticated history comparison and device checkpoint inspection
 on top of its existing history, deleted-note discovery, safe restore and sync
 preview tools. Comparison uses a deterministic bounded line diff so pagination
 does not change with machine timing. Device checkpoint reports fail closed to
@@ -157,7 +157,7 @@ Three things these say, and one they do not.
 ### First Android numbers, at 500 notes
 
 `bun run bench:android`, Pixel 9 Pro XL, Android 17, Obsidian 1.13.8, plugin
-built at `2b3d611` with pass timing on. A disposable `telimus` on a laptop,
+built at `2b3d611` with pass timing on. A disposable `trew` on a laptop,
 reached over `adb reverse` on the phone's own loopback; the live server was
 never involved. A separate `Bench` vault, seeded with the same corpus
 `bench-pass` uses, so these files and the desktop rows above are byte for byte
@@ -205,7 +205,7 @@ Every defect was in reading the measurements, not in taking them:
   about inlining payloads exists for.
 - The collection window read the log after three and a half minutes in which
   the phone had been asleep. Android suspends a backgrounded WebView and
-  Telimus does not sync there, so the window gathered nothing. The harness now
+  Trew does not sync there, so the window gathered nothing. The harness now
   brings Obsidian forward first and reads the whole log at the end.
 
 Two figures were reported from this phone before these were fixed, 66% and
@@ -220,11 +220,11 @@ the step toward it and it did not produce a number, so nothing here revises the
 share above.
 
 Seeding the phone with ten thousand notes took **543 seconds** over `adb push`
-of a tar, before Telimus was involved at all. The phone then had every file on
+of a tar, before Trew was involved at all. The phone then had every file on
 disk and had to hash and reconcile them against the server on its first pass.
 After **thirty minutes** it had not finished and the harness gave up.
 
-That is not a measurement of Telimus, because the run is confounded: the phone
+That is not a measurement of Trew, because the run is confounded: the phone
 entered `mWakefulness=Dozing` partway through, and a dozing phone is not
 syncing. The harness now holds the screen on and brings Obsidian forward, but
 the run was not repeated. What can be said is narrow: nothing establishes that
@@ -404,9 +404,9 @@ in this pass.
 
 ```bash
 cd client
-TELIMUS_BENCH_CLIENTS=2 TELIMUS_BENCH_SAMPLES=20 node --experimental-transform-types bench-cadence.ts
-TELIMUS_BENCH_CLIENTS=5 TELIMUS_BENCH_SAMPLES=20 node --experimental-transform-types bench-cadence.ts
-TELIMUS_BENCH_HISTORY=1000 node --experimental-transform-types bench-history.ts
+TREW_BENCH_CLIENTS=2 TREW_BENCH_SAMPLES=20 node --experimental-transform-types bench-cadence.ts
+TREW_BENCH_CLIENTS=5 TREW_BENCH_SAMPLES=20 node --experimental-transform-types bench-cadence.ts
+TREW_BENCH_HISTORY=1000 node --experimental-transform-types bench-history.ts
 BENCH_NODE=1 BENCH_SIZES=500,2000 BENCH_REPEATS=3 node --experimental-transform-types bench-pass.ts
 ```
 
@@ -487,19 +487,19 @@ the effect on Obsidian's file identity and rename listeners.
 
 The installed official Sync implementation updates existing files through
 `Vault.modify`/`modifyBinary`; Obsidian's text view then merges unsaved buffers
-and preserves the open file. Telimus now keeps text files at their original
+and preserves the open file. Trew now keeps text files at their original
 paths, using a verified backup and a comparison inside `DataAdapter.process`.
 The [design guide](design.md#file-replacement) describes its recovery limits.
 
 `scripts/open-note-smoke.mjs` verified twelve updates in two actual editors,
 cursor stability, disjoint unsaved typing, and undo/redo. Native application of
-Telimus's updates took **20.6–34.7 ms**; a `Vault.modify` control took **1.5–3.8 ms**.
-The Telimus path includes backup verification and desktop filesystem flushes.
+Trew's updates took **20.6–34.7 ms**; a `Vault.modify` control took **1.5–3.8 ms**.
+The Trew path includes backup verification and desktop filesystem flushes.
 Both modes include incoming changes in native undo history; redo restored the
 combined text. This is an editor/storage test, not an official Sync network
 benchmark or a test of Android storage.
 
-Telimus also prioritizes the current text note over background notes. With
+Trew also prioritizes the current text note over background notes. With
 3,845 unchanged notes and a simulated 500 ms read of another note,
 `bench:cadence` measured five deliveries at **561–586 ms** without that priority
 and **25–39 ms** with it. The same run's ordinary repeat edits were **32–37 ms**
@@ -508,8 +508,8 @@ Apple M4 Pro with Bun 1.4.2, a real loopback server, and in-memory vaults:
 
 ```bash
 cd client
-TELIMUS_BENCH_NOTES=3845 TELIMUS_BENCH_PRIORITY=0 bun run bench:cadence
-TELIMUS_BENCH_NOTES=3845 TELIMUS_BENCH_PRIORITY=1 bun run bench:cadence
+TREW_BENCH_NOTES=3845 TREW_BENCH_PRIORITY=0 bun run bench:cadence
+TREW_BENCH_NOTES=3845 TREW_BENCH_PRIORITY=1 bun run bench:cadence
 ```
 
 This does not interrupt a transfer already in progress. Automatic sync still
@@ -591,7 +591,7 @@ passes before and thirteen after: earlier delivery trades additional scans for
 less batching. Every generated note and attachment matched exactly. These are
 loopback measurements with memory vaults, not mobile network results.
 
-Run `TELIMUS_BENCH_NOTES=2000 bun run bench:cadence` to repeat the larger-vault
+Run `TREW_BENCH_NOTES=2000 bun run bench:cadence` to repeat the larger-vault
 workload; its output includes pass counts and content verification. The serial
 queue still bounds active work and combines requests waiting to start. A second
 transport and partial-vault scans were deferred in this experiment; see the
@@ -644,9 +644,9 @@ offers folder exclusions and a separate Start syncing action. Its
 [onboarding for another device](https://obsidian.md/help/sync/setup) also offers
 creating a new local vault from the remote vault.
 
-Telimus uses the populated-vault confirmation and lets empty vaults proceed
+Trew uses the populated-vault confirmation and lets empty vaults proceed
 directly. Its filesystem check runs before consuming an invite, including when
-Obsidian's loaded-file cache is incomplete. Telimus still preserves divergent
+Obsidian's loaded-file cache is incomplete. Trew still preserves divergent
 versions according to its existing conflict rules; this UI change does not adopt
 Sync's initial same-path resolution by modification time. An automatic
 backup-and-replace workflow was deferred because it would need a separate,
@@ -658,7 +658,7 @@ Historical transfer after inserting one line, including entry metadata in both
 columns. The whole-file column is a baseline, not a measurement of a competing
 service.
 
-| Note size | Whole-file baseline | Telimus | Entry metadata within Telimus total |
+| Note size | Whole-file baseline | Trew | Entry metadata within Trew total |
 |---|---|---|---|
 | 4 KiB | 4.4 KiB | 1.9 KiB | 624 B |
 | 32 KiB | 32.4 KiB | 4.9 KiB | 1.3 KiB |
@@ -729,7 +729,7 @@ The old full-JSON rewrite was measured on a laptop SSD:
 | 50,000 | 31.6 MiB | 8.6 ms | 5.0 ms | 13.6 ms |
 
 One cold write of the 50,000-note snapshot took 228 ms. The warm figures should
-not be used to dismiss flush latency. Telimus now uses a [shared journal](index-journal.md)
+not be used to dismiss flush latency. Trew now uses a [shared journal](index-journal.md)
 to avoid rewriting the full snapshot on every changed pass. SQLite or IndexedDB
 would require additional platform-specific storage integration.
 
@@ -771,14 +771,14 @@ an abstract Unix socket on Linux. Process death releases it. The accompanying
 file records the holder. A foreign holder or unavailable mechanism still needs
 manual handling; this does not add support for network filesystems.
 
-The comparison with `obsidian-headless` 0.0.3 examined a timed lease. Telimus chose
+The comparison with `obsidian-headless` 0.0.3 examined a timed lease. Trew chose
 kernel exclusion because a paused writer must not become a second active owner
 when its heartbeat expires. That version-specific evaluation is preserved in
 the original page, rather than presented as a claim about today's product.
 
 ## Credits and dependencies
 
-These projects informed Telimus's design and regression cases:
+These projects informed Trew's design and regression cases:
 
 | Project | Influence |
 |---|---|

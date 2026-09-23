@@ -48,14 +48,14 @@
  * check: that the walk really reached every state and captured something real
  * in each.
  *
- * Everything here runs against the stub in `stub.ts` and a real `telimus`, so
+ * Everything here runs against the stub in `stub.ts` and a real `trew`, so
  * the panel being captured is the panel the plugin builds, not a description
  * of it.
  */
 
 import { App, type FakeEl, Plugin as StubPlugin, Setting, built, modals } from "./stub.ts";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
-import TelimusPlugin, { type State } from "./main.ts";
+import TrewPlugin, { type State } from "./main.ts";
 import type { TestServer } from "../core/test-server.ts";
 import { INVITE_PREFIX } from "../core/pairing.ts";
 
@@ -184,7 +184,7 @@ export function outlineOf(root: FakeEl, rows = rowIndex(), depth = 0): string {
  * The panel that is open, as an outline.
  *
  * Reads the newest modal rather than being handed one, because that is how the
- * plugin opens it: the ribbon callback constructs a `TelimusModal` and nothing
+ * plugin opens it: the ribbon callback constructs a `TrewModal` and nothing
  * returns it. A capture that took a modal as an argument would be capturing a
  * modal this file built, which is a different panel.
  */
@@ -216,12 +216,12 @@ async function until(what: string, cond: () => boolean, ms = 20_000): Promise<vo
 }
 
 /** The plugin, wired to the stub, exactly as `main.test.ts` wires it. */
-type Testable = TelimusPlugin & StubPlugin;
+type Testable = TrewPlugin & StubPlugin;
 
 async function load(saved: unknown = null): Promise<Testable> {
-  const plugin = new TelimusPlugin(
+  const plugin = new TrewPlugin(
     new App() as unknown as ObsidianApp,
-    { id: "telimus", dir: ".obsidian/plugins/telimus" } as unknown as PluginManifest,
+    { id: "trew", dir: ".obsidian/plugins/trew" } as unknown as PluginManifest,
   ) as unknown as Testable;
   plugin.savedData = saved;
   await plugin.onload();
@@ -392,7 +392,7 @@ const setState = (plugin: Testable, state: unknown): void =>
 /**
  * Every panel state, walked and captured.
  *
- * Against a real `telimus`, because the paired states are the ones with rows
+ * Against a real `trew`, because the paired states are the ones with rows
  * in them and a paired panel is one that talked to a server. The caller owns
  * the server and the returned plugins: `onunload` on each, in reverse, and
  * then the server.
@@ -638,14 +638,12 @@ export async function walkPanelStates(
   // The older one deliberately: the newest version is the note on disk, so
   // its diff is empty and an empty diff has nothing to colour either way.
   matching(modals.at(-1)!.contentEl, "modal-sidebar-list-item")[1]?.fire("click");
-  await until("the older version", () =>
-    hasClass(modals.at(-1)!.contentEl, "telimus-history-text"),
-  );
+  await until("the older version", () => hasClass(modals.at(-1)!.contentEl, "trew-history-text"));
   press(modals.at(-1)!.contentEl, "Show changes");
   await until(
     "the diff",
     () =>
-      hasClass(modals.at(-1)!.contentEl, "telimus-history-diff") &&
+      hasClass(modals.at(-1)!.contentEl, "trew-history-diff") &&
       !(modals.at(-1)?.contentEl.allText() ?? "").includes("Loading"),
   );
   shots.push(
@@ -673,7 +671,7 @@ export async function walkPanelStates(
 }
 
 const HEADER = [
-  "The Telimus panel, in every state it has.",
+  "The Trew panel, in every state it has.",
   "",
   "Not a screenshot, and it cannot be one: a picture of this panel needs Obsidian,",
   "which is proprietary and is not on a CI runner, and every pixel of its",
@@ -727,7 +725,7 @@ export function asHtml(shots: Shot[]): string {
   return [
     "<!doctype html>",
     '<html lang="en"><head><meta charset="utf-8">',
-    "<title>Telimus panel states</title>",
+    "<title>Trew panel states</title>",
     "<style>",
     "body{font:14px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;color:#222}",
     "pre{background:#f6f6f6;padding:1rem;overflow-x:auto;font:12px/1.45 ui-monospace,monospace}",
@@ -736,7 +734,7 @@ export function asHtml(shots: Shot[]): string {
     "header p{white-space:pre-wrap}",
     "@media(prefers-color-scheme:dark){body{background:#181818;color:#ddd}pre{background:#222}.why{color:#aaa}}",
     "</style></head><body>",
-    "<h1>Telimus panel states</h1>",
+    "<h1>Trew panel states</h1>",
     `<header><p>${escape(HEADER)}</p></header>`,
     `<nav><ol>\n${nav}\n</ol></nav>`,
     body,

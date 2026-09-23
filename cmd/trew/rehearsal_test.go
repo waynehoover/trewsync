@@ -41,9 +41,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // TestRestoreRehearsal walks the runbook end to end.
@@ -269,11 +269,11 @@ func hashHex(key string) string {
 
 func buildBinary(t *testing.T) string {
 	t.Helper()
-	out := filepath.Join(t.TempDir(), "telimus")
-	cmd := exec.Command("go", "build", "-o", out, "./cmd/telimus")
+	out := filepath.Join(t.TempDir(), "trew")
+	cmd := exec.Command("go", "build", "-o", out, "./cmd/trew")
 	cmd.Dir = repoServerDir(t)
 	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("building telimus: %v\n%s", err, b)
+		t.Fatalf("building trew: %v\n%s", err, b)
 	}
 	return out
 }
@@ -286,7 +286,7 @@ func repoServerDir(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The test runs in cmd/telimus.
+	// The test runs in cmd/trew.
 	return filepath.Dir(filepath.Dir(wd))
 }
 
@@ -295,7 +295,7 @@ func runBinary(t *testing.T, binary string, args ...string) string {
 	cmd := exec.Command(binary, args...)
 	b, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("telimus %s: %v\n%s", strings.Join(args, " "), err, b)
+		t.Fatalf("trew %s: %v\n%s", strings.Join(args, " "), err, b)
 	}
 	return string(b)
 }

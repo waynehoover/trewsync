@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // I23: single-use invites. docs/protocol.md, "Adding a device with a single-use
