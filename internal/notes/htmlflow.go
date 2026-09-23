@@ -314,9 +314,16 @@ func interruptedFlow(parent ast.Node, reader text.Reader) bool {
 	switch b := prev.(type) {
 	case *ast.CodeBlock:
 		return !codeAfterClosedContainer(b, src)
-	case *ast.Paragraph:
+	case *ast.Paragraph, *ast.LinkReferenceDefinition:
+		// Content, to micromark: a paragraph, or definitions goldmark has
+		// already taken out of one, ending on the line before.
 		lines := b.Lines()
-		return lines.Len() > 0 && lines.At(lines.Len()-1).Stop >= lineStart
+		if lines.Len() == 0 {
+			return false
+		}
+		stop := lines.At(lines.Len() - 1).Stop
+		return stop >= lineStart || bytes.Count(src[stop:lineStart], []byte("\n")) == 1 &&
+			len(bytes.TrimSpace(src[stop:lineStart])) == 0
 	}
 	return false
 }
