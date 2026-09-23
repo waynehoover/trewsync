@@ -241,7 +241,9 @@ both versions on a conflict is not a promise that sync never changes an open fil
   can [adjust the limit](server-reference.md#serve).
 - Paths the server refuses because Obsidian could not hold them everywhere:
   longer than 1,024 bytes, a file or folder name longer than 255 bytes, control
-  characters, backslashes, no-break spaces, and a few more.
+  characters, backslashes, and a few more. A no-break space in a name is not
+  one of them: Obsidian reads it as an ordinary space, and so does Trew, so
+  the note syncs under that name and the file keeps its own.
 - A path that differs from another synced path only in letter case, such as
   `Notes/a.md` beside `notes/a.md`, because a case-insensitive disk would hold
   them as one.
