@@ -39,6 +39,19 @@ import (
 //   - Positions. yaml.v3 gives line and column; the tag's range is computed
 //     from them and the text, as npm yaml's range: the value without its tag
 //     or anchor, and without trailing spaces or comments.
+//   - Anchor and alias names libyaml cannot read ("&k.x") are renamed before
+//     it parses (renameAnchors), and lines of only spaces and tabs and tabs
+//     after a block indicator are made spaces (prepareYAML); scanYAML, in
+//     yamlscan.go, refuses what npm yaml refuses around those.
+//   - Flow collections. A colon before a flow indicator ("[a:]") makes a key
+//     to npm yaml and text to libyaml, which matters only for a tags item
+//     (frontmatterTags); npm yaml refuses an implicit key over lines in a
+//     flow sequence (scanYAML).
+//
+// One difference remains, found by the deep corpus: npm yaml reads an
+// implicit key over lines in a flow mapping ("{x\n  y: z}") and libyaml
+// refuses it, so such frontmatter is refused here and was read by Basalt.
+// frontmatter_test.go records it.
 
 // yamlPlaceholderBase is where the substitute characters are taken from:
 // the top of plane 16, private use, and never legitimately in frontmatter.
