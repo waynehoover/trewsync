@@ -518,6 +518,71 @@ plugin's stranded list. The driver is not in the repository; it drives the
 plugin through its own methods (`pair`, `createInvite`, `deletedNotes`,
 `recover`, `syncNow`) from `obsidian eval`, as M0's did.
 
+M3's, on 2026-09-23 at `65e9820`, with real devices: Obsidian 1.13.7 on this
+Mac and Obsidian on a Pixel 9 Pro XL (Android 17), against `trew serve -mcp`
+on the Mac bound to loopback and reached over Tailscale Serve at
+`wss://wph.example.ts.net:8445` (tailnet only), with `-url` naming that
+address in invites. The Mac vault was fresh and paired from `first-invite`;
+the phone vault was a new folder with the plugin pushed over `adb`, and the
+phone paired by scanning the QR the Mac's panel showed. On the phone, writes
+went through Obsidian itself (`obsidian://new` actions, and the plugin's own
+UI driven over the WebView's DevTools socket); on the Mac through the
+`obsidian` CLI and `obsidian eval`. Exercised, in order:
+
+- Edits both ways: a note created on the Mac arrived on the phone in about a
+  second, an edit and a new note made on the phone arrived on the Mac, all
+  byte-identical.
+- An attachment: a 377,520-byte JPEG put in the phone's vault folder by
+  another program arrived on the Mac byte-identical, but by a bad route (the
+  first finding below).
+- A conflict: the phone paused (which closes its connection), both devices
+  changed the same line, the phone resumed; both texts were kept, the
+  phone's under the note's name and the Mac's as `From the Mac (Conflicted
+  copy android-a1c2 202609230941).md`, identical on both devices.
+- History compare on the phone: the history modal listed four versions with
+  their devices and showed the oldest against the current as a coloured diff.
+- Deleted-note restore: a note deleted on the Mac left the phone within two
+  seconds and was restored from the phone's deleted list with its original
+  SHA-256 on both devices.
+- A refused path: a note named with U+0007 written through Obsidian's adapter
+  on the Mac was named with its reason in the Mac's stranded list, never
+  reached the server, and never reached the phone.
+- Revoke while connected: the Mac revoked the phone; the server closed its
+  session within the revoke reply, the phone said it had been revoked and
+  kept all five notes.
+- Re-pair: unlink on the phone, a new invite from the Mac pasted into the
+  pairing form (destination line shown), the populated-vault confirmation,
+  the first-sync review ("already matches"), synced as a new device; an
+  append on each side then arrived on the other, and the two inventories
+  matched byte for byte apart from the refused note.
+
+Findings:
+
+1. **A receiving device committed deletions nobody made.** Twice, the Mac,
+   only receiving, downloaded a version of a file and within 10 to 30 ms
+   committed a deletion of it, then found it on disk and uploaded it as new;
+   the phone applied the deletion (its copy went to `.trash`) and downloaded
+   the re-upload. Once for the attachment (a 0-byte version the phone had
+   caught mid-write, then the full bytes), once for the phone's conflict
+   copy (a new path downloaded in the same pass as another note's new
+   version). No bytes were lost, but only because the re-upload succeeded.
+   Fixed separately with regression tests; see the fix's commit.
+2. A revoked device's panel says to pair again with a new invite but draws
+   the paired panel, with no invite field; the way on is Manage this vault,
+   then Unlink.
+3. After unlinking, the pairing form's Invite field was filled with the
+   first QR's invite, already used.
+4. The "Trew has stopped: this device was revoked" notice stayed on screen
+   after re-pairing.
+5. Folder deletions do not travel (a deliberate rule inherited from Basalt,
+   `client/src/core/engine.ts`, "Folder deletions do not travel"): empty
+   folders deleted on the Mac stayed on the phone.
+6. Not Trew: a meeting-notes exporter on this Mac ran `obsidian create
+   vault=NAME ...` with `vault=` after the command, which the CLI ignores,
+   so it created an empty note in whichever vault was active (the test
+   vault, while it had focus) before writing the real note into the right
+   vault by path. Fixed in the script.
+
 ### The MCP transport: hand-rolled, with the SDK as the test client
 
 Decided 2026-09-22 (PLAN.md M4 task 1). The server speaks MCP's streamable

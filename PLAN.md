@@ -542,6 +542,8 @@ Done when: two plugin instances in two scratch vaults and one headless client pa
 
 Pair the Mac test vault and the Pixel against a local `trew serve` over Tailscale. Exercise pairing, edits both ways, an attachment, a conflict, history compare, deleted-note restore, a refused path, revoke while the other device is connected, and re-pair. Write `docs/server.md` and `docs/plugin.md` from Basalt's, minus keys. Not the homelab yet.
 
+**Status, 2026-09-23.** Exercised end to end on the Mac and the Pixel over Tailscale Serve, every step passing on content (`docs/development.md`, "Real-app acceptance", M3's). It found one durability defect, a receiving device committing a deletion of a file it had just downloaded and then re-uploading it, and three panel defects around revoke and re-pair; M3 is done when those fixes land. `docs/server.md` and `docs/plugin.md` were rewritten for invites in M2 and carry no key material.
+
 ### M4. MCP on the server: read tools (M, lane C, after M1)
 
 Goal: `trew serve --mcp` answers the read half of [plan/mcp-tools.md](plan/mcp-tools.md) over streamable HTTP with bearer auth.
