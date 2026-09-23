@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { fold } from "./fold.ts";
+import { pathReason } from "./path-policy.ts";
 import {
   configFolderName,
   foldPath,
@@ -39,6 +40,33 @@ describe("what never syncs", () => {
     expect(isNeverSynced("proj/node_modules/lib.md", extra)).toBe(true);
     expect(isNeverSynced("config/app.json", extra)).toBe(true);
     expect(isNeverSynced("proj/lib.md", extra)).toBe(false);
+  });
+});
+
+/**
+ * The names that break sync implementations, which Basalt's suite sealed and
+ * opened again. A path is its own identity on the wire now (plan/protocol.md,
+ * "Paths"), so what is left to hold them to is the path policy the server
+ * enforces at put: every one of these is an ordinary note that must sync, and
+ * the backslash is the one Obsidian's normalizePath would turn into a slash,
+ * which the server refuses by name. The contract's generated cases cover
+ * spaces, accents and astral characters; these add the rest of the corpus.
+ */
+describe("the characters that break sync implementations", () => {
+  it("are paths the policy lets through, all but the backslash", () => {
+    for (const path of [
+      "note.md",
+      "folder/sub folder/note.md",
+      "notes/2026-08-27 meeting: with a colon.md",
+      "emoji \u{1f5ff} trew.md",
+      "accents \u00e9\u00e0\u00fc and a ' quote.md",
+      'a "double quoted" name.md',
+      "very/" + "deep/".repeat(20) + "note.md",
+      "trailing space .md",
+    ]) {
+      expect(pathReason(path), path).toBeUndefined();
+    }
+    expect(pathReason("a\\backslash.md")).toBe("backslash");
   });
 });
 
