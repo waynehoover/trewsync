@@ -668,7 +668,7 @@ tool the scope does not allow is `read_only`, whatever the client was shown),
 before every reply (a token revoked while its request ran loses, and the
 result is never sent), and for a write under the commit lock
 (`call.commit`, the only path from a tool to a mutation, which M5's
-`CommitOperation` will run inside). That path is a build check, not a
+`CommitOperation` runs inside). That path is a build check, not a
 convention: `TestOnlyTheCommitBoundaryReachesAMutation` reads the package's
 source and fails on any method of the store, the server or the chunk store
 reached outside a `commit` callback unless it is on a short list of reads, so
@@ -800,8 +800,8 @@ runs the same in the test process on every `go test`.
 ### Agent operations: the commit boundary, the log and the pins (M5)
 
 The store half of M5 tasks 1, 2, 3 and 10 (`internal/store/oplog.go`). The
-tools that call it are later work; `cmd/trew/audit_test.go` commits through it
-directly in the meantime.
+write tools call it (below, "The MCP write tools"); `cmd/trew/audit_test.go`
+also commits through it directly.
 
 **The commit boundary.** `Store.CommitOperation(Operation) (OpResult, error)`
 is the all-or-nothing write PLAN.md section 4.3 asks for, beside a device's
@@ -962,8 +962,8 @@ the directive names (`%YAML 1.1` makes `yes` a boolean) and the port refuses
 - Paths sort in byte order, as M4's listings do.
 - A move, and a deletion with `markBroken`, read every editable note of the
   vault, as Basalt did, so either is `scan_incomplete` in a vault of more than
-  512 notes or 8 MiB of them. A link index could narrow the scan later;
-  nothing here assumes one.
+  512 notes or 8 MiB of them, unless the View is a `LinkIndex` that rules
+  notes out (added with the tools; see "The MCP write tools").
 - The names the server reserves (`.trew-tmp-`, the conflict-copy pattern) are
   the tools' to refuse, for `create_note` and a move's destination alike.
 
@@ -981,6 +981,80 @@ and a write is one `CommitOperation`.
 | `mcp-links.test.ts` | every case (`port_links_test.go`, M4) | |
 | `mcp-operations.test.ts` | tag plans and their writes, changed plans, move rewrites, editable notes only, spoiled edits, occupied and refused destinations, undecodable notes, path bounds before reading (`port_operations_test.go`) | the backlink that fails after the destination exists, a destination occupied during the commit, `createDirectory` |
 | `mcp-batch.test.ts` | a named note with no edits stays in the plan, so its base is rechecked | deletion before-images, racing saves, every batch backup and partial-publication case: one `CommitOperation` is all or nothing |
+
+### The MCP write tools (M5)
+
+M5 tasks 5, 6, 8 and 11 (`internal/mcp/write.go`, `mutations.go`): the twelve
+mutation tools of plan/mcp-tools.md for write-scope tokens, and
+`lookup_operation`, a read tool. The contract decisions (the epoch argument,
+the request digest, the result shapes, the unknown outcome, the apply's
+`head`) are recorded in plan/mcp-tools.md, "Decided in M5" and "As built";
+this is how the code keeps them.
+
+**One way to write.** Every tool reads its arguments strictly, then
+`call.begin` checks the epoch the call's uids belong to and answers a used
+idempotency key from `Store.Replay` before anything is prepared. The tool
+reads the heads, computes the bytes with `internal/notes`, chunks them with
+the Go chunker exactly as a device would, and stores them with
+`chunks.Store.PutAll`, durable before anything names them. `mutation.submit`
+then runs inside `call.commit`: `CommitOperation`, which rechecks the
+credential, the epoch, the key, a preview's snapshot head and every base in
+one transaction, then `server.Broadcast` of what committed, still under the
+commit lock, then the reply the transaction recorded. `CommitOperation` and
+`Broadcast` are reached nowhere else, which
+`TestOnlyTheCommitBoundaryReachesAMutation` now requires as well as checks.
+Previews commit nothing and go through none of it but `begin`.
+
+**Seams for the crash matrix (task 9).** `Config.Seam` is called at
+`SeamBodies` (bodies durable, before the commit lock), `SeamCommitted`
+(inside the lock, committed, not yet broadcast) and `SeamBroadcast` (after
+the lock, before the reply); `TestAWritesSeamsComeInOrderAroundItsCommit`
+holds the order. Nil in production. A crash-matrix binary binds it to a
+kill; the idempotency key and `lookup_operation` are what resolve the kill
+after the commit.
+
+**The link index (task 6).** Beside `note_tags` in each search-index
+generation, `gN_links (note_id, key)` holds every note's link keys, from
+`notes.LinkKeys`, which takes them from the lookups `LinkResolver.Resolve`
+itself makes (`linkLookups`, now the one list of them), folded as every plan
+folds. A note with a link that could resolve to a path always shares one of
+`notes.TargetKeys(path)`. The worker keeps it outside the write path,
+counts it in the generation's counters and the cheap check, verifies it in the
+deep check, and records a note whose links it could not parse as a link
+failure, which every plan reads. `IndexVersion` is 2, and an index without the
+table is rebuilt. `Index.Backlinks(head, keys)` narrows only when the trusted
+generation has indexed exactly `head`, checked in the read that takes the
+keys; `Index.Await` lets the tool give the worker two seconds to get there.
+Otherwise the plan reads every editable note, as Basalt did.
+`notes.LinkIndex` is how a View rules a note out; the moved note and every
+note read are read from the store. `TestTheLinkKeysNeverOmitABacklink` plans
+every move and deletion of forty generated vaults with and without the
+narrowing and requires the same plan; keying only the first lookup of a wiki
+link fails its companion test.
+
+**Authors (task 8).** Entries carry the token's label as their device, so
+`note_history`, `trew audit` and the batches a device receives name the agent,
+and authors are never in the device list or delivery status. A device that
+meets an agent's edit to text it changed offline keeps both, the agent's
+bytes in a conflict copy named after the device that kept it, which is the
+engine's convention and not what PLAN.md section 2.4 expected
+(`client/src/node/agent-author.test.ts`, and the correction in
+plan/mcp-tools.md, "Authentication and authorship").
+
+**Tests.** `write_test.go` drives every tool through the go-sdk client and,
+after each write, reads the displaced version by `previousUid` as its exact
+former bytes, and again after a default purge; seventeen competing edits on
+one base give one commit and sixteen `stale`; a token revoked after its bodies
+are stored loses at the commit boundary with nothing committed; a device
+connected during a write has the batch before the reply; a replay is the
+recorded bytes; an unknown outcome, made by a deferred foreign key that fails
+the `COMMIT`, is `committed: "unknown"` and never a refusal; writes past the
+token's budget are 429 while a device keeps committing.
+`write_epoch_test.go` binds the epoch across a backup and a restore that
+reissues the agent's base uid to other bytes, and plans a move through the
+link index and without it. `injection_write_test.go` is task 11: poisoned
+text written through the tools is stored exactly and read back by the next
+session only under `untrusted_content`, normalised.
 
 ### Latent issues in the chunker
 

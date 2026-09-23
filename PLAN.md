@@ -589,6 +589,8 @@ Tasks:
 
 Done when: one stale slot, a changed namespace, a new backlink, a revoked actor, or an injected storage error leaves **zero** entries committed for that operation; SIGKILL after append yields exactly one discoverable result on retry; a fresh witness device sees exactly the committed state; the year-old before-image survives an immediate purge; and a day of real use on a scratch vault has produced no unexplained conflict copy.
 
+**Status, 2026-09-23.** Tasks 1 to 4 and 10 are in the store and `internal/notes`. Tasks 5, 6, 8 and 11 are built: the twelve tools and `lookup_operation` on `CommitOperation`, the epoch bound to every uid a mutation names, the preview bound to its head at the commit, `note_links` in the search index, the token's label as the author, and the injection round trip (`docs/development.md`, "The MCP write tools (M5)"; the contract decisions in plan/mcp-tools.md). Tasks 7 (undo), 9 (the crash matrix, whose seams are `mcp.Config.Seam`) and 12 (the phone races) remain. One expectation of section 2.4 did not hold: a device names a conflict copy after itself, not after the agent whose version it keeps, which is the plugin's deliberate convention and is left to the owner (plan/mcp-tools.md, "Authentication and authorship").
+
 **Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "MCP (M4, M5, plan/mcp-tools.md)" and "Retention and history". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
 
 ### M5.5. Operational acceptance and restore rehearsal (M, after M5)
