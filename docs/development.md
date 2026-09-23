@@ -431,12 +431,11 @@ the flows driven through the plugin's own methods rather than by hand.
 ### The MCP transport: hand-rolled, with the SDK as the test client
 
 Decided 2026-09-22 (PLAN.md M4 task 1). The server speaks MCP's streamable
-HTTP itself: stateless `POST /mcp` answered with `application/json`, `GET` and
-`DELETE` answered 405, and the protocol version negotiated from the client's
-`initialize` among 2025-06-18, 2025-11-25 and 2026-07-28. The tool surface is
-fixed and small (`initialize`, `tools/list`, `tools/call`, the `initialized`
-notification), and every input is validated more strictly than a generic
-schema layer would (character and UTF-8 byte limits, lone surrogates).
+HTTP itself, in `internal/mcp`: stateless `POST /mcp` answered with
+`application/json`, `GET` and `DELETE` answered 405, no `Mcp-Session-Id` ever
+minted. Every input is validated more strictly than a generic schema layer
+would (character and UTF-8 byte limits, lone surrogates, unknown and repeated
+keys).
 
 The official Go SDK, `github.com/modelcontextprotocol/go-sdk` v1.8.0, is a
 test-only dependency. Its client drives the handler at every protocol version
@@ -445,7 +444,179 @@ an implementation that is not this one. Linking its `mcp` package into the
 server was measured and rejected: it pulls `golang.org/x/oauth2`,
 `google/jsonschema-go`, segmentio's assembly-accelerated JSON and base64,
 `uritemplate` and `x/time/rate` into the binary, beside a 12,000-line
-streamable transport. Test-only imports are not linked into `trew`.
+streamable transport. Test-only imports are not linked into `trew`, and
+`TestTheSDKIsImportedOnlyByTests` checks no server file imports it.
+
+Two eras are spoken, because 2026-07-28 removed the handshake:
+
+| Asked for | Negotiated | How |
+|---|---|---|
+| 2025-06-18, 2025-11-25 | the same | `initialize`, then `MCP-Protocol-Version` on every request |
+| 2024-11-05, 2025-03-26, anything else in `initialize` | 2025-11-25 | the newest version that has a handshake |
+| 2026-07-28 | the same | no handshake: `server/discover`, `_meta` protocol version and client capabilities on every request, `Mcp-Method` and `Mcp-Name` mirrored from the body (SEP-2575, SEP-2243) |
+
+An `initialize` asking for 2026-07-28 is answered with 2025-11-25: announcing,
+through the handshake, the revision that removed the handshake would be wrong,
+and the SDK's own server does the same. At 2026-07-28 results carry
+`resultType`, `_meta` names the server, `tools/list` and `server/discover`
+carry `ttlMs: 0` and `cacheScope: "private"` (the list depends on the token's
+scope), and `ping` is gone, as that revision says. A handshake-era request
+other than `initialize` must name a version this server negotiates in
+`MCP-Protocol-Version`; the versions before 2025-06-18, which had no such
+header, are not spoken, so a missing header is refused rather than guessed.
+
+Frames: one JSON object with JSON-RPC's members and no others, none repeated;
+an id that is a string or an integer of at most 256 bytes, repeated back
+exactly; params an object. Batches and other non-object bodies are invalid
+requests, the Basalt lesson of the non-object frame. Two requests with one id
+are answered each on its own connection, so the Basalt lesson of the duplicate
+id, whose SDK rerouted the first reply, cannot arise: nothing routes a reply
+by id. Unknown methods and malformed frames are JSON-RPC errors (404 for an
+unknown method at 2026-07-28, as it requires); a tool that fails reports it in
+its own result with `isError`.
+
+### The MCP endpoint (M4)
+
+**Tokens and authors.** `mcp_tokens` holds each token's SHA-256, a random
+16-byte id (the display fingerprint is eight hex characters of the hash, never
+the identity), label, scope (`read` by default), `expires_at` (90 days by
+default), `last_used` and `used_count`. `last_used` is written at most once a
+minute per token, with the counts held since, and before any listing and at
+shutdown; so a crash loses at most a minute of counts, and a stolen token used
+once between legitimate uses still shows in `used_count`. Each token has an
+`authors` row of kind `mcp`, made and deleted with it in one transaction:
+authors are not devices, never appear in a device listing or delivery status,
+and need no widening of the device id rule. Minting, listing and revoking go
+through the control socket to the running server, under the commit lock.
+
+**Authorization.** In order: the route (exactly `/mcp`, no query string), the
+method, the `Origin` (absent, or exactly an `-allow-origin` value; 403 before
+the credential is read), the endpoint's cap of 32 requests in flight, the
+bearer (`Authorization: Bearer` and 43 characters of canonical base64url,
+compared in constant time against every stored hash), the token's own
+budgets, and only then the body (8 MiB, declared or streamed, else 413).
+Failures are 401 with `WWW-Authenticate: Bearer realm="trew"` and the word
+`unauthorized`, nothing else; there is no OAuth metadata anywhere. Failed
+authentication has a budget per connection address (10 at once, 1 a second),
+past which refusals are 429 and stop being logged; a valid token from that
+address is still admitted. Per token: 8 requests in flight, 5 a second
+sustained with a burst of 30, and 4 MiB a second of replies with a burst of
+16 MiB, each answering 429 with `Retry-After`. Scope is checked at discovery
+(a token is listed only the tools its scope allows), at dispatch (a call to a
+tool the scope does not allow is `read_only`, whatever the client was shown),
+before every reply (a token revoked while its request ran loses, and the
+result is never sent), and for a write under the commit lock
+(`call.commit`, the only path from a tool to a mutation, which M5's
+`CommitOperation` will run inside). That path is a build check, not a
+convention: `TestOnlyTheCommitBoundaryReachesAMutation` reads the package's
+source and fails on any method of the store, the server or the chunk store
+reached outside a `commit` callback unless it is on a short list of reads, so
+a method added later, `CommitOperation` included, is held to the boundary
+until someone lists it as a read. Replies over 1 MiB are replaced by
+`result_too_large` before anything is written.
+
+**The envelope.** Server facts go under `trusted`: uids, sizes, counts, times,
+the head and the epoch, cursors the server minted, and a path only when it is
+the caller's own argument, which the path rules have just accepted. Under
+`untrusted_content`, through `Normalize`: note text, match context and diff
+text, and every path, name and device label a listing finds in the vault. A
+row about such a path is kept whole under `untrusted_content` rather than
+split, so an agent reads a path beside its facts. A path that `Normalize`
+alters (a bidi override, a tag character, an imitated envelope key are all
+legal in a path) is shown altered and so cannot be passed back as found; the
+security block's counts say it happened.
+
+**Listing and cursors.** `list_notes` and `search_notes` read the vault as of
+the head their first page pinned, with rename retirements capped at the head
+as well as versions (M4 task 7), streaming along the path index. A cursor
+binds the store's epoch, its purge generation, the head and the options; one
+made for other options, or from before a restore or a purge, is
+`invalid_cursor` with a message saying which it may be, never a page of a
+different world. A search cursor does not bind the index generation: the index
+only proposes candidates and the matcher decides, so a page's matches are the
+same whichever generation proposed them. `compare_versions` refuses a later
+page without the `toUid` the first reported.
+
+**Search.** `internal/search` keeps its index in `search.db` beside the store,
+written by one worker that never takes the store's write lock or the commit
+lock, so it cannot refuse or delay a device's write; a commit nudges it
+without waiting, and `indexed_through_uid` is saved in the transaction with the
+changes it covers. Each note's text is folded character by character through
+the matcher's own case fold (`notes.FoldLiteral`), NUL mapped to U+FFFF because
+FTS5 cannot take NUL in a query, and held in a contentless FTS5 table with the
+trigram tokenizer and its own case folding off. Folded containment is exactly
+what a case-insensitive match needs, and implied by an exact one, so for a
+query of three characters or more the proposal is a superset of the matcher's
+notes. Shorter queries, notes the index holds at another version than the one
+searched, and notes it could not read are scanned. Tags come from the ported
+parser; a refused frontmatter limits that note's tags, is counted, and makes
+it a candidate that search reports as skipped. A rebuild captures a head,
+indexes the vault as of it in batches of 64, replays what came after, is
+checked against the store, and only then switches; the previous generation
+answers meanwhile with its own indexed head. Every proposal compares the
+tables with the generation's recorded counters in the same read, so rows
+truncated under a matching `index_version` are caught at once, and a digest
+and a comparison with the store at open and every ten minutes catch what
+consistent counters would hide. A `search.db` that cannot be opened at all is
+renamed `search.db.broken` and made again, and if even that fails the endpoint
+serves with no index and search scans: a derived file is never the reason the
+server does not start. Search matches Basalt's scan over every query of the
+oracle corpus in `mcp-fixtures.json`, with the index and without it.
+
+**Decisions the spec did not settle.** `invalid_arguments` is the code for a
+wrong type, an unknown or a missing argument, and `invalid_limit` for a number
+out of range (both reached the tools from `internal/notes`, neither is in
+plan/mcp-tools.md's list). `list_notes` with `includeDeleted` marks deleted
+rows `kind: "deleted"` and `deleted: true`. Paths sort in byte order, which is
+code point order; Basalt sorted in UTF-16 order, and the two differ only
+between U+E000 to U+FFFF and characters beyond U+FFFF. `.canvas` is not
+readable: `internal/paths.MCPReadable`, pinned by the fixtures, says `.md` and
+`.txt`, where plan/mcp-tools.md also lists `.canvas`. `note_history` takes any
+syncable path, attachments included; Basalt refused formats it could not read.
+
+**Acceptance (M4 done-when, the parts a machine can do).** Recorded
+2026-09-23 on macOS against the built binary, on a scratch data directory;
+the run with the real headless client and with Claude Code follows once the
+client flip has merged. `TestMCPAcceptanceExternal` pairs a device from the
+first invite, writes notes over the protocol, mints a read token through the
+running server's control socket, and drives `/mcp` with the SDK client at
+three protocol versions while a second connection keeps writing:
+
+```bash
+go build -o /tmp/trew ./cmd/trew
+/tmp/trew serve --mcp -localhost -addr 127.0.0.1:3013 -data /tmp/accept-data &
+TREW_ACCEPT_DATA=/tmp/accept-data TREW_ACCEPT_ADDR=127.0.0.1:3013 \
+  go test ./cmd/trew -run TestMCPAcceptanceExternal -v -count=1
+/tmp/trew mcp-token -data /tmp/accept-data -list
+```
+
+```text
+serving MCP at /mcp with no token yet, so every request is refused
+acceptance: the device wrote 11 notes through the protocol, the journal at uid 1
+acceptance: trew mcp-token -label acceptance -key-out FILE: Wrote an MCP token for vault "default" to .../agent.key.
+  It reads the whole vault, and expires at 2026-12-22T10:24:54Z.
+acceptance: protocol 2026-07-28, the last of 5 rounds while the device wrote 52 versions: listed 11 paths at head 12,
+  read uid 12 exactly, found violet-otter, compared uid 1 to 12 (1 changes), vault head 63, index fresh, indexedHead 63
+acceptance: protocol 2025-11-25, the last of 1 rounds while the device wrote 54 versions: listed 37 paths at head 63,
+  read uid 116 exactly, found violet-otter, compared uid 1 to 118 (1 changes), vault head 118, index fresh, indexedHead 118
+acceptance: protocol 2025-06-18, the last of 1 rounds while the device wrote 92 versions: listed 92 paths at head 174,
+  read uid 214 exactly, found violet-otter, compared uid 1 to 214 (1 changes), vault head 265, index fresh, indexedHead 265
+acceptance: the device wrote 256 more versions while the agent read, with no refusal
+acceptance: the token's request budget answered 429 5 times, and each call succeeded after waiting
+--- PASS: TestMCPAcceptanceExternal (5.26s)
+
+1 MCP tokens on vault "default"
+  NJvaaTzvoqKTbbAlbK908g  20d11f76  read   "acceptance"  expires 2026-12-22T10:24:54Z, used 56 times, last 2026-09-23T10:24:59Z
+```
+
+Every read was checked byte for byte against what the device wrote for the
+uid it named, the list pages kept the head the first pinned while commits
+landed, and the poisoned note in the corpus arrived under
+`untrusted_content` with its imitation of the envelope defused. The server's
+log for the run names uids, sizes and counts, and no path, token or note text.
+A restart reopened the index from its durable state without a rebuild, and a
+SIGINT stopped the server with exit status 0. `TestMCPAcceptanceAgainstServe`
+runs the same in the test process on every `go test`.
 
 ### Latent issues in the chunker
 

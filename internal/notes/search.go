@@ -221,6 +221,14 @@ func literalMatches(source, query string, caseSensitive bool) []int {
 	return starts
 }
 
+// FoldLiteral is s with every character mapped through the fold a
+// case-insensitive literal match compares by. The fold is one character to
+// one character, so a text that contains a query, exactly or without regard
+// to case, still contains it once both are folded; that is what lets the
+// search index hold folded text and propose candidates without ever omitting
+// a note the matcher here would find.
+func FoldLiteral(s string) string { return foldString(s, nil) }
+
 // foldString maps every character of s through foldRune. When origin is not
 // nil it receives, for every byte of the result, the offset in s of the
 // character that byte came from.

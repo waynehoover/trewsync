@@ -27,6 +27,19 @@ type operator struct {
 	// urls are the addresses the server knows itself by, which invite
 	// strings carry unless a request names its own.
 	urls []string
+	// mcp is the running MCP endpoint, or nil when `serve` runs without
+	// --mcp or no server is running at all.
+	mcp mcpHooks
+}
+
+// mcpHooks is what the token commands tell a running MCP endpoint.
+type mcpHooks interface {
+	// FlushUsage writes the use counts it is holding, so a listing shows
+	// every request made until now.
+	FlushUsage()
+	// Revoked ends the requests a revoked token has in flight. Each would
+	// lose at its own recheck anyway; this makes it lose now.
+	Revoked(tokenID string)
 }
 
 // Handle does one request.
@@ -79,8 +92,84 @@ func (o *operator) Handle(_ context.Context, req control.Request) control.Reply 
 			return control.Refused(control.CodeInternal, err.Error())
 		}
 		return control.Reply{Canceled: &control.Canceled{Invite: req.Invite}}
+	case "mcp-token":
+		return o.mcpToken(req)
+	case "mcp-tokens":
+		if o.mcp != nil {
+			o.mcp.FlushUsage()
+		}
+		list, err := o.srv.OperatorMCPTokens(o.vault)
+		if err != nil {
+			return control.Refused(control.CodeInternal, err.Error())
+		}
+		b, err := json.Marshal(list)
+		if err != nil {
+			return control.Refused(control.CodeInternal, err.Error())
+		}
+		return control.Reply{MCPTokens: &control.MCPTokens{Tokens: b, Vault: o.vault}}
+	case "mcp-revoke":
+		if !store.ValidMCPTokenID(req.TokenID) {
+			return control.Refused(control.CodeBadRequest, fmt.Sprintf(
+				"%q is not an MCP token id; `trew mcp-token -list` lists them", req.TokenID))
+		}
+		err := o.srv.OperatorRevokeMCPToken(o.vault, req.TokenID)
+		switch {
+		case errors.Is(err, store.ErrUnknownMCPToken):
+			return control.Refused(control.CodeNoToken, fmt.Sprintf(
+				"vault %q has no MCP token %q; `trew mcp-token -list` lists the ones it has", o.vault, req.TokenID))
+		case err != nil:
+			return control.Refused(control.CodeInternal, err.Error())
+		}
+		if o.mcp != nil {
+			o.mcp.Revoked(req.TokenID)
+		}
+		return control.Reply{MCPRevoked: &control.MCPRevoked{TokenID: req.TokenID}}
 	}
 	return control.Refused(control.CodeBadRequest, fmt.Sprintf("unknown request %q", req.Op))
+}
+
+// mcpToken mints an MCP token: read scope unless write is asked for, and the
+// default lifetime unless another, or none, is.
+func (o *operator) mcpToken(req control.Request) control.Reply {
+	scope := store.MCPScope(req.Scope)
+	if scope == "" {
+		scope = store.ScopeRead
+	}
+	if !scope.Valid() {
+		return control.Refused(control.CodeBadRequest, fmt.Sprintf("-scope %q: a token's scope is read or write", req.Scope))
+	}
+	if req.Label == "" {
+		return control.Refused(control.CodeBadRequest,
+			"a token needs -label: it names the token in the list and is what its writes are recorded as")
+	}
+	if err := store.CheckName("token", req.Label, store.MaxMCPLabelLen); err != nil {
+		return control.Refused(control.CodeBadRequest, err.Error())
+	}
+	var expiresAt *int64
+	switch {
+	case req.Never:
+	case req.TTLMs < 0:
+		return control.Refused(control.CodeBadRequest, "a token cannot expire before it is issued")
+	default:
+		ttl := time.Duration(req.TTLMs) * time.Millisecond
+		if req.TTLMs == 0 {
+			ttl = server.DefaultMCPTokenTTL
+		}
+		at := o.srv.Now().Add(ttl).UnixMilli()
+		expiresAt = &at
+	}
+	tok, err := o.srv.OperatorMCPToken(o.vault, req.Label, scope, expiresAt)
+	switch {
+	case errors.Is(err, store.ErrBadEntry):
+		return control.Refused(control.CodeBadRequest, err.Error())
+	case err != nil:
+		return control.Refused(control.CodeInternal, err.Error())
+	}
+	row, err := json.Marshal(tok.MCPToken)
+	if err != nil {
+		return control.Refused(control.CodeInternal, err.Error())
+	}
+	return control.Reply{MCPToken: &control.MCPToken{Token: row, Secret: store.EncodeToken(tok.Token), Vault: o.vault}}
 }
 
 // invite mints one, and formats it for every address it can name, refusing

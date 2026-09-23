@@ -303,7 +303,7 @@ CREATE INDEX IF NOT EXISTS entry_chunks_by_name ON entry_chunks(vault_id, name);
 -- 112 ms against 5.6 ms with this, and the write it costs is 5 us against a
 -- chunk fsync of 7.8 ms.
 CREATE INDEX IF NOT EXISTS entries_by_prev ON entries(vault_id, prev_path, uid);
-` + liveSchema
+` + liveSchema + mcpTokensSchema
 
 // Store is the server's whole persistent state: entries in SQLite, bodies in a
 // chunk store.
@@ -368,6 +368,12 @@ type Store struct {
 	// from it stands in for any post-delete query failing, so a test can prove
 	// the delete rolls back rather than standing with the history already gone.
 	afterPurgeDelete func() error
+
+	// subs are the channels Subscribe handed out, nudged after every commit
+	// that appends entries; see Committed. Guarded by subMu, never by writeMu,
+	// so a subscriber can never hold up a commit.
+	subMu sync.Mutex
+	subs  map[chan struct{}]struct{}
 }
 
 // Open uses SyncFull. Use OpenWithSync only to trade durability for speed in a
@@ -744,6 +750,7 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
+		s.notifyCommitted()
 	}
 	return out, nil
 }
@@ -910,6 +917,7 @@ func (s *Store) appendEntry(vaultID string, e Entry, base *int64, prevBase int64
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	s.notifyCommitted()
 	return uid, nil
 }
 
