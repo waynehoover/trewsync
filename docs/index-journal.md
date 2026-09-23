@@ -43,9 +43,12 @@ Each newline-terminated record has this form:
 ```
 
 The CRC covers the JSON text. Deltas contain absolute values, not increments:
-`cursor`, changed entries in `set`, removed names in `del`, changed remote state
-in `remote`, removed remote names in `unremote`, and a complete `pending` list
-when needed. Replaying the same assignment does not apply a change twice.
+`cursor`, the store `epoch` that cursor belongs to when it changed, changed
+entries in `set`, removed names in `del`, changed remote state in `remote`,
+removed remote names in `unremote`, and a complete `pending` list when needed.
+Replaying the same assignment does not apply a change twice. An epoch is only
+ever replaced, never removed: an index that had one and has none is not a state
+the engine writes.
 
 The codec validates framing, checksum, JSON, and sequence continuity. A damaged
 record ends the usable prefix of the journal. The sequence ties records to the

@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -11,12 +10,16 @@ import (
 )
 
 // The invite lifetime is stated in several docs: the README quickstart, the
-// plugin guide, the server guide, the protocol doc and the protocol spec. Each is right for its reader, so they stay, but a
-// change to either constant used to mean five hand edits and no way to know
-// one was missed. Read the docs here instead, so a miss fails the build.
+// agent runbook, the headless client's README, the server, plugin and security
+// guides, the two command references, the protocol doc and the protocol spec.
+// Each is right for its reader, so they stay, but a change to either constant
+// used to mean ten hand edits and no way to know one was missed. Read the docs
+// here instead, so a miss fails the build.
 //
 // Deliberately a scan and not one parsed row: the risk is the sentence
-// nobody remembered, which only a sweep of every mention can catch.
+// nobody remembered, which only a sweep of every mention can catch. Four of
+// these docs still said ten minutes after the code said an hour, because this
+// list did not name them.
 
 var docDuration = regexp.MustCompile(`(?i)\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|thirty)[\s-]+(second|minute|hour|day)s?\b`)
 
@@ -88,18 +91,22 @@ func TestI23TheDocsStateTheInviteLifetimeTheCodeUses(t *testing.T) {
 		allowed[phrase] = true
 	}
 
-	// plan/protocol.md is the spec the constants come from. client/README.md
-	// is not read until the client is flipped (M2): it describes the client's
-	// own flags, which this branch may not touch, and still says ten minutes.
-	docs := []string{"../../README.md", "../../plan/protocol.md",
-		"../../docs/server.md", "../../docs/plugin.md", "../../docs/protocol.md"}
+	// plan/protocol.md is the spec the constants come from; every other entry
+	// is a doc a person or an agent reads the lifetime from.
+	docs := []string{"../../README.md", "../../llm.md", "../../client/README.md",
+		"../../plan/protocol.md", "../../docs/server.md", "../../docs/server-reference.md",
+		"../../docs/plugin.md", "../../docs/cli-reference.md", "../../docs/security.md",
+		"../../docs/protocol.md"}
 
-	mentions := 0
 	for _, path := range docs {
 		body, err := os.ReadFile(path)
 		if err != nil {
-			t.Skipf("%s not beside the source: %v", filepath.Base(path), err)
+			t.Skipf("%s not beside the source: %v", path, err)
 		}
+		// Named by its path from the repository root: two of these are
+		// README.md, and a failure has to say which.
+		name := strings.TrimPrefix(path, "../../")
+		mentions := 0
 		// Prose wraps, so a sentence is only whole at paragraph scale, but a
 		// table row must stay its own unit or the hello timeout two rows up
 		// reads as an invite lifetime.
@@ -113,14 +120,15 @@ func TestI23TheDocsStateTheInviteLifetimeTheCodeUses(t *testing.T) {
 				mentions++
 				if !allowed[said] {
 					t.Errorf("%s:%d says an invite lasts %q, but the code says %v by default and %v at most\n\t%s",
-						filepath.Base(path), unit.line, said, DefaultInviteTTL, MaxInviteTTL, strings.TrimSpace(unit.text))
+						name, unit.line, said, DefaultInviteTTL, MaxInviteTTL, strings.TrimSpace(unit.text))
 				}
 			}
 		}
-	}
-
-	// Without this the test passes for a doc set that stopped saying it.
-	if mentions < 5 {
-		t.Errorf("found the invite lifetime stated %d times, expected at least 5; if a doc dropped it, fix the count", mentions)
+		// Without this the test passes for a doc that stopped saying it, and
+		// a count over the whole set would let one doc's second mention
+		// cover for another's missing one.
+		if mentions == 0 {
+			t.Errorf("%s never states the invite lifetime; it is on this list because it should", name)
+		}
 	}
 }

@@ -3,8 +3,11 @@
 [Documentation](index.md) · [Maintenance](server-operations.md) · [Command reference](server-reference.md)
 
 Run one server for your personal vault, then connect your devices through the
-Obsidian plugin. The server stores encrypted notes and history; you provide
-storage, a secure connection, and backups.
+Obsidian plugin. The server stores your notes and their history, readable to
+anyone who can read its disk; you provide storage, a secure connection, and
+backups. Put the data directory on encrypted storage (LUKS, FileVault, ZFS
+native encryption) and see [Security and privacy](security.md) for what that
+does and does not cover.
 
 **Put Tailscale Serve or an HTTPS reverse proxy in front of Trew.** Your devices
 connect to the proxy; Trew's own port stays private. For a personal homelab,
@@ -80,8 +83,9 @@ provides the secure connection:
 
 **Your devices → Tailscale Serve or HTTPS proxy → Trew**
 
-Use the proxy's `wss://` address in the plugin. Keep the raw server port private;
-note encryption does not protect device credentials sent over plain `ws://`.
+Use the proxy's `wss://` address in the plugin. Keep the raw server port private:
+over plain `ws://`, your notes and device credentials cross the network
+readable to anyone on the path.
 
 ### Tailscale (recommended)
 
@@ -132,29 +136,47 @@ support WebSockets. If the proxy runs in Docker, connect it to Trew over a
 private Docker network; `127.0.0.1` inside the proxy container refers to that
 container, not the host.
 
-For a test entirely on one machine, `trew serve -localhost` provides a
-loopback `ws://` address. The first-device token is still required.
+For a test entirely on one machine, `trew serve -localhost` binds to loopback
+and puts a `ws://127.0.0.1` address in its invites. The first device still
+pairs from an invite.
 
 ## The first device
 
-The first startup log includes a setup string like `HOST:3003#TOKEN`.
-Replace the address before `#` with your secure endpoint, keeping the token:
+Every device joins with an invite, the first one included. An invite is a
+single-use `trew1i_` string that carries the server's address and the vault's
+name, so it has to name the address your devices use: the `wss://` address from
+[secure access](#secure-access), not the server's own port.
 
-```text
-wss://homelab.example.ts.net#TOKEN
+Once secure access works, make the first invite on the server, naming that
+address:
+
+```bash
+docker compose exec trew /trew invite -url wss://homelab.example.ts.net
 ```
 
-1. [Install the plugin](plugin.md#install) on your first device.
-2. Open Trew, paste the setup string into **Invite or setup line**, and press
-   **Start a new vault**.
-3. Save the recovery key somewhere safe and separate, then press
-   **I have written it down**.
-4. Wait for sync to finish.
-5. Use **Add another device → Create invite** for each additional device.
-   An invite works once and expires after one hour.
+For a binary installation, run
+`trew invite -data /var/lib/trew -url wss://homelab.example.ts.net` as the
+account that runs the server. It prints the invite; `-out FILE` writes it to a
+file, mode 0600, instead. The command goes through the running server.
 
-The setup token claims the server once. It is not your recovery key. Once the
-vault is claimed, new devices join through invites or the recovery key.
+When the vault has no devices yet, `trew serve` also writes an invite for the
+first one to `first-invite` in its data directory, mode 0600, and logs that
+path and when it expires, never the invite itself. It names the right address
+only when `serve` was started with `-url wss://homelab.example.ts.net`;
+otherwise it names this machine's own addresses, one per line, at the server's
+own port, which no device can use while the proxy in front terminates TLS.
+
+1. [Install the plugin](plugin.md#install) on your first device.
+2. Open Trew, paste the invite into **Invite**, check the server it names, and
+   press **Pair**.
+3. Wait for sync to finish.
+4. Use **Add another device → Create invite** for each additional device.
+
+An invite works once and expires after one hour, so make it when you are ready
+to pair; `trew invite -ttl 0` makes one that never expires, for when you mean
+it. There is no recovery key: the notes and their history are on the server,
+and `trew invite` there pairs a new device whenever you need one, even when no
+device is left.
 
 Find the startup log with `docker compose logs trew`, `docker logs trew`,
 or `journalctl -u trew`, depending on how you installed it.
@@ -186,10 +208,10 @@ Server, plugin, and CLI release numbers are separate; protocol compatibility
 determines whether they can connect. An incompatible client stops with a
 protocol error instead of syncing partially.
 
-Plugin, CLI, and server **0.8.0** use protocol 7. Upgrade the server first,
-then every client. Version 0.7.x uses protocol 6 and cannot connect to the
-upgraded server. Existing pairings, credentials, and vault history stay in place.
-For source builds, use the same revision for the server and clients.
+This source tree speaks protocol 1, Trew's own. Basalt Sync's releases speak
+protocol 7, and a Basalt client and a Trew server refuse each other at the
+handshake, naming both numbers; moving from Basalt is a fresh pairing, not an
+upgrade. For source builds, use the same revision for the server and clients.
 
 For Compose, update both the image tag and digest from the chosen server
 release, then run `docker compose pull` and `docker compose up -d`. Preserve
@@ -203,20 +225,9 @@ the version used by this source tree.
 ## A vault that is not called `default`
 
 A server serves one vault, named by `-vault` (default `default`). Run it with
-`-vault work` and its setup line carries the name:
-
-```text
-wss://homelab.example.ts.net#TOKEN#work
-```
-
-Paste that whole line into the plugin under **Start a new vault**, or give it to
-`trew init`. The panel shows which vault and which server the line claims
-before you press the button. Other devices learn the name from the invite, so
-they need nothing extra.
-
-A line with no second `#` claims `default`, which is what every line printed by
-an older server does. A named line needs a plugin or CLI from 0.8.4 or newer:
-older ones read everything after the last `#` as the token and will reject it.
+`-vault work` and every invite it makes carries the name, the first one
+included. A device joins whichever vault its invite names, with nothing extra
+to type; the plugin shows the name before you press **Pair**.
 
 ## Connection troubleshooting
 
@@ -224,11 +235,12 @@ older ones read everything after the last `#` as the token and will reject it.
 |---|---|
 | Cannot reach the server | Server process, proxy, and the proxy's hostname and port. With Tailscale, check it is connected on both server and device. |
 | Works on the server but not the phone | Use the proxy's `wss://` hostname and HTTPS port. `localhost` on the phone is the phone itself. |
-| Setup token rejected | Copy it from this server's log. If already claimed, use an invite. |
+| Invite refused | An invite works once and expires; make a new one with `trew invite` on the server or **Create invite** on a paired device. |
+| Invite names an address the device cannot reach | Make one that names the proxy's address: `trew invite -url wss://your-host`. |
 | Protocol mismatch | Update the server and clients to compatible releases. |
 | Device limit reached | Update the server. Older releases capped the number of devices. |
 | Browser origin rejected | Check the exact origin in the server log and the plugin's hint. Add only that required origin with `-allow-origin`. |
-| Stopped after restoring a backup | Follow [server restoration](server-operations.md#restore), then use **Rejoin this server**. |
+| Stopped after the data directory was copied back | Follow [server restoration](server-operations.md#restore), then use **Rejoin this server**. A restore from a `trew backup` snapshot needs nothing from the devices. |
 | File too large | Check the default 64 MiB limit and [how to change it](server-reference.md#serve). |
 
 Android needs Obsidian in the foreground. For note recovery and device-specific

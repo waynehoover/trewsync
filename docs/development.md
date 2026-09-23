@@ -11,7 +11,7 @@ use, start with the [server](server.md), [plugin](plugin.md), or
 | Document | Purpose |
 |---|---|
 | [Design](design.md) | Durability rules, supported environment, and threat model. |
-| [Protocol](protocol.md) | Requests, replies, authentication, limits, and cryptography. |
+| [Protocol](protocol.md) | Requests, replies, pairing, paths, chunk framing, and errors. |
 | [Index journal](index-journal.md) | Client state format and recovery behavior. |
 | [Engineering notes](research.md) | Historical measurements, design evaluations, and credits. |
 | [Threat model](threat-model.md) | Requirements for the plaintext server and agent endpoint, each with where it is enforced and its status. |
@@ -24,7 +24,7 @@ use, start with the [server](server.md), [plugin](plugin.md), or
 
 ```text
 go.mod, cmd/, internal/  trew: server, store, backup, verification, purge
-client/src/core/         shared sync engine, crypto, chunking, merging, transport
+client/src/core/         shared sync engine, chunking, merging, transport
 client/src/plugin/       Obsidian plugin and Vault adapter
 client/src/cli/          trew CLI and filesystem adapter
 client/src/stress/       fault, crash, collision, and scale coverage
@@ -349,10 +349,11 @@ gh attestation verify main.js --repo waynehoover/trew
 An attestation identifies the build source. It is not a security audit or proof
 that the application is defect-free.
 
-The current source uses protocol 7. Build the server and clients together for
-local testing; release 0.8.0 uses protocol 7 and 0.7.x uses protocol 6. No compatibility
-fallback is provided. Tests exercise preserved bytes across concurrent writers,
-not just final agreement.
+The current source speaks protocol 1, Trew's own; Basalt's releases speak
+protocol 7, and the two refuse each other at hello, naming both numbers. Build
+the server and clients together for local testing. No compatibility fallback is
+provided. Tests exercise preserved bytes across concurrent writers, not just
+final agreement.
 
 The screenshot script includes activity, conflict comparison, first-sync
 preview, and attachment history scenes. Use a disposable Obsidian vault and
@@ -379,12 +380,15 @@ removed. The steps, each gated by a full `scripts/check.sh` run:
    binary. Release tags stay `server/vX.Y.Z` until M9 decides the release
    scheme; they are release triggers, not Go module versions.
 
-Deliberately not renamed, because they die with the crypto in M1 and M2 and
-renaming them now would change derived bytes or golden vectors: the
-`basalt3i_` invite and `basalt3_` credential prefixes, and the
+Deliberately not renamed at M0, because they were to die with the crypto in
+M1 and M2 and renaming them would have changed derived bytes or golden vectors:
+the `basalt3i_` invite and `basalt3_` credential prefixes, and the
 `basalt/<purpose>/1` key-derivation labels including the crypto suite id.
-Three tests had matched a recovery key with a loose `/^basalt/` pattern; they
-now match the kept `basalt3_` prefix.
+Three tests had matched a recovery key with a loose `/^basalt/` pattern and
+were changed to match the kept `basalt3_` prefix. The key schedule and the
+recovery key have since gone. The two prefixes survive in `parseInvite`
+(`client/src/core/pairing.ts`), which recognises a pasted Basalt string so it
+can say that it is Basalt's, and in the fixtures' refused invite vectors.
 
 `docs/findings.md`, `docs/documentation-review.md` and `docs/reviews/` are
 Basalt's history, copied verbatim with a provenance note, because the review
@@ -416,8 +420,10 @@ can build on FTS5 without a second dependency.
 
 On 2026-09-22, against Obsidian 1.13.7 on macOS: the built plugin was
 installed in a brand-new vault, loaded unpaired with no captured errors, and
-claimed a fresh `trew serve -localhost` through its first-device flow
-(`pairFirst`, with the recovery key handed over before the claim). A note
+claimed a fresh `trew serve -localhost` through its first-device flow, still
+Basalt's at M0 (`pairFirst`, with the recovery key handed over before the
+claim; both are gone since M2, and the first device now pairs from an invite).
+A note
 written through the `obsidian` CLI reached the server; a headless client
 paired from an invite the plugin created and downloaded it byte-identical; a
 note created on the headless client arrived in the vault over the live
@@ -451,30 +457,45 @@ streamable transport. Test-only imports are not linked into `trew`.
 
 Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,
 2026-09-22). None is reachable through `sizesFor` with today's tables, so both
-ports keep the behaviour, but each is a trap for whoever changes the sizes:
+ports keep the behaviour, but each is a trap for whoever changes the sizes.
+Line numbers are those of the M2 core:
 
 - `chunkStream` and `chunkBytes` disagree for minimums of 1 or 2: after a UTF-8
   trim the streaming splitter re-hashes the carried bytes without testing them
-  for a boundary (`chunk.ts:436-451`) while the in-memory one re-tests them
-  (`:341`). The engine uses both on the same files, so a table with a tiny
+  for a boundary (`chunk.ts:450-465`) while the in-memory one re-tests them
+  (`:355`). The engine uses both on the same files, so a table with a tiny
   minimum would rename chunks.
-- The 192-byte floor (`WINDOW * 4`, `chunk.ts:219`) can exceed a server's
-  advertised `chunkMax`, producing chunks that server refuses for ever, against
-  the promise at `:193-196`. This server advertises a fixed 1 MiB. The client
-  should refuse a `chunkMax` below the floor at the handshake rather than
-  strand every file (an M2 item).
 - With a minimum under 4, a chunk of valid UTF-8 can be invalid on its own
-  (`:256`), and chunks other than the last can come out up to 3 bytes below
+  (`:270`), and chunks other than the last can come out up to 3 bytes below
   the minimum.
-- `EngineOptions.mergeable` also decides chunking (`engine.ts:437`, `:2332`):
+- `EngineOptions.mergeable` also decides chunking (`engine.ts:354`, `:2217`):
   it picks the size table and the UTF-8 flag, so a custom merge predicate
   would silently change chunk names. Nothing in production sets it.
 - Dead code: `TEXT_AVG_MAX` (`:132`) cannot apply through `sizesFor`, and
-  `if (lead < start)` (`:250`) is never true.
+  `if (lead < start)` (`:264`) is never true.
+
+Settled in M2:
+
+- **Done.** The 192-byte floor (`CHUNK_FLOOR`, `WINDOW * 4`, `chunk.ts:199`)
+  can exceed a server's advertised `chunkMax`, which would produce chunks that
+  server refuses for ever, against the promise at `:204-207`. The engine's
+  `start()` now refuses a `chunkMax` below the floor at the handshake, with a
+  non-retryable `protostate` naming both numbers, and closes the connection
+  rather than strand every file. This server advertises a fixed 1 MiB.
+- **Done.** The chunking text-extension list existed twice in TypeScript.
+  `looksLikeText` in `chunk.ts` now delegates to `chunkingText` in
+  `path-policy.ts`, and `TEXT_EXTENSIONS` is a view of
+  `CHUNKING_TEXT_EXTENSIONS`, so the list `protocol-fixtures.json` pins is the
+  one the chunker uses.
 
 ### The strip ledger
 
 Before M1 or M2 deletes a test file, each of its assertions is classified as
 obsolete with the crypto or still a guarantee (PLAN §2.1). The ledger is
-[plan/strip-ledger.md](../plan/strip-ledger.md).
+[plan/strip-ledger.md](../plan/strip-ledger.md): its per-test tables hold the
+classification, its
+[unique guarantees](../plan/strip-ledger.md#guarantees-with-no-equivalent-elsewhere)
+are the ones no other test would catch, and its
+[M1 outcome](../plan/strip-ledger.md#m1-outcome-the-go-side) records where each
+Go test went.
 

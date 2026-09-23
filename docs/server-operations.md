@@ -16,10 +16,14 @@ trew backup -data /var/lib/trew -to /srv/trew-backup
 trew verify -deep -data /srv/trew-backup
 ```
 
-`backup` copies the database and required encrypted content, including history,
-and verifies the result. Reusing a destination copies content incrementally and
-replaces its database snapshot only after a successful copy. If copying fails,
-the previous completed snapshot stays in place.
+`backup` copies the database and the stored content it refers to, including
+history, and verifies the result. Reusing a destination copies content
+incrementally and replaces its database snapshot only after a successful copy.
+If copying fails, the previous completed snapshot stays in place.
+
+A backup carries the devices and no outstanding invite: restoring an old copy
+must not bring back an invite that has since been used or cancelled, so
+`backup` says how many it left out.
 
 If a destination has unfinished SQLite recovery from an earlier server run,
 backup refuses to replace it. Keep that directory intact and choose a fresh
@@ -40,9 +44,12 @@ backups. These commands use the image's default user, 65532. Adjust ownership
 if your deployment uses another account. Copy the verified snapshot to another
 disk or backup host as well.
 
-**Keep the recovery key separately.** The server backup is encrypted. You need
-a paired device or the recovery key to read it. Also back up the ordinary
-Markdown files on a device for a readable copy independent of Trew.
+**A backup is a readable copy of every note.** The server holds notes and
+their history in plaintext, and so does every backup of it: anyone who can read
+the backup directory can read the vault. Keep backups on encrypted storage,
+including backups that stay on the same machine, and treat the backup host
+like the server. Also back up the ordinary Markdown files on a device for a
+copy independent of Trew.
 
 ### Schedule backups
 
@@ -97,8 +104,11 @@ stop the test server. Retain the backup; remove only the temporary rehearsal
 copy when finished.
 
 These checks cover storage and startup. A full recovery check also pairs a
-throwaway client against a controlled test server and reads restored notes;
-do not repoint a production device casually to a rehearsal copy. The project's
+throwaway client against the rehearsal server and reads restored notes: while
+it runs, `trew invite -data /tmp/trew-restore-test -url ws://127.0.0.1:3004`
+prints an invite for it. Do not repoint a production device casually to a
+rehearsal copy. You can also read one note without any client:
+`trew cat -data /tmp/trew-restore-test -path "Notes/Meeting.md"`. The project's
 CI runs an automated restore-and-readback test, but cannot validate your disk or
 offsite backup.
 
@@ -128,17 +138,28 @@ verified backup into its data volume. Restore ownership to `65532:65532` and
 verify it with the same server image before starting. Do not restore over a
 running server or delete its volume as part of the procedure.
 
-A device that has seen newer versions than the backup may stop with a `cursor`
-error. Preserve its local notes and take a backup of the restored server, then:
+A snapshot made by `trew backup` has a store epoch of its own, so restoring
+one starts a new history as far as the devices are concerned. Each device
+notices at its next connection and, with nothing asked of anybody, reads the
+restored history as a fresh listing: files that match agree, files that differ
+are kept both ways as a conflict copy, files only that device holds are sent
+back, and nothing is deleted because the restored history lacks it. Two
+consequences to expect: a note deleted after the backup was taken can come
+back, and a device revoked after it was taken is back in the device list.
+Check `trew devices` after a restore and revoke that device again. A read-only
+mirror does not upload its local changes.
+
+A data directory copied back some other way, such as a filesystem snapshot or
+a copy of the live directory, keeps its old epoch with an older history. A
+device that has seen newer versions then stops with a `cursor` error. Preserve
+its local notes and take a backup of the server, then:
 
 - In Obsidian, use **Rejoin this server** and confirm the positions shown.
-- In the CLI, inspect with `trew rebase`, then run
-  `trew rebase --backup-taken`.
+- In the CLI, run `trew unlink`, then pair again with a new invite.
 
 Repeat for each affected device. Writable clients send locally held versions
-back to the server and preserve disagreements as separate copies. Prefer this
-to unlinking and pairing again. A read-only mirror does not upload its local
-changes.
+back to the server and preserve disagreements as separate copies. Prefer
+restoring from `trew backup` snapshots, which need neither step.
 
 ## Repair missing content
 
@@ -228,13 +249,18 @@ using the reclaim estimates; a partial scan cannot give a reliable total.
 server. [Health responses and flags](server-reference.md#health) are listed
 in the reference.
 
-## Rotating the vault secret
+## Devices and invites from the server
 
-If the recovery key was exposed, replace it in the plugin or with
-`trew rotate --key-file /private/path/recovery.txt`. Save the new key and
-review the device list afterwards.
+The server host can do everything a device's panel can, which is also the way
+back in when no device is left:
 
-Rotation keeps history and existing devices, while invalidating the old recovery
-key and outstanding invites. It does not replace the data-encryption key or
-remove a device. See [Security and privacy](security.md) for what revocation
-and rotation can and cannot protect.
+```bash
+trew devices -data /var/lib/trew
+trew revoke -data /var/lib/trew DEVICE_ID
+trew uninvite -data /var/lib/trew INVITE_ID
+trew invite -data /var/lib/trew -url wss://homelab.example.ts.net
+```
+
+While the server runs these go through it, so a revoke stops that device at
+once. Revoking also cancels the invites that device created. It cannot erase
+what the device already holds; see [Security and privacy](security.md).

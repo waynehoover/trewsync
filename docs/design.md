@@ -103,8 +103,8 @@ retains an existing UTF-8 BOM at the start. Before changing an
 existing note it creates an independent visible before-image, reads and compares
 its bytes, and flushes it. Failure stops before touching the original. Backups
 remain ordinary synced files, immutable through MCP. Creation and restore publish
-only to absent destinations; restore requires an authenticated version belonging
-to the requested path and an explicit different destination.
+only to absent destinations; restore requires a version the server's history
+lists for the requested path and an explicit different destination.
 
 Tag and namespace tools first return a bounded preview. Applying requires every
 affected base and exact source edit as input; recomputing a different plan refuses
@@ -128,25 +128,29 @@ notes has access to their plaintext.
 
 A multi-vault endpoint exposes only its explicit, non-overlapping root set.
 Every call selects a vault when more than one is configured. Session closures
-keep clients, keys, bases, queues and history separate. All root locks remain
+keep clients, credentials, bases, queues and history separate. All root locks remain
 held until every session drains. The HTTP credential belongs to the first
 configured directory and authorizes the whole configured endpoint, not a
 per-vault subset. Separate access scopes require separate endpoints.
 
-Version comparisons authenticate both historical selections through the chosen
-vault and path. Local comparison pagination pins full content bases. Device
+Version comparisons check both historical selections against the chosen
+vault and path's history. Local comparison pagination pins full content bases. Device
 receipt reports require settled local state before and after reading server
 checkpoints; they cannot establish delivery of a particular tool call.
 
 ## Fast, because it sends less
 
-Files are divided into content-defined chunks, compressed, then encrypted.
-Unchanged chunks are reused across versions. Compressing before chunking would
-move boundaries after edits; compressing ciphertext would not save space.
+Files are divided into content-defined chunks, each named by the SHA-256 of
+its raw bytes. Unchanged chunks are reused across versions, and the server can
+recompute every name from the bytes it holds. Compression happens on the wire,
+one chunk at a time: a body frame is marked raw or deflated, and the receiver
+inflates it before checking the name. Compressing before chunking would move
+boundaries after edits.
 
-The compression implementation and chunking parameters affect content names.
-Changing them can trigger re-upload or require a migration. See
-[historical measurements and evaluations](research.md) before changing them.
+The chunking parameters affect content names; changing them re-uploads existing
+content. The compression implementation does not, because names are over raw
+bytes. See [historical measurements and evaluations](research.md) before
+changing the chunker.
 
 ## Sync scheduling
 
@@ -223,7 +227,7 @@ icons retain their elements during progress updates, and history pagination
 preserves keyboard focus. Preview opens with a loading state while its scan runs.
 
 During sync transfers, the panel reports upload or download activity, the file
-or batch count, and encrypted body bytes sent or received. Reused chunks are
+or batch count, and body bytes sent or received, as framed on the wire. Reused chunks are
 excluded. Upload counts subtract the socket buffer when the adapter exposes it;
 otherwise they measure handoff to the socket. There is no percentage or ETA:
 compression and deduplication change the wire size, and downloads do not know
@@ -242,8 +246,8 @@ CLI options still form a configuration surface and need explicit documentation
 and combination testing. Avoid adding a second implementation where the same
 behavior can be shared.
 
-Joining an existing vault checks the filesystem before registration or invite
-redemption; unreadable folders refuse pairing. Empty vaults proceed directly.
+Joining an existing vault checks the filesystem before invite redemption;
+unreadable folders refuse pairing. Empty vaults proceed directly.
 Populated vaults require confirmation before their files are combined with the
 synced vault. Cancelling does not consume the invite. This is a setup step, not
 a lasting merge preference: paired devices use normal two-way sync.
@@ -282,28 +286,33 @@ support depends on the concrete mount and adapter, not just an OS label.
 
 ## What the server can and cannot do
 
-The server stores encrypted content and paths. It does not hold the plaintext
-data key, but does hold wrapped keys, credential hashes, and readable metadata.
-It sees sizes, timestamps, device labels, update activity, and repeated chunks.
-It also sees the byte length of every filename, and which filenames are the same
-length as each other: `sealPath` is AES-GCM over the UTF-8 path with a fixed
-28-byte overhead, so a sealed name is exactly 28 bytes longer than the name
-(R083-25). Padding names to a bucket would hide it, and would change every
-sealed path in every vault, so it is a migration rather than a fix and is
-recorded here instead.
+**The server is trusted with everything.** It stores every note, every earlier
+version, every filename and every chunk in plaintext, with the device and
+invite credential hashes and all the readable metadata: sizes, timestamps,
+device labels and update activity. That is the decision the product rests on
+(PLAN.md section 3.6), and the [threat model](threat-model.md) lists what it
+costs and what each requirement is enforced by.
 
-The entry authenticator covers the sealed path, size, timestamps, folder and
-deleted flags, previous path, ordered chunk list, and parent. Clients verify it
-before applying or restoring content and check assembly sizes and ancestors.
-A server without the data key cannot forge arbitrary authenticated content.
+What plaintext buys: the server checks every chunk against its name and every
+entry's declared size against its chunks, can rebuild derived views from its
+own history, and can serve history without a paired device. What it costs,
+beyond the notes themselves:
 
-**Ordering and completeness remain trusted.** The server assigns UIDs, which
-are not authenticated. It can replay an older valid version under a newer UID,
-causing an unchanged local note to revert, or withhold entries. The signed
-`parent` is not currently checked as an ancestry chain. A newly paired device
-has no retained checkpoint to challenge an old but valid history.
+- **Writer authenticity is gone.** Basalt's entry authenticator, a MAC under a
+  key the server never had, let a device refuse content the server made up.
+  Trew has none. SHA-256 chunk names give consistency, not authorship: devices
+  trust the server's word about what a note says and which device wrote it.
+- **Chunk names are a presence oracle.** A name is the SHA-256 of plaintext, so
+  anyone holding a chunk inventory can confirm guessed content. Names therefore
+  stay out of logs, metrics and unauthenticated endpoints, and deduplication is
+  scoped to the vault.
 
-Do not describe this as protection from every malicious-server action. Server
+**Ordering and completeness remain trusted**, as they were in Basalt. The
+server assigns UIDs. It can replay an older version under a newer UID, causing
+an unchanged local note to revert, or withhold entries. A newly paired device
+has no retained checkpoint to challenge an old history.
+
+Do not describe this as protection from any malicious-server action. Server
 availability and honest ordering are part of the deployment assumptions. A
 backup protects against some operational failures; it does not prove freshness.
 
@@ -318,46 +327,34 @@ Authentication failures avoid distinguishing unknown vaults, device rows, or
 invites. Format errors remain distinct because they describe the request;
 capacity details requiring vault state are checked after authorization.
 
-### Why a loopback bind is not the token
+### Why a loopback bind is not a credential
 
 A reverse proxy forwards remote traffic to loopback. A local bind therefore
-cannot authorize the first claim. The bootstrap token is required on every bind,
-including `-localhost`; a successful claim binds the vault once and subsequent
-claims cannot replace it.
+cannot authorize the first device. Every device, the first included, pairs by
+redeeming an invite, on every bind including `-localhost`; the first one is
+written to a private file in the data directory, never to the log.
 
-## The keys
+## Credentials, and who holds which
 
-A vault begins with a random 256-bit root secret and a random 256-bit data key.
-The root derives an authentication key for registrar operations and a wrapping
-key for the data key. The data key derives separate path, content, nonce, and
-metadata-authentication keys through HKDF-SHA256.
+Every credential is random, and the server stores only its SHA-256. These are
+random keys, not user-chosen passwords.
 
-Each device has its own random secret for connection authentication. The server
-stores credential hashes. These are random keys, not user-chosen passwords.
-See the [protocol's crypto section](protocol.md#crypto) for the construction.
-
-Sealing uses AES-GCM with an HMAC-derived 96-bit nonce. Equal plaintext under a
-key produces equal ciphertext, enabling deduplication. This is not AES-GCM-SIV;
-a collision between distinct plaintexts would reuse a GCM nonce. The birthday
-scale is about 2^48 distinct inputs, a probabilistic bound rather than an
-impossibility. Do not present deterministic sealing as revealing no information.
-
-## Four credentials, and who holds which
-
-| Credential/key | Held by | Purpose |
+| Credential | Held by | Purpose |
 |---|---|---|
-| Recovery key/root secret | Owner's separate recovery copy; transiently during setup/rotation | Register devices, rotate the root, administer device access. |
-| Device secret | That device | Connect, sync, list/revoke devices, issue/cancel invites. |
-| Data key | Every paired device | Encrypt, decrypt, and authenticate vault content. |
+| Device token, 32 bytes | That device, which made it when it redeemed its invite | Connect and sync; list, rename and revoke devices; issue and cancel invites. |
+| Invite token, 16 bytes | Whoever was handed the `trew1i_` string, until it is used or expires | Redeem once, adding one device. |
 | MCP bearer token | Owner and configured MCP client; serving device stores only its hash | Authenticate to one device's HTTP MCP endpoint in its launch mode. |
 
-A paired device does not normally retain the root. An incomplete initialization
-can retain it until device registration finishes, so an error must preserve and
-explain that recovery state.
+There is no vault key, root secret or recovery key. Administration beyond what
+a device can do is shell access to the server's data directory: `trew invite`,
+`trew devices`, `trew revoke` and `trew uninvite` there go through the running
+server's private control socket, so a revoke from the host takes effect in the
+server at once. Losing every device loses no synced note, because the notes and
+their history are on the server; `trew invite` pairs a new device.
 
-The MCP token is independently random, not derived from another vault key.
+The MCP token is independently random, not derived from the device's token.
 Its hash lives in unsynced `.trew` state. Rotating or revoking it does not
-change device registration, recovery access or encryption keys.
+change the device's pairing.
 
 ## What a device can do to another device
 
@@ -365,11 +362,11 @@ Paired devices are trusted with all vault content. Clients still reject paths
 outside the vault, traversal, unsafe symlink destinations, and excluded paths
 such as the Obsidian configuration folder.
 
-A device cannot directly register with the root or rotate it, but **can issue
-an invite and thereby add another device**. Device and invite listings make
-that authority visible; they do not prevent a compromised authorized device
-from using it. Any device can revoke another except the final device, whose
-revocation requires the recovery key.
+A device **can issue an invite and thereby add another device**. Device and
+invite listings make that authority visible; they do not prevent a compromised
+authorized device from using it. Any device can revoke any device, itself and
+the last one included; the way back into a vault with no devices is
+`trew invite` on the server.
 
 CLI read-only mode restricts ordinary sync behavior. It does not change the
 server credential or prevent explicit repair and administration requests.
@@ -377,29 +374,17 @@ server credential or prevent explicit repair and administration requests.
 ## A lost or stolen device
 
 Revoke its device ID to remove access through the server and close its live
-connections. Review other devices and outstanding invites. If the root may be
-exposed, rotate it and save the new recovery key.
-
-Rotation changes the root and the wrapping of the **same data key**, cancels
-invites, and leaves existing devices and history intact. It does not remove
-access granted to other already-registered devices; inspect and revoke those
-separately. Operator steps are in [Security and privacy](security.md).
+connections. Revoking also cancels, in the same transaction, the invites that
+device issued, so an invite minted on a stolen laptop cannot add another device
+afterwards. Review the other devices and outstanding invites. Operator steps
+are in [Security and privacy](security.md).
 
 ### What a revoked device can still do
 
-Revocation does not erase local notes or the data key. It also does not prevent
-decryption of future ciphertext obtained from another device, backup, or other
-source. Rotation does not change that. Trew does not provide forward secrecy
-through device revocation.
-
-### What the authenticator proves, and what it does not
-
-| Property | Current guarantee |
-|---|---|
-| Content authenticity | A holder of the shared data key authenticated the protected fields. |
-| Device attribution | Not provided. The free-text device label is not covered by `macEntry`, and there are no per-device content signatures. |
-| Freshness | Not provided by the MAC; the server-assigned UID is not covered. |
-| Completeness | Withholding is not fully detected. |
+Read everything it already synced. Revocation stops a device receiving and
+writing at once; it does not erase local notes, which are ordinary readable
+files, and nothing in Trew can. A restore from a backup taken before the
+revocation brings the device's row back, so revoke it again after restoring.
 
 ## Provenance
 
@@ -410,9 +395,12 @@ Provenance identifies a build; it does not establish that the code is secure.
 
 ## What is not claimed
 
-- Full detection of replay, withheld history, or a server refusing service.
+- Confidentiality from the server, its host, or anyone holding its data
+  directory or a backup of it.
+- Detection of content the server altered or made up, of replay, of withheld
+  history, or of a server refusing service.
 - Cryptographic attribution of a version to a particular device.
-- Erasing keys from a revoked device or forward secrecy after revocation.
+- Erasing notes from a revoked device.
 - Mobile persistence guarantees equivalent to desktop flushing.
 - Safe coexistence with another sync engine or arbitrary network filesystems.
 - Complete semantic validation of every merged format. For example, valid
@@ -427,8 +415,8 @@ For honest devices, every independent edit must remain in a current note or an
 accessible preserved copy after reconciliation, including when an author goes
 offline after its first accepted write. Agreement among clients is insufficient.
 
-Protocol 7 appends only when the writer's target UID and, for a rename, source
-UID still match. A refused writer reads intervening metadata and reconciles
+Protocol 1, like Basalt's protocol 7 before it, appends only when the writer's
+target UID and, for a rename, source UID still match. A refused writer reads intervening metadata and reconciles
 before retrying. Merged local text retains the remote ancestor it incorporated,
 even if publishing that merge is refused. Renames retire their source at the
 same UID; a concurrent source edit prevents that retirement and is preserved.
