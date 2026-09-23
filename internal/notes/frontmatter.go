@@ -102,14 +102,22 @@ func prepareYAML(text string) (*yamlText, bool) {
 		}
 		b.WriteRune(p)
 	}
-	// A line of nothing but spaces and tabs is blank to npm yaml; libyaml
-	// refuses one that starts with a tab. Spaces instead of those tabs keep
-	// every offset.
+	// A line of nothing but spaces and tabs is usually blank to npm yaml,
+	// and libyaml refuses one that starts with a tab. Spaces instead of those
+	// tabs keep every offset; yamlRefused catches the places npm yaml does
+	// not see a blank line.
+	// libyaml also refuses a tab in the space after a "-", "?" or ":"
+	// indicator that starts a line, which npm yaml takes as separation.
 	lines := strings.SplitAfter(b.String(), "\n")
 	for i, l := range lines {
-		if strings.Contains(l, "\t") && strings.TrimLeft(l, " \t\r\n") == "" {
-			lines[i] = strings.ReplaceAll(l, "\t", " ")
+		if !strings.Contains(l, "\t") {
+			continue
 		}
+		if strings.TrimLeft(l, " \t\r\n") == "" {
+			lines[i] = strings.ReplaceAll(l, "\t", " ")
+			continue
+		}
+		lines[i] = untabIndicators(l)
 	}
 	y.parsed = strings.Join(lines, "")
 	y.lines = []int{0}
@@ -118,82 +126,26 @@ func prepareYAML(text string) (*yamlText, bool) {
 			y.lines = append(y.lines, i+1)
 		}
 	}
-	// libyaml reads anchor and alias names as letters, digits, "_" and "-"
-	// only; npm yaml, as YAML allows, reads any characters up to a space or
-	// a flow indicator, so "*k:" is an alias named "k:" to one and an alias
-	// then a colon to the other. Where the two would read a name
-	// differently the frontmatter is refused rather than read wrongly.
-	if yamlUnusualProperty(text) {
+	if yamlRefused(text) {
 		return nil, false
 	}
 	return y, true
 }
 
-// yamlUnusualProperty reports whether an anchor or alias that begins a node
-// has a name libyaml would read differently from npm yaml. Quoted scalars,
-// comments and block scalars are skipped, so text inside them is not taken
-// for a property.
-func yamlUnusualProperty(s string) bool {
-	blockIndent := -1 // the indentation of a block scalar's header line
-	for i := 0; i < len(s); i++ {
-		if i == 0 || s[i-1] == '\n' {
-			end := strings.IndexByte(s[i:], '\n')
-			if end < 0 {
-				end = len(s) - i
-			}
-			line := s[i : i+end]
-			indent := len(line) - len(strings.TrimLeft(line, " "))
-			if blockIndent >= 0 && (strings.TrimSpace(line) == "" || indent > blockIndent) {
-				i += end
-				continue
-			}
-			blockIndent = -1
-		}
-		c := s[i]
-		if !yamlNodeStart(s, i) {
-			if c == '#' && i > 0 && (s[i-1] == ' ' || s[i-1] == '\t') {
-				i = skipToLineEnd(s, i)
-			}
-			continue
-		}
-		switch c {
-		case '#':
-			i = skipToLineEnd(s, i)
-		case '"', '\'':
-			for i++; i < len(s); i++ {
-				if c == '"' && s[i] == '\\' {
-					i++
-				} else if s[i] == c {
-					if c == '\'' && i+1 < len(s) && s[i+1] == '\'' {
-						i++
-						continue
-					}
-					break
-				}
-			}
-		case '|', '>':
-			line := s[strings.LastIndexByte(s[:i], '\n')+1:]
-			blockIndent = len(line) - len(strings.TrimLeft(line, " "))
-			i = skipToLineEnd(s, i)
-		case '&', '*':
-			for i++; i < len(s) && !isYAMLSpace(s[i]) && strings.IndexByte(",[]{}", s[i]) < 0; i++ {
-				if !asciiAlnum(s[i]) && s[i] != '_' && s[i] != '-' {
-					return true
-				}
-			}
-			i--
+// untabIndicators replaces with spaces the tabs in the whitespace after the
+// block indicators ("-", "?" or ":") a line starts with, one for one.
+func untabIndicators(line string) string {
+	b := []byte(line)
+	i := 0
+	for i < len(b) && b[i] == ' ' {
+		i++
+	}
+	for i < len(b) && (b[i] == '-' || b[i] == '?' || b[i] == ':') && i+1 < len(b) && (b[i+1] == ' ' || b[i+1] == '\t') {
+		for i++; i < len(b) && (b[i] == ' ' || b[i] == '\t'); i++ {
+			b[i] = ' '
 		}
 	}
-	return false
-}
-
-// skipToLineEnd is the offset of the last character before the line ending
-// of the line s[i] is on, so that a loop's increment lands on the ending.
-func skipToLineEnd(s string, i int) int {
-	if nl := strings.IndexByte(s[i:], '\n'); nl >= 0 {
-		return i + nl - 1
-	}
-	return len(s) - 1
+	return string(b)
 }
 
 // dropAlias replaces every alias to name that starts a node with "~" and
