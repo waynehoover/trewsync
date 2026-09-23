@@ -319,6 +319,13 @@ against the assembled bytes before applying content.
 A deletion is an entry with `deleted: true`, not an absent path. Its record
 remains available to catch-up and recovery even if older content is later purged.
 
+A deletion can name a folder; it has the same shape as a file's. The server
+refuses it with `stale` while any live path lies beneath it, so a client
+deletes a folder's contents first, in earlier entries of the same batch or in
+earlier batches, and the folder last. A rename's retirement of its source is
+not a deletion and is not refused. See the design notes on
+[folders](design.md#folders) for what a receiving device does with one.
+
 ## Repairing a body the server has lost
 
 `resend` repairs missing stored content without creating a note version:
@@ -349,6 +356,7 @@ backward. An empty history does not distinguish an unknown path from purged
 history.
 
 Deleted lists the latest deletion for each path, suppressing file renames and
+folder deletions (a deletion whose previous version was a folder), and
 bounding each page at 1,000. `more` indicates another page. `restorable` names
 the newest content-bearing UID or is 0 when none remains.
 
@@ -441,7 +449,7 @@ not an automatic retry of the unchanged request.
 | `badchunk` | Invalid name, a body frame that does not decode, or a hash mismatch. | no | ends for bad bodies mid-upload, otherwise rejects the request. |
 | `badpath` | Path refused by the path rules; the message starts with the reason code. | no | rejects the entry. |
 | `collision` | Another live path has the same case-folded key; the message names it. | no | rejects the entry. |
-| `stale` | Target or rename source changed before commit. Reconcile and retry. | no | keeps the session; batched refusal affects only that entry. |
+| `stale` | Target or rename source changed before commit, or a folder deletion found a live path beneath it. Reconcile and retry. | no | keeps the session; batched refusal affects only that entry. |
 | `badentry` | Invalid entry, including a size that is not the sum of its chunks, or a request incompatible with current state. | no | rejects the request. |
 | `badname` | Invalid name or device ID. | no | ends at hello, otherwise rejects the request. |
 | `toolarge` | A limit or declared size was exceeded, or a frame over its bound. | no | ends if upload framing cannot continue, otherwise rejects the request. |

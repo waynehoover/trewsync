@@ -207,6 +207,22 @@ A deletion received from another device goes to the system trash, or the
 vault's `.trash` if necessary. If you edit a note while another device deletes
 it, TrewSync keeps the edit and sends it back as a new version.
 
+Deleting or renaming a folder removes it from your other devices too, once
+nothing is left in it there. The notes that were in it go to the trash on the
+other devices, as any deletion does; the emptied folder is removed, not
+trashed. A folder that still
+holds something on another device stays, and comes back on the device where
+you deleted it: a note written there while it was offline, a note edited
+there, or a file TrewSync never syncs, such as a name starting with a dot
+(`.DS_Store`, which the macOS Finder leaves in folders it has opened, is one).
+Deleted folders are not listed under **Browse deleted**; the notes that were
+in them are.
+
+Folders deleted with an earlier version of TrewSync may still be on your
+other devices. The device a folder was deleted on removes it from the others
+on its first sync with this version, as long as that device still has its
+sync record of the folder. If an old folder stays, delete it again.
+
 ## Conflicts
 
 TrewSync tries to combine edits made on different devices. If its merge checks
