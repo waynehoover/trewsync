@@ -10,6 +10,7 @@ import (
 	"github.com/waynehoover/trew/internal/wire"
 	"os"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -460,6 +461,86 @@ func TestARepeatedBodyIsRefused(t *testing.T) {
 	if st := r.mustStats(); st.Versions != 0 {
 		t.Fatalf("%d entries committed", st.Versions)
 	}
+}
+
+// The refusal of a repeated body leaves before the batch writer is closed, so a
+// client can read bad_chunk while the body it sent first is still being placed.
+// Nothing may treat the session as over until that write is done: not
+// Server.Shutdown, which serve runs before it closes the store, and not the
+// rig, which closes the store and then removes the directory the body lands in.
+//
+// The rig used to close only its listener, and httptest does not wait for a
+// hijacked WebSocket, so under a loaded -race run TestARepeatedBodyIsRefused
+// failed in t.TempDir's cleanup with "directory not empty" in the shard the
+// body of "first" was landing in.
+//
+// Held at abandonBodies rather than raced for. The hold is let go only once
+// the stop has returned or has begun shutting the server down, and the stop is
+// judged by whether the writer was still held when it returned.
+func TestAStopWaitsForARefusedPutsBodyToLand(t *testing.T) {
+	r := newRig(t)
+	cl := r.dial("a")
+	cl.hello(0)
+
+	held := make(chan struct{})
+	release := make(chan struct{})
+	var released atomic.Bool
+	r.srv.abandonBodies = func() {
+		close(held)
+		<-release
+		released.Store(true)
+	}
+
+	bodies := []string{"first", "second"}
+	names, size := chunkNames(bodies)
+	cl.sendJSON(wire.In{Op: "put", Path: "note.md", Chunks: names,
+		Meta: wire.PutMeta{Size: size, MTime: 5}})
+	cl.recvInto("want", &wire.Want{})
+	cl.sendBinary([]byte("first"))
+	cl.sendBinary([]byte("first"))
+	cl.expectErr(wire.CodeBadChunk)
+	<-held
+
+	early := make(chan bool, 1)
+	go func() {
+		r.stop()
+		early <- !released.Load()
+	}()
+	waitFor(t, "the stop to return or to begin shutting the server down", func() bool {
+		return len(early) > 0 || closingBegun(r)
+	})
+	close(release)
+	if <-early {
+		waitFor(t, "the refused session to end", func() bool { return r.srv.Sessions() == 0 })
+		t.Fatal("the rig stopped while the refused put was still writing the body it had been sent")
+	}
+	if n := r.srv.Sessions(); n != 0 {
+		t.Fatalf("%d sessions still registered after the stop returned", n)
+	}
+
+	// What the refused put leaves is one whole body under its own name, which
+	// nothing references and the sweep collects, and nothing half-written: a
+	// temp file is debris no purge removes at any grace. The cutoff is in the
+	// future so that every unreferenced body counts as collectable.
+	rep, err := r.st.Chunks().Reclaimable(testVault, map[string]struct{}{}, time.Now().Add(time.Hour))
+	if err != nil || !rep.Complete {
+		t.Fatalf("walking the chunk tree: complete=%v err=%v", rep.Complete, err)
+	}
+	if rep.Temp != 0 || rep.Quarantined != 0 {
+		t.Fatalf("the refused put left %d temp files (%d bytes) and %d quarantined bodies",
+			rep.Temp, rep.TempBytes, rep.Quarantined)
+	}
+	if rep.Deleted != 1 || rep.DeletedBytes != int64(len(bodies[0])) {
+		t.Fatalf("%d collectable bodies of %d bytes, want the one body that arrived, of %d",
+			rep.Deleted, rep.DeletedBytes, len(bodies[0]))
+	}
+	if err := r.st.Chunks().Check(testVault, names[0]); err != nil {
+		t.Fatalf("the body that arrived is not stored whole under its name: %v", err)
+	}
+	if st := r.mustStats(); st.Versions != 0 {
+		t.Fatalf("%d entries committed", st.Versions)
+	}
+	r.mustVerify()
 }
 
 func TestATextFrameWhereABodyWasExpectedIsRefused(t *testing.T) {

@@ -80,10 +80,52 @@ func newRig(t *testing.T) *rig {
 		}
 		srv.Handle(r.Context(), conn, r.RemoteAddr)
 	}))
-	t.Cleanup(hs.Close)
 
-	return &rig{t: t, srv: srv, st: st, http: hs, dir: dir,
+	r := &rig{t: t, srv: srv, st: st, http: hs, dir: dir,
 		url: "ws" + strings.TrimPrefix(hs.URL, "http"), devices: map[string]string{}}
+	// Registered after the store's close, so it runs first: every session has
+	// ended before the store closes and t.TempDir removes the directory.
+	t.Cleanup(r.stop)
+	return r
+}
+
+// rigStopWait bounds how long stop waits for the sessions: Shutdown's own
+// deadline, then as long again for what it killed to unwind. Every client has
+// hung up by the time the cleanup runs, so a session still going after this is
+// held by a test that failed before releasing it, and waiting on it for ever
+// would turn that failure into a hang with nothing reported.
+const rigStopWait = 5 * time.Second
+
+// stop shuts the rig's server down the way serve does: the listener, then the
+// sessions, and only then, in the cleanup before this one, the store.
+//
+// Closing the listener alone is not a stop. httptest's Close, like
+// http.Server.Shutdown, waits for ordinary requests, and a WebSocket is a
+// hijacked connection it no longer counts, so a session could outlive the rig.
+// One did: a put refused for a repeated body was still inside readBodies,
+// closing the writer that was placing its first body, when the store closed
+// and t.TempDir began removing the shard that body was landing in, and the
+// removal failed with "directory not empty" (TestARepeatedBodyIsRefused under
+// a loaded -race run). Server.Shutdown is what waits for a session, so the rig
+// stops with it, as serve does.
+//
+// Safe to call twice, and a test may stop the server itself first.
+func (r *rig) stop() {
+	r.http.Close()
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), rigStopWait)
+		defer cancel()
+		done <- r.srv.Shutdown(ctx)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			r.t.Errorf("stopping the rig's server: %v", err)
+		}
+	case <-time.After(2 * rigStopWait):
+		r.t.Errorf("%d sessions still running %s after the rig began stopping", r.srv.Sessions(), 2*rigStopWait)
+	}
 }
 
 // deviceToken is the 32-byte credential the rig gives the device called name:
