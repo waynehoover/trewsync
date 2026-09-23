@@ -533,6 +533,17 @@ type applyArgs struct {
 	head     int64
 }
 
+// keyFor is the idempotency key a call is begun with: the caller's for an
+// apply, and none for a preview, which commits and records nothing, so a key
+// an agent sends with both is the apply's alone and a preview is never
+// answered with an apply's result or refused for its key.
+func (p applyArgs) keyFor(key string) string {
+	if !p.applying {
+		return ""
+	}
+	return key
+}
+
 func (a *args) apply() applyArgs {
 	var p applyArgs
 	p.changes, p.applying = a.changes()
@@ -682,7 +693,7 @@ func moveNote(c *call, a *args) outcome {
 	if err := a.finish(); err != nil {
 		return c.failWrite(err)
 	}
-	m, o, done := c.begin(a, key, epoch, path, to)
+	m, o, done := c.begin(a, p.keyFor(key), epoch, path, to)
 	if done {
 		return o
 	}
@@ -719,7 +730,7 @@ func deleteNote(c *call, a *args) outcome {
 	if err := a.finish(); err != nil {
 		return c.failWrite(err)
 	}
-	m, o, done := c.begin(a, key, epoch, path)
+	m, o, done := c.begin(a, p.keyFor(key), epoch, path)
 	if done {
 		return o
 	}
@@ -848,7 +859,7 @@ func tagNotes(c *call, a *args, operation string) outcome {
 	if list == nil {
 		return c.failWrite(invalidArguments("paths is required"))
 	}
-	m, o, done := c.begin(a, key, epoch, list...)
+	m, o, done := c.begin(a, p.keyFor(key), epoch, list...)
 	if done {
 		return o
 	}
@@ -880,7 +891,7 @@ func renameTag(c *call, a *args) outcome {
 	if !hasOld || !hasNew {
 		return c.failWrite(invalidArguments("oldTag and newTag are required"))
 	}
-	m, o, done := c.begin(a, key, epoch, folder)
+	m, o, done := c.begin(a, p.keyFor(key), epoch, folder)
 	if done {
 		return o
 	}

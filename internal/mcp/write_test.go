@@ -349,6 +349,24 @@ func TestAnIdempotencyKeyReplaysTheRecordedResult(t *testing.T) {
 	}
 }
 
+// A key sent with a preview and its apply belongs to the apply: the preview
+// records nothing, a preview after the apply is a preview and not a refusal,
+// and the apply sent again is its recorded result.
+func TestAPreviewIgnoresTheKeyItsApplyUses(t *testing.T) {
+	r := newRig(t)
+	a := r.writer("agent")
+	r.write("t.md", "body\n")
+	args := map[string]any{"paths": []any{"t.md"}, "tags": []any{"x"}, "idempotencyKey": "tag-1"}
+	p := previewed(t, invoke(t, a.cs, "add_tags", args))
+	applied := invoke(t, a.cs, "add_tags", apply(args, p))
+	uid := wrote(t, applied).Entries[0].UID
+	previewed(t, invoke(t, a.cs, "add_tags", args))
+	again := invoke(t, a.cs, "add_tags", apply(args, p))
+	if !bytes.Equal(applied.raw, again.raw) || r.operations() != 1 || r.head("t.md") != uid {
+		t.Fatalf("the apply sent again: %s, %d operations", again.raw, r.operations())
+	}
+}
+
 // Preview-then-apply is bound to the preview's head: a backlink a device
 // writes between the two refuses the whole apply, as does a namespace change,
 // and changes the agent did not preview; the apply after a fresh preview
