@@ -6,6 +6,27 @@ This page records dated measurements and design evaluations. Results describe
 specific fixtures, not a speed ranking against another product. The original
 transfer tables remain in `git show 573617c:docs/compared.md`.
 
+## The MCP read side in Go, September 22, 2026
+
+The server's MCP tools reuse the pure half of Basalt's TypeScript MCP, ported
+to `internal/notes`: paging, cursors, literal search, line comparison, tags
+and links. The TypeScript stays as the oracle. `client/src/cli/mcp-oracle.run.ts`
+feeds a corpus through it and writes `mcp-fixtures.json` (8,712 vectors), and
+`TestOracle` holds the Go functions to every one; `ORACLE_EXTRA=100000` builds
+a deeper corpus outside the tree (1,208,688 vectors), which also agrees.
+
+Markdown is parsed with goldmark and frontmatter with `gopkg.in/yaml.v3`,
+where Basalt used micromark and the npm `yaml` package. Each place the deeper
+corpus or the fuzz test found them reading a note differently is handled and
+has a test in `internal/notes/markdown_test.go` or `frontmatter_test.go`,
+showing the stock library's reading beside Basalt's answer. One remains: npm
+`yaml` reads an implicit key over lines in a flow mapping, libyaml refuses
+it, and so the port refuses that frontmatter.
+
+`internal/mcp` holds the result envelope and the one normalisation function
+of PLAN.md section 4.10, after the design of `asciimoo/hister`'s
+untrusted-content envelope; no code of it is used.
+
 ## MCP tool expansion, September 16, 2026
 
 The requested tool coverage follows
@@ -766,6 +787,8 @@ These projects informed Telimus's design and regression cases:
 | [Sync Engine](https://github.com/hesprs/sync-engine) | Correctness checks beside benchmarks, corpus shape, latency scenarios, and trash behavior. |
 | [Fast Note Sync](https://github.com/haierkeys/obsidian-fast-note-sync) | A regression involving a file/folder collision at the same path. |
 | [obsidian-headless](https://github.com/obsidianmd/obsidian-headless) | Locking, read-only mirror, and conflict-policy evaluations. |
+| [goldmark](https://github.com/yuin/goldmark) (MIT) | The server's Markdown parser. Its link parser and link reference definition transformer (v1.8.6) are copied into `internal/notes/goldmark_link.go` with the licence, and patched to follow micromark. |
+| [asciimoo/hister](https://github.com/asciimoo/hister) | The untrusted-content envelope: structural separation, the warning beside each tool, one normalisation function. Design only; no code is used. |
 
 The old source comparison recorded LiveSync 1.0.27 (`dd280a4`), Sync Engine
 3.1.4 (`edb9d42`), and Fast Note Sync 2.4.0 (`1bfb406`). Those observations are
@@ -773,7 +796,8 @@ historical, not a maintained feature matrix. Use the [product comparison](compar
 for current user-facing guidance.
 
 The client uses `diff-match-patch` for merging and `fflate` for compression;
-the server uses `modernc.org/sqlite` and `github.com/coder/websocket`. Exact
+the server uses `modernc.org/sqlite`, `github.com/coder/websocket`,
+`github.com/yuin/goldmark` and `gopkg.in/yaml.v3`. Exact
 versions live in the package manifests and lockfiles. Changes that affect sealed
 bytes or merge output need compatibility tests, even when the replacement API
 looks equivalent.
