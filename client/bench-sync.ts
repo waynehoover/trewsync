@@ -9,10 +9,12 @@
  * was measuring against.
  *
  * Two departures. Half the large files are incompressible, because prose is
- * what hid a defect here for months: deflate made the sealed chunk smaller than
- * the plaintext and a size bug disappeared into the saving. And correctness is
- * reported next to the timings rather than assumed, which is the good idea in
- * their harness and the reason to have read it.
+ * what hid a defect here for months: deflate made the chunk on the wire smaller
+ * than the note's own bytes and a size bug disappeared into the saving. Every
+ * body frame is still deflated where that is shorter, so prose can still hide
+ * that kind of bug and noise cannot. And correctness is reported next to the
+ * timings rather than assumed, which is the good idea in their harness and the
+ * reason to have read it.
  *
  * Timings here are localhost. They say what the software costs, not what a
  * network costs, and they are not comparable to a number measured over a link
@@ -25,7 +27,6 @@ import { join } from "node:path";
 import { cpus, totalmem } from "node:os";
 
 import { Client } from "./src/core/client.ts";
-import { testWrapped } from "./src/core/test-keys.ts";
 
 import { TestServer, serverBinary } from "./src/core/test-server.ts";
 import { LatencyProxy, type Wire } from "./src/core/latency.ts";
@@ -192,7 +193,6 @@ async function run(wire: Wire) {
   await server.start();
   const proxy = new LatencyProxy("127.0.0.1", server.port, wire);
   await proxy.start();
-  const secret = new Uint8Array(32).fill(31);
   const dirs: string[] = [];
   const clients: Client[] = [];
 
@@ -203,7 +203,7 @@ async function run(wire: Wire) {
       vault: new NodeVault(dir),
       store: new JsonIndexStore(join(dir, ".trew", "index.json")),
       url: proxy.url,
-      ...(await server.deviceCredentials(secret, await testWrapped(secret), name)),
+      ...(await server.deviceCredentials(name)),
       vaultId: "default",
       device: name,
       timeoutMs: 120_000,

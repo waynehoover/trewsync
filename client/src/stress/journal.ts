@@ -33,8 +33,8 @@ const COUNT = Number(process.env["NOTES"] ?? 10000);
  * An index entry of the shape `Engine.save` writes, with real chunk names.
  *
  * Synthetic rather than a real sync, because a real one at ten thousand notes
- * costs minutes of chunking and sealing to produce a file whose *shape* is all
- * that matters here. The check that the shape is right is the index size:
+ * costs minutes of chunking and uploading to produce a file whose *shape* is
+ * all that matters here. The check that the shape is right is the index size:
  * docs/compared.md measured 5.6 MiB at 10,000 notes from a real sync, and this
  * corpus is compared against it below.
  */

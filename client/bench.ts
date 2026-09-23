@@ -7,7 +7,7 @@
  * This is a script and not a test on purpose. The chunker measures 575 MiB/s
  * under `bun run` and 32 MiB/s under vitest, so a floor loose enough to survive
  * that would catch nothing. The deterministic half of performance, bytes on the
- * wire, is asserted in `src/perf.test.ts` where it belongs.
+ * wire, is asserted in `src/core/perf.test.ts` where it belongs.
  *
  * That spread was written down as the runner's doing and it is not. It is the
  * engine: bun is JavaScriptCore and vitest is V8, and the boundary test in
@@ -23,6 +23,13 @@
  * Two things every measurement here does, because the first version of it did
  * neither and reported a 2.7x gain where the honest figure was 1.3x:
  * warm up before timing, and alternate the order of anything being compared.
+ *
+ * What it measures, under protocol 1: a chunk's name is the SHA-256 of its raw
+ * bytes (`chunkName`, and `chunkNames` for a file's chunks a window at a time),
+ * and a body travels as a frame (`encodeFrame`: a marker byte, then deflate
+ * where that is shorter). So the per-chunk work is one digest to name it and
+ * one frame to send it, and the bytes on the wire are frames and put entries,
+ * each entry measured by the transport's own `encodedEntryBytes`.
  */
 
 import { readdir, readFile } from "node:fs/promises";
@@ -35,8 +42,9 @@ import {
   sizesFor,
   type ChunkSizes,
 } from "./src/core/chunk.ts";
-import { chunkName, sealChunk, sealChunks } from "./src/core/crypto.ts";
-import { testKeys } from "./src/core/test-keys.ts";
+import { chunkName, chunkNames } from "./src/core/digest.ts";
+import { encodeFrame } from "./src/core/frame.ts";
+import { encodedEntryBytes } from "./src/core/transport.ts";
 
 const enc = new TextEncoder();
 const MIB = 1024 * 1024;
@@ -82,7 +90,7 @@ function row(label: string, ms: number, bytes: number, extra = "") {
 }
 
 async function chunking() {
-  console.log("\nchunking (pure JavaScript, no crypto)");
+  console.log("\nchunking (pure JavaScript, no hashing)");
   const text = note(2 * MIB);
   let n = 0;
   row(
@@ -108,19 +116,18 @@ async function chunking() {
   );
 }
 
-async function sealing() {
-  console.log("\nsealing: compress, encrypt, name (three WebCrypto calls a chunk)");
-  const keys = await testKeys(new Uint8Array(32).fill(9));
+async function naming() {
+  console.log("\nnaming: one SHA-256 of each raw chunk (one WebCrypto call a chunk)");
   const parts = [...chunkBytes(note(512 * 1024), sizesFor(512 * 1024, true), true)].map(
     (c) => c.bytes,
   );
   const bytes = parts.reduce((n, b) => n + b.length, 0);
 
   const serial = async () => {
-    for (const b of parts) await chunkName(await sealChunk(keys, b));
+    for (const b of parts) await chunkName(b);
   };
   const parallel = async () => {
-    await sealChunks(keys, parts);
+    await chunkNames(parts);
   };
 
   await serial();
@@ -146,54 +153,75 @@ async function sealing() {
   const s = med(S);
   const p = med(P);
   row("awaiting each chunk", s, bytes, `${((s * 1000) / parts.length).toFixed(0)} us/chunk`);
-  row("a file's chunks at once", p, bytes, `${((p * 1000) / parts.length).toFixed(0)} us/chunk`);
+  row("a window of chunks at once", p, bytes, `${((p * 1000) / parts.length).toFixed(0)} us/chunk`);
   console.log(`  ${"gain from overlapping the latency".padEnd(36)} ${(s / p).toFixed(2)}x`);
+
+  // The other half of sending a chunk, done by the transport as it sends:
+  // synchronous, so there is no latency to overlap and nothing to alternate.
+  let framed = 0;
+  const f = timed(() => {
+    framed = 0;
+    for (const b of parts) framed += encodeFrame(b).length;
+  });
+  row(
+    "framing: deflate where shorter",
+    f,
+    bytes,
+    `${((100 * framed) / bytes).toFixed(0)}% of the raw bytes`,
+  );
 }
 
-/** Bytes a client sends to bring the server from `original` to `edited`. */
-async function wire(
-  original: Uint8Array,
-  edited: Uint8Array,
-  sizes: ChunkSizes,
-  isText: boolean,
-  keys: Awaited<ReturnType<typeof testKeys>>,
-) {
+/**
+ * Bytes a client sends to bring the server from `original` to `edited`.
+ *
+ * The chunks whose bytes the server already holds are not sent, which is
+ * exactly the chunks whose names it holds, because a name is the SHA-256 of
+ * the bytes. The rest go as frames.
+ */
+async function wire(original: Uint8Array, edited: Uint8Array, sizes: ChunkSizes, isText: boolean) {
   const held = new Set(
-    [...chunkBytes(original, sizes, isText)].map((c) => Buffer.from(c.bytes).toString("base64")),
+    await chunkNames([...chunkBytes(original, sizes, isText)].map((c) => c.bytes)),
   );
-  const send: Uint8Array[] = [];
-  let total = 0;
-  for (const c of chunkBytes(edited, sizes, isText)) {
-    total++;
-    if (!held.has(Buffer.from(c.bytes).toString("base64"))) send.push(c.bytes);
-  }
-  const sealed = await sealChunks(keys, send);
-  const bodies = sealed.reduce((n, c) => n + c.bytes.length, 0);
+  const parts = [...chunkBytes(edited, sizes, isText)].map((c) => c.bytes);
+  const names = await chunkNames(parts);
+  let bodies = 0;
+  let changed = 0;
+  names.forEach((name, at) => {
+    if (held.has(name)) return;
+    changed++;
+    bodies += encodeFrame(parts[at]!).length;
+  });
   // The entry travels too, and it names every chunk of the new version rather
   // than only the changed ones: 64 hex characters plus JSON quoting and a
   // comma each. Counting only the bodies is what made a chunk size of a few
   // hundred bytes look free, when a 2 MiB note was then 5638 names.
-  const entry = ENTRY_OVERHEAD + total * NAME_ON_THE_WIRE;
-  return { bytes: bodies + entry, bodies, entry, changed: send.length, total };
+  const entry = entryBytes(edited.length, names);
+  return { bytes: bodies + entry, bodies, entry, changed, total: names.length };
 }
 
-/** 64 hex characters, two quotes and a comma. */
-const NAME_ON_THE_WIRE = 67;
+/** The path every entry in this benchmark carries: an ordinary one, in plaintext. */
+const ENTRY_PATH = "Projects/2026/a note being edited.md";
+
 /**
- * A sealed path, the meta object, and the authenticator, with no chunks.
- *
- * Checked against the two entries measured on the real wire in
- * `docs/compared.md`: 356 + 67 is the 423 B of a one-chunk note, and
- * 356 + 1024 * 67 is the 68964 B of a 1024-chunk attachment.
+ * One put entry as the transport encodes it into a `putmany`: the path, the
+ * meta and every chunk name, measured by `encodedEntryBytes` rather than
+ * estimated from a per-entry constant. An edit, so it carries a base.
  */
-const ENTRY_OVERHEAD = 356;
+function entryBytes(size: number, names: readonly string[]): number {
+  const now = Date.now();
+  return encodedEntryBytes({
+    path: ENTRY_PATH,
+    meta: { size, ctime: now, mtime: now },
+    names,
+    base: 1234,
+  });
+}
 
 async function bandwidth() {
   console.log("\nbytes on the wire for one line inserted into a note");
   console.log("  Both columns carry the entry as well as the bodies, because both");
   console.log("  protocols send one. Theirs is a whole file and one hash.\n");
   console.log("  note size    trew      of that: entry   whole file    ratio    chunks");
-  const keys = await testKeys(new Uint8Array(32).fill(11));
   for (const size of [4096, 32 * 1024, 128 * 1024, 512 * 1024, 2 * MIB]) {
     const original = note(size);
     const ins = enc.encode("A line added by hand.\n");
@@ -203,9 +231,9 @@ async function bandwidth() {
     edited.set(ins, at);
     edited.set(original.subarray(at), at + ins.length);
 
-    const r = await wire(original, edited, sizesFor(size, true), true, keys);
+    const r = await wire(original, edited, sizesFor(size, true), true);
     // Theirs is the whole body plus an entry naming one hash for it.
-    const theirs = edited.length + ENTRY_OVERHEAD + NAME_ON_THE_WIRE;
+    const theirs = edited.length + entryBytes(edited.length, [await chunkName(edited)]);
     console.log(
       `  ${fmt(size).padStart(9)}  ${fmt(r.bytes).padStart(9)}   ${fmt(r.entry).padStart(14)}` +
         `   ${fmt(theirs).padStart(9)}   ${(theirs / Math.max(1, r.bytes)).toFixed(0).padStart(6)}x` +
@@ -233,32 +261,39 @@ async function realVault(path: string) {
   const plain = files.reduce((n, f) => n + f.data.length, 0);
   console.log(`\nreal vault: ${files.length} files, ${fmt(plain)}`);
 
-  const keys = await testKeys(new Uint8Array(32).fill(13));
   const started = performance.now();
   let chunks = 0;
   let onWire = 0;
+  const sent = new Set<string>();
   for (const f of files) {
     const isText = looksLikeText(f.path);
     const parts = [...chunkBytes(f.data, sizesFor(f.data.length, isText), isText)].map(
       (c) => c.bytes,
     );
     chunks += parts.length;
-    for (const c of await sealChunks(keys, parts)) onWire += c.bytes.length;
+    const names = await chunkNames(parts);
+    names.forEach((name, at) => {
+      // One frame per name: a chunk the server already holds, from this file
+      // or any other, is not sent again.
+      if (sent.has(name)) return;
+      sent.add(name);
+      onWire += encodeFrame(parts[at]!).length;
+    });
   }
   const seconds = (performance.now() - started) / 1000;
 
   console.log(
-    `  first sync: ${chunks} chunks, ${fmt(onWire)} on the wire ` +
-      `(${((onWire / plain) * 100).toFixed(0)}% of the plaintext)`,
+    `  first sync: ${chunks} chunks, ${sent.size} of them distinct, ${fmt(onWire)} of frames ` +
+      `on the wire (${((onWire / plain) * 100).toFixed(0)}% of the vault's bytes)`,
   );
   console.log(
-    `  took ${seconds.toFixed(1)} s to chunk, compress, encrypt and name the whole vault ` +
+    `  took ${seconds.toFixed(1)} s to chunk, name and frame the whole vault ` +
       `(${(plain / MIB / seconds).toFixed(0)} MiB/s end to end)`,
   );
 }
 
-console.log("trew: chunking, sealing and bandwidth");
+console.log("trew: chunking, naming and bandwidth");
 await chunking();
-await sealing();
+await naming();
 await bandwidth();
 if (process.argv[2]) await realVault(process.argv[2]);
