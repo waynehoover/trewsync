@@ -3722,17 +3722,27 @@ export class Engine {
         interleave?: () => Promise<void>,
       ): Promise<Uint8Array[]> => {
         const out: Uint8Array[] = [];
+        // Frame bytes, as `TransferActivity.bytes` documents: the transport
+        // reports each fetch's running count in frames, so the total carried
+        // across fetches is the last count each one reported, not the raw
+        // length of the bodies it returned. A deflated body is shorter as a
+        // frame and a raw one a marker byte longer, so adding raw lengths
+        // mixed two units and stepped the progress back at every boundary.
         let received = 0;
         for (const ask of planFetches(names, budgetOf, cap, MAX_FETCH_NAMES)) {
+          let inThis = 0;
           const bodies = await transport.fetch(
             ask,
-            onBytes === undefined ? undefined : (n) => onBytes(received + n),
+            onBytes === undefined
+              ? undefined
+              : (n) => {
+                  inThis = n;
+                  onBytes(received + n);
+                },
             interleave,
           );
-          for (const b of bodies) {
-            out.push(b);
-            received += b.length;
-          }
+          for (const b of bodies) out.push(b);
+          received += inThis;
         }
         return out;
       };
