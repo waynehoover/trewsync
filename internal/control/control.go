@@ -9,9 +9,11 @@
 // The socket carries `invite`, `devices`, `revoke` and `uninvite` to the server,
 // which does each through the same code a device's request goes through: the
 // same commit lock, the same eviction. It carries the MCP token commands too
-// (`mcp-token`, `mcp-tokens`, `mcp-revoke`), under the same lock, and the
-// read of the agents' operation log (`audit`), so the log a person reads is
-// the one the running server is writing.
+// (`mcp-token`, `mcp-tokens`, `mcp-revoke`), under the same lock, the read of
+// the agents' operation log (`audit`), so the log a person reads is the one
+// the running server is writing, and the undo of an operation in it (`undo`),
+// committed and broadcast to the devices by the server that holds the commit
+// lock, as every other write is.
 //
 // The socket is a unix socket in the data directory, mode 0600, so whoever can
 // reach it can already read the database beside it: the socket is not a new
@@ -48,7 +50,7 @@ const requestTimeout = 30 * time.Second
 // Request is one operation the operator asks of the running server.
 type Request struct {
 	// Op is "invite", "devices", "revoke", "uninvite", "mcp-token",
-	// "mcp-tokens", "mcp-revoke" or "audit".
+	// "mcp-tokens", "mcp-revoke", "audit" or "undo".
 	Op string `json:"op"`
 
 	// invite and mcp-token. TTLMs is the lifetime, and Never says the
@@ -79,6 +81,10 @@ type Request struct {
 	// after the one with sequence number After, which pages.
 	Since int64 `json:"since,omitempty"`
 	After int64 `json:"after,omitempty"`
+
+	// undo: the operation to undo, and whether as the copy.
+	OpID   string `json:"opId,omitempty"`
+	ToCopy bool   `json:"toCopy,omitempty"`
 }
 
 // Reply is the answer to one Request: exactly one of its parts is set, and
@@ -96,6 +102,34 @@ type Reply struct {
 	MCPRevoked *MCPRevoked `json:"mcpRevoked,omitempty"`
 
 	Audit *Audit `json:"audit,omitempty"`
+	Undo  *Undo  `json:"undo,omitempty"`
+}
+
+// Undo is an undo the server did or refused. Refused is an answer, not an
+// error reply: what was found (the paths changed since and who changed them,
+// the before-images a purge took) is what the operator acts on, and it travels
+// in the store's shapes, as the audit's operations do.
+type Undo struct {
+	Vault  string `json:"vault"`
+	Undoes string `json:"undoes"`
+	ToCopy bool   `json:"toCopy"`
+	// Target is the operation undone, as the log records it, when there is
+	// one by that id.
+	Target json.RawMessage `json:"target,omitempty"`
+
+	// Committed, with the undo's own operation id and commit time, what each
+	// step did and the versions it wrote.
+	Committed   bool            `json:"committed"`
+	OpID        string          `json:"opId,omitempty"`
+	CommittedAt int64           `json:"committedAt,omitempty"`
+	Steps       json.RawMessage `json:"steps,omitempty"`
+	Entries     json.RawMessage `json:"entries,omitempty"`
+
+	// Refused: the store's code and reason, and the paths it is about.
+	Code    string          `json:"code,omitempty"`
+	Reason  string          `json:"reason,omitempty"`
+	Changed json.RawMessage `json:"changed,omitempty"`
+	Gone    json.RawMessage `json:"gone,omitempty"`
 }
 
 // Audit is one page of a vault's operation log, in the store's shape, the

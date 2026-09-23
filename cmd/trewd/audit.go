@@ -103,9 +103,14 @@ func cmdAudit(args []string, out io.Writer) error {
 // writeOperation prints one operation: a line for the operation, a line for
 // each path it changed, and a line for each version it pinned.
 func writeOperation(out io.Writer, o store.OperationRecord, epoch string) {
-	fmt.Fprintf(out, "\n%s  %s  %s  by %q (token %s)  op %s\n",
-		stamp(o.CommittedAt), o.Tool, o.Outcome, o.ActorLabel, o.ActorID, o.ID)
+	fmt.Fprintf(out, "\n%s  %s  %s  by %s  op %s\n", stamp(o.CommittedAt), o.Tool, o.Outcome, actorOf(o), o.ID)
 	var notes []string
+	if o.Undoes != "" {
+		notes = append(notes, "undoes op "+o.Undoes)
+	}
+	if o.UndoneBy != "" {
+		notes = append(notes, "undone by op "+o.UndoneBy)
+	}
 	if o.IdempotencyKey != "" {
 		notes = append(notes, fmt.Sprintf("key %q", o.IdempotencyKey))
 	}

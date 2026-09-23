@@ -632,8 +632,11 @@ func (b *undoBuilder) freeCopy(path string, uid int64) (string, error) {
 }
 
 // parents are the folders above path: a check of each one that is a live
-// folder, a folder made for each one the vault lacks, and a refusal where a
-// file is in the way. A folder this plan puts back or makes is neither.
+// folder, a folder made for each one that holds nothing live now (a restore
+// into a folder removed since), and a refusal where a file is in the way. A
+// folder this plan puts back or makes is neither, and nor is one that other
+// live paths hold up without a folder entry of its own: a device makes that
+// on disk for what it writes into it, as it did for them.
 func (b *undoBuilder) parents(path string) error {
 	for i := 0; i < len(path); i++ {
 		if path[i] != '/' {
@@ -647,12 +650,17 @@ func (b *undoBuilder) parents(path string) error {
 		if err != nil {
 			return failed("", err)
 		}
+		held, err := b.s.dirHeld(b.r.Vault, dir)
+		if err != nil {
+			return failed("", err)
+		}
 		switch {
 		case state == PathLive && e.Folder:
 			b.check(dir, e.UID)
 		case state == PathLive:
 			return refused("", OpCodeExists, dir, e.UID, fmt.Errorf(
 				"%w: a file is at %q, where %q needs a folder", ErrExists, dir, path))
+		case held:
 		default:
 			b.made[dir] = true
 			f := b.entry(dir)
@@ -661,6 +669,15 @@ func (b *undoBuilder) parents(path string) error {
 		}
 	}
 	return nil
+}
+
+// dirHeld is whether any live path is inside dir, which a device then holds
+// as a folder on disk whether or not the folder has an entry of its own.
+func (s *Store) dirHeld(vault, dir string) (bool, error) {
+	var refs int64
+	err := s.db.QueryRow(`SELECT COALESCE((SELECT refs FROM live_dirs WHERE vault_id = ? AND path = ?), 0)`,
+		vault, dir).Scan(&refs)
+	return refs > 0, err
 }
 
 // leftInside is how many live paths will be inside folder once the plan so
