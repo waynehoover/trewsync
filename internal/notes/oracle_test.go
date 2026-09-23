@@ -36,7 +36,11 @@ var (
 func loadFixture(t testing.TB) map[string]json.RawMessage {
 	t.Helper()
 	fixtureOnce.Do(func() {
-		raw, err := os.ReadFile(filepath.Join("..", "..", "mcp-fixtures.json"))
+		path := filepath.Join("..", "..", "mcp-fixtures.json")
+		if alt := os.Getenv("MCP_FIXTURES"); alt != "" {
+			path = alt // a deeper corpus from ORACLE_EXTRA, not committed
+		}
+		raw, err := os.ReadFile(path)
 		if err != nil {
 			fixtureErr = err
 			return
@@ -1255,14 +1259,20 @@ func oracleCases(t testing.TB) []oracleCase {
 func TestOracle(t *testing.T) {
 	cases := oracleCases(t)
 	failed := map[string]int{}
+	var failing []string
 	for _, c := range cases {
 		if err := c.check(); err != nil {
 			kind := strings.SplitN(c.name, "/", 2)[0]
 			failed[kind]++
+			failing = append(failing, c.name)
 			if failed[kind] <= 8 {
 				t.Errorf("%s: %v", c.name, err)
 			}
 		}
+	}
+	if out := os.Getenv("ORACLE_FAILURES"); out != "" {
+		// A debugging aid: the names of every failing vector.
+		_ = os.WriteFile(out, []byte(strings.Join(failing, "\n")), 0o644)
 	}
 	for kind, n := range failed {
 		t.Errorf("%s: %d vectors differ from Basalt", kind, n)

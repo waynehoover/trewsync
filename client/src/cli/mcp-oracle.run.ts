@@ -1297,8 +1297,12 @@ function tagVectors() {
   ];
   for (let n = 0; n < 120; n++)
     add(Array.from({ length: 5 + Math.floor(random() * 30) }, () => pick(pieces)).join(""));
-  for (let n = 0; n < 600; n++) add(randomMarkdown());
-  for (let n = 0; n < 400; n++) add(randomFrontmatter());
+  // ORACLE_EXTRA=n adds n more of each generated kind, for a deeper search
+  // for divergences than the committed fixture carries (write it elsewhere
+  // with ORACLE_OUT, and point the Go test at it with MCP_FIXTURES).
+  const extra = Number(process.env["ORACLE_EXTRA"] ?? 0);
+  for (let n = 0; n < 600 + extra; n++) add(randomMarkdown());
+  for (let n = 0; n < 400 + extra; n++) add(randomFrontmatter());
 
   const inline: unknown[] = [];
   for (const s of INLINE.slice(0, 20))
@@ -1755,7 +1759,12 @@ function write(sections: [string, unknown][]): string {
   return `{\n${parts.join(",\n")}\n}\n`;
 }
 
-await writeFile(join(ROOT, "mcp-fixtures.json"), write(fixture));
+const out = process.env["ORACLE_OUT"];
+await writeFile(out ?? join(ROOT, "mcp-fixtures.json"), write(fixture));
+if (out) {
+  console.info(`wrote ${out} (${runtime})`);
+  process.exit(0);
+}
 await writeFile(
   join(ROOT, "internal/notes/emoji_table.go"),
   [
