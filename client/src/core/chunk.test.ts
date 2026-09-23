@@ -13,8 +13,7 @@ import {
   type Chunk,
   type ChunkSizes,
 } from "./chunk.ts";
-import { SEAL_OVERHEAD, sealChunks } from "./crypto.ts";
-import { testKeys } from "./test-keys.ts";
+import { decodeFrame, encodeFrame } from "./frame.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -378,24 +377,24 @@ describe("streaming", () => {
 
 describe("choosing sizes", () => {
   it("uses text sizes for small text and binary sizes for the rest", () => {
-    // The maximum is the one number that is not simply the table's: room is
-    // reserved for what sealing adds, or a chunk cut at the ceiling is a
-    // sealed chunk over it.
-    // Only bites when the table's own maximum is at or above the ceiling,
-    // which is the binary case and not the text one.
-    const reserved = (t: { min: number; avg: number; max: number }) => ({
+    // At the default ceiling, which is BINARY_SIZES.max, every table comes
+    // back exactly as it is. The ceiling bounds the raw chunk and a frame's
+    // marker byte sits on top of it (plan/protocol.md, "Chunk bodies"), so
+    // nothing is reserved below it. Basalt reserved room here for what
+    // sealing added, which only ever bit on the binary table.
+    const capped = (t: { min: number; avg: number; max: number }) => ({
       ...t,
-      max: Math.min(t.max, BINARY_SIZES.max - SEAL_OVERHEAD),
+      max: Math.min(t.max, BINARY_SIZES.max),
     });
-    expect(sizesFor(1000, true)).toEqual(reserved(TEXT_SIZES));
-    expect(sizesFor(1000, false)).toEqual(reserved(BINARY_SIZES));
+    expect(sizesFor(1000, true)).toEqual(TEXT_SIZES);
+    expect(sizesFor(1000, false)).toEqual(BINARY_SIZES);
     // A very large text file is data, not prose, and chunking it at 256
     // bytes would produce tens of thousands of chunks.
-    expect(sizesFor(TEXT_AS_BINARY_ABOVE, true)).toEqual(reserved(BINARY_SIZES));
+    expect(sizesFor(TEXT_AS_BINARY_ABOVE, true)).toEqual(BINARY_SIZES);
     // Just under the threshold it is still text, and text sizes now scale
     // with the file rather than being one number for a note and a novel.
     expect(sizesFor(TEXT_AS_BINARY_ABOVE - 1, true)).toEqual(
-      reserved(textSizesFor(TEXT_AS_BINARY_ABOVE - 1)),
+      capped(textSizesFor(TEXT_AS_BINARY_ABOVE - 1)),
     );
   });
 
@@ -517,32 +516,38 @@ describe("bytes that are not valid UTF-8, on the UTF-8 path", () => {
 });
 
 /**
- * The server's ceiling is on the *sealed* chunk, and sealing adds a nonce, a
- * tag and a marker byte. A cut made at exactly the ceiling produces a body the
- * server refuses, permanently, and the file it belongs to never syncs.
+ * The server's ceiling is on the raw chunk, and a body frame puts one marker
+ * byte on top of it (plan/protocol.md, "Chunk bodies"). A chunk cut over the
+ * ceiling is a body the server refuses, permanently, and the file it belongs
+ * to never syncs.
  *
- * Nothing caught this for a long time because the test data compressed: deflate
- * made the sealed chunk smaller than the plaintext and the overhead vanished
- * into the saving. An attachment is a photo or a video and does not compress,
- * which is how it was eventually found: a 12 MiB file of real random bytes,
- * refused with "chunk exceeds chunkMax: 1048605 > 1048576".
+ * In Basalt the ceiling was on the sealed chunk, 29 bytes more than what was
+ * cut, and nothing caught the difference for a long time because the test
+ * data compressed: deflate made the sealed chunk smaller than the plaintext
+ * and the overhead vanished into the saving. An attachment is a photo or a
+ * video and does not compress, which is how it was eventually found: a 12 MiB
+ * file of real random bytes, refused with "chunk exceeds chunkMax: 1048605 >
+ * 1048576". Incompressible data is still the case that matters, because it
+ * is the one a frame carries raw.
  */
-describe("chunks that have to survive being sealed", () => {
-  it("leaves room for what sealing adds", () => {
+describe("chunks that have to fit the server's ceiling once framed", () => {
+  it("cuts nothing over the ceiling, and reserves nothing below it", () => {
     const sizes = sizesFor(64 * 1024 * 1024, false, 1024 * 1024);
-    expect(sizes.max + SEAL_OVERHEAD).toBeLessThanOrEqual(1024 * 1024);
+    expect(sizes.max).toBeLessThanOrEqual(1024 * 1024);
+    // The whole ceiling is usable: the marker byte is on top, and the
+    // receiver's frame bound is chunkMax + 1 for exactly that reason.
+    expect(sizes.max).toBe(1024 * 1024);
   });
 
   it("respects a ceiling smaller than its own idea of one", () => {
     // The parameter existed and the engine never passed it, so a server
     // advertising something smaller was ignored.
     const sizes = sizesFor(64 * 1024 * 1024, false, 64 * 1024);
-    expect(sizes.max).toBeLessThanOrEqual(64 * 1024 - SEAL_OVERHEAD);
+    expect(sizes.max).toBeLessThanOrEqual(64 * 1024);
   });
 
-  it("keeps every sealed chunk of incompressible data under the ceiling", async () => {
+  it("keeps every framed chunk of incompressible data within the frame bound", () => {
     const ceiling = 256 * 1024;
-    const keys = await testKeys(new Uint8Array(32).fill(4));
     const bytes = new Uint8Array(4 * 1024 * 1024);
     for (let at = 0; at < bytes.length; at += 65536) {
       crypto.getRandomValues(bytes.subarray(at, Math.min(at + 65536, bytes.length)));
@@ -550,14 +555,19 @@ describe("chunks that have to survive being sealed", () => {
 
     const sizes = sizesFor(bytes.length, false, ceiling);
     const parts = [...chunkBytes(bytes, sizes, false)].map((c) => c.bytes);
-    const sealed = await sealChunks(keys, parts);
+    const frames = parts.map((part) => encodeFrame(part));
 
-    expect(sealed.length).toBeGreaterThan(8);
-    const worst = Math.max(...sealed.map((c) => c.bytes.length));
+    expect(frames.length).toBeGreaterThan(8);
+    const worst = Math.max(...frames.map((f) => f.length));
     expect(
       worst,
-      `the largest sealed chunk was ${worst} against a ceiling of ${ceiling}`,
-    ).toBeLessThanOrEqual(ceiling);
+      `the largest frame was ${worst} against a bound of ${ceiling + 1}`,
+    ).toBeLessThanOrEqual(ceiling + 1);
+    // And a receiver holding the server's ceiling takes every one of them
+    // back as the chunk it was.
+    frames.forEach((frame, i) => {
+      expect(Buffer.from(decodeFrame(frame, ceiling)).equals(Buffer.from(parts[i]!))).toBe(true);
+    });
   });
 });
 
