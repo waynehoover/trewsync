@@ -606,8 +606,7 @@ syncable path, attachments included; Basalt refused formats it could not read.
 
 **Acceptance (M4 done-when, the parts a machine can do).** Recorded
 2026-09-23 on macOS against the built binary, on a scratch data directory;
-the run with the real headless client and with Claude Code follows once the
-client flip has merged. `TestMCPAcceptanceExternal` pairs a device from the
+the run with Claude Code and the plugin is below. `TestMCPAcceptanceExternal` pairs a device from the
 first invite, writes notes over the protocol, mints a read token through the
 running server's control socket, and drives `/mcp` with the SDK client at
 three protocol versions while a second connection keeps writing:
@@ -638,6 +637,25 @@ acceptance: the token's request budget answered 429 5 times, and each call succe
 1 MCP tokens on vault "default"
   NJvaaTzvoqKTbbAlbK908g  20d11f76  read   "acceptance"  expires 2026-12-22T10:24:54Z, used 56 times, last 2026-09-23T10:24:59Z
 ```
+
+**Acceptance with Claude Code and the plugin (the rest of M4's done-when).**
+Recorded 2026-09-23 at `07d0b49`, on Claude Code 2.1.280 and Obsidian 1.13.7,
+against `trew serve -mcp -localhost` on the data directory the M2 acceptance
+left, with a read token from `trew mcp-token -key-out`. Claude Code ran
+headless with only this server's tools (`claude -p --mcp-config FILE
+--strict-mcp-config --tools "" --allowedTools mcp__trew`, the config naming
+the URL and an `Authorization: Bearer` header) and was asked to list with
+three rows a page to the end, read a note, search, read one note's history,
+compare its oldest and newest versions, read a note of instruction-shaped
+text, read a note being edited and its history, and list again. Meanwhile the
+plugin, in a paired vault, appended to one note every two seconds and renamed
+another back and forth: 19 edits and 9 renames in the 56 seconds the session
+took, the head moving from 26 to 40. Every call succeeded. Each paged listing
+carried one head on all of its pages (26, then 40), with no path twice and
+never both names of the renamed note. The comparison and the search matched
+the versions written, and the instruction-shaped note came back with its text
+under `untrusted_content` only, the notice under `security`, and nothing of
+it under `trusted`; the agent reported it as data and did not act on it.
 
 Every read was checked byte for byte against what the device wrote for the
 uid it named, the list pages kept the head the first pinned while commits
