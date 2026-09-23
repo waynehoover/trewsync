@@ -1336,9 +1336,19 @@ func (s *Session) handlePutMany(m wire.In, frameLen int) error {
 	asked := map[string]struct{}{}
 	var allowance int64
 
+	// Whether an earlier entry of this batch takes a path out of the live set:
+	// a deletion, or a move, which retires its source. The collision question
+	// `prepare` asks is asked of the store as it stands, before any entry of
+	// the batch commits, and one of those entries can free exactly the key a
+	// later one needs: a rename the client found by scanning arrives as a
+	// deletion of Note.md and a create of NOTE.md. The commit checks each entry
+	// against the state the earlier ones left (plan/protocol.md, "Paths"), so
+	// after such an entry only the commit may refuse one for colliding; asking
+	// early would refuse a create the batch itself makes legal.
+	freed := false
 	for i, in := range m.Entries {
 		e := in.Entry(s.device)
-		missing, spend, refusal := s.prepare(e, in.Base, in.PrevBase)
+		missing, spend, refusal := s.prepare(e, in.Base, in.PrevBase, !freed)
 		if refusal != nil {
 			// One entry's refusal is one entry's result in the acks, and the
 			// rest of the batch still commits, so it is carried rather than
@@ -1348,6 +1358,9 @@ func (s *Session) handlePutMany(m wire.In, frameLen int) error {
 		}
 
 		items[i] = preparedEntry{entry: e}
+		if e.Deleted || e.Prev != "" {
+			freed = true
+		}
 		for _, name := range missing {
 			if _, seen := asked[name]; seen {
 				continue
@@ -1520,7 +1533,13 @@ func (s *Session) commitMany(items []preparedEntry, sent []wire.PutEntry) ([]wir
 // differently and deliberately: handlePut sends an error frame and logs it,
 // while one entry of a batch is only a result in the acks and the rest of the
 // batch still commits.
-func (s *Session) prepare(e store.Entry, base, prevBase int64) (missing []string, allowance int64, refusal *wire.Err) {
+//
+// askCollision says whether the collision rule may be asked now, of the store
+// as it stands. A single put always may. An entry of a batch may not once an
+// earlier entry of that batch deletes or moves a path, since the answer now
+// could differ from the commit's, which is the one that stands; see
+// handlePutMany.
+func (s *Session) prepare(e store.Entry, base, prevBase int64, askCollision bool) (missing []string, allowance int64, refusal *wire.Err) {
 	if e.Prev == "" && prevBase != 0 {
 		r := wire.Error(wire.CodeBadEntry, "prevBase requires a previous path")
 		return nil, 0, &r
@@ -1539,9 +1558,11 @@ func (s *Session) prepare(e store.Entry, base, prevBase int64) (missing []string
 	// The collision rule, asked before any body is: an entry that collides
 	// now is refused before its bytes are sent. The commit asks again under
 	// the lock, and that answer is the one that stands.
-	if err := s.srv.st.Collides(s.vaultID, e); errors.Is(err, store.ErrCollision) {
-		r := wire.Error(wire.CodeCollision, err.Error())
-		return nil, 0, &r
+	if askCollision {
+		if err := s.srv.st.Collides(s.vaultID, e); errors.Is(err, store.ErrCollision) {
+			r := wire.Error(wire.CodeCollision, err.Error())
+			return nil, 0, &r
+		}
 	}
 
 	missing, sizes, err := s.srv.st.Chunks().Missing(s.vaultID, e.Chunks)
@@ -1578,7 +1599,7 @@ func (s *Session) handlePut(m wire.In) error {
 	// a put under another device's name is unexpressible rather than commented.
 	e := m.Entry(s.device)
 
-	missing, allowance, refusal := s.prepare(e, m.Base, m.PrevBase)
+	missing, allowance, refusal := s.prepare(e, m.Base, m.PrevBase, true)
 	if refusal != nil {
 		// reject rather than refuse: a single put's refusal is logged, where one
 		// entry of a batch is only a line in the acks.

@@ -62,6 +62,44 @@ func TestACollisionInABatchRefusesItsOwnSlot(t *testing.T) {
 	}
 }
 
+// An earlier entry of a batch that frees a folded key gives it to a later one,
+// because each entry is checked against the state the earlier ones left
+// (plan/protocol.md, "Paths"). A case-only rename a client found by scanning,
+// rather than being told of, arrives as a deletion of Note.md and a create of
+// NOTE.md. The collision question used to be asked of every entry before any
+// committed, so the create was refused for colliding with a file the same
+// batch was deleting, the deletion committed, and the note left every other
+// device while its new name stayed on the one that renamed it.
+func TestAnEntryThatFreesAKeyGivesItToALaterOneInTheBatch(t *testing.T) {
+	r := newRig(t)
+	cl := r.dial("a")
+	cl.hello(0)
+	cl.put("Note.md", "the note")
+
+	gone := wire.PutEntry{Path: "Note.md", Meta: wire.PutMeta{MTime: 6, Deleted: true}, Chunks: []string{}}
+	renamed, bodies := entryFor("NOTE.md", "the note, renamed")
+	acks := cl.putMany([]wire.PutEntry{gone, renamed}, bodies)
+	if acks.Results[0].UID == 0 || acks.Results[1].UID == 0 {
+		t.Fatalf("a deletion and the create it makes legal came back %+v", acks.Results)
+	}
+	if head := cl.head("NOTE.md"); head != acks.Results[1].UID {
+		t.Fatalf("NOTE.md's head is %d, want the create's uid %d", head, acks.Results[1].UID)
+	}
+
+	// The other order is the same rule: the create is checked against a state
+	// in which Note.md is still live, so it is refused, and the deletion after
+	// it still commits on its own.
+	r2 := newRig(t)
+	c2 := r2.dial("a")
+	c2.hello(0)
+	c2.put("Note.md", "the note")
+	created, more := entryFor("NOTE.md", "the note, renamed")
+	acks = c2.putMany([]wire.PutEntry{created, gone}, more)
+	if acks.Results[0].Code != wire.CodeCollision || acks.Results[1].UID == 0 {
+		t.Fatalf("a create before the deletion that frees its key came back %+v", acks.Results)
+	}
+}
+
 // A case-only rename is allowed, one move at a time, which is how a client
 // renames a folder by case: each move keeps every folded key where it was.
 func TestACaseOnlyRenameIsNotACollision(t *testing.T) {
