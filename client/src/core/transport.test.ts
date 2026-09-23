@@ -482,7 +482,7 @@ describe("the handshake", () => {
 
   /**
    * The frame is exactly the fields protocol 1 names, and nothing else: no
-   * `crypto` suite, which Basalt's hello carried and a Trew server has no use
+   * `crypto` suite, which Basalt's hello carried and a TrewSync server has no use
    * for, and no `epoch` on a device that has not been told one.
    */
   it("sends its protocol version, a device id and an id, and no crypto suite", async () => {

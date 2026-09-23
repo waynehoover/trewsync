@@ -1,5 +1,5 @@
 /*
- * Trew Sync.
+ * TrewSync.
  *
  * Obsidian loads this beside main.js. Everything here is either layout the
  * markup cannot express on its own, or a colour taken from Obsidian's own
@@ -97,7 +97,7 @@
   color: var(--color-red);
 }
 
-/* One icon wide; the tooltip identifies Trew and describes its status. */
+/* One icon wide; the tooltip identifies TrewSync and describes its status. */
 .status-bar-item.plugin-trew-sync {
   display: flex;
   align-items: center;

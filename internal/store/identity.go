@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-// Product is what a Trew data directory says it is, in its store_identity
+// Product is what a TrewSync data directory says it is, in its store_identity
 // row (PLAN.md section 2.8), and the stem of every file name this package
 // gives a data directory.
 //
@@ -330,7 +330,7 @@ func readIdentity(q querier, dbPath string) (Identity, bool, error) {
 // Basalt's is the one worth recognising by name, because it is the directory
 // somebody migrating is most likely to point this at, and its schema version
 // is 1: the same number this build's first schema has, which is exactly why
-// the identity row exists (PLAN.md section 2.8). A Trew build from before
+// the identity row exists (PLAN.md section 2.8). A TrewSync build from before
 // protocol 1 wrote Basalt's schema too, and gets the same answer.
 func foreignWithoutIdentity(q querier, dbPath string) error {
 	rows, err := q.Query(`SELECT name FROM sqlite_master WHERE type = 'table'`)

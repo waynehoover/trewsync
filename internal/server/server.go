@@ -1,4 +1,4 @@
-// Package server speaks the Trew protocol over a WebSocket.
+// Package server speaks the TrewSync protocol over a WebSocket.
 //
 // It owns session state and message dispatch. Durability lives in the store and
 // the chunk layer below it; this package's whole contribution to "do not lose a

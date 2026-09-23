@@ -22,7 +22,7 @@ Not commitments. Things that were impossible or awkward while the server could n
 - **Time-travel reads.** `read_note` at a timestamp; `vault_at(time)` listings. The store has everything; it is a query.
 - **Attachment tools.** Image dimensions, PDF text into the search index, `read_attachment` as a resource.
 - **Streaming assembly on download.** Basalt's `docs/open-work.md` first item; lifts the 64 MiB default. Independent of encryption but easier without the seal window.
-- **`import-basalt`.** Replay a Basalt data directory into Trew given a data key exported from a paired device. History would carry over.
+- **`import-basalt`.** Replay a Basalt data directory into TrewSync given a data key exported from a paired device. History would carry over.
 - **Whole-file `write_note`.** Settled as refused for v1 (PLAN §4.4). If usage shows the need, it arrives as `replace_note` with a full-read base, diff preview, audit record, pinned before-image and conditional undo, or, more likely, as a structural `replace_section` on the Markdown AST.
 - **Stdio bridge.** `trew mcp-stdio --url --token-file` for hosts that cannot speak streamable HTTP.
 
@@ -48,7 +48,7 @@ A close structural sibling: one self-hosted Go binary, privacy-first, full-text 
 
 - **Plugin self-update.** Obsidian's plugin guidelines disallow it, and PKV Sync does it. Updates come through the community directory or a manual install.
 - **Client-side error reporting or telemetry.** Forbidden by the directory's policy, and Obsyncian shipped it on by default while sending the paths its own settings text said it never sent.
-- **Conflict markers in a live note.** The agent, search and any published page all read the live note. Pumice, Obsyncian and PKV Sync write `<<<<<<<` into notes, frontmatter included; Trew keeps both versions as files.
+- **Conflict markers in a live note.** The agent, search and any published page all read the live note. Pumice, Obsyncian and PKV Sync write `<<<<<<<` into notes, frontmatter included; TrewSync keeps both versions as files.
 
 ## First three after M5
 

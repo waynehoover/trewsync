@@ -153,7 +153,7 @@ var (
 
 // Entry is one version of one file.
 //
-// There is no user or owner field. Trew syncs one person's devices, so
+// There is no user or owner field. TrewSync syncs one person's devices, so
 // identity would be a column that is always the same value, and the philosophy
 // doc refuses teams outright rather than half-building them.
 type Entry struct {

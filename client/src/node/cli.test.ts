@@ -779,7 +779,7 @@ describe("status", () => {
  *
  * Each file is made directly on disk, the way such names arrive in a real
  * vault: from an editor, another sync tool or a shell, never through this
- * client. Each is a name Basalt allowed and Trew's server refuses (hazard 9 in
+ * client. Each is a name Basalt allowed and TrewSync's server refuses (hazard 9 in
  * plan/strip-ledger.md), and the refusal carries the server's reason, whose
  * code comes first (plan/protocol.md, "Paths").
  */

@@ -330,7 +330,7 @@ func TestRevokingADeviceDoesNotTouchTheHistoryItWrote(t *testing.T) {
 
 // Hazard 4, decided: revoking the last device is allowed (plan/protocol.md,
 // "Devices and invites"). Basalt refused it, because what it left was a vault
-// only the recovery key opened; Trew has no key a device holds that the
+// only the recovery key opened; TrewSync has no key a device holds that the
 // server cannot reissue, and the way back is an invite from the server. So the
 // last revoke succeeds, the history it leaves is untouched, and the vault can
 // still be given a device.

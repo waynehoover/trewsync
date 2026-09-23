@@ -239,7 +239,7 @@ describe("loading", () => {
   it("comes up unpaired, and says so", async () => {
     const { plugin } = await load();
     expect(plugin.paired).toBe(false);
-    expect(status(plugin)).toBe("Trew Sync: Not paired.");
+    expect(status(plugin)).toBe("TrewSync: Not paired.");
     expect(statusIcon(plugin)).toBe("link");
   });
 
@@ -256,7 +256,7 @@ describe("loading", () => {
       "verify-contents",
       "version-history",
     ]);
-    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["Trew Sync"]);
+    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["TrewSync"]);
     expect(plugin.statusBarItems.length).toBe(1);
     // create, modify, delete, rename. Without these it only syncs on a timer.
     expect(app.vault.handlerCount()).toBe(4);
@@ -408,7 +408,7 @@ describe("where its own state goes", () => {
     await until("it to give up", () => plugin.currentState.kind === "stopped");
     expect(notices.map((n) => n.message).join(" ")).toMatch(/would sync/);
     expect(statusIcon(plugin)).toBe("alert-triangle");
-    expect(status(plugin)).toMatch(/^Trew Sync: Stopped:/);
+    expect(status(plugin)).toMatch(/^TrewSync: Stopped:/);
   }, 300_000);
 });
 
@@ -433,7 +433,7 @@ describe("pairing", () => {
     expect(plugin.deviceName).toBe("laptop");
     expect(statusIcon(plugin)).toBe("cloud-check");
     expect(summaries).toContain("1 sent");
-    expect(status(plugin)).toMatch(/^Trew Sync: (?:1 sent|Up to date), as of /);
+    expect(status(plugin)).toMatch(/^TrewSync: (?:1 sent|Up to date), as of /);
     // Saved in a form that survives the JSON round trip Obsidian does, and
     // exactly the device's own credential: its row and the token for it. No
     // invite: that is held only while a pairing is pending.
@@ -893,7 +893,7 @@ describe("when things go wrong", () => {
     await plugin.syncNow();
     expect(plugin.currentState.kind).toBe("failed");
     expect(notices.some((n) => n.message.includes("editor disk full"))).toBe(true);
-    expect(notices.some((n) => n.message === "Trew: up to date")).toBe(false);
+    expect(notices.some((n) => n.message === "TrewSync: up to date")).toBe(false);
   });
 
   it("shows one busy action and one result for repeated manual sync requests", async () => {
@@ -919,7 +919,7 @@ describe("when things go wrong", () => {
       expect(button.disabled).toBe(true);
       release();
       await Promise.all([first, second]);
-      expect(notices.filter((n) => n.message === "Trew: up to date")).toHaveLength(1);
+      expect(notices.filter((n) => n.message === "TrewSync: up to date")).toHaveLength(1);
       expect(button.label).toBe("Sync now");
       expect(button.disabled).toBe(false);
       expect(app.vault.adapter.filePaths().filter((p) => !p.startsWith(".obsidian/"))).toEqual([]);
@@ -1007,7 +1007,7 @@ describe("when things go wrong", () => {
       () => plugin.currentState.kind === "offline",
     );
     expect(statusIcon(plugin)).toBe("cloud-off");
-    expect(status(plugin)).toMatch(/^Trew Sync: Offline:/);
+    expect(status(plugin)).toMatch(/^TrewSync: Offline:/);
   }, 300_000);
 
   /**
@@ -1234,7 +1234,7 @@ describe("on a platform the tests do not reach", () => {
     expect(
       plugin.statusBarItems[0]!.children.some((c) => c.cls.includes("trew-status-platform")),
     ).toBe(false);
-    expect(status(plugin)).toBe("Trew Sync: Not paired.");
+    expect(status(plugin)).toBe("TrewSync: Not paired.");
     choosePairing(plugin);
     expect(panelText()).not.toMatch(/not supported|untested/);
     expect(supportLink()).toBeUndefined();
@@ -1556,7 +1556,7 @@ describe("unlinking", () => {
     expect(plugin.paired).toBe(false);
     expect(plugin.savedData).toBe(null);
     expect(statusIcon(plugin)).toBe("link");
-    expect(status(plugin)).toBe("Trew Sync: Not paired.");
+    expect(status(plugin)).toBe("TrewSync: Not paired.");
     expect(app.vault.adapter.text("keep.md")).toBe("still here");
 
     // The index goes too. It records what this device believes it has
@@ -1612,7 +1612,7 @@ describe("the panel, which is a modal and a settings tab", () => {
    * It was reachable from the ribbon, the status bar and the command palette,
    * and nowhere else, because the plugin registered no settings tab. Obsidian
    * draws a plugin's gear in Settings only for a plugin that calls
-   * `addSettingTab`, so Settings had no Trew entry at all and somebody
+   * `addSettingTab`, so Settings had no TrewSync entry at all and somebody
    * looking for the plugin's interface where every other plugin keeps it
    * found nothing and concluded there was none. Reported by the one person
    * running it, who could not find the settings screen.
@@ -1624,7 +1624,7 @@ describe("the panel, which is a modal and a settings tab", () => {
     const { plugin } = await load();
     expect(
       plugin.settingTabs.length,
-      "the plugin registers no settings tab, so Settings shows no Trew entry at all",
+      "the plugin registers no settings tab, so Settings shows no TrewSync entry at all",
     ).toBe(1);
 
     const tab = plugin.settingTabs[0]!;
@@ -2062,14 +2062,14 @@ describe("on a device with no status bar", () => {
     await fresh();
     const { plugin } = await load();
     const ribbon = plugin.ribbonIcons[0]!;
-    expect(ribbon.title).toBe("Trew Sync");
+    expect(ribbon.title).toBe("TrewSync");
 
     await startVault(plugin, "laptop");
     await synced(plugin);
 
     // The same sentence the status bar carries, somewhere a phone shows it.
     const label = ribbon.el.attributes.get("aria-label") ?? "";
-    expect(label, `the ribbon says ${JSON.stringify(label)}`).toMatch(/^Trew: /);
+    expect(label, `the ribbon says ${JSON.stringify(label)}`).toMatch(/^TrewSync: /);
     expect(label).not.toMatch(/connecting/);
     expect(ribbon.el.attributes.get("data-icon")).toBe("cloud-check");
   }, 300_000);
@@ -3491,7 +3491,7 @@ describe("pairing honestly", () => {
     await until("it to stop", () => plugin.currentState.kind === "stopped");
     const said = notices.map((n) => n.message).join(" ");
     expect(said).toMatch(/could not join/);
-    expect(said).toMatch(/open the Trew panel and pair it again/);
+    expect(said).toMatch(/open the TrewSync panel and pair it again/);
     expect(said).toMatch(/new invite/);
     expect(said).not.toMatch(/syncing/);
     choosePairing(plugin);
@@ -3601,7 +3601,7 @@ describe("on a phone", () => {
       expect(plugin.statusBarItems).toHaveLength(0);
       await startVault(plugin, "phone");
       await until("a sync", () => plugin.currentState.kind === "synced");
-      expect(plugin.ribbonIcons[0]!.el.attributes.get("aria-label")).toMatch(/^Trew: .*as of/);
+      expect(plugin.ribbonIcons[0]!.el.attributes.get("aria-label")).toMatch(/^TrewSync: .*as of/);
     } finally {
       Platform.isMobileApp = false;
     }
@@ -3858,7 +3858,7 @@ describe("version history on the file menu (P-D8)", () => {
 
     const { menu, items } = fakeMenu();
     app.workspace.fire("file-menu", menu, { path: "daily/note.md", extension: "md" });
-    expect(items.map((i) => i.title)).toEqual(["Trew: version history"]);
+    expect(items.map((i) => i.title)).toEqual(["TrewSync: version history"]);
     expect(items[0]!.icon).toBe("history");
 
     modals.length = 0;
@@ -4074,7 +4074,7 @@ describe("what is still in flight when a vault is unlinked (P-D2, P-D3)", () => 
     gate.release();
     await pass;
 
-    // Unpaired is the truth. "Trew has stopped" or a summary of a pass
+    // Unpaired is the truth. "TrewSync has stopped" or a summary of a pass
     // over a vault that is gone are both louder than the truth and wrong.
     expect(plugin.currentState.kind).toBe("unpaired");
     expect(notices.map((n) => n.message).join(" ")).toBe("");
@@ -4198,7 +4198,7 @@ describe("an older Obsidian", () => {
       "verify-contents",
       "version-history",
     ]);
-    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["Trew Sync"]);
+    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["TrewSync"]);
     expect(plugin.statusBarItems.length).toBe(1);
     // The four vault events and the file-menu entry, all after the guard.
     expect(plugin.registeredEvents.length).toBe(5);
@@ -4267,7 +4267,7 @@ describe("what the status bar shows", () => {
       expect(icon, `${state.kind} chose no glyph`).not.toBe("");
       expect(plugin.statusBarItems[0]!.allText()).toBe("");
       expect(plugin.statusBarItems[0]!.children).toHaveLength(1);
-      expect(status(plugin), `${state.kind} has no tooltip`).toMatch(/^Trew Sync: \S/);
+      expect(status(plugin), `${state.kind} has no tooltip`).toMatch(/^TrewSync: \S/);
       seen.add(icon);
     }
     // Not all the same glyph, or the bar would say nothing by changing.
@@ -4286,7 +4286,7 @@ describe("what the status bar shows", () => {
     const { plugin } = await load();
     for (const state of states) {
       (plugin as unknown as { setState(s: unknown): void }).setState(state);
-      const sentence = status(plugin).replace(/^Trew Sync: /, "");
+      const sentence = status(plugin).replace(/^TrewSync: /, "");
       expect(sentence, `${state.kind} opens mid-sentence`).toMatch(/^[A-Z0-9]/);
     }
   });

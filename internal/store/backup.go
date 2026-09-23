@@ -78,7 +78,7 @@ type BackupReport struct {
 	// store it came from: the last good copy was never refreshed, and `purge
 	// -backup` could then never be satisfied either, so the safety net was cut
 	// by the thing holding it. (Basalt met it with entries whose authenticator
-	// predated F20; Trew has no authenticator and keeps the mechanism.)
+	// predated F20; TrewSync has no authenticator and keeps the mechanism.)
 	//
 	// So a fault the source has as well is reported and does not block. A
 	// fault the source does not have is the copy being wrong, and that still
@@ -797,7 +797,7 @@ func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 // or rollback journal. Publishing a new database beside those files lets
 // SQLite replay old pages over a snapshot we just verified. Keep the recovery
 // copy intact; the caller holds its exclusive data lock throughout this check
-// and publication, so another Trew process cannot create a journal here.
+// and publication, so another TrewSync process cannot create a journal here.
 func refuseDestinationRecovery(destDir string) error {
 	dbPath, _ := DataDir(destDir)
 	for _, suffix := range []string{"-wal", "-journal"} {

@@ -122,7 +122,7 @@ func TestI23InvitesAreSingleUseAndExpire(t *testing.T) {
 // in a stable order, and carries nothing that would let a reader redeem one.
 //
 // The listing type has an id, a label and an expiry, which is the property and
-// not an accident of what this test asks for. A Trew invite token is the
+// not an accident of what this test asks for. A TrewSync invite token is the
 // whole credential, so a listing that carried it, or its digest, or anything
 // derived from it, would hand a working invite to every paired device.
 func TestInvitesListsWhatCanStillBeRedeemed(t *testing.T) {

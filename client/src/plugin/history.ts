@@ -201,7 +201,7 @@ export class HistoryModal extends Modal {
       // it here took the Load more button away, so an offline moment while
       // the modal opened left a window whose only recovery was closing it
       // and opening it again.
-      new Notice(`Trew: ${(err as Error).message}`, 10_000);
+      new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
       this.failed = (err as Error).message;
       this.render();
       return;
@@ -422,7 +422,7 @@ export class HistoryModal extends Modal {
       new Notice(describeRestore(version, done), done.sent ? undefined : 10_000);
       this.close();
     } catch (err) {
-      new Notice(`Trew: ${(err as Error).message}`, 10_000);
+      new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
     } finally {
       this.restoring = false;
       if (!this.closed) this.renderPane();

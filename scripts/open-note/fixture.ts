@@ -40,7 +40,7 @@ export default class OpenNoteSmoke extends Plugin {
     const result: Record<string, unknown> = {};
     const previousLeaf = this.app.workspace.activeLeaf;
     const leaves: WorkspaceLeaf[] = [];
-    const path = `Trew editor check ${Date.now()}.md`;
+    const path = `TrewSync editor check ${Date.now()}.md`;
     const kept = path.replace(".md", " (kept).md");
     const enc = new TextEncoder();
     const renames: string[] = [];
@@ -73,7 +73,7 @@ export default class OpenNoteSmoke extends Plugin {
           kept,
         );
       };
-      result.mode = NATIVE_WRITES ? "native Vault.modify control" : "Trew";
+      result.mode = NATIVE_WRITES ? "native Vault.modify control" : "TrewSync";
       const samples: number[] = [];
       for (let i = 0; i < 12; i++) {
         const before = await this.app.vault.read(file);

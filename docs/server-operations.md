@@ -1,4 +1,4 @@
-# Maintain your Trew server
+# Maintain your TrewSync server
 
 [Documentation](index.md) · [Server setup](server.md) · [Command reference](server-reference.md)
 
@@ -39,7 +39,7 @@ docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
   trewd verify -deep -data /backup/snapshot
 ```
 
-The destination must be outside the data directory; Trew refuses nested
+The destination must be outside the data directory; TrewSync refuses nested
 backups. These commands use the image's default user, 65532. Adjust ownership
 if your deployment uses another account. Copy the verified snapshot to another
 disk or backup host as well.
@@ -49,7 +49,7 @@ their history in plaintext, and so does every backup of it: anyone who can read
 the backup directory can read the vault. Keep backups on encrypted storage,
 including backups that stay on the same machine, and treat the backup host
 like the server. Also back up the ordinary Markdown files on a device for a
-copy independent of Trew.
+copy independent of TrewSync.
 
 ### Schedule backups
 

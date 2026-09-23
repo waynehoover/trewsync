@@ -1,4 +1,4 @@
-# Trew on a homelab.
+# TrewSync on a homelab.
 #
 # No TLS here on purpose: no key material lives in this binary. Put
 # `tailscale serve`, Caddy or a tunnel in front, and leave this published only

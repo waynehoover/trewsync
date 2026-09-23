@@ -711,7 +711,7 @@ export async function walkPanelStates(
 }
 
 const HEADER = [
-  "The Trew panel, in every state it has.",
+  "The TrewSync panel, in every state it has.",
   "",
   "Not a screenshot, and it cannot be one: a picture of this panel needs Obsidian,",
   "which is proprietary and is not on a CI runner, and every pixel of its",
@@ -765,7 +765,7 @@ export function asHtml(shots: Shot[]): string {
   return [
     "<!doctype html>",
     '<html lang="en"><head><meta charset="utf-8">',
-    "<title>Trew panel states</title>",
+    "<title>TrewSync panel states</title>",
     "<style>",
     "body{font:14px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;color:#222}",
     "pre{background:#f6f6f6;padding:1rem;overflow-x:auto;font:12px/1.45 ui-monospace,monospace}",
@@ -774,7 +774,7 @@ export function asHtml(shots: Shot[]): string {
     "header p{white-space:pre-wrap}",
     "@media(prefers-color-scheme:dark){body{background:#181818;color:#ddd}pre{background:#222}.why{color:#aaa}}",
     "</style></head><body>",
-    "<h1>Trew panel states</h1>",
+    "<h1>TrewSync panel states</h1>",
     `<header><p>${escape(HEADER)}</p></header>`,
     `<nav><ol>\n${nav}\n</ol></nav>`,
     body,

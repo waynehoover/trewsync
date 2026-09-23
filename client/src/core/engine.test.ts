@@ -1604,8 +1604,8 @@ describe("two notes the receiving disk cannot hold apart", () => {
  * the NFC rule ever uploaded to a Basalt server.
  *
  * A protocol 1 server refuses such a path at the put (`nfc`, plan/protocol.md,
- * "Paths"), and a device joins Trew by pairing fresh rather than inheriting a
- * Basalt history, so a Trew server never holds one. The engine still files a
+ * "Paths"), and a device joins TrewSync by pairing fresh rather than inheriting a
+ * Basalt history, so a TrewSync server never holds one. The engine still files a
  * name off the wire under its NFC spelling, because that is the one place a
  * path from the wire becomes an identity here, and two checks are cheaper than
  * one recovery (PLAN.md section 4.1). So these cases are played by a server

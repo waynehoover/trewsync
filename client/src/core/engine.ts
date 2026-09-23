@@ -207,7 +207,7 @@ export function refuseIfBehind(serverCursor: number, ownCursor: number): void {
 export const REJOIN_ADVICE =
   "A restore through trewd backup starts a new epoch and needs nothing from here; this is a " +
   "data directory copied back behind the server's back. To rejoin it and keep what only this " +
-  "device holds, back the server up, then press Rejoin this server in the Trew panel, or unlink " +
+  "device holds, back the server up, then press Rejoin this server in the TrewSync panel, or unlink " +
   "this device and pair it again with a new invite. Either resets the merge base, so the next " +
   "edit made on two devices at once makes conflict copies instead of merging.";
 
@@ -1306,7 +1306,7 @@ export class Engine {
 
     // The spelling the sender used, and the one this device files it under.
     // They differ only when a peer spells a name in a Unicode normal form
-    // that is not NFC, which the server refuses, so for a Trew server they
+    // that is not NFC, which the server refuses, so for a TrewSync server they
     // are always the same; the fold is kept because it is the one place a
     // path off the wire becomes an identity here.
     const wires = batch.entries.map((e) => e.path);

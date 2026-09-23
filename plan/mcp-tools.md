@@ -14,7 +14,7 @@ Ported from Basalt's TypeScript MCP (`basalt:client/src/cli/mcp-tools.ts` and fr
 
 ## What changes
 
-| Basalt | Trew | Why |
+| Basalt | TrewSync | Why |
 |---|---|---|
 | `base` is SHA-256 of the local file bytes | `base` is the version UID, bound to the store epoch | The store's conditional write is keyed by UID; it is the same precondition devices use. |
 | Before-image sibling file, verified and flushed | `previousUid` in the result, **pinned in `op_pins`** | History is only a before-image if purge cannot reclaim it. An age cutoff does not achieve that; see PLAN §4.5, where the 30-day proposal was shown to delete the before-image of a year-old note on the day an agent edits it. |

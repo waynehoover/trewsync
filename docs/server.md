@@ -1,4 +1,4 @@
-# Set up your Trew server
+# Set up your TrewSync server
 
 [Documentation](index.md) · [Maintenance](server-operations.md) · [Command reference](server-reference.md)
 
@@ -9,8 +9,8 @@ backups. Put the data directory on encrypted storage (LUKS, FileVault, ZFS
 native encryption) and see [Security and privacy](security.md) for what that
 does and does not cover.
 
-**Put Tailscale Serve or an HTTPS reverse proxy in front of Trew.** Your devices
-connect to the proxy; Trew's own port stays private. For a personal homelab,
+**Put Tailscale Serve or an HTTPS reverse proxy in front of TrewSync.** Your devices
+connect to the proxy; TrewSync's own port stays private. For a personal homelab,
 we recommend [Tailscale Serve](#tailscale-recommended). If you already use a domain
 and an HTTPS proxy, [use that instead](#caddy).
 
@@ -78,10 +78,10 @@ handling and a 30-second shutdown allowance.
 
 ## Secure access
 
-Trew does not provide HTTPS itself. Tailscale Serve or your reverse proxy
+TrewSync does not provide HTTPS itself. Tailscale Serve or your reverse proxy
 provides the secure connection:
 
-**Your devices → Tailscale Serve or HTTPS proxy → Trew**
+**Your devices → Tailscale Serve or HTTPS proxy → TrewSync**
 
 Use the proxy's `wss://` address in the plugin. Keep the raw server port private:
 over plain `ws://`, your notes and device credentials cross the network
@@ -89,7 +89,7 @@ readable to anyone on the path.
 
 ### Tailscale (recommended)
 
-This keeps Trew accessible only to devices allowed on your Tailscale network,
+This keeps TrewSync accessible only to devices allowed on your Tailscale network,
 without a public domain or router port forwarding. Install and connect Tailscale
 on the server and each device, including your phone.
 
@@ -99,7 +99,7 @@ On the server, check for existing routes first:
 tailscale serve status
 ```
 
-If the default HTTPS address is free, publish Trew there:
+If the default HTTPS address is free, publish TrewSync there:
 
 ```bash
 tailscale serve --bg 3003
@@ -113,13 +113,13 @@ access. See [Tailscale's Serve guide](https://tailscale.com/docs/reference/tails
 
 If another app already uses that address, choose a free HTTPS port with
 `tailscale serve --bg --https=8443 3003`, and include `:8443` in the plugin's
-address. The final `3003` is Trew's internal port, not the port you necessarily
+address. The final `3003` is TrewSync's internal port, not the port you necessarily
 enter on your phone.
 
 ### Caddy
 
 For an internet-accessible endpoint, point a domain to your server and let Caddy
-handle HTTPS. With Caddy running on the same host as Trew, use:
+handle HTTPS. With Caddy running on the same host as TrewSync, use:
 
 ```caddyfile
 sync.example.org {
@@ -132,7 +132,7 @@ Reload Caddy and use `wss://sync.example.org`. The usual Caddy setup needs ports
 Caddy handles WebSockets automatically. See [Caddy's reverse-proxy guide](https://caddyserver.com/docs/quick-starts/reverse-proxy).
 
 An existing proxy is fine too: it must provide a trusted HTTPS certificate and
-support WebSockets. If the proxy runs in Docker, connect it to Trew over a
+support WebSockets. If the proxy runs in Docker, connect it to TrewSync over a
 private Docker network; `127.0.0.1` inside the proxy container refers to that
 container, not the host.
 
@@ -167,7 +167,7 @@ otherwise it names this machine's own addresses, one per line, at the server's
 own port, which no device can use while the proxy in front terminates TLS.
 
 1. [Install the plugin](plugin.md#install) on your first device.
-2. Open Trew, paste the invite into **Invite**, check the server it names, and
+2. Open TrewSync, paste the invite into **Invite**, check the server it names, and
    press **Pair**.
 3. Wait for sync to finish.
 4. Use **Add another device → Create invite** for each additional device.
@@ -208,8 +208,8 @@ Server, plugin, and CLI release numbers are separate; protocol compatibility
 determines whether they can connect. An incompatible client stops with a
 protocol error instead of syncing partially.
 
-This source tree speaks protocol 1, Trew's own. Basalt Sync's releases speak
-protocol 7, and a Basalt client and a Trew server refuse each other at the
+This source tree speaks protocol 1, TrewSync's own. Basalt Sync's releases speak
+protocol 7, and a Basalt client and a TrewSync server refuse each other at the
 handshake, naming both numbers; moving from Basalt is a fresh pairing, not an
 upgrade. For source builds, use the same revision for the server and clients.
 

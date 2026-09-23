@@ -236,7 +236,7 @@ type unitArgs struct {
 func unit(a unitArgs) string {
 	return strings.Join([]string{
 		"[Unit]",
-		"Description=Trew, self-hosted sync for Obsidian",
+		"Description=TrewSync, self-hosted sync for Obsidian",
 		"Documentation=https://github.com/waynehoover/trew",
 		"After=network-online.target",
 		"Wants=network-online.target",

@@ -131,7 +131,7 @@ if ! $runbookonly; then
 rm -rf "$out"
 mkdir -p "$out/plugin" "$out/server"
 
-echo "trew $version ($commit)"
+echo "TrewSync $version ($commit)"
 echo
 
 # ---- the server ----------------------------------------------------------
@@ -341,8 +341,8 @@ together. Publish the notes on GitHub; do not commit duplicate changelog docs.
 To publish the plugin, tagged bare because the community directory requires the
 tag to be exactly the manifest version:
 
-  git tag -a @PLUGIN@ -m "Trew Sync @PLUGIN@" && git push origin @PLUGIN@
-  gh release create @PLUGIN@ --draft --title "Trew Sync @PLUGIN@" \
+  git tag -a @PLUGIN@ -m "TrewSync @PLUGIN@" && git push origin @PLUGIN@
+  gh release create @PLUGIN@ --draft --title "TrewSync @PLUGIN@" \
     --notes-file /tmp/trew-plugin-@PLUGIN@-notes.md \
     release/plugin/main.js release/plugin/manifest.json release/plugin/styles.css \
     release/plugin/SHA256SUMS

@@ -102,7 +102,7 @@ export interface Console {
   err(line: string): void;
 }
 
-export const USAGE = `trew: self-hosted sync for Obsidian
+export const USAGE = `trew: the TrewSync command-line client, self-hosted sync for Obsidian
 
   trew pair INVITE                        add this device to a vault with an invite (- reads it
                                             from standard input); trew pair alone finishes a
@@ -619,7 +619,7 @@ async function cmdInvite(args: Args, io: Console): Promise<number> {
   }
   io.out(issued.invite);
   io.out("");
-  io.out(`Paste it into trew pair, or into the Trew panel, on the new device.`);
+  io.out(`Paste it into trew pair, or into the TrewSync panel, on the new device.`);
   io.out(
     issued.expiresAt === null
       ? `It works once and does not expire. trew uninvite ${asTyped(issued.id)} cancels it.`

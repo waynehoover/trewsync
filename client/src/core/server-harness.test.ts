@@ -760,7 +760,7 @@ describe("refusals that the session survives", () => {
    * Probed with what a Basalt plugin actually sends, a protocol 7 hello with
    * the crypto suite it implements, and with the credentials of a device this
    * server really has (hazard 7 in plan/strip-ledger.md). A Basalt plugin
-   * meeting a Trew server has to be told `proto` with both numbers named,
+   * meeting a TrewSync server has to be told `proto` with both numbers named,
    * which says which end to change, and not `auth`, which would send somebody
    * to re-pair a device that will never speak this server's protocol.
    */

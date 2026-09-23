@@ -6,7 +6,7 @@ Definitions of the review IDs cited in code, such as `(R40)` and `(I29)`.
 These titles preserve the original reviewers' wording. They describe historical
 work recorded as resolved or deliberately declined, not a fresh readiness audit.
 
-Trew is forked from Basalt Sync (github.com/waynehoover/basalt-sync, commit
+TrewSync is forked from Basalt Sync (github.com/waynehoover/basalt-sync, commit
 664a963). Every ID below, and the review files it links, comes from Basalt's
 history and is kept verbatim, so names, versions and paths in them are
 Basalt's. The F section at the end is the one addition: those IDs were

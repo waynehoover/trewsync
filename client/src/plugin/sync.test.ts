@@ -143,7 +143,7 @@ describe("a vault reaching another device", () => {
     const b = await device("b");
 
     a.adapter.seed("Meeting notes.md", "# Meeting\n\nDiscussed the thing.\n");
-    a.adapter.seed("Projects/Trew.md", "# Trew\n\nA sync tool.\n");
+    a.adapter.seed("Projects/TrewSync.md", "# TrewSync\n\nA sync tool.\n");
     const bytes = new Uint8Array(5000);
     for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 37) & 0xff;
     await a.adapter.writeBinary("attachment.bin", bytes.slice().buffer as ArrayBuffer, {
@@ -152,9 +152,13 @@ describe("a vault reaching another device", () => {
 
     await converge(a, b);
 
-    expect(b.notes().sort()).toEqual(["Meeting notes.md", "Projects/Trew.md", "attachment.bin"]);
+    expect(b.notes().sort()).toEqual([
+      "Meeting notes.md",
+      "Projects/TrewSync.md",
+      "attachment.bin",
+    ]);
     expect(b.text("Meeting notes.md")).toBe("# Meeting\n\nDiscussed the thing.\n");
-    expect(b.text("Projects/Trew.md")).toBe("# Trew\n\nA sync tool.\n");
+    expect(b.text("Projects/TrewSync.md")).toBe("# TrewSync\n\nA sync tool.\n");
     expect([...new Uint8Array(await b.adapter.readBinary("attachment.bin"))]).toEqual([...bytes]);
     // And the folder came too, so an empty one would as well.
     expect(await b.adapter.exists("Projects")).toBe(true);

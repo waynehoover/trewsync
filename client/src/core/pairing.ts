@@ -405,7 +405,7 @@ function token(
  *
  * `parseInviteString` is the codec, shared with the Go server through
  * `protocol-fixtures.json`. This adds the one thing a person needs that the
- * codec cannot know: a string from Basalt, the project Trew was forked from,
+ * codec cannot know: a string from Basalt, the project TrewSync was forked from,
  * named as such, since its recovery keys and invites look like these and open
  * nothing here.
  */
@@ -413,7 +413,7 @@ export function parseInvite(input: string): InviteString {
   const text = input.trim();
   if (text.startsWith("basalt3_") || text.startsWith("basalt3i_")) {
     throw new Error(
-      "that is a Basalt string, and Trew does not read them. Pair with a trew1i_ invite: " +
+      "that is a Basalt string, and TrewSync does not read them. Pair with a trew1i_ invite: " +
         "trewd invite on the server makes one, and so does a paired device's panel.",
     );
   }

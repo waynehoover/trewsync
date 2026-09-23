@@ -348,7 +348,7 @@ describe("a server that replays an old version (F11, pinned)", () => {
  * are the same trick under different names, and a delta naming one of them
  * replayed into a state it was missing from.
  *
- * These are legal filenames on every filesystem Trew runs on.
+ * These are legal filenames on every filesystem TrewSync runs on.
  */
 describe("a note whose name is a property name (F14)", () => {
   const awkward = ["__proto__", "constructor", "toString", "hasOwnProperty"];

@@ -1748,7 +1748,7 @@ export class ObsidianIndexStore implements IndexStore {
   ) {
     this.files = new ObsidianJournalFiles(adapter, normalizePath(path));
     this.store = new JournalIndexStore(this.files, {
-      log: (message: string, ...rest: unknown[]) => console.warn(`Trew Sync: ${message}`, ...rest),
+      log: (message: string, ...rest: unknown[]) => console.warn(`TrewSync: ${message}`, ...rest),
       ...opts,
     });
   }

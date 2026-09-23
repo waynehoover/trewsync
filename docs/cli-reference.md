@@ -287,7 +287,7 @@ complete base, its action and exact source edits. Offsets count JavaScript UTF-1
 code units; `old` and `text` carry the actual removed and inserted text.
 
 To apply, resubmit the same tool arguments with the complete returned `changes`
-array. Trew recomputes the operation and refuses `plan_changed` if an affected
+array. TrewSync recomputes the operation and refuses `plan_changed` if an affected
 note, base or edit differs, including a new affected note. Inspect a new preview
 and reconsider before retrying. Never replace bases automatically.
 
@@ -302,7 +302,7 @@ every required before-image before changing any original. It rechecks bases befo
 publication and before each file. A later race or I/O failure stops the batch.
 Inspect every `results` row, including `attempted`, `applied`, `durable`,
 `beforeImage` and `preserved`; `complete:false` can accompany completed local
-changes. Trew does not roll those changes back over other writers.
+changes. TrewSync does not roll those changes back over other writers.
 
 A move creates and verifies the destination, updates approved backlinks, then
 retires the source last. It is a recoverable copy and deletion, not an atomic
@@ -445,5 +445,5 @@ material until you have inspected the retained files. Use `unlink` to remove a
 pairing; do not treat deleting state as routine repair.
 
 Supported local macOS and Linux setups release CLI exclusion when the process
-exits. Where Trew reports a fallback, `unlock` refuses a running local holder.
+exits. Where TrewSync reports a fallback, `unlock` refuses a running local holder.
 Neither manual recovery nor `--force` makes a shared network filesystem supported.

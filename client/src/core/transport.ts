@@ -43,7 +43,7 @@ import { FrameError, decodeFrame, encodeFrame } from "./frame.ts";
 /**
  * The protocol version this client speaks. A mismatch is refused, not negotiated.
  *
- * Version 1 of Trew's protocol (plan/protocol.md): Basalt's protocol 7 with
+ * Version 1 of TrewSync's protocol (plan/protocol.md): Basalt's protocol 7 with
  * the encryption taken out. Paths and bodies are plaintext, a device connects
  * with a random token of its own, and a new device joins by redeeming an
  * invite. Upgrade the server and all clients together; there is no fallback.

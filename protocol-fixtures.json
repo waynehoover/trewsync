@@ -3,7 +3,7 @@
     "One entry shape, checked by both languages (I03).",
     "",
     "The TypeScript client and the Go server each decide for themselves what a",
-    "well-formed entry is. In Basalt, which Trew was forked from, they decided",
+    "well-formed entry is. In Basalt, which TrewSync was forked from, they decided",
     "differently for a long time: its server refused an empty entry",
     "authenticator on a file and accepted one on a folder (F20), while its",
     "client checked neither and two other things the server also checked.",

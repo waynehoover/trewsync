@@ -1530,7 +1530,7 @@ func TestATruncatedChunkListIsRefused(t *testing.T) {
 
 // And a count of -1 is not special. Basalt's migration left -1 on rows written
 // before the column existed, and its reader took that as "unknown" and served
-// them. Trew has no such rows, since its schema has had the column from the
+// them. TrewSync has no such rows, since its schema has had the column from the
 // first, so -1 is only a count that disagrees with the chunk rows, and it is
 // refused like any other: an entry that cannot say how many chunks it has
 // cannot prove it was stored whole.

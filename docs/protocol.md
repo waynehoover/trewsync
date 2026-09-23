@@ -2,7 +2,7 @@
 
 [Developer documentation](development.md) · [Design and threat model](design.md)
 
-Trew uses WebSocket connections. Text frames carry JSON control messages;
+TrewSync uses WebSocket connections. Text frames carry JSON control messages;
 binary frames carry chunk bodies. Everything is readable by the server:
 contents, paths, sizes, timestamps, device labels and routing metadata. TLS in
 front of the server is required, because it is all that protects the device
@@ -16,7 +16,7 @@ Where this page and those disagree, they are right. The definitions in code are
 [wire.go](../internal/wire/wire.go) and
 [transport.ts](../client/src/core/transport.ts).
 
-Protocol 1 is Trew's own. It was derived from Basalt Sync's protocol 7 by
+Protocol 1 is TrewSync's own. It was derived from Basalt Sync's protocol 7 by
 removing the encryption: no root secret, data key, sealed paths or chunks,
 entry authenticator, registrar session, recovery key or rotation. The two do
 not interoperate, and each refuses the other at hello with `proto`, naming both

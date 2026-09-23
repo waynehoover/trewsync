@@ -48,7 +48,7 @@ export interface IndexEntry {
    * The chunk names for `hash`, or empty when unknown.
    *
    * The same cache one level further on. Obsidian stops at the hash because it
-   * uploads whole files; Trew uploads chunks, so re-deriving the chunk list
+   * uploads whole files; TrewSync uploads chunks, so re-deriving the chunk list
    * for an unchanged file would mean re-reading, re-chunking and re-hashing it
    * to learn something already known.
    */
@@ -326,7 +326,7 @@ function decideMissingLocally(remote: RemoteState, index: IndexEntry): Action {
  * of four thousand notes then costs four thousand stats rather than four
  * thousand reads, four thousand chunkings and four thousand rounds of hashing.
  *
- * Trew extends it to the chunk list, because it uploads chunks rather than
+ * TrewSync extends it to the chunk list, because it uploads chunks rather than
  * whole files and re-deriving that list means redoing all of the above.
  */
 export function needsRehash(

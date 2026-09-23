@@ -16,7 +16,7 @@ import (
 
 // The escape hatch: a note's bytes straight out of the store, with no device
 // and no client (PLAN.md M1). Basalt could not have one, because what it held
-// was ciphertext; Trew holds the notes in the clear, and the day every
+// was ciphertext; TrewSync holds the notes in the clear, and the day every
 // device is broken is the day somebody needs to read one from the server.
 //
 // Both commands read the store directly, read-only, under the shared data lock,

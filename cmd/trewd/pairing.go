@@ -181,7 +181,7 @@ func printPairing(out io.Writer, addr, vault string, first firstInvite) {
 	case first.Written:
 		fmt.Fprintln(out, "No device is paired with this vault yet. The invite for the first one is in")
 		fmt.Fprintf(out, "  %s\n", first.Path)
-		fmt.Fprintf(out, "and works once, until %s. Paste a line from it into Trew on that device.\n",
+		fmt.Fprintf(out, "and works once, until %s. Paste a line from it into TrewSync on that device.\n",
 			first.ExpiresAt.UTC().Format(time.RFC3339))
 		fmt.Fprintln(out, "Each line names one address of this server; use the one the device can reach.")
 	case first.Outstanding:

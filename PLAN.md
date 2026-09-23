@@ -1,6 +1,6 @@
-# Trew: self-hosted Obsidian sync with a built-in agent
+# TrewSync: self-hosted Obsidian sync with a built-in agent
 
-Said TROO. *Trew* is an old spelling of *true* (Middle English *trewe*: faithful, trustworthy), which is what a sync tool owes the notes it carries. Chosen by the owner on 2026-09-22, who judged its one objection, a typo tax (people type "true"), not worth avoiding. It replaced Telimus, which had replaced Lyell earlier the same day; both are recorded in [§10](#10-the-name) with the candidates that did not survive. The on-disk identity (`trew1i_` invite strings, `.trew` state directories, the store's product identifier) derives from it, so it is settled, not a placeholder.
+*Trew*, said TROO, is an old spelling of *true* (Middle English *trewe*: faithful, trustworthy), which is what a sync tool owes the notes it carries. Chosen by the owner on 2026-09-22, who judged its one objection, a typo tax (people type "true"), not worth avoiding. It replaced Telimus, which had replaced Lyell earlier the same day. On 2026-09-23 the owner settled how it is written: **TrewSync**, one word, wherever a person reads the product's name; `trewd` for the server's command; `trew` for the headless client's. [§10](#10-the-name) records all of it, with the candidates that did not survive. The on-disk identity (`trew1i_` invite strings, `.trew` state directories, the store's product identifier) derives from *trew* and did not change, so it is settled, not a placeholder.
 
 This plan is written for agents. Each milestone lists tasks small enough for one session, the Basalt files they start from, and the test that proves them done. Read [plan/reuse-map.md](plan/reuse-map.md), [plan/protocol.md](plan/protocol.md), and [plan/mcp-tools.md](plan/mcp-tools.md) before starting a task that touches those areas.
 
@@ -50,7 +50,7 @@ What actually carries over:
 
 ### What changes, in one table
 
-| Basalt | Trew | Why |
+| Basalt | TrewSync | Why |
 |---|---|---|
 | Sealed paths, sealed chunks, HMAC entry authenticator | Plaintext NFC paths, chunks named by SHA-256 of raw bytes | The server is trusted and needs to read notes for MCP and search. |
 | Root secret, recovery key, wrapped data key, rotation | None. Admin access is shell access to the data directory. | No keys to recover. Losing every device means running `trewd invite` on the server. |
@@ -183,7 +183,7 @@ The mechanism is a fresh pairing. **The procedure around it is not "pair and com
 
 So M10 becomes: rehearse the whole thing on a disposable copy, settle every device against Basalt first, disable the old writer per directory before enabling the new one, verify by comparing a normalised path/kind/size/SHA-256 inventory against a freshly paired empty witness device, and keep a rollback that can export post-cutover edits. Retirement is earned by a successful restore, not by thirty days elapsing. Details in M10.
 
-**Storage identity, decided here because it constrains M1.** `PRAGMA user_version = 1` collides with Basalt's own schema version 1 (`basalt:server/internal/store/open.go:31`): a Trew binary opened on a Basalt data directory would find a version it accepts. Every data directory therefore records a **product identifier**, a schema version, and a **store epoch**, all validated before any write. A Basalt directory, an unknown product, or a newer schema is refused with the input left byte-identical. An explicit restore starts a new epoch, and cursors and MCP version preconditions bind to the epoch. Otherwise a restored database that re-issues UIDs makes a stale precondition silently match the wrong version.
+**Storage identity, decided here because it constrains M1.** `PRAGMA user_version = 1` collides with Basalt's own schema version 1 (`basalt:server/internal/store/open.go:31`): a trewd binary opened on a Basalt data directory would find a version it accepts. Every data directory therefore records a **product identifier**, a schema version, and a **store epoch**, all validated before any write. A Basalt directory, an unknown product, or a newer schema is refused with the input left byte-identical. An explicit restore starts a new epoch, and cursors and MCP version preconditions bind to the epoch. Otherwise a restored database that re-issues UIDs makes a stale precondition silently match the wrong version.
 
 ## 3. Architecture
 
@@ -305,7 +305,7 @@ The server is trusted with everything. That is the decision, and it is the right
 **Requirements, not advice:**
 
 - The data volume sits on encrypted storage (LUKS, FileVault, ZFS native). Document where the key lives and how an unattended restart unlocks it. **Owner's decision, 2026-09-22:** the homelab volume is not encrypted and that is accepted; `docs/threat-model.md` S1 records it as an accepted risk with what it costs.
-- Backups are encrypted, **including backups that stay on the same box**. `trewd backup` refuses to write outside the data directory without `--plaintext-ok`, or takes `--encrypt-to <age recipient>`. A backup on the homelab is still a backup another process can read. **Deferred by the owner, 2026-09-22:** no Trew backup destination yet. The restore rehearsal in M5.5 still runs locally, because rule 11 is about recovery, not about where copies live.
+- Backups are encrypted, **including backups that stay on the same box**. `trewd backup` refuses to write outside the data directory without `--plaintext-ok`, or takes `--encrypt-to <age recipient>`. A backup on the homelab is still a backup another process can read. **Deferred by the owner, 2026-09-22:** no TrewSync backup destination yet. The restore rehearsal in M5.5 still runs locally, because rule 11 is about recovery, not about where copies live.
 - The restore rehearsal (M5.5) exercises the encrypted path, not a plaintext shortcut.
 - Chunk names and paths are sensitive metadata: not in metrics labels, not on unauthenticated endpoints, not in public manifests.
 
@@ -637,13 +637,13 @@ The earlier version of this milestone was seven steps ending in "verify counts".
 1. **Rehearse the whole procedure on a disposable copy first.** Include attachments, large notes, nested renames, deleted notes, conflict copies, Unicode names, and a device that was offline with edits. Do not connect the rehearsal to the live vault.
 2. **Settle every device against Basalt.** Bring each online, account for local-only changes and conflicts. A device that cannot participate is frozen and gets an explicit later rejoin procedure; an unknown old tree does not get to join blindly and start writing.
 3. **Freeze and capture.** Pause writers. Take and verify both the Basalt server backup and a snapshot of readable local vault content (`basalt:docs/security.md:103`). Record the inventory. Archive the backup, its recovery key, and a compatible Basalt build together. Write down the rollback window and who owns edits made during it.
-4. **Disable the old writer per directory** before enabling the new one. Deploy Trew on an isolated address for verification. Pair the primary vault, upload, then **download to a freshly paired empty witness device and compare normalised paths, kinds, sizes, and SHA-256 content hashes.** Check excluded content explicitly rather than assuming it was meant to be excluded.
+4. **Disable the old writer per directory** before enabling the new one. Deploy TrewSync on an isolated address for verification. Pair the primary vault, upload, then **download to a freshly paired empty witness device and compare normalised paths, kinds, sizes, and SHA-256 content hashes.** Check excluded content explicitly rather than assuming it was meant to be excluded.
 5. **Migrate the phone** from a verified local backup against the reconciled inventory. Confirm no two sync systems share a local directory. Exercise offline edits, catch-up, delete and restore, and conditional undo. Start MCP **read-only**; issue a write token deliberately and separately.
-6. **If validation fails:** stop new writers, preserve the Trew server, export post-cutover changes, then reconcile against the frozen Basalt baseline. Do not point the old plugin at a changed directory and hope the old server sorts it out.
-7. **Retire on evidence, not elapsed time.** The old services and data go only after a Trew backup has been restored successfully, both devices pass the inventory check, and the rollback is no longer needed. Record the accepted result; keep the Basalt archive under an explicit policy.
+6. **If validation fails:** stop new writers, preserve the TrewSync server, export post-cutover changes, then reconcile against the frozen Basalt baseline. Do not point the old plugin at a changed directory and hope the old server sorts it out.
+7. **Retire on evidence, not elapsed time.** The old services and data go only after a TrewSync backup has been restored successfully, both devices pass the inventory check, and the rollback is no longer needed. Record the accepted result; keep the Basalt archive under an explicit policy.
 8. Update `~/code/homelab` docs and the compose comments; remove the second MCP route.
 
-Done when: independent downloads match the agreed source inventory, every participating device has converged, a Trew backup has been restored, and rollback has been rehearsed with post-cutover edits in play.
+Done when: independent downloads match the agreed source inventory, every participating device has converged, a TrewSync backup has been restored, and rollback has been rehearsed with post-cutover edits in play.
 
 ## 6. Sequence and dependencies
 
@@ -671,7 +671,7 @@ Carried from Basalt without softening:
 - Subagents run on the session's model; reports from subagents are verified, not relayed.
 - The five fix-defect shapes an outside reviewer keeps finding in Basalt (`~/.claude/projects/-Users-wayne-code-basalt/memory/basalt-protocol-and-reviews.md`): a seam before the check it proves, a vacuous test, a `finally` that deletes recovery data, a comment describing a removed mechanism, a fix applied to one of two adapters. Read every fix for them.
 
-New for Trew:
+New for TrewSync:
 
 - Every MCP mutation test asserts the displaced version is still readable by UID after the write, **and still readable after a default purge**. The universal form of this ("read every previous UID as former bytes") does not apply to creates, folders, and tombstones; those assert their own shape instead.
 - Every server-side path or size check has a test that a hand-built client can trip it. Scope enforcement is tested against a hand-built request, not against the tool list.
@@ -714,6 +714,8 @@ Newly deferred, with the condition for reopening written down rather than left a
 
 **Trew**, said TROO. An old spelling of *true* (Middle English *trewe*: faithful, loyal, trustworthy), which is what a sync tool owes the notes it carries. The owner chose it on 2026-09-22. Round one had rejected it for a permanent typo tax (people type "true"); the owner judged that not worth avoiding. It is short, one syllable, and spelled the way an old word is spelled.
 
+**Written TrewSync, decided 2026-09-23.** The owner made the display name **TrewSync**, one word with a capital S, everywhere a person reads it: the README and every doc, the plugin's name in Obsidian and the community directory, its notices, panel and modal titles and status bar tooltip, and what the server and the headless client print. The server's command became `trewd`. Until then the server and the headless client both installed a command called `trew`, so a machine with both ran one by its full path, and a doc saying `trew invite` could mean either, since both have `invite`, `devices`, `revoke`, `uninvite` and `mcp-token`. The headless client's command stays `trew`. Every identifier derived from *trew* stayed as it was (the table at the end of this section). The rest of this section, and both rounds' tables, record what was true when they were written.
+
 Checked on 2026-09-22:
 
 | Check | Result |
@@ -721,7 +723,7 @@ Checked on 2026-09-22:
 | npm `trew`, `trew-sync` | free |
 | Obsidian community registry | no match |
 | GitHub | 524 repositories contain "trew", nearly all FiveM game mods (`trew_hud_ui` and forks); none in notes or sync |
-| Web and trademark | **Trew(R) is a registered trademark of Trew LLC**, a US warehouse-automation company that also sells warehouse execution and control software under the name (about $367M revenue). A different market from note sync, so the risk looks low, but it is a registered mark in software, and this is not legal clearance. |
+| Web and trademark | **Trew(R) is a registered trademark of Trew LLC**, a US warehouse-automation company that also sells warehouse execution and control software under the name (about $367M revenue). A different market from note sync, so the risk looks low, but it is a registered mark in software, and this is not legal clearance. Since 2026-09-23 the product's name is TrewSync, not the bare word; that is not legal clearance either. |
 
 These are absence checks on one day, not reservations. Domain and trademark clearance were not done.
 
@@ -772,7 +774,9 @@ Settled now, before the invite format and on-disk identity freeze:
 | Thing | Value |
 |---|---|
 | Go module | `github.com/waynehoover/trew` |
-| Binary | `trew` |
+| Display name | TrewSync (2026-09-23; before that, Trew) |
+| Server command | `trewd` (2026-09-23; before that, `trew`) |
+| Headless client command | `trew`, the npm package's `bin` |
 | Environment | `TREW_DATA` |
 | State directory | `.trew`, staging marks `.trew-tmp-` |
 | Plugin id | `trew-sync` |

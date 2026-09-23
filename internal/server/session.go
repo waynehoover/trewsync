@@ -1902,7 +1902,7 @@ const clockSkewTolerance = 24 * time.Hour
 //
 // What was proposed instead was a server-stamped arrival time that the UI would
 // prefer over the client's. Basalt declined it because its server could write
-// nothing a key did not cover. A Trew server holds the notes in the clear,
+// nothing a key did not cover. A TrewSync server holds the notes in the clear,
 // so that reason is gone, and PLAN.md section 4.5 gives operations a server
 // commit time for retention; the label a device shows stays the device's own.
 // Saying the clock is wrong costs nothing and fixes the cause.
@@ -2338,7 +2338,7 @@ func (s *Session) handleRename(m wire.In) error {
 //
 // Including the last one (plan/protocol.md, "Devices and invites"). Basalt
 // refused that from a device, because what it left was a vault only the
-// recovery key opened. Trew has no key a device holds and the server cannot
+// recovery key opened. TrewSync has no key a device holds and the server cannot
 // reissue, so the way back from an empty device list is `trewd invite` on the
 // server, and a refusal would protect nothing.
 //

@@ -1851,7 +1851,7 @@ export function adviseAfterPairing(what: {
       return cli
         ? `This device is paired with the vault and ${where} holds its credential; ` +
             `run trew sync here to finish, or trew unlink to start again.`
-        : `This device is paired with the vault; Trew will connect as it on the next attempt.`;
+        : `This device is paired with the vault; TrewSync will connect as it on the next attempt.`;
     case "pending":
       return cli
         ? `The invite was sent and no answer came back, so whether the server registered this ` +
@@ -1859,7 +1859,7 @@ export function adviseAfterPairing(what: {
             `finish it with the same credential, which works even after the invite has expired ` +
             `if the server did register it.`
         : `The invite was sent and no answer came back, so whether the server registered this ` +
-            `device is not known. Trew will finish the pairing with the same credential the ` +
+            `device is not known. TrewSync will finish the pairing with the same credential the ` +
             `next time it connects.`;
     case "unreadable":
       return (
