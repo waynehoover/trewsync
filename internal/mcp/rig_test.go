@@ -66,7 +66,14 @@ type rigOption func(*Config, *rigSettings)
 
 type rigSettings struct {
 	noIndex bool
+	dir     string
+	// wrap, when set, is what the endpoint is given in place of the index.
+	wrap func(*search.Index) SearchIndex
 }
+
+// at serves the data directory dir, a backup restored for instance, rather
+// than a fresh one.
+func at(dir string) rigOption { return func(_ *Config, s *rigSettings) { s.dir = dir } }
 
 func withLimits(l Limits) rigOption { return func(c *Config, _ *rigSettings) { c.Limits = l } }
 
@@ -78,7 +85,14 @@ func withoutIndex() rigOption { return func(_ *Config, s *rigSettings) { s.noInd
 
 func newRig(t *testing.T, opts ...rigOption) *rig {
 	t.Helper()
-	dir := t.TempDir()
+	var settings rigSettings
+	for _, o := range opts {
+		o(&Config{}, &settings)
+	}
+	dir := settings.dir
+	if dir == "" {
+		dir = t.TempDir()
+	}
 	dbPath, chunkDir := store.DataDir(dir)
 	st, err := store.OpenWithSync(dbPath, chunkDir, store.SyncNormal)
 	if err != nil {
@@ -93,9 +107,17 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 	r.srv = server.New(st, log)
 	r.srv.Serves(testVault)
 	r.srv.SetVersion("test-version")
+	// Registered before the listener's Close and so run after it, and before
+	// the store's Close, registered first: httptest's Close does not wait for
+	// a hijacked WebSocket session, and a device session still writing when
+	// the store closed would outlive it. Shutdown waits for every session.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = r.srv.Shutdown(ctx)
+	})
 
 	cfg := Config{Server: r.srv, Vault: testVault, Log: log, Now: r.now}
-	var settings rigSettings
 	for _, o := range opts {
 		o(&cfg, &settings)
 	}
@@ -108,6 +130,9 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		t.Cleanup(func() { idx.Close() })
 		r.idx = idx
 		cfg.Index = idx
+		if settings.wrap != nil {
+			cfg.Index = settings.wrap(idx)
+		}
 	}
 	r.h = New(cfg)
 	t.Cleanup(r.h.Close)
@@ -117,6 +142,9 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		n.(*atomic.Int64).Add(1)
 		r.h.ServeHTTP(w, req)
 	}))
+	// The devices' protocol on the same listener, as serve mounts it, for the
+	// tests in which a device and an agent write the same vault.
+	mux.Handle("/", server.HTTPHandler(r.srv, log))
 	r.hs = httptest.NewServer(mux)
 	t.Cleanup(r.hs.Close)
 	r.url = r.hs.URL + "/mcp"

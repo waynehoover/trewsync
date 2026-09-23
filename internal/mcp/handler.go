@@ -50,6 +50,11 @@ type Config struct {
 	Version string
 	// Now is the clock, time.Now when nil.
 	Now func() time.Time
+	// Seam, when set, is called at each named point of a write between its
+	// preparation and its reply (SeamBodies, SeamCommitted, SeamBroadcast),
+	// which is where the crash matrix (PLAN.md M5 task 9) kills the server.
+	// Nil in every production build.
+	Seam func(point string)
 }
 
 // Handler is the MCP endpoint, mounted at /mcp by `trew serve --mcp`.
@@ -77,6 +82,9 @@ type Handler struct {
 	stopOnce sync.Once
 	flushed  sync.WaitGroup
 
+	// seam is Config.Seam.
+	seam func(point string)
+
 	// Hooks for tests, nil otherwise: beforeReply runs after a tool has
 	// produced its result and before the credential is checked again, which
 	// is the window a revoke must still win; duringTool runs inside a tool
@@ -98,7 +106,7 @@ func New(cfg Config) *Handler {
 	h := &Handler{
 		srv: cfg.Server, st: cfg.Server.Store(), vault: cfg.Vault, index: cfg.Index,
 		origins: map[string]bool{}, limits: cfg.Limits.withDefaults(), log: log,
-		version: cfg.Version, now: now,
+		version: cfg.Version, now: now, seam: cfg.Seam,
 		active: map[string]map[*context.CancelFunc]struct{}{},
 		stop:   make(chan struct{}),
 	}
@@ -110,7 +118,7 @@ func New(cfg Config) *Handler {
 	}
 	h.budgets = newBudgets(h.limits)
 	h.usage = newUsage(h.st, h.vault, log)
-	h.tools = readTools()
+	h.tools = append(readTools(), writeTools()...)
 	h.flushed.Add(1)
 	go func() {
 		defer h.flushed.Done()
@@ -539,6 +547,9 @@ func (h *Handler) callTool(ctx context.Context, r *http.Request, cred *credentia
 	}
 	now := h.now()
 	c := &call{h: h, cred: cred, tool: tool, now: now}
+	if n.era == stateless {
+		c.client = clientInfo(f.params)
+	}
 	var o outcome
 	// Dispatch: the scope of the credential as it stands now, whatever the
 	// tool list the client was shown.
