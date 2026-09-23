@@ -303,7 +303,7 @@ CREATE INDEX IF NOT EXISTS entry_chunks_by_name ON entry_chunks(vault_id, name);
 -- 112 ms against 5.6 ms with this, and the write it costs is 5 us against a
 -- chunk fsync of 7.8 ms.
 CREATE INDEX IF NOT EXISTS entries_by_prev ON entries(vault_id, prev_path, uid);
-` + liveSchema
+` + liveSchema + mcpTokensSchema
 
 // Store is the server's whole persistent state: entries in SQLite, bodies in a
 // chunk store.
