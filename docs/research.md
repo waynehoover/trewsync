@@ -3,8 +3,8 @@
 [Developer documentation](development.md) · [Product comparison](compared.md)
 
 This page records dated measurements and design evaluations. Those dated
-before September 22, 2026 were taken on Basalt, with its end-to-end encryption,
-and are kept as its history. Results describe
+before September 22, 2026, or measured against a numbered release, were taken
+on Basalt, with its end-to-end encryption, and are its history. Results describe
 specific fixtures, not a speed ranking against another product. The original
 transfer tables remain in `git show 573617c:docs/compared.md`.
 
