@@ -43,6 +43,10 @@ export async function clientOptions(
     // not a mirror, and the whole value of this is that the capability is
     // absent rather than merely unused.
     ...(args.readOnly || config.readOnly === true ? { readOnly: true } : {}),
+    // A name Windows cannot hold arrives as a stranded path with its reason,
+    // in `status`, rather than as a write that fails for ever (PLAN.md
+    // section 4.12). Asked of the process, since the disk is the host's.
+    ...(process.platform === "win32" ? { windows: true } : {}),
     // Only while watching. A one-shot sync prints its report at the end and
     // a line per path on the way would bury it; a client that stays running
     // has nothing else to say between passes.

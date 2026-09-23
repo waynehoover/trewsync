@@ -58,6 +58,7 @@ import { drawingGate, looksLikeExcalidraw } from "./excalidraw.ts";
 import { looksLikeMarkupPath, wellFormedMarkup } from "./markup.ts";
 import { chunkName, chunkNames, plainDigest } from "./digest.ts";
 import { pathReason, type PathReason } from "./path-policy.ts";
+import { describeWindowsRefusal, windowsRefusal } from "./windows-names.ts";
 import { conflictCopyPath, mergeText } from "./merge.ts";
 import {
   decide,
@@ -373,6 +374,17 @@ export interface EngineOptions {
    * is to say it may (I29).
    */
   readonly readOnly?: boolean;
+  /**
+   * Whether this device files notes on Windows. Default false.
+   *
+   * On, a path from another device that Windows cannot hold (a reserved
+   * device name, one of `< > : " | ? *`, a segment ending in a dot or a space)
+   * is refused on the way in as a stranded path with its reason, the way a
+   * name the protocol refuses is (PLAN.md sections 4.9 and 4.12). The server
+   * accepts these names, because every other platform can hold them, so this
+   * device is the only place the refusal can be made.
+   */
+  readonly windows?: boolean;
 }
 
 /** Overrides for a single pass. */
@@ -1453,7 +1465,7 @@ export class Engine {
   private refusedName(path: string): string | undefined {
     const known = this.refusalOf.get(path);
     if (known !== undefined) return known.why;
-    const why = refusedInboundPath(path);
+    const why = refusedInboundPath(path, this.opts.windows === true);
     this.refusalOf.set(path, { why });
     return why;
   }
@@ -1606,7 +1618,7 @@ export class Engine {
         if (
           this.ignoredPaths.has(path) ||
           this.skipped.has(path) ||
-          refusedInboundPath(path) !== undefined
+          this.refusedName(path) !== undefined
         )
           action = "blocked";
       } catch {
@@ -2127,7 +2139,7 @@ export class Engine {
       // asked; a path in neither is one a pass recorded and then cleared, and
       // a bare path with no sentence is worse than no line.
       const why =
-        this.skipped.get(path)?.why ?? this.refusedInbound.get(path) ?? refusedInboundPath(path);
+        this.skipped.get(path)?.why ?? this.refusedInbound.get(path) ?? this.refusedName(path);
       if (why !== undefined) add(path, why);
     }
     return out;
@@ -2938,7 +2950,7 @@ export class Engine {
       (remote?.uid ?? 0) !== entry.syncuid ||
       this.skipped.has(path) ||
       this.ignoredPaths.has(path) ||
-      refusedInboundPath(path) !== undefined ||
+      this.refusedName(path) !== undefined ||
       this.nowBlocked.has(path) ||
       this.pending.has(path)
     )
@@ -5200,10 +5212,19 @@ export function validityGateFor(
  * dot rule is also the shared one from paths.ts: a dot-prefixed segment never
  * syncs in either direction, because Obsidian's index does not list it and a
  * file written and never listed is reported deleted.
+ *
+ * On Windows, also a name Windows cannot hold (windows-names.ts). Checked after
+ * the protocol's rule, so a path both refuse is described by the rule every
+ * device shares. The server accepts these names, since every other platform
+ * holds them, which leaves the receiving device as the only place to refuse
+ * one; written instead, it fails, and a write that fails is retried for ever.
  */
-export function refusedInboundPath(path: string): string | undefined {
+export function refusedInboundPath(path: string, windows = false): string | undefined {
   const reason = pathReason(path);
-  if (reason === undefined) return undefined;
+  if (reason === undefined) {
+    const onWindows = windows ? windowsRefusal(path) : undefined;
+    return onWindows === undefined ? undefined : describeWindowsRefusal(onWindows);
+  }
   if (reason === "slash") {
     return path.startsWith("/")
       ? "a path starting with a slash is not canonical"

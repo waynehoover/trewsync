@@ -58,6 +58,7 @@ import { watchResume } from "./resume.ts";
 import { watchDelivery } from "./delivery.ts";
 import type { TransferActivity } from "../core/transfer.ts";
 import { describeTransfer } from "./transfer.ts";
+import { SUPPORT_TABLE, platformStanding } from "./platform-notice.ts";
 import { describeDelivery } from "../core/delivery.ts";
 import { REJOIN_ADVICE, type RepairReport, type SyncReport } from "../core/engine.ts";
 import {
@@ -1122,6 +1123,9 @@ export default class TrewPlugin extends Plugin {
       // Which row this device connects as and which token proves it, worked
       // out in core so that both shells cannot answer it differently.
       ...credentialsFor(config),
+      // A name Windows cannot hold arrives as a stranded path with its reason
+      // rather than as a write that fails for ever (PLAN.md section 4.12).
+      ...(Platform.isWin ? { windows: true } : {}),
       confirmFirstSync: (preview) => this.confirmSync(preview, "Review your first sync", current),
       confirmDeletions: (preview) => this.confirmSync(preview, "Review folder deletions", current),
       onActivity: (event) => {
@@ -2710,7 +2714,13 @@ export default class TrewPlugin extends Plugin {
       this.ribbonEl.removeClass("trew-attention", "trew-working");
       const tone = toneFor(state);
       if (tone) this.ribbonEl.addClass(tone);
-      this.ribbonEl.setAttribute("aria-label", `Trew: ${longStatus(state)}`);
+      // With the platform's standing, because on a phone this is the status
+      // bar: iOS has none (PLAN.md section 4.12).
+      const standing = platformStanding(Platform);
+      this.ribbonEl.setAttribute(
+        "aria-label",
+        `Trew: ${longStatus(state)}${standing ? ` ${standing.title}.` : ""}`,
+      );
     }
     this.announceOnAPhone(state);
     for (const listener of this.listeners) listener(state);
@@ -3018,10 +3028,18 @@ function paintStatus(el: HTMLElement, state: State): void {
     if (tone !== "") el.addClass(tone);
     el.setAttribute("data-trew-tone", tone);
   }
+  // A word beside the glyph for as long as this runs where the tests do not
+  // (PLAN.md section 4.12), whatever the sync state: a glyph alone cannot say
+  // "unsupported", and a tooltip is only read by somebody already looking.
+  const standing = platformStanding(Platform);
+  const word = el.querySelector<HTMLElement>(".trew-status-platform");
+  if (standing === undefined) word?.remove();
+  else (word ?? el.createSpan({ cls: "trew-status-platform" })).setText(standing.short);
   // Both, because Obsidian styles aria-label as its own tooltip and a plain
   // title is what shows if it ever stops.
-  el.setAttribute("aria-label", `Trew Sync: ${longStatus(state)}`);
-  el.setAttribute("title", `Trew Sync: ${longStatus(state)}`);
+  const tip = `Trew Sync: ${longStatus(state)}${standing ? ` ${standing.title}.` : ""}`;
+  el.setAttribute("aria-label", tip);
+  el.setAttribute("title", tip);
 }
 
 /**
@@ -3210,6 +3228,9 @@ class TrewPanel {
 
     this.host.addClass("trew-panel");
     const contentEl = this.host;
+    // First, and on every screen the panel draws, paired or not: the notice
+    // lasts as long as the plugin runs on the platform (PLAN.md section 4.12).
+    this.renderPlatformStanding(contentEl);
 
     const problem = this.plugin.configProblem;
     if (problem !== undefined) {
@@ -3418,6 +3439,25 @@ class TrewPanel {
     );
 
     docsLink(contentEl.createEl("p", { cls: "trew-advice" }), "Trew documentation");
+  }
+
+  /**
+   * A row saying this platform is unsupported or untested, and what that
+   * leaves untested, on Windows and iOS only (PLAN.md section 4.12).
+   *
+   * Not dismissable, deliberately: the decision was to pair on these platforms
+   * with a notice that lasts, rather than to refuse, and a notice somebody can
+   * close is a toast with extra steps.
+   */
+  private renderPlatformStanding(host: HTMLElement): void {
+    const standing = platformStanding(Platform);
+    if (standing === undefined) return;
+    const setting = row(settingGroup(host), standing.title, standing.detail);
+    setting.settingEl.addClass("trew-platform-standing");
+    setting.descEl.createEl("br");
+    setting.descEl
+      .createEl("a", { text: "Which platforms Trew supports" })
+      .setAttribute("href", SUPPORT_TABLE);
   }
 
   /**
