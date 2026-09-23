@@ -342,10 +342,22 @@ export class TestServer {
     if (this.dataDir) await removeTree(this.dataDir);
   }
 
-  /** Runs a maintenance subcommand against this server's data directory. */
+  /**
+   * Runs a maintenance subcommand against this server's data directory.
+   *
+   * `-data DIR` goes straight after the subcommand's name rather than at the
+   * end. Go's flag package stops at the first positional argument, so behind
+   * an id, as in `cli("uninvite", id)` or `cli("revoke", id)`, it was read as
+   * two more positional arguments and the command refused for having three.
+   * Flags are read in any order, so every other subcommand is unaffected.
+   */
   async cli(...args: string[]): Promise<string> {
     const binary = await serverBinary();
-    const { stdout } = await run(binary, [...args, "-data", this.dataDir]);
+    const [command, ...rest] = args;
+    const { stdout } = await run(
+      binary,
+      command === undefined ? ["-data", this.dataDir] : [command, "-data", this.dataDir, ...rest],
+    );
     return stdout;
   }
 
