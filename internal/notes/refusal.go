@@ -11,6 +11,10 @@ const NoteBytes = 1 << 20
 type Refusal struct {
 	Code    string
 	Message string
+	// Path is the note a plan refused, when it read several. It can be one
+	// the plan found in the vault rather than one the caller named, so a
+	// tool reports it as note-derived. Empty otherwise.
+	Path string
 }
 
 func (r *Refusal) Error() string { return r.Code + ": " + r.Message }

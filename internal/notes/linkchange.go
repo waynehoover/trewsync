@@ -211,10 +211,13 @@ func percentEncode(s, keep string) string {
 }
 
 // SourceEdit is one exact replacement: Old is the source from Start to End
-// (UTF-16 offsets) as it was read, Text what replaces it.
+// (UTF-16 offsets) as it was read, Text what replaces it. The JSON names are
+// a planned change's, as a preview shows it and an apply passes it back.
 type SourceEdit struct {
-	Start, End int
-	Old, Text  string
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+	Old   string `json:"old"`
+	Text  string `json:"text"`
 }
 
 // LinkChange is a move or deletion whose links changeLinks rewrites in one
