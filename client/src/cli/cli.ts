@@ -26,39 +26,33 @@ import { previewCounts } from "../core/preview.ts";
  * never sync is not a successful run.
  */
 
-import { open as openFile, readFile } from "node:fs/promises";
+import { open as openFile, readFile, rm } from "node:fs/promises";
 import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-import { generateSecret, randomBytes } from "../core/crypto.ts";
+import { base64urlEncode, randomBytes } from "../core/digest.ts";
 import {
   Client,
-  Registrar,
-  adviseAfterRegistering,
+  adviseAfterPairing,
   attentionLines,
   didSomething,
   needsAttention,
-  rebaseCursors,
-  redeemInvite,
-  refuseUnlessAhead,
-  registerAsDevice,
+  pairWithInvite,
   runForever,
   whatTheDiskHolds,
   type DeviceRow,
-  type InviteRow,
-  type JoiningVault,
+  type PairingStore,
 } from "../core/client.ts";
 import { REJOIN_ADVICE, type SyncReport } from "../core/engine.ts";
+import type { InviteString } from "../core/invite-string.ts";
 import {
   NoCredential,
-  deviceCredential,
-  formatPairing,
-  isInvite,
+  encodeConfig,
+  isPendingPairing,
   normaliseUrl,
   parseInvite,
-  parsePairing,
-  parseSetup,
-  type Invite,
+  startPairing,
+  type PendingPairing,
 } from "../core/pairing.ts";
 
 export { normaliseUrl };
@@ -70,20 +64,23 @@ import {
   syncDirectoryIfSupported,
 } from "./vault.ts";
 import {
+  attentionPath,
   configPath,
   indexPath,
+  loadAttention,
   loadConfig,
   orphanedIndex,
-  removeIndex,
+  removeConfig,
   removeState,
+  saveAttention,
   saveConfig,
+  type AttentionRecord,
   type Config,
 } from "./config.ts";
 import type { Displaced, Inventory } from "../core/displaced.ts";
 import { lockVault, unlockVault } from "./lock.ts";
 import { ConnectionError, MAX_NAME_BYTES, ProtocolError } from "../core/transport.ts";
 import { describeOutcome, exitCodeOf, outcomeOf } from "../core/outcome.ts";
-import { rotateVault } from "../core/rotation.ts";
 import { validateStoredState } from "../core/stored-state.ts";
 import type { StoredState } from "../core/vault.ts";
 
@@ -107,65 +104,61 @@ export interface Console {
 
 export const USAGE = `trew: self-hosted sync for Obsidian
 
-  trew init HOST:PORT#TOKEN               start a new vault, with the line the server printed
+  trew pair INVITE                        add this device to a vault with an invite (- reads it
+                                            from standard input); trew pair alone finishes a
+                                            pairing that was interrupted
   trew invite                             print a single-use invite for another device
   trew uninvite ID                        cancel an outstanding invite, from trew devices
-  trew pair INVITE                        add this device to a vault, with an invite or its
-                                            recovery key
   trew sync                               sync once and exit
   trew sync --watch                       sync, then keep syncing
   trew mcp                                serve notes over stdio, or HTTP with --listen
-  trew mcp-token                          issue or rotate the HTTP MCP credential
+  trew mcp-token                          issue or replace the HTTP MCP credential
   trew status                             what this device thinks the state is
   trew preview                            show planned sync changes without writing notes
-  trew devices                            every device that may reach this vault
+  trew devices                            every device and invite that may reach this vault
   trew rename NAME                        change this device's name in the device list
   trew revoke ID                          stop one device connecting, from trew devices
   trew deleted                            notes the server still has and you do not
   trew history PATH                       every version the server holds of one note
   trew restore PATH                       put a note back, newest version first
   trew repair                             resend bodies the server has lost, from this device
-  trew rotate RECOVERY-KEY                give the vault a new secret, keeping its history
-  trew rebase --backup-taken              rejoin a server restored from an older backup
   trew unlink                             forget the pairing, keep the notes
   trew unlock                             clear a lock left behind by a trew that crashed
   trew --version                          which release this is
+
+The first device pairs from the invite trew serve writes to <data>/first-invite on the
+server, or from trew invite run there. Later devices pair from trew invite on any paired
+device, or on the server again.
 
 Options
   --dir DIR        the vault (default: the current directory)
   --vault NAME=DIR mcp only: explicitly named absolute vault directory; repeatable, replaces --dir
   --device NAME    what this device calls itself (default: its hostname and four random characters)
-  --vault-id ID    which vault on the server (default: default)
   --json           machine-readable output
   --timeout MS     how long to wait on the server (default: 30000)
   --listen [ADDR]  mcp over HTTP (default: 127.0.0.1:3010); requires an mcp-token credential
   --writable       allow HTTP MCP mutations; requires --listen and a writable device
   --allow-origin O allow this exact HTTP origin; repeatable, requires --listen
   --revoke         mcp-token only: revoke HTTP access without restarting the service
-  --allow-last     revoke the last device, leaving the vault reachable only by its recovery key.
-                   Needs --recovery-key: it is the one revocation a device cannot undo
   --no-merge       never combine two edits to one note; keep both versions instead. Merging is the
                    only thing that makes content neither device wrote, and this is how to say no
   --read-only      apply what the server has and send nothing: no uploads, no deletions, no
                    conflict copies going out. For a mirror that should not change the vault
                    everyone else sees. This client declining to write, not the server refusing
-                   it. Recorded in the config by init and pair, so a cron job cannot lose it by
+                   it. Recorded in the config by pair, so a cron job cannot lose it by
                    forgetting the flag
   --force          for unlock: clear a lock held on another machine. This one cannot tell whether
                    that process is still running, so saying it is not is your assertion. It will
                    not break a lock held by a process on this machine that is still running
-  --recovery-key K run devices, revoke or uninvite with the vault's recovery key instead of this
-                   device's credential, for the last device and for a vault with no device to ask
-  --ttl DURATION   how long an invite lasts, like 10m or 1h (default: 10m, at most 1h)
+  --ttl DURATION   how long an invite lasts, like 10m or 1h (default: 1h, at most 1h)
   --uid N          restore one exact version, from trew history
   --to PATH        restore somewhere other than where it came from
   --limit N        how many versions history or deleted shows (default: 20, or all deletions)
   --before UID     for history or deleted: the page before this version
   --verify         for sync: read every file to verify the content cache
-  --key-file PATH  read the recovery key, invite or setup string from a file
-  --key-out PATH   save a generated key in a new private file
-                   mcp-token: outside the vault, prints only the id and path
-                   recovery keys: also printed to stdout
+  --key-file PATH  pair: read the invite from a file, so it stays out of the shell's history
+  --key-out PATH   mcp-token: save the credential in a new private file outside the vault, and
+                   print only its id and path
   --config-dir DIR Obsidian's config folder, if it is not .obsidian
   --ignore NAME    a folder or file name never to sync, at any depth, repeatable; local to this
                    device. A path another device syncs and this one ignores is reported as
@@ -209,8 +202,6 @@ export async function run(argv: readonly string[], io: Console): Promise<number>
     // them would make `status` refuse while a watcher is running, which is
     // exactly when somebody asks.
     switch (args.command) {
-      case "init":
-        return await locked(args, () => cmdInit(args, io));
       case "pair":
         return await locked(args, () => cmdPair(args, io));
       case "devices":
@@ -219,16 +210,10 @@ export async function run(argv: readonly string[], io: Console): Promise<number>
         return await locked(args, () => cmdRename(args, io));
       case "revoke":
         return await cmdRevoke(args, io);
-      case "rotate":
-        return await cmdRotate(args, io);
       case "invite":
         return await cmdInvite(args, io);
       case "uninvite":
         return await cmdUninvite(args, io);
-      case "recovery-key":
-        throw new Error(NO_RECOVERY_KEY);
-      case "rebase":
-        return await locked(args, () => cmdRebase(args, io));
       case "mcp":
         return await cmdMcp(args, io, VERSION);
       case "mcp-token":
@@ -320,164 +305,6 @@ async function locked(args: Args, command: () => Promise<number>): Promise<numbe
   }
 }
 
-async function cmdInit(args: Args, io: Console): Promise<number> {
-  // One argument, the line the server printed, is the normal way. The two
-  // flags are kept for anyone who split it by hand when that was the only way.
-  let server = args.server;
-  let token = args.token;
-  // The line's own vault name, where it carries one, so `--vault-id` and a
-  // named setup line cannot disagree about which vault is being claimed.
-  let named: string | undefined;
-  const setup = await secretFrom(args.rest[0], args, "the setup string");
-  if (setup !== undefined) {
-    if (server !== undefined || token !== undefined)
-      throw new Error("init takes the server's line or --server and --token, not both");
-    ({ url: server, token, vaultId: named } = parseSetup(setup));
-    if (named !== undefined && args.vaultIdGiven && named !== args.vaultId) {
-      throw new Error(
-        `the setup line names the vault ${named} and --vault-id says ${args.vaultId}; ` +
-          `they have to be the same vault`,
-      );
-    }
-  }
-  if (!server || !token)
-    throw new Error(
-      "init needs the line the server printed on its first run, like host:3003#TOKEN",
-    );
-  await refuseIfPaired(args.dir);
-
-  const secret = generateSecret();
-  const url = normaliseUrl(server);
-  const device = deviceNameFor(args);
-  // The root, on disk before the claim goes out, and this is the only reason
-  // it is ever written here. The claim binds the server to the key this secret
-  // derives, for good, so a secret that claimed a server without reaching the
-  // disk first is a vault nobody can ever open. Read back rather than trusted:
-  // not written, not renamed, but readable and decoding to itself.
-  const starting: Config = {
-    url,
-    vaultId: named ?? args.vaultId,
-    device,
-    secret,
-    // Recorded here rather than left to the flag (I29). A mirror that becomes
-    // writable when a cron line loses an argument has been made conditional
-    // rather than safe, and there is no flag that turns this back off.
-    ...(args.readOnly ? { readOnly: true } : {}),
-  };
-  await saveConfig(args.dir, starting);
-  await mustReadBack(args.dir, starting);
-
-  // The recovery key, worked out before anything is sent and printed after.
-  // This is the only moment it exists anywhere: registering below replaces the
-  // root on disk with this device's own credential on purpose, so if this
-  // string is not written down now there is no command that can print it again.
-  const recoveryKey = formatPairing({ url, vaultId: starting.vaultId, secret });
-
-  // Claim the vault and register this device's row now, rather than leaving
-  // either to whenever this device first syncs.
-  //
-  // init used to write a config and contact nothing, so it reported a paired
-  // vault that the server had never heard of. A second device pairing and
-  // syncing before this one ever did was refused with "not authorised for
-  // this vault": true, unhelpful, and indistinguishable from a bad key.
-  //
-  // The config is kept if this throws, root and all. The claim may have
-  // committed with the reply lost, and a config discarded in that case is a
-  // vault that nothing will ever open again: the secret in it is the only copy
-  // on this machine. Every command from here on refuses it and prints the key
-  // back out, which is what "pair again with it" needs to be possible.
-  // Out before the registration, not after it (F02).
-  //
-  // The registration replaces the root on this disk with this device's own
-  // credential, and printing the key afterwards meant the window between the
-  // replacement and the print had no copy of it anywhere: a crash there left
-  // a working device and a vault nobody can ever recover. The catch below
-  // already prints it, which covers a failure and not a kill.
-  //
-  // On stderr under --json, because stdout is one object and a second thing
-  // written there is a parse error for whatever is reading it. That is where
-  // the failure path has always printed it.
-  const sayKey = (): void => {
-    const say = args.json ? io.err.bind(io) : io.out.bind(io);
-    say("This is the vault's recovery key. Write it down and keep it offline:");
-    say("");
-    say(`  ${recoveryKey}`);
-    say("");
-    say("It is shown once and this device does not keep it: what is on disk here is this");
-    say("device's own credential, which can be revoked on its own. Adding a device does not");
-    say("need it, trew invite does that; the recovery key replaces the vault's secret and is");
-    say("the only way back if every device is lost. Anyone who has it has the vault, and the");
-    say("server has never seen it.");
-    say("");
-  };
-  sayKey();
-  // Also to a file, when asked, so a script has somewhere to keep it that is
-  // not a terminal. Before the registration for the same reason the printing
-  // is: everything after this is allowed to fail (F02, I12).
-  if (args.keyOut !== undefined) await writeKeyOut(args.keyOut, recoveryKey);
-
-  let registered = false;
-  try {
-    await joinVault(
-      {
-        url,
-        vaultId: args.vaultId,
-        device,
-        secret,
-        bootstrap: token,
-        ...(args.readOnly ? { readOnly: true } : {}),
-      },
-      args,
-      io,
-      () => {
-        registered = true;
-      },
-    );
-  } catch (err) {
-    // What to do next is read off the disk rather than off which step threw
-    // (rule 4), by the same counsellor `pair` and the panel use, so the four
-    // states get the same four answers wherever a registration stops. This one
-    // used to say only "unlink here, and pair with that key", which left out
-    // the row the registration may already have committed: pairing again
-    // registers a second one without explaining the abandoned registration. state.test.ts, "names the row a failed init left".
-    const remains = await whatTheDiskHolds(() => loadConfig(args.dir));
-    io.err("trew: the vault was started but this device could not register itself with it:");
-    io.err(`  ${(err as Error).message}`);
-    io.err("Write this recovery key down now, before anything else:");
-    io.err(`  ${recoveryKey}`);
-    io.err(adviseAfterRegistering({ remains, registered, surface: "cli", where: args.dir }));
-    return 1;
-  }
-
-  if (args.json) {
-    io.out(JSON.stringify({ ok: true, paired: args.dir, device, recoveryKey }));
-  } else {
-    io.out(`Started the vault. ${args.dir} is paired as "${device}".`);
-  }
-  return 0;
-}
-
-/** Registers this device with a vault it holds the root of, saving durably and reading back. */
-async function joinVault(
-  joining: JoiningVault,
-  args: Args,
-  io: Console,
-  onRegistered?: () => void,
-): Promise<Config> {
-  return registerAsDevice(
-    joining,
-    async (device) => {
-      await saveConfig(args.dir, device);
-      await mustReadBack(args.dir, device);
-    },
-    {
-      timeoutMs: args.timeout,
-      ...(onRegistered !== undefined ? { onRegistered } : {}),
-      ...(args.verbose ? { log: (m: string) => io.err(`  ${m}`) } : {}),
-    },
-  );
-}
-
 /**
  * This device's name: what was typed, or the hostname with a short random
  * tail.
@@ -495,7 +322,7 @@ export function deviceNameFor(args: Args): string {
   // than saying no. `checkName` does the refusing.
   if (args.deviceGiven) return args.device;
 
-  // A derived one is not theirs, and refusing it means `trew init` fails on
+  // A derived one is not theirs, and refusing it means `trew pair` fails on
   // a machine whose only crime is a long hostname. That is what happened: a
   // runner with a 61-character hostname produced a 66-byte default and every
   // pairing test failed with "the device name is 66 bytes". Nobody chose that
@@ -526,93 +353,116 @@ function clipToBytes(name: string, limit: number): string {
 }
 
 /**
- * Refuses to pair a vault that is paired, or that still holds an index.
+ * Adds this device to a vault by redeeming an invite (plan/protocol.md,
+ * "Invite redemption").
  *
- * Re-pairing over a paired vault would replace this device's credential and
- * the data key it holds, and if the new string is for another vault every note
- * already on the server becomes undecryptable here. It also strands the row
- * this device already has, which nothing left on this machine can then revoke.
- * An index with no config beside it is an unlink that did not finish, and
- * pairing over it would load an index describing another vault's sync.
- */
-async function refuseIfPaired(dir: string): Promise<void> {
-  if (await loadConfig(dir)) {
-    throw new Error(`${dir} is already paired. Use unlink first if that is really what you want.`);
-  }
-  if (await orphanedIndex(dir)) {
-    throw new Error(
-      `${dir} is not paired but still holds an index at ${indexPath(dir)}, ` +
-        `left by an unlink that did not finish. Run trew unlink to clear it, then pair again.`,
-    );
-  }
-}
-
-/**
- * Adds this device to a vault, with an invite or with the vault's recovery key.
+ * The invite is a `trew1i_` string. The first device's is the one `trew serve`
+ * writes to <data>/first-invite on the server; `trew invite` makes more, on the
+ * server or on any paired device. Redeeming it registers this device's own row,
+ * under an id and a 32-byte token made here, and nothing else on this disk
+ * authenticates: revoking that row is the whole of taking the device away.
  *
- * An invite is the ordinary way and the recovery key is the last resort. Both
- * end in the same place: this device holds a row of its own, the credential
- * for it and the vault's data key, and no root. That is what makes revoking
- * this device on its own mean anything.
+ * The order is `pairWithInvite`'s, in core, and it is what makes each way this
+ * can stop recoverable. The pairing is saved and read back before a byte goes
+ * out (rule 4), so a reply lost after the server committed leaves a pending
+ * pairing holding exactly the credential the server registered, and `trew pair`
+ * again, with the same invite or with none, finishes it under the same ids;
+ * that works even after the invite has expired, because the server recognises
+ * its own redemption. A refusal, or a server never reached, removes what was
+ * saved, so nothing is left behind and the invite is not spent (hazard 2 in
+ * plan/strip-ledger.md). "Paired" is said only once `redeemed` has come back.
  *
- * The two differ in what is on the wire and so in when the config is written.
- *
- * An **invite** is spent by the redemption that registers this device, in one
- * server transaction, so there is nothing to write until it has answered: the
- * id and the key it registered are made in that call and come back with the
- * data key. A crash before the reply lands leaves this vault unpaired and one
- * row on the server that nobody holds the key to, which shows up in `trew
- * devices` as a device that has never connected and goes with `trew revoke`.
- * The alternative order strands this device instead; see `redeemInvite`.
- *
- * A **recovery key** buys a registrar session: it may register a device and
- * rewrap the vault's secret, and it may not sync. So that path is
- * register-then-save, and nothing is written until the row exists: the key was
- * pasted in a moment ago, so there is nothing on this disk yet worth keeping
- * and a key that turns out to be wrong should leave the vault exactly as
- * unpaired as it found it. A crash between the registration and the save
- * leaves the same orphan row the invite path leaves, and the same way to see
- * and remove it. See `registerAsDevice`.
- *
- * What a failure after the registration is told to do comes from
- * `adviseAfterRegistering`, which `init` and both of the panel's pairing paths
- * also take their words from.
+ * What to do after a pairing that did not finish comes from
+ * `adviseAfterPairing`, which the panel takes its words from too, and it is
+ * read off the disk rather than off which step threw (rule 4).
  */
 async function cmdPair(args: Args, io: Console): Promise<number> {
-  const given = await secretFrom(args.rest[0], args, "the invite or recovery key");
-  if (!given) throw new Error("pair needs the invite or recovery key another device printed");
-  await refuseIfPaired(args.dir);
-  if (isInvite(given)) return await pairWithInvite(parseInvite(given), args, io);
-
-  const pairing = parsePairing(given);
-  const joining: JoiningVault = {
-    url: pairing.url,
-    vaultId: pairing.vaultId,
-    device: deviceNameFor(args),
-    secret: pairing.secret,
-    // The mirror case (I29). `init --read-only` and `pair --read-only` both
-    // have to record it, and only `init` did: this is the path a second
-    // device takes, which is the one a mirror actually uses.
-    ...(args.readOnly ? { readOnly: true } : {}),
-  };
-  let paired: Config;
-  let registered = false;
-  try {
-    paired = await joinVault(joining, args, io, () => {
-      registered = true;
+  const given = await secretFrom(args.rest[0], args, "the invite");
+  // The file serve writes holds one line per address it found, each the same
+  // invite. Handed over whole it is several strings in one, and the codec
+  // would call that damaged, which sends somebody looking for a copying
+  // mistake nobody made.
+  const lines = given?.split(/\r?\n/).filter((line) => line.trim() !== "") ?? [];
+  if (lines.length > 1) {
+    throw new Error(
+      `that holds ${lines.length} invites, one per address of the server, all the same invite. ` +
+        `Give trew pair the one line whose address this device can reach.`,
+    );
+  }
+  // Parsed before anything on disk is looked at, so a string pasted wrong is
+  // named as that whatever state the vault is in.
+  const invite = given === undefined ? undefined : parseInvite(given);
+  const held = await loadConfig(args.dir);
+  let pending: PendingPairing;
+  if (held !== undefined && isPendingPairing(held)) {
+    refuseAnotherPairing(args, held, invite);
+    pending = held;
+    if (!args.json) io.err(`Finishing the pairing already started here, as "${held.device}".`);
+  } else if (held !== undefined) {
+    // Pairing over a paired vault would throw away this device's credential,
+    // the only copy of its row's token, and strand that row on the server
+    // with nothing left here that can revoke it.
+    throw new Error(
+      `${args.dir} is already paired. Run trew unlink first if that is really what you want.`,
+    );
+  } else {
+    // An index with no config beside it is an unlink that did not finish, and
+    // pairing over it would load an index describing another pairing's sync.
+    if (await orphanedIndex(args.dir)) {
+      throw new Error(
+        `${args.dir} is not paired but still holds an index at ${indexPath(args.dir)}, ` +
+          `left by an unlink that did not finish. Run trew unlink to clear it, then pair again.`,
+      );
+    }
+    if (invite === undefined) throw new Error(`pair needs an invite. ${WHERE_INVITES_COME_FROM}`);
+    pending = startPairing(invite, deviceNameFor(args), {
+      // Recorded in the config rather than left to the flag (I29). A mirror
+      // that becomes writable when a cron line loses an argument has been
+      // made conditional rather than safe, and there is no flag that turns
+      // this back off.
+      ...(args.readOnly ? { readOnly: true } : {}),
     });
+  }
+
+  let notDurable: string | undefined;
+  let paired: Config;
+  try {
+    paired = await pairWithInvite(
+      pending,
+      pairingStore(args.dir, (why) => (notDurable = why)),
+      {
+        timeoutMs: args.timeout,
+        ...(args.verbose ? { log: (m: string) => io.err(`  ${m}`) } : {}),
+      },
+    );
   } catch (err) {
-    if (!registered) throw err;
-    // Registered, and then what the disk says rather than which step threw
-    // (rule 4). The `.catch(() => undefined)` this used to read it with is
-    // what the counsellor exists to replace: it made an unreadable config look
-    // like an absent one, so a save that succeeded with a read-back that then
-    // failed was told to revoke a row it was itself holding the key to.
-    // state.test.ts, "will not send somebody revoking a row".
+    // What the disk holds now, in the four states the counsellor knows, rather
+    // than what the step that threw suggests (rule 4).
     const remains = await whatTheDiskHolds(() => loadConfig(args.dir));
+    const flushed =
+      notDurable === undefined
+        ? ""
+        : ` The pairing saved before it was sent is gone from this disk, but flushing that ` +
+          `removal failed (${notDurable}); if the machine loses power first it may come back.`;
     throw new Error(
       `${(err as Error).message}. ` +
-        adviseAfterRegistering({ remains, registered, surface: "cli", where: args.dir }),
+        adviseAfterPairing({ remains, surface: "cli", where: args.dir }) +
+        flushed,
+    );
+  }
+
+  // Then once as the device, which the redemption was not. It proves the saved
+  // credential opens a session, and it is what stamps the row as seen, so
+  // `trew devices` does not show a device paired a moment ago as one nothing
+  // has ever connected under (I13).
+  try {
+    const client = await open(paired, args, io, { waitForBacklog: false, inspect: true });
+    await client.close();
+  } catch (err) {
+    throw new Error(
+      `${args.dir} is paired as "${paired.device}" and holds its credential, and connecting as ` +
+        `it afterwards failed: ${(err as Error).message}. Nothing needs undoing: trew sync ` +
+        `connects again.`,
     );
   }
 
@@ -624,12 +474,13 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
         device: paired.device,
         deviceId: paired.deviceId,
         url: paired.url,
+        vaultId: paired.vaultId,
       }),
     );
   } else {
     io.out(`Paired ${args.dir} with ${paired.url} as "${paired.device}". Run trew sync.`);
     io.out(
-      `This device has its own credential now, and not the recovery key: ` +
+      `This device has its own credential, and nothing else here opens the vault: ` +
         `trew revoke ${paired.deviceId} on any device stops it connecting.`,
     );
   }
@@ -637,286 +488,269 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
 }
 
 /**
- * Pairs with an invite: redeem, save, connect.
- *
- * The redemption is the registration, so what comes back is a finished device:
- * this config never holds a root, at any point.
- *
- * Saved and read back before the connection is made, because at the moment the
- * reply lands the only copy of the data key on this machine is in this
- * process, and the invite that carried it is already spent (rule 4). Then the
- * connection, because a pairing that says "paired" without having reached the
- * server is how a wrong address is found out later, from a sync that fails
- * (I13).
+ * Where the first invite and the ones after it come from, for a sentence that
+ * has to say.
  */
-async function pairWithInvite(invite: Invite, args: Args, io: Console): Promise<number> {
-  const device = deviceNameFor(args);
-  const redeemed = await redeemInvite(invite, device, {
-    timeoutMs: args.timeout,
-    ...(args.verbose ? { log: (m: string) => io.err(`  ${m}`) } : {}),
-  });
-  const config: Config = {
-    url: invite.url,
-    vaultId: invite.vaultId,
-    device,
-    deviceId: redeemed.deviceId,
-    deviceSecret: redeemed.deviceSecret,
-    dataKey: redeemed.dataKey,
-    // The third of three places that write this config, and the one a mirror
-    // actually goes through: a second device is added with an invite (I29).
-    // The other two are `init` and pairing with a recovery key.
-    ...(args.readOnly ? { readOnly: true } : {}),
-  };
-  await saveConfig(args.dir, config);
-  await mustReadBack(args.dir, config);
-  // The row exists and this is the only copy of its credential, so a failure
-  // from here leaves the config alone: the next command finishes what this
-  // started rather than making somebody find another invite.
-  const client = await open(config, args, io, { waitForBacklog: false });
-  await client.close();
+const WHERE_INVITES_COME_FROM =
+  "The first device pairs from the invite trew serve writes to <data>/first-invite on the " +
+  "server, or from trew invite run there; later devices pair from trew invite on any paired " +
+  "device, or on the server again.";
 
-  if (args.json) {
-    io.out(
-      JSON.stringify({
-        ok: true,
-        paired: args.dir,
-        device: config.device,
-        deviceId: config.deviceId,
-        url: config.url,
-      }),
-    );
-  } else {
-    io.out(`Paired ${args.dir} with ${config.url} as "${config.device}". Run trew sync.`);
-    io.out(
-      `This device has its own credential, and not the vault's recovery key: ` +
-        `trew revoke ${config.deviceId} on any device stops it connecting.`,
-    );
+/**
+ * Refuses to change a pairing that has not finished into a different one.
+ *
+ * The pending pairing may already be a row on the server whose reply was lost,
+ * and the token saved here is then the only copy of that row's credential.
+ * Starting over with another invite would throw it away and leave the row with
+ * nothing that can connect as it, so that is the person's decision, made with
+ * `trew unlink`, and not something a second paste does in passing.
+ *
+ * The name and `--read-only` are checked for the same reason a flag that is
+ * quietly ignored is refused everywhere else: the pairing finishes as it was
+ * started, and somebody who asked for something else should hear so. A name
+ * that was not typed is derived afresh on every run, so it is not compared.
+ */
+function refuseAnotherPairing(
+  args: Args,
+  held: PendingPairing,
+  invite: InviteString | undefined,
+): void {
+  const sameInvite =
+    invite === undefined ||
+    (base64urlEncode(invite.token) === held.invite &&
+      invite.url === held.url &&
+      invite.vault === held.vaultId);
+  const renamed = args.deviceGiven && args.device !== held.device;
+  const madeReadOnly = args.readOnly && held.readOnly !== true;
+  if (sameInvite && !renamed && !madeReadOnly) return;
+  const asked = !sameInvite
+    ? "a different invite"
+    : renamed
+      ? `the name ${JSON.stringify(args.device)}`
+      : "--read-only";
+  throw new Error(
+    `${args.dir} holds a pairing that has not finished, started with ${held.url} as ` +
+      `"${held.device}"${held.readOnly === true ? " and read-only" : ""}, and this asked for ` +
+      `${asked}. Run trew pair here with the same invite, or with none, to finish it as it was ` +
+      `started; or run trew unlink here to abandon it, and then pair again.`,
+  );
+}
+
+/**
+ * Where a pairing's progress is kept: this vault's own config file.
+ *
+ * `save` reads back what it wrote before it returns (rule 4), because each of
+ * the two things it writes holds the only copy of this device's token: the
+ * pending pairing before the redemption goes out, and the finished device once
+ * it is answered. `forget` removes the config and proves it gone, for a
+ * pairing that was refused or never reached its server, so nothing is left
+ * saved. A removal that happened and could not be flushed is handed to
+ * `onNotDurable` rather than thrown, because the file is gone either way.
+ */
+function pairingStore(dir: string, onNotDurable: (why: string) => void): PairingStore {
+  return {
+    save: async (config) => {
+      await saveConfig(dir, config);
+      await mustReadBack(dir, config);
+    },
+    forget: async () => {
+      const why = await removeConfig(dir);
+      if (why !== undefined) onNotDurable(why);
+    },
+  };
+}
+
+/**
+ * Proves the config is on disk and decodes to exactly what was written before
+ * anything relies on it (rule 4). Not written, not renamed, but readable.
+ *
+ * Every field, by comparing the stored forms, because a read-back that checked
+ * the address and not the token would pass over the write that lost the one
+ * thing nothing can reissue, and a token that landed under a different id is a
+ * credential for a row that is not this device's.
+ */
+async function mustReadBack(dir: string, config: Config): Promise<void> {
+  const back = await loadConfig(dir);
+  const wrote = JSON.stringify(encodeConfig(config));
+  if (back === undefined || JSON.stringify(encodeConfig(back)) !== wrote) {
+    throw new Error(`${configPath(dir)} did not read back as what was just written`);
   }
-  return 0;
 }
 
 /**
  * Prints a single-use invite for another device.
  *
- * The vault's data key goes to the server sealed under a key that stays in the
- * string, for ten minutes unless asked otherwise, and the string works once.
- * Nothing about the vault is shown: the string is where to ask, which vault,
- * and how to open what is handed back.
- *
- * This is how a device is added. The recovery key is not: it stays written
- * down for the day every device is gone, and no device holds one to print.
+ * Minted over the wire by this device (plan/protocol.md, "Devices and
+ * invites"): the server makes the token and keeps only its digest, and this
+ * formats it into a `trew1i_` string with this device's own server address and
+ * vault. The string is the only copy of the token, and nothing here keeps it.
+ * It lasts an hour unless asked for less, and revoking this device cancels it.
  */
 async function cmdInvite(args: Args, io: Console): Promise<number> {
   const config = await mustLoad(args.dir);
   const client = await open(config, args, io, { waitForBacklog: false, inspect: true });
-  let issued: { invite: string; expiresAt: number };
+  let issued: { invite: string; id: string; expiresAt: number | null };
   try {
-    issued = await client.invite(args.ttlMs);
+    issued = await client.invite(args.ttlMs !== undefined ? { ttlMs: args.ttlMs } : {});
   } finally {
     await client.close();
   }
   if (args.json) {
-    io.out(JSON.stringify({ ok: true, invite: issued.invite, expiresAt: issued.expiresAt }));
+    io.out(
+      JSON.stringify({
+        ok: true,
+        invite: issued.invite,
+        id: issued.id,
+        expiresAt: issued.expiresAt,
+      }),
+    );
     return 0;
   }
   io.out(issued.invite);
   io.out("");
   io.out(`Paste it into trew pair, or into the Trew panel, on the new device.`);
-  io.out(`It works once and expires at ${when(issued.expiresAt)}.`);
+  io.out(
+    issued.expiresAt === null
+      ? `It works once and does not expire. trew uninvite ${issued.id} cancels it.`
+      : `It works once, until ${when(issued.expiresAt)}. trew uninvite ${issued.id} cancels it ` +
+          `sooner.`,
+  );
   return 0;
 }
 
 /**
- * Proves the config is on disk and decodes to itself before anything relies
- * on it. Not written, not renamed, but readable: what is in it is the only
- * copy this device has, whether that is a vault's root before its claim or a
- * device's credential after its registration.
- */
-async function mustReadBack(dir: string, config: Config): Promise<void> {
-  const back = await loadConfig(dir);
-  if (!back || back.url !== config.url) {
-    throw new Error(`${configPath(dir)} did not read back as what was just written`);
-  }
-  const same = (a: Uint8Array | undefined, b: Uint8Array | undefined) =>
-    a === undefined ? b === undefined : b !== undefined && Buffer.compare(a, b) === 0;
-  // Every key, by name, because each of the three is the only copy of itself
-  // in one of the two states a config is written in, and a read-back that
-  // checked one of them would pass over the write that lost another.
-  // `deviceId` too: a device secret that landed under a different id is a
-  // credential for a row that is not this device's.
-  if (
-    !same(back.secret, config.secret) ||
-    !same(back.deviceSecret, config.deviceSecret) ||
-    !same(back.dataKey, config.dataKey) ||
-    back.deviceId !== config.deviceId
-  ) {
-    throw new Error(`${configPath(dir)} did not read back with the keys that were written`);
-  }
-}
-
-/**
- * What `trew recovery-key` says now, and why there is nothing to print.
- *
- * It used to print the vault's root secret out of this device's config. No
- * device holds one since protocol 4, which is the whole of why revoking one
- * means anything, so the command has nothing to read. Adding a device is
- * `trew invite`, which is what it was for anyway.
- */
-const NO_RECOVERY_KEY =
-  "this device does not hold the vault's recovery key. It was shown once, when the vault was " +
-  "started, and it is not on any device on purpose: a device that held it could re-derive " +
-  "the vault's credential and register itself again, so revoking it would stop nothing. " +
-  "To add a device, run trew invite here. If the recovery key is lost, trew rotate needs " +
-  "the old one, so there is nothing this can print.";
-
-/**
- * Opens a session holding the vault's recovery key rather than this device's
- * own credential.
- *
- * Two commands take one. Revoking the last device needs it, because that is
- * the one revocation nothing on a device can undo. Listing accepts it for the
- * vault that has no paired device left to ask: unused registrations can
- * still be inspected and revoked.
- *
- * The key names its own server and vault, so this works in a directory that
- * was never paired. When there is a config here it has to agree, or a key
- * pasted from the wrong vault would act on that vault while the person read
- * this one's name off the screen.
- */
-async function asRecoveryKey(given: string, args: Args): Promise<Registrar> {
-  const key = parsePairing(given);
-  const config = await loadConfig(args.dir);
-  if (config && config.vaultId !== key.vaultId) {
-    throw new Error(
-      `that recovery key is for vault "${key.vaultId}" and this directory is paired with ` +
-        `"${config.vaultId}", so it would act on a vault this device is not on`,
-    );
-  }
-  return Registrar.open({
-    // A paired directory chooses the target, as it does for rotation. Most
-    // servers call their vault "default", so the name alone cannot distinguish
-    // a key pasted from another server. This also keeps old recovery keys
-    // usable after updating the saved server address.
-    url: config?.url ?? key.url,
-    vaultId: key.vaultId,
-    device: config?.device ?? "recovery-key",
-    secret: key.secret,
-    timeoutMs: args.timeout,
-  });
-}
-
-/**
- * Every device that may reach this vault.
+ * Every device that may reach this vault, and every invite that could still
+ * add one.
  *
  * The only way to answer "what is still connected to my notes", which is the
  * question a device list exists for.
  *
  * A row that has never connected is flagged rather than left to be read out of
- * a blank column, because those are the reclaimable ones. A redemption saves
- * nothing on the new device until the server has answered, so a crash in that
- * window strands a row on the server instead of a device that thinks it is
- * paired: the right way round, and it means the rows that pile up against the
- * cap are exactly the ones nothing has ever connected under.
+ * a blank column, because those are the reclaimable ones: a redemption answered
+ * and never followed by a session, which is a pairing interrupted and not
+ * finished, or one abandoned with `trew unlink` while it was pending.
+ *
+ * An invite is listed as its id, its label and its expiry, and nothing else:
+ * the token is the whole credential, it never comes back from the server, and
+ * no field of a row redeems anything (hazard 1 in plan/strip-ledger.md).
  */
 async function cmdDevices(args: Args, io: Console): Promise<number> {
-  const { devices, maxDevices, invites, thisDevice, close } = await openDeviceList(args, io);
+  const config = await mustLoad(args.dir);
+  const client = await open(config, args, io, { waitForBacklog: false, inspect: true });
+  const thisDevice = client.deviceId;
+  let devices: DeviceRow[];
+  let invites: ListedInvite[];
   try {
-    if (args.json) {
-      io.out(
-        JSON.stringify({
-          ok: true,
-          devices,
-          maxDevices,
-          invites,
-          ...(thisDevice !== undefined ? { thisDevice } : {}),
-        }),
-      );
-      return 0;
-    }
-    for (const d of devices) {
-      const mine = d.id === thisDevice ? "  (this device)" : "";
-      // The id first, because it is what `trew revoke` takes and the name
-      // is not: two laptops may both be called laptop, and a list that put
-      // the name where the identity goes would invite revoking the wrong one.
-      io.out(
-        `${d.id.padEnd(24)}  ${d.name.padEnd(16)}  added ${when(d.createdAt)}  ` +
-          `${d.lastSeen === 0 ? "never connected " : `last seen ${when(d.lastSeen)}`}${mine}`,
-      );
-    }
-    io.out("");
-    const count =
-      maxDevices > 0
-        ? `${devices.length} of at most ${maxDevices} devices`
-        : `${devices.length} ${devices.length === 1 ? "device" : "devices"}`;
-    io.out(`${count}. trew revoke ID stops one.`);
-    const stale = devices.filter((d) => d.lastSeen === 0);
-    if (stale.length > 0) {
-      io.out(
-        `${stale.length} of them ${stale.length === 1 ? "has" : "have"} never connected. A pairing ` +
-          `that reached the server and then crashed can leave a row like that.`,
-      );
-    }
-    io.out(
-      "Revoking stops a device connecting. It does not un-read what that device already read:",
-    );
-    io.out(
-      "it still holds the vault's key and can decrypt later encrypted content obtained elsewhere.",
-    );
-    io.out(
-      "If the recovery key was exposed, use trew rotate. Rotation does not change the data key.",
-    );
-    // The invites, beside the rows, because they are the same question. A row
-    // is a device that was added and an outstanding invite is one about to be:
-    // a string issued on a device somebody has just lost is the thing worth
-    // seeing, and until this it was invisible until it was redeemed.
-    io.out("");
-    if (invites.length === 0) {
-      io.out("No outstanding invites.");
-    } else {
-      for (const inv of invites) {
-        io.out(`${inv.id.padEnd(24)}  invite, expires ${when(inv.expiresAt)}`);
-      }
-      io.out("");
-      io.out(
-        `${invites.length} outstanding ${invites.length === 1 ? "invite" : "invites"}. Each one ` +
-          `registers one device and then stops working. trew uninvite ID cancels one you did ` +
-          `not mean to issue.`,
-      );
-    }
-    return 0;
+    const listed = await client.devices();
+    devices = listed.devices;
+    invites = listed.invites.map((row) => ({
+      id: row.invite,
+      label: row.label,
+      expiresAt: row.expiresAt,
+    }));
   } finally {
-    await close();
+    await client.close();
   }
+  if (args.json) {
+    io.out(JSON.stringify({ ok: true, devices, invites, thisDevice }));
+    return 0;
+  }
+  for (const d of devices) {
+    const mine = d.id === thisDevice ? "  (this device)" : "";
+    // The id first, because it is what `trew revoke` takes and the name is
+    // not: two laptops may both be called laptop, and a list that put the
+    // name where the identity goes would invite revoking the wrong one.
+    io.out(
+      `${d.id.padEnd(24)}  ${d.name.padEnd(16)}  added ${when(d.createdAt)}  ` +
+        `${d.lastSeen === 0 ? "never connected " : `last seen ${when(d.lastSeen)}`}${mine}`,
+    );
+  }
+  io.out("");
+  io.out(`${devices.length} ${devices.length === 1 ? "device" : "devices"}. trew revoke ID stops one.`);
+  const stale = devices.filter((d) => d.lastSeen === 0);
+  if (stale.length > 0) {
+    io.out(
+      `${stale.length} of them ${stale.length === 1 ? "has" : "have"} never connected. A pairing ` +
+        `that was interrupted and never finished, or abandoned with trew unlink, leaves a row ` +
+        `like that.`,
+    );
+  }
+  io.out(REVOKING_DOES_NOT_UNREAD);
+  // The invites, beside the rows, because they are the same question. A row
+  // is a device that was added and an outstanding invite is one about to be:
+  // a string issued on a device somebody has just lost is the thing worth
+  // seeing, and until this it was invisible until it was redeemed.
+  io.out("");
+  if (invites.length === 0) {
+    io.out("No outstanding invites.");
+  } else {
+    for (const inv of invites) {
+      const label = inv.label === "" ? "" : ` ${JSON.stringify(inv.label)}`;
+      io.out(
+        `${inv.id.padEnd(24)}  invite${label}, ` +
+          (inv.expiresAt === null ? "never expires" : `expires ${when(inv.expiresAt)}`),
+      );
+    }
+    io.out("");
+    io.out(
+      `${invites.length} outstanding ${invites.length === 1 ? "invite" : "invites"}. Each one ` +
+        `registers one device and then stops working. trew uninvite ID cancels one you did ` +
+        `not mean to issue.`,
+    );
+  }
+  return 0;
 }
+
+/**
+ * An outstanding invite as `trew devices` shows it: the id `uninvite` takes,
+ * the label a person gave it, and when it stops working, or null for never.
+ */
+interface ListedInvite {
+  readonly id: string;
+  readonly label: string;
+  readonly expiresAt: number | null;
+}
+
+/**
+ * What revoking does and does not do, said wherever it is offered.
+ *
+ * The notes are plaintext on every device that synced them. Revoking stops a
+ * device receiving anything new and stops it writing; it cannot reach into
+ * that device and take back what it already has, and a list that let somebody
+ * think otherwise would be the most dangerous line in it.
+ */
+const REVOKING_DOES_NOT_UNREAD =
+  "Revoking stops a device connecting, receiving anything new and writing. It does not un-read " +
+  "what that device already read: every note it synced is still on its disk, in plaintext.";
 
 /**
  * Cancels an outstanding invite.
  *
  * The companion to seeing them. An invite is a standing authority to register
- * one device, and before it could be listed the only ways to retire one were
- * to wait out its hour or to rotate the vault, which retires the recovery key
- * with it. Neither is an answer to "I issued that on the laptop I have just
- * lost".
+ * one device, and waiting out its hour is not an answer to "I issued that on
+ * the laptop I have just lost". Revoking that laptop cancels the invites it
+ * issued too.
  */
 async function cmdUninvite(args: Args, io: Console): Promise<number> {
-  const invite = await secretFrom(args.rest[0], args, "the invite");
+  const invite = args.rest[0];
   if (!invite) throw new Error("uninvite needs an invite id, from trew devices");
-  const canceller = await openRevoker(args, io);
+  const config = await mustLoad(args.dir);
+  const client = await open(config, args, io, { waitForBacklog: false, inspect: true });
   try {
-    await canceller.uninvite(invite);
+    await client.uninvite(invite);
   } catch (err) {
     if (err instanceof ProtocolError && err.code === "badentry") {
-      // One refusal for unknown, expired and already redeemed, because saying
-      // which would tell somebody guessing identifiers that they had found a
-      // real one. What it can say is where to look.
+      // One refusal for unknown, expired, cancelled and already redeemed,
+      // because saying which would tell somebody guessing ids that they had
+      // found a real one. What it can say is where to look.
       throw new Error(
-        `this vault has no outstanding invite ${invite}: it may have expired, or been redeemed, ` +
-          `in which case it is a device row now. trew devices shows both.`,
+        `this vault has no outstanding invite ${invite}: it may have expired, been cancelled, or ` +
+          `been redeemed, in which case it is a device row now. trew devices shows both.`,
       );
     }
     throw err;
   } finally {
-    await canceller.close();
+    await client.close();
   }
   if (args.json) {
     io.out(JSON.stringify({ ok: true, cancelled: invite }));
@@ -930,93 +764,6 @@ async function cmdUninvite(args: Args, io: Console): Promise<number> {
   return 0;
 }
 
-/**
- * Whoever is doing the revoking: this device, or the recovery key.
- *
- * The same two ways in as the list, and the same reason for the second one.
- * Both objects answer `revoke` identically, because it is the same op on the
- * wire; what differs is only whether the server will honour `allowLast`.
- */
-async function openRevoker(
-  args: Args,
-  io: Console,
-): Promise<{
-  revoke: (id: string, opts: { allowLast?: boolean }) => Promise<{ self: boolean }>;
-  uninvite: (invite: string) => Promise<void>;
-  close: () => Promise<void>;
-}> {
-  if (args.recoveryKey !== undefined) {
-    const registrar = await asRecoveryKey(args.recoveryKey, args);
-    return {
-      revoke: (id, opts) => registrar.revoke(id, opts),
-      uninvite: (invite) => registrar.uninvite(invite),
-      close: async () => registrar.close(),
-    };
-  }
-  const config = await mustLoad(args.dir);
-  const client = await open(config, args, io, { waitForBacklog: false, inspect: true });
-  return {
-    revoke: (id, opts) => client.revoke(id, opts),
-    uninvite: (invite) => client.uninvite(invite),
-    close: () => client.close(),
-  };
-}
-
-/**
- * The device list, from whichever credential was offered.
- *
- * Two ways in, one shape out. `thisDevice` is absent over the recovery key,
- * because a registrar is not a device and there is no row for it to be: a
- * list that guessed one would put "(this device)" against somebody else.
- */
-async function openDeviceList(
-  args: Args,
-  io: Console,
-): Promise<{
-  devices: DeviceRow[];
-  maxDevices: number;
-  invites: InviteRow[];
-  thisDevice?: string;
-  close: () => Promise<void>;
-}> {
-  if (args.recoveryKey !== undefined) {
-    const registrar = await asRecoveryKey(args.recoveryKey, args);
-    try {
-      return {
-        ...(await registrar.devices()),
-        close: async () => registrar.close(),
-      };
-    } catch (err) {
-      registrar.close();
-      throw err;
-    }
-  }
-  const config = await mustLoad(args.dir);
-  const client = await open(config, args, io, { waitForBacklog: false, inspect: true });
-  try {
-    return {
-      ...(await client.devices()),
-      thisDevice: client.deviceId,
-      close: () => client.close(),
-    };
-  } catch (err) {
-    await client.close();
-    throw err;
-  }
-}
-
-/**
- * Stops one device connecting, and closes whatever it has open.
- *
- * Both, and the reply means both: a row removed while the revoked device holds
- * an authenticated connection is a revocation it does not notice.
- *
- * Any device may do this to any other, which is the whole point of having
- * revocation rather than rotation: a phone cuts off a stolen laptop without
- * anybody digging the recovery key out of a drawer. The exception is
- * `--allow-last`, which needs the recovery key, because emptying the vault is
- * the one revocation nothing on a device can undo.
- */
 /**
  * Changes this device's name, on the server and then here.
  *
@@ -1076,23 +823,27 @@ async function cmdRename(args: Args, io: Console): Promise<number> {
   return 0;
 }
 
+/**
+ * Stops one device connecting, and closes whatever it has open.
+ *
+ * Both, and the reply means both: a row removed while the revoked device holds
+ * an authenticated connection is a revocation it does not notice.
+ *
+ * Any device may do this to any other, to itself, and to the last one
+ * (plan/protocol.md, "Devices and invites"). Nothing a device holds is needed
+ * to get back in afterwards: `trew invite` on the server makes an invite
+ * whatever is left, so a vault with no devices is one invite from having one
+ * again. Revoking a device also cancels the invites it issued, so an invite
+ * minted on a laptop before it was stolen cannot add the thief's next device.
+ */
 async function cmdRevoke(args: Args, io: Console): Promise<number> {
   const deviceId = args.rest[0];
   if (!deviceId) throw new Error("revoke needs a device id, from trew devices");
-  // Refused here as well as at the server, so somebody who typed it gets the
-  // whole command back rather than a round trip and a refusal. The server's
-  // is the one that enforces it; this one is the one that helps.
-  if (args.allowLast && args.recoveryKey === undefined) {
-    throw new Error(
-      `--allow-last leaves a vault only its recovery key can reach, and it is the one revocation ` +
-        `no device can undo, so it takes that key: trew revoke ${deviceId} --allow-last ` +
-        `--recovery-key basalt3_...`,
-    );
-  }
-  const revoker = await openRevoker(args, io);
+  const config = await mustLoad(args.dir);
+  const client = await open(config, args, io, { waitForBacklog: false, inspect: true });
   let self: boolean;
   try {
-    ({ self } = await revoker.revoke(deviceId, { allowLast: args.allowLast }));
+    ({ self } = await client.revoke(deviceId));
   } catch (err) {
     if (err instanceof ProtocolError && err.code === "nodevice") {
       throw new Error(
@@ -1100,218 +851,25 @@ async function cmdRevoke(args: Args, io: Console): Promise<number> {
           `Run trew devices again.`,
       );
     }
-    if (err instanceof ProtocolError && err.code === "badentry" && !args.allowLast) {
-      // The last device. Over the recovery key that is the confirmation being
-      // asked for; from a device it is the credential as well, and saying so
-      // is the difference between an instruction and a dead end.
-      const said = err.message.replace(/; resend with allowLast.*$/, "");
-      throw new Error(
-        args.recoveryKey !== undefined
-          ? `${said}. Say it out loud to do it anyway: trew revoke ${deviceId} --allow-last ` +
-              `--recovery-key basalt3_...`
-          : `${said}. That is the recovery key's to do, not a device's: trew revoke ${deviceId} ` +
-              `--allow-last --recovery-key basalt3_...`,
-      );
-    }
     throw err;
   } finally {
-    await revoker.close();
+    await client.close();
   }
   if (args.json) {
     io.out(JSON.stringify({ ok: true, revoked: deviceId, self }));
     return 0;
   }
   io.out(`Revoked ${deviceId}. Its sessions are closed and it cannot connect again.`);
-  io.out(
-    "It still holds the vault's key and can decrypt later encrypted content obtained elsewhere.",
-  );
-  io.out(
-    "If the recovery key was exposed, use trew rotate. Rotation does not change the data key.",
-  );
+  io.out(REVOKING_DOES_NOT_UNREAD);
   if (self) {
     io.out("");
     io.out(
-      `That was this device. It has stopped syncing; run trew unlink here to forget the pairing, ` +
-        `then trew pair RECOVERY-KEY to add it again if needed.`,
+      `That was this device. It has stopped syncing; run trew unlink here to forget the ` +
+        `pairing, then trew pair with a new invite to add it again: from trew invite on another ` +
+        `device, or, if no device is left, from trew invite on the server.`,
     );
   }
   return 0;
-}
-
-/**
- * Gives the vault a new root secret and keeps its history and its devices.
- *
- * It takes the old recovery key on the command line, because no device holds
- * one: rotating is the root's own power, along with registering a device, and
- * this is one of the two moments in a vault's life the root is used.
- *
- * **No device row is touched and every device keeps syncing across this**,
- * which is the expensive half of what per-device credentials removed. A
- * rotation that evicted every device would be a weekend of re-pairing across a
- * laptop, a phone, a desktop and a NAS, and that is how a leaked string goes
- * unrotated.
- *
- * The data key is this device's own, which is the vault's: rotation replaces
- * the wrapping and never the key, so the copy a paired device holds is always
- * current, and there is nothing to fetch before rewrapping it.
- */
-async function cmdRotate(args: Args, io: Console): Promise<number> {
-  const given = await secretFrom(args.rest[0], args, "the recovery key");
-  if (!given) {
-    throw new Error(
-      "rotate needs the vault's current recovery key, which no device holds: " +
-        "trew rotate basalt3_...",
-    );
-  }
-  const config = await mustLoad(args.dir);
-  const { dataKey } = deviceCredential(config);
-
-  const rotation = await rotateVault(
-    {
-      url: config.url,
-      vaultId: config.vaultId,
-      device: config.device,
-      recoveryKey: given,
-      dataKey,
-      timeoutMs: args.timeout,
-    },
-    // Out before the request, and on stderr whatever the output format: stdout
-    // is one object under `--json` and a second thing written there is a parse
-    // error for whatever is reading it (F03). The shared machine awaits this,
-    // so the bytes are gone before the vault can change.
-    async (candidate: string) => {
-      io.err("The vault is about to get this recovery key. Write it down before pressing on:");
-      io.err(`  ${candidate}`);
-      // Awaited by the state machine, so a script's copy is on disk before
-      // the vault can change under it (I02, I12).
-      if (args.keyOut !== undefined) await writeKeyOut(args.keyOut, candidate);
-    },
-  );
-
-  switch (rotation.kind) {
-    case "committed":
-      if (rotation.confirmedBy === "probe") {
-        // The command looked like it failed and did not. Said before the
-        // success block below, because somebody watching a timeout needs to
-        // know the key they were shown is the live one.
-        io.err(
-          "trew: the reply was lost, but the rotation did commit. The key above is the vault's.",
-        );
-      }
-      return finishRotate(rotation.recoveryKey, args, io);
-    case "refused":
-      throw new Error(rotation.why);
-    case "notCommitted":
-      throw new Error(
-        `${rotation.why}. The vault still has its old recovery key; cross out the one above.`,
-      );
-    case "unknown":
-      throw new Error(
-        `${rotation.why}. Keep both keys and run trew rotate again with whichever one the ` +
-          `server accepts.`,
-      );
-  }
-  // Every arm above returns or throws. Named rather than left implicit,
-  // because a fifth outcome added to the union should fail here loudly.
-  throw new Error(`unhandled rotation outcome ${JSON.stringify(rotation)}`);
-}
-
-function finishRotate(recoveryKey: string, args: Args, io: Console): number {
-  if (args.json) {
-    io.out(JSON.stringify({ ok: true, rotated: args.dir, recoveryKey }));
-    return 0;
-  }
-  io.out("Rotated. The old recovery key, and every outstanding invite, no longer open this vault.");
-  io.out("");
-  io.out("This is the new recovery key. Write it down in place of the old one:");
-  io.out("");
-  io.out(`  ${recoveryKey}`);
-  io.out("");
-  io.out("Every device keeps syncing: a rotation replaces the vault's secret and touches no");
-  io.out("device row. It cannot un-read what a lost device already read, so revoke that device");
-  io.out("too, with trew devices and trew revoke ID.");
-  return 0;
-}
-
-/**
- * Rejoins a server that has lost history this device applied.
- *
- * A device ahead of the server is refused with `cursor`, and rightly: the
- * server is a restored backup or the wrong vault, and continuing would reissue
- * uids for different content. The one safe thing to do is to forget what this
- * device believed it had synced and start again from the server's cursor:
- * everything both sides hold identically is agreed, what only this device
- * holds goes up as new versions, and where the two disagree both are kept.
- * Nothing is deleted anywhere.
- *
- * Refused without `--backup-taken`, because the index this removes is the
- * only record of what this device had synced, and the server's own history
- * is what the person is about to add to.
- */
-async function cmdRebase(args: Args, io: Console): Promise<number> {
-  const config = await mustLoad(args.dir);
-  // Both numbers from core, so the panel and this cannot disagree about where
-  // the two ends are or about when a rebase is allowed.
-  const at = await rebaseCursors(await clientOptions(config, args, io));
-  const { local, server: serverCursor } = at;
-  const say = (line: string) => {
-    if (!args.json) io.out(line);
-  };
-  say(`local cursor   ${local}`);
-  say(`server cursor  ${serverCursor}`);
-
-  refuseUnlessAhead(at);
-  if (!args.backupTaken) {
-    throw new Error(
-      `the server is at ${serverCursor} and this device has applied ${local}: the server has lost history. ` +
-        `Take a backup of the server (trew backup) and of this vault, then run trew rebase --backup-taken`,
-    );
-  }
-
-  // Same as unlink: a flush that failed is reported and does not stop the
-  // rebase, because the index is already gone and starting again from the
-  // server's cursor is what was asked for (I18).
-  const notDurable = await removeIndex(args.dir);
-  if (notDurable !== undefined && !args.json) {
-    io.err(`The index was removed, but flushing that removal failed: ${notDurable}`);
-  }
-  const client = await open(config, args, io);
-  try {
-    const report = await client.settle({ coalesceWrites: false });
-    if (args.json) {
-      // The same exit status the text branch gives, and the same `ok` (F26).
-      //
-      // This returned zero unconditionally, so an incomplete replay was a
-      // failure interactively and a success in automation: exactly the
-      // difference a cron job cannot see. A rebase that left paths retrying
-      // or written off has not finished, whoever is reading.
-      const code = exitCodeFor(report, client.vault);
-      io.out(
-        JSON.stringify({
-          ok: code === 0,
-          localCursor: local,
-          serverCursor,
-          replayed: report,
-        }),
-      );
-      return code;
-    }
-    io.out("");
-    io.out("Rebased onto the server's history:");
-    renderReport(
-      report,
-      args,
-      io,
-      client.serverCursor,
-      client.vault.stranded ?? [],
-      client.vault.displaced ?? [],
-      unknownRecovery(client.vault),
-    );
-    io.out(`Nothing was deleted. Where the two sides disagreed, both versions were kept.`);
-    return exitCodeFor(report, client.vault);
-  } finally {
-    await client.close();
-  }
 }
 
 async function cmdSync(args: Args, io: Console): Promise<number> {
@@ -1330,9 +888,45 @@ async function cmdSync(args: Args, io: Console): Promise<number> {
       client.vault.displaced ?? [],
       unknownRecovery(client.vault),
     );
+    await recordAttention(args, io, report);
     return exitCodeFor(report, client.vault);
   } finally {
     await client.close();
+  }
+}
+
+/**
+ * Writes down what a pass left waiting on a person, for `trew status`.
+ *
+ * After every pass that prints a report: a one-shot sync, each pass of a watch
+ * whose list changed, and the sync a restore runs. `status` runs no pass of its
+ * own, so without this a path the server refused was named once, by a report
+ * somebody may never have read, and then never again (PLAN.md section 4.9).
+ *
+ * A failure here is said, on stderr where it cannot break a JSON report, and
+ * does not change the exit code: the pass's own report and exit code are
+ * already true, and what failed is the note of them for later. The old record
+ * is removed if it can be, because a record older than the pass that just ran
+ * would have `status` describe a vault this pass has already contradicted.
+ */
+async function recordAttention(args: Args, io: Console, report: SyncReport): Promise<void> {
+  try {
+    await saveAttention(args.dir, {
+      at: Date.now(),
+      count: needsAttention(report),
+      // `?? []` because the type promises the list and a report built by hand
+      // may not keep it, the same guard `attentionLines` has.
+      paths: report.needsAttention ?? [],
+    });
+  } catch (err) {
+    const gone = await rm(attentionPath(args.dir), { force: true }).then(
+      () => "",
+      (cause: Error) => ` The older record could not be removed either: ${cause.message}.`,
+    );
+    io.err(
+      `trew: could not write down what needs attention, for trew status: ` +
+        `${(err as Error).message}.${gone}`,
+    );
   }
 }
 
@@ -1356,21 +950,24 @@ async function cmdSync(args: Args, io: Console): Promise<number> {
 /**
  * A secret from somewhere other than the command line (I12).
  *
- * A recovery key, an invite or a setup string typed as an argument is in the
- * shell's history file and in `/proc` for every process on the machine while
- * the command runs. That is fine for a one-off on a laptop you own and wrong
- * for a script, a shared box, or anything a person will paste twice.
+ * An invite typed as an argument is in the shell's history file and in
+ * `/proc` for every process on the machine while the command runs, and until
+ * it is redeemed or expires it adds a device to the vault. That is fine for a
+ * one-off on a laptop you own and wrong for a script, a shared box, or
+ * anything a person will paste twice.
  *
  * Three ways in, and the argument is still one of them because taking it away
  * would make the common case worse for no gain:
  *
- *   trew pair basalt3i_...        the argument, as before
+ *   trew pair trew1i_...          the argument, as before
  *   trew pair -                   standard input, for a pipe
  *   trew pair --key-file ./k      a file, which is what a script should use
  *
- * `-` reads to end of input and trims, so `printf %s "$KEY" | trew pair -`
+ * `-` reads to end of input and trims, so `printf %s "$INVITE" | trew pair -`
  * and a here-doc both work. A file is read whole and trimmed for the same
- * reason. Neither is logged, and neither is echoed back.
+ * reason. Neither is logged, and neither is echoed back. An empty file is
+ * refused rather than read as no invite, and a file and an argument together
+ * are refused rather than one of them quietly winning.
  */
 async function secretFrom(
   given: string | undefined,
@@ -1398,26 +995,25 @@ async function secretFrom(
 }
 
 /**
- * Writes a newly generated recovery key somewhere only its owner can read.
+ * Writes a newly issued credential somewhere only its owner can read, for
+ * `trew mcp-token --key-out`.
  *
- * The alternative to a key on a terminal, for a script that has to keep one.
- * Created with `wx` so it cannot land on an existing file, and 0600 so it is
- * not readable by anything else on the machine. The key still goes to the
- * usual place as well: a file somebody forgot to look at is not a backup, and
- * this is an addition rather than a redirection.
+ * The alternative to a credential on a terminal, for a script that has to
+ * keep one. Created with `wx` so it cannot land on an existing file, and 0600
+ * so it is not readable by anything else on the machine.
  */
-async function writeKeyOut(path: string, recoveryKey: string): Promise<void> {
+async function writeKeyOut(path: string, credential: string): Promise<void> {
   const handle = await openFile(path, "wx", 0o600);
   try {
-    await handle.writeFile(`${recoveryKey}\n`, "utf8");
+    await handle.writeFile(`${credential}\n`, "utf8");
     await handle.sync();
   } finally {
     await handle.close();
   }
   // The directory too, or the file's bytes are durable and its name is not
-  // (R02). This is the only copy of a credential nothing can reissue, and a
-  // power cut between here and the vault being claimed would leave a vault
-  // whose recovery key exists nowhere. The same rule every other durable write
+  // (R02). The server keeps only the credential's digest, so this file is its
+  // only copy, and a power cut that took its name would leave a credential
+  // that works and that nobody holds. The same rule every other durable write
   // in this project follows; this one was written before the rule had a
   // helper and did not get it.
   //
@@ -1427,9 +1023,9 @@ async function writeKeyOut(path: string, recoveryKey: string): Promise<void> {
   const flushed = await syncDirectoryIfSupported(dirname(path));
   if (!flushed.synced) {
     throw new Error(
-      `wrote the recovery key to ${path}, and could not make that durable: ${flushed.why}. ` +
+      `wrote the credential to ${path}, and could not make that durable: ${flushed.why}. ` +
         `Copy it somewhere else before going on: a power cut now could lose the file, and ` +
-        `nothing can reissue this key.`,
+        `nothing keeps another copy of it.`,
     );
   }
 }
@@ -1478,10 +1074,23 @@ async function watchForever(config: Config, args: Args, io: Console): Promise<nu
   // The live client, for the server cursor an ongoing report prints. Held by
   // `onClient`, which is how `runForever` hands each connection over.
   let watching: Client | undefined;
+  // What `trew status` is told, rewritten only when the list changes, since a
+  // watcher passes every thirty seconds and nearly every pass finds what the
+  // last one did. Chained, so two passes close together cannot land their
+  // records out of order and leave the older one on disk.
+  let recorded: string | undefined;
+  let recording = Promise.resolve();
+  const record = (report: SyncReport): void => {
+    const now = JSON.stringify([needsAttention(report), report.needsAttention ?? []]);
+    if (now === recorded) return;
+    recorded = now;
+    recording = recording.then(() => recordAttention(args, io, report));
+  };
   await runForever(
     {
       ...(await clientOptions(config, args, io)),
       onPass: (report) => {
+        record(report);
         if (!settled || !didSomething(report)) return;
         renderReport(
           report,
@@ -1526,6 +1135,8 @@ async function watchForever(config: Config, args: Args, io: Console): Promise<nu
       },
     },
   );
+  // `recordAttention` catches its own failures, so this only waits.
+  await recording;
   if (fatal) {
     io.err(`trew: ${withRecovery(fatal)}`);
     io.err("That will not fix itself by trying again.");
@@ -1610,10 +1221,28 @@ async function unsentHere(
 }
 
 async function cmdStatus(args: Args, io: Console): Promise<number> {
-  const config = await mustLoad(args.dir);
+  // Not `mustLoad`, which refuses a pairing that has not finished: this is the
+  // command somebody runs to find out what state the vault is in, and that is
+  // one of the states it has to be able to describe (rule 7).
+  const config = await loadConfig(args.dir);
+  if (!config) throw new Error(notPaired(args.dir));
+  const unfinished = isPendingPairing(config);
   // Checked the way the engine checks it, so a status never reports numbers
   // read out of a file the next sync would refuse.
   const stored = validateStoredState(await new JsonIndexStore(indexPath(args.dir)).load());
+
+  // What the last sync left waiting on a person, as it wrote it down (PLAN.md
+  // section 4.9): a path the server refused, with the server's reason, and
+  // every other path the engine wrote off. Read rather than worked out here,
+  // because a refusal is the server's answer to a put and this command sends
+  // nothing. Unreadable is kept apart from absent (rule 2).
+  let attention: AttentionRecord | undefined;
+  let attentionUnknown: string | undefined;
+  try {
+    attention = await loadAttention(args.dir);
+  } catch (err) {
+    attentionUnknown = (err as Error).message;
+  }
 
   const stranded: string[] = [];
   const displaced: Displaced[] = [];
@@ -1662,6 +1291,14 @@ async function cmdStatus(args: Args, io: Console): Promise<number> {
         : recovery.at.complete
           ? undefined
           : (recovery.at.why ?? "the record of displaced versions could not be established"),
+    // The paths the last sync could not sync and waiting will not fix, each
+    // with the engine's sentence: for a path the server refused, its reason
+    // code first (`toolong:`, `control:`), then what it is and what to do.
+    // Null when no sync has written a record yet.
+    attention: attention ?? null,
+    // Set when that record is there and cannot be read, which is not the
+    // same as there being nothing to attend to.
+    attentionUnknown,
   };
 
   // Reachability is reported, never assumed. "up to date" from a client that
@@ -1687,9 +1324,13 @@ async function cmdStatus(args: Args, io: Console): Promise<number> {
   // sentence that sends somebody to go and look at the server.
   let unjoined = false;
   try {
+    // A pairing that has not finished has a credential, and whether the
+    // server registered it is exactly what is not known, so nothing is asked
+    // with it: `trew pair` is what finishes it, and says which it was.
+    if (unfinished) throw new NoCredential(unfinishedPairing(args.dir));
     // The handshake and nothing after it. What is printed below is the
     // server's own cursor out of `ready`, and waiting for the backlog first
-    // meant a device weeks behind unsealed all of it before saying a word.
+    // meant a device weeks behind downloaded all of it before saying a word.
     const client = await open(config, args, io, { waitForBacklog: false, inspect: true });
     // Signed, not clamped. Clamping at zero made a server behind its own
     // clients, which is a restored backup or the wrong vault, read exactly
@@ -1736,7 +1377,13 @@ async function cmdStatus(args: Args, io: Console): Promise<number> {
     // them, and an empty list is the answer it gives either way. Exiting zero
     // on the difference between "nothing is waiting" and "this could not be
     // established" is rule 7 with the two cases that matter collapsed.
-    !local.recoveryComplete;
+    !local.recoveryComplete ||
+    // A path the last sync wrote off waits on a person and does not clear
+    // itself, the same as a version this client could not put back, and
+    // `sync` exited 1 over it: two readings of one vault cannot disagree about
+    // whether it needs somebody (RR5). Not knowing is not clean either.
+    (attention?.count ?? 0) > 0 ||
+    attentionUnknown !== undefined;
 
   if (args.json) {
     io.out(JSON.stringify({ ok: !wrong, ...local, server }));
@@ -1781,8 +1428,30 @@ async function cmdStatus(args: Args, io: Console): Promise<number> {
       if (d !== undefined) io.out(`    from ${d.from}: ${d.why}`);
     }
   }
+  // The paths themselves, with the reason each one gives, because a count is
+  // not something anybody can act on and these never clear themselves (PLAN.md
+  // section 4.9). With when they were found, because this is what the last
+  // sync saw and not something this command looked at.
+  if (attentionUnknown !== undefined) {
+    io.out(
+      `unknown  what the last sync left needing attention could not be read: ${attentionUnknown}. ` +
+        `trew sync writes it again.`,
+    );
+  } else if (attention !== undefined && attention.count > 0) {
+    io.out(
+      `attention ${attention.count} ${attention.count === 1 ? "path needs" : "paths need"} a ` +
+        `person, as the sync at ${when(attention.at).trim()} found them:`,
+    );
+    for (const { path, why } of attention.paths) io.out(`  ${visible(path)}: ${why}`);
+    const rest = attention.count - attention.paths.length;
+    if (rest > 0) io.out(`  and ${rest} more.`);
+  }
   if (unjoined) {
-    io.out(`state    nothing to connect with: ${server.error}`);
+    io.out(
+      unfinished
+        ? `state    not connected: ${server.error}`
+        : `state    nothing to connect with: ${server.error}`,
+    );
     return 1;
   }
   if (server.refused) {
@@ -2105,6 +1774,7 @@ async function cmdRestore(args: Args, io: Console): Promise<number> {
       return 1;
     }
     const sent = client.engine.serverHasOurs(done.path);
+    await recordAttention(args, io, report);
 
     if (args.json) {
       // `ok` from the same place the exit code comes from (RR8).
@@ -2155,8 +1825,8 @@ async function cmdRestore(args: Args, io: Console): Promise<number> {
     }
     // The restore itself succeeded, and the sync after it is a sync: a file
     // that can never sync, or one still failing when the pass gave up, is
-    // the same unsuccessful run here as it is under `sync` and `rebase`. The
-    // note is on this device either way, and the line above says so.
+    // the same unsuccessful run here as it is under `sync`. The note is on
+    // this device either way, and the line above says so.
     return exitCodeFor(report, client.vault);
   } finally {
     await client.close();
@@ -2228,12 +1898,17 @@ async function cmdUnlink(args: Args, io: Console): Promise<number> {
   // this used to be swallowed, so a vault could come back paired to a server
   // it had been told to forget with nothing anywhere having mentioned it.
   const notDurable = await removeState(args.dir);
+  // A pairing that had not finished is forgotten like a finished one, and is
+  // not described like one: whether the server registered it is exactly what
+  // was never learned, so the row this names may or may not exist.
+  const unfinished = config !== undefined && isPendingPairing(config);
   if (args.json) {
     io.out(
       JSON.stringify({
         ok: true,
         unlinked: args.dir,
-        wasPaired: config !== undefined,
+        wasPaired: config !== undefined && !unfinished,
+        ...(unfinished ? { unfinished: true } : {}),
         ...(notDurable !== undefined ? { notDurable } : {}),
         ...(config?.deviceId !== undefined ? { deviceId: config.deviceId } : {}),
       }),
@@ -2250,7 +1925,14 @@ async function cmdUnlink(args: Args, io: Console): Promise<number> {
     );
   }
   io.out("Nothing was removed from the server.");
-  if (config?.deviceId !== undefined) {
+  if (unfinished) {
+    io.out("");
+    io.out(
+      `The pairing here had not finished. If the server registered it, the vault's device list ` +
+        `has a row ${config.deviceId} that has never connected, and nothing here can remove it ` +
+        `now: run trew revoke ${config.deviceId} on a device that still syncs.`,
+    );
+  } else if (config?.deviceId !== undefined) {
     io.out("");
     io.out(
       `This device is still in the vault's device list as ${config.deviceId}. Nothing here can ` +
@@ -2285,9 +1967,9 @@ interface ConnectHow {
  * credential on this disk would. A second way in is one that revoking the
  * first cannot close.
  *
- * Nothing is written back either. What a connection used to prove, and this
- * file used to record, is settled by the registration that made the device,
- * before any command connects.
+ * Nothing is written back either. Which row this device is and the token
+ * that proves it are settled by the redemption that made the device, before
+ * any command connects.
  */
 async function open(
   config: Config,
@@ -2451,11 +2133,6 @@ export interface Args {
   device: string;
   /** Whether --device was typed, since the default gets a random tail at pairing. */
   deviceGiven: boolean;
-  vaultId: string;
-  /** Whether --vault-id was typed, so a setup line naming a vault can differ. */
-  vaultIdGiven: boolean;
-  server?: string;
-  token?: string;
   json: boolean;
   watch: boolean;
   uid?: number;
@@ -2471,9 +2148,9 @@ export interface Args {
    * exactly the point somebody needs it.
    */
   before: number;
-  /** A file holding the recovery key, invite or setup string (I12). */
+  /** A file holding the invite `pair` redeems (I12). */
   keyFile: string | undefined;
-  /** Where to write a newly generated recovery key, at 0600 (I12). */
+  /** Where `mcp-token` writes the credential it issues, at 0600 (I12). */
   keyOut: string | undefined;
   mcpRevoke?: boolean;
   mcpListen?: string;
@@ -2484,27 +2161,8 @@ export interface Args {
   help: boolean;
   version: boolean;
   timeout: number;
-  /**
-   * Whether revoking the last device is meant, which the person says out loud.
-   *
-   * What it leaves is a vault only the recovery key can reach: a real thing to
-   * want after a house fire, and not a thing to discover you did by typing an
-   * id off a list.
-   */
-  allowLast: boolean;
-  /**
-   * The vault's recovery key, for the two device-list commands that can be run
-   * with it instead of this device's own credential.
-   *
-   * Revoking the last device needs it, because that is the one revocation
-   * nothing on a device can undo. Listing takes it for the vault with no
-   * paired device left to ask, so abandoned registrations can be removed.
-   */
-  recoveryKey?: string;
   /** How long an invite lasts, in milliseconds; undefined is the server's default. */
   ttlMs?: number;
-  /** Whether rebase may remove the index, which the person confirms by typing it. */
-  backupTaken: boolean;
   /**
    * Whether two edits to one note may be merged on this device (I30).
    *
@@ -2541,8 +2199,6 @@ export function parseArgs(argv: readonly string[]): Args {
     dir: process.cwd(),
     device: hostname().split(".")[0] || "device",
     deviceGiven: false,
-    vaultId: "default",
-    vaultIdGiven: false,
     json: false,
     watch: false,
     limit: 20,
@@ -2553,8 +2209,6 @@ export function parseArgs(argv: readonly string[]): Args {
     verbose: false,
     help: false,
     version: false,
-    backupTaken: false,
-    allowLast: false,
     force: false,
     merge: true,
     readOnly: false,
@@ -2567,9 +2221,6 @@ export function parseArgs(argv: readonly string[]): Args {
     "--dir",
     "--vault",
     "--device",
-    "--vault-id",
-    "--server",
-    "--token",
     "--timeout",
     "--uid",
     "--to",
@@ -2580,7 +2231,6 @@ export function parseArgs(argv: readonly string[]): Args {
     "--config-dir",
     "--ignore",
     "--ttl",
-    "--recovery-key",
     "--allow-origin",
   ]);
   let onlyPositional = false;
@@ -2628,16 +2278,6 @@ export function parseArgs(argv: readonly string[]): Args {
       case "--device":
         args.device = value!;
         args.deviceGiven = true;
-        break;
-      case "--vault-id":
-        args.vaultId = value!;
-        args.vaultIdGiven = true;
-        break;
-      case "--server":
-        args.server = value!;
-        break;
-      case "--token":
-        args.token = value!;
         break;
       case "--timeout": {
         const ms = Number(value);
@@ -2709,12 +2349,6 @@ export function parseArgs(argv: readonly string[]): Args {
       case "--verify":
         args.verify = true;
         break;
-      case "--backup-taken":
-        args.backupTaken = true;
-        break;
-      case "--allow-last":
-        args.allowLast = true;
-        break;
       case "--force":
         args.force = true;
         break;
@@ -2723,9 +2357,6 @@ export function parseArgs(argv: readonly string[]): Args {
         break;
       case "--read-only":
         args.readOnly = true;
-        break;
-      case "--recovery-key":
-        args.recoveryKey = value!;
         break;
       case "--json":
         args.json = true;
@@ -2759,17 +2390,73 @@ export function parseArgs(argv: readonly string[]): Args {
  * Small things
  * ---------------------------------------------------------------- */
 
+/**
+ * The config of a paired device, refusing a vault that is not paired and a
+ * pairing that has not finished.
+ *
+ * The second in its own words and as a `NoCredential`, because every command
+ * that connects comes through here and a pending pairing is neither reachable
+ * nor refused (rule 7): nothing was asked of the server, and "not authorised"
+ * would send somebody after a server problem that is not there. `status` does
+ * not come through here, because describing that state is its job.
+ */
 async function mustLoad(dir: string): Promise<Config> {
   const config = await loadConfig(dir);
-  if (!config) throw new Error(`${dir} is not paired. Run trew init or trew pair first.`);
+  if (!config) throw new Error(notPaired(dir));
+  if (isPendingPairing(config)) throw new NoCredential(unfinishedPairing(dir));
   return config;
+}
+
+/** What every command says in a vault that is not paired, with the way to pair it. */
+function notPaired(dir: string): string {
+  return `${dir} is not paired. Run trew pair with an invite. ${WHERE_INVITES_COME_FROM}`;
+}
+
+/**
+ * What a command says about a pairing that has not finished.
+ *
+ * The redemption may have been sent and not answered, or not sent at all
+ * before whatever stopped it, and the pending pairing on disk is the same
+ * either way: whether the server registered this device is what is not known.
+ * `trew pair` asks, with the credential already saved, and the server answers
+ * `redeemed` again if it did, even after the invite has expired.
+ */
+function unfinishedPairing(dir: string): string {
+  return (
+    `the pairing in ${dir} has not finished: an invite was being redeemed and no answer was ` +
+    `heard, so whether the server registered this device is not known. Run trew pair here to ` +
+    `finish it with the credential already saved, which works even after the invite has ` +
+    `expired if the server did register it.`
+  );
+}
+
+/**
+ * A path as a terminal can show it: every control character spelled out.
+ *
+ * The paths `status` prints are ones the last sync could not sync, and one of
+ * the reasons the server refuses a path is a control character in it
+ * (plan/protocol.md, "Paths"). Printed raw, that character is invisible at
+ * best, and an escape sequence is an instruction to the terminal rather than a
+ * name. Everything else is left as it is, because a person reads a name best
+ * as itself; `spellOut` in core goes further, for the one refusal where two
+ * spellings have to be told apart.
+ */
+function visible(path: string): string {
+  let out = "";
+  for (const ch of path) {
+    const code = ch.codePointAt(0)!;
+    out += code < 0x20 || (code >= 0x7f && code <= 0x9f) ? `\\u{${code.toString(16)}}` : ch;
+  }
+  return out;
 }
 
 /**
  * A duration as a person types one: `10m`, `1h`, `90s`, or plain seconds.
  *
- * Bounded above by what the server allows, so the answer is one it will give
- * rather than one it will quietly cap.
+ * Bounded above by what the server allows, an hour, which is also its
+ * default, so the answer is one it will give rather than one it will quietly
+ * cap. Nothing here asks for an invite that never expires: that is `trew
+ * invite -ttl 0` on the server, a deliberate act by whoever runs it.
  */
 export function parseDuration(text: string): number {
   const m = /^(\d+)\s*(ms|s|m|h)?$/.exec(text.trim());

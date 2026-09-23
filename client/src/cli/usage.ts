@@ -3,27 +3,13 @@ import { mcpOrigin, parseMcpListen } from "./mcp-http.ts";
 
 /** Accepted positional arguments. Vault paths always use --dir. */
 const POSITIONALS: Record<string, number> = {
-  init: 1,
   pair: 1,
   history: 1,
   rename: 1,
   restore: 1,
   revoke: 1,
-  rotate: 1,
   uninvite: 1,
 };
-
-const TAKES_RECOVERY_KEY = new Set(["devices", "revoke", "uninvite"]);
-
-function refuseRecoveryKey(args: Args): void {
-  if (args.recoveryKey === undefined) return;
-  if (TAKES_RECOVERY_KEY.has(args.command ?? "")) return;
-  throw new Error(
-    `${args.command} does not take --recovery-key, so the key would have been ignored. ` +
-      `It is for ${[...TAKES_RECOVERY_KEY].join(", ")}; trew rotate takes the key as its ` +
-      `argument instead.`,
-  );
-}
 
 function refuseForce(args: Args): void {
   if (!args.force || args.command === "unlock") return;
@@ -57,21 +43,16 @@ export function validateUsage(args: Args): void {
     "--ttl": ["invite"],
     "--watch": ["sync"],
     "--verify": ["sync"],
-    "--backup-taken": ["rebase"],
-    "--allow-last": ["revoke"],
-    "--server": ["init"],
-    "--token": ["init"],
-    "--device": ["init", "pair"],
-    "--vault-id": ["init"],
-    "--key-file": ["init", "pair", "rotate"],
-    "--key-out": ["init", "rotate", "mcp-token"],
+    "--device": ["pair"],
+    "--key-file": ["pair"],
+    "--key-out": ["mcp-token"],
     "--revoke": ["mcp-token"],
     "--listen": ["mcp"],
     "--vault": ["mcp"],
     "--writable": ["mcp"],
     "--allow-origin": ["mcp"],
     "--no-merge": ["sync", "restore", "preview", "mcp"],
-    "--read-only": ["init", "pair", "sync", "restore", "preview", "mcp"],
+    "--read-only": ["pair", "sync", "restore", "preview", "mcp"],
   };
   for (const flag of args.provided ?? []) {
     const allowed = forCommands[flag];
@@ -90,25 +71,11 @@ export function validateUsage(args: Args): void {
     throw new Error("--writable cannot be combined with --read-only");
   if (args.mcpListen !== undefined) parseMcpListen(args.mcpListen);
   for (const origin of args.mcpOrigins ?? []) mcpOrigin(origin);
+  // Refused here, before anything is read, rather than one of the two quietly
+  // winning: an invite from a file and another on the command line are two
+  // answers to one question (I12).
   if (args.keyFile && args.rest[0] && args.rest[0] !== "-")
-    throw new Error("Use a key argument or --key-file, not both");
-  if (["pair", "rotate"].includes(args.command ?? "") && !args.rest[0] && !args.keyFile)
-    throw new Error(
-      args.command === "rotate"
-        ? "rotate needs the vault's current recovery key"
-        : "pair needs an invite or recovery key",
-    );
-  if (args.command === "init") {
-    if ((args.rest[0] || args.keyFile) && (args.server || args.token))
-      throw new Error("init takes a setup string or --server and --token, not both");
-    if (!args.rest[0] && !args.keyFile && (!args.server || !args.token))
-      throw new Error(
-        "init needs the server's setup string, like host:3003#TOKEN, or --server and --token",
-      );
-  }
-  if (args.allowLast && !args.recoveryKey)
-    throw new Error("Use --allow-last --recovery-key to remove the final device");
-  refuseRecoveryKey(args);
+    throw new Error("give the invite as an argument or with --key-file, not both");
   refuseForce(args);
   if (args.verify && (args.command !== "sync" || args.watch)) {
     throw new Error("--verify is for a one-time sync, without --watch");
@@ -116,6 +83,8 @@ export function validateUsage(args: Args): void {
   if (args.before && args.command !== "history" && args.command !== "deleted") {
     throw new Error("--before is only for history and deleted");
   }
+  // `pair` is not among these: with no invite it finishes a pairing that was
+  // interrupted, and whether there is one is on the disk, which `pair` reads.
   const required: Record<string, string> = {
     history: "the path of a note",
     restore: "the path of a note",

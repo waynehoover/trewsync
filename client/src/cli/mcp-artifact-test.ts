@@ -38,7 +38,7 @@ export async function smokeMcpArtifact(artifact: string, runtime: string, denyRe
   });
   try {
     await server.start();
-    const initialized = await cli("init", server.setup, "--dir", dir);
+    const initialized = await cli("pair", await server.firstInvite(), "--dir", dir);
     assert.equal(initialized.code, 0, initialized.err);
     const original = "UNSENT ARTIFACT MARKER\n- [ ] exact task\n";
     await writeFile(join(dir, "note.md"), original);
@@ -90,7 +90,7 @@ export async function smokeHttpArtifact(artifact: string, runtime: string, denyR
   let host: Awaited<ReturnType<typeof openHttp>> | undefined;
   try {
     await server.start();
-    const paired = await cli("init", server.setup, "--dir", dir);
+    const paired = await cli("pair", await server.firstInvite(), "--dir", dir);
     assert.equal(paired.code, 0, paired.err);
     const issued = await cli("mcp-token", "--dir", dir);
     assert.equal(issued.code, 0, issued.err);

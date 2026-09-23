@@ -26,9 +26,11 @@ export async function clientOptions(
   return {
     vault,
     store: new JsonIndexStore(indexPath(args.dir)),
-    // Which key authenticates and what the vault is bound to, worked out in
-    // core so that both shells cannot answer it differently.
-    ...(await credentialsFor(config)),
+    // Which row this device connects as and the token that proves it, worked
+    // out in core so that the two shells cannot answer it differently. It
+    // refuses a config with no credential, and a pairing that has not
+    // finished, in words `status` repeats.
+    ...credentialsFor(config),
     timeoutMs: args.timeout,
     // A one-shot sync does not defer a file to a next pass it will never
     // run. A watching one does, because there is one.
