@@ -14,7 +14,9 @@
 // reads a line from stdin: "go" lets the write go on, and anything else,
 // the end of stdin included, holds it there until the process is killed. So
 // a test can stop the world inside a write, change something and let it
-// finish, or SIGKILL the server with the write exactly there.
+// finish, or SIGKILL the server with the write exactly there. One write is
+// held at a time: another reaching the seam waits behind it, unannounced,
+// until it is let go.
 package main
 
 import (

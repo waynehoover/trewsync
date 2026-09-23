@@ -521,20 +521,19 @@ func TestAKillAroundAnAppendResolvesOnRetryToOneResult(t *testing.T) {
 func TestAWriteThatLosesAtItsCommitCommitsNothingEndToEnd(t *testing.T) {
 	crash := builtTrewd(t, "crashmatrix")
 	type world struct {
-		s                *served
-		token, tokenID   string
-		reader           string
-		dev              *device
-		heads            map[string]int64
-		last             int64
-		epoch            any
-		previewed        bool
-		tool             string
-		args             map[string]any
-		deviceWrote      map[string]string
-		wouldWrite       []string
-		wouldCreate      []string
-		refusedWithReply bool
+		s              *served
+		token, tokenID string
+		reader         string
+		dev            *device
+		heads          map[string]int64
+		last           int64
+		epoch          any
+		previewed      bool
+		tool           string
+		args           map[string]any
+		deviceWrote    map[string]string
+		wouldWrite     []string
+		wouldCreate    []string
 	}
 	put := func(w *world, path, text string) {
 		uid, err := w.dev.put(path, text, w.heads[path])
