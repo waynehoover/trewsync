@@ -4073,13 +4073,32 @@ class TrewPanel {
       goButton?.setDisabled(!readable);
     };
 
+    new Setting(contentEl).addButton((b) => {
+      goButton = b;
+      b.setButtonText("Pair")
+        .setCta()
+        .onClick(async () => {
+          const value = inviteField?.getValue() ?? "";
+          b.setDisabled(true);
+          try {
+            await this.pairFromPanel(value, device(), skipping());
+          } finally {
+            showDestination();
+          }
+        });
+    });
+
     // More options, collapsed, because both have answers that work.
     //
     // A device name is suggested from the platform and is only ever a label in
     // the device list. A skip list is empty for almost everybody. Neither is a
     // decision most people have to make, and a screen that asks anyway is a
     // screen that says all four of these matter equally.
-    const more = contentEl.createEl("details", { cls: "trew-more-options" });
+    //
+    // Below the group rather than inside it, like the paired panel's
+    // disclosures: a disclosure among the rows sat outside their padding and
+    // drew a row border under its own summary, which only a screenshot showed.
+    const more = host.createEl("details", { cls: "trew-more-options" });
     more.createEl("summary", { text: "More options" });
     const moreEl = settingGroup(more);
 
@@ -4102,20 +4121,6 @@ class TrewPanel {
     this.renderJoinSkip(moreEl);
     const skipping = () => this.joinSkip;
 
-    new Setting(contentEl).addButton((b) => {
-      goButton = b;
-      b.setButtonText("Pair")
-        .setCta()
-        .onClick(async () => {
-          const value = inviteField?.getValue() ?? "";
-          b.setDisabled(true);
-          try {
-            await this.pairFromPanel(value, device(), skipping());
-          } finally {
-            showDestination();
-          }
-        });
-    });
     showDestination();
 
     docsLink(host.createEl("p", { cls: "trew-advice" }), "How pairing works");

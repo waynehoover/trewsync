@@ -181,13 +181,15 @@
 
 .trew-add-device,
 .trew-server,
-.trew-manage {
+.trew-manage,
+.trew-more-options {
   margin-top: var(--size-4-4);
 }
 
 .trew-add-device > summary,
 .trew-server > summary,
-.trew-manage > summary {
+.trew-manage > summary,
+.trew-more-options > summary {
   cursor: pointer;
   color: var(--text-muted);
   font-size: var(--font-ui-small);
@@ -381,7 +383,8 @@
 
   .trew-add-device,
   .trew-server,
-  .trew-manage {
+  .trew-manage,
+  .trew-more-options {
     margin-top: var(--size-4-2);
   }
 
