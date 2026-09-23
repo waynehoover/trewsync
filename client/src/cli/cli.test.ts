@@ -2143,6 +2143,11 @@ describe("a server that lost history behind its own back (I10)", () => {
  * the safe default and the wrong answer on Linux: two notes that differ only in
  * case are then one file to the alias check, both are refused, and every sync
  * exits 1 over a pair the disk is perfectly happy with.
+ *
+ * Protocol 1 refuses the second of such a pair at the server, so a vault
+ * holding one still exits 1, with the server's reason. What this checks is
+ * that the refusal is the server's, naming the note it collides with, and not
+ * this disk's alias check blocking both.
  */
 describe("what the disk says about case (C-D2)", () => {
   it("is asked, and is what the vault then goes by", async () => {
@@ -2168,11 +2173,24 @@ describe("what the disk says about case (C-D2)", () => {
     try {
       await write(a, "note.md", "one\n");
       // Two files on a case-sensitive disk, one file on a folding one. Either
-      // way the sync has to agree with the disk about which it is.
+      // way the sync has to agree with the disk about which it is: this disk's
+      // alias check blocks neither, because to this disk they are not one.
       if (!folds) await write(a, "NOTE.md", "two\n");
       const synced = await cli("sync", "--dir", a);
-      expect(synced.code, synced.all).toBe(0);
       expect(synced.all).not.toMatch(/in the way|blocked/i);
+      if (folds) {
+        expect(synced.code, synced.all).toBe(0);
+      } else {
+        // They are one name to the server, though (protocol 1, PLAN.md
+        // section 4.1, "the cost, accepted"): the second to arrive is refused
+        // there as a collision naming the first, and kept here. That is the
+        // server's refusal and not this disk's, so it is said, and it is what
+        // the exit code is about.
+        expect(synced.code, synced.all).toBe(1);
+        expect(synced.all).toMatch(/collision: "(note|NOTE)\.md" cannot be created/);
+        expect(await read(a, "note.md")).toBe("one\n");
+        expect(await read(a, "NOTE.md")).toBe("two\n");
+      }
       // Counted before this test asks for itself, or the spy would be
       // satisfied by the line below it.
       asked = probed.length;
