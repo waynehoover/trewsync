@@ -90,7 +90,7 @@ func mustHex(t *testing.T, s string) []byte {
 // frame given, exactly, and returns the reply.
 func uploadFrame(t *testing.T, cl *client, path, name string, size int64, framed []byte) map[string]any {
 	t.Helper()
-	cl.sendJSON(wire.In{Op: "put", Path: path, Chunks: []string{name}, Mac: testMac,
+	cl.sendJSON(wire.In{Op: "put", Path: path, Chunks: []string{name},
 		Meta: wire.PutMeta{Size: size, MTime: 1}})
 	if m := cl.recv(); m["res"] != "want" {
 		t.Fatalf("%s: the put was answered %v before any body was sent", path, m)
@@ -231,7 +231,7 @@ func TestTheUploadAllowanceCountsInflatedBytes(t *testing.T) {
 	r := newRig(t)
 	liar := r.dial("a")
 	liar.hello(0)
-	liar.sendJSON(wire.In{Op: "put", Path: "lie.md", Chunks: []string{name}, Mac: testMac,
+	liar.sendJSON(wire.In{Op: "put", Path: "lie.md", Chunks: []string{name},
 		Meta: wire.PutMeta{Size: 1000, MTime: 1}})
 	liar.recvInto("want", nil)
 	liar.sendFrame(framed)

@@ -6,8 +6,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base32"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,7 +24,6 @@ import (
 
 	"github.com/waynehoover/telimus/internal/chunks"
 	"github.com/waynehoover/telimus/internal/dirlock"
-	"github.com/waynehoover/telimus/internal/fsync"
 	"github.com/waynehoover/telimus/internal/server"
 	"github.com/waynehoover/telimus/internal/store"
 	"github.com/waynehoover/telimus/internal/wire"
@@ -116,13 +113,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 // same store and opening a second copy of it is how two processes disagree
 // about what is stored.
 func dataFlags(fs *flag.FlagSet) *string {
-	return fs.String("data", defaultDataDir(), "directory holding the database, chunks and auth token")
+	return fs.String("data", defaultDataDir(), "directory holding the database and the chunk bodies")
 }
-
-// tokenFileName is the device auth token. It is not the encryption key: the
-// vault's recovery key is generated on the first device and this server never sees
-// it.
-const tokenFileName = "auth-token"
 
 func defaultDataDir() string {
 	if d := os.Getenv("TELIMUS_DATA"); d != "" {
@@ -280,17 +272,21 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	maxFetch := fs.Int64("max-fetch-bytes", wire.MaxFetchBytes,
 		"most body bytes one fetch may ask for, in bytes, up to the 256 MiB file ceiling")
 	local := fs.Bool("localhost", false,
-		"bind to 127.0.0.1 and print a ws:// pairing string, for trying this out on one machine")
+		"bind to 127.0.0.1 and put a ws:// address in invites, for trying this out on one machine")
+	publicURL := fs.String("url", "",
+		"the address devices reach this server at, ws:// or wss://, which invites carry (default: this machine's addresses)")
+	inviteOut := fs.String("invite-out", "",
+		"where to write the first device's invite when the vault has none (default: first-invite in the data directory)")
 	verbose := fs.Bool("v", false, "verbose logging")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *local {
 		// Both halves of what a local trial needs. Binding to loopback is the
-		// obvious half; the other is that a pairing string with no scheme
-		// becomes wss://, which is right for the tunnel this is normally reached
-		// through and wrong for a server with no TLS in front of it. Printing
-		// the string a device can actually use is the point of the flag.
+		// obvious half; the other is that an invite's address is otherwise
+		// wss://, which is right for the tunnel this is normally reached
+		// through and wrong for a server with no TLS in front of it. Writing
+		// the invite a device can actually use is the point of the flag.
 		_, port, err := net.SplitHostPort(*addr)
 		if err != nil {
 			return fmt.Errorf("-addr %q is not host:port: %w", *addr, err)
@@ -351,23 +347,28 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		log.Warn("rebuilt the live set from the entries", "vault", vault, "why", why)
 	}
 
-	token, fresh, err := loadOrCreateToken(filepath.Join(*dataDir, tokenFileName))
-	if err != nil {
+	// An -url that no invite could carry is refused now, before the port
+	// opens, rather than when the first invite is written.
+	if *publicURL != "" {
+		if err := checkInviteURL(*publicURL); err != nil {
+			return fmt.Errorf("-url %q: %w", *publicURL, err)
+		}
+	}
+	firstInvitePath := *inviteOut
+	if firstInvitePath == "" {
+		firstInvitePath = filepath.Join(*dataDir, firstInviteFile)
+	}
+
+	// The served vault exists from the first start, so the first device's
+	// invite has a vault to be an invite to.
+	if err := st.EnsureVault(*vault, time.Now().UnixMilli()); err != nil {
 		return err
 	}
 
-	// Exactly one vault is authorised. A typo in the vault name then fails
-	// authentication instead of quietly creating a second, empty vault that
-	// reports itself as fully synced.
-	// One secret. The token printed on first run is a bootstrap: the first
-	// device authenticates with it and, in the same breath, tells the server
-	// which auth key the vault belongs to from then on. After that the
-	// bootstrap opens nothing, and the only credential is one derived from the
-	// root secret that also produces the content and path keys.
-	srv := server.New(st, server.DerivedAuth(st, *vault, token, func() int64 {
-		return time.Now().UnixMilli()
-	}), log)
-	// Every hello route, not only the one that claims (F19).
+	// Exactly one vault is served, on every hello route (F19). A typo in the
+	// vault name then fails authentication instead of quietly creating a
+	// second, empty vault that reports itself as fully synced.
+	srv := server.New(st, log)
 	srv.Serves(*vault)
 	srv.SetVersion(resolveVersion(version, moduleVersion()))
 	srv.SetPerFileMax(*maxFile)
@@ -403,14 +404,6 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		// No WriteTimeout: these are long-lived websockets.
 	}
 
-	// Whether the vault has been claimed decides whether the bootstrap token is
-	// worth printing. An error here is not worth refusing to start over, so it
-	// prints the pairing string: telling someone to pair when they cannot is a
-	// smaller failure than withholding the string they need.
-	hash, hashErr := st.AuthHash(*vault)
-	if hashErr != nil {
-		log.Warn("could not tell whether the vault is claimed", "err", hashErr)
-	}
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -431,17 +424,35 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		return fmt.Errorf("listening on %s: %w", hs.Addr, err)
 	}
 
-	// After the bind, because it says "listening on" and hands somebody a
-	// pairing string.
+	// After the bind, because it says "listening on" and may mint an invite.
 	//
-	// It used to be seventeen lines earlier. Under systemd both streams land
-	// in one journal, so the line an operator greps said the server was up,
-	// with a setup string to paste, for a server that then exited 1 with
-	// "address already in use" -- and `loadOrCreateToken` had by then written
-	// a fresh auth token for a server that never started. Rule 4: report the
-	// outcome, not the intent. The same argument as the bind-before-the-walk
-	// above, one statement over, and it was applied to only one of them.
-	printSetup(out, *addr, *vault, token, fresh, *local, hash == "" || hashErr != nil)
+	// It used to come earlier. Under systemd both streams land in one
+	// journal, so the line an operator greps said the server was up, with a
+	// setup string to paste, for a server that then exited 1 with "address
+	// already in use", and Basalt had by then written a fresh credential for a
+	// server that never started. Rule 4: report the outcome, not the intent.
+	// The same argument as the bind-before-the-walk above.
+	urls, err := inviteURLs(*publicURL, boundAddr(*addr, ln.Addr()), *local)
+	if err != nil {
+		ln.Close()
+		return err
+	}
+	first, err := mintFirstInvite(st, *vault, urls, firstInvitePath, time.Now())
+	if err != nil {
+		ln.Close()
+		return err
+	}
+	// The path and the expiry, never the string: a container log is not a
+	// private place, and the string adds a device to the vault.
+	switch {
+	case first.Written:
+		log.Info("wrote an invite for the first device", "path", first.Path,
+			"expiresAt", first.ExpiresAt.UTC().Format(time.RFC3339))
+	case first.NoAddress:
+		log.Warn("no device is paired and no address is known to put in an invite",
+			"hint", "start with -url wss://your-host:port")
+	}
+	printPairing(out, *addr, *vault, first)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -527,8 +538,8 @@ const shutdownTimeout = 5 * time.Second
 // TestTheRefusalOffersOnlyRemediesAStoppedServerHas.
 //
 // Only the newest version of each live path counts; see store.FilesOver for why
-// history and deletions over the ceiling do not. Paths are sealed, so what can
-// be named is the uid and the size. TestServeRefusesACeilingBelowAFileTheVaultHolds.
+// history and deletions over the ceiling do not. Each is named by its path, its
+// uid and its size. TestServeRefusesACeilingBelowAFileTheVaultHolds.
 func refuseCeilingBelowContent(st *store.Store, vault string, ceiling int64) error {
 	over, err := st.FilesOver(vault, ceiling)
 	if err != nil {
@@ -549,7 +560,7 @@ func refuseCeilingBelowContent(st *store.Store, vault string, ceiling int64) err
 			fmt.Fprintf(&b, "\n  and %d more", len(over)-listed)
 			break
 		}
-		fmt.Fprintf(&b, "\n  uid %d is %d bytes", f.UID, f.Size)
+		fmt.Fprintf(&b, "\n  %s (uid %d) is %d bytes", f.Path, f.UID, f.Size)
 	}
 	fmt.Fprintf(&b, "\nA device paired from now on could never download %s, and would report the vault synced without %s.\n"+
 		"Start with -max-file %d or more and this server runs as it did. Nothing is lost by doing that: the %s\n"+
@@ -558,9 +569,8 @@ func refuseCeilingBelowContent(st *store.Store, vault string, ceiling int64) err
 		"Deleting on a device is not a way out from here, because a device deletes by pushing an entry and there\n"+
 		"is no server to push to. To bring the ceiling down: raise, start, delete or shrink %s on a device, wait\n"+
 		"for that to reach this server, stop, lower.\n"+
-		"This can happen with no flag changed, by restoring a backup taken before the %s %s deleted.\n"+
-		"Paths are sealed here, so the uid and the size are all this server can say about %s.",
-		pronoun, pronoun, over[0].Size, noun, isare, over[0].Size, pronoun, noun, waswere, pronoun)
+		"This can happen with no flag changed, by restoring a backup taken before the %s %s deleted.",
+		pronoun, pronoun, over[0].Size, noun, isare, over[0].Size, pronoun, noun, waswere)
 	return errors.New(b.String())
 }
 
@@ -584,13 +594,13 @@ func gracefulStop(stopListener, stopSessions func(context.Context) error, timeou
 }
 
 // vaultSummary is what the startup line says about one vault: the latest uid,
-// which is the cursor every device compares itself against, and whether it has
-// been claimed. Neither is a secret and both are the first thing to look at
-// when a device says it is behind and nothing arrives (I11).
+// which is the cursor every device compares itself against, and how many
+// devices are paired with it. Neither is a secret and both are the first thing
+// to look at when a device says it is behind and nothing arrives (I11).
 type vaultSummary struct {
 	Name    string
 	Latest  int64
-	Claimed bool
+	Devices int
 }
 
 func vaultSummaries(st *store.Store) ([]vaultSummary, error) {
@@ -604,17 +614,17 @@ func vaultSummaries(st *store.Store) ([]vaultSummary, error) {
 		if err != nil {
 			return nil, err
 		}
-		hash, err := st.AuthHash(name)
+		devices, err := st.Devices(name)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, vaultSummary{Name: name, Latest: latest, Claimed: hash != ""})
+		out = append(out, vaultSummary{Name: name, Latest: latest, Devices: len(devices)})
 	}
 	return out, nil
 }
 
 // logStartup writes the one line an operator greps for after a restart: the
-// version, and for the served vault its latest uid and whether it is claimed.
+// version, and for the served vault its latest uid and how many devices it has.
 // A vault in the store that this server is not serving gets its own line, so
 // a -vault typo is visible in the journal rather than only as refused hellos.
 func logStartup(log *slog.Logger, st *store.Store, served, version string) error {
@@ -648,16 +658,16 @@ func logStartup(log *slog.Logger, st *store.Store, served, version string) error
 		if v.Name == served {
 			found = true
 			log.Info("starting", "version", version, "vault", v.Name, "latest", v.Latest,
-				"claimed", v.Claimed, "reclaimable", reclaimable)
+				"devices", v.Devices, "reclaimable", reclaimable)
 		}
 	}
 	if !found {
-		log.Info("starting", "version", version, "vault", served, "latest", 0, "claimed", false,
+		log.Info("starting", "version", version, "vault", served, "latest", 0, "devices", 0,
 			"reclaimable", reclaimable)
 	}
 	for _, v := range vaults {
 		if v.Name != served {
-			log.Warn("vault present but not served", "vault", v.Name, "latest", v.Latest, "claimed", v.Claimed,
+			log.Warn("vault present but not served", "vault", v.Name, "latest", v.Latest, "devices", v.Devices,
 				"hint", "start with -vault "+v.Name+" if this is the one your devices use")
 		}
 	}
@@ -700,7 +710,7 @@ func pairingHosts(addr string) []string {
 		}
 	}
 	if len(out) == 0 {
-		out = []string{"<this-host>:" + port}
+		out = []string{placeholderHost + ":" + port}
 	}
 	return out
 }
@@ -708,208 +718,6 @@ func pairingHosts(addr string) []string {
 // defaultVault is the name every client assumes when a setup line, an invite or
 // a pairing string does not carry one.
 const defaultVault = "default"
-
-// printSetup says what the server is and, if it is still waiting for its first
-// device, how to give it one.
-//
-// The token is printed only while it can still be used. It is a bootstrap: it
-// claims an unclaimed vault, and once a device has claimed one it opens
-// nothing. Printing it after that put a dead credential into the log on every
-// restart, and offered it as a pairing string that fails when pasted. Later
-// devices pair with each other, using an invite issued on a device that
-// already has the vault. That invite seals the vault's data key under a key
-// this server never sees, so there is nothing here it could print.
-func printSetup(out io.Writer, addr, vault, token string, fresh, local, unclaimed bool) {
-	if fresh && unclaimed {
-		fmt.Fprintln(out, "A new bootstrap token was generated for this server.")
-	}
-	fmt.Fprintf(out, "telimus %s listening on %s, serving vault %q\n", resolveVersion(version, moduleVersion()), addr, vault)
-
-	if !unclaimed {
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "This vault has been claimed, so the bootstrap token no longer opens it.")
-		fmt.Fprintln(out, "To add another device, pair it with one that already has the vault:")
-		fmt.Fprintln(out, "run `telimus invite` there, or copy the pairing string from the plugin.")
-		return
-	}
-
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "No device has claimed this vault yet. Paste one of these lines into")
-	fmt.Fprintln(out, "Telimus on your first device, under \"Start a new vault\", or run")
-	fmt.Fprintln(out, "`telimus init <line>` there:")
-	fmt.Fprintln(out)
-	// The vault's name, in the line, when it is not the one every client
-	// assumes. Without it the only way to start a vault called anything else
-	// was to install the CLI somewhere, claim the vault into a throwaway
-	// directory, invite the real device from it and then revoke the throwaway
-	// (R083-14). Both clients read the second # as the vault name, and a line
-	// for `default` is byte-for-byte what it always was.
-	named := ""
-	if vault != defaultVault {
-		named = "#" + vault
-	}
-	for _, host := range pairingHosts(addr) {
-		// The scheme only where it is not the usual one. A pairing string with
-		// no scheme becomes wss://, which is right behind a tunnel and wrong for
-		// a loopback server with no TLS in front of it.
-		if local {
-			host = "ws://" + host
-		}
-		fmt.Fprintf(out, "  %s#%s%s\n", host, token, named)
-	}
-	fmt.Fprintln(out)
-	if !local {
-		// The addresses above are this machine's interfaces, and the device
-		// reaches whatever terminates TLS, which is usually somewhere else.
-		fmt.Fprintf(out, "If TLS is in front, use that hostname instead: wss://your-host#%s%s\n", token, named)
-		fmt.Fprintln(out)
-	}
-	fmt.Fprintln(out, "The part after the # is a one-time token. It is not the encryption key:")
-	fmt.Fprintln(out, "the vault secret is generated on your first device and this server")
-	fmt.Fprintln(out, "never sees it, so it cannot read anything it stores.")
-}
-
-// loadOrCreateToken reads the auth token, creating one on first run.
-//
-// A read that fails for any reason other than "not there" is fatal. Falling
-// back to a fresh token on an unreadable file would silently lock out every
-// device that already has the old one, which is rule 2: absent and unreadable
-// are different states.
-//
-// An existing token is also checked for its mode and tightened to 0600 (S20).
-// writeTokenFile has always written it private, but a file copied in by hand,
-// or left by an older build, kept whatever mode it had and nothing ever looked
-// again. A credential that cannot be made private is a reason not to start.
-func loadOrCreateToken(path string) (string, bool, error) {
-	b, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		token := strings.TrimSpace(string(b))
-		if token == "" {
-			return "", false, fmt.Errorf("%s is empty; delete it to generate a new token", path)
-		}
-		if err := ensurePrivate(path); err != nil {
-			return "", false, err
-		}
-		return token, false, nil
-	case errors.Is(err, os.ErrNotExist):
-		// fall through and create
-	default:
-		return "", false, fmt.Errorf("reading %s: %w", path, err)
-	}
-
-	token, err := newToken()
-	if err != nil {
-		return "", false, err
-	}
-	if err := writeTokenFile(path, token+"\n"); err != nil {
-		return "", false, err
-	}
-	return token, true, nil
-}
-
-// ensurePrivate makes an existing file 0600 if it is not, and proves it.
-func ensurePrivate(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if info.Mode().Perm() == 0o600 {
-		return nil
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("%s has mode %o and could not be made private: %w", path, info.Mode().Perm(), err)
-	}
-	info, err = os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		return fmt.Errorf("%s has mode %o after chmod, want 600", path, perm)
-	}
-	return nil
-}
-
-// writeTokenFile writes a token file atomically and durably, then proves it
-// (S11). A token is a credential: a restart that finds it truncated or absent
-// locks out every paired device, and the failure looks like a typed pairing
-// string, so this is worth more than an os.WriteFile.
-//
-//   - A temp file in the same directory, fsynced, then renamed over the target,
-//     so a crash mid-write leaves either the old token or the new one, never
-//     half of one. os.WriteFile truncates in place, and a crash there is the
-//     truncation this exists to avoid.
-//   - The directory is fsynced after the rename, or the name can be lost while
-//     the bytes are durable.
-//   - The mode is set explicitly to 0600 and re-applied, because os.WriteFile
-//     leaves an existing file's mode alone: a copy made 0644 by an older build,
-//     or by a careless cp, would keep it.
-//   - It is read back and checked, content and mode both. Rule 4: verify the
-//     outcome, not the exit code.
-func writeTokenFile(path, content string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".auth-token.*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	// Removed if anything below fails; a no-op once the rename has consumed it.
-	defer os.Remove(tmpName)
-
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.WriteString(content); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	if err := fsync.Dir(dir); err != nil {
-		return err
-	}
-
-	// Prove it: the bytes, and the mode, are what was intended.
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("verifying %s: %w", path, err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		return fmt.Errorf("%s has mode %o after writing, want 600", path, perm)
-	}
-	back, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("verifying %s: %w", path, err)
-	}
-	if string(back) != content {
-		return fmt.Errorf("%s does not contain what was just written", path)
-	}
-	return nil
-}
-
-// newToken is 160 bits in Crockford-ish base32: no padding, and the alphabet
-// avoids characters that are misread when someone types one off a screen.
-func newToken() (string, error) {
-	var raw [20]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	enc := base32.NewEncoding("0123456789ABCDEFGHJKMNPQRSTVWXYZ").WithPadding(base32.NoPadding)
-	s := enc.EncodeToString(raw[:])
-	return s[:8] + "-" + s[8:], nil
-}
 
 /* ---------------------------------------------------------------- *
  * verify
@@ -1221,9 +1029,8 @@ var beforePurge = func() {}
 //     the data directory is not a backup of it, aliases and symlinks included.
 //  2. Is it this vault? Compared by walking entries rather than by name: names
 //     are chosen by whoever ran the server, and uids restart with the store.
-//  3. Does it hold every version this store holds? Every uid, with an
-//     identical MAC, which is the client's own authentication of that entry
-//     and is not something a coincidence reproduces.
+//  3. Does it hold every version this store holds? Every uid, identical in
+//     every field the store keeps, which a coincidence does not reproduce.
 //  4. Can it actually give them back? Every chunk of every entry with a body
 //     has to be a file in the backup's own chunk tree. A database with no
 //     bodies restores to a history of empty notes.
@@ -1240,9 +1047,11 @@ func backupCovers(
 	if err := store.RefuseSamePlace(dir, dataDir); err != nil {
 		return 0, nil, err
 	}
-	if _, err := os.Stat(filepath.Join(dir, "telimus.db")); err != nil {
+	bkDB, bkChunks := store.DataDir(dir)
+	if _, err := os.Stat(bkDB); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil, fmt.Errorf("there is no backup at %s: no telimus.db in it; nothing was purged", dir)
+			return 0, nil, fmt.Errorf("there is no backup at %s: no %s in it; nothing was purged",
+				dir, filepath.Base(bkDB))
 		}
 		return 0, nil, err
 	}
@@ -1291,7 +1100,6 @@ func backupCovers(
 	// Read-only (I15, R04). This inspects a backup and must not migrate it,
 	// write its schema, or create anything: a diagnostic that modifies what it
 	// was asked to look at is one nobody can trust about the day it matters.
-	bkDB, bkChunks := store.DataDir(dir)
 	bk, err := store.OpenForInspection(bkDB, bkChunks)
 	if err != nil {
 		return 0, nil, fmt.Errorf("opening the backup at %s: %w", dir, err)
@@ -1311,14 +1119,14 @@ func backupCovers(
 	// Every version this store holds, present in the backup, identical, and
 	// readable.
 	//
-	// It used to compare the MAC alone, on the reasoning that a client's
-	// authenticator over an entry identifies its content. That is true of what
-	// the *client* signed and says nothing about what this database stores
-	// beside it: a row whose path, size or chunk list differs while carrying
-	// the same MAC string passes such a check, and so does a chunk file of the
+	// Basalt once compared the MAC alone, on the reasoning that a client's
+	// authenticator over an entry identifies its content. That was true of
+	// what the *client* signed and said nothing about what the database stored
+	// beside it: a row whose path, size or chunk list differed while carrying
+	// the same MAC string passed such a check, and so did a chunk file of the
 	// right name holding the wrong bytes (R04). Purge is the one command that
 	// destroys something no device holds, so what it accepts as proof has to be
-	// the thing it is proof of.
+	// the thing it is proof of: every field, and every body read and hashed.
 	seen := 0
 	bodies := 0
 	if err := source.EachEntry(vault, func(e store.Entry) error {
@@ -1365,7 +1173,7 @@ func backupCovers(
 				if !errors.Is(err, chunks.ErrNotFound) {
 					what = fmt.Sprintf(
 						"version %d of %q and cannot serve it: chunk %s %v, so restoring from it "+
-							"would give back a note that will not decrypt", e.UID, vault, name, err)
+							"would give back a note with the wrong contents", e.UID, vault, name, err)
 				}
 				return fmt.Errorf(
 					"the backup at %s has %s; nothing was purged.\nTake a fresh one first: "+
@@ -1408,10 +1216,6 @@ func sameVersion(want, got store.Entry) string {
 		return "a different device wrote it"
 	case got.Prev != want.Prev:
 		return "a different previous path"
-	case got.Mac != want.Mac:
-		return "a different authenticator"
-	case got.Parent != want.Parent:
-		return "a different parent version"
 	case len(got.Chunks) != len(want.Chunks):
 		return fmt.Sprintf("%d chunks rather than %d", len(got.Chunks), len(want.Chunks))
 	}
@@ -1507,16 +1311,6 @@ func cmdBackup(args []string, out io.Writer) error {
 		return err
 	}
 
-	// The token goes with it. Without it a restored server generates a new one
-	// and every paired device stops working, which turns a restore from a copy
-	// into an afternoon. It is a credential for ciphertext the backup already
-	// contains in full, so keeping the two together risks nothing that was not
-	// already at stake.
-	tokenCopied, err := copyToken(*dataDir, *to)
-	if err != nil {
-		return fmt.Errorf("copying the auth token into the backup: %w", err)
-	}
-
 	fmt.Fprintf(out, "backed up to %s\n", rep.Dir)
 	fmt.Fprintf(out, "  %d vaults, %d chunk references, %d bodies copied (%s)\n",
 		rep.Vaults, rep.Refs, rep.Copied, humanBytes(rep.Bytes))
@@ -1561,8 +1355,12 @@ func cmdBackup(args []string, out io.Writer) error {
 			rep.Retained)
 	}
 
-	if tokenCopied {
-		fmt.Fprintln(out, "  the device auth token is in the backup, so a restore needs no re-pairing")
+	// Which devices may connect is in the database, so a restore needs no
+	// re-pairing. Outstanding invites are not, and the count says so, because
+	// this made a list smaller (rule 5).
+	if rep.InvitesLeftOut > 0 {
+		fmt.Fprintf(out, "  (%d outstanding invites were left out: a restore must not bring back an invite\n"+
+			"  that has been used or cancelled since; make a new one after restoring)\n", rep.InvitesLeftOut)
 	}
 
 	// What the backup covers, read back from the file just written rather than
@@ -1576,43 +1374,16 @@ func cmdBackup(args []string, out io.Writer) error {
 			store.BackupMetaFile, v.Vault, v.OldestUID, v.LatestUID, v.Versions, v.Purges)
 	}
 
-	// The copy is ciphertext. Saying so every time is the point: a backup
-	// without the recovery key restores nothing, and that is the one part of
-	// this no command can check. The name matters: the plugin, the CLI and the
-	// docs all call it the recovery key, and a person reading this line has to
-	// know it means the thing they were told to write down.
+	// The copy is the notes themselves, readable by anybody who can read the
+	// directory. Saying so every time is the point: Basalt's backups were
+	// ciphertext, and a person who learned to leave those anywhere has to hear
+	// that these are not.
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "This backup is ciphertext. Restoring it needs the vault's recovery key,")
-	fmt.Fprintln(out, "which this server has never seen. Keep that written down somewhere")
-	fmt.Fprintln(out, "else, or the backup is a pile of bytes nobody can read.")
+	fmt.Fprintln(out, "This backup holds every note in the clear, as the server does. Keep it")
+	fmt.Fprintln(out, "somewhere only you can read, as you would the notes themselves.")
 	fmt.Fprintf(out, "\nTo restore: point the server at it, or copy it back.\n")
 	fmt.Fprintf(out, "  telimus verify -deep -data %s\n", rep.Dir)
 	return nil
-}
-
-// copyToken puts the auth token in the backup, reading it back rather than
-// trusting the write. Rule 4: verify the outcome, not the exit code.
-//
-// A missing token is not an error. A data directory that has never been served
-// does not have one yet, and refusing to back up over that would be refusing to
-// back up the notes.
-func copyToken(dataDir, destDir string) (bool, error) {
-	want, err := os.ReadFile(filepath.Join(dataDir, tokenFileName))
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	dst := filepath.Join(destDir, tokenFileName)
-	// Through the same atomic, durable, mode-enforcing path as the original.
-	// A backup token overwritten in place by os.WriteFile kept whatever mode
-	// an earlier copy had, and a crash mid-write left the backup's credential
-	// truncated (S11).
-	if err := writeTokenFile(dst, string(want)); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func humanBytes(n int64) string {

@@ -99,7 +99,7 @@ func TestNoPreAuthSurfaceNamesTheServerVersion(t *testing.T) {
 		}
 	})
 
-	// Every refusal handleHello can send before s.srv.auth has said yes, plus
+	// Every refusal handleHello can send before a credential has matched, plus
 	// the two the connection can get without a hello at all. Each is the whole
 	// frame as it came off the wire, not the message field, because a version
 	// could as easily arrive in a field a struct would not decode.
@@ -112,47 +112,52 @@ func TestNoPreAuthSurfaceNamesTheServerVersion(t *testing.T) {
 			send func(*rig, *client)
 		}{
 			{"proto too old", wire.CodeProto, func(r *rig, c *client) {
-				c.sendRaw(wire.In{Op: "hello", ID: 1, Proto: wire.MinProto - 1, Crypto: wire.Crypto,
+				c.sendRaw(wire.In{Op: "hello", ID: 1, Proto: wire.MinProto - 1,
 					Vault: testVault, Device: "prober"})
 			}},
 			{"proto too new", wire.CodeProto, func(r *rig, c *client) {
-				c.sendRaw(wire.In{Op: "hello", ID: 1, Proto: wire.Proto + 1, Crypto: wire.Crypto,
+				c.sendRaw(wire.In{Op: "hello", ID: 1, Proto: wire.Proto + 1,
 					Vault: testVault, Device: "prober"})
 			}},
-			{"crypto", wire.CodeProto, func(r *rig, c *client) {
-				c.sendJSON(wire.In{Op: "hello", Crypto: "basalt/something-else/1",
-					Vault: testVault, Device: "prober"})
+			{"a Basalt plugin", wire.CodeProto, func(r *rig, c *client) {
+				c.sendRaw(map[string]any{"op": "hello", "id": 1, "proto": 7,
+					"crypto": "basalt/hkdf-aes-gcm/1", "vault": testVault, "device": "prober"})
 			}},
 			{"missing vault", wire.CodeAuth, func(r *rig, c *client) {
-				c.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: "", Device: "prober"})
+				c.sendJSON(wire.In{Op: "hello", Vault: "", Device: "prober"})
+			}},
+			{"no credential", wire.CodeAuth, func(r *rig, c *client) {
+				c.sendJSON(wire.In{Op: "hello", Vault: testVault, Device: "prober"})
 			}},
 			{"bad token", wire.CodeAuth, func(r *rig, c *client) {
-				c.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto,
-					Vault: testVault, Device: "prober", Token: "not the token"})
+				c.sendJSON(wire.In{Op: "hello", Vault: testVault, Device: "prober",
+					DeviceID: deviceID("prober"), Token: "not the token"})
 			}},
 			{"unknown vault", wire.CodeAuth, func(r *rig, c *client) {
-				c.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto,
-					Vault: "no-such-vault", Device: "prober", Token: testToken})
+				c.sendJSON(wire.In{Op: "hello", Vault: "no-such-vault", Device: "prober",
+					DeviceID: deviceID("prober"), Token: deviceKey("prober")})
+			}},
+			{"reserved device id", wire.CodeAuth, func(r *rig, c *client) {
+				c.sendJSON(wire.In{Op: "hello", Vault: testVault, Device: "prober",
+					DeviceID: store.ReservedDeviceIDPrefix + "x", Token: deviceKey("prober")})
 			}},
 			{"bad vault name", wire.CodeBadName, func(r *rig, c *client) {
-				c.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto,
+				c.sendJSON(wire.In{Op: "hello",
 					Vault: strings.Repeat("v", store.MaxVaultLen+1), Device: "prober"})
 			}},
 			{"bad device name", wire.CodeBadName, func(r *rig, c *client) {
-				c.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto,
-					Vault: testVault, Device: "a\nb"})
+				c.sendJSON(wire.In{Op: "hello", Vault: testVault, Device: "a\nb"})
 			}},
 			{"negative cursor", wire.CodeProtoState, func(r *rig, c *client) {
-				c.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto,
-					Vault: testVault, Device: "prober", Cursor: -1})
+				c.sendJSON(wire.In{Op: "hello", Vault: testVault, Device: "prober", Cursor: -1})
 			}},
-			{"claim without a data key", wire.CodeBadEntry, func(r *rig, c *client) {
-				c.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault,
-					Device: "prober", Token: testToken, Claim: "something", Wrapped: ""})
+			{"an invite never issued", wire.CodeAuth, func(r *rig, c *client) {
+				c.sendJSON(redeemHello([]byte("sixteen byte tok"), "prober"))
 			}},
-			{"token and invite together", wire.CodeBadEntry, func(r *rig, c *client) {
-				c.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault,
-					Device: "prober", Token: testToken, Invite: "an-invite"})
+			{"a redemption with a short token", wire.CodeBadEntry, func(r *rig, c *client) {
+				h := redeemHello([]byte("sixteen byte tok"), "prober")
+				h.Token = "short"
+				c.sendJSON(h)
 			}},
 			{"first op is not hello", wire.CodeProtoState, func(r *rig, c *client) {
 				c.sendRaw(wire.In{Op: "get", ID: 1})
@@ -219,20 +224,20 @@ func TestReadyStillCarriesTheVersionAfterAuthentication(t *testing.T) {
 	}
 }
 
-// The two refusals still have to say the numbers an old client needs, or the
+// The proto refusal still has to say the numbers an old client needs, or the
 // disclosure rule above would be satisfied by saying nothing useful at all.
-func TestTheProtoAndCryptoRefusalsStillNameWhatThisServerSpeaks(t *testing.T) {
+// (disclosure_test.go:224; its crypto half went with the crypto field.)
+func TestTheProtoRefusalStillNamesWhatThisServerSpeaks(t *testing.T) {
 	r := newRig(t)
 	r.srv.SetVersion(sentinelVersion)
 
 	cl := r.dial("prober")
-	cl.sendRaw(wire.In{Op: "hello", ID: 1, Proto: wire.MinProto - 1, Crypto: wire.Crypto,
+	cl.sendRaw(wire.In{Op: "hello", ID: 1, Proto: wire.MinProto - 1,
 		Vault: testVault, Device: "prober"})
 	msg := cl.expectErr(wire.CodeProto)
 	// Derived, not written down: these assert that the refusal names the version
 	// that was asked for and the range this server speaks, which is a property
-	// of the machinery rather than of any particular number. Spelled out, they
-	// had to be edited for protocol 5 and would be again for 6.
+	// of the machinery rather than of any particular number.
 	for _, want := range []string{
 		fmt.Sprintf("protocol %d", wire.MinProto-1),
 		fmt.Sprintf("%d to %d", wire.MinProto, wire.Proto),
@@ -240,13 +245,6 @@ func TestTheProtoAndCryptoRefusalsStillNameWhatThisServerSpeaks(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("the proto refusal does not name %q: %q", want, msg)
 		}
-	}
-
-	cl = r.dial("prober")
-	cl.sendJSON(wire.In{Op: "hello", Crypto: "basalt/something-else/1",
-		Vault: testVault, Device: "prober"})
-	if msg := cl.expectErr(wire.CodeProto); !strings.Contains(msg, wire.Crypto) {
-		t.Fatalf("the crypto refusal does not name the suite this server speaks: %q", msg)
 	}
 }
 
@@ -285,21 +283,20 @@ func TestHealthSaysOkAndNothingElse(t *testing.T) {
 //
 // The suspicion this pins was that `auth` correctly says nothing while the
 // codes around it still oracle: "this vault id parses", "this proto is old",
-// "the server is full". Two of those turn out to be facts a caller already
-// holds. `proto`, `badname`, `protostate` and `badentry` are decided by
+// "this vault is the one served". The first two turn out to be facts a caller
+// already holds. `proto`, `badname`, `protostate` and `badentry` are decided by
 // checking the frame against constants that are in this repository and in
-// docs/protocol.md, so a prober learns nothing it could not have computed
+// plan/protocol.md, so a prober learns nothing it could not have computed
 // offline, and collapsing them into `auth` would cost a real client the one
 // thing it is for: telling a person which end to fix. A client that cannot
 // tell `proto` from `auth` cannot say whether to upgrade the server or the
 // plugin, and one that cannot tell `badname` from `auth` sends somebody
 // hunting a credential bug over a 65-character device name.
 //
-// The third, `full`, is not reachable here at all: it comes from the device
-// limit, which is checked inside the transaction that registers a row, after
-// the invite has been spent, so anybody without a live invite gets `auth` from
-// the spend and never reaches the count. That ordering is the property, and it
-// is asserted below rather than read.
+// The third is not a fact the caller holds, and Basalt leaked it: on a server
+// told which vault it serves, a hello for any other vault was refused before
+// its shape was judged and with a message naming the served vault. Every row
+// below runs against both kinds of server for that reason.
 //
 // So the test is the boundary rather than a list of codes: the same probe
 // against a vault this server serves, and against one it has never heard of,
@@ -307,19 +304,21 @@ func TestHealthSaysOkAndNothingElse(t *testing.T) {
 // answering differently for a vault that exists shows up here, whatever code
 // it chooses.
 func TestNoPreAuthRefusalDependsOnWhetherTheVaultExists(t *testing.T) {
-	// One vault that is real in every way a vault can be: claimed, with
-	// devices on it, entries in it and an outstanding invite. If any of those
-	// can be sensed from outside, this is the rig that would show it.
-	furnished := func(t *testing.T) *rig {
+	// One vault that is real in every way a vault can be: devices on it,
+	// entries in it and an outstanding invite. If any of those can be sensed
+	// from outside, this is the rig that would show it. Served explicitly or
+	// not, because a server told which vault it serves has one more thing it
+	// could leak, the name, and Basalt's did.
+	furnished := func(t *testing.T, serving bool) *rig {
 		t.Helper()
 		r := newRig(t)
+		if serving {
+			r.srv.Serves(testVault)
+		}
 		r.device("laptop")
 		r.device("phone")
 		r.seed("note.md", "hello")
-		if err := r.st.AddInvite(testVault, "iiiiiiiiiiiiiiiiiiiiii", "sealed-blob",
-			r.srv.now().Add(time.Hour).UnixMilli(), r.srv.now().UnixMilli()); err != nil {
-			t.Fatalf("adding an invite: %v", err)
-		}
+		r.invite(time.Hour)
 		return r
 	}
 
@@ -337,65 +336,88 @@ func TestNoPreAuthRefusalDependsOnWhetherTheVaultExists(t *testing.T) {
 		probe func(vault string) wire.In
 	}{
 		{"no credential", wire.CodeAuth, func(v string) wire.In {
-			return wire.In{Op: "hello", Crypto: wire.Crypto, Vault: v, Device: "prober"}
+			return wire.In{Op: "hello", Vault: v, Device: "prober"}
 		}},
 		{"a wrong token", wire.CodeAuth, func(v string) wire.In {
-			return wire.In{Op: "hello", Crypto: wire.Crypto, Vault: v, Device: "prober", Token: "not the token"}
+			return wire.In{Op: "hello", Vault: v, Device: "prober", DeviceID: deviceID("laptop"),
+				Token: deviceKey("not the laptop")}
+		}},
+		{"a malformed token", wire.CodeAuth, func(v string) wire.In {
+			return wire.In{Op: "hello", Vault: v, Device: "prober", DeviceID: deviceID("laptop"),
+				Token: "not the token"}
 		}},
 		{"a malformed device id", wire.CodeBadName, func(v string) wire.In {
 			// Shape before credential, and as `badname` rather than `auth`, so
 			// the shape of an id never becomes the answer to whether that
-			// device exists. See the comment on this check in handleHello.
-			return wire.In{Op: "hello", Crypto: wire.Crypto, Vault: v, Device: "prober",
+			// device exists, nor to whether the vault is served.
+			return wire.In{Op: "hello", Vault: v, Device: "prober",
 				DeviceID: strings.Repeat("d", store.MaxDeviceIDLen+1), Token: "anything"}
 		}},
+		{"a reserved device id", wire.CodeAuth, func(v string) wire.In {
+			return wire.In{Op: "hello", Vault: v, Device: "prober",
+				DeviceID: store.ReservedDeviceIDPrefix + "laptop", Token: deviceKey("laptop")}
+		}},
 		{"a device id that is not registered", wire.CodeAuth, func(v string) wire.In {
-			return wire.In{Op: "hello", Crypto: wire.Crypto, Vault: v, Device: "prober",
-				DeviceID: deviceID("laptop"), Token: "not this device's key"}
+			return wire.In{Op: "hello", Vault: v, Device: "prober",
+				DeviceID: deviceID("stranger"), Token: deviceKey("stranger")}
 		}},
 		{"an invite that was never issued", wire.CodeAuth, func(v string) wire.In {
-			return wire.In{Op: "hello", Crypto: wire.Crypto, Vault: v, Device: "prober",
-				Invite: "jjjjjjjjjjjjjjjjjjjjjj", DeviceID: deviceID("newcomer"),
-				Auth: strings.Repeat("k", MinClaimLength)}
+			h := redeemHello([]byte("sixteen byte tok"), "newcomer")
+			h.Vault = v
+			return h
+		}},
+		{"a malformed invite", wire.CodeAuth, func(v string) wire.In {
+			h := redeemHello(nil, "newcomer")
+			h.Vault, h.Invite = v, "not an invite"
+			return h
+		}},
+		{"a redemption onto a device that exists", wire.CodeAuth, func(v string) wire.In {
+			h := redeemHello([]byte("sixteen byte tok"), "laptop")
+			h.Vault = v
+			return h
+		}},
+		{"a redemption with a malformed device id", wire.CodeBadName, func(v string) wire.In {
+			h := redeemHello([]byte("sixteen byte tok"), "newcomer")
+			h.Vault, h.DeviceID = v, "not base64!"
+			return h
+		}},
+		{"a redemption with a short token", wire.CodeBadEntry, func(v string) wire.In {
+			h := redeemHello([]byte("sixteen byte tok"), "newcomer")
+			h.Vault, h.Token = v, "short"
+			return h
 		}},
 		{"an over-long device name", wire.CodeBadName, func(v string) wire.In {
-			return wire.In{Op: "hello", Crypto: wire.Crypto, Vault: v, Device: long}
+			return wire.In{Op: "hello", Vault: v, Device: long}
 		}},
 		{"a negative cursor", wire.CodeProtoState, func(v string) wire.In {
-			return wire.In{Op: "hello", Crypto: wire.Crypto, Vault: v, Device: "prober", Cursor: -1}
+			return wire.In{Op: "hello", Vault: v, Device: "prober", Cursor: -1}
 		}},
 		{"a protocol this server does not speak", wire.CodeProto, func(v string) wire.In {
-			return wire.In{Op: "hello", ID: 1, Proto: wire.MinProto - 1, Crypto: wire.Crypto,
-				Vault: v, Device: "prober"}
-		}},
-		{"a crypto suite this server does not speak", wire.CodeProto, func(v string) wire.In {
-			return wire.In{Op: "hello", Crypto: "basalt/something-else/1", Vault: v, Device: "prober"}
-		}},
-		{"a token and an invite together", wire.CodeBadEntry, func(v string) wire.In {
-			return wire.In{Op: "hello", Crypto: wire.Crypto, Vault: v, Device: "prober",
-				Token: testToken, Invite: "jjjjjjjjjjjjjjjjjjjjjj"}
+			return wire.In{Op: "hello", ID: 1, Proto: wire.Proto + 1, Vault: v, Device: "prober"}
 		}},
 	} {
-		t.Run(tc.what, func(t *testing.T) {
-			real := furnished(t)
-			cl := real.dial("prober")
-			cl.sendJSON(tc.probe(testVault))
-			present := cl.recvFrame()
+		for _, serving := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, serving=%v", tc.what, serving), func(t *testing.T) {
+				real := furnished(t, serving)
+				cl := real.dial("prober")
+				cl.sendJSON(tc.probe(testVault))
+				present := cl.recvFrame()
 
-			absent := furnished(t)
-			cl = absent.dial("prober")
-			cl.sendJSON(tc.probe("no-such-vault"))
-			missing := cl.recvFrame()
+				absent := furnished(t, serving)
+				cl = absent.dial("prober")
+				cl.sendJSON(tc.probe("no-such-vault"))
+				missing := cl.recvFrame()
 
-			if string(present) != string(missing) {
-				t.Fatalf("the refusal differs by whether the vault exists:\n  served: %s\n  unknown: %s",
-					present, missing)
-			}
-			if !strings.Contains(string(present), `"code":"`+tc.code+`"`) {
-				t.Fatalf("this probe never reached the check it is about: wanted %s, got %s",
-					tc.code, present)
-			}
-		})
+				if string(present) != string(missing) {
+					t.Fatalf("the refusal differs by whether the vault exists:\n  served: %s\n  unknown: %s",
+						present, missing)
+				}
+				if !strings.Contains(string(present), `"code":"`+tc.code+`"`) {
+					t.Fatalf("this probe never reached the check it is about: wanted %s, got %s",
+						tc.code, present)
+				}
+			})
+		}
 	}
 }
 
@@ -410,9 +432,7 @@ func TestInvalidInviteDoesNotDiscloseDeviceCount(t *testing.T) {
 	// Both clients are fresh, so sendJSON gives each the same request id and
 	// fills in the current protocol number; a probe left at protocol zero is
 	// refused before it reaches the invite at all.
-	probe := wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault, Device: "prober",
-		Invite: "jjjjjjjjjjjjjjjjjjjjjj", DeviceID: deviceID("newcomer"),
-		Auth: strings.Repeat("k", MinClaimLength)}
+	probe := redeemHello([]byte("sixteen byte tok"), "newcomer")
 
 	cl := populated.dial("prober")
 	cl.sendJSON(probe)

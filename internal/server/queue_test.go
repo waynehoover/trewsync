@@ -352,7 +352,7 @@ func TestS8TheCatchUpBufferIsBoundedInBytesAsWellAsEntries(t *testing.T) {
 	// and are nowhere near CatchupBufferMax.
 	for i := 0; i < 3; i++ {
 		peer.deliver(store.Entry{
-			UID: int64(1000 + i), Path: "big.md", Size: 1, MTime: 1, Chunks: names, Mac: testMac,
+			UID: int64(1000 + i), Path: "big.md", Size: 1, MTime: 1, Chunks: names,
 		}, false)
 	}
 	select {

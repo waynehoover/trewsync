@@ -84,7 +84,7 @@ func TestStatsSaysSoWhenThereIsNothingToReclaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := st.AppendEntry("default", store.Entry{
-		Path: "note.md", Size: 3, MTime: 10, Device: "seed", Mac: testMac,
+		Path: "note.md", Size: 3, MTime: 10, Device: "seed",
 		Chunks: []string{putBody(t, st, "one")},
 	}); err != nil {
 		t.Fatal(err)

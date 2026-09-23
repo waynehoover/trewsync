@@ -16,34 +16,6 @@ import (
 )
 
 /* ---------------------------------------------------------------- *
- * S20: an existing token is made private on load
- * ---------------------------------------------------------------- */
-
-// A token file left world-readable by a hand copy or an older build is
-// tightened to 0600 when the server loads it, not only when it writes one.
-func TestS20AnExisting0644TokenIsTightenedOnLoad(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, tokenFileName)
-	if err := os.WriteFile(path, []byte("copied-in-by-hand\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	token, fresh, err := loadOrCreateToken(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if fresh || token != "copied-in-by-hand" {
-		t.Fatalf("load returned %q fresh=%v, the existing token was not kept", token, fresh)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("the token is still mode %o after loading, want 600", perm)
-	}
-}
-
-/* ---------------------------------------------------------------- *
  * S28: the sessions get their own shutdown deadline
  * ---------------------------------------------------------------- */
 
@@ -97,7 +69,7 @@ func TestI11StartupLogsVersionLatestUIDAndClaimed(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := buf.String()
-	for _, want := range []string{`msg=starting`, `version=1.2.3`, `vault=default`, `latest=6`, `claimed=false`} {
+	for _, want := range []string{`msg=starting`, `version=1.2.3`, `vault=default`, `latest=6`, `devices=0`} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("the startup line lacks %s:\n%s", want, line)
 		}
@@ -106,8 +78,8 @@ func TestI11StartupLogsVersionLatestUIDAndClaimed(t *testing.T) {
 		t.Fatalf("wanted exactly one line, got:\n%s", line)
 	}
 
-	// Claimed, and a vault the server is not serving is called out.
-	if _, err := st.ClaimVault("default", strings.Repeat("ab", 32), testWrapped, 1); err != nil {
+	// A device, and a vault the server is not serving is called out.
+	if err := st.RegisterDevice("default", "alfa", "laptop", strings.Repeat("ab", 32), 1); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.EnsureVault("other", 1); err != nil {
@@ -117,8 +89,8 @@ func TestI11StartupLogsVersionLatestUIDAndClaimed(t *testing.T) {
 	if err := logStartup(log, st, "default", "1.2.3"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "claimed=true") {
-		t.Fatalf("the claimed vault is not reported as claimed:\n%s", buf.String())
+	if !strings.Contains(buf.String(), "devices=1") {
+		t.Fatalf("the vault's device is not counted:\n%s", buf.String())
 	}
 	if !strings.Contains(buf.String(), "not served") || !strings.Contains(buf.String(), "vault=other") {
 		t.Fatalf("a vault that is present but not served went unmentioned:\n%s", buf.String())
@@ -126,7 +98,7 @@ func TestI11StartupLogsVersionLatestUIDAndClaimed(t *testing.T) {
 	// And the serve command emits it: the summary must not contain anything
 	// that looks like a token or a hash.
 	if strings.Contains(buf.String(), strings.Repeat("ab", 32)) {
-		t.Fatal("the startup line leaks the auth hash")
+		t.Fatal("the startup line leaks a device's auth hash")
 	}
 }
 
@@ -154,8 +126,8 @@ func TestI17StatsJSONCarriesEveryNumberTheProseDoes(t *testing.T) {
 		// deleted and not recoverable, which the prose reports as purged.
 		t.Fatalf("recoverable/purged: %+v", v)
 	}
-	if v.Claimed {
-		t.Fatal("an unclaimed vault reports claimed")
+	if v.Devices != 0 {
+		t.Fatalf("a vault with no devices reports %d", v.Devices)
 	}
 	if rep.Bodies == 0 || rep.GraceMs != time.Hour.Milliseconds() || rep.Version == "" {
 		t.Fatalf("report: bodies=%d graceMs=%d version=%q", rep.Bodies, rep.GraceMs, rep.Version)
@@ -230,7 +202,7 @@ func TestI18PurgeRefusesABackupThatIsMissingHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.AppendEntry("default", store.Entry{Path: "late.md", Deleted: true, MTime: 30, Mac: testMac}); err != nil {
+	if _, err := st.AppendEntry("default", store.Entry{Path: "late.md", Deleted: true, MTime: 30}); err != nil {
 		t.Fatal(err)
 	}
 	st.Close()

@@ -40,7 +40,7 @@ func dirWithLargeFiles(t *testing.T) string {
 		if err := st.Chunks().Put("default", n, []byte(body)); err != nil {
 			t.Fatalf("put chunk: %v", err)
 		}
-		e := store.Entry{Path: path, Size: int64(len(body)), MTime: 10, Device: "seed", Chunks: []string{n}, Mac: testMac}
+		e := store.Entry{Path: path, Size: int64(len(body)), MTime: 10, Device: "seed", Chunks: []string{n}}
 		if _, err := st.AppendEntry("default", e); err != nil {
 			t.Fatalf("append %s: %v", path, err)
 		}
@@ -49,7 +49,7 @@ func dirWithLargeFiles(t *testing.T) string {
 	put("old.md", strings.Repeat("o", 40))
 	put("old.md", strings.Repeat("o", 5))
 	put("gone.bin", strings.Repeat("g", 50))
-	if _, err := st.AppendEntry("default", store.Entry{Path: "gone.bin", Deleted: true, MTime: 20, Mac: testMac}); err != nil {
+	if _, err := st.AppendEntry("default", store.Entry{Path: "gone.bin", Deleted: true, MTime: 20}); err != nil {
 		t.Fatalf("append deletion: %v", err)
 	}
 	if err := st.Close(); err != nil {

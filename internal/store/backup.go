@@ -54,16 +54,22 @@ type BackupReport struct {
 	// Verified is chunk references checked in the backup after writing it.
 	Verified int
 
+	// InvitesLeftOut is invites the source still had outstanding, which the
+	// backup does not carry; see Backup for why a restore must not bring one
+	// back.
+	InvitesLeftOut int
+
 	// Inherited is faults the finished backup has that the source has too.
 	//
-	// A copy cannot be better than what it copied. An entry whose
-	// authenticator predates F20 keeps the empty string a migration gave it,
-	// because the server holds no key to mint one, and `verifyEntries` reports
-	// it on every pass. Refusing to publish over that vetoed every backup for
-	// ever on any vault old enough to have one, and the message blamed the
-	// backup for a fault in the store it came from: the last good copy was
-	// never refreshed, and `purge -backup` could then never be satisfied
-	// either, so the safety net was cut by the thing holding it.
+	// A copy cannot be better than what it copied. A row the store should
+	// never have taken, a path the policy refuses for instance, is copied
+	// faithfully by `VACUUM INTO`, and `verifyEntries` reports it on every
+	// pass. Refusing to publish over that vetoed every backup for ever on any
+	// vault holding one, and the message blamed the backup for a fault in the
+	// store it came from: the last good copy was never refreshed, and `purge
+	// -backup` could then never be satisfied either, so the safety net was cut
+	// by the thing holding it. (Basalt met it with entries whose authenticator
+	// predated F20; Telimus has no authenticator and keeps the mechanism.)
 	//
 	// So a fault the source has as well is reported and does not block. A
 	// fault the source does not have is the copy being wrong, and that still
@@ -618,6 +624,20 @@ func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 		dest.Close()
 		return rep, fmt.Errorf("giving the snapshot its own epoch: %w", err)
 	}
+	// Nor is an outstanding invite carried into it. An invite is a bearer
+	// credential that lives an hour, and the backup is for notes: restoring a
+	// week-old copy would otherwise revive every invite that was outstanding
+	// then, including the ones cancelled or spent since, each of which adds a
+	// device (plan/astra-critique.md: a restore can resurrect retired
+	// credentials). Spent rows stay, because a device row that came from one
+	// is in the copy too, and they redeem nothing. Counted, because this makes
+	// a list smaller (rule 5).
+	left, err := dest.dropUnspentInvites()
+	if err != nil {
+		dest.Close()
+		return rep, fmt.Errorf("leaving outstanding invites out of the snapshot: %w", err)
+	}
+	rep.InvitesLeftOut = left
 
 	vaults, err := dest.Vaults()
 	if err != nil {

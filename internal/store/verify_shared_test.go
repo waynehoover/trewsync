@@ -49,7 +49,7 @@ func sharedVerificationStore(tb testing.TB, refs, size int) *Store {
 	// The store's normal publication and commit paths seed the fixture.
 	for i := range refs {
 		if _, err := h.AppendEntry("v1", Entry{Path: fmt.Sprintf("note-%d.md", i%10),
-			Size: int64(size), MTime: 1, Device: "laptop", Mac: testMac, Chunks: []string{name}}); err != nil {
+			Size: int64(size), MTime: 1, Device: "laptop", Chunks: []string{name}}); err != nil {
 			tb.Fatal(err)
 		}
 	}
@@ -57,11 +57,12 @@ func sharedVerificationStore(tb testing.TB, refs, size int) *Store {
 }
 
 func TestDeepVerifyReportsEverySharedReferenceAndChecksAgainNextTime(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	a := h.file(t, "a.md", "good", "shared", "shared")
 	b := h.file(t, "b.md", "shared", "missing")
 	bad := h.file(t, "malformed.md")
-	if _, err := h.db.Exec(`UPDATE entries SET mac='' WHERE vault_id='v1' AND uid=?`, bad.UID); err != nil {
+	// A size with no chunks behind it, which reads as an empty note.
+	if _, err := h.db.Exec(`UPDATE entries SET size=5 WHERE vault_id='v1' AND uid=?`, bad.UID); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.RegisterDevice("v1", "laptop", "Laptop", hashA, 1); err != nil {
@@ -74,7 +75,7 @@ func TestDeepVerifyReportsEverySharedReferenceAndChecksAgainNextTime(t *testing.
 		t.Fatal(err)
 	}
 	other := h.put(t, "v2", "shared")
-	if _, err := h.AppendEntry("v2", Entry{Path: "other.md", Size: 6, MTime: 1, Device: "other", Mac: testMac, Chunks: other}); err != nil {
+	if _, err := h.AppendEntry("v2", Entry{Path: "other.md", Size: 6, MTime: 1, Device: "other", Chunks: other}); err != nil {
 		t.Fatal(err)
 	}
 	corrupt, _ := h.chunks.Path("v1", a.Chunks[1])
@@ -97,7 +98,7 @@ func TestDeepVerifyReportsEverySharedReferenceAndChecksAgainNextTime(t *testing.
 		{a.UID, a.Path, a.Chunks[2], "corrupt"},
 		{b.UID, b.Path, b.Chunks[0], "corrupt"},
 		{b.UID, b.Path, b.Chunks[1], "missing"},
-		{bad.UID, bad.Path, "", "nomac"},
+		{bad.UID, bad.Path, "", "nochunks"},
 	}
 	for i, expected := range want {
 		f := got.Faults[i]
@@ -126,7 +127,7 @@ func TestDeepVerifyReportsEverySharedReferenceAndChecksAgainNextTime(t *testing.
 	if err != nil || again.Chunks != 6 || again.Entries != 4 || again.Rows != 1 || len(again.Faults) != 2 {
 		t.Fatalf("verification retained stale body failures or skipped other checks: %+v %v", again, err)
 	}
-	if again.Faults[0].Reason != "nomac" || again.Faults[1].Reason != "baddevice" {
+	if again.Faults[0].Reason != "nochunks" || again.Faults[1].Reason != "baddevice" {
 		t.Fatalf("remaining faults: %+v", again.Faults)
 	}
 }

@@ -140,17 +140,7 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 		}
 	}
 
-	// Asked rather than assumed: a read-only open does not migrate, so a
-	// backup from before `n_chunks` existed is read exactly as it is (R48).
-	counted, err := hasColumn(db, "entries", "n_chunks")
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	return &Store{
-		db: db, chunks: cs, dbPath: dbPath, identity: id,
-		hasChunkCount: counted, readOnly: mode == ReadOnly,
-	}, nil
+	return &Store{db: db, chunks: cs, dbPath: dbPath, identity: id, readOnly: mode == ReadOnly}, nil
 }
 
 // dsn is the connection string every handle on a store uses.

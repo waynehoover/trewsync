@@ -2,12 +2,17 @@ package server
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/waynehoover/telimus/internal/wire"
 )
 
+// A revoke landing while a device is minting an invite, after the request is
+// in and before the invite is stored, leaves no invite: the mint rechecks the
+// device's row under the lock the revoke takes, so an acknowledged revoke is
+// never followed by an invite the revoked device made.
 func TestRevokedDeviceCannotFinishMintingAnInvite(t *testing.T) {
 	r := newRig(t)
 	victim := r.dial("victim")
@@ -15,14 +20,14 @@ func TestRevokedDeviceCannotFinishMintingAnInvite(t *testing.T) {
 	owner := r.dial("owner")
 	owner.hello(0)
 	release := pauseNextMutationClock(t, r)
-	victim.sendJSON(wire.In{Op: "invite", Invite: testInvite, Sealed: testSealed})
+	victim.sendJSON(wire.In{Op: "invite"})
 	release.afterEntered(func() {
 		owner.sendJSON(wire.In{Op: "revoke", DeviceID: deviceID("victim")})
 		owner.recvInto("revoked", &wire.Revoked{})
 	})
 	waitFor(t, "revoked handler to unwind", func() bool { return r.srv.Peers(testVault) == 1 })
-	if got := redeem(t, r, testInvite, "replacement"); got["res"] == "redeemed" {
-		t.Fatalf("revoked device minted an invite after revocation was acknowledged and regained access: %v", got)
+	if n, err := r.st.OutstandingInvites(testVault, time.Now().UnixMilli()); err != nil || n != 0 {
+		t.Fatalf("revoked device minted %d invites after revocation was acknowledged (%v)", n, err)
 	}
 }
 
@@ -36,7 +41,7 @@ func TestRevokedWriterCannotCommitAfterTheRevocationReply(t *testing.T) {
 	owner.hello(0)
 	release := pauseNextMutationClock(t, r)
 	victim.sendJSON(wire.In{Op: "put", Path: old.Path, Meta: wire.PutMeta{Size: newer.Size, MTime: 1},
-		Chunks: newer.Chunks, Mac: testMac, Base: old.UID})
+		Chunks: newer.Chunks, Base: old.UID})
 	release.afterEntered(func() {
 		owner.sendJSON(wire.In{Op: "revoke", DeviceID: deviceID("victim")})
 		owner.recvInto("revoked", &wire.Revoked{})
@@ -60,28 +65,26 @@ func TestReusedDeviceIDDoesNotAuthorizeItsOldSession(t *testing.T) {
 			victim.hello(0)
 			owner := r.dial("owner")
 			owner.hello(0)
-			issue(t, owner, testInvite)
+			issued := issue(t, owner, wire.In{})
 			// Keep the old socket in the exact window between removing its row
 			// and eviction, then recreate its ID under an unrelated credential.
-			if err := r.st.RevokeDevice(testVault, deviceID("victim"), "", false); err != nil {
+			if _, err := r.st.RevokeDevice(testVault, deviceID("victim"), 2); err != nil {
 				t.Fatal(err)
 			}
 			if err := r.st.RegisterDevice(testVault, deviceID("victim"), "replacement",
-				hashOf(deviceKey("replacement")), hashOf(testToken), 1); err != nil {
+				hashOf(deviceKey("replacement")), 1); err != nil {
 				t.Fatal(err)
 			}
 			request := wire.In{Op: op}
 			switch op {
-			case "invite":
-				request.Invite, request.Sealed = "another-invite", testSealed
 			case "uninvite":
-				request.Invite = testInvite
+				request.Invite = issued.Invite
 			case "rename":
 				request.Name = "stale label"
 			case "revoke":
 				request.DeviceID = deviceID("owner")
 			case "put":
-				request.Path, request.Chunks, request.Mac = "new.md", []string{}, testMac
+				request.Path, request.Chunks = "new.md", []string{}
 			}
 			victim.sendJSON(request)
 			victim.expectErr(wire.CodeAuth)
@@ -93,30 +96,13 @@ func TestReusedDeviceIDDoesNotAuthorizeItsOldSession(t *testing.T) {
 				t.Fatalf("old session revoked the owner: %v", err)
 			}
 			invites, err := r.st.Invites(testVault, time.Now().UnixMilli())
-			if err != nil || len(invites) != 1 || invites[0].ID != testInvite {
+			if err != nil || len(invites) != 1 || invites[0].ID != issued.Invite {
 				t.Fatalf("old session changed invitations: %+v %v", invites, err)
 			}
 			if latest, err := r.st.LatestUID(testVault); err != nil || latest != 0 {
 				t.Fatalf("old session wrote history: uid=%d err=%v", latest, err)
 			}
 		})
-	}
-}
-
-func TestRetiredRegistrarCannotCancelANewInvite(t *testing.T) {
-	r := newRigDerived(t)
-	device := claimed(t, r, "owner")
-	leaked := registrarWith(t, r, "retired-root", longKey)
-	// Retire the credential while its socket still exists, as an in-flight
-	// handler can outlive the rotation's notification and connection close.
-	if err := r.st.Rotate(testVault, hashOf(longKey), hashOf(newKey), newWrapped); err != nil {
-		t.Fatal(err)
-	}
-	issue(t, device, testInvite)
-	leaked.sendJSON(wire.In{Op: "uninvite", Invite: testInvite})
-	leaked.expectErr(wire.CodeRotated)
-	if got := redeem(t, r, testInvite, "new-device"); got["res"] != "redeemed" {
-		t.Fatalf("the retired root cancelled a new invite: %v", got)
 	}
 }
 
@@ -127,11 +113,18 @@ type mutationPause struct {
 	once    sync.Once
 }
 
+// pauseNextMutationClock holds the first caller of the server's clock until the
+// test says go, and lets every later caller straight through: the revoke the
+// test then sends reads the clock too, and must not queue behind the handler it
+// is racing.
 func pauseNextMutationClock(t *testing.T, r *rig) *mutationPause {
 	p := &mutationPause{t: t, entered: make(chan struct{}), resume: make(chan struct{})}
-	var enterOnce sync.Once
+	var first atomic.Bool
 	r.srv.now = func() time.Time {
-		enterOnce.Do(func() { close(p.entered); <-p.resume })
+		if first.CompareAndSwap(false, true) {
+			close(p.entered)
+			<-p.resume
+		}
 		return time.Now()
 	}
 	t.Cleanup(func() { p.once.Do(func() { close(p.resume) }) })

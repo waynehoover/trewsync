@@ -26,7 +26,7 @@ Two session types.
 ### Device session
 
 ```text
--> {op:"hello", id, proto:1, vault, deviceId, token, device, cursor}
+-> {op:"hello", id, proto:1, vault, deviceId, token, device, cursor, epoch?}
 <- {res:"ready", id, proto:1, minProto:1, serverVersion, epoch, cursor,
     perFileMax, chunkMax, maxChunks, maxBatchBytes, maxFetchBytes}
 ```
@@ -34,6 +34,10 @@ Two session types.
 `token` is the device's random 32-byte credential, unpadded base64url (43 characters). The server decodes it, refuses anything that is not exactly 32 bytes, and compares SHA-256 of the 32 raw bytes against `devices.auth_hash` in constant time. A `deviceId` starting with `mcp:` is refused with `auth`.
 
 `epoch` is the store's epoch (PLAN §2.8), an opaque string. A client stores it beside its cursor; when a later `ready` carries a different epoch, the server's history was restored or replaced, and the client discards its cursor and re-lists from 0 rather than trusting a UID sequence that may have been reissued.
+
+**Settled in M1: the hello may carry the epoch its cursor was read under.** Without it, a client whose cursor is ahead of a restored store is refused with `cursor` before `ready`, and so never learns the epoch that would tell it why. When the hello's `epoch` is present and is not the store's, the server does not honour the cursor in either direction: it is not refused for being ahead, and it is not continued from, which would skip every version the new history holds below it. The whole vault is replayed from uid 1, `ready.cursor` is the store's latest, and `ready.epoch` is the store's, so the client resets its cursor and reconciles against everything. A hello without `epoch` has its cursor taken as it is, and one ahead of the store is refused as before. Every backup snapshot is given an epoch of its own, so restoring one is always a new epoch.
+
+**Settled in M1: the order of the refusals, and what each says.** A hello's own shape is judged before anything about a vault is looked up: the vault and device names (`badname`), the cursor (`protostate`), and then, on this route, a missing device id (`auth`), a device id under the reserved `mcp:` prefix (`auth`, before its shape is judged), and a device id that is not base64url of at most 64 characters (`badname`). Only then is the served vault checked, and only then the credential. The served-vault refusal is the same `auth`, with the same message, as a wrong token: Basalt named the served vault in that refusal and made it before the shape checks, which told anyone on the port the one name worth aiming at. Every refusal before a credential matches is therefore a function of the request alone. A token that is not exactly 32 bytes in unpadded base64url is compared anyway, as the digest of what was sent, and gets the same refusal as a wrong one.
 
 ### Invite redemption
 
@@ -57,6 +61,8 @@ The field is **`token`**, everywhere. PLAN.md previously called it `auth` in the
 5. Insert the device row, mark the invite spent by `deviceId`, answer `redeemed`, then close the connection. The device reconnects as a device session.
 
 Every refusal is the same `auth` error with the same message, so a probe cannot tell an unknown invite from a spent, expired or cancelled one, and a refusal writes nothing: in particular it never spends the invite.
+
+**Settled in M1.** The refusals above, a malformed invite token, a vault this server does not serve and a `deviceId` under the reserved `mcp:` prefix are all that one `auth`. The request's own shape is named instead, because it says nothing about the vault and is checked before the invite is looked up: a `deviceId` that is not base64url of at most 64 characters is `badname`, a `token` that is not exactly 32 bytes in unpadded base64url is `badentry`, and a `device` name over 64 bytes or with a control character is `badname`. Step 2 compares the stored device digest in constant time, and a retry after the device was revoked has no row to recognise, so it is refused like any spent invite. The device row is named by the hello's `device`. The server keeps every spent invite row, since step 2 needs it; an unspent row that can no longer be redeemed is swept the next time an invite is created on the vault.
 
 There is no registrar session, no claim, no bootstrap token, no `crypto` field, no wrapped key.
 
@@ -171,9 +177,15 @@ The batch budget is **not** `size + 64` per entry. That is not an exact wire-mem
 -> {op:"uninvite", id, invite}      <- {res:"uninvited", id, invite}
 ```
 
+**Settled in M1.** A label is at most 64 bytes with no control characters (`badname`). `ttlMs` of 0 or absent is the one-hour default, anything above an hour is clamped to it before it is converted, so no value overflows into a past expiry, and a negative one is `badentry`. `invited.expiresAt` is null only for an invite that never expires, which only `telimus invite -ttl 0` on the server can make. `uninvite` of an id that is unknown, malformed, spent, cancelled or expired is one `badentry` naming the device list. **Revoking a device cancels the invites it issued**, in the same transaction as the delete: an invite a laptop minted before it was stolen would otherwise add the thief's next device after the laptop was revoked. Invites the operator made name no device and are untouched. **A backup does not carry an outstanding invite**: restoring an old copy must not revive an invite that has since been used or cancelled, so the snapshot keeps only spent rows, and `telimus backup` prints how many it left out.
+
+**Settled in M1: what a revoke means on the server** (PLAN §2.3.1). The row is deleted and the device's sessions are taken out of the fan-out inside one hold on the commit lock, which every mutation and every broadcast also takes, so no commit after the revoke can reach them and no mutation they have in flight can commit (each rechecks the row under that lock). Those sessions are also marked, and their writer sends nothing more but the unsolicited `auth` notice: a batch already queued, a catch-up page, or the reply to a request sent a moment before is dropped at the socket. Basalt deleted the row, released the lock, and only then looked for the sessions, so a commit from another device landing in that window was broadcast to a device already reported revoked.
+
 `invite` in a listing, in `invited` and in `uninvite` is the invite's **id**: 8 random bytes, base64url, minted with the invite and stored beside it. It is not the token and not derived from it. Basalt listed the redemption identifier itself, which was safe only because redeeming also needed a key that never reached the server; with a bearer token that listing would hand every paired device a working invite. Nothing in any listing can redeem an invite, and a test proves it field by field. `token` appears once, in `invited`, to the device that asked; the device formats the string with its own server URL and vault.
 
 **The first device.** `telimus serve` on a store with no devices and no outstanding invite mints one invite (one-hour TTL) and writes its string atomically, mode 0600, to `<data>/first-invite` (or `-invite-out FILE`). It logs that path and the expiry, never the string, because a container log is not a private place. `telimus invite` on the server host (through the control socket while `serve` runs) prints a fresh invite to stdout, or writes it to `-out FILE`.
+
+**Settled in M1: the address an invite carries.** `-url` when given, which must be canonical `ws://` or `wss://`, and is checked before the port opens. Otherwise `-localhost` gives `ws://127.0.0.1:PORT`. Otherwise each address of this machine a device could dial, as Basalt's pairing lines named them, with `wss://`, which is what those lines meant without a scheme. The first-invite file holds one invite string per address, one per line, all carrying the same token: a device redeems whichever it can reach and the others die with it. When no address can be found, no invite is minted, and `serve` says to start it with `-url`. A restart inside the hour leaves the file alone, since its invite is still outstanding.
 
 `devices` includes MCP author rows so the panel shows agents. **Not as `id` starting with `mcp:`**, because `ValidDeviceID` accepts base64url (`basalt:server/internal/store/store.go:2595`), which has no colon, so that scheme is not the unchanged devices table it was described as. Author rows carry their own `kind` and a valid id, and they are refused as `hello` credentials. An author row must not present as an offline sync peer whose applied checkpoint other devices wait on. Revoking the last real device is allowed from a device session; recovery is `telimus invite` on the server, so `allowLast` is gone (settled in M0.5: without a vault key, no device holds anything the server cannot reissue). `register` and `rotate` are gone.
 

@@ -36,7 +36,7 @@ func TestAnEntryWhoseChunksHoldMoreThanItsSizeIsRefused(t *testing.T) {
 	h := newTestStore(t)
 	names := h.bigChunks(t, 8, 1<<16) // 512 KiB of bodies
 
-	_, err := h.AppendEntry("v1", Entry{Path: "lie.md", Mac: testMac, Size: 1, MTime: 1, Chunks: names})
+	_, err := h.AppendEntry("v1", Entry{Path: "lie.md", Size: 1, MTime: 1, Chunks: names})
 	if !errors.Is(err, ErrSizeMismatch) || !errors.Is(err, ErrBadEntry) {
 		t.Fatalf("err = %v, want ErrSizeMismatch, which is ErrBadEntry", err)
 	}
@@ -64,13 +64,13 @@ func TestASizeIsAcceptedExactlyWhenItIsTheSumOfItsChunks(t *testing.T) {
 
 	for _, wrong := range []int64{size - 1, size + 1} {
 		if _, err := h.AppendEntry("v1", Entry{
-			Path: "real.md", Mac: testMac, Size: wrong, MTime: 1, Chunks: names,
+			Path: "real.md", Size: wrong, MTime: 1, Chunks: names,
 		}); !errors.Is(err, ErrSizeMismatch) {
 			t.Fatalf("a size of %d for chunks summing to %d was answered %v", wrong, size, err)
 		}
 	}
 	if _, err := h.AppendEntry("v1", Entry{
-		Path: "real.md", Mac: testMac, Size: size, MTime: 1, Chunks: names,
+		Path: "real.md", Size: size, MTime: 1, Chunks: names,
 	}); err != nil {
 		t.Fatalf("an honest %d byte file in %d chunks was refused: %v", size, n, err)
 	}
@@ -92,13 +92,13 @@ func TestTheSizeCountsRepeatedChunksOncePerReference(t *testing.T) {
 
 	// Two references to one 2048 byte body, declaring 4096 bytes.
 	if _, err := h.AppendEntry("v1", Entry{
-		Path: "repeat.md", Mac: testMac, Size: 4096, MTime: 1, Chunks: []string{name, name},
+		Path: "repeat.md", Size: 4096, MTime: 1, Chunks: []string{name, name},
 	}); err != nil {
 		t.Fatalf("a file of two identical blocks was refused: %v", err)
 	}
 	// The same two references declaring one byte is still a lie.
 	if _, err := h.AppendEntry("v1", Entry{
-		Path: "lie.md", Mac: testMac, Size: 1, MTime: 1, Chunks: []string{name, name},
+		Path: "lie.md", Size: 1, MTime: 1, Chunks: []string{name, name},
 	}); !errors.Is(err, ErrSizeMismatch) {
 		t.Fatalf("err = %v, want ErrSizeMismatch", err)
 	}
@@ -109,13 +109,13 @@ func TestTheSizeCountsRepeatedChunksOncePerReference(t *testing.T) {
 	// is the correct one, because the declared size counts the bytes once per
 	// reference too.
 	refs := []string{name, name, name, name}
-	_, err := h.AppendEntry("v1", Entry{Path: "four.md", Mac: testMac, Size: 2048, MTime: 1, Chunks: refs})
+	_, err := h.AppendEntry("v1", Entry{Path: "four.md", Size: 2048, MTime: 1, Chunks: refs})
 	if !errors.Is(err, ErrSizeMismatch) {
 		t.Fatalf("err = %v, want ErrSizeMismatch: four references to one body were counted once", err)
 	}
 	// Declared honestly, the same four references are fine.
 	if _, err := h.AppendEntry("v1", Entry{
-		Path: "four.md", Mac: testMac, Size: 4 * 2048, MTime: 1, Chunks: refs,
+		Path: "four.md", Size: 4 * 2048, MTime: 1, Chunks: refs,
 	}); err != nil {
 		t.Fatalf("four honestly declared references were refused: %v", err)
 	}
@@ -132,27 +132,27 @@ func TestReferencingAlreadyHeldChunksIsStillChecked(t *testing.T) {
 	const n = 16
 	names := h.bigChunks(t, n, 1<<15) // 512 KiB total
 	if _, err := h.AppendEntry("v1", Entry{
-		Path: "big.md", Mac: testMac, Size: n * (1 << 15), MTime: 1, Chunks: names,
+		Path: "big.md", Size: n * (1 << 15), MTime: 1, Chunks: names,
 	}); err != nil {
 		t.Fatalf("honest file refused: %v", err)
 	}
 
 	// A second entry claiming to be tiny while pointing at all of it. Nothing
 	// is uploaded, so only the commit can refuse this.
-	_, err := h.AppendEntry("v1", Entry{Path: "tiny.md", Mac: testMac, Size: 10, MTime: 2, Chunks: names})
+	_, err := h.AppendEntry("v1", Entry{Path: "tiny.md", Size: 10, MTime: 2, Chunks: names})
 	if !errors.Is(err, ErrSizeMismatch) {
 		t.Fatalf("err = %v, want ErrSizeMismatch", err)
 	}
 	// And one claiming more than the chunks hold, which the old budget, an
 	// upper bound, let through.
-	_, err = h.AppendEntry("v1", Entry{Path: "vast.md", Mac: testMac, Size: n*(1<<15) + 1, MTime: 2, Chunks: names})
+	_, err = h.AppendEntry("v1", Entry{Path: "vast.md", Size: n*(1<<15) + 1, MTime: 2, Chunks: names})
 	if !errors.Is(err, ErrSizeMismatch) {
 		t.Fatalf("err = %v, want ErrSizeMismatch", err)
 	}
 	// The same refusals inside a batch, entry by entry.
 	res, err := h.AppendMany("v1", []Entry{
-		{Path: "tiny.md", Mac: testMac, Size: 10, MTime: 3, Chunks: names},
-		{Path: "copy.md", Mac: testMac, Size: n * (1 << 15), MTime: 3, Chunks: names},
+		{Path: "tiny.md", Size: 10, MTime: 3, Chunks: names},
+		{Path: "copy.md", Size: n * (1 << 15), MTime: 3, Chunks: names},
 	}, []int64{0, 0}, []int64{0, 0})
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +175,7 @@ func TestAZeroByteFileHasExactlyOneShape(t *testing.T) {
 	h := newTestStore(t)
 	names := h.put(t, "v1", "not nothing")
 
-	err := Entry{Path: "empty.md", Mac: testMac, Size: 0, Chunks: names}.Validate()
+	err := Entry{Path: "empty.md", Size: 0, Chunks: names}.Validate()
 	if !errors.Is(err, ErrBadEntry) {
 		t.Fatalf("err = %v, want ErrBadEntry", err)
 	}
@@ -183,7 +183,7 @@ func TestAZeroByteFileHasExactlyOneShape(t *testing.T) {
 		t.Fatalf("the refusal does not say what the right shape is: %s", err)
 	}
 
-	if err := (Entry{Path: "empty.md", Mac: testMac, Size: 0}).Validate(); err != nil {
+	if err := (Entry{Path: "empty.md", Size: 0}).Validate(); err != nil {
 		t.Fatalf("the legal shape was refused: %v", err)
 	}
 }
@@ -199,13 +199,13 @@ func TestAZeroByteFileHasExactlyOneShape(t *testing.T) {
 func TestEntriesLeaveTheStoreWithAnArrayNotNull(t *testing.T) {
 	h := newTestStore(t)
 	h.file(t, "note.md", "content")
-	if _, err := h.AppendEntry("v1", Entry{Path: "folder", Mac: testMac, Folder: true}); err != nil {
+	if _, err := h.AppendEntry("v1", Entry{Path: "folder", Folder: true}); err != nil {
 		t.Fatalf("folder: %v", err)
 	}
-	if _, err := h.AppendEntry("v1", Entry{Path: "note.md", Mac: testMac, Deleted: true, MTime: 2}); err != nil {
+	if _, err := h.AppendEntry("v1", Entry{Path: "note.md", Deleted: true, MTime: 2}); err != nil {
 		t.Fatalf("deletion: %v", err)
 	}
-	if _, err := h.AppendEntry("v1", Entry{Path: "empty.md", Mac: testMac, Size: 0, MTime: 3}); err != nil {
+	if _, err := h.AppendEntry("v1", Entry{Path: "empty.md", Size: 0, MTime: 3}); err != nil {
 		t.Fatalf("empty file: %v", err)
 	}
 

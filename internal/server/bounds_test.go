@@ -44,7 +44,7 @@ func TestS18ABatchOverTheByteBudgetIsRefused(t *testing.T) {
 	// Two entries of 9 MiB each: neither is over the file limit, together
 	// they are over the batch cap. No body is ever sent, so the chunks need
 	// not exist.
-	big := wire.PutEntry{Path: "a.bin", Chunks: []string{chunks.Name([]byte("a"))}, Mac: testMac,
+	big := wire.PutEntry{Path: "a.bin", Chunks: []string{chunks.Name([]byte("a"))},
 		Meta: wire.PutMeta{Size: 9 << 20, MTime: 1}}
 	other := big
 	other.Path = "b.bin"
@@ -79,7 +79,7 @@ func TestS18ANegativeSizeCannotBuyBudget(t *testing.T) {
 	cl.hello(0)
 
 	name := chunks.Name([]byte("a"))
-	big := wire.PutEntry{Path: "a.bin", Chunks: []string{name}, Mac: testMac,
+	big := wire.PutEntry{Path: "a.bin", Chunks: []string{name},
 		Meta: wire.PutMeta{Size: 9 << 20, MTime: 1}}
 	other := big
 	other.Path = "b.bin"
@@ -125,10 +125,15 @@ func TestS22AFrameOverTheBatchCapIsRefusedNotDisconnected(t *testing.T) {
 	if ReadLimit < store.ChunkMax {
 		t.Fatalf("ReadLimit %d is below ChunkMax %d", ReadLimit, store.ChunkMax)
 	}
-	hello, _ := json.Marshal(wire.In{Op: "hello", ID: wire.MaxRequestID, Proto: wire.Proto, Crypto: wire.Crypto,
+	// The largest honest hello: every name at its bound, a redemption's
+	// invite and token, a device id at its bound, and an epoch far longer than
+	// any this server mints.
+	hello, _ := json.Marshal(wire.In{Op: "hello", ID: wire.MaxRequestID, Proto: wire.Proto,
 		Vault: strings.Repeat("v", store.MaxVaultLen), Device: strings.Repeat("d", store.MaxDeviceLen),
-		Token: strings.Repeat("t", 64), Claim: strings.Repeat("c", 64),
-		Wrapped: strings.Repeat("w", store.MaxWrappedLen), Cursor: 1 << 62})
+		DeviceID: strings.Repeat("i", store.MaxDeviceIDLen),
+		Token:    strings.Repeat("t", store.EncodedTokenLen(store.DeviceTokenBytes)),
+		Invite:   strings.Repeat("n", store.EncodedTokenLen(store.InviteTokenBytes)),
+		Epoch:    strings.Repeat("e", 256), Cursor: 1 << 62})
 	if HelloReadLimit < len(hello) {
 		t.Fatalf("HelloReadLimit %d is below the largest hello, %d bytes", HelloReadLimit, len(hello))
 	}
@@ -143,7 +148,7 @@ func TestS22AFrameOverTheBatchCapIsRefusedNotDisconnected(t *testing.T) {
 	}
 	entries := make([]wire.PutEntry, 0, wire.MaxBatchEntries)
 	for i := 0; i < wire.MaxBatchEntries; i++ {
-		entries = append(entries, wire.PutEntry{Path: strings.Repeat("p", 64), Chunks: names, Mac: testMac,
+		entries = append(entries, wire.PutEntry{Path: strings.Repeat("p", 64), Chunks: names,
 			Meta: wire.PutMeta{Size: 1, MTime: 1}})
 	}
 	frame, _ := json.Marshal(wire.In{Op: "putmany", ID: 1, Entries: entries})
@@ -314,7 +319,7 @@ func TestS27ACommitFaultRefusesThePutAndKeepsTheSession(t *testing.T) {
 	cl.hello(0)
 
 	names, size := chunkNames([]string{"body"})
-	cl.sendJSON(wire.In{Op: "put", ID: 3, Path: "note.md", Chunks: names, Mac: testMac,
+	cl.sendJSON(wire.In{Op: "put", ID: 3, Path: "note.md", Chunks: names,
 		Meta: wire.PutMeta{Size: size, MTime: 1}})
 	cl.recvInto("want", &wire.Want{})
 	cl.sendBinary([]byte("body"))
@@ -345,8 +350,8 @@ func TestS27ACommitFaultRefusesThePutAndKeepsTheSession(t *testing.T) {
 	c2 := r2.dial("b")
 	c2.hello(0)
 	c2.sendJSON(wire.In{Op: "putmany", Entries: []wire.PutEntry{
-		{Path: "ok.md", Mac: testMac, Meta: wire.PutMeta{Folder: true}},
-		{Path: "faulty.md", Mac: testMac, Meta: wire.PutMeta{Folder: true}},
+		{Path: "ok.md", Meta: wire.PutMeta{Folder: true}},
+		{Path: "faulty.md", Meta: wire.PutMeta{Folder: true}},
 	}})
 	var acks wire.Acks
 	c2.recvInto("acks", &acks)

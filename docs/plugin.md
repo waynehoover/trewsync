@@ -74,7 +74,7 @@ join it with an invite.
 To download a fresh copy, create a new empty Obsidian vault and keep the old
 vault as a backup. Telimus does not clear or move existing files during pairing.
 
-An invite works once and expires after ten minutes. If it expires, create a new
+An invite works once and expires after one hour. If it expires, create a new
 one. If no paired device remains, paste the recovery key into the same field.
 There is no fixed device limit.
 

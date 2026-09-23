@@ -81,7 +81,7 @@ func (h *harness) writeAt(t *testing.T, path, prev string, folder bool) error {
 			t.Fatal(err)
 		}
 	}
-	_, err = h.AppendCurrent("v1", Entry{Path: path, Prev: prev, Folder: folder, Mac: testMac, MTime: 1}, base, prevBase)
+	_, err = h.AppendCurrent("v1", Entry{Path: path, Prev: prev, Folder: folder, MTime: 1}, base, prevBase)
 	return err
 }
 
@@ -172,7 +172,7 @@ func TestTheFixtureCollisionsThroughTheAppendPath(t *testing.T) {
 						prevBase, _ = h.CurrentUID("v1", op.Prev)
 					}
 					res, berr := h.AppendMany("v1", []Entry{{Path: op.Path, Prev: op.Prev, Folder: op.Folder,
-						Mac: testMac, MTime: 1}}, []int64{base}, []int64{prevBase})
+						MTime: 1}}, []int64{base}, []int64{prevBase})
 					if berr != nil {
 						t.Fatal(berr)
 					}
@@ -247,7 +247,7 @@ func agreeOnRandomHistory(t *testing.T, seed int64, randomPath func(*rand.Rand) 
 		case len(live) > 0:
 			victim := live[rng.Intn(len(live))]
 			base, _ := h.CurrentUID("v1", victim.Path)
-			if _, err := h.AppendCurrent("v1", Entry{Path: victim.Path, Deleted: true, Mac: testMac, MTime: 1},
+			if _, err := h.AppendCurrent("v1", Entry{Path: victim.Path, Deleted: true, MTime: 1},
 				base, 0); err != nil {
 				t.Fatalf("seed %d step %d: deleting %q: %v", seed, step, victim.Path, err)
 			}
@@ -317,7 +317,7 @@ func TestTheLiveSetIsExactlyWhatTheEntriesSay(t *testing.T) {
 			prevBase, _ = h.CurrentUID("v1", s.prev)
 		}
 		if _, err := h.AppendCurrent("v1", Entry{Path: s.path, Prev: s.prev, Folder: s.folder, Deleted: s.deleted,
-			Mac: testMac, MTime: 1}, base, prevBase); err != nil {
+			MTime: 1}, base, prevBase); err != nil {
 			t.Fatalf("%s: %v", s.what, err)
 		}
 		check(s.what)
@@ -359,7 +359,7 @@ func TestADriftedLiveSetIsReportedAndHealed(t *testing.T) {
 	// Deleting a file under the folder takes a count away that is not there,
 	// which is the drift being met: the write succeeds and the set is whole.
 	base, _ := h.CurrentUID("v1", "notes/a.md")
-	if _, err := h.AppendCurrent("v1", Entry{Path: "notes/a.md", Deleted: true, Mac: testMac, MTime: 2}, base, 0); err != nil {
+	if _, err := h.AppendCurrent("v1", Entry{Path: "notes/a.md", Deleted: true, MTime: 2}, base, 0); err != nil {
 		t.Fatalf("a write that met the drift was refused: %v", err)
 	}
 	if diff, err := liveDifference(h.db, "v1"); err != nil || diff != "" {

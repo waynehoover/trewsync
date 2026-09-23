@@ -126,7 +126,7 @@ func TestHealthNamesNothingAboutThisServer(t *testing.T) {
 			"the vault name":       testVault,
 			"a path":               root,
 			"the parent directory": filepath.Dir(root),
-			"the bootstrap token":  testToken,
+			"a device's token":     deviceKey("a"),
 		} {
 			if secret != "" && strings.Contains(body, secret) {
 				t.Errorf("/health said %q, which names %s", body, what)

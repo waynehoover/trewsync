@@ -26,7 +26,7 @@ func TestResendIsBoundedByTheChunkCeilingNotTheFileCeiling(t *testing.T) {
 		t.Fatal(err)
 	}
 	uid, err := r.st.AppendEntry(testVault, store.Entry{
-		Path: "note.md", Size: int64(len(body)), CTime: 1, MTime: 1, Mac: testMac, Chunks: []string{name},
+		Path: "note.md", Size: int64(len(body)), CTime: 1, MTime: 1, Chunks: []string{name},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -98,9 +98,9 @@ func TestTheBadpathMatrixThroughASession(t *testing.T) {
 		}
 		if !v.Valid {
 			for _, in := range []wire.In{
-				{Op: "put", Path: p, Chunks: names, Mac: testMac, Meta: wire.PutMeta{Size: size, MTime: 1}},
-				{Op: "put", Path: p, Mac: testMac, Meta: wire.PutMeta{Folder: true, MTime: 1}},
-				{Op: "put", Path: p, Mac: testMac, Meta: wire.PutMeta{Deleted: true, MTime: 1}},
+				{Op: "put", Path: p, Chunks: names, Meta: wire.PutMeta{Size: size, MTime: 1}},
+				{Op: "put", Path: p, Meta: wire.PutMeta{Folder: true, MTime: 1}},
+				{Op: "put", Path: p, Meta: wire.PutMeta{Deleted: true, MTime: 1}},
 			} {
 				cl.sendJSON(in)
 				expectBadPath(t, cl, v, "path")
@@ -108,7 +108,7 @@ func TestTheBadpathMatrixThroughASession(t *testing.T) {
 			// An empty prev is not a rename at all, so that vector has no
 			// rename to refuse.
 			if p != "" {
-				cl.sendJSON(wire.In{Op: "put", Path: fmt.Sprintf("moved/%d.md", i), Chunks: names, Mac: testMac,
+				cl.sendJSON(wire.In{Op: "put", Path: fmt.Sprintf("moved/%d.md", i), Chunks: names,
 					Meta: wire.PutMeta{Size: size, MTime: 1, Prev: p}})
 				expectBadPath(t, cl, v, "prev")
 			}
@@ -119,10 +119,10 @@ func TestTheBadpathMatrixThroughASession(t *testing.T) {
 		// folder, the same path becoming a file, deleted, made again, then
 		// renamed away.
 		for _, in := range []wire.In{
-			{Op: "put", Path: p, Mac: testMac, Meta: wire.PutMeta{Folder: true, MTime: 1}},
-			{Op: "put", Path: p, Chunks: names, Mac: testMac, Meta: wire.PutMeta{Size: size, MTime: 2}},
-			{Op: "put", Path: p, Mac: testMac, Meta: wire.PutMeta{Deleted: true, MTime: 3}},
-			{Op: "put", Path: p, Chunks: names, Mac: testMac, Meta: wire.PutMeta{Size: size, MTime: 4}},
+			{Op: "put", Path: p, Meta: wire.PutMeta{Folder: true, MTime: 1}},
+			{Op: "put", Path: p, Chunks: names, Meta: wire.PutMeta{Size: size, MTime: 2}},
+			{Op: "put", Path: p, Meta: wire.PutMeta{Deleted: true, MTime: 3}},
+			{Op: "put", Path: p, Chunks: names, Meta: wire.PutMeta{Size: size, MTime: 4}},
 		} {
 			in.Base = cl.head(p)
 			cl.sendJSON(in)
@@ -136,7 +136,7 @@ func TestTheBadpathMatrixThroughASession(t *testing.T) {
 			committed++
 		}
 		dest := fmt.Sprintf("moved/%d.md", i)
-		cl.sendJSON(wire.In{Op: "put", Path: dest, Chunks: names, Mac: testMac,
+		cl.sendJSON(wire.In{Op: "put", Path: dest, Chunks: names,
 			Meta: wire.PutMeta{Size: size, MTime: 5, Prev: p}, PrevBase: cl.head(p)})
 		if m := cl.recv(); m["res"] != "have" {
 			t.Fatalf("%s: a rename from a legal path was answered %v", v.Name, m)
@@ -156,12 +156,12 @@ func TestTheBadpathMatrixThroughASession(t *testing.T) {
 	var refused []pathVector
 	for _, v := range pathVectors(t) {
 		if p := v.path(t); !v.Valid && utf8.ValidString(p) {
-			entries = append(entries, wire.PutEntry{Path: p, Chunks: names, Mac: testMac,
+			entries = append(entries, wire.PutEntry{Path: p, Chunks: names,
 				Meta: wire.PutMeta{Size: size, MTime: 6}})
 			refused = append(refused, v)
 		}
 	}
-	entries = append(entries, wire.PutEntry{Path: "batch-ok.md", Chunks: names, Mac: testMac,
+	entries = append(entries, wire.PutEntry{Path: "batch-ok.md", Chunks: names,
 		Meta: wire.PutMeta{Size: size, MTime: 6}})
 	acks := cl.putMany(entries, map[string]string{names[0]: body})
 	for k, v := range refused {

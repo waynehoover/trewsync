@@ -10,56 +10,22 @@ import (
 	"testing"
 )
 
-// Step 1 of per-device credentials at the store: the devices table and the
-// operations over it. Nothing here is wired into a session yet, and the vault's
-// own auth_hash still authorises everything it did; what these pin is that the
-// list a session will consult is correct on its own, because step 2 has nowhere
-// safe to stand otherwise.
+// The devices table and the operations over it: registering, listing,
+// revoking and last_seen, and the races between them. A device comes to exist
+// by redeeming an invite (invites_test.go); these register rows directly,
+// because what they pin is the table.
 
-// Device auth hashes. Hex, 64 characters, the same shape as the vault's,
-// because they are the same thing per device: a hash of a key the server never
-// holds.
+// Device auth hashes: hex SHA-256, the shape HashToken writes.
 var (
 	hashA = strings.Repeat("a", 64)
 	hashB = strings.Repeat("b", 64)
 	hashC = strings.Repeat("c", 64)
 )
 
-// RegisterDevice is Store.RegisterDevice with the two arguments protocol 4
-// added filled in: the vault credential the registration is authorised by,
-// which is whatever the vault currently holds, and a cap high enough not to be
-// what any of these tests is about.
-//
-// Deliberately a shadow on the harness rather than an edit to thirty-six call
-// sites. Every test below was written to pin something else, and rewriting all
-// of them to thread two new arguments through is how an assertion quietly
-// changes meaning in a diff nobody can read. The two new arguments have their
-// own tests, which call Store.RegisterDevice directly and say so.
-func (h *harness) RegisterDevice(vaultID, deviceID, name, deviceHash string, now int64) error {
-	vaultHash, err := h.Store.AuthHash(vaultID)
-	if err != nil {
-		return err
-	}
-	if vaultHash == "" {
-		// An unclaimed vault has no credential to be authorised by, and the
-		// store refuses a caller that offers none as a caller bug. These tests
-		// mean "a registration a holder of the vault credential tried", so
-		// pass a well-formed hash that cannot be the vault's and let the
-		// answer be about the vault.
-		vaultHash = strings.Repeat("0", 64)
-	}
-	return h.Store.RegisterDevice(vaultID, deviceID, name, deviceHash, vaultHash, now)
-}
-
-// claimedStore is a vault that has been claimed, which is the only kind a
-// device may be registered to.
-func claimedStore(t *testing.T) *harness {
-	t.Helper()
-	h := newTestStore(t)
-	if _, err := h.ClaimVault("v1", hash1, wrapped1, 1); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	return h
+// revoke is RevokeDevice for the tests that do not count cancelled invites.
+func revoke(h *harness, vaultID, deviceID string) error {
+	_, err := h.RevokeDevice(vaultID, deviceID, 2000)
+	return err
 }
 
 // ids returns the device ids of a vault's list, in the order it gave them.
@@ -81,7 +47,7 @@ func ids(t *testing.T, h *harness, vaultID string) []string {
  * ---------------------------------------------------------------- */
 
 func TestRegisteringADeviceStoresItAndRefusesADuplicateID(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	if err := h.RegisterDevice("v1", "device-one", "laptop", hashA, 1000); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -119,26 +85,20 @@ func TestRegisteringADeviceStoresItAndRefusesADuplicateID(t *testing.T) {
 	if err := h.EnsureVault("v2", 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.ClaimVault("v2", hash2, wrapped2, 1); err != nil {
-		t.Fatal(err)
-	}
 	if err := h.RegisterDevice("v2", "device-one", "laptop", hashB, 3000); err != nil {
 		t.Fatalf("the same device id on another vault: %v", err)
 	}
 }
 
-// Registration is what the vault's auth_hash still authorises once its meaning
-// narrows, so a vault nothing has claimed has no credential that could have
-// authorised this.
-func TestRegisteringADeviceNeedsAClaimedVault(t *testing.T) {
-	h := newTestStore(t) // ensured, not claimed
-	if err := h.RegisterDevice("v1", "device-one", "laptop", hashA, 1000); !errors.Is(err, ErrUnknownVault) {
-		t.Fatalf("err = %v, want ErrUnknownVault", err)
-	}
+// A device row names a vault this store holds, and a registration onto one it
+// does not is refused and writes nothing. (Basalt's version required a claimed
+// vault; with no vault credential, existing is what a vault has to do.)
+func TestRegisteringADeviceNeedsAVault(t *testing.T) {
+	h := newTestStore(t)
 	if err := h.RegisterDevice("nosuchvault", "device-one", "laptop", hashA, 1000); !errors.Is(err, ErrUnknownVault) {
 		t.Fatalf("err = %v on a vault with no row, want ErrUnknownVault", err)
 	}
-	if n := len(ids(t, h, "v1")); n != 0 {
+	if n := len(ids(t, h, "nosuchvault")); n != 0 {
 		t.Fatalf("%d devices on a vault the registration was refused for", n)
 	}
 }
@@ -148,7 +108,7 @@ func TestRegisteringADeviceNeedsAClaimedVault(t *testing.T) {
 // to what the client already sends and it lands in the same places. One rule,
 // in store.CheckName, called from both.
 func TestADeviceNameIsOptionalFreeTextBoundedLikeTheWireOne(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 
 	// Optional.
 	if err := h.RegisterDevice("v1", "device-one", "", hashA, 1000); err != nil {
@@ -185,7 +145,7 @@ func TestADeviceNameIsOptionalFreeTextBoundedLikeTheWireOne(t *testing.T) {
 }
 
 func TestRegisteringADeviceRefusesAMalformedIDOrHash(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	for _, c := range []struct {
 		why, id, hash string
 	}{
@@ -215,7 +175,7 @@ func TestRegisteringADeviceRefusesAMalformedIDOrHash(t *testing.T) {
 // repeatable; it cannot see the tiebreak itself, because today's plan scans the
 // primary key and sorts stably over it. See Devices.
 func TestDevicesListsInAStableOrderAndNeverReturnsNil(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 
 	// A vault with no devices is an empty list and not an error, and not nil
 	// either: nil marshals to JSON null and a client that iterates it crashes
@@ -258,7 +218,7 @@ func TestDevicesListsInAStableOrderAndNeverReturnsNil(t *testing.T) {
 // serialises it, so the type does not have the field: this fails the moment one
 // is added.
 func TestADeviceListingCarriesNoCredential(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	if err := h.RegisterDevice("v1", "device-one", "laptop", hashA, 1000); err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +236,7 @@ func TestADeviceListingCarriesNoCredential(t *testing.T) {
 }
 
 func TestDeviceByIDCarriesTheHashAndSaysWhenThereIsNoRow(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	if err := h.RegisterDevice("v1", "device-one", "laptop", hashA, 1000); err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +270,7 @@ func TestDeviceByIDCarriesTheHashAndSaysWhenThereIsNoRow(t *testing.T) {
  * ---------------------------------------------------------------- */
 
 func TestRevokingADeviceLeavesEveryOtherDeviceAlone(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	for i, id := range []string{"alfa", "bravo", "charlie"} {
 		if err := h.RegisterDevice("v1", id, id, hashA, int64(1000+i)); err != nil {
 			t.Fatal(err)
@@ -319,7 +279,7 @@ func TestRevokingADeviceLeavesEveryOtherDeviceAlone(t *testing.T) {
 	if err := h.SawDevice("v1", "charlie", 5000); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.RevokeDevice("v1", "bravo", "", false); err != nil {
+	if err := revoke(h, "v1", "bravo"); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
@@ -339,7 +299,7 @@ func TestRevokingADeviceLeavesEveryOtherDeviceAlone(t *testing.T) {
 	}
 	// And it is a delete, so revoking it again is unknown rather than a
 	// second success.
-	if err := h.RevokeDevice("v1", "bravo", "", false); !errors.Is(err, ErrUnknownDevice) {
+	if err := revoke(h, "v1", "bravo"); !errors.Is(err, ErrUnknownDevice) {
 		t.Fatalf("err = %v revoking an already revoked device, want ErrUnknownDevice", err)
 	}
 }
@@ -348,7 +308,7 @@ func TestRevokingADeviceLeavesEveryOtherDeviceAlone(t *testing.T) {
 // somewhere else. It is: entries.device is a column on rows revocation never
 // touches, so what a revoked device wrote is still attributed to it.
 func TestRevokingADeviceDoesNotTouchTheHistoryItWrote(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	if err := h.RegisterDevice("v1", "device-one", "laptop", hashA, 1000); err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +316,7 @@ func TestRevokingADeviceDoesNotTouchTheHistoryItWrote(t *testing.T) {
 	if err := h.RegisterDevice("v1", "device-two", "phone", hashB, 1001); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.RevokeDevice("v1", "device-one", "", false); err != nil {
+	if err := revoke(h, "v1", "device-one"); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	got, ok, err := h.EntryByUID("v1", e.UID)
@@ -368,68 +328,53 @@ func TestRevokingADeviceDoesNotTouchTheHistoryItWrote(t *testing.T) {
 	}
 }
 
-// Refused by default, because a vault with no devices is reachable only by the
-// recovery key and that is not a state to arrive in by clicking a row. Allowed
-// when the caller says so, because it is also a real thing to want.
-func TestRevokingTheLastDeviceIsRefusedUnlessSaidSo(t *testing.T) {
-	h := claimedStore(t)
+// Hazard 4, decided: revoking the last device is allowed (plan/protocol.md,
+// "Devices and invites"). Basalt refused it, because what it left was a vault
+// only the recovery key opened; Telimus has no key a device holds that the
+// server cannot reissue, and the way back is an invite from the server. So the
+// last revoke succeeds, the history it leaves is untouched, and the vault can
+// still be given a device.
+func TestRevokingTheLastDeviceIsAllowed(t *testing.T) {
+	h := newTestStore(t)
 	if err := h.RegisterDevice("v1", "alfa", "laptop", hashA, 1000); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.RegisterDevice("v1", "bravo", "phone", hashB, 1001); err != nil {
-		t.Fatal(err)
-	}
-	// Two devices: not the last one.
-	if err := h.RevokeDevice("v1", "alfa", "", false); err != nil {
-		t.Fatalf("revoking one of two: %v", err)
-	}
-	// One device: refused, and still there afterwards.
-	err := h.RevokeDevice("v1", "bravo", "", false)
-	if !errors.Is(err, ErrLastDevice) {
-		t.Fatalf("err = %v revoking the last device, want ErrLastDevice", err)
-	}
-	if _, _, ok, _ := h.DeviceByID("v1", "bravo"); !ok {
-		t.Fatal("the refusal deleted the row anyway")
-	}
-	// The message has to say what it would cost, because the refusal is the
-	// only place a person learns what "the last device" means for the vault.
-	// What to do about it is the session's to add, since the answer depends on
-	// which credential is asking: a device is told to fetch the recovery key,
-	// and the recovery key is told to say the word. See handleRevoke.
-	if !strings.Contains(err.Error(), "recovery key") || !strings.Contains(err.Error(), "no devices") {
-		t.Fatalf("the refusal does not say what it costs: %v", err)
-	}
-	// Said explicitly: done.
-	if err := h.RevokeDevice("v1", "bravo", "", true); err != nil {
-		t.Fatalf("revoking the last device on purpose: %v", err)
+	e := h.file(t, "note.md", "still here")
+	if err := revoke(h, "v1", "alfa"); err != nil {
+		t.Fatalf("revoking the last device: %v", err)
 	}
 	if n := len(ids(t, h, "v1")); n != 0 {
-		t.Fatalf("%d devices left after revoking the last one on purpose", n)
+		t.Fatalf("%d devices left after revoking the last one", n)
+	}
+	if got, ok, err := h.EntryByUID("v1", e.UID); err != nil || !ok || got.Path != "note.md" {
+		t.Fatalf("revoking the last device touched the history: %+v %v %v", got, ok, err)
+	}
+	expires := int64(9000)
+	inv, err := h.CreateInvite("v1", "", "", &expires, 3000)
+	if err != nil {
+		t.Fatalf("an invite for a vault with no devices: %v", err)
+	}
+	if err := redeem(h, "v1", inv.Token, "bravo", "phone", hashB, 3000); err != nil {
+		t.Fatalf("the way back: %v", err)
 	}
 }
 
-// "There is no such device" and "that is the last one" are opposite
-// instructions to whoever is holding the list: one is a wrong id, the other is
-// a right id and a decision. A single error for both would have somebody
-// confirming their way past a typo.
-func TestRevokingAnUnknownDeviceIsNotTheSameAsTheLastOne(t *testing.T) {
-	h := claimedStore(t)
+// "There is no such device" is its own answer, and never a quiet success: a
+// revoke that reported done for a typo would have somebody believing a device
+// was gone that is still connected.
+func TestRevokingAnUnknownDeviceIsUnknown(t *testing.T) {
+	h := newTestStore(t)
 	if err := h.RegisterDevice("v1", "alfa", "laptop", hashA, 1000); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.RevokeDevice("v1", "typo", "", false); !errors.Is(err, ErrUnknownDevice) {
+	if err := revoke(h, "v1", "typo"); !errors.Is(err, ErrUnknownDevice) {
 		t.Fatalf("err = %v, want ErrUnknownDevice", err)
 	}
-	// Even with the confirmation, an unknown id is unknown rather than a
-	// quiet success.
-	if err := h.RevokeDevice("v1", "typo", "", true); !errors.Is(err, ErrUnknownDevice) {
-		t.Fatalf("err = %v with allowLast, want ErrUnknownDevice", err)
-	}
-	if err := h.RevokeDevice("nosuchvault", "alfa", "", true); !errors.Is(err, ErrUnknownDevice) {
+	if err := revoke(h, "nosuchvault", "alfa"); !errors.Is(err, ErrUnknownDevice) {
 		t.Fatalf("err = %v on an unknown vault, want ErrUnknownDevice", err)
 	}
 	if n := len(ids(t, h, "v1")); n != 1 {
-		t.Fatalf("%d devices after three refused revokes, want 1", n)
+		t.Fatalf("%d devices after two refused revokes, want 1", n)
 	}
 }
 
@@ -438,7 +383,7 @@ func TestRevokingAnUnknownDeviceIsNotTheSameAsTheLastOne(t *testing.T) {
  * ---------------------------------------------------------------- */
 
 func TestSawDeviceMovesLastSeenAndNothingElse(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	if err := h.RegisterDevice("v1", "alfa", "laptop", hashA, 1000); err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +415,7 @@ func TestSawDeviceMovesLastSeenAndNothingElse(t *testing.T) {
 // that goes backwards reads as "that laptop has not been here since Tuesday"
 // about a device that was here a minute ago.
 func TestSawDeviceNeverMovesLastSeenBackwards(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	if err := h.RegisterDevice("v1", "alfa", "laptop", hashA, 1000); err != nil {
 		t.Fatal(err)
 	}
@@ -496,14 +441,14 @@ func TestSawDeviceNeverMovesLastSeenBackwards(t *testing.T) {
 // thing revocation has to mean. It says so instead, so a session can tell it
 // was revoked while connected and stop rather than retry.
 func TestSawDeviceOnARevokedDeviceSaysSoAndDoesNotRecreateIt(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	if err := h.RegisterDevice("v1", "alfa", "laptop", hashA, 1000); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.RegisterDevice("v1", "bravo", "phone", hashB, 1001); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.RevokeDevice("v1", "bravo", "", false); err != nil {
+	if err := revoke(h, "v1", "bravo"); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.SawDevice("v1", "bravo", 7000); !errors.Is(err, ErrUnknownDevice) {
@@ -527,7 +472,7 @@ func TestSawDeviceOnARevokedDeviceSaysSoAndDoesNotRecreateIt(t *testing.T) {
 // in the SQL rather than in this process's mutex.
 
 func TestConcurrentRegistrationsOfOneIDProduceOneRow(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	const racers = 8
 	errs := make([]error, racers)
 	var wg sync.WaitGroup
@@ -573,11 +518,9 @@ func TestConcurrentRegistrationsOfOneIDProduceOneRow(t *testing.T) {
 // than the insert's ON CONFLICT DO NOTHING; see
 // TestConcurrentRevokesCannotEmptyTheVault.
 //
-// The loser's ErrDeviceExists is what a session answers `badentry` to, and it
-// is deliberately not the same answer as re-registering under the *same* key,
-// which is the lost-reply retry and succeeds:
-// TestRegisteringTheSameDeviceTwiceIsIdempotent, in the server package, pins
-// both mappings and the sequential case of this.
+// The lost-reply retry of a redemption, which does succeed under the same key,
+// is recognised by the invite that was spent on the row rather than by the
+// row alone; see TestALostReplyRetrySucceedsEvenAfterExpiry.
 //
 // Checked to fail rather than assumed to: with the insert's ON CONFLICT clause
 // changed to DO UPDATE SET auth_hash = excluded.auth_hash, both racers win and
@@ -591,9 +534,6 @@ func TestConcurrentRegistrationsOfOneIDUnderTwoKeysCannotFlipTheRow(t *testing.T
 		if err := one.EnsureVault("v1", 1000); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := one.ClaimVault("v1", hash1, wrapped1, 1000); err != nil {
-			t.Fatal(err)
-		}
 		two := openAt(t, dir)
 
 		var errs [2]error
@@ -604,8 +544,7 @@ func TestConcurrentRegistrationsOfOneIDUnderTwoKeysCannotFlipTheRow(t *testing.T
 			go func(i int, h *harness) {
 				defer wg.Done()
 				<-start
-				errs[i] = h.Store.RegisterDevice(
-					"v1", "contested", names[i], hashes[i], hash1, int64(1000+i))
+				errs[i] = h.RegisterDevice("v1", "contested", names[i], hashes[i], int64(1000+i))
 			}(i, h)
 		}
 		close(start)
@@ -652,26 +591,25 @@ func TestConcurrentRegistrationsOfOneIDUnderTwoKeysCannotFlipTheRow(t *testing.T
 	}
 }
 
-// The one that a read followed by a write gets wrong. Two devices revoking each
-// other at the same moment both see two rows, both decide they are not the
-// last, and both delete: the vault ends with no devices and neither caller was
-// told it did that.
+// Two processes revoking one device at the same moment. Exactly one deletes
+// it; the other is told it is not there, rather than both reporting a revoke
+// that happened once, and the invites the device issued are cancelled once,
+// in the transaction that deleted it.
 //
 // Through two Store handles on one directory, because that is the shape the
-// guarantee has to survive. writeMu makes a read-then-write atomic within one
-// process, which is enough to make a single-handle version of this test pass
-// against the broken implementation, and the store is opened by more than one
-// process: `telimus backup` and `telimus purge` run against a live server's
-// directory. The atomicity has to be in the SQL, so the test has to be able to
-// see the SQL.
-func TestConcurrentRevokesCannotEmptyTheVault(t *testing.T) {
+// guarantee has to survive: writeMu makes a read-then-write atomic within one
+// process, and the store is opened by more than one process (`telimus
+// backup` and `telimus purge` run against a live server's directory, and
+// `telimus revoke` does when no server is running).
+//
+// Basalt's version of this raced two devices revoking each other and asserted
+// that the vault never ended empty. With the last-device rule gone (hazard 4)
+// that is a legal outcome, so what is pinned is the delete's own atomicity.
+func TestConcurrentRevokesOfOneDeviceDeleteItOnce(t *testing.T) {
 	for attempt := 0; attempt < 20; attempt++ {
 		dir := t.TempDir()
 		one := openAt(t, dir)
 		if err := one.EnsureVault("v1", 1000); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := one.ClaimVault("v1", hash1, wrapped1, 1000); err != nil {
 			t.Fatal(err)
 		}
 		if err := one.RegisterDevice("v1", "alfa", "laptop", hashA, 1000); err != nil {
@@ -680,43 +618,46 @@ func TestConcurrentRevokesCannotEmptyTheVault(t *testing.T) {
 		if err := one.RegisterDevice("v1", "bravo", "phone", hashB, 1001); err != nil {
 			t.Fatal(err)
 		}
+		expires := int64(9000)
+		if _, err := one.CreateInvite("v1", "", "alfa", &expires, 1000); err != nil {
+			t.Fatal(err)
+		}
 		two := openAt(t, dir)
 
 		errs := make([]error, 2)
+		cancelled := make([]int, 2)
 		start := make(chan struct{})
 		var wg sync.WaitGroup
-		for i, r := range []struct {
-			h  *harness
-			id string
-		}{{one, "alfa"}, {two, "bravo"}} {
+		for i, h := range []*harness{one, two} {
 			wg.Add(1)
-			go func(i int, h *harness, id string) {
+			go func(i int, h *harness) {
 				defer wg.Done()
 				<-start
-				errs[i] = h.RevokeDevice("v1", id, "", false)
-			}(i, r.h, r.id)
+				cancelled[i], errs[i] = h.RevokeDevice("v1", "alfa", 2000)
+			}(i, h)
 		}
 		close(start)
 		wg.Wait()
 
-		survivors := ids(t, one, "v1")
-		if len(survivors) != 1 {
-			t.Fatalf("attempt %d: %v devices left after two simultaneous revokes, want exactly 1 "+
-				"(errors: %v, %v)", attempt, survivors, errs[0], errs[1])
-		}
-		gone, refused := 0, 0
+		gone, unknown := 0, 0
 		for _, err := range errs {
 			switch {
 			case err == nil:
 				gone++
-			case errors.Is(err, ErrLastDevice):
-				refused++
+			case errors.Is(err, ErrUnknownDevice):
+				unknown++
 			default:
-				t.Fatalf("attempt %d: %v, want nil or ErrLastDevice", attempt, err)
+				t.Fatalf("attempt %d: %v, want nil or ErrUnknownDevice", attempt, err)
 			}
 		}
-		if gone != 1 || refused != 1 {
-			t.Fatalf("attempt %d: %d revoked and %d refused, want one of each", attempt, gone, refused)
+		if gone != 1 || unknown != 1 {
+			t.Fatalf("attempt %d: %d revoked and %d unknown, want one of each", attempt, gone, unknown)
+		}
+		if cancelled[0]+cancelled[1] != 1 {
+			t.Fatalf("attempt %d: the invites were cancelled %d times, want once", attempt, cancelled[0]+cancelled[1])
+		}
+		if survivors := ids(t, one, "v1"); strings.Join(survivors, ",") != "bravo" {
+			t.Fatalf("attempt %d: devices %v after revoking alfa twice, want bravo", attempt, survivors)
 		}
 		if err := one.Close(); err != nil {
 			t.Fatalf("close: %v", err)
@@ -731,7 +672,7 @@ func TestConcurrentRevokesCannotEmptyTheVault(t *testing.T) {
 // call may resurrect the row or corrupt the other, and -race says so about the
 // store's own locking.
 func TestRevokingRacesASessionsHeartbeatWithoutResurrectingIt(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	if err := h.RegisterDevice("v1", "alfa", "laptop", hashA, 1000); err != nil {
 		t.Fatal(err)
 	}
@@ -753,7 +694,7 @@ func TestRevokingRacesASessionsHeartbeatWithoutResurrectingIt(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		if err := h.RevokeDevice("v1", "bravo", "", false); err != nil {
+		if err := revoke(h, "v1", "bravo"); err != nil {
 			t.Errorf("revoke: %v", err)
 		}
 	}()
@@ -774,9 +715,9 @@ func TestRevokingRacesASessionsHeartbeatWithoutResurrectingIt(t *testing.T) {
 // Device rows are the answer to "every device is lost", so a backup without
 // them is a backup that restores a vault nobody can connect to. They are rows
 // in the database and VACUUM INTO copies the database, which is why this
-// works; checked rather than assumed, the way the wrapped data key is.
+// works; checked rather than assumed.
 func TestDeviceRowsSurviveBackupAndRestore(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	h.file(t, "note.md", "content")
 	if err := h.RegisterDevice("v1", "alfa", "laptop", hashA, 1000); err != nil {
 		t.Fatal(err)
@@ -810,53 +751,22 @@ func TestDeviceRowsSurviveBackupAndRestore(t *testing.T) {
 	}
 }
 
-// Rotation retires the root and every invite sealed under it, and must leave
-// the device rows alone: device credentials are independent of the root, which
-// is what makes rotation stop being a weekend of re-pairing. Rotate already
-// sweeps the invites table, and devices is the next table along, so this is
-// here to fail if it ever grows a second DELETE.
-func TestRotatingAVaultLeavesEveryDeviceRow(t *testing.T) {
-	h := claimedStore(t)
-	if err := h.RegisterDevice("v1", "alfa", "laptop", hashA, 1000); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.RegisterDevice("v1", "bravo", "phone", hashB, 1001); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.SawDevice("v1", "alfa", 5000); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Rotate("v1", hash1, hash2, wrapped2); err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	if got := ids(t, h, "v1"); strings.Join(got, ",") != "alfa,bravo" {
-		t.Fatalf("devices after rotating: %v, want both still there", got)
-	}
-	d, hash, ok, err := h.DeviceByID("v1", "alfa")
-	if err != nil || !ok {
-		t.Fatalf("alfa after rotating: ok=%v err=%v", ok, err)
-	}
-	if hash != hashA || d.LastSeen != 5000 || d.CreatedAt != 1000 {
-		t.Fatalf("rotating changed a device row: %+v hash %q", d, hash)
-	}
-}
-
 /* ---------------------------------------------------------------- *
- * The cap, and the credential a registration is authorised by
+ * No cap
  * ---------------------------------------------------------------- */
 
 // Adding devices preserves every existing credential and last-seen value.
 func TestRegisteringMoreDevicesPreservesExistingDevices(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	// Seed existing registrations before adding another.
 	const over = 24
 	for i := 0; i < over; i++ {
 		id := fmt.Sprintf("device-%d", i)
-		if err := h.Store.RegisterDevice("v1", id, id, hashA, hash1, int64(1000+i)); err != nil {
+		if err := h.RegisterDevice("v1", id, id, hashA, int64(1000+i)); err != nil {
 			t.Fatalf("seeding device %d: %v", i, err)
 		}
 	}
-	if err := h.Store.RegisterDevice("v1", "another", "phone", hashB, hash1, 2000); err != nil {
+	if err := h.RegisterDevice("v1", "another", "phone", hashB, 2000); err != nil {
 		t.Fatalf("adding another device: %v", err)
 	}
 	got := ids(t, h, "v1")
@@ -874,98 +784,6 @@ func TestRegisteringMoreDevicesPreservesExistingDevices(t *testing.T) {
 	}
 }
 
-// Registration is authorised by the vault's credential, and only while that is
-// still the vault's credential.
-//
-// This is the ErrRotated incident in the one place where the prize is
-// permanent. You rotate because a root secret leaked; rotate is a registrar's
-// op, so the leak-holder and you are two registrar sessions racing. Without
-// the condition, the session holding the retired root registers a device a
-// millisecond after your rotation and keeps a credential the rotation cannot
-// touch, because rotating deliberately leaves every device row alone.
-func TestRegisteringUnderARetiredVaultCredentialIsRefused(t *testing.T) {
-	h := claimedStore(t)
-	if err := h.Store.RegisterDevice("v1", "before", "laptop", hashA, hash1, 1000); err != nil {
-		t.Fatalf("the registration before the rotation: %v", err)
-	}
-	if err := h.Rotate("v1", hash1, hash2, wrapped2); err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	err := h.Store.RegisterDevice("v1", "after", "the leak", hashB, hash1, 2000)
-	if !errors.Is(err, ErrRotated) {
-		t.Fatalf("a registration under the retired credential returned %v, want ErrRotated", err)
-	}
-	if _, _, ok, _ := h.DeviceByID("v1", "after"); ok {
-		t.Fatal("the retired credential registered a device that survives the rotation")
-	}
-	// And the rotation left the device that was already there alone, which is
-	// the other half: rotating must not cost a re-pairing.
-	if _, _, ok, _ := h.DeviceByID("v1", "before"); !ok {
-		t.Fatal("the rotation removed a device row")
-	}
-	// The new credential registers.
-	if err := h.Store.RegisterDevice("v1", "after", "phone", hashB, hash2, 3000); err != nil {
-		t.Fatalf("registering under the new credential: %v", err)
-	}
-}
-
-// Revoking under the vault's credential is conditional on that still being the
-// vault's credential, exactly as registering is.
-//
-// The same incident, and the prize is worse. A rotation deliberately leaves
-// every device row alone, so a retired root that could still delete rows would
-// answer the rotation meant to end its access by deleting every device the
-// vault has: the person who rotated keeps a vault only the recovery key opens,
-// and the leak-holder chose that for them. A device passes no hash and is
-// unaffected, because it authenticated against its own row and not the vault.
-func TestRevokingUnderARetiredVaultCredentialIsRefused(t *testing.T) {
-	h := claimedStore(t)
-	if err := h.RegisterDevice("v1", "alfa", "laptop", hashA, 1000); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.RegisterDevice("v1", "bravo", "phone", hashB, 1001); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Rotate("v1", hash1, hash2, wrapped2); err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-
-	err := h.RevokeDevice("v1", "alfa", hash1, false)
-	if !errors.Is(err, ErrRotated) {
-		t.Fatalf("a revoke under the retired credential returned %v, want ErrRotated", err)
-	}
-	if _, _, ok, _ := h.DeviceByID("v1", "alfa"); !ok {
-		t.Fatal("the retired credential revoked a device the rotation cannot put back")
-	}
-	// A device's revoke names no vault hash and is not touched by any of this:
-	// its authority is its own row, and a rotation does not move that.
-	if err := h.RevokeDevice("v1", "alfa", "", false); err != nil {
-		t.Fatalf("a device revoking after a rotation: %v", err)
-	}
-	// And the new credential revokes.
-	if err := h.RevokeDevice("v1", "bravo", hash2, true); err != nil {
-		t.Fatalf("revoking under the new credential: %v", err)
-	}
-	if n := len(ids(t, h, "v1")); n != 0 {
-		t.Fatalf("%d devices left", n)
-	}
-}
-
-// A caller that names no vault credential at all is a caller bug, not a fact
-// about the vault, and is told so rather than being told the vault is unknown.
-func TestRegisteringNamesTheCredentialItIsAuthorisedBy(t *testing.T) {
-	h := claimedStore(t)
-	for _, bad := range []string{"", "not-hex", strings.Repeat("a", 63)} {
-		err := h.Store.RegisterDevice("v1", "device-one", "laptop", hashA, bad, 1000)
-		if !errors.Is(err, ErrBadEntry) {
-			t.Fatalf("vault hash %q returned %v, want ErrBadEntry", bad, err)
-		}
-	}
-	if n := len(ids(t, h, "v1")); n != 0 {
-		t.Fatalf("%d devices after registrations that named no credential", n)
-	}
-}
-
 // I2. A rotted registry row is one device locked out with "not authorised" and
 // nothing anywhere that ever says the registry is unsound.
 //
@@ -975,14 +793,14 @@ func TestRegisteringNamesTheCredentialItIsAuthorisedBy(t *testing.T) {
 // tried to connect. These are the same predicates the writes use, so a row
 // that would be refused today is a fault however it came to be there.
 func TestDeepVerifyDecodesTheRegistry(t *testing.T) {
-	h := claimedStore(t)
+	h := newTestStore(t)
 	h.file(t, "note.md", "content")
 	if err := h.RegisterDevice("v1", "sound", "laptop", hashA, 1000); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.AddInvite("v1", "AAAAAAAAAAAAAAAAAAAAAA", sealed1, 9000, 1000); err != nil {
-		t.Fatal(err)
-	}
+	inv := mint(t, h, "v1", 9000, 1000)
+	row := `invite "` + inv.ID + `"`
+	where := ` WHERE id = '` + inv.ID + `'`
 
 	// Clean, and the numbers say what was opened rather than only that nothing
 	// was wrong with it (rule 8): one chunk reference, one device, one invite.
@@ -1042,25 +860,37 @@ func TestDeepVerifyDecodesTheRegistry(t *testing.T) {
 			`INSERT INTO devices (vault_id, device_id, name, auth_hash, created_at, last_seen)
 			 VALUES ('ghost', 'stray', 'phone', '` + hashB + `', 1000, 0)`,
 			`DELETE FROM devices WHERE vault_id = 'ghost'`,
-			"novault", `device "stray"`, "not a vault a device row can be registered onto",
+			"novault", `device "stray"`, "names a vault this database does not hold",
 		},
 		{
-			"an invite whose sealed data key is gone",
-			`UPDATE invites SET sealed = '' WHERE invite = 'AAAAAAAAAAAAAAAAAAAAAA'`,
-			`UPDATE invites SET sealed = '` + sealed1 + `' WHERE invite = 'AAAAAAAAAAAAAAAAAAAAAA'`,
-			"badinvite", `invite "AAAAAAAAAAAAAAAAAAAAAA"`, "hand a device nothing",
+			"an invite whose token hash lost most of itself",
+			`UPDATE invites SET token_hash = '0123'` + where,
+			`UPDATE invites SET token_hash = '` + HashToken(inv.Token) + `'` + where,
+			"badinvite", row, "nothing can ever redeem it",
 		},
 		{
 			"an invite that expires at a time nothing could have issued it with",
-			`UPDATE invites SET expires_at = 0 WHERE invite = 'AAAAAAAAAAAAAAAAAAAAAA'`,
-			`UPDATE invites SET expires_at = 9000 WHERE invite = 'AAAAAAAAAAAAAAAAAAAAAA'`,
-			"badinvite", `invite "AAAAAAAAAAAAAAAAAAAAAA"`, "not a time",
+			`UPDATE invites SET expires_at = 0` + where,
+			`UPDATE invites SET expires_at = 9000` + where,
+			"badinvite", row, "not a time",
 		},
 		{
-			"an invite that is neither spent nor unspent",
-			`UPDATE invites SET used = 7 WHERE invite = 'AAAAAAAAAAAAAAAAAAAAAA'`,
-			`UPDATE invites SET used = 0 WHERE invite = 'AAAAAAAAAAAAAAAAAAAAAA'`,
-			"badinvite", `invite "AAAAAAAAAAAAAAAAAAAAAA"`, "spent or it is not",
+			"an invite marked spent without saying by whom",
+			`UPDATE invites SET used_at = 1500` + where,
+			`UPDATE invites SET used_at = NULL` + where,
+			"badinvite", row, "without saying by whom",
+		},
+		{
+			"an invite cancelled and spent at once",
+			`UPDATE invites SET used_at = 1500, used_by = 'sound', cancelled_at = 1500` + where,
+			`UPDATE invites SET used_at = NULL, used_by = NULL, cancelled_at = NULL` + where,
+			"badinvite", row, "cancelled and spent at once",
+		},
+		{
+			"an invite issued by a device id that cannot be one",
+			`UPDATE invites SET issued_by = 'not base64!'` + where,
+			`UPDATE invites SET issued_by = NULL` + where,
+			"badinvite", row, "impossible device id",
 		},
 	} {
 		t.Run(c.what, func(t *testing.T) {

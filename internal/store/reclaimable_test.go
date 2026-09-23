@@ -45,7 +45,7 @@ func TestReclaimablePredictsExactlyWhatAPurgeThenFrees(t *testing.T) {
 	h.file(t, "att.bin", "part one ", "part two ", "part four!")
 	// A deleted path whose earlier content version a purge drops.
 	h.file(t, "gone.md", "about to go")
-	if _, err := h.AppendEntry("v1", Entry{Path: "gone.md", Deleted: true, MTime: 20, Mac: testMac}); err != nil {
+	if _, err := h.AppendEntry("v1", Entry{Path: "gone.md", Deleted: true, MTime: 20}); err != nil {
 		t.Fatalf("append deletion: %v", err)
 	}
 	// An orphan: a body uploaded by a push whose entry never committed. A

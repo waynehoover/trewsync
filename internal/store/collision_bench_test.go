@@ -25,7 +25,7 @@ func BenchmarkABatchOfNewNotes(b *testing.B) {
 		entries := make([]Entry, 256)
 		for k := range entries {
 			entries[k] = Entry{Path: fmt.Sprintf("area-%d/project-%d/notes/note-%d.md", n%7, n%31, n),
-				Mac: testMac, MTime: 1}
+				MTime: 1}
 			n++
 		}
 		if _, err := st.AppendMany("v1", entries, make([]int64, 256), make([]int64, 256)); err != nil {

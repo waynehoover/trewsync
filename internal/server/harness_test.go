@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -25,15 +25,7 @@ import (
 	"github.com/waynehoover/telimus/internal/wire"
 )
 
-// A mac of the right shape, standing in for a real writer's. The server holds
-// no key and checks only that an entry carries one, because an entry nothing can
-// authenticate is refused by every reader for ever.
-const testMac = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
-const (
-	testVault = "v1"
-	testToken = "correct-horse-battery-staple"
-)
+const testVault = "v1"
 
 type rig struct {
 	t    *testing.T
@@ -41,37 +33,24 @@ type rig struct {
 	st   *store.Store
 	http *httptest.Server
 	url  string
+	// dir is the data directory the store is in.
+	dir string
 
-	// devices memoises the row each named client syncs as. Protocol 4 syncs
-	// under a device's own credential, so "a client" is a registered row plus
-	// the key its hash was made from, and two clients dialled under one name
-	// are deliberately one device with two connections: several tests want
-	// more peers than a vault may have devices, and a device with two sockets
-	// is a thing that happens anyway.
+	// devices memoises the row each named client syncs as. A client is a
+	// registered row plus the token its hash was made from, and two clients
+	// dialled under one name are deliberately one device with two
+	// connections: several tests want more peers than they want devices, and
+	// a device with two sockets is a thing that happens anyway.
 	devMu   sync.Mutex
 	devices map[string]string // client name -> device id
 }
 
-func newRig(t *testing.T) *rig { return newRigWith(t, nil) }
-
-// newRigDerived is a rig whose authenticator is the real one: a bootstrap token
-// claims the vault, and only the claimed key opens it afterwards. testToken is
-// the bootstrap.
-//
-// Its clock is the rig's, so a test that moves r.srv.now moves invite expiry
-// with it.
-func newRigDerived(t *testing.T) *rig {
-	var r *rig
-	r = newRigWith(t, func(st *store.Store) Authenticator {
-		return DerivedAuth(st, testVault, testToken, func() int64 { return r.srv.now().UnixMilli() })
-	})
-	return r
-}
-
-func newRigWith(t *testing.T, auth func(*store.Store) Authenticator) *rig {
+// newRig is a server on a fresh store with the test vault in it.
+func newRig(t *testing.T) *rig {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	dbPath, chunkDir := store.DataDir(dir)
+	st, err := store.Open(dbPath, chunkDir)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -84,22 +63,12 @@ func newRigWith(t *testing.T, auth func(*store.Store) Authenticator) *rig {
 		out = os.Stderr
 	}
 	log := slog.New(slog.NewTextHandler(out, nil))
-	a := StaticTokens(map[string]string{testVault: testToken})
-	if auth != nil {
-		a = auth(st)
-	}
-	srv := New(st, a, log)
+	srv := New(st, log)
 
-	// A device row needs a claimed vault, and StaticTokens claims nothing: it
-	// is a token map, and the vault's auth_hash was never part of how it
-	// authenticated. The rig claims the vault so that the default rigs have
-	// somewhere to register devices, which is the state every vault a real
-	// device connects to is in. A rig with its own authenticator is left
-	// unclaimed, because claiming is what those tests are about.
-	if auth == nil {
-		if ok, err := st.ClaimVault(testVault, hashOf(testToken), testWrapped, 1); err != nil || !ok {
-			t.Fatalf("claiming the test vault: ok=%v err=%v", ok, err)
-		}
+	// A device row and an invite both need the vault to exist, which is the
+	// state `serve` leaves every vault it serves in.
+	if err := st.EnsureVault(testVault, 1); err != nil {
+		t.Fatalf("creating the test vault: %v", err)
 	}
 
 	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -113,14 +82,33 @@ func newRigWith(t *testing.T, auth func(*store.Store) Authenticator) *rig {
 	}))
 	t.Cleanup(hs.Close)
 
-	return &rig{t: t, srv: srv, st: st, http: hs,
+	return &rig{t: t, srv: srv, st: st, http: hs, dir: dir,
 		url: "ws" + strings.TrimPrefix(hs.URL, "http"), devices: map[string]string{}}
 }
 
-// deviceKey is the auth key the rig gives the device called name. Long enough
-// to pass MinClaimLength, so the same value works for a register over the wire
-// as for a row seeded straight into the store.
-func deviceKey(name string) string { return "device-auth-key-for-" + name + "-000000000000" }
+// deviceToken is the 32-byte credential the rig gives the device called name:
+// the same bytes for the same name every time, and its wire spelling, which is
+// what a hello carries.
+func deviceToken(name string) (raw []byte, onWire string) {
+	sum := sha256.Sum256([]byte("device-token-for-" + name))
+	return sum[:], store.EncodeToken(sum[:])
+}
+
+// deviceKey is the wire spelling of the named device's token.
+func deviceKey(name string) string {
+	_, key := deviceToken(name)
+	return key
+}
+
+// hashOf is what the store keeps for a device token given in its wire
+// spelling. A string that is not one is hashed as it stands, which is what a
+// hello offering it is compared as, so it matches nothing.
+func hashOf(key string) string {
+	if raw, ok := store.DecodeToken(key, store.DeviceTokenBytes); ok {
+		return store.HashToken(raw)
+	}
+	return store.HashToken([]byte(key))
+}
 
 // deviceID is a base64url id for a client name, since a device id is bounded
 // and base64url and a test name is neither.
@@ -139,30 +127,62 @@ func deviceID(name string) string {
 }
 
 // device registers the row the named client syncs as, once, and returns its id
-// and key.
+// and the wire spelling of its token.
 //
 // Seeded straight through the store rather than over the wire, the way r.seed
 // puts an entry there: what a test wants is a device that exists, and making
-// every one of them redeem the registration handshake first would put the
-// registration path inside every unrelated test.
+// every one of them redeem an invite first would put the redemption path
+// inside every unrelated test. The tests about redemption redeem.
 func (r *rig) device(name string) (id, key string) {
 	r.t.Helper()
 	r.devMu.Lock()
 	defer r.devMu.Unlock()
-	id, key = deviceID(name), deviceKey(name)
+	raw, key := deviceToken(name)
+	id = deviceID(name)
 	if _, done := r.devices[name]; done {
 		return id, key
 	}
-	vaultHash, err := r.st.AuthHash(testVault)
-	if err != nil || vaultHash == "" {
-		r.t.Fatalf("the test vault is not claimed, so no device can be registered: %q %v", vaultHash, err)
-	}
-	err = r.st.RegisterDevice(testVault, id, name, hashOf(key), vaultHash, 1)
+	err := r.st.RegisterDevice(testVault, id, name, store.HashToken(raw), 1)
 	if err != nil && !errors.Is(err, store.ErrDeviceExists) {
 		r.t.Fatalf("registering device %q: %v", name, err)
 	}
 	r.devices[name] = id
 	return id, key
+}
+
+// invite mints an invite on the test vault through the store, as `telimus
+// invite` on the server would, living ttl from the rig's clock.
+func (r *rig) invite(ttl time.Duration) store.NewInvite {
+	r.t.Helper()
+	now := r.srv.now()
+	expires := now.Add(ttl).UnixMilli()
+	inv, err := r.st.CreateInvite(testVault, "", "", &expires, now.UnixMilli())
+	if err != nil {
+		r.t.Fatalf("minting an invite: %v", err)
+	}
+	return inv
+}
+
+// redeemHello is the hello a device joining with an invite sends: the invite
+// token, and the device id and token it has chosen and will connect with.
+func redeemHello(invite []byte, name string) wire.In {
+	return wire.In{
+		Op: "hello", Vault: testVault, Device: name,
+		Invite: store.EncodeToken(invite), DeviceID: deviceID(name), Token: deviceKey(name),
+	}
+}
+
+// redeem joins the named device with the invite over this connection, which
+// then closes, as the protocol says it does.
+func (c *client) redeem(invite []byte) wire.Redeemed {
+	c.t.Helper()
+	c.sendJSON(redeemHello(invite, c.name))
+	var got wire.Redeemed
+	c.recvInto("redeemed", &got)
+	if got.DeviceID != deviceID(c.name) {
+		c.t.Fatalf("%s: redeemed names device %q, not the one that asked", c.name, got.DeviceID)
+	}
+	return got
 }
 
 // incompressible is n bytes that deflate will not shrink, the same n bytes for
@@ -197,7 +217,7 @@ func (r *rig) seed(path string, bodies ...string) store.Entry {
 	if err := r.st.EnsureVault(testVault, 1); err != nil {
 		r.t.Fatalf("ensure vault: %v", err)
 	}
-	e := store.Entry{Path: path, Size: int64(size), MTime: 1, Device: "seed", Chunks: names, Mac: testMac}
+	e := store.Entry{Path: path, Size: int64(size), MTime: 1, Device: "seed", Chunks: names}
 	uid, err := r.st.AppendEntry(testVault, e)
 	if err != nil {
 		r.t.Fatalf("seed append: %v", err)
@@ -526,38 +546,17 @@ func (c *client) expectErr(code string) string {
 	return msg
 }
 
-// vaultHello builds a hello offering the *vault's* credential and no deviceId,
-// which since protocol 4 opens a registrar session: it may register a device
-// and rotate the secret, and may not sync. This is the recovery key's hello.
+// deviceHello builds a hello for this client's own registered device, which is
+// what a hello has to be to sync.
 //
 // Proto is left zero so that sendJSON fills in the client's own, and the id
 // likewise.
-func vaultHello(vault, token, device string, cursor int64) wire.In {
-	return wire.In{
-		Op: "hello", Crypto: wire.Crypto,
-		Vault: vault, Token: token, Device: device, Cursor: cursor,
-	}
-}
-
-// deviceHello builds a hello for this client's own registered device, which is
-// what a hello has to be to sync.
 func (c *client) deviceHello(cursor int64) wire.In {
 	c.t.Helper()
 	id, key := c.rig.device(c.name)
 	return wire.In{
-		Op: "hello", Crypto: wire.Crypto,
-		Vault: testVault, Token: key, DeviceID: id, Device: c.name, Cursor: cursor,
+		Op: "hello", Vault: testVault, Token: key, DeviceID: id, Device: c.name, Cursor: cursor,
 	}
-}
-
-// registrar performs a handshake with the vault credential and returns the
-// registrar frame.
-func (c *client) registrar() wire.Registrar {
-	c.t.Helper()
-	c.sendJSON(vaultHello(testVault, testToken, c.name, 0))
-	var got wire.Registrar
-	c.recvInto("registrar", &got)
-	return got
 }
 
 // hello performs the handshake and drains catch-up, returning the ready frame
@@ -632,13 +631,13 @@ func (c *client) drainBatches() []wire.Batch {
 	return out
 }
 
-// put runs a whole put and returns the assigned uid. bodies are the plaintext
-// stand-ins for encrypted chunks; the server never inspects them.
+// put runs a whole put and returns the assigned uid. bodies are the chunks,
+// named by their hash as a client names them.
 func (c *client) put(path string, bodies ...string) int64 {
 	c.t.Helper()
 	names, size := chunkNames(bodies)
 	c.sendJSON(wire.In{
-		Op: "put", Path: path, Chunks: names, Mac: testMac, Base: c.head(path),
+		Op: "put", Path: path, Chunks: names, Base: c.head(path),
 		Meta: wire.PutMeta{Size: size, MTime: 5},
 	})
 

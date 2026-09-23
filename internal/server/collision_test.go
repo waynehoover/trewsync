@@ -18,7 +18,7 @@ func TestACollisionIsRefusedThroughASession(t *testing.T) {
 
 	for _, path := range []string{"notes/other.md", "Notes/idea.md", "NOTES/IDEA.md"} {
 		names, size := chunkNames([]string{"second"})
-		cl.sendJSON(wire.In{Op: "put", Path: path, Chunks: names, Mac: testMac,
+		cl.sendJSON(wire.In{Op: "put", Path: path, Chunks: names,
 			Meta: wire.PutMeta{Size: size, MTime: 2}})
 		msg := cl.expectErr(wire.CodeCollision)
 		if !strings.Contains(msg, "Notes") {
@@ -73,7 +73,7 @@ func TestACaseOnlyRenameIsNotACollision(t *testing.T) {
 
 	for _, name := range []string{"a.md", "b.md"} {
 		names, size := chunkNames([]string{name[:1]})
-		cl.sendJSON(wire.In{Op: "put", Path: "folder/" + name, Chunks: names, Mac: testMac,
+		cl.sendJSON(wire.In{Op: "put", Path: "folder/" + name, Chunks: names,
 			Meta: wire.PutMeta{Size: size, MTime: 3, Prev: "Folder/" + name}, PrevBase: cl.head("Folder/" + name)})
 		if m := cl.recv(); m["res"] != "have" {
 			t.Fatalf("a case-only rename of %s was answered %v", name, m)

@@ -54,16 +54,16 @@ func TestValidateRefusesExactlyTheFixturesPaths(t *testing.T) {
 			entry Entry
 			field string
 		}{
-			{Entry{Path: p, Mac: testMac, Size: 1, Chunks: []string{chunk}}, "path"},
-			{Entry{Path: p, Mac: testMac, Folder: true}, "path"},
-			{Entry{Path: p, Mac: testMac, Deleted: true}, "path"},
+			{Entry{Path: p, Size: 1, Chunks: []string{chunk}}, "path"},
+			{Entry{Path: p, Folder: true}, "path"},
+			{Entry{Path: p, Deleted: true}, "path"},
 		}
 		if p != "" {
 			// An empty prev is no rename, so that vector has no source to test.
 			kinds = append(kinds, struct {
 				entry Entry
 				field string
-			}{Entry{Path: "dest.md", Mac: testMac, Prev: p}, "prev"})
+			}{Entry{Path: "dest.md", Prev: p}, "prev"})
 		}
 		for _, k := range kinds {
 			err := k.entry.Validate()

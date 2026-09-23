@@ -151,7 +151,7 @@ wss://homelab.example.ts.net#TOKEN
    **I have written it down**.
 4. Wait for sync to finish.
 5. Use **Add another device → Create invite** for each additional device.
-   An invite works once and expires after ten minutes.
+   An invite works once and expires after one hour.
 
 The setup token claims the server once. It is not your recovery key. Once the
 vault is claimed, new devices join through invites or the recovery key.

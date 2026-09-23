@@ -8,18 +8,15 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/waynehoover/telimus/internal/store"
 	"github.com/waynehoover/telimus/internal/wire"
-	"sync/atomic"
 )
 
 const (
@@ -46,10 +43,11 @@ const (
 	// meets the bare disconnect. This bounds each session's incoming frame.
 	//
 	// Before hello nothing has been authenticated, so the limit is 64 KiB: a
-	// hello is a vault and device of 64 bytes each, a token, a claim of 43 and
-	// a wrapped key of at most 256, a few hundred bytes in all. An unauthenticated
-	// connection therefore cannot make the server allocate more than that, and
-	// MaxPreAuth bounds how many of them there can be (S19).
+	// hello is a vault and a device name of 64 bytes each, a device id of at
+	// most 64, a 43-character token, a 22-character invite and an epoch, a few
+	// hundred bytes in all. An unauthenticated connection therefore cannot make
+	// the server allocate more than that, and MaxPreAuth bounds how many of
+	// them there can be (S19).
 	ReadLimit      = 32 << 20
 	HelloReadLimit = 64 << 10
 
@@ -66,11 +64,14 @@ const (
 	ShutdownRetryAfter = 5 * time.Second
 
 	// DefaultInviteTTL is how long an invite lives when the issuing device does
-	// not say, and MaxInviteTTL the most it may ask for. Ten minutes is long
-	// enough to walk to the other device and short enough that an invite left
-	// in a chat is dead before anyone reads it; an hour is the ceiling for the
-	// same reason the client is not allowed to choose a day.
-	DefaultInviteTTL = 10 * time.Minute
+	// not say, and MaxInviteTTL the most a device may ask for (plan/protocol.md,
+	// "The invite string"). One hour for both: long enough to walk to the
+	// other device and pair it, and short enough that an invite left in a chat
+	// or a log is dead soon after. An invite token is a bearer credential for
+	// the whole vault, so a device is not allowed to mint a longer one; the
+	// operator can, with `telimus invite -ttl`, including one that never
+	// expires, on the server, where the choice is deliberate.
+	DefaultInviteTTL = time.Hour
 	MaxInviteTTL     = time.Hour
 
 	// WriteWait bounds one frame write, so a peer that stops reading is
@@ -133,68 +134,21 @@ const (
 	BatchSize = 200
 )
 
-// Credentials are what a device offers at hello.
-//
-// Token is what it is authenticating with. Claim is the auth key it wants the
-// vault to be bound to from now on, sent only while pairing the first device,
-// and ignored once a vault has been claimed. Wrapped travels with Claim: the
-// vault's data key, wrapped under the root secret, stored beside the hash.
-//
-// There is no invite here, and there was. An authenticator answers whether a
-// token opens a vault, and redeeming an invite is not that question: it spends
-// a single-use row and registers a device in one transaction. Leaving it here
-// meant a pluggable interface could be handed the one credential whose whole
-// point is that it is checked in the same statement that consumes it. See
-// Session.helloAsInvite.
-type Credentials struct {
-	VaultID string
-	Token   string
-	Claim   string
-	Wrapped string
-}
-
-// Grant is what a successful authentication says about how it succeeded.
-//
-// Bootstrap is true when the token was the server's first-run token, which is
-// the one credential that is not derived from the root secret. A session that
-// authenticated that way may not rotate the vault: rotation retires the old
-// root, and a caller that never proved it held the old one has no business
-// choosing the new.
-//
-// AuthHash is the vault's stored hash that this credential matched, or the one
-// a claim just bound the vault to. The session keeps it and rotation swaps
-// against it, so a device can only replace the credential it proved it holds;
-// see store.Rotate.
-type Grant struct {
-	Bootstrap bool
-	AuthHash  string
-}
-
-// Authenticator decides whether a token may use a vault.
-//
-// It returns an error so the reason can be logged, but the reason never reaches
-// the wire: every failure is reported to the client as CodeAuth, because
-// distinguishing "no such vault" from "wrong token" tells an attacker which
-// half to keep guessing.
-type Authenticator func(c Credentials) (Grant, error)
-
 // Server is the protocol handler. One per process; sessions are per connection.
 type Server struct {
-	st   *store.Store
-	hub  *Hub
-	auth Authenticator
-	log  *slog.Logger
+	st  *store.Store
+	hub *Hub
+	log *slog.Logger
 
 	// servedVault is the one vault this server answers for, or empty when it
 	// has not been told (which is every test that builds a server directly).
 	//
-	// `DerivedAuth` closes over the same name and enforces it, and for a while
-	// that was taken to be the whole of the rule. It is not: it only sees the
-	// registrar's route. `helloAsDevice` and `helloAsInvite` look a vault up
-	// by the name the caller sent, so a device registered to another vault in
-	// the same store connected to it while this server was configured to serve
-	// one name and had logged every other as "not served" (F19). Scope, not
-	// access: the caller still needs that vault's own credentials.
+	// Both hello routes enforce it before they look anything up by the name
+	// the caller sent. Basalt enforced it on one route and not the other, so a
+	// device registered to another vault in the same store connected to it
+	// while this server was configured to serve one name and had logged every
+	// other as "not served" (F19). Scope, not access: the caller still needs
+	// that vault's own credentials.
 	servedVault string
 
 	// version is what `ready.serverVersion` says and what the startup line
@@ -258,33 +212,20 @@ type Server struct {
 	afterReplayBatch func(n int)
 	afterReplay      func()
 
-	// beforeJoin runs inside a hello, after the vault's key material has been
-	// read and before the session joins the fan-out, and is nil in every
-	// non-test build. It exists for the same reason as the two above: the
-	// window between authenticating and joining is a few microseconds wide, and
-	// a rotation landing in it used to leave a session holding a retired
-	// credential serving happily. A test that tried to hit it by timing would
-	// be a test that passes when the machine is busy.
+	// beforePublish runs inside a device's hello, after its token has been
+	// checked and before the fields it establishes are published to the other
+	// goroutines that read them, and is nil in every non-test build. A test
+	// uses it to kill the connection at that moment, which -race then checks
+	// is safe.
+	beforePublish func()
+
+	// beforeJoin runs inside a hello, after the device's token has been checked
+	// and before the session joins the fan-out, and is nil in every non-test
+	// build. It exists for the same reason as the two above: the window between
+	// authenticating and joining is a few microseconds wide, and a revoke
+	// landing in it must still end the session. A test that tried to hit it by
+	// timing would be a test that passes when the machine is busy.
 	beforeJoin func()
-
-	// beforeRegister runs inside a register, just before the store is asked to
-	// insert the row, and is nil in every non-test build. It is the register's
-	// beforeRotate: how a test lands a rotation inside the window between a
-	// registrar authenticating and its registration committing, which is the
-	// window in which a retired root would otherwise buy itself a permanent
-	// device.
-	beforeRegister func()
-
-	// beforeRegistrarPublish pauses a registrar hello after validating the
-	// vault keys but before publishing the session to rotation's eviction list.
-	beforeRegistrarPublish func()
-
-	// beforeRotate runs inside a rotate, just before the store is asked to swap
-	// the credential, and is nil in every non-test build. It is how a test
-	// parks one device's rotation inside the store call while another device's
-	// rotation commits underneath it, which is the sequence that let a revoked
-	// device take the vault back.
-	beforeRotate func()
 
 	// afterFlush runs once flushPending has released its lock, and is nil in
 	// every non-test build. By then caught-up is already queued, so a broadcast
@@ -304,12 +245,18 @@ type Server struct {
 	// test-only race reaches CI and stays.
 	beforePing atomic.Pointer[func()]
 
-	// beforeEvict runs at the top of each eviction a rotation causes, and is
-	// nil in every non-test build. A test uses it to see that the evictions
+	// beforeEvict runs at the top of each eviction a revoke causes, and is nil
+	// in every non-test build. A test uses it to see that the evictions
 	// overlap, which is the whole of what parallelising them buys and is not
 	// otherwise observable: how long an eviction takes depends on whether the
 	// peer is reading, which a test cannot arrange honestly.
 	beforeEvict func()
+
+	// afterRevoke runs once a revoke has committed and taken the device's
+	// sessions out of the fan-out, while it still holds commitMu, and is nil in
+	// every non-test build. A test uses it to commit from another device at
+	// the one moment a revoked session could still have been sent something.
+	afterRevoke func()
 
 	// beforeAppend runs just before an entry is committed, and is nil in every
 	// non-test build. An error from it stands in for the database failing the
@@ -347,8 +294,10 @@ type Server struct {
 	// ordering reason, so this adds a fan-out of a few non-blocking channel
 	// sends to a section that was serial anyway.
 	// Credential retirement and registry mutations use this same lock, so a
-	// session's credential check remains valid until its mutation commits.
-	// Socket replies and eviction are kept outside this section.
+	// session's credential check remains valid until its mutation commits, and
+	// a revoke takes the device's sessions out of the fan-out before it lets
+	// go, so no commit after it can reach them (PLAN.md section 2.3.1). Socket
+	// replies and eviction are kept outside this section.
 	commitMu sync.Mutex
 
 	// sessions is every connection Handle is running, joined to a vault or not,
@@ -423,28 +372,6 @@ func (s *Server) forget(sess *Session) {
 		sess.counted = false
 		s.preAuth--
 	}
-}
-
-// registrarsOn is every session on this vault that authenticated with the
-// vault's own credential, except one, for a rotation to close.
-//
-// The hub cannot answer this: a registrar joins no vault's fan-out, because
-// there is nothing it may be sent. The session list can, and it is the same
-// list Shutdown fans its notices out over.
-//
-// Skip sessions still in the pre-auth count before reading their fields.
-// authenticated publishes registrar and vaultID under this mutex; an admitted
-// session can still be initializing both until that publication happens.
-func (s *Server) registrarsOn(vaultID string, except *Session) []*Session {
-	s.sessMu.Lock()
-	defer s.sessMu.Unlock()
-	var out []*Session
-	for sess := range s.sessions {
-		if sess != except && !sess.counted && sess.registrar && sess.vaultID == vaultID {
-			out = append(out, sess)
-		}
-	}
-	return out
 }
 
 func (s *Server) Health(ctx context.Context) store.Health {
@@ -544,12 +471,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 }
 
-func New(st *store.Store, auth Authenticator, log *slog.Logger) *Server {
+// New is a server for the store, logging to log (the default logger when nil).
+func New(st *store.Store, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Server{
-		st: st, hub: NewHub(), auth: auth, log: log,
+		st: st, hub: NewHub(), log: log,
 		perFileMax: store.DefaultPerFileMax,
 		version:    "dev",
 		pingEvery:  PingInterval, pongWait: PongWait, writeWait: WriteWait,
@@ -560,8 +488,8 @@ func New(st *store.Store, auth Authenticator, log *slog.Logger) *Server {
 }
 
 // Serves names the one vault this server answers for, so every hello route
-// enforces it and not only the one that claims. Empty means unrestricted,
-// which is what a test that builds a server directly gets.
+// enforces it. Empty means unrestricted, which is what a test that builds a
+// server directly gets.
 func (s *Server) Serves(vaultID string) { s.servedVault = vaultID }
 
 // refuseUnservedVault is the check every hello route makes before it looks a
@@ -613,7 +541,7 @@ func (s *Server) SetPerFileMax(max int64) {
 //
 // Clamped to what the store can hold, because a limit above that would be
 // advertised, attempted, and then refused by Validate: the client would have
-// read and sealed the file to find out. There is no floor beyond one byte: a
+// read and chunked the file to find out. There is no floor beyond one byte: a
 // ceiling set low only refuses files, and refusing is the safe direction.
 //
 // Exported because `telimus service` writes the flag into a unit and has to
@@ -660,140 +588,92 @@ func (s *Server) Store() *store.Store { return s.st }
 // one that is not advertised, is how a client ends up retrying a put that can
 // never succeed.
 //
-// wrapped is the vault's data key, which every claimed vault has, so a client
-// always learns it here. The protocol range is sent whole even though it is one
-// version wide, because that is what a client names when the next bump refuses
-// it; see wire.Proto.
-func (s *Server) ready(id, cursor int64, wrapped string) wire.Ready {
+// The epoch is the store's, so a client can tell a history it has followed
+// from one that has been restored under it. The protocol range is sent whole
+// even though it is one version wide, because that is what a client names when
+// the next bump refuses it; see wire.Proto.
+func (s *Server) ready(id, cursor int64) wire.Ready {
 	return wire.Ready{
 		Res:           "ready",
 		ID:            id,
 		Proto:         wire.Proto,
 		MinProto:      wire.MinProto,
 		ServerVersion: s.version,
+		Epoch:         s.st.Epoch(),
 		Cursor:        cursor,
 		PerFileMax:    s.perFileMax,
 		ChunkMax:      s.st.Chunks().Max(),
 		MaxChunks:     store.MaxChunksPerEntry,
 		MaxBatchBytes: s.maxBatchBytes,
 		MaxFetchBytes: s.maxFetchBytes,
-		Wrapped:       wrapped,
 	}
 }
 
-/* ---------------------------------------------------------------- *
- * One secret
- * ---------------------------------------------------------------- */
+// Revocation is what a revoke did, for the reply and the log.
+type Revocation struct {
+	// Closed is how many of the device's sessions were ended.
+	Closed int
+	// InvitesCancelled is how many invites the device had issued that could
+	// still have been redeemed; see store.RevokeDevice.
+	InvitesCancelled int
+}
 
-// MinClaimLength is the shortest auth key a vault may be bound to.
+// revoke deletes a device's row, cancels the invites it issued, and ends
+// everything that device has open.
 //
-// A derived key is 43 characters of base64url. Anything much shorter came from
-// a client that is not deriving it, and binding a vault to a guessable
-// credential is worse than refusing to bind it at all: the refusal is visible
-// and the weak key is not.
-const MinClaimLength = 32
-
-// DerivedAuth authenticates against a key the client derives from the vault's
-// root secret, with a one-time bootstrap token for the very first device.
+// A revoke means three things (PLAN.md section 2.3.1): no later mutation from
+// the device commits, no mutation it has in flight completes, and no live
+// session of it is sent anything more. The first two are the row being gone,
+// checked under commitMu by every mutation (see currentCredential). The third
+// is here: the device's sessions leave the fan-out inside the same critical
+// section as the delete, so there is no moment after the revoke commits and
+// before its sessions close at which a commit from another device can be
+// broadcast to them. They are marked revoked too, so a frame already queued,
+// a catch-up still being written or a reply to a request they sent a moment
+// ago is dropped at the socket, and the only thing such a connection hears
+// after the revoke is the notice that it was revoked.
 //
-// The point is that there is one secret rather than two. Before this, a vault
-// had a root secret that the devices shared and a server token that had nothing
-// to do with it, and a pairing string had to carry both. The auth key is now
-// another branch of the same HKDF schedule the root produces, so holding the
-// root secret is what it means to own the vault.
+// origin is the session asking, or nil when the operator asks through the
+// control socket. A session revoking its own device keeps its connection just
+// long enough to hear the reply, and leaves the fan-out with the rest.
 //
-// Since protocol 4 that is ownership rather than access: this key registers a
-// device, rewraps the data key and administers the device list, and it may not
-// sync. What a device connects with is its own key, checked against its own
-// row; see session.go's three hello branches.
-//
-// The server stores only sha256 of that key. It never needs the key itself: it
-// checks an offered one, and a server that held the credential could write to
-// the vault it exists only to keep. A stolen disk already yields every byte of
-// ciphertext; it should not also yield the ability to add to it.
-//
-// The bootstrap token is how a vault gets claimed in the first place. The
-// server prints one on first run, the first device authenticates with it and
-// sends the auth key it wants the vault bound to, and from then on the
-// bootstrap opens nothing. Trust on first connection would be simpler and would
-// mean whoever reached the port first owned the vault.
-//
-// # Why the hash is a bare, unsalted SHA-256, and must stay one
-//
-// The auth key is 256 random bits derived by HKDF from a random root. There is
-// nothing to guess, so there is nothing for a salt to defeat and nothing for a
-// slow hash to slow down: bcrypt or argon2 here would burn a core on every
-// hello for no security and block the accept loop while doing it. That
-// reasoning holds only because the input is random and long. It must never be
-// reused for anything a person chose, where a fast unsalted hash is exactly
-// the wrong tool (I12).
-func DerivedAuth(st *store.Store, allowedVault, bootstrap string, now func() int64) Authenticator {
-	return func(c Credentials) (Grant, error) {
-		// Exactly one vault is authorised. A typo in the vault name fails here
-		// instead of quietly creating a second, empty vault that reports itself
-		// as fully synced, which is what claiming does if it is allowed to
-		// invent the vault it claims.
-		if c.VaultID != allowedVault {
-			return Grant{}, fmt.Errorf("this server serves %q, not %q", allowedVault, c.VaultID)
+// The notices are sent and the sockets closed after the lock is released, in
+// parallel, because each peer is given a moment to read its notice and eight
+// of them in series would spend a second each.
+func (s *Server) revoke(vaultID, deviceID string, origin *Session) (Revocation, error) {
+	s.commitMu.Lock()
+	if origin != nil {
+		if err := origin.currentCredential(); err != nil {
+			s.commitMu.Unlock()
+			return Revocation{}, err
 		}
-		if bootstrap == "" {
-			// Otherwise an empty token would match an empty bootstrap and the
-			// first caller would claim the vault with nothing at all.
-			return Grant{}, errors.New("this server has no bootstrap token, so no vault can be claimed")
-		}
-
-		hash, _, _, err := st.VaultKeys(c.VaultID)
-		if err != nil {
-			return Grant{}, fmt.Errorf("reading the vault's auth hash: %w", err)
-		}
-
-		if hash != "" {
-			// Constant time, and over the hashes rather than the keys, so the
-			// comparison is a fixed 32 bytes whatever was offered.
-			offered := sha256.Sum256([]byte(c.Token))
-			want, decodeErr := hex.DecodeString(hash)
-			if decodeErr != nil {
-				return Grant{}, fmt.Errorf("vault %q has an unreadable auth hash", c.VaultID)
-			}
-			if subtle.ConstantTimeCompare(offered[:], want) != 1 {
-				return Grant{}, errors.New("auth key mismatch")
-			}
-			// The hash this credential matched travels with the grant, because
-			// it is what a later rotation compare-and-swaps against.
-			return Grant{AuthHash: hash}, nil
-		}
-
-		// Unclaimed. The bootstrap token is the only thing that opens it, and
-		// only in exchange for the key that replaces it.
-		if subtle.ConstantTimeCompare([]byte(c.Token), []byte(bootstrap)) != 1 {
-			return Grant{}, errors.New("bootstrap token mismatch")
-		}
-		if len(c.Claim) < MinClaimLength {
-			return Grant{}, fmt.Errorf(
-				"this vault has not been claimed, and the key offered to claim it with is %d characters, which is too few",
-				len(c.Claim))
-		}
-		// A vault is claimed with a data key. The session refuses a claim
-		// without a usable one before it ever reaches an authenticator, and
-		// this is the same rule at the layer that does the writing, so no
-		// authenticator can bind a vault whose content keys would derive from
-		// the root secret.
-		if !store.ValidWrapped(c.Wrapped) {
-			return Grant{}, fmt.Errorf(
-				"a vault is claimed with a data key, and the wrapped key offered with this claim is %d bytes and not base64url",
-				len(c.Wrapped))
-		}
-		claimed := sha256.Sum256([]byte(c.Claim))
-		claimedHash := hex.EncodeToString(claimed[:])
-		ok, err := st.ClaimVault(c.VaultID, claimedHash, c.Wrapped, now())
-		if err != nil {
-			return Grant{}, fmt.Errorf("claiming vault %q: %w", c.VaultID, err)
-		}
-		if !ok {
-			// Another device claimed it between the read and the write. Its key
-			// is the vault's key now, and this one is not it.
-			return Grant{}, errors.New("the vault was claimed by another device a moment ago")
-		}
-		return Grant{Bootstrap: true, AuthHash: claimedHash}, nil
 	}
+	cancelled, err := s.st.RevokeDevice(vaultID, deviceID, s.now().UnixMilli())
+	if err != nil {
+		s.commitMu.Unlock()
+		return Revocation{}, err
+	}
+	victims := s.hub.detach(vaultID, deviceID, origin)
+	for _, peer := range victims {
+		peer.revoked.Store(true)
+	}
+	if origin != nil && origin.deviceID == deviceID {
+		s.hub.leave(vaultID, origin)
+	}
+	if s.afterRevoke != nil {
+		s.afterRevoke()
+	}
+	s.commitMu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, peer := range victims {
+		wg.Add(1)
+		go func(peer *Session) {
+			defer wg.Done()
+			peer.evict("this device was revoked and may no longer sync this vault; "+
+				"pair it again with a new invite", errors.New("device revoked"))
+		}(peer)
+	}
+	wg.Wait()
+	return Revocation{Closed: len(victims), InvitesCancelled: cancelled}, nil
 }

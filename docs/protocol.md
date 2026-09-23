@@ -371,7 +371,7 @@ the invite key travels only in the user's string.
 
 The `basalt3i_` string encodes a version byte, identifier, invite key,
 length-prefixed server address and vault ID, and CRC-32. The default lifetime is
-ten minutes; the maximum is one hour. A device can issue invites; a registrar
+one hour, which is also the maximum. A device can issue invites; a registrar
 cannot. Either session can cancel an invite by ID.
 
 Redeeming at hello atomically spends the invite and inserts the new device row.

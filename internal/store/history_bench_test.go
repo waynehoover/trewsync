@@ -1,8 +1,6 @@
 package store
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -49,11 +47,6 @@ func buildVault(tb testing.TB, sh vaultShape) (*Store, string) {
 		tb.Fatal(err)
 	}
 
-	mac := func(s string) string {
-		sum := sha256.Sum256([]byte(s))
-		return hex.EncodeToString(sum[:])
-	}
-
 	// A real body per version, because AppendEntry checks that every chunk an
 	// entry names is present before it will commit it. One shared body per
 	// version index rather than one per row: the queries below group and count
@@ -72,7 +65,7 @@ func buildVault(tb testing.TB, sh vaultShape) (*Store, string) {
 		for v := range sh.versions {
 			e := Entry{
 				Path: path, Size: 400, CTime: 1000, MTime: int64(1000 + v),
-				Device: "a", Mac: mac(fmt.Sprintf("%s/%d", path, v)),
+				Device: "a",
 				Chunks: []string{bodies[v]},
 			}
 			if _, err := st.AppendEntry(vaultID, e); err != nil {
@@ -82,7 +75,7 @@ func buildVault(tb testing.TB, sh vaultShape) (*Store, string) {
 		if p < sh.deleted {
 			e := Entry{
 				Path: path, Deleted: true, CTime: 1000, MTime: 2000,
-				Device: "a", Mac: mac(path + "/gone"),
+				Device: "a",
 			}
 			if _, err := st.AppendEntry(vaultID, e); err != nil {
 				tb.Fatal(err)
