@@ -939,8 +939,8 @@ describe("concurrent edits, which is where notes get lost", () => {
  * single move. Under protocol 1 that is the only way a case-only rename can
  * reach the server at all: a create of `NOTE.md` beside a live `Note.md` is a
  * collision, and only a move whose two names fold alike is always allowed
- * (plan/protocol.md, "Paths"). What happens to a rename nobody reported is the
- * case after this one.
+ * (plan/protocol.md, "Paths"). A rename nobody reported is the describe after
+ * this one.
  */
 describe("a case-only rename on a receiving device", () => {
   async function scenario(others: number): Promise<{ b: Device; report: SyncReport }> {
@@ -988,59 +988,169 @@ describe("a case-only rename on a receiving device", () => {
     );
     expect(report.deletedLocally).toBe(0);
   }, 240_000);
+});
 
-  /**
-   * A case-only rename nothing reported: every rename the headless client
-   * makes, which finds them by scanning, and any the plugin was not told of.
-   * This is a data-loss bug, found by this conversion and reported with it,
-   * and pinned here rather than asserted as right, so that the fix fails this
-   * test and is read (the F11 and C-D1 pins below are the same arrangement).
-   *
-   * The scan sees a deletion of `Note.md` and a create of `NOTE.md`, and both
-   * go up in one putmany. The server refuses the create as a `collision` with
-   * the live `Note.md`, which is the path the same batch deletes: it judges
-   * each entry of a putmany against the store as it stood before the batch,
-   * so no order of the two entries gets past it. The deletion commits, and
-   * every other device applies it. The renaming device writes the new name
-   * off for good, citing a live file that no longer exists, and does not try
-   * again until the file changes. The note is on one device, stranded, and on
-   * no other device and not on the server (rule 3).
-   */
-  it("strands the new name when the rename is found by a scan (a pinned bug)", async () => {
+/**
+ * A case-only rename nothing reported, found by the scan: every rename the
+ * headless client makes, since it learns of renames only by scanning, and any
+ * the plugin was not told of.
+ *
+ * The scan sees a synced `Note.md` gone and a new `NOTE.md`. Sent as that, a
+ * deletion and a create, the create is refused as a `collision` with the live
+ * `Note.md`, the deletion commits, and every other device applies it, while
+ * the renaming device writes the new name off: the note on one device,
+ * stranded, and on no other device and not on the server (rule 3). Found
+ * moving these tests to protocol 1, where it was pinned before it was fixed.
+ * The pass now reads the pair as the rename it is and sends one move, which a
+ * protocol 1 server always takes for a case-only rename (plan/protocol.md,
+ * "Paths", collision rule 1).
+ *
+ * Checked on three devices: the one that renames, one whose disk folds case,
+ * as a Mac's does, and one whose disk keeps case apart, as Linux's does. The
+ * property is where the bytes end up on each of them, under which name.
+ */
+describe("a case-only rename found by a scan", () => {
+  async function three(): Promise<{ a: Device; b: Device; c: Device }> {
     await fresh();
-    const a = await device("a", undefined, new FoldingVault());
-    const b = await device("b", undefined, new FoldingVault());
-    const text = "the only copy of this text\n";
+    const a = await device("a", undefined, new CaseKeepingVault());
+    const b = await device("b", undefined, new AliasingVault());
+    const c = await device("c", undefined, new CaseKeepingVault());
+    return { a, b, c };
+  }
 
+  /** Every device syncs, each after hearing what the others committed. */
+  async function syncAll(...ds: Device[]): Promise<void> {
+    for (let round = 0; round < 3; round++) {
+      for (const d of ds) {
+        await receiveCommitted(d.transport);
+        await d.engine.sync();
+      }
+    }
+  }
+
+  /** Every file each device holds, by name, with its text. */
+  const files = (d: Device) => d.vault.snapshot();
+
+  /** What the entries that reached `d` said about `path`. */
+  const arrivals = (d: Device, path: string) =>
+    d.batches
+      .flatMap((b) => b.entries as { path: string; prev?: string; deleted?: boolean }[])
+      .filter((e) => e.path === path);
+
+  it("sends a note's new name as one move, so its bytes are everywhere under it", async () => {
+    const { a, b, c } = await three();
+    const text = "the only copy of this text\n";
     await a.vault.edit("Note.md", text);
-    await convergeBoth(a, b);
-    expect(b.vault.text("Note.md")).toBe(text);
+    await syncAll(a, b, c);
+    for (const d of [b, c]) expect(files(d), d.name).toEqual({ "Note.md": text });
 
     // Renamed on disk, and nothing tells the engine.
+    const bytes = await a.vault.read("Note.md");
     await a.vault.remove("Note.md");
-    await a.vault.edit("NOTE.md", text);
+    await a.vault.write("NOTE.md", bytes, { mtime: 2000, ctime: 1000 });
     const sent = await a.settle();
-    await receiveCommitted(b.transport);
-    const received = await b.engine.sync();
+    expect(sent.skippedPaths, `stranded: ${JSON.stringify(sent.needsAttention)}`).toEqual([]);
+    await syncAll(a, b, c);
 
-    // What must stay true whatever the fix: the device that renamed it still
-    // has the note.
-    expect(a.vault.text("NOTE.md")).toBe(text);
+    for (const d of [a, b, c]) {
+      expect(files(d), `${d.name} does not hold the note under its new name`).toEqual({
+        "NOTE.md": text,
+      });
+    }
+    // One move on the wire, from the old name, and no deletion beside it.
+    expect(arrivals(c, "NOTE.md").map((e) => e.prev)).toEqual(["Note.md"]);
+    expect(arrivals(c, "Note.md").filter((e) => e.deleted)).toEqual([]);
+    expect(await server.cli("cat", "-path", "NOTE.md")).toBe(text);
+    await expect(server.cli("cat", "-path", "Note.md")).rejects.toThrow(/deleted or renamed/);
+  }, 240_000);
 
-    // What is wrong, pinned. The new name was written off for a collision
-    // with a path that is no longer live...
-    expect(sent.skippedPaths).toContain("NOTE.md");
-    const why = sent.needsAttention.find((n) => n.path === "NOTE.md")?.why ?? "";
-    expect(why).toMatch(/^collision: /);
-    expect(why).toMatch(/Note\.md/);
-    // ...the server never received it...
-    await expect(
-      server.cli("cat", "-path", "NOTE.md"),
-      "the renamed note reached the server, which is the fix landing: assert it is on every device",
-    ).rejects.toThrow(/has never held/);
-    // ...and the other device deleted the only other copy.
-    expect(received.deletedLocally, "the other device kept the note: update this pin").toBe(1);
-    expect(b.vault.paths().filter((p) => p.toLowerCase() === "note.md")).toEqual([]);
+  it("carries an edit made with the rename, in the same move", async () => {
+    const { a, b, c } = await three();
+    await a.vault.edit("Note.md", "the only copy of this text\n");
+    await syncAll(a, b, c);
+
+    const edited = "the only copy of this text, and a line added while renaming it\n";
+    await a.vault.remove("Note.md");
+    await a.vault.edit("NOTE.md", edited, 3000);
+    const sent = await a.settle();
+    expect(sent.skippedPaths, `stranded: ${JSON.stringify(sent.needsAttention)}`).toEqual([]);
+    await syncAll(a, b, c);
+
+    for (const d of [a, b, c]) {
+      expect(files(d), `${d.name} does not hold the edited note`).toEqual({ "NOTE.md": edited });
+    }
+    expect(arrivals(c, "NOTE.md").map((e) => e.prev)).toEqual(["Note.md"]);
+    expect(await server.cli("cat", "-path", "NOTE.md")).toBe(edited);
+    await expect(server.cli("cat", "-path", "Note.md")).rejects.toThrow(/deleted or renamed/);
+  }, 240_000);
+
+  it("moves a folder whose case changed, and every file beneath it", async () => {
+    const { a, b, c } = await three();
+    const before = { "Dir/a.md": "first file\n", "Dir/sub/b.md": "second file\n" };
+    for (const [path, text] of Object.entries(before)) await a.vault.edit(path, text);
+    await syncAll(a, b, c);
+    for (const d of [b, c]) expect(files(d), d.name).toEqual(before);
+
+    // The folder renamed on disk, case only, the way a file manager does it:
+    // everything beneath goes with it and nothing tells the engine.
+    const after: Record<string, string> = {};
+    const held = new Map<string, Uint8Array>();
+    for (const path of Object.keys(before)) held.set(path, await a.vault.read(path));
+    for (const path of Object.keys(before)) await a.vault.remove(path);
+    await a.vault.remove("Dir/sub");
+    await a.vault.remove("Dir");
+    for (const [path, bytes] of held) {
+      const moved = path.replace(/^Dir\//, "dir/");
+      await a.vault.write(moved, bytes, { mtime: 2000, ctime: 1000 });
+      after[moved] = before[path as keyof typeof before];
+    }
+    const sent = await a.settle();
+    expect(sent.skippedPaths, `stranded: ${JSON.stringify(sent.needsAttention)}`).toEqual([]);
+    await syncAll(a, b, c);
+
+    for (const d of [a, b, c]) {
+      expect(files(d), `${d.name} does not hold the files under the new name`).toEqual(after);
+    }
+    // Each file travelled as a move from its old name.
+    for (const path of Object.keys(after)) {
+      expect(arrivals(c, path).map((e) => e.prev)).toEqual([path.replace(/^dir\//, "Dir/")]);
+      expect(await server.cli("cat", "-path", path)).toBe(after[path]);
+    }
+    await expect(server.cli("cat", "-path", "Dir/a.md")).rejects.toThrow(/deleted or renamed/);
+    // And the folders are this spelling on the server too, so a note made
+    // under the folder afterwards is taken rather than refused as a clash
+    // with the old spelling.
+    await a.vault.edit("dir/sub/new.md", "made after the rename\n", 4000);
+    const later = await a.settle();
+    expect(later.skippedPaths, `stranded: ${JSON.stringify(later.needsAttention)}`).toEqual([]);
+    expect(await server.cli("cat", "-path", "dir/sub/new.md")).toBe("made after the rename\n");
+  }, 240_000);
+
+  /**
+   * The same folder rename, reported the way Obsidian reports one: one event,
+   * for the folder. Its files always moved; its own entry went up as a new
+   * folder beside the old spelling, which never goes away because folder
+   * deletions do not travel, and was refused as a collision and left stranded.
+   * A folder whose name changed only in case now goes up as a move too.
+   */
+  it("moves a reported folder rename that changed only case, folder entry and all", async () => {
+    const { a, b, c } = await three();
+    await a.vault.edit("Dir/a.md", "first file\n");
+    await syncAll(a, b, c);
+
+    const bytes = await a.vault.read("Dir/a.md");
+    await a.vault.remove("Dir/a.md");
+    await a.vault.remove("Dir");
+    await a.vault.write("dir/a.md", bytes, { mtime: 2000, ctime: 1000 });
+    a.engine.noteRename("Dir", "dir");
+    const sent = await a.settle();
+    expect(sent.skippedPaths, `stranded: ${JSON.stringify(sent.needsAttention)}`).toEqual([]);
+    await syncAll(a, b, c);
+
+    for (const d of [a, b, c]) expect(files(d), d.name).toEqual({ "dir/a.md": "first file\n" });
+    // The folder's own entry travelled as a move from the old spelling.
+    expect(arrivals(c, "dir").map((e) => e.prev)).toEqual(["Dir"]);
+    expect(await server.cli("cat", "-path", "dir/a.md")).toBe("first file\n");
   }, 240_000);
 });
 

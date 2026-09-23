@@ -1711,6 +1711,10 @@ export class Engine {
         omittedRefusals.set(path, err);
       }
     }
+    // Before anything reads the entries: the folder-deletion check, the
+    // preview and every decision below have to see a case-only rename the
+    // scan found as the rename it is.
+    this.recordScannedRenames(onDisk, omittedRefusals);
     into("listMs");
     await this.confirmWork(stats);
     const dirty = new Set(this.dirty);
@@ -1725,9 +1729,12 @@ export class Engine {
     }
     const moving = new Set<string>();
     for (const [to, entry] of this.entries) {
-      if (!entry.prev || entry.folder) continue;
+      if (!entry.prev) continue;
       const from = canonicalSpelling(entry.prev);
       if (from === to) continue;
+      // A folder travels as a move only when the rename changed its case
+      // alone (see `upload`); any other folder rename is a new folder.
+      if (entry.folder && !foldsTogether(from, to)) continue;
       if (onDisk.has(from))
         entry.prev = ""; // a new file now occupies the source
       else if (this.sending && onDisk.has(to)) moving.add(from);
@@ -2161,10 +2168,11 @@ export class Engine {
     // it was free, because it is `remote.wire` going away that says the server
     // has heard, and an attempt that failed owes another one.
     //
-    // Files only. A folder carries no content and its entry carries no `prev`,
-    // so renaming one would add a second folder to the server and remove
-    // nothing. It does not need to: a receiving device folds the old spelling
-    // to the same name and makes the same directory.
+    // Files only. A folder carries no content, and its entry carries `prev`
+    // only for a rename this device made that changed its case alone (see
+    // `upload`). A folder the server spells another way does not need one: a
+    // receiving device folds the old spelling to the same name and makes the
+    // same directory.
     const spelled = remote?.wire;
     if (spelled !== undefined && local !== undefined && !local.folder) {
       if (entry.prev === "") entry.prev = spelled;
@@ -2502,16 +2510,32 @@ export class Engine {
       return;
     }
     if (entry.folder) {
+      // A folder's entry carries no `prev`, with one exception: a rename that
+      // changed only the folder's case. Folder deletions do not travel, so the
+      // old spelling's entry would stay live on the server and a new folder
+      // entry beside it is refused as a `collision`; a move whose two names
+      // fold alike is the one write the server always takes for it
+      // (plan/protocol.md, "Paths", collision rule 1). Any other folder rename
+      // is a new folder, as it always was.
+      const previous =
+        entry.prev !== "" && foldsTogether(canonicalSpelling(entry.prev), path) ? entry.prev : "";
+      const prevBase = previous ? (this.entries.get(canonicalSpelling(previous))?.syncuid ?? 0) : 0;
       const facts: PutFacts = {
         path,
-        meta: { size: 0, ctime: 0, mtime: 0, folder: true },
+        meta: {
+          size: 0,
+          ctime: 0,
+          mtime: 0,
+          folder: true,
+          ...(previous ? { prev: previous } : {}),
+        },
         names: [],
       };
       await this.queue(
         {
           path,
           size: 0,
-          entry: { ...facts, base },
+          entry: { ...facts, base, ...(previous ? { prevBase } : {}) },
           bodyOf: noBodies,
           commit: (uid, remoteIsNewer) => {
             synced(entry, "", [], uid, this.now());
@@ -2524,6 +2548,7 @@ export class Engine {
                 size: 0,
                 hash: "",
               });
+            if (previous) this.retireMovedSource(previous, path, uid, 0);
             if (count) report.uploaded++;
           },
         },
@@ -2575,36 +2600,7 @@ export class Engine {
               hash,
               ...spellingHeads(this.remote.get(path), path, path, uid),
             });
-          if (previous) {
-            // A peer can advance the destination before this ack is handled.
-            // Its source retirement still committed; own broadcasts carry
-            // no entry that could record that fact for us later.
-            const old = canonicalSpelling(previous);
-            if (old !== path) {
-              // The old incarnation was retired even if a peer has already
-              // reused its name with identical bytes. Keeping that ancestor
-              // would misread the absent old file as a new deletion.
-              this.entries.delete(old);
-              if ((this.remote.get(old)?.uid ?? 0) <= uid) {
-                this.remote.set(old, {
-                  uid,
-                  folder: false,
-                  deleted: true,
-                  mtime,
-                  size: 0,
-                  hash: "",
-                  ...spellingHeads(this.remote.get(old), old, previous, uid),
-                });
-                this.pending.delete(old);
-              }
-            } else if (old === path) {
-              const state = this.remote.get(path)!;
-              this.remote.set(path, {
-                ...state,
-                heads: { ...state.heads, [previous]: Math.max(state.heads?.[previous] ?? 0, uid) },
-              });
-            }
-          }
+          if (previous) this.retireMovedSource(previous, path, uid, mtime);
           if (count) report.uploaded++;
           this.log("uploaded", path);
           this.activity("uploaded", path);
@@ -2612,6 +2608,43 @@ export class Engine {
       },
       report,
     );
+  }
+
+  /**
+   * What a committed move settles about the name it moved from.
+   *
+   * One place for a file's move and a folder's, because the two record the
+   * same fact: the server has retired the source as part of the rename. A
+   * peer can advance the destination before this ack is handled. Its source
+   * retirement still committed; own broadcasts carry no entry that could
+   * record that fact for us later.
+   */
+  private retireMovedSource(previous: string, path: string, uid: number, mtime: number): void {
+    const old = canonicalSpelling(previous);
+    if (old !== path) {
+      // The old incarnation was retired even if a peer has already reused its
+      // name with identical bytes. Keeping that ancestor would misread the
+      // absent old file as a new deletion.
+      this.entries.delete(old);
+      if ((this.remote.get(old)?.uid ?? 0) <= uid) {
+        this.remote.set(old, {
+          uid,
+          folder: false,
+          deleted: true,
+          mtime,
+          size: 0,
+          hash: "",
+          ...spellingHeads(this.remote.get(old), old, previous, uid),
+        });
+        this.pending.delete(old);
+      }
+    } else if (old === path) {
+      const state = this.remote.get(path)!;
+      this.remote.set(path, {
+        ...state,
+        heads: { ...state.heads, [previous]: Math.max(state.heads?.[previous] ?? 0, uid) },
+      });
+    }
   }
 
   /**
@@ -4767,6 +4800,85 @@ export class Engine {
       remote,
       pending: [...this.pending],
     });
+  }
+
+  /**
+   * A case-only rename the scan found, recorded as the rename it is.
+   *
+   * Nothing tells the engine about a rename made outside Obsidian, and the
+   * headless client learns of every rename by scanning, so one arrives here as
+   * a synced path gone from the disk and a new path in its place. Sent as
+   * that, a deletion and a create, a rename that changed only case is lost:
+   * the create folds like the live path it replaces and is refused as a
+   * `collision`, the deletion beside it commits, every other device applies
+   * it, and this device writes the new name off, so the note is on one disk
+   * and nowhere else (rule 3). A move whose two names fold alike is the one
+   * write the server always takes for it (plan/protocol.md, "Paths",
+   * collision rule 1), so the pair is given the bookkeeping `noteRename`
+   * gives a reported one, and the new name goes up carrying `prev`.
+   *
+   * Only where the fold leaves no doubt: exactly one synced path gone and one
+   * path here this device has never synced, folding alike, on a device that
+   * sends. The gone one has to be what the server still holds, unchanged since
+   * this device synced it, or the move would be refused as stale and the
+   * rename is left to the deletion and create it always was. So is everything
+   * else: two candidates either way, a rename that changed more than case. A
+   * folder's pair moves its own entry and nothing beneath it, because each path
+   * beneath is a pair of its own, and one that changed more than case inside
+   * the folder is not a rename this can vouch for.
+   */
+  private recordScannedRenames(onDisk: Map<string, FileStat>, omitted: Map<string, unknown>): void {
+    if (!this.sending) return;
+    const byFold = (into: Map<string, string[]>, path: string) => {
+      const key = foldPath(path);
+      const same = into.get(key);
+      if (same) same.push(path);
+      else into.set(key, [path]);
+    };
+
+    // Synced paths gone from the disk, as the server still holds them.
+    const gone = new Map<string, string[]>();
+    for (const [path, entry] of this.entries) {
+      if (onDisk.has(path) || omitted.has(path) || entry.prev !== "") continue;
+      const synced = entry.folder ? entry.synctime > 0 : entry.synchash !== "";
+      const remote = this.remote.get(path);
+      if (!synced || entry.syncuid <= 0 || remote === undefined || remote.deleted) continue;
+      if (remote.uid !== entry.syncuid || remote.folder !== entry.folder) continue;
+      byFold(gone, path);
+    }
+    if (gone.size === 0) return;
+
+    // A path already the source of a rename in flight is that rename's.
+    const sources = new Set<string>();
+    for (const entry of this.entries.values()) {
+      if (entry.prev !== "") sources.add(canonicalSpelling(entry.prev));
+    }
+
+    // Paths here that this device has never synced, and that fold like one
+    // of those.
+    const arrived = new Map<string, string[]>();
+    for (const path of onDisk.keys()) {
+      const key = foldPath(path);
+      if (!gone.has(key)) continue;
+      const entry = this.entries.get(path);
+      if (entry && (entry.syncuid > 0 || entry.synchash !== "" || entry.prev !== "")) continue;
+      byFold(arrived, path);
+    }
+
+    for (const [key, here] of arrived) {
+      const there = gone.get(key)!;
+      if (here.length !== 1 || there.length !== 1) continue;
+      const to = here[0]!;
+      const from = there[0]!;
+      if (sources.has(from) || isNeverSynced(to, new Set())) continue;
+      if (onDisk.get(to)!.folder !== this.entries.get(from)!.folder) continue;
+      this.log("a rename that changed only case, found by the scan", from, to);
+      // A write-off or a retry held against the new name was against a create
+      // this rename replaces, so it goes with it.
+      this.skipped.delete(to);
+      this.retries.delete(to);
+      this.movePath(from, to);
+    }
   }
 
   /**
