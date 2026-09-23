@@ -196,6 +196,65 @@ func TestEveryOlderSchemaHasAStep(t *testing.T) {
 	}
 }
 
+// The second schema arrives tested (PLAN.md section 3.3): a store the build
+// before this one wrote, at schema 1 with no operation log, is upgraded when it
+// is opened. The tables arrive exactly as a new store has them, the version is
+// recorded in the identity row and the header, nothing already stored moves,
+// and the store takes an agent's operation straight away.
+//
+// The other half of the bump, that a build at schema 1 refuses a store at 2
+// rather than purging the before-images it cannot see, is the refusal of a
+// newer schema, which TestADatabaseFromTheFutureIsRefused holds for every
+// mode a store opens in.
+func TestASchemaOneStoreGainsTheOperationLogWhenOpened(t *testing.T) {
+	fresh := t.TempDir()
+	want := func() string {
+		st := openAt(t, fresh)
+		defer st.Close()
+		return schemaOf(t, st.db)
+	}()
+
+	dir := t.TempDir()
+	h := openAt(t, dir)
+	if err := h.EnsureVault("v1", 1000); err != nil {
+		t.Fatal(err)
+	}
+	note := h.file(t, "note.md", "written at schema one")
+	identity := h.Identity()
+	// What the build before this one left: no operation log, and version 1
+	// in both places it is recorded.
+	for _, stmt := range []string{
+		`DROP TABLE op_keys`, `DROP TABLE op_pins`, `DROP TABLE op_entries`, `DROP TABLE operations`,
+		`UPDATE store_identity SET schema_version = 1`, `PRAGMA user_version = 1`,
+	} {
+		if err := h.ExecForTest(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	up := openAt(t, dir)
+	if got := up.Identity(); got.SchemaVersion != SchemaVersion || got.Epoch != identity.Epoch || got.CreatedAt != identity.CreatedAt {
+		t.Fatalf("after the upgrade the identity is %+v, was %+v", got, identity)
+	}
+	var header int
+	if err := up.db.QueryRow(`PRAGMA user_version`).Scan(&header); err != nil || header != SchemaVersion {
+		t.Fatalf("the header says %d (%v)", header, err)
+	}
+	if got := schemaOf(t, up.db); got != want {
+		t.Fatalf("an upgraded store's schema is not a new store's:\nupgraded:\n%s\nnew:\n%s", got, want)
+	}
+	if got := up.bytesOf(t, up.Store, note.UID); got != "written at schema one" {
+		t.Fatalf("the note reads %q after the upgrade", got)
+	}
+	a := up.writer(t, "agent")
+	if _, err := up.CommitOperation(up.op(a, "edit", up.change(t, a, "note.md", note.UID, "an agent's edit"))); err != nil {
+		t.Fatalf("an operation on the upgraded store: %v", err)
+	}
+}
+
 // schemaOf is every table and index definition, in a stable order, so two
 // opens can be compared as strings.
 func schemaOf(t *testing.T, db *sql.DB) string {

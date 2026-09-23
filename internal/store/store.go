@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/waynehoover/trew/internal/chunks"
@@ -303,7 +304,7 @@ CREATE INDEX IF NOT EXISTS entry_chunks_by_name ON entry_chunks(vault_id, name);
 -- 112 ms against 5.6 ms with this, and the write it costs is 5 us against a
 -- chunk fsync of 7.8 ms.
 CREATE INDEX IF NOT EXISTS entries_by_prev ON entries(vault_id, prev_path, uid);
-` + liveSchema + mcpTokensSchema
+` + liveSchema + mcpTokensSchema + oplogSchema
 
 // Store is the server's whole persistent state: entries in SQLite, bodies in a
 // chunk store.
@@ -368,6 +369,23 @@ type Store struct {
 	// from it stands in for any post-delete query failing, so a test can prove
 	// the delete rolls back rather than standing with the history already gone.
 	afterPurgeDelete func() error
+
+	// duringOperation runs inside CommitOperation's transaction after each
+	// step that writes, named by the step, and is nil in every non-test
+	// build. Returning an error stands in for that statement failing, so a
+	// test can prove a failure anywhere in the operation leaves nothing of it
+	// behind. failOperationCommit, when set, replaces the COMMIT with a
+	// rollback and this error, standing in for the one failure whose outcome
+	// cannot be stated.
+	duringOperation     func(step string) error
+	failOperationCommit error
+
+	// now is the clock operations are committed and pins expire by, and
+	// retention the windows a new operation's pins and reply are given; see
+	// SetClock and SetRetention. The clock is read without writeMu, so it is
+	// held atomically; the retention is read and written only under it.
+	now       atomic.Pointer[func() time.Time]
+	retention Retention
 
 	// subs are the channels Subscribe handed out, nudged after every commit
 	// that appends entries; see Committed. Guarded by subMu, never by writeMu,
@@ -809,8 +827,10 @@ func (s *Store) sizeAccountedFor(vaultID string, e Entry) error {
 }
 
 // writeEntry is the conditional check and the three inserts, inside whatever
-// transaction or savepoint the caller has opened.
-func writeEntry(tx *sql.Tx, vaultID string, e Entry, base *int64, prevBase int64) (int64, error) {
+// transaction or savepoint the caller has opened: a device's put and batch,
+// and each entry of an agent's operation (CommitOperation), so the three
+// cannot come to different conclusions about one write.
+func writeEntry(tx execer, vaultID string, e Entry, base *int64, prevBase int64) (int64, error) {
 	if base != nil {
 		head, deleted, err := pathHead(tx, vaultID, e.Path)
 		if err != nil {

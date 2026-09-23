@@ -31,13 +31,30 @@ import (
 // Raise it when a change makes a database unreadable by the build before it,
 // and add the step to `migrations`. The upgrade discipline outlives the fresh
 // first schema: the second one must arrive tested.
-const SchemaVersion = 1
+//
+// Version 2 is the operation log (oplogSchema, PLAN.md M5). It is a version
+// and not only a table because the build before it is dangerous on a store
+// that has one, not merely ignorant of it: that build's purge keeps heads and
+// rename records and nothing else, so run on a store where agents have pinned
+// the versions they displaced, it would drop every before-image on the spot
+// (PLAN.md section 4.5). A new table alone reaches an older store through
+// `CREATE TABLE IF NOT EXISTS` and fences nothing; the version is what makes
+// the older build refuse, with ErrFutureSchema, before its purge can run.
+const SchemaVersion = 2
 
 // migrations are the steps from one schema version to the next, keyed by the
-// version they upgrade from. Empty: version 1 is the first. Each step runs
-// inside the transaction that records the new version, so a store is at one
-// version or the next and never between them.
-var migrations = map[int]func(q execer) error{}
+// version they upgrade from. Each step runs inside the transaction that
+// records the new version, so a store is at one version or the next and never
+// between them.
+var migrations = map[int]func(q execer) error{
+	// 1 to 2: the operation log. A store at version 1 has never committed an
+	// agent operation, because no build at version 1 could, so the tables
+	// start empty and nothing already stored changes meaning.
+	1: func(q execer) error {
+		_, err := q.Exec(oplogSchema)
+		return err
+	},
+}
 
 // execer is what a migration or an initialisation needs from a transaction.
 type execer interface {
@@ -140,7 +157,10 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 		}
 	}
 
-	return &Store{db: db, chunks: cs, dbPath: dbPath, identity: id, readOnly: mode == ReadOnly}, nil
+	return &Store{
+		db: db, chunks: cs, dbPath: dbPath, identity: id, readOnly: mode == ReadOnly,
+		retention: DefaultRetention,
+	}, nil
 }
 
 // dsn is the connection string every handle on a store uses.
@@ -237,9 +257,10 @@ func initialise(db *sql.DB, dbPath string) (Identity, error) {
 // then makes sure every table the current schema names is there.
 //
 // The second half is `CREATE TABLE IF NOT EXISTS` and costs nothing on a
-// store that is current, which is every store at version 1. It stays because
-// it is idempotent and because a table added to the schema reaches an
-// existing store through it; a column does not, and needs a step.
+// store that is current. It stays because it is idempotent and because a
+// table added to the schema reaches an existing store through it; a column
+// does not, and needs a step, and so does a table the build before would be
+// wrong to ignore (see SchemaVersion).
 func migrate(db *sql.DB, dbPath string, id Identity) (Identity, error) {
 	for id.SchemaVersion < SchemaVersion {
 		step, ok := migrations[id.SchemaVersion]
