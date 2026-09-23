@@ -604,20 +604,26 @@ func opMessage(oe *store.OpError) string {
 // liveNote is the note at path, which must be live at base: stale when the
 // path has moved on (its currentUid is the path's own, never the vault's), and
 // not_found when base is its head but that is not a note.
+//
+// One read decides both. The head was read first and the entry after it, and
+// a commit landing between the two made a note that had moved on read as one
+// that was gone (TestEditsRacingACommitAreStaleNeverNotFound). The head is
+// the path's own entry, or the rename that took it away, as Store.Head counts
+// it.
 func (c *call) liveNote(path string, base int64) (store.Entry, error) {
-	head, _, err := c.h.st.Head(c.h.vault, path)
+	e, state, movedAt, err := c.h.st.EntryAsOf(c.h.vault, path, 0)
 	if err != nil {
 		return store.Entry{}, err
 	}
-	if head != base {
+	head := e.UID
+	if state == store.PathMoved {
+		head = movedAt
+	}
+	switch {
+	case head != base:
 		return store.Entry{}, &ToolError{Code: "stale", Message: "the note changed since that base; read it again and reconsider",
 			Path: path, CurrentUID: &head}
-	}
-	e, state, _, err := c.h.st.EntryAsOf(c.h.vault, path, 0)
-	switch {
-	case err != nil:
-		return store.Entry{}, err
-	case state != store.PathLive || e.UID != base:
+	case state != store.PathLive:
 		return store.Entry{}, &ToolError{Code: "not_found", Message: "no note is at that path now; deleted_notes and note_history say what was"}
 	case e.Folder:
 		return store.Entry{}, &ToolError{Code: "not_note_content", Message: "that path is a folder"}

@@ -1177,6 +1177,12 @@ A SIGKILL is not a power cut: the page cache survives it, so these prove the
 ordering of bodies, commit, broadcast and reply, and the recovery of the
 unknown outcome, not durability against losing power (M5.5).
 
+**Found on the way.** The full gate's race run failed the seventeen competing
+edits in 30 of 40 runs: `edit_note`, `append_note` and `prepend_note` read a
+note's head and then its entry, and a commit between the two reads made a
+note that had moved on answer `not_found`. They read it once now, and
+`TestEditsRacingACommitAreStaleNeverNotFound` holds every loser `stale`.
+
 ### Latent issues in the chunker
 
 Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,
