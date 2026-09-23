@@ -534,6 +534,8 @@ Tasks:
 
 Done when: two plugin instances in two scratch vaults and one headless client pair from invites, converge on the M1 server, keep both sides of a conflict, restore a deleted note, surface a refused path, and `scripts/check.sh` exits 0.
 
+**Status: done, 2026-09-23.** All fourteen tasks are merged. `scripts/check.sh` passed 32 of 32 on the final tree (`99953a7`), and the done criterion was run in the real application: two plugin instances in two fresh vaults on Obsidian 1.13.7 and one headless client paired from invites against a local `trew serve`, converged byte for byte, kept both sides of a conflict, restored a deleted note, and named a refused path with its reason in the plugin's stranded list and in `trew status` (`docs/development.md`, "Real-app acceptance"). A path over 1,024 bytes cannot exist on macOS, whose absolute paths stop at 1,024 bytes, so that refusal is proven by the test suites and the control-character name by the real application. Regenerating the gallery (task 13) found one layout defect in the new pairing form, fixed. Task 14's Windows refusal is enforced by the engine behind a `windows` option; a Mac renaming a note onto a name Windows refuses leaves the note on the server and keeps any unsent Windows edit (`client/src/core/refused-rename.test.ts`).
+
 **Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "Plugin and headless client (M2, M3)". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
 
 ### M3. First real acceptance (S)

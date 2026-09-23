@@ -438,6 +438,26 @@ versions.
 This is M0's acceptance, not M3's: one desktop, one machine, loopback, and
 the flows driven through the plugin's own methods rather than by hand.
 
+M2's, on 2026-09-23 at `99953a7`, against Obsidian 1.13.7 on macOS: two
+brand-new vaults opened through Obsidian's own IPC, each with the built
+plugin, and one headless client, all against `trew serve -localhost`. The
+first vault paired from the server's `first-invite` with the merge confirmed
+(it held a note already); the second vault and the headless client paired
+from invites the first vault's plugin created. Notes written through the
+`obsidian` CLI in each vault and on disk for the headless client converged
+to one normalised path and SHA-256 inventory on all three. The headless
+client, offline, and the first vault edited the same line of one note; after
+it synced, all three held the vault's version under the note's name and the
+headless client's as a conflicted copy. A note deleted in the first vault
+left the other two, was restored from the second vault's deleted list, and
+came back byte-identical everywhere. A control-character name on the
+headless client's disk and another written through Obsidian's adapter in the
+first vault each stayed on the disk that held it and were named with the
+reason, in `trew sync` and `trew status` (both exiting 1) and in the
+plugin's stranded list. The driver is not in the repository; it drives the
+plugin through its own methods (`pair`, `createInvite`, `deletedNotes`,
+`recover`, `syncNow`) from `obsidian eval`, as M0's did.
+
 ### The MCP transport: hand-rolled, with the SDK as the test client
 
 Decided 2026-09-22 (PLAN.md M4 task 1). The server speaks MCP's streamable
