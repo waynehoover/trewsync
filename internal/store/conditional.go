@@ -15,18 +15,27 @@ const notRetiredByRename = `NOT EXISTS (
   SELECT 1 FROM entries moved
    WHERE moved.vault_id = e.vault_id AND moved.prev_path = e.path AND moved.uid > e.uid)`
 
-// TODO(PLAN.md section 4.5): this is today's survivor set, heads and the rename
-// records they need, which is all Basalt and a device-only Trew have. Once
-// MCP operations exist they pin the versions they displace (op_pins), and purge
-// must keep every unexpired pin as well, in this set, so its preview and its
-// execution still agree; until then purge removes exactly what it always has.
+// The survivor set is every version a purge keeps, in two parts, and Purge
+// and its preview (Reclaimable) both read it from purgeSurvivorUIDs with the
+// arguments survivorArgs builds, so the preview cannot promise what the purge
+// does not free.
 //
-// Keep current paths and rename retirements. Deleted also needs the latest
-// rename and, for a reused name, its predecessor after that rename: removing
-// this evidence makes a genuine deletion look like a legacy rename's tail.
-// A retained predecessor with content remains recoverable, including its bodies.
-// Purge and its preview use exactly the same survivor set.
-const purgeSurvivorUIDs = `
+// baseSurvivorUIDs is what Basalt and a device-only Trew keep: current paths
+// and rename retirements. Deleted also needs the latest rename and, for a
+// reused name, its predecessor after that rename: removing this evidence makes
+// a genuine deletion look like a legacy rename's tail. A retained predecessor
+// with content remains recoverable, including its bodies.
+//
+// pinnedUIDs is what agents add (PLAN.md section 4.5): every version an
+// operation displaced, until its pin expires. Keeping extra versions cannot
+// disturb the first part, because none of them is newer than a head: the
+// newest row of a path is its head whatever else survives, a pinned rename
+// record older than its source's newest rename changes no MAX, and a second
+// purge computes the same base set from what the first one left. Joined to the
+// entries, so a pin whose version is already gone (verify reports it, as
+// `lostpin`) cannot put a uid in the set that no row answers to, which the
+// purge's own arithmetic would refuse.
+const baseSurvivorUIDs = `
 WITH heads AS (
  SELECT path, MAX(uid) AS uid FROM entries WHERE vault_id = ? GROUP BY path
 ), renames AS (
@@ -48,6 +57,22 @@ UNION
 SELECT MAX(p.uid) FROM entries p JOIN deletions d ON d.path = p.path
  WHERE p.vault_id = ? AND p.uid < d.uid AND p.uid > d.rename_uid
  GROUP BY p.path`
+
+const pinnedUIDs = `
+SELECT p.uid FROM op_pins p
+  JOIN entries e ON e.vault_id = p.vault_id AND e.uid = p.uid
+ WHERE p.vault_id = ? AND p.expires_at > ?`
+
+const purgeSurvivorUIDs = baseSurvivorUIDs + `
+UNION` + pinnedUIDs
+
+// survivorArgs are purgeSurvivorUIDs' arguments: the vault four times for the
+// base set, then the vault and the time, in milliseconds, that decides which
+// pins still hold. One clock reading for the whole purge, so the set it
+// captures and the set it deletes against are the same set.
+func survivorArgs(vaultID string, now int64) []any {
+	return []any{vaultID, vaultID, vaultID, vaultID, vaultID, now}
+}
 
 // A rename is also a tombstone for its previous path at the same UID.
 func pathHead(q headReader, vault, path string) (uid int64, deleted bool, err error) {

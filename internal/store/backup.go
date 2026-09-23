@@ -59,6 +59,15 @@ type BackupReport struct {
 	// back.
 	InvitesLeftOut int
 
+	// Oplog is the agent operations, before-image pins and idempotency keys
+	// the snapshot carries, counted in the snapshot itself. All three travel
+	// with the database, because a restore that lost the pins would let the
+	// next purge drop every before-image an agent's writes displaced (PLAN.md
+	// section 4.5), and one that lost the operations would leave writes nobody
+	// can explain. The keys travel too, and are not replayed across the
+	// restore's new epoch; see Replay.
+	Oplog OplogCounts
+
 	// Inherited is faults the finished backup has that the source has too.
 	//
 	// A copy cannot be better than what it copied. A row the store should
@@ -638,6 +647,10 @@ func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 		return rep, fmt.Errorf("leaving outstanding invites out of the snapshot: %w", err)
 	}
 	rep.InvitesLeftOut = left
+	if rep.Oplog, err = dest.oplogCounts(); err != nil {
+		dest.Close()
+		return rep, fmt.Errorf("counting the operations the snapshot carries: %w", err)
+	}
 
 	vaults, err := dest.Vaults()
 	if err != nil {
@@ -980,9 +993,10 @@ func DataDir(dir string) (dbPath, chunkDir string) {
 // malformed in the source and no backup can mend it. A missing or corrupt body
 // is this operation's own work and is never excused.
 //
-// Matched on vault, uid and reason rather than on the whole fault, because the
-// path is the only other field and a copy cannot have changed it without the
-// digest check upstream already refusing.
+// Matched on vault, uid, row and reason rather than on the whole fault,
+// because the path is the only other field and a copy cannot have changed it
+// without the digest check upstream already refusing; the detail is a
+// sentence, and a sentence that names a time is not the same in both.
 func (s *Store) splitInheritedFaults(found []Fault, deep bool) (inherited, blocking []Fault, err error) {
 	if len(found) == 0 {
 		return nil, nil, nil
@@ -993,6 +1007,16 @@ func (s *Store) splitInheritedFaults(found []Fault, deep bool) (inherited, block
 		return nil, nil, err
 	}
 	for _, f := range entryFaults {
+		source[faultKey(f)] = struct{}{}
+	}
+	// The operation log is rows too, copied as verbatim as the entries are,
+	// and every pass reads it; a pin whose version the source had already
+	// lost is lost in the copy for the same reason.
+	opFaults, _, err := s.verifyOplog()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, f := range opFaults {
 		source[faultKey(f)] = struct{}{}
 	}
 	if deep {
@@ -1014,6 +1038,10 @@ func (s *Store) splitInheritedFaults(found []Fault, deep bool) (inherited, block
 	return inherited, blocking, nil
 }
 
+// faultKey names a fault for that match. The row is part of it: the faults
+// that name no entry, a registry row's or an operation's, all have uid zero,
+// and without the row one operation's fault in the source would excuse a
+// different operation's in the copy.
 func faultKey(f Fault) string {
-	return fmt.Sprintf("%s\x00%d\x00%s", f.VaultID, f.UID, f.Reason)
+	return fmt.Sprintf("%s\x00%d\x00%s\x00%s", f.VaultID, f.UID, f.Row, f.Reason)
 }
