@@ -64,6 +64,24 @@ type View interface {
 	Read(path string) (Version, error)
 }
 
+// LinkIndex is what a View may also be: one that can rule a note out of the
+// scan a move or a deletion with markBroken makes of the vault's links
+// (PLAN.md M5 task 6). The tool layer backs it with the search index's link
+// keys (LinkKeys), and only when the index has indexed exactly the head the
+// View reads; a View that is not one is scanned whole, as Basalt did.
+//
+// The index narrows which notes are read and nothing else: every note the
+// plan then reads is read through Read, from the store, and its links are
+// resolved against the whole inventory, so what a plan edits is decided by
+// authoritative content alone.
+type LinkIndex interface {
+	// MayLinkTo reports whether the note at path, in the version Read returns
+	// for it, may hold a link that resolves to target. It answers false only
+	// when it can prove the note holds none; for a note it knows nothing
+	// about, or could not parse, it answers true, and the note is read.
+	MayLinkTo(path, target string) bool
+}
+
 // Plan is an operation's changes, as a preview returns them and an apply
 // recomputes them, with the text each change was planned from.
 type Plan struct {
@@ -160,8 +178,8 @@ func PlanTags(view View, change TagChange, scope TagScope) (Plan, error) {
 // PlanMove is Basalt's planOperation for move_note: the move of path to to,
 // with its own relative links rewritten for the new place, and with
 // updateLinks every other note's links to it (ChangeLinks over the vault,
-// which reads every editable note). Links whose names mean several notes are
-// left alone and counted.
+// which reads every editable note, or with a LinkIndex every one that may link
+// to it). Links whose names mean several notes are left alone and counted.
 //
 // The destination must be an editable format (unsupported_format) and a
 // path the server accepts (badpath), not the source itself
@@ -198,7 +216,8 @@ func PlanMove(view View, path, to string, updateLinks bool) (Plan, error) {
 
 // PlanDelete is Basalt's planOperation for delete_note: the deletion of
 // path, and with markBroken every other note's links to it struck through
-// (ChangeLinks over the vault, which reads every editable note).
+// (ChangeLinks over the vault, which reads every editable note, or with a
+// LinkIndex every one that may link to it).
 func PlanDelete(view View, path string, markBroken bool) (Plan, error) {
 	r := newPlanReader(view)
 	_, source, err := r.read(path)
@@ -220,11 +239,17 @@ func (r *planReader) links(list []string, path string, source Version, to string
 	var changes []PlannedChange
 	var own []SourceEdit
 	ambiguous := 0
+	index, narrowed := r.view.(LinkIndex)
 	for _, p := range list {
 		if deletion && paths.Fold(p) == paths.Fold(path) {
 			continue
 		}
 		if onlySource && p != path {
+			continue
+		}
+		// The moved note is always read: its own relative links move with it,
+		// which no key of the target describes.
+		if narrowed && p != path && !index.MayLinkTo(p, path) {
 			continue
 		}
 		text, v, err := r.read(p)
