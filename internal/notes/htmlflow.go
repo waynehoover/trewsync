@@ -313,12 +313,34 @@ func interruptedFlow(parent ast.Node, reader text.Reader) bool {
 	}
 	switch b := prev.(type) {
 	case *ast.CodeBlock:
-		return true
+		return !codeAfterClosedContainer(b, src)
 	case *ast.Paragraph:
 		lines := b.Lines()
 		return lines.Len() > 0 && lines.At(lines.Len()-1).Stop >= lineStart
 	}
 	return false
+}
+
+// codeAfterClosedContainer reports whether an indented code block began on
+// the line that closed the quote or list before it. micromark reads that
+// line as lazy and starts afresh after it, so the code block does not make
+// the next line interrupting.
+func codeAfterClosedContainer(code *ast.CodeBlock, src []byte) bool {
+	prev := code.PreviousSibling()
+	if prev == nil || code.Lines().Len() == 0 {
+		return false
+	}
+	switch prev.(type) {
+	case *ast.Blockquote, *ast.List:
+	default:
+		return false
+	}
+	start := bytes.LastIndexByte(src[:code.Lines().At(0).Start], '\n') + 1
+	if start == 0 {
+		return false
+	}
+	before := bytes.LastIndexByte(src[:start-1], '\n') + 1
+	return len(bytes.TrimSpace(src[before:start-1])) > 0
 }
 
 // listMayInterrupt is whether a list item that starts s may interrupt: it is
