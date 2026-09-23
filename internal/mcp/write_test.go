@@ -392,8 +392,34 @@ func TestAnApplyIsBoundToItsPreviewsHead(t *testing.T) {
 	if r.head("topic.md") != src || r.operations() != 0 {
 		t.Fatal("a refused apply wrote something")
 	}
+	// The binding is to the head, so it is conservative: a write that
+	// changes nothing the plan read refuses the apply too.
+	p = previewed(t, invoke(t, a.cs, "move_note", args))
+	r.write("unrelated.md", "nothing to do with it\n")
+	if code := refused(t, invoke(t, a.cs, "move_note", apply(args, p))); code != "plan_changed" {
+		t.Fatalf("an unrelated write: %s", code)
+	}
+
+	// And it holds at the commit boundary, where only the snapshot head can
+	// see it: a backlink written after the apply made its plan again and
+	// before it committed refuses the whole operation.
+	p = previewed(t, invoke(t, a.cs, "move_note", args))
+	r.h.seam = func(point string) {
+		if point == SeamBodies {
+			r.write("three.md", "a backlink in the last moment: [[elsewhere/topic]] and [[topic.md]]\n")
+		}
+	}
+	if code := refused(t, invoke(t, a.cs, "move_note", apply(args, p))); code != "plan_changed" {
+		t.Fatalf("a backlink between the plan and the commit: %s", code)
+	}
+	r.h.seam = nil
+	if r.head("topic.md") != src || r.operations() != 0 {
+		t.Fatal("a refused apply wrote something")
+	}
+
+	p = previewed(t, invoke(t, a.cs, "move_note", args))
 	w := wrote(t, invoke(t, a.cs, "move_note", apply(args, p)))
-	if w.Count != 1 || w.Entries[0].Path != "subject.md" {
+	if w.Entries[len(w.Entries)-1].Path != "subject.md" {
 		t.Fatalf("the apply wrote %+v", w.Entries)
 	}
 }
