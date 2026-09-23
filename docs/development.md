@@ -648,6 +648,98 @@ A restart reopened the index from its durable state without a rebuild, and a
 SIGINT stopped the server with exit status 0. `TestMCPAcceptanceAgainstServe`
 runs the same in the test process on every `go test`.
 
+### The MCP write side's note functions (M5)
+
+M5 tasks 4 to 6 need the bytes each mutation writes before the store can
+commit them. Those are pure functions in `internal/notes`, ported from
+`client/src/node/mcp-notes.ts`, `mcp-markdown.ts`, `mcp-operations.ts` and
+`mcp-batch.ts`; `mcp-links.ts` was ported whole in M4 (`ChangeLinks`), and the
+plans use it as it is.
+
+**What the tools call.** `EditNote`, `AppendNote` and `PrependNote` take a
+version's bytes and return a `Revision` (the new bytes, and `Noop` when they
+are the old ones); `NoteContent` checks `create_note`'s content. `ChangeTags`
+returns the exact source edits of a tag change to one note. `PlanTags`,
+`PlanMove` and `PlanDelete` read the vault through a `View` (every live file
+at one head, and a version's bytes and uid by path) and return a `Plan`: its
+`PlannedChange`s, sorted by path, each with the uid it was planned against as
+its `base` and edits in UTF-16 offsets, the count of ambiguous links, and
+`Writes`, the bytes each change commits. An apply holds the changes passed
+back to `PlanTooLarge`, plans again at the current head, and refuses with
+`plan_changed` unless `SamePlan` holds (`PlanDigest` is the same comparison as
+a hash). Every refusal is a `*notes.Refusal` carrying a plan/mcp-tools.md code,
+and a plan's names the note it concerns in `Path`, which can be a path the
+plan found in the vault rather than one the caller named.
+
+**The oracle.** `mcp-oracle.run.ts` records what the TypeScript does in four
+more sections of `mcp-fixtures.json`: `edits` (`prepareNote` over a note in a
+scratch vault), `changeTags` (fifteen changes over every note of the read
+side's corpus, the content changes only for generated Markdown and one of each
+kind for generated anchors, plus inputs refused before a note is read),
+`plans` (`previewOperation` over seven scratch vaults, among them 523 notes for
+the scan's count and nine of a million bytes for its size) and `samePlan`
+(each small preview against altered copies of itself). `oracle_write_test.go`
+holds the port to every vector and `oracle_corrupt_test.go` proves each check
+rejects a damaged one. A generator of tags properties (block lists with
+comments, blank and empty items at each place, flow lists over lines, block
+scalars with header comments, empty values with properties) was added for the
+edit, which rewrites the value's source range; with `ORACLE_EXTRA=12000` the
+port matched about 250,000 vectors, and the only difference was the one M4
+recorded, an implicit key over lines in a flow mapping.
+
+**What the write side found on the read side.** The edit reads the note it
+produced again, so it holds the frontmatter reader to more text than M4's
+corpus did. Three differences from npm yaml were fixed: a later YAML document,
+which npm yaml ignores and libyaml's scanner reads into (`firstDocument`); lines
+that start with a tab, where npm yaml refuses a quoted scalar's or a flow
+collection's and reads a comment line's, and libyaml does the reverse
+(`scanYAML`); and a comment against the token before it (`'x'# c`, `[x]# c`),
+which npm yaml refuses and libyaml reads. One is recorded as refused rather
+than modelled: a document after a directive, which npm yaml read by the schema
+the directive names (`%YAML 1.1` makes `yes` a boolean) and the port refuses
+(`TestFrontmatterKnownDivergence`).
+
+**Decisions.**
+
+- An exact edit whose result is over 1 MiB is `note_too_large`, as
+  plan/mcp-tools.md says; Basalt said `input_too_large`. The oracle check
+  accepts the spec's code for those vectors only.
+- A plan's size is measured as Basalt measured it, `JSON.stringify` of the
+  changes against 64 KiB, but with the base a uid, so the same plan is smaller
+  here than it was.
+- More than 32 changes, or 32 paths once a move's destination is counted, is
+  `batch_too_large`; a change of more than 4,096 edits is `plan_too_large`.
+  Basalt's schema refused both before the operation ran.
+- A move onto its own path is `same_destination`. A case-only rename is a
+  move, as the store allows (`f5ce1c7`); Basalt refused one on a case-folding
+  disk. A destination that a case-folding disk would hold as another live file
+  is `exists` at the plan, and the store's collision rule, which sees folders
+  too, still decides at the commit.
+- A folder scope is a path prefix, as `list_notes` and `search_notes` take
+  one; Basalt required the folder to exist on disk.
+- Paths sort in byte order, as M4's listings do.
+- A move, and a deletion with `markBroken`, read every editable note of the
+  vault, as Basalt did, so either is `scan_incomplete` in a vault of more than
+  512 notes or 8 MiB of them. A link index could narrow the scan later;
+  nothing here assumes one.
+- The names the server reserves (`.trew-tmp-`, the conflict-copy pattern) are
+  the tools' to refuse, for `create_note` and a move's destination alike.
+
+**Where the TypeScript cases went.** The suites stay in the tree as the
+oracle (PLAN.md section 2.1). Their cases about the bytes a mutation writes
+are Go table tests; the ones about a filesystem before-image, a replace, a
+flush and the races around them become store guarantees, because on the
+server a base is a version uid, a before-image is the pinned previous version
+and a write is one `CommitOperation`.
+
+| Suite | In `internal/notes` | For the store and the tools |
+|---|---|---|
+| `mcp-notes.test.ts` | BOM prepend, two edits together, removed prose, every edit refusal, overlapping occurrences, the aggregate budget, no invented newline, invalid source, suffix and size, noop, create content (`port_notes_test.go`) | stale bases, the lost reply, a missing target, every backup, race, publication and reserved-name case |
+| `mcp-markdown.test.ts` | every case, reading (`port_markdown_test.go`) and writing (`port_tagedit_test.go`) | |
+| `mcp-links.test.ts` | every case (`port_links_test.go`, M4) | |
+| `mcp-operations.test.ts` | tag plans and their writes, changed plans, move rewrites, editable notes only, spoiled edits, occupied and refused destinations, undecodable notes, path bounds before reading (`port_operations_test.go`) | the backlink that fails after the destination exists, a destination occupied during the commit, `createDirectory` |
+| `mcp-batch.test.ts` | a named note with no edits stays in the plan, so its base is rechecked | deletion before-images, racing saves, every batch backup and partial-publication case: one `CommitOperation` is all or nothing |
+
 ### Latent issues in the chunker
 
 Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,
