@@ -135,7 +135,7 @@ This removes from the Basalt MCP: two vault instances, the kernel lock, the seri
 
 It does **not** remove the durable-versus-delivered distinction, and the earlier draft was wrong to collapse it. A commit is durable when the transaction commits (rule 1); it is *delivered* when a device applies it, which is a different fact on a different timeline. Basalt's hub deliberately skips peers that are failing and leaves them to catch-up (`basalt:server/internal/server/hub.go:50`), so "committed" never implied "every device has it". The tool result reports `committed` with the operation id and resulting UIDs; delivery is exposed separately through applied checkpoints, and an agent edit never blocks on a slow phone. See §4.8.
 
-Author identity: each MCP token is also a device row with id `mcp:<token id>` and name from the token's label. Conflict copies read `Note (Conflicted copy Claude 202609171130).md`, history shows the author, and the devices panel lists the agent with its last-seen time. Revoking the token revokes the row.
+Author identity: each MCP token has an author row of its own (`kind = 'mcp'`), never a device row: `mcp:<id>` is not a valid device id, and an agent listed as a device would be an offline sync peer whose applied checkpoint everyone waits on (see the paragraph below on `ValidDeviceID`, and the schema notes in §3). The author's name is the token's label, so conflict copies read `Note (Conflicted copy Claude 202609171130).md` and history shows the author; `trew mcp-token -list` shows the token's last use. Revoking the token removes its author row, and the versions it wrote keep the name they were written under.
 
 ### 2.5 Search is a derived view, maintained outside the write path
 

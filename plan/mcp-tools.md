@@ -70,7 +70,7 @@ This applies to `read_note`, `search_notes` match context, `list_notes` paths an
 
 `text(N)`: string, ≤ N characters, ≤ N UTF-8 bytes, no lone surrogates. `path`: `text(1024).min(1)`, validated by the server path rules. `uid`: integer 1 to 2^53−1. `limit(max)`: integer 1 to max. Constants: `NOTE_BYTES` 1 MiB, `EDIT_BYTES` 8 KiB, `INPUT_BYTES` 64 KiB, `PAGE_TEXT_BYTES` 64 KiB, `PAGE_ROWS_BYTES` 192 KiB.
 
-Text formats MCP may read and edit: `.md`, `.txt`; `.canvas` is readable. `.excalidraw.md` is readable, not editable. Everything else is an attachment: listed, not read.
+Text formats MCP may read: `.md` and `.txt`, the `mcpReadable` policy in [protocol.md](protocol.md). The ones it may edit are the same less `.excalidraw.md`, which is readable, not editable (`mcpEditable`). Everything else, `.canvas` included, is an attachment: listed, not read.
 
 ## Read tools
 
