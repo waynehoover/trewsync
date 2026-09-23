@@ -34,6 +34,7 @@ import {
 } from "./stub.ts";
 import TrewPlugin, { connectionDetail, describeConnection, describeDeleted } from "./main.ts";
 import { describeRestore } from "./history.ts";
+import { SUPPORT_TABLE } from "./platform-notice.ts";
 import { Engine, type SyncReport } from "../core/engine.ts";
 import { Client, pairWithInvite } from "../core/client.ts";
 import { ObsidianIndexStore } from "./vault.ts";
@@ -1159,6 +1160,84 @@ describe("when things go wrong", () => {
       Platform.isWin = false;
     }
   }, 300_000);
+});
+
+/**
+ * The plugin pairs on Windows and iOS, with a notice that lasts for as long as
+ * it runs there (PLAN.md section 4.12): a row at the top of the panel and a
+ * word in the status bar, or on the ribbon where there is no status bar.
+ */
+describe("on a platform the tests do not reach", () => {
+  /** The support table link in the open panel, if one is drawn. */
+  const supportLink = (): FakeEl | undefined => {
+    const find = (el: FakeEl): FakeEl | undefined =>
+      el.tag === "a" && el.attributes.get("href") === SUPPORT_TABLE
+        ? el
+        : el.children.map(find).find((x) => x !== undefined);
+    const modal = modals.at(-1);
+    return modal ? find(modal.contentEl) : undefined;
+  };
+
+  it("says Windows is not supported, in the panel and the status bar, whatever the state", async () => {
+    Platform.isWin = true;
+    try {
+      const { plugin } = await load();
+      const word = () =>
+        plugin.statusBarItems[0]!.children.find((c) => c.cls.includes("trew-status-platform"));
+      expect(word()?.text).toBe("Windows unsupported");
+      expect(status(plugin)).toMatch(/Windows is not supported\.$/);
+      // Through a change of state, which repaints the bar: still there.
+      (plugin as unknown as { setState(s: unknown): void }).setState({
+        kind: "synced",
+        summary: "up to date",
+        at: 1_700_000_000_000,
+        refused: 0,
+      });
+      expect(plugin.statusBarItems[0]!.children.filter((c) => c === word())).toHaveLength(1);
+      expect(word()?.text).toBe("Windows unsupported");
+
+      choosePairing(plugin);
+      const text = panelText();
+      expect(text).toContain("Windows is not supported");
+      expect(text).toMatch(/Untested: file locking/);
+      expect(supportLink(), "the panel does not link the support table").toBeDefined();
+    } finally {
+      Platform.isWin = false;
+    }
+  });
+
+  it("says iOS is untested, in the panel and on the ribbon", async () => {
+    // An iPhone claims to be a Mac, too, which is the order platformWord
+    // guards against; the notice has to guard against it the same way.
+    Platform.isMobileApp = true;
+    Platform.isIosApp = true;
+    Platform.isMacOS = true;
+    try {
+      const { plugin } = await load();
+      expect(plugin.statusBarItems).toHaveLength(0);
+      expect(plugin.ribbonIcons[0]!.el.attributes.get("aria-label")).toMatch(/iOS is untested\.$/);
+      choosePairing(plugin);
+      const text = panelText();
+      expect(text).toContain("iOS is untested");
+      expect(text).toMatch(/same code here as on Android/);
+      expect(supportLink()).toBeDefined();
+    } finally {
+      Platform.isMobileApp = false;
+      Platform.isIosApp = false;
+      Platform.isMacOS = false;
+    }
+  });
+
+  it("says nothing of the kind anywhere else", async () => {
+    const { plugin } = await load();
+    expect(
+      plugin.statusBarItems[0]!.children.some((c) => c.cls.includes("trew-status-platform")),
+    ).toBe(false);
+    expect(status(plugin)).toBe("Trew Sync: Not paired.");
+    choosePairing(plugin);
+    expect(panelText()).not.toMatch(/not supported|untested/);
+    expect(supportLink()).toBeUndefined();
+  });
 });
 
 describe("recovering a deleted note from the app", () => {

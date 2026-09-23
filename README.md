@@ -65,6 +65,16 @@ Obsidian on **macOS, Linux, and Android**, with local storage. The plugin needs
 Obsidian **1.7.2 or newer** and is installed manually. iOS is untested; Windows
 is not supported.
 
+### Platforms
+
+| Platform | Status | What that means |
+|---|---|---|
+| macOS | Supported | The tests run here. |
+| Linux | Supported | The tests run here. |
+| Android | Supported | Sync runs while Obsidian is open in the foreground. |
+| iOS | Untested | The same code as on Android, but no test has run on an iPhone or iPad: background suspension, iCloud Drive vaults and the iOS file system are untested. The plugin pairs, and says so in its panel for as long as it runs. |
+| Windows | Not supported | No test runs on Windows. The plugin pairs, and says so in its panel and status bar for as long as it runs. A note whose name Windows cannot hold (a device name such as `CON` or `COM1`, one of the characters Windows forbids, or a name ending in a dot or a space) is listed as needing attention instead of syncing, and stays on your other devices. |
+
 On Android, sync runs while Obsidian is open in the foreground. Settings,
 themes, plugins, and hidden files do not sync: nothing whose name starts with a
 dot does, so an `.attachments` folder stays on the device that has it.

@@ -108,6 +108,11 @@
   align-items: center;
 }
 
+/* Windows and iOS only: the platform's standing, beside the glyph, always. */
+.status-bar-item.plugin-trew-sync .trew-status-platform {
+  margin-inline-start: var(--size-2-2);
+}
+
 .status-bar-item.plugin-trew-sync.trew-attention,
 .trew-sync-ribbon.trew-attention {
   color: var(--text-error);
