@@ -1110,6 +1110,10 @@ func nullableUID(uid int64) any {
 // whose operation was recorded before the store was restored is
 // ErrReplayFromEarlierEpoch, both as refusals.
 //
+// It does not check the credential. The caller authenticated the request, and
+// a reply is a read: a token revoked since loses at the recheck the caller
+// makes before any reply is sent, as it does for every other read.
+//
 // # Why a replay across a restore is refused
 //
 // A backup's database is given a new epoch, and restoring is serving it. The

@@ -648,6 +648,99 @@ A restart reopened the index from its durable state without a rebuild, and a
 SIGINT stopped the server with exit status 0. `TestMCPAcceptanceAgainstServe`
 runs the same in the test process on every `go test`.
 
+### Agent operations: the commit boundary, the log and the pins (M5)
+
+The store half of M5 tasks 1, 2, 3 and 10 (`internal/store/oplog.go`). The
+tools that call it are later work; `cmd/trew/audit_test.go` commits through it
+directly in the meantime.
+
+**The commit boundary.** `Store.CommitOperation(Operation) (OpResult, error)`
+is the all-or-nothing write PLAN.md section 4.3 asks for, beside a device's
+deliberately partial `AppendMany`, which is unchanged. A tool prepares outside
+every lock (bodies stored through `chunks.Writer` and `Close`), and then, inside
+`server.UnderCommitLock`, calls it and broadcasts `OpResult.Committed()`.
+Under the store's `writeMu`, in one transaction begun `IMMEDIATE`, it rechecks
+the credential as it stands (the token row, its hash, write scope, expiry, and
+its author still named as the request was prepared), the epoch, the
+idempotency key, a preview's snapshot head, and every check, base and
+prevBase, and writes each entry through `writeEntry`, the function a device
+put runs, so the path and collision rules meet an operation's entries in order
+exactly as they meet a device batch's. Any refusal or failure rolls back every
+entry, row and uid. An `Operation` with `Checks` and no `Entries` is a noop: it
+revalidates at the same boundary and is recorded with outcome `noop`, so its
+key names one outcome. `Render` is called before the lock with every uid at
+2^53-1 and inside the transaction with the real ones, and both are held to
+`MaxResult`, so an oversized reply is refused before anything is written; the
+second is recorded and returned.
+
+**Errors.** Every error is an `*OpError` with a `Code` from plan/mcp-tools.md
+(`stale`, `exists`, `plan_changed`, `read_only`, `badpath`, `duplicate_path`,
+`result_too_large`, `internal`, plus `collision`, which PLAN.md section 4.1
+gives MCP creates and moves, and `key_reused`, which section 4.8 asks for and
+the list lacks), the `Path` and `CurrentUID` to read again from, the operation's
+id, and an `Outcome`: `OpRefused` (a precondition said no, nothing written),
+`OpFailed` (a statement failed and the transaction rolled back, nothing
+written) or `OpUnknown` (the `COMMIT` itself failed, which SQLite may have made
+durable anyway). `errors.Is(err, store.ErrRefused)` and
+`errors.Is(err, store.ErrOutcomeUnknown)` test the outcome, and the causes are
+sentinels too (`ErrStale`, `ErrExists`, `ErrPlanChanged`,
+`ErrActorCannotWrite`, `ErrEpochChanged`, `ErrKeyReused`,
+`ErrReplayFromEarlierEpoch`, `ErrResultTooLarge`, `ErrDuplicatePath`,
+`ErrCollision`). An unknown outcome is resolved by `LookupOperation` with the
+error's `OpID`, or by `Replay` with the key.
+
+**The log.** Schema 2 adds `operations` (the actor's id and label copied in,
+tool, request digest, key, epoch, outcome, a preview's snapshot head, the
+client's name and version capped and stripped of control characters, the
+reply, and `committed_at` on the server's clock, never earlier than the
+vault's previous operation), `op_entries` (every path changed, with its uid
+before and the uid that changed it; a move is a `write` row and a `source`
+row), `op_pins` and `op_keys`. No bearer token, token hash or note body is
+stored, which a test checks column by column. Revoking a token deletes its
+token and author rows and none of this. `trew audit` reads it, through the
+control socket while `serve` runs. The version is 2 and not just new tables
+because the build before would open such a store and purge every pinned
+before-image it cannot see; at version 2 it refuses the store instead.
+
+**Idempotency.** `(actor_id, idempotency_key)` names the operation that used
+it, whose `request_digest` is the comparison. `Replay` is asked before a retry
+is prepared again (preparing reads the heads the first attempt moved), and
+`CommitOperation` asks again inside its transaction for the retry that races
+the original: the same digest returns the recorded reply and writes nothing, a
+different one is `key_reused`. A key lasts as long as its reply. After that
+the request is new and meets the bases its first commit moved, so an edit or
+an append replayed late is refused as `stale` rather than applied twice. A key
+whose operation was recorded before a restore is refused, `stale` with
+`ErrReplayFromEarlierEpoch`, and never replayed: its reply names uids of the
+old history, which the restored store may issue again to other versions.
+
+**Retention.** Three policies. Ordinary history is purge's own: heads and
+rename records kept, the rest dropped when the operator runs it, bodies spared
+by `-grace`. Before-image pins (`Retention.PinFor`) hold every version an
+operation displaced, where the path held something, against purge for 30 days
+after the operation's commit by default, which is also the floor; a longer
+window may be set with `SetRetention`. Replies and their keys
+(`Retention.ResultFor`) are kept 7 days by default, floor 1 hour: long enough
+for any retry, a resumed session and a weekend. Both expiries are fixed on the
+row at commit, so changing a window never shortens a promise already made.
+Purge's survivor set is heads, rename records and unexpired pins, joined to the
+entries, and `Reclaimable` reads the same query with the same clock reading;
+both report `Pinned`/`VersionsPinned` separately. When a pin expires its
+version is ordinary history and the next purge drops it and the pin row; the
+operation and its paths stay, so the audit still names what was displaced.
+Expired replies are cleared and expired keys deleted by the same purge.
+`Store.SetClock` injects the clock the commit, the expiry checks and purge
+read.
+
+**Backup and restore.** `VACUUM INTO` carries all four tables; the report
+counts them. `verify` decodes the log on every pass, since a backup checks its
+own snapshot with a shallow one, and an unexpired pin whose version is gone is
+a `lostpin` fault. A restore serves the backup's new epoch, so its recorded
+keys do not replay; its pins hold in its own purges.
+`TestAYearOldNoteEditedTodaySurvivesAnImmediatePurgeAndARestart` and
+`TestTheBeforeImageSurvivesABackupAndARestore` are the M5 task 10 tests; with
+the pin union taken out of the survivor set, those and two more fail.
+
 ### Latent issues in the chunker
 
 Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,
