@@ -107,15 +107,14 @@ func TextSizesFor(size int64) ChunkSizes {
 }
 
 // SizesFor chooses chunk sizes for a file, clamped to the ceiling a server
-// advertises as chunkMax. chunk.ts sizesFor, under the protocol 1 rule.
+// advertises as chunkMax. chunk.ts sizesFor, under the protocol 1 rule, which
+// both languages implement and the sizesForV1 cases in chunk-fixtures.json pin.
 //
-// The rule differs from chunk.ts in one place, deliberately. chunk.ts subtracts
-// SEAL_OVERHEAD from the ceiling, because Basalt's ceiling is on the sealed
-// chunk. Protocol 1 has no sealing: chunkMax bounds the raw bytes, and a body
-// frame's marker byte sits on top of it (plan/protocol.md, "Chunk bodies"), so
-// Max is simply the smaller of the size table's own maximum and serverChunkMax.
-// The TypeScript client adopts this rule when it drops encryption (PLAN M2 task
-// 2); until then the sizesForV1 cases in chunk-fixtures.json are the contract.
+// chunkMax bounds the raw bytes, and a body frame's marker byte sits on top of
+// it (plan/protocol.md, "Chunk bodies"), so Max is simply the smaller of the
+// size table's own maximum and serverChunkMax, with nothing reserved below the
+// ceiling. (Basalt reserved its sealing overhead there, because its ceiling was
+// on the sealed chunk.)
 //
 // A serverChunkMax of zero or less means the server has not said, and stands
 // for BinarySizes.Max, as a missing or nonsensical value does in chunk.ts. Max
