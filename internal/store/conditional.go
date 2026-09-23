@@ -58,6 +58,14 @@ func pathHead(q headReader, vault, path string) (uid int64, deleted bool, err er
 	return uid, gone.Bool, err
 }
 
+// Head is the uid of a path's newest version, counting a rename away from it,
+// and whether that version left the path with no file: a deletion, or a
+// rename's source. Zero when the vault has never held the path.
+func (s *Store) Head(vault, path string) (uid int64, gone bool, err error) {
+	return pathHead(s.db, vault, path)
+}
+
+// CurrentUID is Head's uid alone, the base a conditional write names.
 func (s *Store) CurrentUID(vault, path string) (int64, error) {
 	uid, _, err := pathHead(s.db, vault, path)
 	return uid, err

@@ -108,12 +108,16 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return cmdRevoke(rest, out)
 		case "uninvite":
 			return cmdUninvite(rest, out)
+		case "cat":
+			return cmdCat(rest, out)
+		case "export":
+			return cmdExport(rest, out)
 		case "version":
 			fmt.Fprintf(out, "telimus %s %s/%s %s\n", resolveVersion(version, moduleVersion()), runtime.GOOS, runtime.GOARCH, runtime.Version())
 			return nil
 		default:
-			return fmt.Errorf("unknown command %q (try serve, invite, devices, revoke, uninvite, backup, verify, "+
-				"purge, stats, service, health, version)", cmd)
+			return fmt.Errorf("unknown command %q (try serve, invite, devices, revoke, uninvite, cat, export, "+
+				"backup, verify, purge, stats, service, health, version)", cmd)
 		}
 	}
 	return cmdServe(ctx, args, out)
