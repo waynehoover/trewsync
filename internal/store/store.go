@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -600,9 +601,24 @@ type PathError struct {
 	// Field is "path" or "prev": which of the entry's two paths it is.
 	Field  string
 	Reason paths.Reason
-	// Len is the path's length in bytes, which the message gives for
-	// "toolong" so the number that is wrong is in front of the person.
+	// Len is the length in bytes the reason is about, which the message gives
+	// so the number that is wrong is in front of the person: the whole path's
+	// for "toolong", the first segment over the limit for "segmenttoolong".
 	Len int
+}
+
+// pathError is the PathError for p, refused by paths.Check with reason r.
+func pathError(field, p string, r paths.Reason) *PathError {
+	n := len(p)
+	if r == paths.ReasonSegmentLong {
+		for _, seg := range strings.Split(p, "/") {
+			if len(seg) > paths.MaxSegmentBytes {
+				n = len(seg)
+				break
+			}
+		}
+	}
+	return &PathError{Field: field, Reason: r, Len: n}
 }
 
 func (e *PathError) Error() string {
@@ -614,6 +630,9 @@ func (e *PathError) Error() string {
 		why = "is empty"
 	case paths.ReasonTooLong:
 		why = fmt.Sprintf("is %d bytes of UTF-8, and a path is at most %d", e.Len, paths.MaxPathBytes)
+	case paths.ReasonSegmentLong:
+		why = fmt.Sprintf("has a file or folder name of %d bytes of UTF-8, and a name is at most %d "+
+			"on the disks Obsidian runs on", e.Len, paths.MaxSegmentBytes)
 	case paths.ReasonControl:
 		why = "contains a control character"
 	case paths.ReasonNFC:
@@ -647,11 +666,11 @@ func (e *PathError) Unwrap() error { return ErrBadPath }
 // internal/paths, which is where they are written down once for the server.
 func (e Entry) CheckPaths() error {
 	if r := paths.Check(e.Path); r != "" {
-		return &PathError{Field: "path", Reason: r, Len: len(e.Path)}
+		return pathError("path", e.Path, r)
 	}
 	if e.Prev != "" {
 		if r := paths.Check(e.Prev); r != "" {
-			return &PathError{Field: "prev", Reason: r, Len: len(e.Prev)}
+			return pathError("prev", e.Prev, r)
 		}
 	}
 	return nil

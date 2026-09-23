@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/waynehoover/telimus/internal/chunks"
@@ -82,9 +83,38 @@ func TestValidateRefusesExactlyTheFixturesPaths(t *testing.T) {
 			if pe.Field != k.field || string(pe.Reason) != *c.Reason {
 				t.Errorf("%s: refused as %s/%s, want %s/%s", c.Name, pe.Field, pe.Reason, k.field, *c.Reason)
 			}
+			// The message is what the person reads (PLAN.md section 4.9), so
+			// a reason the contract grows must arrive with its explanation,
+			// not the fallback that only says the path was refused.
+			if strings.HasSuffix(pe.Error(), " is refused") {
+				t.Errorf("%s: %q explains nothing about %s", c.Name, pe.Error(), pe.Reason)
+			}
 		}
 	}
 	if accepted == 0 || refused == 0 {
 		t.Fatalf("the vectors cover one verdict only: %d accepted, %d refused", accepted, refused)
+	}
+}
+
+// A length refusal names the length that is wrong, and for a name too long
+// that is the name's, not the whole path's: "a path of 1003 bytes" would send
+// the person looking at the wrong thing.
+func TestALengthRefusalNamesTheLengthThatIsWrong(t *testing.T) {
+	name := strings.Repeat("n", 300)
+	for _, c := range []struct {
+		entry Entry
+		want  string
+	}{
+		{Entry{Path: "Notes/" + name + ".md", Deleted: true},
+			"segmenttoolong: the path has a file or folder name of 303 bytes of UTF-8, and a name is at most 255"},
+		{Entry{Path: "dest.md", Prev: name + "/a.md"},
+			"segmenttoolong: the prev has a file or folder name of 300 bytes of UTF-8, and a name is at most 255"},
+		{Entry{Path: strings.Repeat("abcd/", 206) + "x.md", Deleted: true},
+			"toolong: the path is 1034 bytes of UTF-8, and a path is at most 1024"},
+	} {
+		err := c.entry.Validate()
+		if err == nil || !strings.HasPrefix(err.Error(), c.want) {
+			t.Errorf("%.40q... answered %v, want it to begin %q", c.entry.Path, err, c.want)
+		}
 	}
 }
