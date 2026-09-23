@@ -1,15 +1,8 @@
-// Package notes works on note content the way the TypeScript clients do.
-//
-// The server holds notes in plaintext, and from M5 it writes them too, for the
-// MCP tools. A note the server writes has to be chunked exactly as a device
-// would chunk the same bytes. A chunk's name is the SHA-256 of its raw bytes, so
-// a boundary one byte away from where the client puts it gives the server and
-// the device two different chunks for the same note, and nothing reports it:
-// both sides still converge, they just stop deduplicating against each other.
-//
 // chunk.go is a port of client/src/core/chunk.ts. chunk-fixtures.json at the
 // repository root pins the two together, and each language checks the cut
-// points the other one produced.
+// points the other one produced. The package documentation, in doc.go, says
+// why a server chunk boundary must fall exactly where a device's does.
+
 package notes
 
 import (
