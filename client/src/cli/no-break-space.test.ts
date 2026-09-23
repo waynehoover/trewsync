@@ -18,13 +18,17 @@
  * identical printed plainly.
  */
 
-import { mkdir, mkdtemp, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { removeTree } from "../core/test-server.ts";
-import { NodeVault } from "./vault.ts";
+import { Client } from "../core/client.ts";
+import { receiveCommitted } from "../core/test-async.ts";
+import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
+import { FakeAdapter, FakeVaultIndex, asVault } from "../plugin/fake.ts";
+import { ObsidianIndexStore, ObsidianVault } from "../plugin/vault.ts";
+import { JsonIndexStore, NodeVault } from "./vault.ts";
 
 /** The name every device and the server use. */
 const SPACE = "a b.md";
@@ -253,4 +257,133 @@ describe("a plain space and a no-break space beside each other", () => {
     expect((await vault.list()).map((f) => f.path).sort()).toEqual([SPACE, "c.md"]);
     expect(vault.ambiguous()).toEqual([]);
   });
+});
+
+/**
+ * The round trip PLAN.md M2 task 10 asks for: a real server, a headless client
+ * on a real directory, and the plugin's adapter over its faked `DataAdapter`.
+ */
+beforeAll(async () => {
+  await serverBinary();
+}, 180_000);
+afterAll(async () => await cleanupBinary());
+
+let server: TestServer | undefined;
+const clients: Client[] = [];
+
+afterEach(async () => {
+  while (clients.length) clients.pop()!.close();
+  if (server) await server.cleanup();
+  server = undefined;
+});
+
+async function credentials(name: string) {
+  return {
+    url: server!.wsUrl,
+    ...(await server!.deviceCredentials(name)),
+    vaultId: "default",
+    device: name,
+    timeoutMs: 20_000,
+    coalesceWrites: false,
+  };
+}
+
+async function headless(dir: string): Promise<Client> {
+  const c = new Client({
+    vault: new NodeVault(dir),
+    store: new JsonIndexStore(join(dir, ".trew", "index.json")),
+    ...(await credentials("headless")),
+  });
+  clients.push(c);
+  await c.connect();
+  return c;
+}
+
+async function plugin(): Promise<{ c: Client; adapter: FakeAdapter }> {
+  const adapter = new FakeAdapter();
+  const c = new Client({
+    vault: new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian"),
+    store: new ObsidianIndexStore(adapter, ".obsidian/plugins/trew/index.json"),
+    ...(await credentials("plugin")),
+  });
+  clients.push(c);
+  await c.connect();
+  return { c, adapter };
+}
+
+/** Everything a person would see in the fake vault. */
+function notes(adapter: FakeAdapter): string[] {
+  return adapter.filePaths().filter((p) => !p.startsWith(".obsidian/") && !p.startsWith(".trash/"));
+}
+
+describe("a no-break space through both clients", () => {
+  it("is one server path, and an edit comes back to the file on disk", async () => {
+    server = new TestServer();
+    await server.start();
+
+    // Created on the disk, as Finder or a shell would.
+    await writeFile(join(root, NBSP), "typed on the disk\n");
+    const cli = await headless(root);
+    const up = await cli.settle();
+    expect(up.blocked, `the note was held back: ${JSON.stringify(up.inTheWay)}`).toBe(0);
+    expect(await server.cli("cat", "-path", SPACE)).toBe("typed on the disk\n");
+
+    const obsidian = await plugin();
+    await obsidian.c.settle();
+    expect(notes(obsidian.adapter), "the plugin got a different name").toEqual([SPACE]);
+    expect(obsidian.adapter.text(SPACE)).toBe("typed on the disk\n");
+
+    // Edited in Obsidian, and carried back.
+    obsidian.adapter.seed(SPACE, "edited in Obsidian\n", times.mtime + 60_000);
+    await obsidian.c.settle();
+    await receiveCommitted(cli.transport);
+    const down = await cli.settle();
+    expect(down.blocked).toBe(0);
+
+    // Rule 10: on the file the person has, with no twin beside it. Two files
+    // that look identical, one of them stale, is the failure this is for.
+    expect(await onDisk(), "a second file was made beside the note").toEqual([NBSP]);
+    expect(await readFile(join(root, NBSP), "utf8")).toBe("edited in Obsidian\n");
+    expect(await server.cli("cat", "-path", SPACE)).toBe("edited in Obsidian\n");
+
+    // And an edit on the disk goes up under the same path again.
+    await writeFile(join(root, NBSP), "edited on the disk\n");
+    const later = new Date(times.mtime + 120_000);
+    await utimes(join(root, NBSP), later, later);
+    await cli.settle();
+    await receiveCommitted(obsidian.c.transport);
+    await obsidian.c.settle();
+    expect(notes(obsidian.adapter)).toEqual([SPACE]);
+    expect(obsidian.adapter.text(SPACE)).toBe("edited on the disk\n");
+    expect(await onDisk()).toEqual([NBSP]);
+  }, 120_000);
+
+  it("reaches the same path from a no-break name in Obsidian", async () => {
+    server = new TestServer();
+    await server.start();
+
+    const obsidian = await plugin();
+    obsidian.adapter.seed(NARROW, "typed in Obsidian\n");
+    await obsidian.c.settle();
+    expect(await server.cli("cat", "-path", SPACE)).toBe("typed in Obsidian\n");
+
+    // A headless client whose disk already holds the note under a no-break
+    // spelling of its own takes the server's version as the same note rather
+    // than as a second file with a plain space.
+    await writeFile(join(root, NBSP), "typed in Obsidian\n");
+    const cli = await headless(root);
+    const first = await cli.settle();
+    expect(first.blocked).toBe(0);
+    expect(await onDisk()).toEqual([NBSP]);
+
+    await writeFile(join(root, NBSP), "edited on the disk\n");
+    const later = new Date(times.mtime + 120_000);
+    await utimes(join(root, NBSP), later, later);
+    await cli.settle();
+    await receiveCommitted(obsidian.c.transport);
+    await obsidian.c.settle();
+    expect(notes(obsidian.adapter), "the plugin grew a second note").toEqual([NARROW]);
+    expect(obsidian.adapter.text(NARROW)).toBe("edited on the disk\n");
+    expect(await onDisk()).toEqual([NBSP]);
+  }, 120_000);
 });
