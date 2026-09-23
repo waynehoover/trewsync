@@ -202,8 +202,9 @@ describe("the handshake, against the real server", () => {
     clients.push(c);
     const ready = await c.connect(server);
     expect(ready.proto).toBe(PROTO);
-    // One protocol, so the range the server speaks is one number wide.
-    expect(ready.minProto).toBe(PROTO);
+    // Answered in this client's protocol, 2, from a range that still reaches
+    // back to 1, which the server answers devices not yet upgraded in.
+    expect(ready.minProto).toBe(1);
     expect(ready.serverVersion).not.toBe("");
     // And the store's epoch, which every store has, and which a device keeps
     // beside its cursor.
@@ -795,7 +796,7 @@ describe("refusals that the session survives", () => {
     // Both numbers named, because that is how somebody works out which end to
     // upgrade.
     expect(String(refusal["msg"])).toMatch(/protocol 7 not supported/);
-    expect(String(refusal["msg"])).toMatch(new RegExp(`${PROTO} to ${PROTO}`));
+    expect(String(refusal["msg"])).toMatch(new RegExp(`1 to ${PROTO}`));
     expect(refusal["retryable"]).toBe(false);
   });
 });

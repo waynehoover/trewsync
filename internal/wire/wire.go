@@ -34,9 +34,19 @@ import (
 // Version 1 is this product's first. Basalt's protocol 7 is refused as `proto`,
 // so a Basalt plugin pointed at this server is told which versions the two ends
 // speak rather than failing to authenticate.
+//
+// Version 2 is protocol 1 and undo (PLAN.md section 4.5): the `undo` request,
+// and the operation that wrote a version on each `history` entry. Nothing in
+// protocol 1 changed, so a session is answered in the version its hello asked
+// for, and one that asked for 1 is answered exactly as protocol 1 was: no
+// `undo`, which is an unknown op there, and history entries as they were. The
+// upgrade order is the server first (docs/server.md, "Upgrade order"), so
+// every device on protocol 1 keeps syncing through the upgrade.
 const (
-	Proto    = 1
+	Proto    = 2
 	MinProto = 1
+	// ProtoUndo is the first version with undo.
+	ProtoUndo = 2
 )
 
 // MaxRequestID bounds a client-chosen request id: an integer from 1 to 2^32-1.
@@ -98,6 +108,13 @@ const (
 	// sentence: a list read a moment ago is stale and wants refreshing, which
 	// is a different act from every other refusal a revoke can get.
 	CodeNoDevice = "nodevice"
+	// CodeNoUndo is an undo (protocol 2) that cannot be done, whatever the
+	// device does next: no such operation, one already undone, one whose
+	// before-image a purge has taken, one that left nothing to put back, or
+	// a folder it made that is not empty. The message says which. An undo
+	// refused because a note changed since is `stale` instead, since that
+	// one has an answer: the copy.
+	CodeNoUndo = "noundo"
 	// CodeProtoState is a message that does not belong in the current state:
 	// a put before hello, a stray binary frame, a frame that is not text. The
 	// session closes.
@@ -214,6 +231,12 @@ type In struct {
 
 	// putmany
 	Entries []PutEntry `json:"entries"`
+
+	// undo (protocol 2): OpID is the operation to undo, as a history entry's
+	// `op` names it, and ToCopy asks for the copy, which writes the versions
+	// the operation replaced beside their notes and changes nothing else.
+	OpID   string `json:"opId,omitempty"`
+	ToCopy bool   `json:"toCopy,omitempty"`
 }
 
 // PutEntry is one file inside a batched put.
@@ -565,6 +588,47 @@ type History struct {
 	// which answer it is holding.
 	Path    string        `json:"path"`
 	Entries []store.Entry `json:"entries"`
+}
+
+// HistoryV2 is History in protocol 2, where each entry an agent operation or
+// an undo wrote says which: its `op`, with the id a device's undo names.
+type HistoryV2 struct {
+	Res     string         `json:"res"` // "history"
+	ID      int64          `json:"id,omitempty"`
+	Path    string         `json:"path"`
+	Entries []HistoryEntry `json:"entries"`
+}
+
+// HistoryEntry is one version in a protocol 2 history: the entry, and the
+// operation that wrote it when an operation did. A device's own versions have
+// no `op`.
+type HistoryEntry struct {
+	store.Entry
+	Op *store.OperationRef `json:"op,omitempty"`
+}
+
+// Undone answers an undo (protocol 2): the undo committed, as the operation
+// OpID, undoing Undoes. Steps say what it did to each path, in order, a copy's
+// destination included; Entries are the versions it wrote, which reach every
+// device, this one too, as an ordinary batch.
+type Undone struct {
+	Res         string           `json:"res"` // "undone"
+	ID          int64            `json:"id,omitempty"`
+	OpID        string           `json:"opId"`
+	Undoes      string           `json:"undoes"`
+	ToCopy      bool             `json:"toCopy"`
+	CommittedAt int64            `json:"committedAt"`
+	Steps       []store.UndoStep `json:"steps"`
+	Entries     []UndoneEntry    `json:"entries"`
+}
+
+// UndoneEntry is one version an undo wrote, and the version it displaced
+// there, zero for a path that held nothing.
+type UndoneEntry struct {
+	Path        string `json:"path"`
+	UID         int64  `json:"uid"`
+	PreviousUID int64  `json:"previousUid"`
+	Prev        string `json:"prev,omitempty"`
 }
 
 // Deleted answers a deleted request with every path whose newest version is a

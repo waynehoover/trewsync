@@ -1,6 +1,8 @@
 {
   "note": [
-    "Protocol 1 exchanges, message by message (plan/protocol.md; PLAN.md M1 task 12).",
+    "Protocol exchanges, message by message (plan/protocol.md; PLAN.md M1 task 12 and M5 task 7):",
+    "protocol 2 unless a hello says otherwise, which one transcript does, to hold the server to",
+    "answering protocol 1 as protocol 1.",
     "Written by scripts/protocol-transcripts.py and replayed against a real server on a fresh",
     "store by internal/server/transcripts_test.go, which fails on any frame that differs.",
     "",
@@ -8,7 +10,8 @@
     "registered with the SHA-256 of its token's raw bytes and the createdAt given. Steps run in",
     "order. A step names a connection (conn), opened by its first step and closed by close or",
     "by the server (expectClose), and does one thing:",
-    "  send          a text frame, the JSON as given",
+    "  send          a text frame, the JSON as given, a placeholder marked same standing for the",
+    "                value it was bound to earlier in the transcript",
     "  sendBinary    a binary frame, the hex as given, marker byte included",
     "  expect        the next text frame on that connection, compared as JSON: the same keys,",
     "                no others, equal values, except placeholders",
@@ -16,15 +19,18 @@
     "                bodies') to the raw bytes in this hex; a replaying server may deflate or not",
     "  expectClose   the server closes the connection with nothing more sent",
     "  store         done to the store directly, not over the wire: put commits a version of",
-    "                path with these bodies (hex) and mtime, written by device 'seed'; loseChunk",
-    "                removes a body from the chunk tree. A fake socket ignores these steps: the",
-    "                server's frames already reflect them.",
+    "                path with these bodies (hex) and mtime, written by device 'seed'; operation",
+    "                commits the same as an agent's edit of path's head, through the commit",
+    "                boundary the MCP tools use, by a token labelled 'agent'; loseChunk removes a",
+    "                body from the chunk tree. A fake socket ignores these steps: the server's",
+    "                frames already reflect them.",
     "After the last step, no connection may be sent anything more.",
     "",
     "A placeholder is a whole string value beginning with $. $name matches the placeholder's kind;",
     "one marked same must match one value everywhere it appears in a transcript. $prefix:TEXT",
     "matches a string beginning with TEXT. A fake socket sends each placeholder's example, and",
-    "for $prefix:TEXT the text followed by 'example'."
+    "for $prefix:TEXT the text followed by 'example', and a client is held to sending a same",
+    "placeholder's example where the transcript sends it."
   ],
   "format": 1,
   "vault": "v1",
@@ -52,18 +58,30 @@
       "same": false,
       "example": 1790000000000,
       "about": "a server timestamp in milliseconds"
+    },
+    "$opId": {
+      "kind": "string",
+      "same": true,
+      "example": "EditEditEditEditEditEQ",
+      "about": "an operation's id, 16 random bytes in base64url"
+    },
+    "$undoId": {
+      "kind": "string",
+      "same": true,
+      "example": "UndoUndoUndoUndoUndoUQ",
+      "about": "an undo's own operation id, 16 random bytes in base64url"
     }
   },
   "devices": {
     "laptop": {
       "deviceId": "laptop",
-      "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+      "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
       "device": "laptop",
       "createdAt": 1
     },
     "phone": {
       "deviceId": "phone",
-      "token": "cilBIMICnjZ3qV_o-b6w_eYztc_2WGAGqQurO_kET3Y",
+      "token": "7-9Gc1q0Oygg54LeE0hmTYzAUcYEA-UWIEgSPXZtkJs",
       "device": "phone",
       "createdAt": 2
     }
@@ -88,10 +106,10 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "vault": "v1",
             "deviceId": "laptop",
-            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
             "device": "laptop",
             "cursor": 0
           }
@@ -101,7 +119,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -190,10 +208,10 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "vault": "v1",
             "deviceId": "laptop",
-            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
             "device": "laptop",
             "cursor": 0
           }
@@ -203,7 +221,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -227,10 +245,10 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "vault": "v1",
             "deviceId": "phone",
-            "token": "cilBIMICnjZ3qV_o-b6w_eYztc_2WGAGqQurO_kET3Y",
+            "token": "7-9Gc1q0Oygg54LeE0hmTYzAUcYEA-UWIEgSPXZtkJs",
             "device": "phone",
             "cursor": 0
           }
@@ -240,7 +258,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -387,10 +405,10 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "vault": "v1",
             "deviceId": "laptop",
-            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
             "device": "laptop",
             "cursor": 1
           }
@@ -400,7 +418,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -549,10 +567,10 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "vault": "v1",
             "deviceId": "laptop",
-            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
             "device": "laptop",
             "cursor": 2
           }
@@ -562,7 +580,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -681,10 +699,10 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "vault": "v1",
             "deviceId": "laptop",
-            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
             "device": "laptop",
             "cursor": 2
           }
@@ -694,7 +712,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -787,10 +805,10 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "vault": "v1",
             "deviceId": "laptop",
-            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
             "device": "laptop",
             "cursor": 0
           }
@@ -800,7 +818,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -874,10 +892,10 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "vault": "v1",
             "deviceId": "laptop",
-            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
             "device": "laptop",
             "cursor": 2
           }
@@ -887,7 +905,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -934,10 +952,10 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "vault": "v1",
             "deviceId": "phone",
-            "token": "cilBIMICnjZ3qV_o-b6w_eYztc_2WGAGqQurO_kET3Y",
+            "token": "7-9Gc1q0Oygg54LeE0hmTYzAUcYEA-UWIEgSPXZtkJs",
             "device": "phone",
             "cursor": 3
           }
@@ -947,7 +965,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1066,10 +1084,10 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "vault": "v1",
             "deviceId": "laptop",
-            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
             "device": "laptop",
             "cursor": 1
           }
@@ -1079,7 +1097,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1184,10 +1202,10 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "vault": "v1",
             "deviceId": "laptop",
-            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
             "device": "laptop",
             "cursor": 0
           }
@@ -1197,7 +1215,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 1,
+            "proto": 2,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1315,6 +1333,621 @@
             "res": "err",
             "id": 4,
             "code": "badentry",
+            "msg": "$msg",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "ping"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "pong"
+          }
+        }
+      ]
+    },
+    {
+      "name": "undo",
+      "covers": "Protocol 2: a history entry an agent wrote names its operation; undoing it writes the former bytes back as a new version by the device that asked, which every device is sent as an ordinary batch, the asking one first and before its reply; the history then names the undo and says the edit was undone, and a second undo is refused.",
+      "steps": [
+        {
+          "store": {
+            "op": "put",
+            "path": "a.md",
+            "bodies": [
+              "616c70686120626f6479"
+            ],
+            "mtime": 1
+          }
+        },
+        {
+          "store": {
+            "op": "operation",
+            "path": "a.md",
+            "bodies": [
+              "627261766f20626f6479"
+            ],
+            "mtime": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 2,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
+            "device": "laptop",
+            "cursor": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 2,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 2,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "batch",
+            "from": 1,
+            "to": 2,
+            "entries": [
+              {
+                "uid": 1,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 1,
+                "folder": false,
+                "deleted": false,
+                "device": "seed",
+                "chunks": [
+                  "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+                ]
+              },
+              {
+                "uid": 2,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 2,
+                "folder": false,
+                "deleted": false,
+                "device": "agent",
+                "chunks": [
+                  "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "phone",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 2,
+            "vault": "v1",
+            "deviceId": "phone",
+            "token": "7-9Gc1q0Oygg54LeE0hmTYzAUcYEA-UWIEgSPXZtkJs",
+            "device": "phone",
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 2,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 2,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "history",
+            "id": 2,
+            "path": "a.md"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "history",
+            "id": 2,
+            "path": "a.md",
+            "entries": [
+              {
+                "uid": 2,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 2,
+                "folder": false,
+                "deleted": false,
+                "device": "agent",
+                "chunks": [
+                  "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697"
+                ],
+                "op": {
+                  "id": "$opId",
+                  "tool": "edit_note",
+                  "kind": "mcp"
+                }
+              },
+              {
+                "uid": 1,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 1,
+                "folder": false,
+                "deleted": false,
+                "device": "seed",
+                "chunks": [
+                  "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "undo",
+            "id": 3,
+            "opId": "$opId"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "batch",
+            "from": 3,
+            "to": 3,
+            "entries": [
+              {
+                "uid": 3,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": "$time",
+                "folder": false,
+                "deleted": false,
+                "device": "laptop",
+                "chunks": [
+                  "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "undone",
+            "id": 3,
+            "opId": "$undoId",
+            "undoes": "$opId",
+            "toCopy": false,
+            "committedAt": "$time",
+            "steps": [
+              {
+                "action": "restore",
+                "path": "a.md",
+                "before": 1,
+                "after": 2
+              }
+            ],
+            "entries": [
+              {
+                "path": "a.md",
+                "uid": 3,
+                "previousUid": 2
+              }
+            ]
+          }
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "op": "batch",
+            "from": 3,
+            "to": 3,
+            "entries": [
+              {
+                "uid": 3,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": "$time",
+                "folder": false,
+                "deleted": false,
+                "device": "laptop",
+                "chunks": [
+                  "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "history",
+            "id": 4,
+            "path": "a.md"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "history",
+            "id": 4,
+            "path": "a.md",
+            "entries": [
+              {
+                "uid": 3,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": "$time",
+                "folder": false,
+                "deleted": false,
+                "device": "laptop",
+                "chunks": [
+                  "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+                ],
+                "op": {
+                  "id": "$undoId",
+                  "tool": "undo",
+                  "kind": "device"
+                }
+              },
+              {
+                "uid": 2,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 2,
+                "folder": false,
+                "deleted": false,
+                "device": "agent",
+                "chunks": [
+                  "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697"
+                ],
+                "op": {
+                  "id": "$opId",
+                  "tool": "edit_note",
+                  "kind": "mcp",
+                  "undoneBy": "$undoId"
+                }
+              },
+              {
+                "uid": 1,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 1,
+                "folder": false,
+                "deleted": false,
+                "device": "seed",
+                "chunks": [
+                  "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "undo",
+            "id": 5,
+            "opId": "$opId"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 5,
+            "code": "noundo",
+            "msg": "$prefix:already_undone: ",
+            "retryable": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "undo of nothing",
+      "covers": "Protocol 2: an undo naming an operation the vault never committed is refused noundo, one naming no operation id at all is refused badentry, and the session goes on.",
+      "steps": [
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 2,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
+            "device": "laptop",
+            "cursor": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 2,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 0,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "undo",
+            "id": 2,
+            "opId": "AAAAAAAAAAAAAAAAAAAAAA"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 2,
+            "code": "noundo",
+            "msg": "$prefix:not_found: ",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "undo",
+            "id": 3,
+            "opId": "not an operation"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 3,
+            "code": "badentry",
+            "msg": "$msg",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "ping"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "pong"
+          }
+        }
+      ]
+    },
+    {
+      "name": "protocol 1 is still answered",
+      "covers": "A device on protocol 1 is answered in protocol 1 by a server of protocol 2: its ready says 1, a history entry an agent wrote carries no operation, and undo, which protocol 1 does not have, is an unknown op that rejects the request and keeps the session. The server's half only: the TypeScript client speaks protocol 2, so it does not play this one.",
+      "steps": [
+        {
+          "store": {
+            "op": "put",
+            "path": "a.md",
+            "bodies": [
+              "616c70686120626f6479"
+            ],
+            "mtime": 1
+          }
+        },
+        {
+          "store": {
+            "op": "operation",
+            "path": "a.md",
+            "bodies": [
+              "627261766f20626f6479"
+            ],
+            "mtime": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
+            "device": "laptop",
+            "cursor": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 2,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "batch",
+            "from": 1,
+            "to": 2,
+            "entries": [
+              {
+                "uid": 1,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 1,
+                "folder": false,
+                "deleted": false,
+                "device": "seed",
+                "chunks": [
+                  "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+                ]
+              },
+              {
+                "uid": 2,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 2,
+                "folder": false,
+                "deleted": false,
+                "device": "agent",
+                "chunks": [
+                  "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "history",
+            "id": 2,
+            "path": "a.md"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "history",
+            "id": 2,
+            "path": "a.md",
+            "entries": [
+              {
+                "uid": 2,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 2,
+                "folder": false,
+                "deleted": false,
+                "device": "agent",
+                "chunks": [
+                  "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697"
+                ]
+              },
+              {
+                "uid": 1,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 1,
+                "folder": false,
+                "deleted": false,
+                "device": "seed",
+                "chunks": [
+                  "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "undo",
+            "id": 3,
+            "opId": "AAAAAAAAAAAAAAAAAAAAAA"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 3,
+            "code": "protostate",
             "msg": "$msg",
             "retryable": false
           }

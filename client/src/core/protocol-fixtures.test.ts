@@ -22,13 +22,14 @@ import {
   LOCAL_MAX_BATCH_BYTES,
   LOCAL_MAX_CHUNK_BYTES,
   LOCAL_MAX_FETCH_BYTES,
+  PROTO,
 } from "./transport.ts";
 import type { WireEntry } from "./transport.ts";
 
 interface Fixture {
   goodChunk: string;
   ceilings: { maxBatchBytes: number; maxFetchBytes: number };
-  constants: { chunkMax: number };
+  constants: { chunkMax: number; proto: number; minProto: number };
   cases: { name: string; valid: boolean; why?: string; entry: Record<string, unknown> }[];
 }
 
@@ -92,5 +93,15 @@ describe("the ceilings both languages hard-code", () => {
    */
   it("hold the chunk ceiling at the protocol's", () => {
     expect(fixtures.constants.chunkMax).toBe(LOCAL_MAX_CHUNK_BYTES);
+  });
+
+  /**
+   * The version this client says at hello is the newest the contract names,
+   * the one the server answers undo in; a client behind it would never be
+   * offered an undo, and one ahead of it would be refused at every hello.
+   */
+  it("speak the newest protocol the contract names", () => {
+    expect(fixtures.constants.proto).toBe(PROTO);
+    expect(fixtures.constants.minProto).toBeLessThanOrEqual(PROTO);
   });
 });

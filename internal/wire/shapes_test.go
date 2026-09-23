@@ -74,8 +74,10 @@ func TestNoFieldOfTheCryptoSurvives(t *testing.T) {
 			}
 		}
 	}
-	if Proto != 1 || MinProto != 1 {
-		t.Errorf("the protocol range is %d to %d; protocol 1 is the only one", MinProto, Proto)
+	// Protocol 2 added undo and nothing else, so the range is 1 to 2 and
+	// protocol 1 is still answered as it was.
+	if Proto != 2 || MinProto != 1 || ProtoUndo != 2 {
+		t.Errorf("the protocol range is %d to %d with undo from %d; it is 1 to 2, undo from 2", MinProto, Proto, ProtoUndo)
 	}
 }
 
@@ -88,6 +90,7 @@ func TestTheWireConstantsAreTheContracts(t *testing.T) {
 	var f struct {
 		Constants struct {
 			Proto            int   `json:"proto"`
+			MinProto         int   `json:"minProto"`
 			InviteTokenBytes int   `json:"inviteTokenBytes"`
 			DeviceTokenBytes int   `json:"deviceTokenBytes"`
 			MaxNameBytes     int   `json:"maxNameBytes"`
@@ -103,6 +106,7 @@ func TestTheWireConstantsAreTheContracts(t *testing.T) {
 		got, want int64
 	}{
 		{"proto", int64(Proto), int64(c.Proto)},
+		{"min proto", int64(MinProto), int64(c.MinProto)},
 		{"invite token bytes", int64(store.InviteTokenBytes), int64(c.InviteTokenBytes)},
 		{"device token bytes", int64(store.DeviceTokenBytes), int64(c.DeviceTokenBytes)},
 		{"vault name bytes", int64(store.MaxVaultLen), int64(c.MaxNameBytes)},

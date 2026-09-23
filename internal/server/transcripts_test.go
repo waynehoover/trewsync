@@ -198,7 +198,11 @@ func (p *replayer) step(st transcriptStep) error {
 	}
 	switch {
 	case st.Send != nil:
-		return c.Write(p.ctx, websocket.MessageText, st.Send)
+		frame, err := p.bound(st.Send)
+		if err != nil {
+			return err
+		}
+		return c.Write(p.ctx, websocket.MessageText, frame)
 	case st.SendBinary != "":
 		b, err := hex.DecodeString(st.SendBinary)
 		if err != nil {
@@ -271,11 +275,63 @@ func (p *replayer) read(c *websocket.Conn) (websocket.MessageType, []byte, error
 	return c.Read(ctx)
 }
 
+// bound is a frame to send with each placeholder in it replaced by the value
+// it was bound to earlier in the transcript: an operation's id, learned from a
+// history, sent back in an undo. Only a placeholder marked same can stand for
+// a value, and only once a frame has bound it.
+func (p *replayer) bound(frame json.RawMessage) (json.RawMessage, error) {
+	var v any
+	if err := json.Unmarshal(frame, &v); err != nil {
+		return nil, fmt.Errorf("the frame to send is not JSON: %w", err)
+	}
+	var fill func(any) (any, error)
+	fill = func(v any) (any, error) {
+		switch x := v.(type) {
+		case string:
+			if !strings.HasPrefix(x, "$") {
+				return x, nil
+			}
+			if h, ok := p.f.Placeholders[x]; !ok || !h.Same {
+				return nil, fmt.Errorf("%s in a frame to send, and only a placeholder marked same can stand for a value", x)
+			}
+			bound, ok := p.binds[x]
+			if !ok {
+				return nil, fmt.Errorf("%s is sent before any frame bound it", x)
+			}
+			return bound, nil
+		case map[string]any:
+			for k, e := range x {
+				f, err := fill(e)
+				if err != nil {
+					return nil, err
+				}
+				x[k] = f
+			}
+		case []any:
+			for i, e := range x {
+				f, err := fill(e)
+				if err != nil {
+					return nil, err
+				}
+				x[i] = f
+			}
+		}
+		return v, nil
+	}
+	filled, err := fill(v)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(filled)
+}
+
 // seed does a store step: what the transcript says happened on the server
 // rather than on a connection.
 func (p *replayer) seed(s transcriptSeed) error {
 	st := p.r.st
 	switch s.Op {
+	case "operation":
+		return p.agentEdit(s)
 	case "put":
 		names := make([]string, 0, len(s.Bodies))
 		var size int64
@@ -303,6 +359,46 @@ func (p *replayer) seed(s transcriptSeed) error {
 		return os.Remove(path)
 	}
 	return fmt.Errorf("unknown store step %q", s.Op)
+}
+
+// agentEdit is the operation store step: an agent's edit of the path's head,
+// committed through CommitOperation and broadcast under the commit lock, as
+// the MCP tools commit one, by a token labelled "agent".
+func (p *replayer) agentEdit(s transcriptSeed) error {
+	st := p.r.st
+	tok, err := st.CreateMCPToken(p.f.Vault, "agent", store.ScopeWrite, nil, 1)
+	if err != nil {
+		return err
+	}
+	e := store.Entry{Path: s.Path, MTime: s.MTime, Device: "agent", Chunks: []string{}}
+	for _, h := range s.Bodies {
+		b, err := hex.DecodeString(h)
+		if err != nil {
+			return err
+		}
+		n := chunks.Name(b)
+		if err := st.Chunks().Put(p.f.Vault, n, b); err != nil {
+			return err
+		}
+		e.Chunks = append(e.Chunks, n)
+		e.Size += int64(len(b))
+	}
+	base, err := st.CurrentUID(p.f.Vault, s.Path)
+	if err != nil {
+		return err
+	}
+	return p.r.srv.UnderCommitLock(func() error {
+		res, err := st.CommitOperation(store.Operation{
+			Vault: p.f.Vault, ActorID: tok.ID, ActorHash: store.MCPTokenHash(tok.Token), ActorLabel: "agent",
+			Tool: "edit_note", RequestDigest: strings.Repeat("0", 64), Epoch: st.Epoch(),
+			Entries: []store.OpEntry{{Entry: e, Base: base}},
+			Render:  func(store.OpResult) ([]byte, error) { return []byte(`{}`), nil }, MaxResult: 1 << 10,
+		})
+		if err == nil {
+			p.r.srv.Broadcast(p.f.Vault, res.Committed())
+		}
+		return err
+	})
 }
 
 // match compares a frame against an expectation: the same keys, no others,
@@ -415,7 +511,8 @@ func TestTheTranscriptsAreWhatTheServerDoes(t *testing.T) {
 		})
 	}
 	for _, want := range []string{"have", "want", "mixed-success putmany", "stale rename source",
-		"stale rename destination", "reconnect continuity", "resend repair", "applied receipts"} {
+		"stale rename destination", "reconnect continuity", "resend repair", "applied receipts",
+		"undo", "undo of nothing", "protocol 1 is still answered"} {
 		if !names[want] {
 			t.Errorf("no transcript covers %q", want)
 		}

@@ -66,12 +66,7 @@ func (s *Server) UnderCommitLock(fn func() error) error {
 // catches up from the log, so committed never waits on delivered (section
 // 4.8). No session is the origin, so every peer receives the entries whole.
 func (s *Server) Broadcast(vaultID string, entries []store.Entry) {
-	for _, e := range entries {
-		s.log.Info("committed", "vault", vaultID, "uid", e.UID,
-			"size", e.Size, "chunks", len(e.Chunks),
-			"folder", e.Folder, "deleted", e.Deleted, "author", "mcp")
-		s.hub.broadcast(vaultID, e, nil)
-	}
+	s.broadcastAs(vaultID, entries, store.AuthorKindMCP)
 }
 
 // DeliveryStatus is every device registered to the vault with whether it is

@@ -1,7 +1,7 @@
 /**
  * `protocol-transcripts.json`, played back to the real transport.
  *
- * The file holds protocol 1 exchanges message by message, written by
+ * The file holds protocol exchanges message by message, written by
  * `scripts/protocol-transcripts.py` and replayed against a real server on a
  * fresh store by `internal/server/transcripts_test.go`, which fails on any
  * frame the server sends that differs. This is the other half: a fake socket
@@ -13,18 +13,24 @@
  * Each Transport call is derived from the transcript's own client frames: the
  * hello from the hello frame, a put or a putmany from its frame with `bodyOf`
  * answering from the bodies the transcript sends after it, and a fetch, a
- * resend, an applied, a devices and a ping from theirs. Server frames go out
- * with each placeholder's example in place, `store` steps are skipped (the
- * server's frames already reflect them), and at the end nothing may be left
- * over on either side: no frame the client sent that the transcript lacks, no
- * call still waiting on a server frame, and no connection closed that the
- * transcript did not close.
+ * resend, an applied, a devices, a history, an undo and a ping from theirs.
+ * Server frames go out with each placeholder's example in place, `store`
+ * steps are skipped (the server's frames already reflect them), and at the end
+ * nothing may be left over on either side: no frame the client sent that the
+ * transcript lacks, no call still waiting on a server frame, and no connection
+ * closed that the transcript did not close.
  *
  * Text frames are compared as parsed JSON: the same keys, no others, equal
- * values. A binary frame is compared byte for byte where the transcript's hex
- * is exactly what this client's `encodeFrame` makes of those bytes, and by
- * the bytes it decodes to otherwise, since a sender may deflate or not; which
- * of the two each step used is pinned below.
+ * values, and a placeholder marked same in a client frame standing for the
+ * example the fake socket sent in its place (an operation's id, learned from
+ * a history and sent back in an undo). A binary frame is compared byte for
+ * byte where the transcript's hex is exactly what this client's `encodeFrame`
+ * makes of those bytes, and by the bytes it decodes to otherwise, since a
+ * sender may deflate or not; which of the two each step used is pinned below.
+ *
+ * A transcript whose hello asks for another protocol than this client's is the
+ * server's half alone: the server answers protocol 1 as protocol 1, and this
+ * client cannot send a hello of it. Which transcripts those are is pinned.
  */
 
 import { readFileSync } from "node:fs";
@@ -38,6 +44,7 @@ import { FakeSocket, rawFrame, settle } from "./fake-socket.ts";
 import { MARKER_DEFLATE, decodeFrame, encodeFrame } from "./frame.ts";
 import {
   LOCAL_MAX_CHUNK_BYTES,
+  PROTO,
   ProtocolError,
   Transport,
   type Batch,
@@ -128,18 +135,33 @@ function substituted(value: Json, placeholders: Record<string, Placeholder>): Js
  * no others, and equal values all the way down. Throws naming the first
  * difference, which is what a failed replay reports.
  */
-function compareText(want: Json, got: Json, where: string): void {
+function compareText(
+  want: Json,
+  got: Json,
+  where: string,
+  placeholders: Record<string, Placeholder>,
+): void {
   const say = (v: Json) => JSON.stringify(v);
   if (typeof want === "string" && want.startsWith("$")) {
-    // The client's frames are concrete in the file; a placeholder in one is a
-    // transcript this replayer does not know how to hold the client to.
-    throw new Error(`${where}: ${want} in a client frame, which this replayer does not match`);
+    // A value the client learned from the server, which the fake socket sent
+    // as the placeholder's example, and so the example is what the client
+    // owes. Any other placeholder is one this replayer cannot hold it to.
+    const holder = placeholders[want];
+    if (holder === undefined || !holder.same) {
+      throw new Error(`${where}: ${want} in a client frame, which this replayer does not match`);
+    }
+    if (!Object.is(holder.example, got)) {
+      throw new Error(
+        `${where}: the transcript has ${want}, sent as ${say(holder.example)}, and the client sent ${say(got)}`,
+      );
+    }
+    return;
   }
   if (Array.isArray(want)) {
     if (!Array.isArray(got) || got.length !== want.length) {
       throw new Error(`${where}: the transcript has ${say(want)}, the client sent ${say(got)}`);
     }
-    want.forEach((w, i) => compareText(w, got[i]!, `${where}[${i}]`));
+    want.forEach((w, i) => compareText(w, got[i]!, `${where}[${i}]`, placeholders));
     return;
   }
   if (want !== null && typeof want === "object") {
@@ -155,7 +177,7 @@ function compareText(want: Json, got: Json, where: string): void {
       if (!(key in got)) {
         throw new Error(`${where}: the transcript has "${key}", which the client did not send`);
       }
-      compareText(want[key]!, got[key]!, `${where}.${key}`);
+      compareText(want[key]!, got[key]!, `${where}.${key}`, placeholders);
     }
     return;
   }
@@ -291,7 +313,7 @@ async function replay(file: TranscriptFile, tr: Transcript): Promise<Replayed> {
         throw new Error(`${where}: the transcript sends no body named ${name}`);
       return body;
     };
-    const f = frame as Record<string, unknown>;
+    const f = substituted(frame, file.placeholders) as Record<string, unknown>;
     const t = conn.t;
     let promise: Promise<unknown>;
     switch (f["op"]) {
@@ -344,6 +366,12 @@ async function replay(file: TranscriptFile, tr: Transcript): Promise<Replayed> {
       case "ping":
         promise = t.ping();
         break;
+      case "history":
+        promise = t.history(f["path"] as string);
+        break;
+      case "undo":
+        promise = t.undo(f["opId"] as string, f["toCopy"] === true ? { toCopy: true } : {});
+        break;
       default:
         throw new Error(`${where}: no Transport call sends ${JSON.stringify(f["op"])}`);
     }
@@ -368,7 +396,7 @@ async function replay(file: TranscriptFile, tr: Transcript): Promise<Replayed> {
         if (!("text" in got)) {
           throw new Error(`${where}: the client sent a binary frame where the transcript has text`);
         }
-        compareText(step.send, got.text, `${where}, ${String(step.send["op"])}`);
+        compareText(step.send, got.text, `${where}, ${String(step.send["op"])}`, file.placeholders);
       } else if (step.sendBinary !== undefined) {
         const want = fromHex(step.sendBinary);
         const got = await nextSent(conn, where, `the body ${step.sendBinary}`);
@@ -479,7 +507,7 @@ function refusal(conn: Conn, i: number, op: string): ProtocolError {
 /** The limits a transcript's ready carries, once its placeholders are filled. */
 function limits(cursor: number) {
   return {
-    proto: 1,
+    proto: PROTO,
     minProto: 1,
     serverVersion: "dev",
     epoch: "transcript-epoch",
@@ -602,12 +630,80 @@ const RESULTS: Record<string, (c: Map<string, Conn>) => void> = {
     expect(value(laptop, 4, "ping")).toBeUndefined();
     expect(laptop.openAtEnd, "a refused checkpoint ended the session").toBe(true);
   },
+  undo: (c) => {
+    const laptop = c.get("laptop")!;
+    const agent = { id: "EditEditEditEditEditEQ", tool: "edit_note", kind: "mcp" };
+    expect(value(laptop, 0, "hello")).toEqual(limits(2));
+    const history = value(laptop, 1, "history") as { op?: unknown; uid: number; device: string }[];
+    expect(history.map((e) => [e.uid, e.device, e.op])).toEqual([
+      [2, "agent", agent],
+      [1, "seed", undefined],
+    ]);
+    expect(value(laptop, 2, "undo")).toEqual({
+      opId: "UndoUndoUndoUndoUndoUQ",
+      undoes: agent.id,
+      toCopy: false,
+      committedAt: 1790000000000,
+      steps: [{ action: "restore", path: "a.md", before: 1, after: 2 }],
+      entries: [{ path: "a.md", uid: 3, previousUid: 2 }],
+    });
+    // The undo's version arrived as a batch before its reply, on this device
+    // and on the other one.
+    expect(laptop.batches.at(-1)!.entries.map((e) => [e.uid, e.device])).toEqual([[3, "laptop"]]);
+    expect(
+      c
+        .get("phone")!
+        .batches.at(-1)!
+        .entries.map((e) => [e.uid, e.device]),
+    ).toEqual([[3, "laptop"]]);
+    const after = value(laptop, 3, "history") as { uid: number; op?: unknown }[];
+    expect(after.map((e) => [e.uid, e.op])).toEqual([
+      [3, { id: "UndoUndoUndoUndoUndoUQ", tool: "undo", kind: "device" }],
+      [2, { ...agent, undoneBy: "UndoUndoUndoUndoUndoUQ" }],
+      [1, undefined],
+    ]);
+    // Undone once, and a second undo is refused without ending the session.
+    const again = refusal(laptop, 4, "undo");
+    expect(again.code).toBe("noundo");
+    expect(again.message).toBe("already_undone: example");
+    expect(laptop.openAtEnd, "a refused undo ended the session").toBe(true);
+  },
+  "undo of nothing": (c) => {
+    const laptop = c.get("laptop")!;
+    expect(value(laptop, 0, "hello")).toEqual(limits(0));
+    expect(refusal(laptop, 1, "undo")).toMatchObject({
+      code: "noundo",
+      message: "not_found: example",
+    });
+    expect(refusal(laptop, 2, "undo").code).toBe("badentry");
+    expect(value(laptop, 3, "ping")).toBeUndefined();
+    expect(laptop.openAtEnd, "a refused undo ended the session").toBe(true);
+  },
 };
+
+/**
+ * The transcripts this client does not play, because their hello asks for
+ * another protocol than its own, and why: the server's half is all there is.
+ */
+const SERVER_ONLY = ["protocol 1 is still answered"];
+
+/** The protocol a transcript's first hello asks for. */
+function helloProto(tr: Transcript): unknown {
+  return tr.steps.find((s) => s.send?.["op"] === "hello")?.send?.["proto"];
+}
 
 /** Every transcript, replayed, with its batches and results held to the file and the table. */
 async function replayAll(file: TranscriptFile): Promise<Map<string, Replayed>> {
   const all = new Map<string, Replayed>();
   for (const tr of file.transcripts) {
+    if (helloProto(tr) !== PROTO) {
+      if (!SERVER_ONLY.includes(tr.name)) {
+        throw new Error(
+          `${tr.name} asks for protocol ${String(helloProto(tr))}, and is not one the server plays alone`,
+        );
+      }
+      continue;
+    }
     const done = await replay(file, tr);
     for (const [name, conn] of done.conns) {
       const want = sentTo(file, tr, name);
@@ -645,13 +741,26 @@ describe("the protocol transcripts, played to the real transport", () => {
         "reconnect continuity",
         "resend repair",
         "applied receipts",
+        "undo",
+        "undo of nothing",
+        "protocol 1 is still answered",
       ].sort(),
     );
   });
 
   it("sends exactly the client side of every transcript, and returns what it says", async () => {
     const all = await replayAll(load());
-    expect([...all.keys()]).toHaveLength(8);
+    expect([...all.keys()]).toHaveLength(10);
+  });
+
+  it("leaves the server alone with exactly the transcripts of another protocol", () => {
+    const file = load();
+    expect(file.transcripts.filter((t) => helloProto(t) !== PROTO).map((t) => t.name)).toEqual(
+      SERVER_ONLY,
+    );
+    for (const name of SERVER_ONLY) {
+      expect(helloProto(file.transcripts.find((t) => t.name === name)!)).toBe(1);
+    }
   });
 
   /**

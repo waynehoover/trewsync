@@ -46,7 +46,10 @@ INVITE_PREFIX = "trew1i_"
 STAGING_MARK = ".trew-tmp-"
 PRODUCT = "trew"
 
-PROTO = 1
+# Protocol 2 is protocol 1 and undo (plan/protocol.md, "Undo"); the server
+# still answers a hello of protocol 1, as protocol 1.
+PROTO = 2
+MIN_PROTO = 1
 INVITE_VERSION = 1
 INVITE_TOKEN_BYTES = 16
 DEVICE_TOKEN_BYTES = 32
@@ -720,6 +723,7 @@ def main() -> None:
     fixtures["constants"] = {
         "note": ["Name-derived strings and wire numbers both implementations assert they hold."],
         "proto": PROTO,
+        "minProto": MIN_PROTO,
         "product": PRODUCT,
         "invitePrefix": INVITE_PREFIX,
         "stagingMark": STAGING_MARK,

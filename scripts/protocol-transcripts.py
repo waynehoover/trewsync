@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write protocol-transcripts.json: protocol 1 exchanges, message by message.
+"""Write protocol-transcripts.json: protocol exchanges, message by message.
 
     uv run --no-project --python 3.13 scripts/protocol-transcripts.py
 
@@ -59,18 +59,25 @@ DEVICES = {
 }
 
 
-def hello(device: str, rid: int, cursor: int) -> dict:
+# The protocol a transcript speaks unless it says otherwise: 2, which is 1 and
+# undo (plan/protocol.md, "Undo (protocol 2)"). The server answers a hello in
+# the version it asks for, and one transcript holds it to answering 1.
+PROTO = 2
+MIN_PROTO = 1
+
+
+def hello(device: str, rid: int, cursor: int, proto: int = PROTO) -> dict:
     d = DEVICES[device]
-    return {"op": "hello", "id": rid, "proto": 1, "vault": VAULT, "deviceId": d["deviceId"],
+    return {"op": "hello", "id": rid, "proto": proto, "vault": VAULT, "deviceId": d["deviceId"],
             "token": d["token"], "device": d["device"], "cursor": cursor}
 
 
-def ready(rid: int, cursor: int) -> dict:
-    return {"res": "ready", "id": rid, "proto": 1, "minProto": 1, "serverVersion": "$serverVersion",
+def ready(rid: int, cursor: int, proto: int = PROTO) -> dict:
+    return {"res": "ready", "id": rid, "proto": proto, "minProto": MIN_PROTO, "serverVersion": "$serverVersion",
             "epoch": "$epoch", "cursor": cursor, **LIMITS}
 
 
-def entry(uid: int, path: str, bodies: list[bytes], mtime: int, device: str, prev: str = "") -> dict:
+def entry(uid: int, path: str, bodies: list[bytes], mtime, device: str, prev: str = "") -> dict:
     e = {"uid": uid, "path": path, "size": sum(len(b) for b in bodies), "ctime": 0, "mtime": mtime,
          "folder": False, "deleted": False, "device": device}
     if prev:
@@ -112,6 +119,16 @@ def c(conn: str, **step) -> dict:
 
 def seed(path: str, bodies: list[bytes], mtime: int) -> dict:
     return {"store": {"op": "put", "path": path, "bodies": [b.hex() for b in bodies], "mtime": mtime}}
+
+
+def agent_edit(path: str, bodies: list[bytes], mtime: int) -> dict:
+    """An agent's edit of path, committed as an MCP operation would be."""
+    return {"store": {"op": "operation", "path": path, "bodies": [b.hex() for b in bodies], "mtime": mtime}}
+
+
+def with_op(e: dict, op: dict) -> dict:
+    """A protocol 2 history entry: the entry, and the operation that wrote it."""
+    return {**e, "op": op}
 
 
 def connect(conn: str, device: str, cursor: int, backlog: list[tuple[int, int, list[dict]]], at: int) -> list[dict]:
@@ -277,13 +294,86 @@ TRANSCRIPTS = [
             c("laptop", expect={"res": "pong"}),
         ],
     },
+    {
+        "name": "undo",
+        "covers": "Protocol 2: a history entry an agent wrote names its operation; undoing it writes the "
+                  "former bytes back as a new version by the device that asked, which every device is sent "
+                  "as an ordinary batch, the asking one first and before its reply; the history then names "
+                  "the undo and says the edit was undone, and a second undo is refused.",
+        "steps": [
+            seed("a.md", [A], 1),
+            agent_edit("a.md", [B], 2),
+            *connect("laptop", "laptop", 0, [(1, 2, [entry(1, "a.md", [A], 1, "seed"),
+                                                     entry(2, "a.md", [B], 2, "agent")])], 2),
+            *connect("phone", "phone", 2, [], 2),
+            c("laptop", send={"op": "history", "id": 2, "path": "a.md"}),
+            c("laptop", expect={"res": "history", "id": 2, "path": "a.md", "entries": [
+                with_op(entry(2, "a.md", [B], 2, "agent"), {"id": "$opId", "tool": "edit_note", "kind": "mcp"}),
+                entry(1, "a.md", [A], 1, "seed"),
+            ]}),
+            c("laptop", send={"op": "undo", "id": 3, "opId": "$opId"}),
+            c("laptop", expect=batch(3, 3, [entry(3, "a.md", [A], "$time", "laptop")])),
+            c("laptop", expect={"res": "undone", "id": 3, "opId": "$undoId", "undoes": "$opId", "toCopy": False,
+                                "committedAt": "$time",
+                                "steps": [{"action": "restore", "path": "a.md", "before": 1, "after": 2}],
+                                "entries": [{"path": "a.md", "uid": 3, "previousUid": 2}]}),
+            c("phone", expect=batch(3, 3, [entry(3, "a.md", [A], "$time", "laptop")])),
+            c("laptop", send={"op": "history", "id": 4, "path": "a.md"}),
+            c("laptop", expect={"res": "history", "id": 4, "path": "a.md", "entries": [
+                with_op(entry(3, "a.md", [A], "$time", "laptop"), {"id": "$undoId", "tool": "undo", "kind": "device"}),
+                with_op(entry(2, "a.md", [B], 2, "agent"),
+                        {"id": "$opId", "tool": "edit_note", "kind": "mcp", "undoneBy": "$undoId"}),
+                entry(1, "a.md", [A], 1, "seed"),
+            ]}),
+            c("laptop", send={"op": "undo", "id": 5, "opId": "$opId"}),
+            c("laptop", expect=err(5, "noundo", "$prefix:already_undone: ")),
+        ],
+    },
+    {
+        "name": "undo of nothing",
+        "covers": "Protocol 2: an undo naming an operation the vault never committed is refused noundo, one "
+                  "naming no operation id at all is refused badentry, and the session goes on.",
+        "steps": [
+            *connect("laptop", "laptop", 0, [], 0),
+            c("laptop", send={"op": "undo", "id": 2, "opId": "AAAAAAAAAAAAAAAAAAAAAA"}),
+            c("laptop", expect=err(2, "noundo", "$prefix:not_found: ")),
+            c("laptop", send={"op": "undo", "id": 3, "opId": "not an operation"}),
+            c("laptop", expect=err(3, "badentry")),
+            c("laptop", send={"op": "ping"}),
+            c("laptop", expect={"res": "pong"}),
+        ],
+    },
+    {
+        "name": "protocol 1 is still answered",
+        "covers": "A device on protocol 1 is answered in protocol 1 by a server of protocol 2: its ready says "
+                  "1, a history entry an agent wrote carries no operation, and undo, which protocol 1 does "
+                  "not have, is an unknown op that rejects the request and keeps the session. The server's "
+                  "half only: the TypeScript client speaks protocol 2, so it does not play this one.",
+        "steps": [
+            seed("a.md", [A], 1),
+            agent_edit("a.md", [B], 2),
+            c("laptop", send=hello("laptop", 1, 0, proto=1)),
+            c("laptop", expect=ready(1, 2, proto=1)),
+            c("laptop", expect=batch(1, 2, [entry(1, "a.md", [A], 1, "seed"), entry(2, "a.md", [B], 2, "agent")])),
+            c("laptop", expect=caught_up(2)),
+            c("laptop", send={"op": "history", "id": 2, "path": "a.md"}),
+            c("laptop", expect={"res": "history", "id": 2, "path": "a.md", "entries": [
+                entry(2, "a.md", [B], 2, "agent"), entry(1, "a.md", [A], 1, "seed")]}),
+            c("laptop", send={"op": "undo", "id": 3, "opId": "AAAAAAAAAAAAAAAAAAAAAA"}),
+            c("laptop", expect=err(3, "protostate")),
+            c("laptop", send={"op": "ping"}),
+            c("laptop", expect={"res": "pong"}),
+        ],
+    },
 ]
 
 
 def main() -> None:
     doc = {
         "note": [
-            "Protocol 1 exchanges, message by message (plan/protocol.md; PLAN.md M1 task 12).",
+            "Protocol exchanges, message by message (plan/protocol.md; PLAN.md M1 task 12 and M5 task 7):",
+            "protocol 2 unless a hello says otherwise, which one transcript does, to hold the server to",
+            "answering protocol 1 as protocol 1.",
             "Written by scripts/protocol-transcripts.py and replayed against a real server on a fresh",
             "store by internal/server/transcripts_test.go, which fails on any frame that differs.",
             "",
@@ -291,7 +381,8 @@ def main() -> None:
             "registered with the SHA-256 of its token's raw bytes and the createdAt given. Steps run in",
             "order. A step names a connection (conn), opened by its first step and closed by close or",
             "by the server (expectClose), and does one thing:",
-            "  send          a text frame, the JSON as given",
+            "  send          a text frame, the JSON as given, a placeholder marked same standing for the",
+            "                value it was bound to earlier in the transcript",
             "  sendBinary    a binary frame, the hex as given, marker byte included",
             "  expect        the next text frame on that connection, compared as JSON: the same keys,",
             "                no others, equal values, except placeholders",
@@ -299,15 +390,18 @@ def main() -> None:
             "                bodies') to the raw bytes in this hex; a replaying server may deflate or not",
             "  expectClose   the server closes the connection with nothing more sent",
             "  store         done to the store directly, not over the wire: put commits a version of",
-            "                path with these bodies (hex) and mtime, written by device 'seed'; loseChunk",
-            "                removes a body from the chunk tree. A fake socket ignores these steps: the",
-            "                server's frames already reflect them.",
+            "                path with these bodies (hex) and mtime, written by device 'seed'; operation",
+            "                commits the same as an agent's edit of path's head, through the commit",
+            "                boundary the MCP tools use, by a token labelled 'agent'; loseChunk removes a",
+            "                body from the chunk tree. A fake socket ignores these steps: the server's",
+            "                frames already reflect them.",
             "After the last step, no connection may be sent anything more.",
             "",
             "A placeholder is a whole string value beginning with $. $name matches the placeholder's kind;",
             "one marked same must match one value everywhere it appears in a transcript. $prefix:TEXT",
             "matches a string beginning with TEXT. A fake socket sends each placeholder's example, and",
-            "for $prefix:TEXT the text followed by 'example'.",
+            "for $prefix:TEXT the text followed by 'example', and a client is held to sending a same",
+            "placeholder's example where the transcript sends it.",
         ],
         "format": 1,
         "vault": VAULT,
@@ -320,6 +414,10 @@ def main() -> None:
                      "about": "a refusal's message, for a person; its wording is not the protocol"},
             "$time": {"kind": "number", "same": False, "example": 1790000000000,
                       "about": "a server timestamp in milliseconds"},
+            "$opId": {"kind": "string", "same": True, "example": "EditEditEditEditEditEQ",
+                      "about": "an operation's id, 16 random bytes in base64url"},
+            "$undoId": {"kind": "string", "same": True, "example": "UndoUndoUndoUndoUndoUQ",
+                        "about": "an undo's own operation id, 16 random bytes in base64url"},
         },
         "devices": DEVICES,
         "transcripts": TRANSCRIPTS,

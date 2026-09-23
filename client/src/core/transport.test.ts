@@ -449,9 +449,9 @@ describe("the handshake", () => {
   it("refuses a server answering in another protocol version, naming both", async () => {
     const { t, socket } = await connected();
     const hello = t.hello({ vault: "v", deviceId: "dev", token: "t", device: "d", cursor: 0 });
-    socket.reply(ready({ proto: 2, serverVersion: "0.2.2" }));
+    socket.reply(ready({ proto: 1, serverVersion: "0.2.2" }));
     await expect(hello).rejects.toMatchObject({ code: "proto" });
-    await expect(hello).rejects.toThrow(/protocol 2/);
+    await expect(hello).rejects.toThrow(/protocol 1/);
     await expect(hello).rejects.toThrow(new RegExp(`speaks ${PROTO}`));
     await expect(hello).rejects.toThrow(/upgrade the server first/);
   });
@@ -471,19 +471,20 @@ describe("the handshake", () => {
     socket.raw({
       res: "err",
       code: "proto",
-      msg: "protocol 3 not supported, this server speaks 2 to 2",
+      msg: "protocol 2 not supported, this server speaks 1 to 1",
     });
     await expect(hello).rejects.toMatchObject({ code: "proto", retryable: false });
-    await expect(hello).rejects.toThrow(/speaks 2 to 2/);
+    await expect(hello).rejects.toThrow(/speaks 1 to 1/);
     await expect(hello).rejects.toThrow(new RegExp(`This client speaks protocol ${PROTO}`));
     await expect(hello).rejects.toThrow(/upgrade the server first/);
     expect(t.isClosed).toBe(true);
   });
 
   /**
-   * The frame is exactly the fields protocol 1 names, and nothing else: no
+   * The frame is exactly the fields the protocol names, and nothing else: no
    * `crypto` suite, which Basalt's hello carried and a TrewSync server has no use
-   * for, and no `epoch` on a device that has not been told one.
+   * for, and no `epoch` on a device that has not been told one. The version is
+   * 2, protocol 1 and undo (plan/protocol.md, "Undo (protocol 2)").
    */
   it("sends its protocol version, a device id and an id, and no crypto suite", async () => {
     const { t, socket } = await connected();
@@ -501,7 +502,7 @@ describe("the handshake", () => {
       device: "d",
       cursor: 7,
     });
-    expect(PROTO).toBe(1);
+    expect(PROTO).toBe(2);
     expect("crypto" in socket.sentText[0]!).toBe(false);
   });
 

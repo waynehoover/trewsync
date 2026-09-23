@@ -739,8 +739,16 @@ func (p UndoPlan) UndoRefusalDetail() string {
 		}
 		lines = append(lines, what)
 	}
+	// Bounded, because it travels in one refusal and a tag rename can span
+	// hundreds of notes; the first few are what a person acts on.
+	if len(lines) > undoDetailLines {
+		lines = append(lines[:undoDetailLines], fmt.Sprintf("and %d more", len(lines)-undoDetailLines))
+	}
 	return strings.Join(lines, "\n")
 }
+
+// undoDetailLines is the most paths UndoRefusalDetail names.
+const undoDetailLines = 10
 
 /* ---------------------------------------------------------------- *
  * Which operation wrote a version

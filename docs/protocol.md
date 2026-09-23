@@ -1,4 +1,4 @@
-# Wire protocol, version 1
+# Wire protocol, versions 1 and 2
 
 [Developer documentation](development.md) · [Design and threat model](design.md)
 
@@ -21,6 +21,11 @@ removing the encryption: no root secret, data key, sealed paths or chunks,
 entry authenticator, registrar session, recovery key or rotation. The two do
 not interoperate, and each refuses the other at hello with `proto`, naming both
 numbers.
+
+Protocol 2 is protocol 1 and [undo](#undo): the `undo` request, and the
+operation behind each `history` entry. Nothing else changed. The server speaks
+both and answers each session in the version its hello asks for, so a device
+on protocol 1 is answered exactly as before.
 
 The client normally uses one connection. Large uploads can use a temporary
 second connection with the same device credential, leaving the main connection
@@ -116,8 +121,10 @@ and a token that is not 32 bytes is `badentry`.
 
 ### Validation and compatibility
 
-Only **protocol 1** is supported. A refusal names supported protocol numbers,
-not the server release; `serverVersion` is disclosed only after a credential
+The server speaks **protocols 1 and 2**, and answers a hello in the version
+it asks for; this source tree's clients speak 2. Upgrade the server first: a
+client of protocol 2 meeting a server of protocol 1 is refused at hello, and
+says to. A refusal names supported protocol numbers, not the server release; `serverVersion` is disclosed only after a credential
 matches. Vault and device names are bounded at 64 bytes and reject control
 characters. Device IDs are base64url, up to 64 characters. The order in which
 a hello's refusals are checked, so that nothing before the credential depends
@@ -144,8 +151,8 @@ address and vault. The plugin shows it as a QR code of
 
 Requests expecting replies carry an integer `id` from **1 to 2^32-1**, unique
 among requests in flight. This applies to hello, put, putmany, get, fetch,
-resend, history, deleted, devices, rename, revoke, invite, uninvite, and
-applied. Replies and request-specific errors echo the ID.
+resend, history, deleted, devices, rename, revoke, invite, uninvite, applied,
+and undo. Replies and request-specific errors echo the ID.
 
 Missing or invalid IDs cause `protostate` and end the session. Clients also end
 a session on an unknown reply ID. Unsolicited batches, caught-up notices, pings,
@@ -356,6 +363,38 @@ There is no restore wire operation. A client reads a historical version,
 checks it against the history it was listed in, writes a local copy, and
 ordinarily uploads it as a new version.
 
+In protocol 2 each history entry an agent operation or an undo wrote carries
+`op: {id, tool, kind, undoneBy?}`: the operation's id, what it was
+(`edit_note`, `move_note`, `undo`, ...), who made it (`mcp` an agent, `operator`
+`trewd undo`, `device` a device's undo), and the undo that undid it, if one
+has. A version a device wrote carries none.
+
+## Undo
+
+```text
+-> {op:"undo", id, opId, toCopy?}
+<- {res:"undone", id, opId, undoes, toCopy, committedAt, steps, entries}
+```
+
+Protocol 2 only. An undo puts back what one operation displaced, as one new
+operation, and only if every path the operation changed still holds the
+version it left there: an edit or a deletion written back with its exact
+former bytes, a move moved back with its own links and its backlinks, a create
+removed with the folders it made while they are empty. `toCopy` writes each
+version the operation replaced beside its note instead (`Note (restored
+12).md`) and changes nothing already in the vault. History is never rewritten;
+the undo is new versions, which reach every device, the asking one included,
+as an ordinary batch before the reply. `steps` say what each path had done to
+it, and `opId` is the undo's own operation, which can be undone in its turn.
+
+A device may undo any operation of the vault. A note changed since refuses
+the undo with `stale`, naming the paths and who changed them, and writes
+nothing; the copy is the answer. Anything no retry changes (no such operation,
+already undone, a version a purge has taken, nothing to put back, a folder
+that is not empty) is `noundo`, whose message begins with the reason. The
+reasons and the result's shape are in
+[plan/protocol.md](../plan/protocol.md#undo-protocol-2).
+
 ## Devices and invites
 
 ```text
@@ -450,6 +489,7 @@ not an automatic retry of the unchanged request.
 | `nocontent` | Requested version is a folder or deletion. | no | request rejected. |
 | `nochunk` | Content unavailable. | no | request rejected without partial fetch bodies. |
 | `nodevice` | Device ID does not exist. | no | request rejected. |
+| `noundo` | An undo that cannot be done; the message starts with the reason. | no | request rejected. |
 | `internal` | Server fault; nothing committed. | yes | ends during handshake/catch-up, otherwise rejects the request. |
 
 `busy` includes a retry delay for admission pressure or shutdown. Numeric limits
