@@ -207,8 +207,6 @@ func singleHeader(r *http.Request, name string) (string, *rpcError) {
 	return "", headerMismatch("the " + name + " header appears more than once")
 }
 
-// requestMeta is a request's params._meta, and the protocol version it names
-// when it names one as a string.
 // metaClientInfo is the _meta key under which a 2026-07-28 request may say
 // which client sent it; the handshake era says it once, in initialize, which a
 // stateless endpoint does not keep.
@@ -227,6 +225,8 @@ func clientInfo(params json.RawMessage) implementation {
 	return info
 }
 
+// requestMeta is a request's params._meta, and the protocol version it names
+// when it names one as a string.
 func requestMeta(params json.RawMessage) (map[string]json.RawMessage, string, bool) {
 	if params == nil {
 		return nil, "", false
