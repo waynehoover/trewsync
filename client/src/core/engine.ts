@@ -3294,12 +3294,68 @@ export class Engine {
     const chunks = chunkNamesOf(remote.hash);
     this.checkChunkCount(remote.uid, chunks.length);
 
-    const baseDigest = based === undefined || based.folder ? undefined : await this.digestOf(path);
-    this.inbox.push({ path, entry, remote, chunks, kind, why, based, baseDigest });
+    // Where the version lands is, on some disks, a file already here under
+    // another spelling; then that file is what the write has to recognise.
+    const respelled = based === undefined ? await this.respelledHere(path, remote) : undefined;
+    const baseline = respelled?.state ?? based;
+    const baseDigest =
+      baseline === undefined || baseline.folder
+        ? undefined
+        : await this.digestOf(respelled?.from ?? path);
+    this.inbox.push({ path, entry, remote, chunks, kind, why, based: baseline, baseDigest });
     this.inboxBytes += remote.size;
     if (this.inbox.length >= MAX_BATCH_ENTRIES || this.inboxBytes >= INBOX_BYTES) {
       await this.fill(report);
     }
+  }
+
+  /**
+   * The file an incoming rename that changed only case moves, where this disk
+   * already holds it under the old spelling and says the two names are one
+   * file.
+   *
+   * The version arrives as a path this device never held, so its landing had
+   * no baseline: on a disk that folds case the write found the old note under
+   * the new name, could not account for it, and kept it aside as a conflict
+   * copy, and the old name's deletion then removed the file just written,
+   * since it was the same file. The next round landed the note again from the
+   * copy and the copy went up to every other device. What is owed is only a
+   * new spelling, and with the old file as the baseline the preserving write
+   * recognises what it displaces and keeps nothing; the old name's deletion
+   * is then the one `applyDeletes` already declines, because it would remove
+   * what this pass wrote.
+   *
+   * Only on the vault's own word that the two are one file, `sameFile` or
+   * `canonical`: a vault that can say neither may hold both apart, and there
+   * the old behaviour is the right one. And only where the disk agrees, by
+   * finding the old file under the new name: a `sameFile` read off a listing
+   * can call two spellings one file on a disk that keeps them apart, and there
+   * the new name is an empty slot that the ordinary landing is right for.
+   * Only for the move that retired the old name, which is the version being
+   * received, and only while the old file is unchanged here since it was
+   * synced; an edit made to it since is kept, as it always was.
+   */
+  private async respelledHere(
+    path: string,
+    remote: RemoteState,
+  ): Promise<{ from: string; state: LocalState } | undefined> {
+    const vault = this.opts.vault;
+    if (vault.sameFile === undefined && vault.canonical === undefined) return undefined;
+    const from = this.localByIdentity.get(this.identity(path));
+    if (from === undefined || from === path || !foldsTogether(from, path)) return undefined;
+    const retired = this.remote.get(from);
+    if (retired === undefined || !retired.deleted || retired.uid !== remote.uid) return undefined;
+    const held = this.entries.get(from);
+    if (held === undefined || held.folder) return undefined;
+    if (held.synchash === "" || held.hash !== held.synchash) return undefined;
+    if (vault.sameFile !== undefined && !(await vault.sameFile(path, from))) return undefined;
+    const there = await vault.stat(path);
+    if (there === undefined || there.folder) return undefined;
+    if (there.size !== held.size || Math.ceil(there.mtime) !== held.mtime) return undefined;
+    return {
+      from,
+      state: { folder: false, mtime: held.mtime, size: held.size, hash: held.hash },
+    };
   }
 
   /**
