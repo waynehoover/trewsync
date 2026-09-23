@@ -802,6 +802,93 @@ describe("creating a file only where nothing is", () => {
 });
 
 /**
+ * A file renamed into place, before Obsidian's index has it.
+ *
+ * The staged copy has a dot-prefixed name, which Obsidian's adapter never
+ * holds, and its `rename` only moves a record it holds. So the landed file is
+ * on the disk and missing from the index until the watcher reports it. On a
+ * Mac receiving from a phone (M3, 2026-09-23), a pass inside that window read
+ * a photo it had just downloaded as deleted and sent the deletion everywhere.
+ */
+describe("a file renamed into place, before Obsidian's index has it", () => {
+  const times = { mtime: 1000, ctime: 1000 };
+  const listed = async () => (await vault.list()).map((f) => f.path).sort();
+  const indexed = () => adapter.index().map((f) => f.path);
+  const statsOf = (path: string) =>
+    adapter.calls.filter((c) => c.op === "stat" && c.path === path).length;
+
+  it("lists a new file the index does not show yet", async () => {
+    adapter.holdWatcher();
+    await vault.write("new.md", enc.encode("landed"), { mtime: 1234, ctime: 1000 });
+    expect(await vault.create("made.bin", new Uint8Array([1, 2, 3]), times)).toBe(true);
+
+    expect(indexed()).not.toContain("new.md");
+    const byPath = new Map((await vault.list()).map((f) => [f.path, f]));
+    expect([...byPath.keys()].sort()).toEqual(["made.bin", "new.md"]);
+    expect(byPath.get("new.md")).toMatchObject({ folder: false, size: 6, mtime: 1234 });
+    expect(byPath.get("made.bin")).toMatchObject({ folder: false, size: 3 });
+  });
+
+  it("lists an attachment replaced over the one the index had", async () => {
+    await adapter.writeBinary("photo.jpg", new ArrayBuffer(0), times);
+    expect(indexed()).toContain("photo.jpg");
+    adapter.holdWatcher();
+
+    const jpeg = new Uint8Array(4096).map((_, i) => (i * 131 + 7) & 0xff);
+    const out = await vault.replace(
+      "photo.jpg",
+      { contentId: await plainDigest(new Uint8Array(0)), idOf: plainDigest },
+      jpeg,
+      { mtime: 900, ctime: 900 },
+      "photo (kept).jpg",
+    );
+
+    // The old bytes were moved aside and removed as a duplicate, so the index
+    // lost the name, and the new bytes have not been reported yet.
+    expect(out).toEqual({ landed: true });
+    expect(indexed()).not.toContain("photo.jpg");
+    const byPath = new Map((await vault.list()).map((f) => [f.path, f]));
+    expect([...byPath.keys()]).toEqual(["photo.jpg"]);
+    expect(byPath.get("photo.jpg")).toMatchObject({ size: 4096, mtime: 900 });
+  });
+
+  it("stops asking once the index has it, or once nothing is there", async () => {
+    adapter.holdWatcher();
+    await vault.write("kept.md", enc.encode("stays"), times);
+    await vault.write("gone.md", enc.encode("goes"), times);
+    expect(await listed()).toEqual(["gone.md", "kept.md"]);
+
+    await adapter.remove("gone.md");
+    adapter.releaseWatcher();
+    expect(await listed()).toEqual(["kept.md"]);
+    const asked = { kept: statsOf("kept.md"), gone: statsOf("gone.md") };
+    expect(await listed()).toEqual(["kept.md"]);
+    expect({ kept: statsOf("kept.md"), gone: statsOf("gone.md") }).toEqual(asked);
+  });
+
+  it("fails the listing when it cannot tell whether such a file is there", async () => {
+    adapter.holdWatcher();
+    await vault.write("new.md", enc.encode("landed"), times);
+    adapter.fault = (op, path) =>
+      op === "stat" && path === "new.md" ? new Error("EIO: stat failed") : undefined;
+    // Rule 2: left out, it would read as deleted.
+    await expect(vault.list()).rejects.toThrow(/EIO/);
+    adapter.fault = undefined;
+    expect(await listed()).toEqual(["new.md"]);
+  });
+
+  it("takes a respelling the index shows for the same file on a folding disk", async () => {
+    adapter.insensitive = true;
+    adapter.holdWatcher();
+    await vault.write("note.md", enc.encode("one file"), times);
+    // Respelled behind the vault's back, then reported by the watcher.
+    await adapter.rename("note.md", "Note.md");
+    adapter.releaseWatcher();
+    expect(await listed()).toEqual(["Note.md"]);
+  });
+});
+
+/**
  *  Two raw names in Obsidian's index that normalize
  * to one path used to be one entry in the map, the second winning silently.
  *
@@ -1648,6 +1735,10 @@ describe("writing over a file the pass did not decide about", () => {
       ),
     ).rejects.toThrow("The previous content is at note (kept).md");
     expect(adapter.text("note.md")).toBe("inc");
+    // Listed before Obsidian's index has it, or it never syncs.
+    expect((await vault.list()).map((f) => f.path)).toContain("note (kept).md");
+    // Obsidian lists the whole disk as it opens a vault again.
+    adapter.reopen();
     const restarted = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian");
     expect((await restarted.list()).map((f) => f.path)).toContain("note (kept).md");
     expect(dec.decode(await restarted.read("note (kept).md"))).toBe("unsent local text\n");

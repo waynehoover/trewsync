@@ -293,6 +293,27 @@ export class FakeVault {
     for (const handler of this.handlers.get(name) ?? []) handler(...args);
   }
 
+  /**
+   * Passes on what the adapter reports, as the shipped vault's `onChange`
+   * does: a created file or folder is `create`, a changed file `modify`, a
+   * removed one `delete`, and a rename `rename` with the old path. So the
+   * plugin hears about its own writes the way it does in Obsidian, including
+   * the rename a binary replacement makes when it moves the old bytes aside.
+   *
+   * Off unless asked for. The tests written before it fire the events they
+   * mean by hand, and relaying everywhere would add a pass after every write
+   * the plugin makes to each of them.
+   */
+  relayAdapterEvents(): void {
+    this.adapter.handler = (kind, path, oldPath) => {
+      const file = { path };
+      if (kind === "renamed") this.fire("rename", file, oldPath);
+      else if (kind === "modified") this.fire("modify", file);
+      else if (kind === "file-removed") this.fire("delete", file);
+      else this.fire("create", file);
+    };
+  }
+
   /** How many handlers a plugin registered, so a test can see it registered any. */
   handlerCount(): number {
     return [...this.handlers.values()].reduce((n, list) => n + list.length, 0);

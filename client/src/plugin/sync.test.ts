@@ -493,3 +493,239 @@ describe("a restore whose name is taken in the gap", () => {
     expect(a.text("note.md")).toBe("second\n");
   }, 300_000);
 });
+
+/**
+ * A device that only receives, while Obsidian's index is behind its disk.
+ *
+ * A file the plugin lands by renaming a staged copy into place is missing from
+ * `getAllLoadedFiles` until the filesystem watcher reports it, because the
+ * adapter's `rename` has no record of a hidden source to move (`fake.ts`,
+ * `unindexed`). The M3 acceptance run on 2026-09-23 found what a pass inside
+ * that window did: a Mac receiving a photo from a phone read the photo it had
+ * just downloaded as deleted, committed the deletion, and uploaded the same
+ * bytes as new a few milliseconds later. The phone put its copy in the trash.
+ * Had the upload failed, every device would have lost the file.
+ *
+ * The property asserted is the one that matters (rule 10): the receiver
+ * writes nothing to the server, nobody deletes anything, and both devices end
+ * with the bytes that were sent.
+ */
+describe("a device that only receives, while Obsidian's index catches up", () => {
+  const enc = new TextEncoder();
+
+  /** Bytes that are not text and do not repeat, as a photo's are not. */
+  function photoBytes(size: number, seed: number): Uint8Array {
+    const out = new Uint8Array(size);
+    let x = seed >>> 0;
+    for (let i = 0; i < size; i++) {
+      x = (Math.imul(x, 1_103_515_245) + 12_345) >>> 0;
+      out[i] = x >>> 24;
+    }
+    out.set([0xff, 0xd8, 0xff, 0xe0]);
+    return out;
+  }
+
+  async function holds(d: Device, path: string, bytes: Uint8Array): Promise<boolean> {
+    if (!(await d.adapter.exists(path))) return false;
+    const now = new Uint8Array(await d.adapter.readBinary(path));
+    return now.length === bytes.length && now.every((b, i) => b === bytes[i]);
+  }
+
+  async function arrives(d: Device, path: string, bytes: Uint8Array): Promise<void> {
+    const deadline = Date.now() + 60_000;
+    while (!(await holds(d, path, bytes))) {
+      if (Date.now() > deadline) throw new Error(`${d.name} never received ${path}`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+
+  /** Every version `d` put on the server under these paths after `after`. */
+  async function writtenBy(d: Device, paths: readonly string[], after = 0): Promise<string[]> {
+    const out: string[] = [];
+    for (const path of paths) {
+      for (const v of await d.client.history(path, { limit: 50 })) {
+        if (v.device !== d.name || v.uid <= after) continue;
+        out.push(`${v.deleted ? "deleted" : "wrote"} ${path} as ${v.uid}`);
+      }
+    }
+    return out;
+  }
+
+  /** Every deletion the server holds for these paths, whoever made it. */
+  async function deletions(d: Device, paths: readonly string[]): Promise<string[]> {
+    const out: string[] = [];
+    for (const path of paths) {
+      for (const v of await d.client.history(path, { limit: 50 })) {
+        if (v.deleted) out.push(`${path} by ${v.device} as ${v.uid}`);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * `path` reaches the receiver, and its index, as `first`. Then `second`
+   * arrives while the index is behind, and the receiver passes again before
+   * the watcher reports what the download landed.
+   */
+  async function replacedWhileTheIndexLags(
+    sender: Device,
+    receiver: Device,
+    path: string,
+    first: { bytes: Uint8Array; mtime: number },
+    second: { bytes: Uint8Array; mtime: number },
+  ): Promise<void> {
+    const put = (v: { bytes: Uint8Array; mtime: number }) =>
+      sender.adapter.writeBinary(path, v.bytes.slice().buffer, { mtime: v.mtime, ctime: v.mtime });
+    await put(first);
+    await sender.client.settle();
+    await receiveCommitted(receiver.client.transport);
+    await arrives(receiver, path, first.bytes);
+    // Long enough for the fake's watcher, which reports on the next turn.
+    await new Promise((r) => setTimeout(r, 50));
+    await receiver.client.settle();
+
+    receiver.adapter.holdWatcher();
+    await put(second);
+    await sender.client.settle();
+    await receiveCommitted(receiver.client.transport);
+    // The download, and a pass after it while the index is still behind.
+    await receiver.client.settle();
+    await arrives(receiver, path, second.bytes);
+    await receiver.client.settle();
+    receiver.adapter.releaseWatcher();
+    await converge(sender, receiver);
+  }
+
+  async function nothingWasLost(
+    sender: Device,
+    receiver: Device,
+    path: string,
+    bytes: Uint8Array,
+  ): Promise<void> {
+    expect(await writtenBy(receiver, [path]), "the receiver wrote to the server").toEqual([]);
+    expect(await deletions(sender, [path]), "a deletion nobody asked for").toEqual([]);
+    expect(await holds(receiver, path, bytes), "the receiver's copy").toBe(true);
+    expect(await holds(sender, path, bytes), "the sender's copy").toBe(true);
+    expect(sender.adapter.trashedLocally, "the sender trashed its copy").toEqual([]);
+    expect(receiver.notes()).toEqual([path]);
+  }
+
+  it("keeps a photo that arrived empty and then whole, with an older mtime", async () => {
+    await fresh();
+    const phone = await device("android");
+    const mac = await device("Mac");
+    await converge(phone, mac);
+    // The incident's own shape: first seen while the program writing it had
+    // written nothing, then whole, stamped with the source file's older mtime.
+    const jpeg = photoBytes(377_520, 5);
+    await replacedWhileTheIndexLags(
+      phone,
+      mac,
+      "m3-photo.jpg",
+      { bytes: new Uint8Array(0), mtime: 1_790_192_360_000 },
+      { bytes: jpeg, mtime: 1_790_192_356_000 },
+    );
+    await nothingWasLost(phone, mac, "m3-photo.jpg", jpeg);
+  }, 300_000);
+
+  it("keeps a new note it received in the same pass as an edit to another", async () => {
+    await fresh();
+    const phone = await device("android-a1c2");
+    const mac = await device("Mac");
+    const edited = "From the Mac.md";
+    const copy = "From the Mac (Conflicted copy android-a1c2 202609230941).md";
+    const v1 = "# From the Mac\n\nWritten on the Mac.\n";
+    const v2 = "# From the Mac\n\nWritten on the Mac, and edited on the phone.\n";
+    mac.adapter.seed(edited, v1, 1_790_192_400_000);
+    await converge(mac, phone);
+    expect(phone.text(edited)).toBe(v1);
+    const [authored] = await mac.client.history(edited, { limit: 1 });
+
+    // The phone kept the Mac's version under a conflict name, whose bytes are
+    // the ones the Mac already has for the other note, and edited that note.
+    mac.adapter.holdWatcher();
+    phone.adapter.seed(copy, v1, 1_790_192_410_000);
+    phone.adapter.seed(edited, v2, 1_790_192_420_000);
+    await phone.client.settle();
+    await receiveCommitted(mac.client.transport);
+    await mac.client.settle();
+    await arrives(mac, copy, enc.encode(v1));
+    await arrives(mac, edited, enc.encode(v2));
+    await mac.client.settle();
+    mac.adapter.releaseWatcher();
+    await converge(phone, mac);
+
+    expect(await writtenBy(mac, [copy, edited], authored!.uid)).toEqual([]);
+    expect(await deletions(phone, [copy, edited])).toEqual([]);
+    for (const d of [phone, mac]) {
+      expect(d.text(copy), `${d.name}'s copy`).toBe(v1);
+      expect(d.text(edited), `${d.name}'s note`).toBe(v2);
+      expect(d.notes().sort(), d.name).toEqual([copy, edited].sort());
+    }
+    expect(phone.adapter.trashedLocally).toEqual([]);
+  }, 300_000);
+
+  it("keeps a note written over an empty one", async () => {
+    await fresh();
+    const phone = await device("phone");
+    const mac = await device("Mac");
+    const words = enc.encode("Now it has words.\n");
+    await replacedWhileTheIndexLags(
+      phone,
+      mac,
+      "empty.md",
+      { bytes: new Uint8Array(0), mtime: 2_000_000 },
+      { bytes: words, mtime: 3_000_000 },
+    );
+    await nothingWasLost(phone, mac, "empty.md", words);
+  }, 300_000);
+
+  it("keeps an attachment written over an earlier one", async () => {
+    await fresh();
+    const phone = await device("phone");
+    const mac = await device("Mac");
+    const after = photoBytes(60_000, 2);
+    await replacedWhileTheIndexLags(
+      phone,
+      mac,
+      "diagram.png",
+      { bytes: photoBytes(50_000, 1), mtime: 2_000_000 },
+      { bytes: after, mtime: 3_000_000 },
+    );
+    await nothingWasLost(phone, mac, "diagram.png", after);
+  }, 300_000);
+
+  it("keeps a note whose new version is stamped older than the one it replaces", async () => {
+    await fresh();
+    const phone = await device("phone");
+    const mac = await device("Mac");
+    const older = enc.encode("# Restored\n\nThe version with the older stamp.\n");
+    await replacedWhileTheIndexLags(
+      phone,
+      mac,
+      "stamped.md",
+      { bytes: enc.encode("# Restored\n\nThe newer stamp.\n"), mtime: 5_000_000 },
+      { bytes: older, mtime: 4_000_000 },
+    );
+    await nothingWasLost(phone, mac, "stamped.md", older);
+  }, 300_000);
+
+  it("keeps an attachment too large to hold in memory while it is compared", async () => {
+    // Above the engine's KEEP_BODIES_BELOW of 8 MiB, where a body is not
+    // kept whole for reuse and the landing is the same staged rename.
+    await fresh();
+    const phone = await device("phone");
+    const mac = await device("Mac");
+    const before = photoBytes(9 * 1024 * 1024, 3);
+    const after = before.slice();
+    after.set(photoBytes(64 * 1024, 4), 4 * 1024 * 1024);
+    await replacedWhileTheIndexLags(
+      phone,
+      mac,
+      "recording.m4a",
+      { bytes: before, mtime: 2_000_000 },
+      { bytes: after, mtime: 3_000_000 },
+    );
+    await nothingWasLost(phone, mac, "recording.m4a", after);
+  }, 300_000);
+});

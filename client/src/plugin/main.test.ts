@@ -1,4 +1,4 @@
-import { deferred, nextTurn, within } from "../core/test-async.ts";
+import { deferred, nextTurn, receiveCommitted, within } from "../core/test-async.ts";
 /**
  * The plugin, run.
  *
@@ -1359,6 +1359,146 @@ describe("renames, which only Obsidian can report", () => {
     const gone = (await client!.deleted()).notes.map((v) => v.path);
     expect(gone).toContain("before.md");
     expect(app.vault.adapter.text("after.md")).toBe("content that moves");
+  }, 300_000);
+});
+
+/**
+ * The M3 acceptance incident of 2026-09-23, through the whole plugin.
+ *
+ * The receiving vault passes on what its adapter reports, as Obsidian's does,
+ * so the plugin hears its own writes: the rename a binary replacement makes
+ * when it moves the old bytes aside, the removal of that duplicate, and the
+ * modify of a note updated in place. Each of those arrives inside the pass and
+ * asks for another round straight away, which is why the next listing ran
+ * before the watcher had reported what the pass landed. The sender needs
+ * nothing relayed; its writes go up either way.
+ */
+describe("a device that only receives, while Obsidian's index catches up", () => {
+  const clientOf = (p: Testable) => (p as unknown as { client: Client }).client;
+  const bytesOf = async (a: App, path: string): Promise<number[] | undefined> =>
+    (await a.vault.adapter.exists(path))
+      ? [...new Uint8Array(await a.vault.adapter.readBinary(path))]
+      : undefined;
+  const same = (a: number[] | undefined, b: Uint8Array) =>
+    a !== undefined && a.length === b.length && a.every((x, i) => x === b[i]);
+  /** What a person sees in the vault, so a stray conflict copy shows too. */
+  const notes = (a: App) =>
+    a.vault.adapter
+      .filePaths()
+      .filter((p) => !p.startsWith(".obsidian/") && !p.startsWith(".trash/"));
+
+  /** What the server holds for these paths that `device` wrote, or any deletion. */
+  async function unasked(p: Testable, device: string, paths: string[], after = 0) {
+    const out: string[] = [];
+    for (const path of paths) {
+      for (const v of await clientOf(p).history(path, { limit: 50 })) {
+        if (v.deleted) out.push(`${path} deleted by ${v.device} as ${v.uid}`);
+        else if (v.device === device && v.uid > after) out.push(`${path} written as ${v.uid}`);
+      }
+    }
+    return out;
+  }
+
+  async function pair(): Promise<{
+    phone: { plugin: Testable; app: App };
+    mac: { plugin: Testable; app: App };
+  }> {
+    await fresh();
+    const phone = await load();
+    await startVault(phone.plugin, "android");
+    await synced(phone.plugin);
+    const mac = await load();
+    mac.app.vault.relayAdapterEvents();
+    await mac.plugin.pair(await anInvite(), "Mac");
+    await synced(mac.plugin);
+    return { phone, mac };
+  }
+
+  /** Lets both finish what they started, with the Mac's watcher reporting. */
+  async function settleBoth(phone: Testable, mac: Testable): Promise<void> {
+    for (let i = 0; i < 3; i++) {
+      await mac.syncNow();
+      await receiveCommitted(clientOf(phone).transport);
+      await phone.syncNow();
+      await receiveCommitted(clientOf(mac).transport);
+    }
+  }
+
+  it("does not delete a photo it replaced over the empty file it saw first", async () => {
+    const { phone, mac } = await pair();
+    const jpeg = new Uint8Array(377_520).map((_, i) => (i * 131 + (i >> 9)) & 0xff);
+    jpeg.set([0xff, 0xd8, 0xff, 0xe0]);
+
+    // First seen while the program writing it had written nothing.
+    await phone.app.vault.adapter.writeBinary("m3-photo.jpg", new ArrayBuffer(0), {
+      mtime: 1_790_192_360_000,
+    });
+    await phone.plugin.syncNow();
+    await until("the empty version on the Mac", () =>
+      mac.app.vault.adapter.filePaths().includes("m3-photo.jpg"),
+    );
+    await settleBoth(phone.plugin, mac.plugin);
+
+    // Then whole, with the source file's older mtime, and the Mac's watcher
+    // slower than the round its own events ask for.
+    mac.app.vault.adapter.holdWatcher();
+    await phone.app.vault.adapter.writeBinary("m3-photo.jpg", jpeg.slice().buffer, {
+      mtime: 1_790_192_356_000,
+    });
+    await phone.plugin.syncNow();
+    // Landed whole or not at all: the staged copy is renamed into place.
+    await until(
+      "the whole photo on the Mac",
+      () => (mac.app.vault.adapter.text("m3-photo.jpg") ?? "").length > 0,
+    );
+    await mac.plugin.syncNow();
+    mac.app.vault.adapter.releaseWatcher();
+    await settleBoth(phone.plugin, mac.plugin);
+
+    expect(await unasked(mac.plugin, "Mac", ["m3-photo.jpg"])).toEqual([]);
+    expect(same(await bytesOf(mac.app, "m3-photo.jpg"), jpeg), "the Mac's copy").toBe(true);
+    expect(same(await bytesOf(phone.app, "m3-photo.jpg"), jpeg), "the phone's copy").toBe(true);
+    expect(phone.app.vault.adapter.trashedLocally).toEqual([]);
+    expect(notes(mac.app)).toEqual(["m3-photo.jpg"]);
+    expect(notes(phone.app)).toEqual(["m3-photo.jpg"]);
+  }, 300_000);
+
+  it("does not delete a new note it received in the pass that updated another", async () => {
+    const { phone, mac } = await pair();
+    const edited = "From the Mac.md";
+    const copy = "From the Mac (Conflicted copy android-a1c2 202609230941).md";
+    const v1 = "# From the Mac\n\nWritten on the Mac.\n";
+    const v2 = "# From the Mac\n\nWritten on the Mac, and edited on the phone.\n";
+    mac.app.vault.adapter.seed(edited, v1, 1_790_192_400_000);
+    await mac.plugin.syncNow();
+    await until("the Mac's note on the phone", () => phone.app.vault.adapter.text(edited) === v1);
+    await settleBoth(phone.plugin, mac.plugin);
+    const [authored] = await clientOf(mac.plugin).history(edited, { limit: 1 });
+
+    // The phone kept the Mac's version under a conflict name and edited the
+    // note, so the copy holds the bytes the Mac's note held until now.
+    mac.app.vault.adapter.holdWatcher();
+    phone.app.vault.adapter.seed(copy, v1, 1_790_192_410_000);
+    phone.app.vault.adapter.seed(edited, v2, 1_790_192_420_000);
+    await phone.plugin.syncNow();
+    await until(
+      "both on the Mac",
+      () => mac.app.vault.adapter.text(copy) === v1 && mac.app.vault.adapter.text(edited) === v2,
+    );
+    await mac.plugin.syncNow();
+    mac.app.vault.adapter.releaseWatcher();
+    await settleBoth(phone.plugin, mac.plugin);
+
+    expect(await unasked(mac.plugin, "Mac", [copy, edited], authored!.uid)).toEqual([]);
+    for (const [name, app] of [
+      ["phone", phone.app],
+      ["Mac", mac.app],
+    ] as const) {
+      expect(app.vault.adapter.text(copy), `${name}'s copy`).toBe(v1);
+      expect(app.vault.adapter.text(edited), `${name}'s note`).toBe(v2);
+      expect(notes(app), name).toEqual([copy, edited].sort());
+    }
+    expect(phone.app.vault.adapter.trashedLocally).toEqual([]);
   }, 300_000);
 });
 

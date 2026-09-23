@@ -232,6 +232,12 @@ Tests use the real Obsidian declarations with a `DataAdapter` fake and a runtime
 stub. Bundle tests load the built plugin against that stub and a real server,
 and check for accidental Node dependencies in the plugin bundle.
 
+The fake's index leaves out a file renamed into place from a hidden name until
+its watcher reports it, as Obsidian 1.13.7 does. `holdWatcher` keeps the index
+behind for a test, and the stub vault's `relayAdapterEvents` passes the
+adapter's reports to the plugin as the `create`, `modify`, `delete` and
+`rename` events Obsidian fires for the plugin's own writes.
+
 These tests do not establish that a real Obsidian release invokes every adapter
 method as expected. Pairing, editing, recovery, suspension, and upgrade flows
 also need acceptance on actual supported desktop and Android devices. Screenshots

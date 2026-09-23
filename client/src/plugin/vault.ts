@@ -49,6 +49,12 @@
  * check and the rename, which is why `create` looks once more just before it.
  * So there is no replace-by-rename through this API on either platform, and
  * `replace` below says what is done instead.
+ *
+ * What reaches Obsidian's index differs too. Every write and removal
+ * reconciles its own path before it returns; `rename` only moves a record the
+ * adapter already held, and it holds none for a staging copy. A file renamed
+ * into place is missing from the index until the filesystem watcher reports
+ * it, so `list` asks the adapter about those (`unlisted`).
  */
 
 import {
@@ -313,6 +319,24 @@ export class ObsidianVault implements Vault {
    * engine would be given a path that nothing could then read.
    */
   private readonly actualName = new Map<string, string>();
+  /**
+   * Names this client renamed something onto, which Obsidian's index may not
+   * show yet.
+   *
+   * Read out of 1.13.7, both adapters: `rename` moves the adapter's record of
+   * the source to the destination and reports that, and a source it never
+   * held has no record to move. A write never gives it a record of a
+   * dot-prefixed name, so a file landed by renaming its staged copy into place
+   * is on the disk and missing from `getAllLoadedFiles` until the filesystem
+   * watcher reports it, however long the platform takes. A pass that listed
+   * inside that window read the file it had just downloaded as deleted here:
+   * it sent the deletion to every device, then uploaded the same bytes as new
+   * once the watcher caught up (M3 acceptance, 2026-09-23). The window is
+   * reached because the plugin's own events during a pass ask the engine for
+   * another round at once. Writes and removals put their own path into the
+   * index before they return, so renames are all that is recorded.
+   */
+  private readonly unlisted = new Set<string>();
   private readonly ignore: Set<string>;
   private readonly adapter: DataAdapter;
   private readonly log: (message: string, ...rest: unknown[]) => void;
@@ -595,6 +619,8 @@ export class ObsidianVault implements Vault {
       });
     }
 
+    if (this.unlisted.size > 0) await this.addUnlisted(byPath, out);
+
     // What this client has taken off a name and could not put back. From the
     // ledger only, unlike the headless client: Obsidian's index does not list
     // a hidden folder, so there is nothing here to walk for and the record is
@@ -608,6 +634,46 @@ export class ObsidianVault implements Vault {
     this.stranded.length = 0;
     for (const d of this.displaced) this.stranded.push(d.at);
     return out;
+  }
+
+  /**
+   * Adds to a listing what this client renamed into place and the index does
+   * not show yet, asked of the adapter (see `unlisted`).
+   *
+   * A name is dropped once the index has it, under any spelling this disk
+   * treats as the same one, or once the adapter finds no file there. A stat
+   * that fails fails the listing (rule 2): leaving the name out instead is the
+   * deletion this exists to prevent.
+   */
+  private async addUnlisted(indexed: ReadonlyMap<string, unknown>, out: FileStat[]): Promise<void> {
+    let folded: Set<string> | undefined;
+    for (const raw of [...this.unlisted]) {
+      const path = this.normalOf(raw);
+      if (indexed.has(path)) {
+        this.unlisted.delete(raw);
+        continue;
+      }
+      if (this.foldsCase) {
+        folded ??= new Set([...indexed.keys()].map(foldPath));
+        if (folded.has(foldPath(path))) {
+          this.unlisted.delete(raw);
+          continue;
+        }
+      }
+      const stat = await this.adapter.stat(raw);
+      if (stat === null || stat.type !== "file") {
+        this.unlisted.delete(raw);
+        continue;
+      }
+      if (path !== raw) this.actualName.set(path, raw);
+      out.push({ path, folder: false, mtime: stat.mtime, ctime: stat.ctime, size: stat.size });
+    }
+  }
+
+  /** `adapter.rename`, remembering a destination the index may not show (see `unlisted`). */
+  private async move(from: string, to: string): Promise<void> {
+    await this.adapter.rename(from, to);
+    if (!this.ignored(to)) this.unlisted.add(to);
   }
 
   /** Paths the last `list` left out because two names in the index claim them. */
@@ -898,7 +964,7 @@ export class ObsidianVault implements Vault {
     // early write to save them is reinstating the defect.
     let moved = true;
     try {
-      await this.adapter.rename(from, kept);
+      await this.move(from, kept);
     } catch (err) {
       // Absent, or refused, and the two are not the same answer (R32).
       //
@@ -1115,7 +1181,7 @@ export class ObsidianVault implements Vault {
       }
       // Somebody else's version, so it is not deleted at all. It comes back
       // out under a name a person will find, and the engine says so.
-      await this.adapter.rename(aside, kept);
+      await this.move(aside, kept);
       emptied = true;
       this.wrote(kept);
       return { keptAt: keepAt, landed: true };
@@ -1322,7 +1388,7 @@ export class ObsidianVault implements Vault {
 
     if (!(await this.adapter.exists(normalized))) {
       try {
-        await this.adapter.rename(temp, normalized);
+        await this.move(temp, normalized);
         await verify(this.adapter, normalized, bytes);
       } catch (err) {
         await this.adapter.remove(temp).catch(() => undefined);
@@ -1386,7 +1452,7 @@ export class ObsidianVault implements Vault {
       return false;
     }
     try {
-      await this.adapter.rename(temp, normalized);
+      await this.move(temp, normalized);
     } catch (err) {
       await this.adapter.remove(temp).catch(() => undefined);
       if (await this.adapter.exists(normalized)) return false;
@@ -1430,7 +1496,7 @@ export class ObsidianVault implements Vault {
     const folded = foldPath(normalized);
     const actual = listed.files.find((f) => foldPath(f) === folded);
     if (actual === undefined || actual === normalized) return;
-    await this.adapter.rename(actual, normalized);
+    await this.move(actual, normalized);
     this.actualName.delete(actual);
     // A rename is a changed entry in the directory holding it, and durable
     // only when that directory is. The write that follows records the file.
