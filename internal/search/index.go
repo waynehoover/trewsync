@@ -813,10 +813,13 @@ func (x *Index) Backlinks(ctx context.Context, head int64, keys []string) (Backl
 // the time a batch takes; a caller that cannot wait longer scans.
 func (x *Index) Await(ctx context.Context, head int64) bool {
 	for {
+		// Read under the lock: the worker rewrites the active generation in
+		// place as its batches commit.
 		x.mu.Lock()
-		g, distrust, advanced := x.active, x.distrust, x.advanced
+		g, advanced := x.active, x.advanced
+		reached := g != nil && x.distrust == "" && g.version == IndexVersion && g.through >= head
 		x.mu.Unlock()
-		if g != nil && distrust == "" && g.version == IndexVersion && g.through >= head {
+		if reached {
 			return true
 		}
 		select {
