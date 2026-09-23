@@ -1102,7 +1102,7 @@ type oracleBug struct {
 // every range and destination it reports is one unit early. Hidden ranges
 // then miss their last character, and changeLinks reads the destination
 // "(Old.m" for "Old.md" and leaves the link unchanged
-// (client/src/cli/mcp-markdown.ts:191, client/src/cli/mcp-links.ts:38).
+// (client/src/cli/mcp-markdown.ts:191 and client/src/cli/mcp-links.ts:45).
 const bomBody = "micromark does not count a leading byte-order mark in its offsets"
 
 var oracleBugs = []oracleBug{
