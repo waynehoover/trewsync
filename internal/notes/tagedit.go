@@ -399,9 +399,11 @@ func appendJSStrings(b []byte, list []string) []byte {
 //   - A flow sequence runs from its "[" to after its "]".
 //   - A block sequence runs from its first "-" to the end of its last item,
 //     which npm yaml takes as that item's range[2]: after the spaces, the
-//     comment and the line break that follow the item's text, or for an
-//     empty item after its "-", unless the item's own start holds a comment,
-//     when it runs over the blank and comment lines after it.
+//     comment and the line break that follow the item's text, and the
+//     comment lines indented past the list after those (indentedComments);
+//     for a block scalar, after its text; for an empty item, after its "-",
+//     unless the item's own start holds a comment, when it runs over the
+//     blank and comment lines after it.
 //
 // Comments can begin only between the items, and in a block scalar's header.
 func (d *yamlDoc) valueSpan(key, node *yaml.Node) (start, end int, comments []string, ok bool) {
