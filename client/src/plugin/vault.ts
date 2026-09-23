@@ -1250,7 +1250,9 @@ export class ObsidianVault implements Vault {
       return;
     }
     const adapter = this.adapter;
-    let failure: unknown;
+    // An Error, so what is thrown below is one: the same object a platform's
+    // fsync threw, or one naming what it threw when that was not an Error.
+    let failure: Error | undefined;
     for (const [path, stamp] of files) {
       try {
         await fsyncPath(fs, adapter, path);
@@ -1267,7 +1269,7 @@ export class ObsidianVault implements Vault {
           this.forget(this.unsynced.files, path, stamp);
           continue;
         }
-        failure ??= err;
+        failure ??= err instanceof Error ? err : new Error(String(err));
       }
     }
     for (const [dir, stamp] of dirs) {

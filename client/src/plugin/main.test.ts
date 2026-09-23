@@ -2730,8 +2730,9 @@ describe("a pairing saved before it is sent", () => {
     second.app.vault.adapter.seed("mine.md", "a note of my own\n");
     choosePairing(second.plugin);
     built.find((s) => s.name === "Invite")!.texts[0]!.type(invite);
+    const pair = pairButton();
     built.length = 0;
-    await pairButton().click();
+    await pair.click();
     expect(built.find((s) => s.name === "Confirm merge")).toBeDefined();
     // Closed instead of answered.
     modals.at(-1)!.close();

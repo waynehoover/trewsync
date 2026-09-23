@@ -179,9 +179,8 @@ describe("the plugin bundle, loaded and run", () => {
   ) => StubPlugin & {
     onload(): Promise<void>;
     onunload(): void;
-    pairFirst(setup: string, device: string): Promise<string>;
-    pair(pairing: string, device: string): Promise<void>;
-    recoveryKey(): string | undefined;
+    pair(invite: string, device: string, mergeConfirmed?: boolean): Promise<void>;
+    createInvite(): Promise<{ invite: string }>;
     currentState: { kind: string };
   } {
     const mod: { exports: Record<string, unknown> } = { exports: {} };
@@ -226,10 +225,13 @@ describe("the plugin bundle, loaded and run", () => {
       await b.onload();
       appA.vault.adapter.seed("From the bundle.md", "# Built\n\nThis came out of dist.\n");
 
-      const pairing = await a.pairFirst(server.setup, "laptop");
+      // The first device from the invite serve wrote on its empty store, with
+      // the merge its note asks for confirmed; the second from an invite the
+      // first device's panel mints over the wire.
+      await a.pair(await server.firstInvite(), "laptop", true);
       await until(() => a.currentState.kind === "synced");
 
-      await b.pair(pairing, "desktop");
+      await b.pair((await a.createInvite()).invite, "desktop");
       await until(() => appB.vault.adapter.text("From the bundle.md") !== undefined, 25_000);
 
       expect(appB.vault.adapter.text("From the bundle.md")).toBe(

@@ -68,9 +68,9 @@ afterAll(async () => {
 const EXPECTED = [
   "unpaired",
   "config-unreadable",
+  "pairing-finishing",
   "join-confirm",
   "paired",
-  "fresh-recovery-key",
   "stopped-offering-rejoin",
   "devices-listed-last-device",
   "invite-created",
@@ -80,6 +80,8 @@ const EXPECTED = [
   "history-newest-version",
   "history-diff",
   "status-bar-unpaired",
+  "status-bar-pairing",
+  "status-bar-pairing-waiting",
   "status-bar-connecting",
   "status-bar-loading",
   "status-bar-syncing-started",
@@ -126,12 +128,14 @@ describe("the panel walk", () => {
 
   it("gives a device with nothing one field, and a broken one none", () => {
     // The form, immediately. This screen used to ask which kind of device this
-    // was before drawing anything, and the string being pasted already answers
-    // that, so the question was a screen for nothing.
-    expect(of("unpaired")).toContain("Invite or setup line");
+    // was before drawing anything, and every device pairs from an invite now,
+    // so there is no question to ask: one field, Invite, and one button, Pair.
+    expect(of("unpaired")).toMatch(/name {4}Invite$/m);
+    expect(of("unpaired")).toContain("button  [Pair]");
     expect(of("unpaired")).not.toContain("Join an existing vault");
     expect(of("unpaired")).not.toContain("Set up a new vault");
-    expect(of("unpaired")).not.toContain("Use a setup line");
+    expect(of("unpaired")).not.toContain("Start a new vault");
+    expect(prose("unpaired")).not.toMatch(/setup line|recovery key/i);
     // The defaults are present and out of the way.
     expect(of("unpaired")).toContain("More options");
     expect(of("unpaired")).not.toContain("First sync");
@@ -144,8 +148,16 @@ describe("the panel walk", () => {
     // write over a credential that may be the only copy, so there is none, and
     // the question is not asked either.
     expect(of("config-unreadable")).toMatch(/stopped/);
-    expect(of("config-unreadable")).not.toContain("Use a setup line");
+    expect(of("config-unreadable")).not.toMatch(/name {4}Invite$/m);
     expect(of("config-unreadable")).not.toContain("Which is this device?");
+
+    // A pairing being finished is neither: no form to pair over the credential
+    // it holds, and no paired panel for a vault not yet told it may connect.
+    expect(prose("pairing-finishing")).toContain("Finishing pairing");
+    expect(prose("pairing-finishing")).toContain("the same credential");
+    expect(of("pairing-finishing")).toContain("button  [Try now]");
+    expect(of("pairing-finishing")).not.toMatch(/name {4}Invite$/m);
+    expect(of("pairing-finishing")).not.toContain("Sync status");
   });
 
   it("draws the paired panel's rows, in the order somebody reads them", () => {
@@ -158,8 +170,6 @@ describe("the panel walk", () => {
       "Add another device",
       "Server address",
       "Devices",
-      "Recovery key",
-      "Replace the vault's secret",
       "Unlink this vault",
     ];
     const at = rows.map((row) => body.indexOf(`name    ${row}`));
@@ -193,12 +203,7 @@ describe("the panel walk", () => {
         `"${row}" is behind the disclosure, and it is an everyday row`,
       ).toBeLessThan(adding);
     }
-    for (const row of [
-      "Devices",
-      "Recovery key",
-      "Replace the vault's secret",
-      "Unlink this vault",
-    ]) {
+    for (const row of ["Devices", "Unlink this vault"]) {
       expect(
         body.indexOf(`name    ${row}`),
         `"${row}" is on the everyday panel, and it is rare or destructive`,
@@ -248,32 +253,33 @@ describe("the panel walk", () => {
   });
 
   /**
-   * The four things the cut was not allowed to take, each still on screen.
+   * The things the cut was not allowed to take, each still on screen.
    *
    * Every one of them was a paragraph somebody argued for, and each is now a
    * clause. Compressed is fine; gone is not, and this is the difference.
    */
-  it("still says the four things that were paid for in incidents", () => {
-    // Revoking, beside the buttons that do it.
-    expect(prose("devices-revoke-confirming")).toMatch(/can still read copies of your notes/);
-    // What revoking does not do, which is the half that used to be overstated:
-    // the copy said to replace the vault's secret "too", implying that made a
-    // stolen device harmless. It does not. The data key is the same key for
-    // the life of the vault and rotation replaces the wrapping around it
-    // (I24).
-    expect(prose("devices-revoke-confirming")).toMatch(/keeps its decryption key/);
-    // An invite: one device, once, and it expires.
-    expect(prose("paired")).toMatch(/Create a one-time invite. Expires in 10 minutes/);
+  it("still says the things that were paid for in incidents", () => {
+    // What revoking does not do, which is the half that used to be
+    // overstated: nothing a device already synced is taken back, and without
+    // end-to-end encryption it is readable there as it is.
+    expect(prose("devices-revoke-confirming")).toMatch(/Revoking does not un-read anything/);
+    expect(prose("devices-revoke-confirming")).toMatch(/stay readable there, in plaintext/);
+    // Nothing of the vault-wide key that Basalt's copy leaned on is left.
+    expect(prose("devices-revoke-confirming")).not.toMatch(/decryption key/);
+    // An invite: one device, once, and it expires, after the hour the server
+    // gives it.
+    expect(prose("paired")).toMatch(/Create a one-time invite. Expires in one hour/);
     expect(prose("devices-listed")).toMatch(/Expires /);
-    // The recovery key is written down, and is not how a device is added.
-    expect(prose("paired")).toMatch(/Not stored on this device/);
-    expect(prose("fresh-recovery-key")).toMatch(/only way back if every device is lost/);
-    // And what a hop with nothing in front of it costs. Shortened once, and
-    // the wording is not the point: what may not go is that the notes are
-    // sealed anyway and the credential is not, which is the half somebody has
-    // to act on.
-    expect(prose("paired")).toMatch(/notes are still sealed, the device credential is not/);
-    expect(prose("paired")).toMatch(/the device credential is not/);
+    // No recovery key: no row for one, and no screen that shows one.
+    expect(prose("paired")).not.toMatch(/recovery key/i);
+    // And what a hop with nothing in front of it costs, which inverted with
+    // the encryption: Basalt could say the notes were sealed anyway and only
+    // the credential was exposed, and here both are (plan/strip-ledger.md,
+    // hazard 8). The half somebody has to act on is that the notes are.
+    expect(prose("paired")).toMatch(
+      /No TLS on this hop: your notes and the device credential both cross it in the clear/,
+    );
+    expect(prose("paired")).not.toMatch(/still sealed/);
   });
 
   /**
@@ -300,11 +306,13 @@ describe("the panel walk", () => {
     expect(prose("devices-listed")).not.toContain("decryption key");
   });
 
-  it("keeps the one-device vault's row buttonless without command-line instructions", () => {
+  it("gives the one-device vault's row its button, without command-line flags", () => {
     const body = of("devices-listed-last-device");
     expect(body).toContain("Received latest changes");
-    // No revoke here: the last row is the one revocation no device can undo.
-    expect(body).not.toContain("button  [Revoke]");
+    // The last device may be revoked (hazard 4, decided): the way back into a
+    // vault with no devices is `trew invite` on the server, so the row keeps
+    // its button like any other. It is this device, so the button says so.
+    expect(body).toContain("button  [Unlink from the server] (warning)");
     expect(prose("devices-listed-last-device")).toContain("1 device");
     expect(body).not.toContain("--allow-last");
   });
@@ -314,17 +322,17 @@ describe("the panel walk", () => {
     // The first press only relabels and explains. Nothing has happened yet,
     // which is what makes a destructive button in a panel safe to draw.
     expect(body).toContain("button  [Yes, revoke]");
-    expect(prose("devices-revoke-confirming")).toMatch(/can still read copies of your notes/);
+    expect(prose("devices-revoke-confirming")).toMatch(/Revoking does not un-read anything/);
   });
 
-  it("puts the invite and the recovery key on screen where they can be read", () => {
-    // Both are strings somebody has to copy off a screen that may have no
-    // clipboard behind it, so both have to be rendered and not only offered.
-    expect(of("invite-created")).toContain("basalt3i_");
+  it("puts the invite on screen where it can be read", () => {
+    // A string somebody has to copy off a screen that may have no clipboard
+    // behind it, so it has to be rendered and not only offered.
+    expect(of("invite-created")).toContain("trew1i_");
     expect(of("invite-created")).toContain("Pairing code");
     expect(of("invite-created")).toContain("button  [Copy]");
-    expect(of("fresh-recovery-key")).toContain("basalt3_");
-    expect(of("fresh-recovery-key")).toContain("I have written it down");
+    // Nothing else a person has to write down: there is no recovery key.
+    for (const shot of shots) expect(shot.body, shot.name).not.toContain("basalt3");
   });
 
   it("grows the way out when the server has gone backwards", () => {
