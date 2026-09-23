@@ -152,6 +152,20 @@ export class TestServer {
    */
   extraArgs: string[] = [];
 
+  /**
+   * A build of the server to run instead of the shared one, for a test that
+   * needs a build of its own: the crash matrix's, made with `-tags
+   * crashmatrix` (cmd/trewd/testseam.go). Set before `start`.
+   */
+  binary: string | undefined;
+
+  /**
+   * Environment added to the server's own at the next `start`, such as the
+   * crash build's TREW_TEST_SEAM. The server's stdin is empty, so a write
+   * held at that seam stays there until the process is killed.
+   */
+  env: Record<string, string> = {};
+
   async start(samePort?: number): Promise<void> {
     let last: Error | undefined;
     for (let attempt = 0; attempt < 4; attempt++) {
@@ -168,7 +182,7 @@ export class TestServer {
   }
 
   private async startOnce(fixedPort?: number): Promise<void> {
-    const binary = await serverBinary();
+    const binary = this.binary ?? (await serverBinary());
     if (!this.dataDir) this.dataDir = await mkdtemp(join(tmpdir(), "trew-data-"));
     this.port = fixedPort ?? (await freePort());
     this.stderr.length = 0;
@@ -187,7 +201,11 @@ export class TestServer {
         `ws://127.0.0.1:${this.port}`,
         ...this.extraArgs,
       ],
-      { stdio: ["ignore", "pipe", "pipe"] },
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        // A seam only when this server was given one, never from the runner.
+        env: { ...process.env, TREW_TEST_SEAM: undefined, ...this.env },
+      },
     );
     this.proc.stderr?.on("data", (b: Buffer) => this.stderr.push(b.toString()));
 
