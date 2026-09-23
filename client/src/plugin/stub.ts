@@ -229,6 +229,32 @@ export const Platform = {
   isLinux: false,
 };
 
+/**
+ * Which Obsidian the stub says it is, for `requireApiVersion`.
+ *
+ * Current by default, because what the stub implements is the current API. A
+ * test lowers it with `setApiVersion` to see the plugin on an older app, and
+ * `resetStub` puts it back.
+ */
+const CURRENT_API = "1.13.1";
+let apiVersion = CURRENT_API;
+
+export function setApiVersion(version: string): void {
+  apiVersion = version;
+}
+
+/** True when the app is `version` or newer, compared as dotted numbers. */
+export function requireApiVersion(version: string): boolean {
+  const have = apiVersion.split(".").map(Number);
+  const want = version.split(".").map(Number);
+  for (let i = 0; i < Math.max(have.length, want.length); i++) {
+    const a = have[i] ?? 0;
+    const b = want[i] ?? 0;
+    if (a !== b) return a > b;
+  }
+  return true;
+}
+
 /* ---------------------------------------------------------------- *
  * The app
  * ---------------------------------------------------------------- */
@@ -751,6 +777,7 @@ export const built: Setting[] = [];
 /** Forgets everything recorded, between tests. */
 export function resetStub(): void {
   FakeEl.activeElement = undefined;
+  apiVersion = CURRENT_API;
   notices.length = 0;
   built.length = 0;
   modals.length = 0;
