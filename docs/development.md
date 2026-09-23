@@ -569,11 +569,18 @@ Findings:
    Fixed separately with regression tests; see the fix's commit.
 2. A revoked device's panel says to pair again with a new invite but draws
    the paired panel, with no invite field; the way on is Manage this vault,
-   then Unlink.
+   then Unlink. Fixed: a stop on `auth` or `nodevice` carries the
+   `pair-again` recovery, and the panel draws the pairing form in place of
+   the paired panel. Pairing from it confirms the merge, writes the new
+   pending pairing over the refused one, and only then removes the old index,
+   which any save of a pending pairing now does, so a crash between the two
+   cannot finish the new pairing on the old cursor.
 3. After unlinking, the pairing form's Invite field was filled with the
-   first QR's invite, already used.
+   first QR's invite, already used. Fixed: the panel forgets a link's invite
+   once a pairing holds the vault.
 4. The "Trew has stopped: this device was revoked" notice stayed on screen
-   after re-pairing.
+   after re-pairing. Fixed: the notice is taken down when the state leaves
+   that stop, by pairing again, unlinking or a recovery.
 5. Folder deletions do not travel (a deliberate rule inherited from Basalt,
    `client/src/core/engine.ts`, "Folder deletions do not travel"): empty
    folders deleted on the Mac stayed on the phone.

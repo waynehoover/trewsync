@@ -311,6 +311,13 @@ readable there. See
 You can revoke any device, including this one and the last one; `trew invite`
 on the server pairs a device again afterwards.
 
+On the revoked device, the panel says it was revoked and shows **Pair this
+device again** with an Invite field in place of its usual controls. Its notes
+stay where they are, on that device and on the server. Paste or scan a new
+invite and press **Pair**: Trew asks before combining the vault's notes, then
+replaces the old pairing and sync index, as unlinking would, and syncs as a new
+device under the same name, still skipping what it skipped.
+
 <details>
 <summary>Recovery and server maintenance</summary>
 

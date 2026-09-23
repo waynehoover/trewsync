@@ -512,6 +512,23 @@ export async function walkPanelStates(
     ),
   );
   closePanel();
+
+  // Revoked: the pairing form in place of the paired panel, whose every row
+  // needs the credential the server has just refused (M3's second finding).
+  setState(laptop, {
+    kind: "stopped",
+    why: "this device was revoked and may no longer sync this vault; pair it again with a new invite",
+    recovery: "pair-again",
+  });
+  openPanel(laptop);
+  shots.push(
+    shotOfOpenPanel(
+      "stopped-revoked",
+      "The server refuses this device's credential. The panel says so, says the notes are kept, " +
+        "and offers the pairing form, and nothing that needs the refused credential.",
+    ),
+  );
+  closePanel();
   setState(laptop, {
     kind: "synced",
     summary: "up to date",
