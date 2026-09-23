@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/waynehoover/trew/internal/invite"
+	"github.com/waynehoover/trew/internal/store"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -14,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/frame"
 	"github.com/waynehoover/trew/internal/wire"
 )
 
@@ -52,11 +57,11 @@ func TestS16ATerminatedServerEndsAnUploadAsAnAckOrACleanRetry(t *testing.T) {
 			addr := fmt.Sprintf("127.0.0.1:%d", port)
 			waitForServer(t, addr, out)
 
-			cl := dialFirstDevice(t, "ws://"+addr, bootstrapToken(t, out.String()))
+			cl := dialFirstDevice(t, "ws://"+addr, readFirstInvite(t, dir))
 			bodies := [][]byte{[]byte("the first half"), []byte("the second half")}
 			names := []string{chunks.Name(bodies[0]), chunks.Name(bodies[1])}
 			cl.write(wire.In{
-				Op: "put", ID: 2, Path: "note.md", Chunks: names, Mac: testMac,
+				Op: "put", ID: 2, Path: "note.md", Chunks: names,
 				Meta: wire.PutMeta{Size: int64(len(bodies[0]) + len(bodies[1])), MTime: 5},
 			})
 			if res := cl.readJSON(); res["res"] != "want" {
@@ -144,11 +149,21 @@ func waitForServer(t *testing.T, addr string, out *safeBuffer) {
 	t.Fatalf("the server never answered:\n%s", out.String())
 }
 
-// bootstrapToken is the part after the # on the pairing line serve prints.
-func bootstrapToken(t *testing.T, out string) string {
+// readFirstInvite reads the invite `serve` wrote for the first device and says
+// what it holds. The first line is enough: every line carries the same token,
+// under a different address of this server.
+func readFirstInvite(t *testing.T, dir string) invite.Invite {
 	t.Helper()
-	line := tokenLine(t, out)
-	return line[strings.LastIndex(line, "#")+1:]
+	b, err := os.ReadFile(filepath.Join(dir, firstInviteFile))
+	if err != nil {
+		t.Fatalf("the first device's invite: %v", err)
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
+	inv, err := invite.Parse(line)
+	if err != nil {
+		t.Fatalf("the first device's invite does not parse: %v", err)
+	}
+	return inv
 }
 
 // wsClient is the least a device needs to speak the protocol from this package.
@@ -162,14 +177,12 @@ type wsClient struct {
 	ready map[string]any
 }
 
-// The vault's own credential, and the device credential the first device ends
-// up syncing under. Protocol 4 separates the two: the first is what claims the
-// vault and registers a device, the second is what the device connects with
-// afterwards, and the second never leaves the device it was made on.
-const (
-	vaultKey    = "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
+// The first device's own credentials, as a device chooses them: a base64url id
+// and 32 random bytes of token, fixed here so a test can connect as it again.
+var (
 	firstDevID  = "first-device"
-	firstDevKey = "a-device-auth-key-for-the-first-device-0001"
+	firstDevRaw = sha256.Sum256([]byte("the first device's token"))
+	firstDevKey = store.EncodeToken(firstDevRaw[:])
 )
 
 func dialWS(t *testing.T, url string) *wsClient {
@@ -185,32 +198,25 @@ func dialWS(t *testing.T, url string) *wsClient {
 }
 
 // dialFirstDevice runs the whole of what a first device does against the real
-// binary: claim the vault with the first-run token, register a device row on
-// the registrar session that produces, then connect as that device and drain
-// the empty catch-up.
-//
-// Three steps because there are three credentials in play, and doing it here
-// rather than in a helper each test skips is what keeps the command-line
-// tests speaking the protocol the shipped server actually implements.
-func dialFirstDevice(t *testing.T, url, token string) *wsClient {
+// binary: redeem the invite `serve` wrote, for an id and a token of its own,
+// then connect as that device and drain the empty catch-up. Two connections,
+// because a redemption closes behind its reply: the redeemer has proved it
+// holds an invite, and the next hello proves it holds the token it registered.
+func dialFirstDevice(t *testing.T, url string, inv invite.Invite) *wsClient {
 	t.Helper()
-	reg := dialWS(t, url)
-	reg.write(wire.In{
-		Op: "hello", ID: 1, Proto: wire.Proto, Crypto: wire.Crypto, Vault: "default",
-		Token: token, Claim: vaultKey, Wrapped: testWrapped, Device: "test-device",
+	joiner := dialWS(t, url)
+	joiner.write(wire.In{
+		Op: "hello", ID: 1, Proto: wire.Proto, Vault: inv.Vault, Device: "test-device",
+		Invite: store.EncodeToken(inv.Token), DeviceID: firstDevID, Token: firstDevKey,
 	})
-	if res := reg.readJSON(); res["res"] != "registrar" {
-		t.Fatalf("wanted registrar, got %v", res)
+	if res := joiner.readJSON(); res["res"] != "redeemed" {
+		t.Fatalf("wanted redeemed, got %v", res)
 	}
-	reg.write(wire.In{Op: "register", ID: 2, DeviceID: firstDevID, Auth: firstDevKey, Name: "test-device"})
-	if res := reg.readJSON(); res["res"] != "registered" {
-		t.Fatalf("wanted registered, got %v", res)
-	}
-	reg.conn.CloseNow()
+	joiner.conn.CloseNow()
 
 	cl := dialWS(t, url)
 	cl.write(wire.In{
-		Op: "hello", ID: 1, Proto: wire.Proto, Crypto: wire.Crypto, Vault: "default",
+		Op: "hello", ID: 1, Proto: wire.Proto, Vault: inv.Vault,
 		Token: firstDevKey, DeviceID: firstDevID, Device: "test-device",
 	})
 	cl.ready = cl.readJSON()
@@ -234,9 +240,11 @@ func (c *wsClient) write(v any) {
 	}
 }
 
+// writeBinary sends one chunk body as a protocol 1 body frame, raw marker and
+// bytes (plan/protocol.md, "Chunk bodies").
 func (c *wsClient) writeBinary(b []byte) {
 	c.t.Helper()
-	if err := c.conn.Write(c.ctx, websocket.MessageBinary, b); err != nil {
+	if err := c.conn.Write(c.ctx, websocket.MessageBinary, append([]byte{frame.MarkerRaw}, b...)); err != nil {
 		c.t.Fatalf("write body: %v", err)
 	}
 }

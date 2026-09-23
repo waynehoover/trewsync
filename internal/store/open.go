@@ -1,37 +1,49 @@
 package store
 
 import (
+	"context"
 	"database/sql"
-	"errors"
+	"database/sql/driver"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/waynehoover/trew/internal/chunks"
 )
 
-// SchemaVersion is what this binary's schema is, written into the database as
-// SQLite's `user_version` (I15).
+// SchemaVersion is what this binary's schema is, recorded in the store's
+// identity row and in SQLite's `user_version` (I15, PLAN.md section 2.8).
 //
-// The number exists so an older binary can refuse a database a newer one wrote,
-// instead of opening it and being wrong quietly. Nothing checked before this:
-// `CREATE TABLE IF NOT EXISTS` does nothing to a table that is already there,
-// so a build that had never heard of a column would start cleanly on a database
-// full of them, read the columns it did know, and write rows missing the rest.
-// Every one of those rows is somebody's note, and no message would have
-// appeared anywhere.
+// The number exists so an older binary can refuse a database a newer one
+// wrote, instead of opening it and being wrong quietly. `CREATE TABLE IF NOT
+// EXISTS` does nothing to a table that is already there, so a build that had
+// never heard of a column would start cleanly on a database full of them, read
+// the columns it did know, and write rows missing the rest. Every one of those
+// rows is somebody's note, and no message would have appeared anywhere.
 //
-// Raise it when a change makes a database unreadable by the build before it.
-// Adding a table or a nullable column is not that: `migrate` handles those
-// forwards and an older binary ignores them, which is why every database this
-// project has ever written is version 1. What would need a 2 is a column whose
-// meaning changed, a row an old build would misread, or anything that makes
-// going back destructive.
+// It is the identity row that is checked, not `user_version`. Basalt's schema
+// is also version 1 in `user_version`, which is exactly the collision the
+// identity row exists for: a bare version number cannot tell this product's
+// first schema from another product's.
+//
+// Raise it when a change makes a database unreadable by the build before it,
+// and add the step to `migrations`. The upgrade discipline outlives the fresh
+// first schema: the second one must arrive tested.
 const SchemaVersion = 1
 
-// ErrFutureSchema is a database written by a newer trew.
-var ErrFutureSchema = errors.New("this database was written by a newer trew")
+// migrations are the steps from one schema version to the next, keyed by the
+// version they upgrade from. Empty: version 1 is the first. Each step runs
+// inside the transaction that records the new version, so a store is at one
+// version or the next and never between them.
+var migrations = map[int]func(q execer) error{}
+
+// execer is what a migration or an initialisation needs from a transaction.
+type execer interface {
+	querier
+	Exec(string, ...any) (sql.Result, error)
+}
 
 // Mode says what opening a store is allowed to do to it.
 //
@@ -57,14 +69,23 @@ const (
 
 // OpenMode opens a store with an explicit contract about what it may change.
 //
-// The schema version is checked in every mode, including ReadOnly: a database
-// from the future is one this binary cannot read correctly, and being asked
-// only to look at it does not make that safe. Refusing is the whole point.
+// The store's identity is checked in every mode and before anything is
+// written or created, including the directory, the chunk tree and the
+// database file (PLAN.md section 2.8). A Basalt directory, another product's
+// database, one with no identity, a newer schema, and a chunk tree with no
+// database are all refused with the directory left exactly as it was. Being
+// asked only to look does not make reading a database this binary cannot
+// interpret safe, and refusing is the whole point.
 func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error) {
 	if sync != SyncFull && sync != SyncNormal {
 		return nil, fmt.Errorf("invalid sync mode %q", sync)
 	}
 
+	// Before anything is created. Every check in here only reads.
+	exists, err := checkDirectory(dbPath, chunkDir)
+	if err != nil {
+		return nil, err
+	}
 	switch mode {
 	case Create:
 		if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
@@ -74,11 +95,8 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 		// Named rather than created. `trew verify -data /typo` used to make
 		// an empty store and report it healthy, which is a true statement about
 		// a directory nobody wanted and a false answer to the question asked.
-		if _, err := os.Stat(dbPath); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil, fmt.Errorf("no database at %s", dbPath)
-			}
-			return nil, err
+		if !exists {
+			return nil, fmt.Errorf("no database at %s", dbPath)
 		}
 	}
 
@@ -91,81 +109,263 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 		return nil, err
 	}
 
-	// SQLite and its driver parse URI parameters. Escape the filesystem path
-	// first so a literal '?' cannot truncate it or inject connection options.
-	absPath, err := filepath.Abs(dbPath)
+	db, err := sql.Open("sqlite", dsn(dbPath, sync, mode == ReadOnly))
 	if err != nil {
 		return nil, err
 	}
-	dbURL := &url.URL{Scheme: "file", Path: filepath.ToSlash(absPath)}
-	dsn := dbURL.String() + "?_pragma=busy_timeout(5000)" +
+
+	// Again, through the handle that will be used, because this one reads the
+	// write-ahead log and the probe above deliberately did not. A newer schema
+	// recorded only in the log is refused here, before migrate or the schema
+	// has run.
+	id, empty, err := readIdentity(db, dbPath)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if empty && mode != Create {
+		db.Close()
+		return nil, fmt.Errorf("%s holds no store: it has no tables, so it was never initialised", dbPath)
+	}
+
+	if mode != ReadOnly {
+		if empty {
+			id, err = initialise(db, dbPath)
+		} else {
+			id, err = migrate(db, dbPath, id)
+		}
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+
+	return &Store{db: db, chunks: cs, dbPath: dbPath, identity: id, readOnly: mode == ReadOnly}, nil
+}
+
+// dsn is the connection string every handle on a store uses.
+//
+// The pragmas are here rather than in the schema because a pragma in a
+// statement applies to the one connection that ran it, and database/sql keeps
+// a pool.
+//
+// `temp_store = MEMORY` (2) is the one that has cost something. SQLite writes a
+// statement journal whenever a statement inside a transaction may have to be
+// rolled back on its own, which is what a SAVEPOINT is for, and it puts that
+// journal in a temp directory. The shipped container mounts only /data and is
+// read-only everywhere else, so there is no temp directory to have: Basalt's
+// batched commit asked for one and got SQLITE_IOERR_GETTEMPPATH (6410) on
+// every batch large enough to need it, twenty-two thousand times in a day on
+// the author's own server, rescued only by a fallback to one commit per entry.
+// MEMORY is right rather than a workaround: the transactions hold one batch,
+// which the protocol bounds, so the journal is small.
+//
+// The pragma used to be a statement in the schema, and so reached only the
+// connection that ran the schema. Measured against the pinned driver, every
+// other connection in the pool reported 0, the default, which is the temp
+// directory again. In the DSN the driver runs it on every connection it opens,
+// and TestEveryConnectionKeepsItsTempStoreInMemory holds it there.
+//
+// SQLite and its driver parse URI parameters. The filesystem path is escaped
+// first so a literal '?' cannot truncate it or inject connection options.
+func dsn(dbPath string, sync SyncMode, readOnly bool) string {
+	absPath, err := filepath.Abs(dbPath)
+	if err != nil {
+		absPath = dbPath
+	}
+	u := &url.URL{Scheme: "file", Path: filepath.ToSlash(absPath)}
+	s := u.String() + "?_pragma=busy_timeout(5000)" +
 		"&_pragma=synchronous(" + string(sync) + ")" +
-		"&_pragma=foreign_keys(1)"
-	if mode == ReadOnly {
+		"&_pragma=foreign_keys(1)" +
+		"&_pragma=temp_store(2)"
+	if readOnly {
 		// The driver's own read-only open, so this is enforced below the code
 		// rather than by the code remembering. A write through this handle is
 		// an error from SQLite, which is what makes "inspection does not
 		// modify" a fact rather than a convention.
-		dsn += "&_pragma=query_only(1)&mode=ro"
+		s += "&_pragma=query_only(1)&mode=ro"
 	}
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := checkSchemaVersion(db, dbPath); err != nil {
-		db.Close()
-		return nil, err
-	}
-
-	if mode != ReadOnly {
-		if err := migrate(db); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("migrating: %w", err)
-		}
-		if _, err := db.Exec(schema); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("schema: %w", err)
-		}
-		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("recording the schema version: %w", err)
-		}
-	}
-
-	// Asked rather than assumed: a read-only open does not migrate, so a
-	// backup from before `n_chunks` existed is read exactly as it is (R48).
-	counted, err := hasColumn(db, "entries", "n_chunks")
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	return &Store{
-		db: db, chunks: cs, dbPath: dbPath,
-		hasChunkCount: counted, readOnly: mode == ReadOnly,
-	}, nil
+	return s
 }
 
-// checkSchemaVersion refuses a database this binary is too old to read.
+// initialise writes the schema and the identity row into a database that has
+// no tables, in one transaction, so a store either has an identity and every
+// table or has nothing and is initialised again on the next open.
 //
-// Zero is every database written before the version existed, and it is
-// accepted: those are readable, and refusing them would mean an upgrade that
-// cannot open the store it is upgrading. Anything above SchemaVersion is a
-// newer trew's, and the refusal names both numbers because the answer is
-// always "run the newer one" and a message that does not say which is which
-// leaves somebody guessing at their own data.
-func checkSchemaVersion(db *sql.DB, dbPath string) error {
-	var got int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&got); err != nil {
-		return fmt.Errorf("reading the schema version: %w", err)
+// The journal mode goes first and on its own, because SQLite will not change
+// it inside a transaction. A crash between the two leaves a database with no
+// tables, which is exactly the state this function starts from.
+func initialise(db *sql.DB, dbPath string) (Identity, error) {
+	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		return Identity{}, fmt.Errorf("schema: %w", err)
 	}
-	if got > SchemaVersion {
-		return fmt.Errorf(
-			"%w: %s is schema %d and this trew understands %d. "+
-				"Run the newer trew, or restore a backup taken before the upgrade. "+
-				"Opening it with this one would read rows it does not understand and write rows "+
-				"the newer one would not",
-			ErrFutureSchema, dbPath, got, SchemaVersion)
+	epoch, err := newEpoch()
+	if err != nil {
+		return Identity{}, err
+	}
+	var id Identity
+	err = immediate(db, func(q execer) error {
+		// Another handle may have initialised it while this one waited for
+		// the lock. Its identity is the one that stands.
+		existing, empty, err := readIdentity(q, dbPath)
+		if err != nil {
+			return err
+		}
+		if !empty {
+			id = existing
+			return nil
+		}
+		if _, err := q.Exec(identitySchema + schema); err != nil {
+			return fmt.Errorf("schema: %w", err)
+		}
+		id = Identity{Product: Product, SchemaVersion: SchemaVersion, Epoch: epoch, CreatedAt: nowMillis()}
+		if _, err := q.Exec(
+			`INSERT INTO store_identity (id, product, schema_version, epoch, created_at) VALUES (1, ?, ?, ?, ?)`,
+			id.Product, id.SchemaVersion, id.Epoch, id.CreatedAt); err != nil {
+			return fmt.Errorf("recording the store identity: %w", err)
+		}
+		if _, err := q.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
+			return fmt.Errorf("recording the schema version: %w", err)
+		}
+		return nil
+	})
+	return id, err
+}
+
+// migrate brings a store from the schema version it records to this binary's,
+// one step at a time, each step and its new version in one transaction, and
+// then makes sure every table the current schema names is there.
+//
+// The second half is `CREATE TABLE IF NOT EXISTS` and costs nothing on a
+// store that is current, which is every store at version 1. It stays because
+// it is idempotent and because a table added to the schema reaches an
+// existing store through it; a column does not, and needs a step.
+func migrate(db *sql.DB, dbPath string, id Identity) (Identity, error) {
+	for id.SchemaVersion < SchemaVersion {
+		step, ok := migrations[id.SchemaVersion]
+		if !ok {
+			return id, fmt.Errorf("%s is schema %d and this build has no step from it to %d",
+				dbPath, id.SchemaVersion, id.SchemaVersion+1)
+		}
+		next := id.SchemaVersion + 1
+		if err := immediate(db, func(q execer) error {
+			if err := step(q); err != nil {
+				return err
+			}
+			if _, err := q.Exec(`UPDATE store_identity SET schema_version = ? WHERE id = 1`, next); err != nil {
+				return err
+			}
+			_, err := q.Exec(fmt.Sprintf("PRAGMA user_version = %d", next))
+			return err
+		}); err != nil {
+			return id, fmt.Errorf("migrating %s from schema %d: %w", dbPath, id.SchemaVersion, err)
+		}
+		id.SchemaVersion = next
+	}
+	if _, err := db.Exec(schema); err != nil {
+		return id, fmt.Errorf("schema: %w", err)
+	}
+	// The header copy of the version, restamped when it has drifted from the
+	// identity row, so a tool that reads only the header is not misled. The
+	// identity row is the authority and nothing here trusts the header.
+	var header int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&header); err != nil {
+		return id, fmt.Errorf("reading the schema version: %w", err)
+	}
+	if header != id.SchemaVersion {
+		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", id.SchemaVersion)); err != nil {
+			return id, fmt.Errorf("recording the schema version: %w", err)
+		}
+	}
+	return id, nil
+}
+
+// immediate runs fn in a transaction begun with BEGIN IMMEDIATE, on one pinned
+// connection.
+//
+// Immediate rather than deferred, for any transaction that reads and then
+// decides to write. A deferred transaction takes the write lock only at its
+// first write, and in WAL mode a read snapshot older than the latest commit
+// cannot be upgraded: SQLite answers SQLITE_BUSY at once instead of waiting,
+// because retrying would not refresh what the transaction already read. Taking
+// the lock at BEGIN means the busy timeout waits for it, and every read inside
+// sees the latest commit. That is what several store handles on one directory
+// need, and `trew backup`, `purge` and the admin commands are exactly that.
+//
+// database/sql has no way to ask for it, so the statements are sent by hand on
+// a pinned connection. A connection whose rollback failed is discarded rather
+// than returned to the pool with a transaction still open on it.
+func immediate(db *sql.DB, fn func(q execer) error) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	abandon := func() {
+		if _, err := conn.ExecContext(ctx, "ROLLBACK"); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}
+	if err := fn(pinned{conn, ctx}); err != nil {
+		abandon()
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		abandon()
+		return err
 	}
 	return nil
 }
+
+// pinned adapts a pinned connection to the statement methods a transaction
+// has, for code shared with *sql.Tx.
+type pinned struct {
+	c   *sql.Conn
+	ctx context.Context
+}
+
+func (p pinned) QueryRow(q string, args ...any) *sql.Row {
+	return p.c.QueryRowContext(p.ctx, q, args...)
+}
+
+func (p pinned) Query(q string, args ...any) (*sql.Rows, error) {
+	return p.c.QueryContext(p.ctx, q, args...)
+}
+
+func (p pinned) Exec(q string, args ...any) (sql.Result, error) {
+	return p.c.ExecContext(p.ctx, q, args...)
+}
+
+// Identity is what this store says about itself, as read when it was opened.
+func (s *Store) Identity() Identity { return s.identity }
+
+// Epoch is this store's epoch, which `ready` carries: the uid sequence a
+// device's cursor belongs to.
+func (s *Store) Epoch() string { return s.identity.Epoch }
+
+// renewEpoch gives this store a new epoch. Only a backup snapshot is given
+// one, in its staging copy, before it is published; see Backup.
+func (s *Store) renewEpoch() error {
+	epoch, err := newEpoch()
+	if err != nil {
+		return err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	res, err := s.db.Exec(`UPDATE store_identity SET epoch = ? WHERE id = 1`, epoch)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return fmt.Errorf("the identity row was not updated (%d rows, %v)", n, err)
+	}
+	s.identity.Epoch = epoch
+	return nil
+}
+
+// nowMillis is the server's clock in milliseconds, for the identity row.
+func nowMillis() int64 { return time.Now().UnixMilli() }

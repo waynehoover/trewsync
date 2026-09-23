@@ -13,7 +13,7 @@ func TestPurgePreservesDeletionOfAReusedName(t *testing.T) {
 			h.file(t, "from.md", "original")
 			renameCurrent(t, h, "from.md", "to.md", "original")
 			reused := h.file(t, "from.md", "new incarnation")
-			if _, err := h.AppendCurrent("v1", Entry{Path: "from.md", Deleted: true, Mac: testMac}, reused.UID, 0); err != nil {
+			if _, err := h.AppendCurrent("v1", Entry{Path: "from.md", Deleted: true}, reused.UID, 0); err != nil {
 				t.Fatal(err)
 			}
 			if editDestination {
@@ -70,14 +70,14 @@ func TestPurgeKeepsLegacyRenameDeletionsSuppressed(t *testing.T) {
 			h := newTestStore(t)
 			old := h.file(t, "from.md", "original")
 			remove := func() {
-				if _, err := h.AppendEntry("v1", Entry{Path: "from.md", Deleted: true, Mac: testMac}); err != nil {
+				if _, err := h.AppendEntry("v1", Entry{Path: "from.md", Deleted: true}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if deleteFirst {
 				remove()
 			}
-			if _, err := h.AppendEntry("v1", Entry{Path: "to.md", Prev: "from.md", Size: old.Size, Chunks: old.Chunks, Mac: testMac}); err != nil {
+			if _, err := h.AppendEntry("v1", Entry{Path: "to.md", Prev: "from.md", Size: old.Size, Chunks: old.Chunks}); err != nil {
 				t.Fatal(err)
 			}
 			if !deleteFirst {
@@ -103,7 +103,7 @@ func TestPurgeDoesNotPromiseContentForARetainedDeletionPredecessor(t *testing.T)
 	renameCurrent(t, h, "from.md", "to.md", "original")
 	reused := h.file(t, "from.md", "new incarnation")
 	for range 2 {
-		if _, err := h.AppendEntry("v1", Entry{Path: "from.md", Deleted: true, Mac: testMac}); err != nil {
+		if _, err := h.AppendEntry("v1", Entry{Path: "from.md", Deleted: true}); err != nil {
 			t.Fatal(err)
 		}
 	}

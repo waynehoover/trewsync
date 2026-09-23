@@ -12,9 +12,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/waynehoover/trew/internal/invite"
 	"net"
 	"os"
 	"path/filepath"
@@ -34,15 +37,6 @@ import (
 	"net/http/httptest"
 	"strconv"
 )
-
-// A mac of the right shape, standing in for a real writer's. The server holds no
-// key and checks only that an entry carries one, because an entry nothing can
-// authenticate is refused by every reader for ever.
-const testMac = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
-// A wrapped data key of the shape a client produces: 60 bytes in base64url.
-// Every claim carries one, because every claimed vault has a data key.
-const testWrapped = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 // seeded builds a data directory with some history in it, the way a server
 // would have, and returns its path.
@@ -69,7 +63,7 @@ func seeded(t *testing.T) string {
 			names = append(names, n)
 			size += len(b)
 		}
-		e := store.Entry{Path: path, Size: int64(size), MTime: 10, Device: "seed", Chunks: names, Mac: testMac}
+		e := store.Entry{Path: path, Size: int64(size), MTime: 10, Device: "seed", Chunks: names}
 		uid, err := st.AppendEntry("default", e)
 		if err != nil {
 			t.Fatalf("append %s: %v", path, err)
@@ -83,7 +77,7 @@ func seeded(t *testing.T) string {
 	put("note.md", "version three")
 	put("other.md", "only version")
 	put("attachment.bin", "part one ", "part two ", "part three")
-	if _, err := st.AppendEntry("default", store.Entry{Path: "gone.md", Deleted: true, MTime: 20, Mac: testMac}); err != nil {
+	if _, err := st.AppendEntry("default", store.Entry{Path: "gone.md", Deleted: true, MTime: 20}); err != nil {
 		t.Fatalf("append deletion: %v", err)
 	}
 	if err := st.Close(); err != nil {
@@ -111,7 +105,7 @@ func appendOne(t *testing.T, dir, path, body string) {
 	}
 	if _, err := st.AppendEntry("default", store.Entry{
 		Path: path, Size: int64(len(body)), MTime: 30, Device: "seed",
-		Chunks: []string{name}, Mac: testMac,
+		Chunks: []string{name},
 	}); err != nil {
 		t.Fatalf("append %s: %v", path, err)
 	}
@@ -217,8 +211,8 @@ func TestVerifyDeepChecksTheRegistryAndSaysWhatItChecked(t *testing.T) {
 	}
 }
 
-// registryOn claims the seeded vault and puts a device and an outstanding
-// invite on it, which is what a vault anybody is using has.
+// registryOn puts a device and an outstanding invite on the seeded vault, which
+// is what a vault anybody is using has.
 func registryOn(t *testing.T, dir string) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
@@ -226,16 +220,11 @@ func registryOn(t *testing.T, dir string) {
 		t.Fatalf("open: %v", err)
 	}
 	defer st.Close()
-	vaultHash := strings.Repeat("a", 64)
-	if _, err := st.ClaimVault("default", vaultHash, testWrapped, 1000); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	if err := st.RegisterDevice("default", "alfa", "laptop", strings.Repeat("b", 64),
-		vaultHash, 1000); err != nil {
+	if err := st.RegisterDevice("default", "alfa", "laptop", strings.Repeat("b", 64), 1000); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if err := st.AddInvite("default", "AAAAAAAAAAAAAAAAAAAAAA", testWrapped,
-		time.Now().Add(time.Hour).UnixMilli(), time.Now().UnixMilli()); err != nil {
+	expires := time.Now().Add(time.Hour).UnixMilli()
+	if _, err := st.CreateInvite("default", "", "", &expires, time.Now().UnixMilli()); err != nil {
 		t.Fatalf("invite: %v", err)
 	}
 }
@@ -665,37 +654,40 @@ func TestASecondServerRefusesTheSameDirectory(t *testing.T) {
 	}
 }
 
-// First run generates a token and says so, and the same directory keeps it.
-// A token that changed on restart would invalidate a pairing string somebody
-// had already copied, and the failure would look like a typo.
-func TestServeKeepsItsTokenAcrossRestarts(t *testing.T) {
+// main_test.go:671, the half that stays. A first run on an empty store writes
+// the first device's invite, and a restart inside its hour leaves it as it
+// was: replacing it would invalidate an invite somebody had already copied,
+// and the failure would look like a typo.
+func TestARestartKeepsTheFirstInviteItWrote(t *testing.T) {
 	dir := t.TempDir()
 
 	first, stop := serveCapturing(t, dir)
 	stop()
-	if !strings.Contains(first, "A new bootstrap token was generated") {
-		t.Fatalf("the first run did not announce a new token:\n%s", first)
+	path := filepath.Join(dir, firstInviteFile)
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the first run wrote no invite: %v\n%s", err, first)
+	}
+	if !strings.Contains(first, path) {
+		t.Fatalf("the first run did not say where the invite is:\n%s", first)
+	}
+	// The invite itself is never printed: stdout is a log under systemd.
+	if strings.Contains(first, strings.TrimSpace(string(written))) {
+		t.Fatalf("serve printed the invite it wrote:\n%s", first)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the invite file is %v (%v), want mode 600", info.Mode(), err)
 	}
 
 	second, stop2 := serveCapturing(t, dir)
 	stop2()
-	if strings.Contains(second, "A new bootstrap token was generated") {
-		t.Fatalf("a restart generated a new token, locking out every paired device:\n%s", second)
+	again, err := os.ReadFile(path)
+	if err != nil || string(again) != string(written) {
+		t.Fatalf("a restart replaced the first device's invite:\n%s\n%s", written, again)
 	}
-	if tokenLine(t, first) != tokenLine(t, second) {
-		t.Fatalf("the token changed across a restart:\n%s\n%s", first, second)
+	if !strings.Contains(second, "still outstanding") {
+		t.Fatalf("the restart did not say an invite is outstanding:\n%s", second)
 	}
-}
-
-func tokenLine(t *testing.T, out string) string {
-	t.Helper()
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "#") {
-			return strings.TrimSpace(line)
-		}
-	}
-	t.Fatalf("no token line in:\n%s", out)
-	return ""
 }
 
 /* helpers for running a server inside a test */
@@ -850,8 +842,11 @@ func TestServeCreatesADataDirectoryOnItsFirstRun(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "fresh")
 	out, stop := serveCapturing(t, dir)
 	stop()
-	if !strings.Contains(out, "A new bootstrap token was generated") {
-		t.Fatalf("a first run should have set one up:\n%s", out)
+	if !strings.Contains(out, "No device is paired with this vault yet") {
+		t.Fatalf("a first run should have said how to pair its first device:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, firstInviteFile)); err != nil {
+		t.Fatalf("a first run wrote no invite for its first device: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "trew.db")); err != nil {
 		t.Fatalf("serve did not create the database: %v", err)
@@ -1036,12 +1031,12 @@ func TestStatsKeepsTheShortLineWhenEveryDeletionIsRecoverable(t *testing.T) {
 		t.Fatalf("put chunk: %v", err)
 	}
 	if _, err := st.AppendEntry("default", store.Entry{
-		Path: "gone.md", Size: int64(len(body)), MTime: 10, Chunks: []string{name}, Mac: testMac,
+		Path: "gone.md", Size: int64(len(body)), MTime: 10, Chunks: []string{name},
 	}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	if _, err := st.AppendEntry("default", store.Entry{
-		Path: "gone.md", Deleted: true, MTime: 20, Mac: testMac,
+		Path: "gone.md", Deleted: true, MTime: 20,
 	}); err != nil {
 		t.Fatalf("append deletion: %v", err)
 	}
@@ -1182,74 +1177,81 @@ func majorMinor(v string) string {
 	return parts[0] + "." + parts[1]
 }
 
-// A bind address is not an address. Binding to every interface is the normal way
-// to run this, because a phone cannot reach a server on loopback, but pasting
-// "0.0.0.0:3003" into a device asks it to connect to nothing at all and the
-// failure looks like a server that is down.
-func TestTheSetupStringNamesSomethingADeviceCanDial(t *testing.T) {
+// main_test.go:1189. A bind address is not an address. Binding to every
+// interface is the normal way to run this, because a phone cannot reach a
+// server on loopback, but an invite naming "0.0.0.0:3003" asks a device to
+// connect to nothing at all, and the failure looks like a server that is down.
+// Whatever addresses the first invite carries, none is a wildcard, and each is
+// one the codec takes.
+func TestTheFirstInviteNamesSomethingADeviceCanDial(t *testing.T) {
 	for _, addr := range []string{"0.0.0.0:3003", ":3003", "[::]:3003"} {
-		var out bytes.Buffer
-		printSetup(&out, addr, "default", "TOKEN", true, false, true)
-		got := out.String()
-
-		for _, wildcard := range []string{"0.0.0.0:3003#", "[::]:3003#", " :3003#"} {
-			if strings.Contains(got, wildcard) {
-				t.Errorf("listening on %s printed %q as something to paste:\n%s", addr, wildcard, got)
+		urls, err := inviteURLs("", addr, false)
+		if err != nil {
+			t.Fatalf("%s: %v", addr, err)
+		}
+		for _, u := range urls {
+			for _, wildcard := range []string{"0.0.0.0", "[::]", "://:", placeholderHost} {
+				if strings.Contains(u, wildcard) {
+					t.Errorf("listening on %s put %q in an invite", addr, u)
+				}
+			}
+			if err := checkInviteURL(u); err != nil {
+				t.Errorf("listening on %s gave %q, which no invite can carry: %v", addr, u, err)
 			}
 		}
-		if !strings.Contains(got, "#TOKEN") {
-			t.Errorf("listening on %s printed no pairing string at all:\n%s", addr, got)
+	}
+}
+
+// main_test.go:1207. An explicit address goes into the invite unchanged, and
+// -url overrides whatever the bind would have said: it is already the answer.
+func TestAnExplicitAddressIsWrittenAsGiven(t *testing.T) {
+	urls, err := inviteURLs("", "vault.example.ts.net:3003", false)
+	if err != nil || len(urls) != 1 || urls[0] != "wss://vault.example.ts.net:3003" {
+		t.Fatalf("an explicit bind became %v, %v", urls, err)
+	}
+	urls, err = inviteURLs("wss://notes.example.com", "0.0.0.0:3003", false)
+	if err != nil || len(urls) != 1 || urls[0] != "wss://notes.example.com" {
+		t.Fatalf("-url became %v, %v", urls, err)
+	}
+	for _, bad := range []string{"notes.example.com", "https://notes.example.com", "wss://notes.example.com/"} {
+		if _, err := inviteURLs(bad, "0.0.0.0:3003", false); err == nil {
+			t.Errorf("-url %q was accepted, and no invite can carry it", bad)
 		}
 	}
 }
 
-// An explicit address is left exactly as given: it is already the answer.
-func TestAnExplicitAddressIsPrintedAsGiven(t *testing.T) {
+// main_test.go:1218. A store with devices mints no first invite and prints
+// none, and says how a device is added instead.
+func TestAPairedVaultWritesNoFirstInvite(t *testing.T) {
+	dir := seeded(t)
+	registryOn(t, dir)
+	st, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	path := filepath.Join(t.TempDir(), firstInviteFile)
+	first, err := mintFirstInvite(st, "default", []string{"wss://vault.example.ts.net"}, path, time.Now())
+	if err != nil || !first.Paired || first.Written {
+		t.Fatalf("a paired vault's first invite: %+v %v", first, err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a paired vault wrote an invite file: %v", err)
+	}
 	var out bytes.Buffer
-	printSetup(&out, "vault.example.ts.net:3003", "default", "TOKEN", false, false, true)
-	if !strings.Contains(out.String(), "vault.example.ts.net:3003#TOKEN") {
-		t.Errorf("an explicit address was rewritten:\n%s", out.String())
+	printPairing(&out, "vault.example.ts.net:3003", "default", first)
+	if !strings.Contains(out.String(), "trew invite") {
+		t.Errorf("a paired vault did not say how to add a device:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), invite.Prefix) {
+		t.Errorf("a paired vault printed an invite:\n%s", out.String())
 	}
 }
 
-// The bootstrap token claims an unclaimed vault and nothing else. Once a device
-// has claimed one, printing it writes a dead credential to the log on every
-// restart and offers it as a pairing string that fails when pasted.
-func TestAClaimedVaultPrintsNoToken(t *testing.T) {
-	var out bytes.Buffer
-	printSetup(&out, "vault.example.ts.net:3003", "default", "SECRETTOKEN", false, false, false)
-	got := out.String()
-
-	if strings.Contains(got, "SECRETTOKEN") {
-		t.Errorf("a claimed vault printed its spent bootstrap token:\n%s", got)
-	}
-	if !strings.Contains(got, "claimed") {
-		t.Errorf("a claimed vault did not say so, so the missing token looks like a bug:\n%s", got)
-	}
-	// Whoever reads this is here to add a device, and the answer is on another
-	// device rather than on this server.
-	if !strings.Contains(got, "trew invite") {
-		t.Errorf("a claimed vault did not say how to add a device:\n%s", got)
-	}
-}
-
-// A claimed vault refuses the next claim, and says so.
-//
-// The printed token is what stops somebody who can reach the port from
-// claiming an empty vault, and what makes it safe to print in a log is that
-// spending it is final: the vault is bound to the first device's key, and a
-// second device offering the same token with a key of its own is refused
-// rather than quietly rebound to. Dropping the token on a loopback bind was
-// considered and refused (docs/design.md, "Why a loopback bind is not the
-// token"), so this property has to hold for every bind there is, which is why
-// it is checked here against the running binary rather than only against the
-// authenticator.
-//
-// There is a test for this at the authenticator already, in
-// internal/server/auth_test.go, and it is a function call rather than a door.
-// This one is the door: the shipped binary, a websocket, and the frame a
-// second claimant is actually sent.
-func TestAClaimedVaultRefusesTheNextClaim(t *testing.T) {
+// main_test.go:1252. Through the shipped binary: the first-run invite redeems
+// once, a second use is refused as `auth`, not retryable, and the device that
+// used it still connects.
+func TestTheFirstInviteWorksOnce(t *testing.T) {
 	dir := t.TempDir()
 	addr := fmt.Sprintf("127.0.0.1:%d", freeTestPort(t))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1258,45 +1260,58 @@ func TestAClaimedVaultRefusesTheNextClaim(t *testing.T) {
 	go func() { _ = run(ctx, []string{"serve", "-data", dir, "-addr", addr}, out) }()
 	waitForServer(t, addr, out)
 
-	token := bootstrapToken(t, out.String())
-	dialFirstDevice(t, "ws://"+addr, token)
+	inv := readFirstInvite(t, dir)
+	dialFirstDevice(t, "ws://"+addr, inv)
 
-	// The same token, a key of its own, and nothing else different.
+	// The same invite, a device of its own, and nothing else different.
 	stranger := dialWS(t, "ws://"+addr)
+	strangerRaw := sha256.Sum256([]byte("a stranger's token"))
 	stranger.write(wire.In{
-		Op: "hello", ID: 1, Proto: wire.Proto, Crypto: wire.Crypto, Vault: "default",
-		Token: token, Claim: strings.Repeat("s", len(vaultKey)), Wrapped: testWrapped,
-		Device: "stranger",
+		Op: "hello", ID: 1, Proto: wire.Proto, Vault: inv.Vault, Device: "stranger",
+		Invite: store.EncodeToken(inv.Token), DeviceID: "stranger", Token: store.EncodeToken(strangerRaw[:]),
 	})
 	res := stranger.readJSON()
 	if res["res"] != "err" || res["code"] != wire.CodeAuth {
-		t.Fatalf("a claimed vault answered a second claim with %v", res)
+		t.Fatalf("a spent first invite answered a second redemption with %v", res)
 	}
 	if retryable, _ := res["retryable"].(bool); retryable {
-		t.Errorf("a refused claim was marked retryable, so a stranger is invited to keep trying: %v", res)
+		t.Errorf("a refused redemption was marked retryable, so a stranger is invited to keep trying: %v", res)
 	}
 
-	// And the vault is still the first device's: the refusal above is only
-	// worth anything if the claim it refused changed nothing.
+	// And the vault is still the first device's.
 	back := dialWS(t, "ws://"+addr)
 	back.write(wire.In{
-		Op: "hello", ID: 1, Proto: wire.Proto, Crypto: wire.Crypto, Vault: "default",
+		Op: "hello", ID: 1, Proto: wire.Proto, Vault: inv.Vault,
 		Token: firstDevKey, DeviceID: firstDevID, Device: "test-device",
 	})
 	if res := back.readJSON(); res["res"] != "ready" {
-		t.Fatalf("the device that claimed the vault was locked out by the claim that failed: %v", res)
+		t.Fatalf("the first device was locked out by the redemption that failed: %v", res)
 	}
 }
 
-// -localhost exists so that trying this out on one machine needs no thought
-// about schemes: a pairing string with none becomes wss://, and a loopback
-// server has no TLS in front of it.
-func TestLocalhostPrintsAStringThatCanBePastedAsIs(t *testing.T) {
-	var out bytes.Buffer
-	printSetup(&out, "127.0.0.1:3003", "default", "TOKEN", false, true, true)
-	if !strings.Contains(out.String(), "ws://127.0.0.1:3003#TOKEN") {
-		t.Errorf("-localhost printed a string that needs editing before use:\n%s", out.String())
+// main_test.go:1294. -localhost exists so that trying this out on one machine
+// needs no thought about schemes: under it the first invite carries a ws://
+// loopback address, and that address, dialled as it stands, pairs a device.
+func TestLocalhostWritesAnInviteThatWorksAsIs(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := &safeBuffer{}
+	go func() {
+		_ = run(ctx, []string{"serve", "-data", dir, "-addr", fmt.Sprintf(":%d", freeTestPort(t)), "-localhost"}, out)
+	}()
+	deadline := time.Now().Add(15 * time.Second)
+	for !strings.Contains(out.String(), "listening on") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the server never started:\n%s", out.String())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	inv := readFirstInvite(t, dir)
+	if !strings.HasPrefix(inv.URL, "ws://127.0.0.1:") {
+		t.Fatalf("-localhost wrote an invite for %q", inv.URL)
+	}
+	dialFirstDevice(t, inv.URL, inv)
 }
 
 /* ---------------------------------------------------------------- *
@@ -1318,10 +1333,10 @@ func TestI25TheCapFlagsReachReady(t *testing.T) {
 		go func() { _ = run(ctx, append([]string{"serve", "-data", dir, "-addr", addr}, flags...), out) }()
 		waitForServer(t, addr, out)
 
-		// The ceilings are in `ready`, which since protocol 4 only a
-		// registered device is given, so the probe has to be one: claim,
-		// register, then connect.
-		return dialFirstDevice(t, "ws://"+addr, bootstrapToken(t, out.String())).ready
+		// The ceilings are in `ready`, which only a registered device is
+		// given, so the probe has to be one: redeem the first invite, then
+		// connect.
+		return dialFirstDevice(t, "ws://"+addr, readFirstInvite(t, dir)).ready
 	}
 
 	lowered := readyWith(t, "-max-batch-bytes", "2097152", "-max-fetch-bytes", "3145728")
@@ -1434,7 +1449,7 @@ func TestPurgeRefusesAnUnrelatedVaultThatCountedHigher(t *testing.T) {
 	}
 	for i := 0; i < 10; i++ {
 		if _, err := st.AppendEntry("default", store.Entry{
-			Path: "elsewhere.md", MTime: 30, Device: "other", Mac: strings.Repeat("b", 64),
+			Path: "elsewhere.md", MTime: 30, Device: "other",
 		}); err != nil {
 			t.Fatalf("append: %v", err)
 		}
@@ -2076,7 +2091,7 @@ func TestVerifyDeepSeesATruncatedChunkList(t *testing.T) {
 				names = append(names, n)
 			}
 			uid, err := st.AppendEntry("default", store.Entry{
-				Path: "note.md", Size: 14, MTime: 1, Device: "d", Chunks: names, Mac: testMac,
+				Path: "note.md", Size: 13, MTime: 1, Device: "d", Chunks: names,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2119,71 +2134,6 @@ func TestVerifyDeepStillPassesAWholeVault(t *testing.T) {
 	out := mustRun(t, "verify", "-deep", "-data", dir)
 	if !strings.Contains(out, "0 faults") {
 		t.Fatalf("a healthy vault reported faults:\n%s", out)
-	}
-}
-
-// A backup taken by the previous build is still readable (R48).
-//
-// `n_chunks` arrived with the truncated-tail check, and a read-only open does
-// not migrate: an inspection command must not alter what it inspects. So every
-// entry read against an older backup failed with `no such column`, including
-// the one `purge` uses to establish that a backup covers what it is about to
-// delete. A valid backup became unusable because of a column that did not
-// exist when it was taken.
-func TestPurgeAcceptsABackupFromBeforeTheChunkCount(t *testing.T) {
-	dir := seeded(t)
-	dest := filepath.Join(t.TempDir(), "backup")
-	mustRun(t, "backup", "-data", dir, "-to", dest)
-
-	// The previous schema, which is this one without the column.
-	dbPath, _ := store.DataDir(dest)
-	before, err := os.ReadFile(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	onDisk(t, dbPath, func(db *sql.DB) {
-		// The previous schema is this one without the column, rebuilt the way
-		// SQLite makes you: a table without it, the rows copied across, and
-		// the old one dropped.
-		for _, stmt := range []string{
-			`CREATE TABLE entries_old (
-			   vault_id TEXT NOT NULL, uid INTEGER NOT NULL, path TEXT NOT NULL,
-			   size INTEGER NOT NULL DEFAULT 0, ctime INTEGER NOT NULL DEFAULT 0,
-			   mtime INTEGER NOT NULL DEFAULT 0, folder INTEGER NOT NULL DEFAULT 0,
-			   deleted INTEGER NOT NULL DEFAULT 0, device TEXT NOT NULL DEFAULT '',
-			   prev_path TEXT NOT NULL DEFAULT '', mac TEXT NOT NULL DEFAULT '',
-			   parent TEXT NOT NULL DEFAULT '', PRIMARY KEY (vault_id, uid))`,
-			`INSERT INTO entries_old SELECT vault_id, uid, path, size, ctime, mtime,
-			   folder, deleted, device, prev_path, mac, parent FROM entries`,
-			`DROP TABLE entries`,
-			`ALTER TABLE entries_old RENAME TO entries`,
-		} {
-			if _, err := db.Exec(stmt); err != nil {
-				t.Fatalf("recreating the previous schema: %v", err)
-			}
-		}
-	})
-	after, err := os.ReadFile(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(before, after) {
-		t.Fatal("the fixture still has the column, so this proves nothing")
-	}
-
-	out := mustRun(t, "purge", "-data", dir, "-vault", "default", "-confirm", "default",
-		"-backup", dest)
-	if strings.Contains(out, "n_chunks") {
-		t.Errorf("the purge tripped over the missing column:\n%s", out)
-	}
-
-	// And inspecting it did not change a byte of it.
-	unchanged, err := os.ReadFile(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(after, unchanged) {
-		t.Error("inspecting the backup modified it")
 	}
 }
 

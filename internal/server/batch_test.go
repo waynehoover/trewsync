@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/waynehoover/trew/internal/chunks"
@@ -22,7 +23,10 @@ func (c *client) putMany(entries []wire.PutEntry, bodies map[string]string) wire
 	}
 	c.sendJSON(wire.In{Op: "putmany", Entries: entries})
 
-	frame := c.recvRaw()
+	// Batches queued rather than read as the answer: when every body is held
+	// the entries commit at once, and the echo of this device's own commits
+	// is broadcast before the acks are written.
+	frame := string(c.recvFrame())
 	var head struct {
 		Res string `json:"res"`
 	}
@@ -70,7 +74,6 @@ func entryFor(path string, bodies ...string) (wire.PutEntry, map[string]string) 
 		Path:   path,
 		Meta:   wire.PutMeta{Size: int64(size), MTime: 5},
 		Chunks: names,
-		Mac:    testMac,
 	}, byName
 }
 
@@ -178,7 +181,7 @@ func TestOneBadEntryDoesNotRefuseTheRest(t *testing.T) {
 	cl.hello(0)
 
 	good, bodies := entryFor("good.md", "fine")
-	bad := wire.PutEntry{Path: "", Mac: testMac, Meta: wire.PutMeta{Size: 1}}
+	bad := wire.PutEntry{Path: "", Meta: wire.PutMeta{Size: 1}}
 	alsoGood, more := entryFor("also-good.md", "also fine")
 	for k, v := range more {
 		bodies[k] = v
@@ -191,8 +194,13 @@ func TestOneBadEntryDoesNotRefuseTheRest(t *testing.T) {
 	if acks.Results[0].UID == 0 || acks.Results[2].UID == 0 {
 		t.Fatalf("a good entry was refused alongside a bad one: %+v", acks.Results)
 	}
-	if acks.Results[1].Code != wire.CodeBadName {
-		t.Fatalf("the bad entry was refused as %q, want %q", acks.Results[1].Code, wire.CodeBadName)
+	if acks.Results[1].Code != wire.CodeBadPath {
+		t.Fatalf("the bad entry was refused as %q, want %q", acks.Results[1].Code, wire.CodeBadPath)
+	}
+	// The rule that refused it leads the message, for the person whose file
+	// will not sync (PLAN.md section 4.9).
+	if !strings.HasPrefix(acks.Results[1].Msg, "empty: ") {
+		t.Fatalf("the refusal does not lead with its reason: %q", acks.Results[1].Msg)
 	}
 	if cl.closed() {
 		t.Fatal("one unacceptable entry closed the session")
@@ -227,7 +235,7 @@ func TestABatchIsBounded(t *testing.T) {
 
 	huge := make([]wire.PutEntry, wire.MaxBatchEntries+1)
 	for i := range huge {
-		huge[i] = wire.PutEntry{Path: "x.md", Mac: testMac, Meta: wire.PutMeta{MTime: 1}}
+		huge[i] = wire.PutEntry{Path: "x.md", Meta: wire.PutMeta{MTime: 1}}
 	}
 	cl.sendJSON(wire.In{Op: "putmany", Entries: huge})
 	cl.expectErr(wire.CodeToolarge)
@@ -239,10 +247,10 @@ func TestABatchIsBounded(t *testing.T) {
 
 // A commit refusal is an entry's refusal, not the batch's.
 //
-// checkEntry runs before the bodies arrive, so it cannot know how much
-// ciphertext an entry will end up referencing. The budget is therefore enforced
-// again at commit, and a batch spends one allowance across every entry in it, so
-// an entry that overruns its own share is caught only there.
+// checkEntry runs before the bodies arrive, so it cannot know how many bytes an
+// entry will end up referencing. The size is therefore checked again at
+// commit, and a batch spends one allowance across every entry in it, so an
+// entry whose chunks do not sum to its size is caught only there.
 //
 // This used to end the session. The entries that had already committed were
 // never acked, the client retried all of them, and the server grew a second
@@ -253,7 +261,7 @@ func TestACommitRefusalDoesNotTakeTheBatchWithIt(t *testing.T) {
 	cl.hello(0)
 
 	// Three honest entries and one that declares a byte while naming a chunk
-	// the batch is paying for. Its own budget cannot cover that chunk, but the
+	// the batch is paying for. Its own size cannot cover that chunk, but the
 	// batch's summed allowance can, so the bodies all arrive.
 	big := make([]byte, 4096)
 	for i := range big {
@@ -263,8 +271,8 @@ func TestACommitRefusalDoesNotTakeTheBatchWithIt(t *testing.T) {
 	bodies := map[string]string{bigName: string(big)}
 
 	entries := []wire.PutEntry{
-		{Path: "honest.md", Meta: wire.PutMeta{Size: 4096, MTime: 1}, Chunks: []string{bigName}, Mac: testMac},
-		{Path: "liar.md", Meta: wire.PutMeta{Size: 1, MTime: 2}, Chunks: []string{bigName}, Mac: testMac},
+		{Path: "honest.md", Meta: wire.PutMeta{Size: 4096, MTime: 1}, Chunks: []string{bigName}},
+		{Path: "liar.md", Meta: wire.PutMeta{Size: 1, MTime: 2}, Chunks: []string{bigName}},
 	}
 	for _, name := range []string{"after-one.md", "after-two.md"} {
 		e, b := entryFor(name, "content of "+name)
@@ -278,8 +286,8 @@ func TestACommitRefusalDoesNotTakeTheBatchWithIt(t *testing.T) {
 	if len(acks.Results) != 4 {
 		t.Fatalf("%d results, want 4", len(acks.Results))
 	}
-	if acks.Results[1].Code != wire.CodeToolarge {
-		t.Fatalf("the overrunning entry came back as %+v, want %s", acks.Results[1], wire.CodeToolarge)
+	if acks.Results[1].Code != wire.CodeBadEntry {
+		t.Fatalf("the overrunning entry came back as %+v, want %s", acks.Results[1], wire.CodeBadEntry)
 	}
 	// The three honest ones, including the two that were queued behind the
 	// refusal, all committed and all said so.

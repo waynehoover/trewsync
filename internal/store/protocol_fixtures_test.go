@@ -32,6 +32,20 @@ type fixtureFile struct {
 	} `json:"cases"`
 }
 
+// retiredWithTheAuthenticator are the fixture's cases about the entry MAC and
+// the parent digest, which protocol 1 removed (plan/protocol.md, "Writing": no
+// mac, no parent). They stay in protocol-fixtures.json until the client is
+// flipped (M2), because the TypeScript suite still reads them. An entry here
+// has no such fields to refuse, so the server must accept every one of them;
+// the client flip deletes them, and `goodMac` with them, and this list goes.
+var retiredWithTheAuthenticator = map[string]bool{
+	"a file with no authenticator":                true,
+	"a folder with no authenticator":              true,
+	"a deletion with no authenticator":            true,
+	"an authenticator that is not a digest":       true,
+	"a parent that is neither empty nor a digest": true,
+}
+
 func TestTheEntryShapeBothLanguagesEnforce(t *testing.T) {
 	path := filepath.Join("..", "..", "protocol-fixtures.json")
 	raw, err := os.ReadFile(path)
@@ -46,7 +60,7 @@ func TestTheEntryShapeBothLanguagesEnforce(t *testing.T) {
 		t.Fatalf("only %d fixtures, which is not a contract", len(f.Cases))
 	}
 
-	valid, invalid := 0, 0
+	valid, invalid, retired := 0, 0, 0
 	for _, c := range f.Cases {
 		// `$mac` and `$chunk` stand in for real digests, so the file stays
 		// readable next to the rules it is about.
@@ -58,6 +72,13 @@ func TestTheEntryShapeBothLanguagesEnforce(t *testing.T) {
 			t.Fatalf("%s: parse entry: %v", c.Name, err)
 		}
 		err := e.Validate()
+		if retiredWithTheAuthenticator[c.Name] {
+			retired++
+			if err != nil {
+				t.Errorf("%s: refused, and protocol 1 has no authenticator to refuse it for: %v", c.Name, err)
+			}
+			continue
+		}
 		if c.Valid {
 			valid++
 			if err != nil {
@@ -72,5 +93,9 @@ func TestTheEntryShapeBothLanguagesEnforce(t *testing.T) {
 	}
 	if valid == 0 || invalid == 0 {
 		t.Fatalf("the fixtures cover only one verdict: %d valid, %d invalid", valid, invalid)
+	}
+	if retired != len(retiredWithTheAuthenticator) {
+		t.Fatalf("%d of the %d retired cases are in the fixture: take the missing ones off the list",
+			retired, len(retiredWithTheAuthenticator))
 	}
 }

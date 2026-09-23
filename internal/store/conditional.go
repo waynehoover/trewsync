@@ -15,6 +15,12 @@ const notRetiredByRename = `NOT EXISTS (
   SELECT 1 FROM entries moved
    WHERE moved.vault_id = e.vault_id AND moved.prev_path = e.path AND moved.uid > e.uid)`
 
+// TODO(PLAN.md section 4.5): this is today's survivor set, heads and the rename
+// records they need, which is all Basalt and a device-only Trew have. Once
+// MCP operations exist they pin the versions they displace (op_pins), and purge
+// must keep every unexpired pin as well, in this set, so its preview and its
+// execution still agree; until then purge removes exactly what it always has.
+//
 // Keep current paths and rename retirements. Deleted also needs the latest
 // rename and, for a reused name, its predecessor after that rename: removing
 // this evidence makes a genuine deletion look like a legacy rename's tail.
@@ -58,6 +64,14 @@ func pathHead(q headReader, vault, path string) (uid int64, deleted bool, err er
 	return uid, gone.Bool, err
 }
 
+// Head is the uid of a path's newest version, counting a rename away from it,
+// and whether that version left the path with no file: a deletion, or a
+// rename's source. Zero when the vault has never held the path.
+func (s *Store) Head(vault, path string) (uid int64, gone bool, err error) {
+	return pathHead(s.db, vault, path)
+}
+
+// CurrentUID is Head's uid alone, the base a conditional write names.
 func (s *Store) CurrentUID(vault, path string) (int64, error) {
 	uid, _, err := pathHead(s.db, vault, path)
 	return uid, err

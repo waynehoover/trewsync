@@ -20,7 +20,7 @@ func TestFanoutSharesImmutableFramesAcrossLiveAndCatchingUpPeers(t *testing.T) {
 	for _, s := range []*Session{first, second, catchingUp, origin} {
 		hub.join("v1", s)
 	}
-	e := store.Entry{UID: 7, Path: "note.md", Mac: testMac, Chunks: []string{strings.Repeat("a", 64)}}
+	e := store.Entry{UID: 7, Path: "note.md", Chunks: []string{strings.Repeat("a", 64)}}
 	hub.broadcast("v1", e, origin)
 	a, b, own := <-first.out, <-second.out, <-origin.out
 	if len(catchingUp.pending) != 1 {
@@ -67,7 +67,7 @@ func BenchmarkLiveFanout(b *testing.B) {
 	for _, count := range []int{1, 512} {
 		for _, peers := range []int{2, 8, 32} {
 			b.Run(fmt.Sprintf("chunks=%d/peers=%d", count, peers), func(b *testing.B) {
-				e := store.Entry{UID: 1, Path: strings.Repeat("p", 160), Device: "laptop", Mac: testMac, Size: int64(count) * 4096, Chunks: make([]string, count)}
+				e := store.Entry{UID: 1, Path: strings.Repeat("p", 160), Device: "laptop", Size: int64(count) * 4096, Chunks: make([]string, count)}
 				for i := range e.Chunks {
 					e.Chunks[i] = fmt.Sprintf("%064x", i)
 				}

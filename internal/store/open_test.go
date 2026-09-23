@@ -60,12 +60,14 @@ func TestADatabaseFromTheFutureIsRefused(t *testing.T) {
 	dbPath, chunkDir := newStore(t)
 
 	// Stamp a version this binary has never heard of, which is what a newer
-	// trew would have left behind.
+	// trew would have left behind. In the identity row, which is what is
+	// checked: the header's copy alone is not, because Basalt's header says 1
+	// too (PLAN.md section 2.8).
 	bump, err := OpenMode(dbPath, chunkDir, Existing, SyncFull)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := bump.db.Exec(`PRAGMA user_version = 9999`); err != nil {
+	if _, err := bump.db.Exec(`UPDATE store_identity SET schema_version = 9999`); err != nil {
 		t.Fatal(err)
 	}
 	if err := bump.Close(); err != nil {
@@ -106,10 +108,12 @@ func TestADatabaseFromTheFutureIsRefused(t *testing.T) {
 	}
 }
 
-// Every database this project has written so far has no user_version at all,
-// which reads as zero. Refusing those would mean an upgrade that cannot open
-// the store it is upgrading.
-func TestADatabaseFromBeforeVersionsWasKeptIsAccepted(t *testing.T) {
+// The header's copy of the version is not what identifies a store, the
+// identity row is, so a header that lost it does not make a store unopenable:
+// refusing would be an upgrade that cannot open the store it is upgrading. And
+// opening it restamps the header, so a tool reading only the header is not
+// misled for long.
+func TestAHeaderThatLostItsVersionIsRestamped(t *testing.T) {
 	dbPath, chunkDir := newStore(t)
 	back, err := OpenMode(dbPath, chunkDir, Existing, SyncFull)
 	if err != nil {
@@ -124,16 +128,15 @@ func TestADatabaseFromBeforeVersionsWasKeptIsAccepted(t *testing.T) {
 
 	st, err := Open(dbPath, chunkDir)
 	if err != nil {
-		t.Fatalf("a database from before the version existed was refused: %v", err)
+		t.Fatalf("a store whose header lost its version was refused: %v", err)
 	}
 	defer func() { _ = st.Close() }()
-	// And opening it brings it up to date, so this only happens once.
 	var got int
 	if err := st.db.QueryRow(`PRAGMA user_version`).Scan(&got); err != nil {
 		t.Fatal(err)
 	}
 	if got != SchemaVersion {
-		t.Fatalf("opening it left the version at %d", got)
+		t.Fatalf("opening it left the header at %d", got)
 	}
 }
 

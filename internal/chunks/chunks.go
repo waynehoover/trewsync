@@ -1,4 +1,4 @@
-// Package chunks is a content-addressed store for encrypted chunk bodies.
+// Package chunks is a content-addressed store for chunk bodies.
 //
 // It is deliberately free of any dependency on the entry store, the wire
 // protocol or SQLite: a chunk is bytes under a name, and everything this
@@ -6,9 +6,10 @@
 // boundary is the one worth keeping clean, because it is where "do not lose a
 // note" turns into fsync ordering.
 //
-// The server never sees plaintext. Clients encrypt each chunk before naming it,
-// so the bytes here are ciphertext and the name is a hash of ciphertext. That is
-// what lets the server dedup without learning anything.
+// The bytes here are the raw chunks of the vault's files, in the clear, and a
+// chunk's name is the SHA-256 of them, so the server can recompute every name
+// from what it holds (PLAN.md section 2.2). How a chunk crossed the wire, raw or
+// deflated, is the transport's business and never reaches this package.
 package chunks
 
 import (
@@ -27,9 +28,8 @@ import (
 
 // NameLen is the length of a chunk name in characters.
 //
-// A chunk name is the lowercase hex SHA-256 of the *encrypted* chunk bytes.
-// docs/protocol.md says chunk hashes are hashes of the encrypted chunk; it does
-// not name the function, so this package names it, for two reasons.
+// A chunk name is the lowercase hex SHA-256 of the raw chunk bytes, for two
+// reasons.
 //
 // The first is verification. If the server cannot recompute the name from the
 // body, it cannot tell a correct chunk from a corrupt one, and "stored" becomes
@@ -283,9 +283,9 @@ func vaultKey(vaultID string) string {
 // Chunks are namespaced by vault and deliberately NOT shared across vaults.
 // Sharing by content would let one vault read another's file by claiming its
 // chunk name, and overwrite that content by uploading different bytes under the
-// same name. Cross-vault dedup is worth nothing anyway: each vault encrypts
-// with its own key, so identical notes in two vaults have different ciphertext
-// and therefore different names.
+// same name. Deduplication stays inside a vault (PLAN.md section 2.2): a
+// chunk name is the SHA-256 of plaintext, so sharing names across vaults would
+// make one vault a presence oracle for another's content.
 func (s *Store) path(vaultID, name string) string {
 	// The two-character fan-out keeps directory sizes reasonable on filesystems
 	// that degrade with very wide directories.
@@ -324,10 +324,10 @@ func (s *Store) Has(vaultID, name string) bool {
 
 // Size is Has plus the stored size, from the same stat.
 //
-// The size matters because an entry declares a plaintext size and references
-// chunks of ciphertext, and nothing else in the system relates the two. A
-// caller checking presence is already paying for the stat, so it may as well
-// learn what it is admitting.
+// The size matters because an entry declares a size that must be the sum of
+// its chunks' lengths, and the stored length is the raw length. A caller
+// checking presence is already paying for the stat, so it may as well learn
+// what it is admitting.
 func (s *Store) Size(vaultID, name string) (int64, bool) {
 	if !ValidName(name) {
 		return 0, false
@@ -519,7 +519,7 @@ func (s *Store) place(vaultID, name string, body []byte) ([]string, error) {
 	// caller and the writer are different goroutines: whoever handed this over
 	// has moved on, and if the bytes ever came from a buffer that gets reused,
 	// the wrong body would be filed under a correct name and served to a device
-	// that could only report it as undecryptable.
+	// that could only report it as a chunk that does not match its name.
 	//
 	// coder/websocket's Conn.Read allocates per message today (io.ReadAll), so
 	// this is closing the class rather than a live fault. One SHA-256 over data
@@ -937,7 +937,7 @@ func (s *Store) CheckWritable() error {
 //
 // Verifying on every read costs one SHA-256 over data that was just read from
 // disk, and it is the difference between a client receiving a chunk that will
-// fail to decrypt for reasons it cannot diagnose and the server saying which
+// fail its own check for reasons it cannot diagnose and the server saying which
 // chunk of which vault went bad. Bit rot and a truncated restore both land
 // here.
 func (s *Store) Get(vaultID, name string) ([]byte, error) {

@@ -1,189 +1,174 @@
 package server
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"log/slog"
-	"path/filepath"
+	"database/sql"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
-// One secret. The auth key is another branch of the same HKDF schedule that
-// produces the content and path keys, so holding the root secret is what it
-// means to have the vault. These are the rules that makes true.
+// The credentials: a device's 32-byte token and an invite's 16-byte token,
+// each stored as the SHA-256 of its raw bytes and never in the clear. Basalt's
+// auth_test.go was about the claim and the bootstrap token, and the four tests
+// that were only about those went with them (plan/strip-ledger.md); these are
+// the rules that survive.
 
-const bootstrap = "BOOTSTRAP-TOKEN-FROM-FIRST-RUN"
-
-// As long as a real derived key, which is 43 characters of base64url.
-const longKey = "a-derived-auth-key-of-a-realistic-length-01"
-
-func authRig(t *testing.T) (*store.Store, Authenticator) {
-	t.Helper()
-	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
-	_ = slog.Default()
-	clock := int64(1)
-	return st, DerivedAuth(st, "v", bootstrap, func() int64 { clock++; return clock })
-}
-
-func TestAnUnclaimedVaultIsOpenedOnlyByTheBootstrapToken(t *testing.T) {
-	_, auth := authRig(t)
-
-	if _, err := auth(Credentials{VaultID: "v", Token: "not-the-bootstrap", Claim: longKey, Wrapped: testWrapped}); err == nil {
-		t.Fatal("an unclaimed vault accepted a token that was not the bootstrap")
-	}
-	if _, err := auth(Credentials{VaultID: "v", Token: bootstrap, Claim: longKey, Wrapped: testWrapped}); err != nil {
-		t.Fatalf("the bootstrap token did not open an unclaimed vault: %v", err)
-	}
-}
-
-// The bootstrap is one-time. Leaving it working would mean the printed token
-// stayed a credential for the life of the server, which is the second secret
-// this exists to remove.
-func TestTheBootstrapStopsWorkingOnceTheVaultIsClaimed(t *testing.T) {
-	_, auth := authRig(t)
-	if _, err := auth(Credentials{VaultID: "v", Token: bootstrap, Claim: longKey, Wrapped: testWrapped}); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-
-	if _, err := auth(Credentials{VaultID: "v", Token: bootstrap, Claim: longKey, Wrapped: testWrapped}); err == nil {
-		t.Fatal("the bootstrap token still opens the vault after it was claimed")
-	}
-	if _, err := auth(Credentials{VaultID: "v", Token: longKey}); err != nil {
-		t.Fatalf("the claimed key does not open the vault: %v", err)
-	}
-	if _, err := auth(Credentials{VaultID: "v", Token: longKey + "-other"}); err == nil {
-		t.Fatal("a key that never claimed anything opened the vault")
-	}
-}
-
-// A second device cannot re-point a claimed vault at its own key, whatever it
-// offers, or the first device would be locked out of its own notes.
-func TestAClaimedVaultCannotBeReclaimed(t *testing.T) {
-	_, auth := authRig(t)
-	if _, err := auth(Credentials{VaultID: "v", Token: bootstrap, Claim: longKey, Wrapped: testWrapped}); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	if _, err := auth(Credentials{VaultID: "v", Token: bootstrap, Claim: longKey + "-two", Wrapped: testWrapped}); err == nil {
-		t.Fatal("a second device re-claimed the vault with the bootstrap")
-	}
-	if _, err := auth(Credentials{VaultID: "v", Token: longKey + "-two", Claim: longKey + "-two", Wrapped: testWrapped}); err == nil {
-		t.Fatal("a second device claimed the vault by offering its own key as both")
-	}
-	if _, err := auth(Credentials{VaultID: "v", Token: longKey}); err != nil {
-		t.Fatalf("the original device was locked out: %v", err)
-	}
-}
-
-// Claiming needs a key to claim with. Accepting the bootstrap alone would leave
-// the vault open to the bootstrap for ever, which is the state being left.
-func TestClaimingNeedsAKey(t *testing.T) {
-	_, auth := authRig(t)
-	if _, err := auth(Credentials{VaultID: "v", Token: bootstrap}); err == nil {
-		t.Fatal("the bootstrap opened an unclaimed vault with nothing to bind it to")
-	}
-}
-
-// The server keeps a hash and never the key. A server that held the credential
-// could write to the vault it exists only to keep, and a stolen disk already
-// yields every byte of ciphertext without also handing over the ability to add
-// to it.
+// auth_test.go:98. The server keeps digests and never a credential. A server
+// that held a device's token could be that device, and one that held an
+// invite's could redeem it; a copy of the database is not a place either
+// should be.
 func TestTheServerStoresAHashAndNotTheKey(t *testing.T) {
-	st, auth := authRig(t)
-	const key = longKey
-	if _, err := auth(Credentials{VaultID: "v", Token: bootstrap, Claim: key, Wrapped: testWrapped}); err != nil {
-		t.Fatalf("claim: %v", err)
+	r := newRig(t)
+	inv := r.invite(time.Hour)
+	r.dial("phone").redeem(inv.Token)
+
+	raw, onWire := deviceToken("phone")
+	_, stored, ok, err := r.st.DeviceByID(testVault, deviceID("phone"))
+	if err != nil || !ok {
+		t.Fatalf("the redeemed device: ok=%v err=%v", ok, err)
+	}
+	if stored != store.HashToken(raw) {
+		t.Fatalf("the device row holds %q, want the SHA-256 of the 32 raw bytes %q", stored, store.HashToken(raw))
+	}
+	if strings.Contains(stored, onWire) || stored == store.HashToken([]byte(onWire)) {
+		t.Fatalf("the device row holds the token, or the digest of its spelling rather than its bytes: %q", stored)
 	}
 
-	stored, err := st.AuthHash("v")
+	// And the invite: every column of its row, read back, and none of them the
+	// token or anything that would let a reader present it.
+	db := openRaw(t, r)
+	rows, err := db.Query(`SELECT * FROM invites`)
 	if err != nil {
-		t.Fatalf("auth hash: %v", err)
+		t.Fatal(err)
 	}
-	if stored == key {
-		t.Fatal("the server stored the key itself")
+	defer rows.Close()
+	cols, _ := rows.Columns()
+	sawHash := false
+	for rows.Next() {
+		vals := make([]sql.NullString, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatal(err)
+		}
+		for i, v := range vals {
+			if strings.Contains(v.String, store.EncodeToken(inv.Token)) || v.String == string(inv.Token) {
+				t.Fatalf("column %s of the invite row holds the token", cols[i])
+			}
+			sawHash = sawHash || v.String == store.HashToken(inv.Token)
+		}
 	}
-	want := sha256.Sum256([]byte(key))
-	if stored != hex.EncodeToString(want[:]) {
-		t.Fatalf("stored %q, want the hash %q", stored, hex.EncodeToString(want[:]))
+	if !sawHash {
+		t.Fatal("the invite row does not hold the token's digest, so nothing could ever redeem it")
 	}
 }
 
-// Vaults are claimed separately, so one being taken does not open another.
-// A server serves one vault. A typo in the name must fail here rather than
-// quietly creating a second, empty one that reports itself as fully synced,
-// which is what claiming does if it is allowed to invent what it claims.
-func TestOnlyTheServedVaultCanBeClaimed(t *testing.T) {
-	st, auth := authRig(t)
-	if _, err := auth(Credentials{VaultID: "typo", Token: bootstrap, Claim: longKey, Wrapped: testWrapped}); err == nil {
-		t.Fatal("a vault this server does not serve was claimed")
+// openRaw opens the rig's database directly, read only, for the tests that
+// have to look at rows no API returns.
+func openRaw(t *testing.T, r *rig) *sql.DB {
+	t.Helper()
+	path, _ := store.DataDir(r.dir)
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
 	}
-	vaults, err := st.Vaults()
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+// auth_test.go:122. A server serves one vault. A hello for any other, on
+// either route, is refused and creates nothing: a typo in the name must fail
+// here rather than quietly creating a second, empty vault that reports itself
+// as fully synced.
+func TestOnlyTheServedVaultCanBeReached(t *testing.T) {
+	r := newRig(t)
+	r.srv.Serves(testVault)
+	inv := r.invite(time.Hour)
+
+	device := r.dial("phone")
+	_, key := r.device("phone")
+	device.sendJSON(wire.In{Op: "hello", Vault: "typo", DeviceID: deviceID("phone"), Token: key, Device: "phone"})
+	device.expectErr(wire.CodeAuth)
+
+	joiner := r.dial("tablet")
+	hello := redeemHello(inv.Token, "tablet")
+	hello.Vault = "typo"
+	joiner.sendJSON(hello)
+	joiner.expectErr(wire.CodeAuth)
+
+	vaults, err := r.st.Vaults()
 	if err != nil {
 		t.Fatalf("vaults: %v", err)
 	}
 	for _, v := range vaults {
 		if v == "typo" {
-			t.Fatal("a refused claim created the vault anyway")
+			t.Fatal("a refused hello created the vault anyway")
 		}
 	}
 }
 
-// A key short enough to guess is worse than no key: the refusal is visible and
-// the weak credential is not.
-func TestAVaultWillNotBeBoundToAGuessableKey(t *testing.T) {
-	_, auth := authRig(t)
-	for _, claim := range []string{"", "x", "short", strings.Repeat("a", MinClaimLength-1)} {
-		if _, err := auth(Credentials{VaultID: "v", Token: bootstrap, Claim: claim, Wrapped: testWrapped}); err == nil {
-			t.Fatalf("the vault was bound to a %d character key", len(claim))
+// auth_test.go:140. A redemption registers the token the joining device will
+// connect with, so it is refused unless that token is exactly 32 bytes in the
+// one spelling: a short one would be a guessable credential bound to the vault
+// for ever, and a refusal the device can see is better than a weak key it
+// cannot. The floor replaces Basalt's MinClaimLength. No refusal registers
+// anything or spends the invite.
+func TestARedemptionWillNotRegisterAGuessableToken(t *testing.T) {
+	r := newRig(t)
+	inv := r.invite(time.Hour)
+	for _, token := range []string{
+		"",
+		"short",
+		store.EncodeToken(make([]byte, store.DeviceTokenBytes-1)),
+		store.EncodeToken(make([]byte, store.DeviceTokenBytes+1)),
+		store.EncodeToken(make([]byte, store.DeviceTokenBytes)) + "=",
+		strings.Repeat("k", 43) + "!",
+	} {
+		cl := r.dial("tablet")
+		hello := redeemHello(inv.Token, "tablet")
+		hello.Token = token
+		cl.sendJSON(hello)
+		msg := cl.expectErr(wire.CodeBadEntry)
+		if !strings.Contains(msg, "32 random bytes") {
+			t.Fatalf("a token of %d characters was refused without saying what one is: %q", len(token), msg)
+		}
+		if !cl.closed() {
+			t.Fatal("a refused redemption left the connection open")
 		}
 	}
-	if _, err := auth(Credentials{VaultID: "v", Token: bootstrap, Claim: longKey, Wrapped: testWrapped}); err != nil {
-		t.Fatalf("a proper key was refused: %v", err)
+	if ds, _ := r.st.Devices(testVault); len(ds) != 0 {
+		t.Fatalf("a refused redemption registered %v", ds)
 	}
+	if n, _ := r.st.OutstandingInvites(testVault, r.srv.now().UnixMilli()); n != 1 {
+		t.Fatal("a refused redemption spent the invite")
+	}
+	// And a proper one is not refused.
+	r.dial("tablet").redeem(inv.Token)
 }
 
-// A vault is claimed with a data key, and the authenticator is the layer that
-// writes the row, so it refuses a claim without one even though the session
-// already did. While a vault could be claimed without a data key, a server
-// could choose which key schedule a client used by leaving `wrapped` out of
-// `ready`. There is no longer a vault for it to choose between.
-func TestAVaultIsNotClaimedWithoutADataKey(t *testing.T) {
-	st, auth := authRig(t)
-	for _, w := range []string{"", "not base64url!", strings.Repeat("A", store.MaxWrappedLen+1)} {
-		if _, err := auth(Credentials{VaultID: "v", Token: bootstrap, Claim: longKey, Wrapped: w}); err == nil {
-			t.Fatalf("a vault was claimed with a %d byte wrapped key", len(w))
+// auth_test.go:177. An empty credential never matches, whatever is stored: a
+// device hello with no token, one with no device id, and a row whose digest
+// happens to be the digest of nothing.
+func TestAnEmptyCredentialOpensNothing(t *testing.T) {
+	r := newRig(t)
+	// A row nobody should have, of the one digest an empty token has.
+	if err := r.st.RegisterDevice(testVault, deviceID("hollow"), "hollow", store.HashToken(nil), 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, hello := range []wire.In{
+		{Op: "hello", Vault: testVault, DeviceID: deviceID("hollow"), Token: "", Device: "hollow"},
+		{Op: "hello", Vault: testVault, DeviceID: "", Token: "", Device: "hollow"},
+		{Op: "hello", Vault: testVault, DeviceID: deviceID("hollow"), Token: "", Invite: "", Device: "hollow"},
+	} {
+		cl := r.dial("hollow")
+		cl.sendJSON(hello)
+		if msg := cl.expectErr(wire.CodeAuth); msg != errNotAuthorised.Error() {
+			t.Fatalf("an empty credential was refused with %q", msg)
 		}
-		if hash, _ := st.AuthHash("v"); hash != "" {
-			t.Fatal("a refused claim bound the vault anyway")
-		}
-	}
-	if _, err := auth(Credentials{VaultID: "v", Token: bootstrap, Claim: longKey, Wrapped: testWrapped}); err != nil {
-		t.Fatalf("a claim carrying a data key was refused: %v", err)
-	}
-	if w, _ := st.Wrapped("v"); w != testWrapped {
-		t.Fatalf("the claimed vault stored wrapped %q", w)
-	}
-}
-
-// A server with no bootstrap token has nothing to check an unclaimed vault
-// against, and an empty token would match an empty bootstrap exactly.
-func TestAServerWithNoBootstrapClaimsNothing(t *testing.T) {
-	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
-	auth := DerivedAuth(st, "v", "", func() int64 { return 1 })
-
-	if _, err := auth(Credentials{VaultID: "v", Token: "", Claim: longKey, Wrapped: testWrapped}); err == nil {
-		t.Fatal("an empty token claimed a vault from a server with no bootstrap")
 	}
 }

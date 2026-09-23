@@ -3,18 +3,16 @@ package server
 import (
 	"fmt"
 	"testing"
-
-	"github.com/waynehoover/trew/internal/wire"
+	"time"
 )
 
+// unlimited_devices_test.go:10. There is no device cap: twenty-four devices
+// join one vault, each through an invite of its own.
 func TestMoreThanEightDevicesCanRegister(t *testing.T) {
-	r := newRigDerived(t)
-	claimed(t, r, "first")
-	reg := registrarWith(t, r, "recovery-key", longKey)
+	r := newRig(t)
+	r.device("first")
 	for i := 1; i < 24; i++ {
-		name := fmt.Sprintf("many-%d", i)
-		reg.sendJSON(wire.In{Op: "register", DeviceID: deviceID(name), Auth: deviceKey(name)})
-		reg.recvInto("registered", &wire.Registered{})
+		r.dial(fmt.Sprintf("many-%d", i)).redeem(r.invite(time.Hour).Token)
 	}
 	if rows := mustDevices(t, r); len(rows) != 24 {
 		t.Fatalf("registered %d devices, want 24", len(rows))

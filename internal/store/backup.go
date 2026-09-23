@@ -54,16 +54,22 @@ type BackupReport struct {
 	// Verified is chunk references checked in the backup after writing it.
 	Verified int
 
+	// InvitesLeftOut is invites the source still had outstanding, which the
+	// backup does not carry; see Backup for why a restore must not bring one
+	// back.
+	InvitesLeftOut int
+
 	// Inherited is faults the finished backup has that the source has too.
 	//
-	// A copy cannot be better than what it copied. An entry whose
-	// authenticator predates F20 keeps the empty string a migration gave it,
-	// because the server holds no key to mint one, and `verifyEntries` reports
-	// it on every pass. Refusing to publish over that vetoed every backup for
-	// ever on any vault old enough to have one, and the message blamed the
-	// backup for a fault in the store it came from: the last good copy was
-	// never refreshed, and `purge -backup` could then never be satisfied
-	// either, so the safety net was cut by the thing holding it.
+	// A copy cannot be better than what it copied. A row the store should
+	// never have taken, a path the policy refuses for instance, is copied
+	// faithfully by `VACUUM INTO`, and `verifyEntries` reports it on every
+	// pass. Refusing to publish over that vetoed every backup for ever on any
+	// vault holding one, and the message blamed the backup for a fault in the
+	// store it came from: the last good copy was never refreshed, and `purge
+	// -backup` could then never be satisfied either, so the safety net was cut
+	// by the thing holding it. (Basalt met it with entries whose authenticator
+	// predated F20; Trew has no authenticator and keeps the mechanism.)
 	//
 	// So a fault the source has as well is reported and does not block. A
 	// fault the source does not have is the copy being wrong, and that still
@@ -480,7 +486,9 @@ func (s *Store) ChunkRefs(fn func(vaultID, name string) error) error {
 	return rows.Err()
 }
 
-const stagedPrefix = ".trew.db.snapshot"
+// stagedPrefix names a snapshot being written but not yet published. Every
+// file under it in a backup directory is this operation's or a dead one's.
+const stagedPrefix = "." + dbFileName + ".snapshot"
 
 // Backup writes everything this store holds into destDir, which becomes a data
 // directory in its own right: restoring is copying it back, and checking it is
@@ -525,8 +533,6 @@ const stagedPrefix = ".trew.db.snapshot"
 // deep re-reads every body already in the backup as well as the ones just
 // written. The bodies just written are always checksummed; deep is for finding
 // bit rot in a backup that has been sitting on a disk for a year.
-// stagedPrefix names a snapshot being written but not yet published. Every
-// file under it in a backup directory is this operation's or a dead one's.
 func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 	rep := BackupReport{Dir: destDir}
 
@@ -608,6 +614,30 @@ func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 	if err != nil {
 		return rep, fmt.Errorf("opening the staged snapshot: %w", err)
 	}
+	// A new epoch for the copy, before anything is verified or published, so a
+	// database served from this backup is never mistaken for the store it was
+	// taken from. Restoring is serving the backup's database, and a device that
+	// followed the source's uid sequence past this snapshot must be told that
+	// the sequence it is holding a cursor into may be reissued (PLAN.md section
+	// 2.8): a different epoch in `ready` is how it is told.
+	if err := dest.renewEpoch(); err != nil {
+		dest.Close()
+		return rep, fmt.Errorf("giving the snapshot its own epoch: %w", err)
+	}
+	// Nor is an outstanding invite carried into it. An invite is a bearer
+	// credential that lives an hour, and the backup is for notes: restoring a
+	// week-old copy would otherwise revive every invite that was outstanding
+	// then, including the ones cancelled or spent since, each of which adds a
+	// device (plan/astra-critique.md: a restore can resurrect retired
+	// credentials). Spent rows stay, because a device row that came from one
+	// is in the copy too, and they redeem nothing. Counted, because this makes
+	// a list smaller (rule 5).
+	left, err := dest.dropUnspentInvites()
+	if err != nil {
+		dest.Close()
+		return rep, fmt.Errorf("leaving outstanding invites out of the snapshot: %w", err)
+	}
+	rep.InvitesLeftOut = left
 
 	vaults, err := dest.Vaults()
 	if err != nil {
@@ -933,7 +963,7 @@ func resolvePath(path string) (string, error) {
 // Names of the two things a data directory holds, so the backup writes a
 // directory the server can be pointed straight at.
 const (
-	dbFileName   = "trew.db"
+	dbFileName   = Product + ".db"
 	chunkDirName = "chunks"
 )
 

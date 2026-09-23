@@ -120,7 +120,7 @@ func TestHistoryRefusesAnEmptyPath(t *testing.T) {
 	cl := r.dial("a")
 	cl.hello(0)
 	cl.sendJSON(wire.In{Op: "history"})
-	cl.expectErr(wire.CodeBadName)
+	cl.expectErr(wire.CodeBadPath)
 
 	// Still usable, asserted by using it. A refusal a client can recover from
 	// has to leave a session it can carry on with.
@@ -261,7 +261,7 @@ func (c *client) rawEntries(want string) string {
 // remove puts a deletion, which is a put like any other.
 func (c *client) remove(path string) int64 {
 	c.t.Helper()
-	c.sendJSON(wire.In{Op: "put", Path: path, Base: c.head(path), Meta: wire.PutMeta{Deleted: true, MTime: 9}, Mac: testMac})
+	c.sendJSON(wire.In{Op: "put", Path: path, Base: c.head(path), Meta: wire.PutMeta{Deleted: true, MTime: 9}})
 	// "have" rather than "ack": a deletion carries no chunks, so every body the
 	// server needs is already present, vacuously.
 	var have wire.Have
@@ -275,7 +275,7 @@ func (c *client) rename(to, from string, bodies ...string) int64 {
 	c.t.Helper()
 	names, size := chunkNames(bodies)
 	c.sendJSON(wire.In{
-		Op: "put", Path: to, Chunks: names, Mac: testMac, Base: c.head(to), PrevBase: c.head(from),
+		Op: "put", Path: to, Chunks: names, Base: c.head(to), PrevBase: c.head(from),
 		Meta: wire.PutMeta{Size: size, MTime: 6, Prev: from},
 	})
 	m := c.recv()

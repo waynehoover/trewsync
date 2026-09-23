@@ -1,0 +1,1337 @@
+{
+  "note": [
+    "Protocol 1 exchanges, message by message (plan/protocol.md; PLAN.md M1 task 12).",
+    "Written by scripts/protocol-transcripts.py and replayed against a real server on a fresh",
+    "store by internal/server/transcripts_test.go, which fails on any frame that differs.",
+    "",
+    "Each transcript starts from an empty store holding the vault and the devices below, each",
+    "registered with the SHA-256 of its token's raw bytes and the createdAt given. Steps run in",
+    "order. A step names a connection (conn), opened by its first step and closed by close or",
+    "by the server (expectClose), and does one thing:",
+    "  send          a text frame, the JSON as given",
+    "  sendBinary    a binary frame, the hex as given, marker byte included",
+    "  expect        the next text frame on that connection, compared as JSON: the same keys,",
+    "                no others, equal values, except placeholders",
+    "  expectBinary  the next frame is a body frame that decodes (plan/protocol.md, 'Chunk",
+    "                bodies') to the raw bytes in this hex; a replaying server may deflate or not",
+    "  expectClose   the server closes the connection with nothing more sent",
+    "  store         done to the store directly, not over the wire: put commits a version of",
+    "                path with these bodies (hex) and mtime, written by device 'seed'; loseChunk",
+    "                removes a body from the chunk tree. A fake socket ignores these steps: the",
+    "                server's frames already reflect them.",
+    "After the last step, no connection may be sent anything more.",
+    "",
+    "A placeholder is a whole string value beginning with $. $name matches the placeholder's kind;",
+    "one marked same must match one value everywhere it appears in a transcript. $prefix:TEXT",
+    "matches a string beginning with TEXT. A fake socket sends each placeholder's example, and",
+    "for $prefix:TEXT the text followed by 'example'."
+  ],
+  "format": 1,
+  "vault": "v1",
+  "placeholders": {
+    "$epoch": {
+      "kind": "string",
+      "same": true,
+      "example": "transcript-epoch",
+      "about": "the store's epoch, opaque"
+    },
+    "$serverVersion": {
+      "kind": "string",
+      "same": true,
+      "example": "dev",
+      "about": "what the server calls itself"
+    },
+    "$msg": {
+      "kind": "string",
+      "same": false,
+      "example": "a message for the person",
+      "about": "a refusal's message, for a person; its wording is not the protocol"
+    },
+    "$time": {
+      "kind": "number",
+      "same": false,
+      "example": 1790000000000,
+      "about": "a server timestamp in milliseconds"
+    }
+  },
+  "devices": {
+    "laptop": {
+      "deviceId": "laptop",
+      "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+      "device": "laptop",
+      "createdAt": 1
+    },
+    "phone": {
+      "deviceId": "phone",
+      "token": "cilBIMICnjZ3qV_o-b6w_eYztc_2WGAGqQurO_kET3Y",
+      "device": "phone",
+      "createdAt": 2
+    }
+  },
+  "transcripts": [
+    {
+      "name": "have",
+      "covers": "A put whose every body the server already holds is answered have, with no upload; the writer is sent its own version as an empty range first.",
+      "steps": [
+        {
+          "store": {
+            "op": "put",
+            "path": "a.md",
+            "bodies": [
+              "616c70686120626f6479"
+            ],
+            "mtime": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "device": "laptop",
+            "cursor": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 1,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "batch",
+            "from": 1,
+            "to": 1,
+            "entries": [
+              {
+                "uid": 1,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 1,
+                "folder": false,
+                "deleted": false,
+                "device": "seed",
+                "chunks": [
+                  "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "put",
+            "id": 2,
+            "path": "copy-of-a.md",
+            "meta": {
+              "size": 10,
+              "ctime": 0,
+              "mtime": 2,
+              "folder": false,
+              "deleted": false
+            },
+            "chunks": [
+              "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+            ],
+            "base": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "batch",
+            "from": 2,
+            "to": 2,
+            "entries": []
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "have",
+            "id": 2,
+            "uid": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "want",
+      "covers": "A put naming bodies the server lacks is answered want, the bodies follow as frames, and the ack comes after the echo; another device is sent the version live and fetches it.",
+      "steps": [
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "device": "laptop",
+            "cursor": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 0,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 0
+          }
+        },
+        {
+          "conn": "phone",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "phone",
+            "token": "cilBIMICnjZ3qV_o-b6w_eYztc_2WGAGqQurO_kET3Y",
+            "device": "phone",
+            "cursor": 0
+          }
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 0,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "put",
+            "id": 2,
+            "path": "b.md",
+            "meta": {
+              "size": 22,
+              "ctime": 0,
+              "mtime": 5,
+              "folder": false,
+              "deleted": false
+            },
+            "chunks": [
+              "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697",
+              "76254b164b9181202330d4227eb058a5924ef96e7b5fd61ab342445032e85a21"
+            ],
+            "base": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "want",
+            "id": 2,
+            "chunks": [
+              "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697",
+              "76254b164b9181202330d4227eb058a5924ef96e7b5fd61ab342445032e85a21"
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "sendBinary": "00627261766f20626f6479"
+        },
+        {
+          "conn": "laptop",
+          "sendBinary": "00636861726c696520626f6479"
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "batch",
+            "from": 1,
+            "to": 1,
+            "entries": []
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ack",
+            "id": 2,
+            "uid": 1
+          }
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "op": "batch",
+            "from": 1,
+            "to": 1,
+            "entries": [
+              {
+                "uid": 1,
+                "path": "b.md",
+                "size": 22,
+                "ctime": 0,
+                "mtime": 5,
+                "folder": false,
+                "deleted": false,
+                "device": "laptop",
+                "chunks": [
+                  "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697",
+                  "76254b164b9181202330d4227eb058a5924ef96e7b5fd61ab342445032e85a21"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "phone",
+          "send": {
+            "op": "fetch",
+            "id": 2,
+            "chunks": [
+              "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697",
+              "76254b164b9181202330d4227eb058a5924ef96e7b5fd61ab342445032e85a21"
+            ]
+          }
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "res": "bodies",
+            "id": 2,
+            "count": 2
+          }
+        },
+        {
+          "conn": "phone",
+          "expectBinary": "627261766f20626f6479"
+        },
+        {
+          "conn": "phone",
+          "expectBinary": "636861726c696520626f6479"
+        }
+      ]
+    },
+    {
+      "name": "mixed-success putmany",
+      "covers": "One putmany whose entries succeed and fail independently: a new file, a write against a stale base, and a path the policy refuses. The refused path uploads nothing, the stale write uploads and is refused at the commit, only the first commits, and the acks say which is which, slot by slot.",
+      "steps": [
+        {
+          "store": {
+            "op": "put",
+            "path": "kept.md",
+            "bodies": [
+              "616c70686120626f6479"
+            ],
+            "mtime": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "device": "laptop",
+            "cursor": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 1,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "putmany",
+            "id": 2,
+            "entries": [
+              {
+                "path": "new.md",
+                "meta": {
+                  "size": 10,
+                  "ctime": 0,
+                  "mtime": 6,
+                  "folder": false,
+                  "deleted": false
+                },
+                "chunks": [
+                  "4af58db1e6eec94e4cc6cd222c987213e815b0e1e437c1d906682eb3a3a4c99e"
+                ],
+                "base": 0
+              },
+              {
+                "path": "kept.md",
+                "meta": {
+                  "size": 10,
+                  "ctime": 0,
+                  "mtime": 6,
+                  "folder": false,
+                  "deleted": false
+                },
+                "chunks": [
+                  "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697"
+                ],
+                "base": 0
+              },
+              {
+                "path": ".obsidian/app.json",
+                "meta": {
+                  "size": 12,
+                  "ctime": 0,
+                  "mtime": 6,
+                  "folder": false,
+                  "deleted": false
+                },
+                "chunks": [
+                  "76254b164b9181202330d4227eb058a5924ef96e7b5fd61ab342445032e85a21"
+                ],
+                "base": 0
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "want",
+            "id": 2,
+            "chunks": [
+              "4af58db1e6eec94e4cc6cd222c987213e815b0e1e437c1d906682eb3a3a4c99e",
+              "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697"
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "sendBinary": "0064656c746120626f6479"
+        },
+        {
+          "conn": "laptop",
+          "sendBinary": "00627261766f20626f6479"
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "batch",
+            "from": 2,
+            "to": 2,
+            "entries": []
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "acks",
+            "id": 2,
+            "results": [
+              {
+                "uid": 2
+              },
+              {
+                "code": "stale",
+                "msg": "$msg"
+              },
+              {
+                "code": "badpath",
+                "msg": "$prefix:dotprefix: the path "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "stale rename source",
+      "covers": "A rename prepared against an old version of its source is refused stale and the session stays usable; the same rename against the source's head commits.",
+      "steps": [
+        {
+          "store": {
+            "op": "put",
+            "path": "from.md",
+            "bodies": [
+              "616c70686120626f6479"
+            ],
+            "mtime": 1
+          }
+        },
+        {
+          "store": {
+            "op": "put",
+            "path": "from.md",
+            "bodies": [
+              "627261766f20626f6479"
+            ],
+            "mtime": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "device": "laptop",
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 2,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "put",
+            "id": 2,
+            "path": "to.md",
+            "meta": {
+              "size": 10,
+              "ctime": 0,
+              "mtime": 3,
+              "folder": false,
+              "deleted": false,
+              "prev": "from.md"
+            },
+            "chunks": [
+              "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697"
+            ],
+            "base": 0,
+            "prevBase": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 2,
+            "code": "stale",
+            "msg": "$msg",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "put",
+            "id": 3,
+            "path": "to.md",
+            "meta": {
+              "size": 10,
+              "ctime": 0,
+              "mtime": 3,
+              "folder": false,
+              "deleted": false,
+              "prev": "from.md"
+            },
+            "chunks": [
+              "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697"
+            ],
+            "base": 0,
+            "prevBase": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "batch",
+            "from": 3,
+            "to": 3,
+            "entries": []
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "have",
+            "id": 3,
+            "uid": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "stale rename destination",
+      "covers": "A rename onto a path whose version it did not prepare against is refused stale, the destination's base being the one that is out of date.",
+      "steps": [
+        {
+          "store": {
+            "op": "put",
+            "path": "from.md",
+            "bodies": [
+              "616c70686120626f6479"
+            ],
+            "mtime": 1
+          }
+        },
+        {
+          "store": {
+            "op": "put",
+            "path": "to.md",
+            "bodies": [
+              "636861726c696520626f6479"
+            ],
+            "mtime": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "device": "laptop",
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 2,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "put",
+            "id": 2,
+            "path": "to.md",
+            "meta": {
+              "size": 10,
+              "ctime": 0,
+              "mtime": 3,
+              "folder": false,
+              "deleted": false,
+              "prev": "from.md"
+            },
+            "chunks": [
+              "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+            ],
+            "base": 0,
+            "prevBase": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 2,
+            "code": "stale",
+            "msg": "$msg",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "ping"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "pong"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reconnect continuity",
+      "covers": "A device replays the backlog from uid 1, goes away, and on reconnecting with its cursor is sent exactly what it missed and nothing before it; afterwards it is sent another device's writes live, each range continuing the one before.",
+      "steps": [
+        {
+          "store": {
+            "op": "put",
+            "path": "a.md",
+            "bodies": [
+              "616c70686120626f6479"
+            ],
+            "mtime": 1
+          }
+        },
+        {
+          "store": {
+            "op": "put",
+            "path": "b.md",
+            "bodies": [
+              "627261766f20626f6479"
+            ],
+            "mtime": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "device": "laptop",
+            "cursor": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 2,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "batch",
+            "from": 1,
+            "to": 2,
+            "entries": [
+              {
+                "uid": 1,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 1,
+                "folder": false,
+                "deleted": false,
+                "device": "seed",
+                "chunks": [
+                  "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+                ]
+              },
+              {
+                "uid": 2,
+                "path": "b.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 2,
+                "folder": false,
+                "deleted": false,
+                "device": "seed",
+                "chunks": [
+                  "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "close": true
+        },
+        {
+          "store": {
+            "op": "put",
+            "path": "c.md",
+            "bodies": [
+              "636861726c696520626f6479"
+            ],
+            "mtime": 3
+          }
+        },
+        {
+          "conn": "laptop-again",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "device": "laptop",
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "laptop-again",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 3,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop-again",
+          "expect": {
+            "op": "batch",
+            "from": 3,
+            "to": 3,
+            "entries": [
+              {
+                "uid": 3,
+                "path": "c.md",
+                "size": 12,
+                "ctime": 0,
+                "mtime": 3,
+                "folder": false,
+                "deleted": false,
+                "device": "seed",
+                "chunks": [
+                  "76254b164b9181202330d4227eb058a5924ef96e7b5fd61ab342445032e85a21"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop-again",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 3
+          }
+        },
+        {
+          "conn": "phone",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "phone",
+            "token": "cilBIMICnjZ3qV_o-b6w_eYztc_2WGAGqQurO_kET3Y",
+            "device": "phone",
+            "cursor": 3
+          }
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 3,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 3
+          }
+        },
+        {
+          "conn": "phone",
+          "send": {
+            "op": "put",
+            "id": 2,
+            "path": "d.md",
+            "meta": {
+              "size": 10,
+              "ctime": 0,
+              "mtime": 4,
+              "folder": false,
+              "deleted": false
+            },
+            "chunks": [
+              "4af58db1e6eec94e4cc6cd222c987213e815b0e1e437c1d906682eb3a3a4c99e"
+            ],
+            "base": 0
+          }
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "res": "want",
+            "id": 2,
+            "chunks": [
+              "4af58db1e6eec94e4cc6cd222c987213e815b0e1e437c1d906682eb3a3a4c99e"
+            ]
+          }
+        },
+        {
+          "conn": "phone",
+          "sendBinary": "0064656c746120626f6479"
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "op": "batch",
+            "from": 4,
+            "to": 4,
+            "entries": []
+          }
+        },
+        {
+          "conn": "phone",
+          "expect": {
+            "res": "ack",
+            "id": 2,
+            "uid": 4
+          }
+        },
+        {
+          "conn": "laptop-again",
+          "expect": {
+            "op": "batch",
+            "from": 4,
+            "to": 4,
+            "entries": [
+              {
+                "uid": 4,
+                "path": "d.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 4,
+                "folder": false,
+                "deleted": false,
+                "device": "phone",
+                "chunks": [
+                  "4af58db1e6eec94e4cc6cd222c987213e815b0e1e437c1d906682eb3a3a4c99e"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "resend repair",
+      "covers": "The server has lost a body a committed version names; a device that still has it resends it, with no entry and no uid, and the version can be fetched again.",
+      "steps": [
+        {
+          "store": {
+            "op": "put",
+            "path": "a.md",
+            "bodies": [
+              "616c70686120626f6479"
+            ],
+            "mtime": 1
+          }
+        },
+        {
+          "store": {
+            "op": "loseChunk",
+            "chunk": "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "device": "laptop",
+            "cursor": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 1,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "resend",
+            "id": 2,
+            "chunks": [
+              "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "want",
+            "id": 2,
+            "chunks": [
+              "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "sendBinary": "00616c70686120626f6479"
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "resent",
+            "id": 2,
+            "stored": 1,
+            "missing": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "fetch",
+            "id": 3,
+            "chunks": [
+              "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "bodies",
+            "id": 3,
+            "count": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "expectBinary": "616c70686120626f6479"
+        }
+      ]
+    },
+    {
+      "name": "applied receipts",
+      "covers": "A device reports the checkpoint it has applied, the device list shows it, and a checkpoint ahead of the server is refused without ending the session.",
+      "steps": [
+        {
+          "store": {
+            "op": "put",
+            "path": "a.md",
+            "bodies": [
+              "616c70686120626f6479"
+            ],
+            "mtime": 1
+          }
+        },
+        {
+          "store": {
+            "op": "put",
+            "path": "b.md",
+            "bodies": [
+              "627261766f20626f6479"
+            ],
+            "mtime": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 1,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "k8duXSN3ZjlP_OxgF_69nNtkGcH3_dFPmqZagz92Ut4",
+            "device": "laptop",
+            "cursor": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 1,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 2,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "batch",
+            "from": 1,
+            "to": 2,
+            "entries": [
+              {
+                "uid": 1,
+                "path": "a.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 1,
+                "folder": false,
+                "deleted": false,
+                "device": "seed",
+                "chunks": [
+                  "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
+                ]
+              },
+              {
+                "uid": 2,
+                "path": "b.md",
+                "size": 10,
+                "ctime": 0,
+                "mtime": 2,
+                "folder": false,
+                "deleted": false,
+                "device": "seed",
+                "chunks": [
+                  "c1b842b6d780f958bec4eb7ce66c574eaa6ec7c05a7ce9cac5f86a3bf6145697"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "applied",
+            "id": 2,
+            "applied": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "applied",
+            "id": 2,
+            "cursor": 2
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "devices",
+            "id": 3
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "devices",
+            "id": 3,
+            "devices": [
+              {
+                "id": "laptop",
+                "name": "laptop",
+                "createdAt": 1,
+                "lastSeen": "$time",
+                "online": true,
+                "applied": 2
+              },
+              {
+                "id": "phone",
+                "name": "phone",
+                "createdAt": 2,
+                "lastSeen": 0,
+                "online": false,
+                "applied": null
+              }
+            ],
+            "invites": []
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "applied",
+            "id": 4,
+            "applied": 99
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 4,
+            "code": "badentry",
+            "msg": "$msg",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "ping"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "pong"
+          }
+        }
+      ]
+    }
+  ]
+}

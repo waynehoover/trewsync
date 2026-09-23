@@ -36,9 +36,9 @@ func TestABackupRestoresEverything(t *testing.T) {
 	// only tested on the easy shape.
 	want = append(want, h.file(t, "f0.md", "shared head", "a second version"))
 	for _, e := range []Entry{
-		{Path: "folder", Mac: testMac, Folder: true},
-		{Path: "f1.md", Mac: testMac, Deleted: true, MTime: 9},
-		{Path: "empty.md", Mac: testMac, Size: 0, MTime: 9},
+		{Path: "folder", Folder: true},
+		{Path: "f1.md", Deleted: true, MTime: 9},
+		{Path: "empty.md", Size: 0, MTime: 9},
 	} {
 		uid, err := h.AppendEntry("v1", e)
 		if err != nil {
@@ -102,7 +102,7 @@ func TestABackupRestoresEverything(t *testing.T) {
 
 	// The restored store must be usable, not just readable: uids continue from
 	// where they left off rather than being reissued.
-	next, err := restored.AppendEntry("v1", Entry{Path: "after.md", Mac: testMac, Size: 0, MTime: 10})
+	next, err := restored.AppendEntry("v1", Entry{Path: "after.md", Size: 0, MTime: 10})
 	if err != nil {
 		t.Fatalf("appending to a restored backup: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestABackupKeepsHistoryAndDeletions(t *testing.T) {
 	h := newTestStore(t)
 	h.file(t, "note.md", "version one")
 	h.file(t, "note.md", "version two")
-	if _, err := h.AppendEntry("v1", Entry{Path: "note.md", Mac: testMac, Deleted: true, MTime: 9}); err != nil {
+	if _, err := h.AppendEntry("v1", Entry{Path: "note.md", Deleted: true, MTime: 9}); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
@@ -455,7 +455,7 @@ func TestABackupKeepsVaultsSeparate(t *testing.T) {
 		t.Fatalf("put: %v", err)
 	}
 	if _, err := h.AppendEntry("v2", Entry{
-		Path: "shared.md", Mac: testMac, Size: 17, MTime: 1, Chunks: []string{name},
+		Path: "shared.md", Size: 17, MTime: 1, Chunks: []string{name},
 	}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -834,14 +834,16 @@ func TestAMalformedDigestIsRefusedRatherThanPanicking(t *testing.T) {
 
 // A fault the source already has does not veto a faithful copy of it.
 //
-// `migrate` gives a pre-F20 `entries` table a `mac` column defaulting to the
-// empty string, because the server holds no key to mint one, and
-// `verifyEntries` reports every such row as `nomac` on every pass. `Backup`
-// refused to publish while any fault existed, so on any vault old enough to
-// have one, every backup failed for ever -- and the message blamed the backup
-// for a fault in the store it came from. The last good copy was never
+// Basalt met this with entries from before F20, which a migration gave an
+// empty authenticator and `verifyEntries` then reported on every pass.
+// `Backup` refused to publish while any fault existed, so on any vault old
+// enough to have one, every backup failed for ever, and the message blamed the
+// backup for a fault in the store it came from. The last good copy was never
 // refreshed, and `purge -backup` could then never be satisfied either, so the
 // safety net was cut by the thing holding it.
+//
+// Hazard 6: the authenticator is gone, so the fault seeded here is one the
+// path policy names, a row written behind the policy's back.
 func TestBackupPublishesOverAFaultItInherited(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "live")
@@ -853,21 +855,25 @@ func TestBackupPublishesOverAFaultItInherited(t *testing.T) {
 	if err := st.EnsureVault("default", 1000); err != nil {
 		t.Fatal(err)
 	}
-	body := []byte("a note from before the authenticator existed")
+	body := []byte("a note under a path no device would take")
 	name := chunks.Name(body)
 	if err := st.Chunks().Put("default", name, body); err != nil {
 		t.Fatal(err)
 	}
 	uid, err := st.AppendEntry("default", Entry{
 		Path: "old.md", Size: int64(len(body)), MTime: 1, Device: "d",
-		Chunks: []string{name}, Mac: testMac,
+		Chunks: []string{name},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Exactly what the migration leaves: a committed row with no authenticator.
-	if _, err := st.db.Exec(`UPDATE entries SET mac = '' WHERE vault_id = ? AND uid = ?`,
+	// A committed row under a path the policy refuses, and the live set
+	// rebuilt from it the way `serve` would, so the path is the only fault.
+	if _, err := st.db.Exec(`UPDATE entries SET path = '.obsidian/old.md' WHERE vault_id = ? AND uid = ?`,
 		"default", uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RepairLive(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -876,7 +882,7 @@ func TestBackupPublishesOverAFaultItInherited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a backup was refused for a fault in the store it copied: %v", err)
 	}
-	if len(rep.Inherited) != 1 || rep.Inherited[0].Reason != "nomac" {
+	if len(rep.Inherited) != 1 || rep.Inherited[0].Reason != "badpath" || rep.Inherited[0].UID != uid {
 		t.Errorf("the inherited fault was not reported: %v", rep.Inherited)
 	}
 	// And it really published: the coverage beside it describes this snapshot.
@@ -915,7 +921,7 @@ func TestBackupStillRefusesAFaultOfItsOwn(t *testing.T) {
 	}
 	if _, err := st.AppendEntry("default", Entry{
 		Path: "note.md", Size: int64(len(body)), MTime: 1, Device: "d",
-		Chunks: []string{name}, Mac: testMac,
+		Chunks: []string{name},
 	}); err != nil {
 		t.Fatal(err)
 	}

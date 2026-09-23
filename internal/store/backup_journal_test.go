@@ -26,7 +26,7 @@ func TestBackupRefusesDestinationWithPendingRecovery(t *testing.T) {
 		if err := s.Chunks().Put("v1", name, body); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.AppendEntry("v1", Entry{Path: "old.md", Chunks: []string{name}, Size: int64(len(body)), Device: "old", Mac: testMac}); err != nil {
+		if _, err := s.AppendEntry("v1", Entry{Path: "old.md", Chunks: []string{name}, Size: int64(len(body)), Device: "old"}); err != nil {
 			t.Fatal(err)
 		}
 		os.Exit(0) // Simulate a process exit without SQLite's close/checkpoint.

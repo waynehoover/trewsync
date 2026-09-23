@@ -6,13 +6,23 @@
 // and a transport that knows no policy, and this is the equivalent seam on the
 // server side.
 //
-// Every reply names its outcome. docs/protocol.md's first design rule exists
+// Every reply names its outcome. The protocol's first design rule exists
 // because in Obsidian's protocol `{res:"ok"}` on a push means "discard the
 // upload", making the most natural success reply the destructive one. There is
 // no `ok` here.
+//
+// The protocol is version 1, specified in plan/protocol.md: Basalt's protocol 7
+// with the encryption taken out. Paths and bodies are plaintext, a device
+// authenticates with a random token of its own, and a new device joins by
+// redeeming a single-use invite token.
 package wire
 
-import "github.com/waynehoover/trew/internal/store"
+import (
+	"errors"
+	"unicode/utf8"
+
+	"github.com/waynehoover/trew/internal/store"
+)
 
 // Proto is the newest protocol version this server implements, and MinProto the
 // oldest it still answers. A version outside that range is refused at hello
@@ -21,11 +31,12 @@ import "github.com/waynehoover/trew/internal/store"
 // ship here is a device that connects and syncs under a credential nobody can
 // revoke.
 //
-// Protocol 7 requires conditional writes. Upgrade the server and every client
-// together; stored history and device credentials retain their formats.
+// Version 1 is this product's first. Basalt's protocol 7 is refused as `proto`,
+// so a Basalt plugin pointed at this server is told which versions the two ends
+// speak rather than failing to authenticate.
 const (
-	Proto    = 7
-	MinProto = 7
+	Proto    = 1
+	MinProto = 1
 )
 
 // MaxRequestID bounds a client-chosen request id: an integer from 1 to 2^32-1.
@@ -33,35 +44,42 @@ const (
 // detectable rather than indistinguishable from one that carries id 0.
 const MaxRequestID = 1<<32 - 1
 
-// Crypto names the client-side scheme. It is a string rather than an integer
-// because an integer shared with other implementations means two projects
-// eventually disagree about what version 2 was.
-const Crypto = "basalt/hkdf-aes-gcm/1"
-
 // Error codes. `code` is for the client to act on, `msg` is for a human to
-// read; docs/protocol.md requires both, because an error a device cannot act on
+// read; the protocol requires both, because an error a device cannot act on
 // and a person cannot read is how a silent failure starts.
 //
-// Every code here has a row in the doc's error table, which also says whether
-// the session continues after it. The two lists are kept in step by hand, so a
-// new code goes in both.
+// Every code here has a row in the error table of plan/protocol.md, which also
+// says whether the session continues after it, and
+// TestI2RetryableMatchesTheProtocolDoc holds the two lists together.
 const (
-	CodeProto = "proto" // unsupported proto or crypto; the session closes
-	CodeAuth  = "auth"  // bad token or vault; the session closes
+	CodeProto = "proto" // unsupported protocol number; the session closes
+	CodeAuth  = "auth"  // bad credential, unknown invite, or not allowed
 
 	// CodeBadEntry is a structurally invalid put: a folder carrying chunks, a
-	// size with no chunk list, a prev equal to path. Rejected before any body
-	// is read, and the session continues.
+	// size that is not the sum of its chunks, a prev equal to path. Rejected
+	// before any body is read where it can be, and the session continues.
 	CodeBadEntry = "badentry"
 	CodeStale    = "stale" // the path changed; reconcile and retry the write
-	// CodeBadName is a path the server cannot store: empty, or over the length
-	// bound. The plaintext-name check is the client's, since the server holds
-	// no key; see docs/protocol.md.
+	// CodeBadName is a vault or device name the server will not store: over
+	// its bound, or carrying a control character, or a device id of the wrong
+	// shape. Paths have their own code.
 	CodeBadName = "badname"
-	// CodeBadChunk is an uploaded body that does not hash to the name it was
-	// asked for, or a chunk name that is not a hex SHA-256.
+	// CodeBadPath is a path the protocol refuses (plan/protocol.md, "Paths").
+	// It rejects the entry and the session continues. The message begins with
+	// the reason code and a colon, "dotprefix: ...", because the wire has one
+	// code for twelve rules and the rule is what the person whose file will
+	// not sync needs to know (PLAN.md section 4.9).
+	CodeBadPath = "badpath"
+	// CodeCollision is a create, or the destination of a move, whose folded
+	// key is another live path's: two notes a case-folding disk would hold as
+	// one (PLAN.md section 4.1). It rejects the entry and the session
+	// continues. The message names the live path it collides with.
+	CodeCollision = "collision"
+	// CodeBadChunk is an uploaded body that does not decode as a frame or does
+	// not hash to the name it was asked for, or a chunk name that is not a hex
+	// SHA-256.
 	CodeBadChunk = "badchunk"
-	// CodeToolarge is a file or chunk above the advertised ceiling.
+	// CodeToolarge is a file, frame or chunk above the advertised ceiling.
 	CodeToolarge = "toolarge"
 	// CodeNoSpace is a write refused for want of disk.
 	CodeNoSpace = "nospace"
@@ -81,7 +99,8 @@ const (
 	// is a different act from every other refusal a revoke can get.
 	CodeNoDevice = "nodevice"
 	// CodeProtoState is a message that does not belong in the current state:
-	// a put before hello, a stray binary frame. The session closes.
+	// a put before hello, a stray binary frame, a frame that is not text. The
+	// session closes.
 	CodeProtoState = "protostate"
 	// CodeInternal is a server-side fault. The put is not committed.
 	CodeInternal = "internal"
@@ -95,18 +114,10 @@ const (
 	// restored from an old backup, or pointed at the wrong vault. Left alone,
 	// the server reissues those uids for different content and the two diverge
 	// with both sides reporting success. It is refused instead, because a
-	// refusal is reversible and silent divergence is not.
+	// refusal is reversible and silent divergence is not. A client that sends
+	// the epoch its cursor belongs to is spared it after a restore: see
+	// In.Epoch.
 	CodeCursor = "cursor"
-	// CodeRotated is a rotate that lost the race: the vault's credential is no
-	// longer the one this session authenticated under, because another device
-	// rotated first.
-	//
-	// Distinct from `auth` because it answers a request rather than the
-	// connection, and distinct from `internal` because nothing went wrong: the
-	// vault has a new owner and this device is not it. Retrying the same rotate
-	// cannot succeed, so it is not retryable, and the session ends, because the
-	// credential it is holding no longer opens the vault.
-	CodeRotated = "rotated"
 )
 
 /* ---------------------------------------------------------------- *
@@ -126,106 +137,66 @@ type In struct {
 	// refusing it. Every request that expects a reply carries one; a request
 	// that does not ends the session. Before ids, a reply was matched to the
 	// one request in flight by position, and three separate client defects
-	// came from that; see docs/protocol.md.
+	// came from that.
 	ID int64 `json:"id,omitempty"`
 
 	// hello
+	//
+	// A hello is one of two things, and says which by what it carries. A
+	// device connecting names itself with DeviceID and proves it with Token,
+	// its own random 32-byte credential in unpadded base64url. A device
+	// joining carries Invite, the invite token, and with it the DeviceID and
+	// Token it has chosen and will connect with from then on; redeeming the
+	// invite is what registers them (plan/protocol.md, "Invite redemption").
+	// A hello carrying neither is refused.
 	Proto  int    `json:"proto"`
 	Vault  string `json:"vault"`
 	Token  string `json:"token"`
 	Device string `json:"device"`
-	Crypto string `json:"crypto"`
 	Cursor int64  `json:"cursor"`
+	// Epoch is the store epoch the client's cursor was read under, as the
+	// `ready` that began it said. Optional, and empty on a first connect.
+	//
+	// Settled in M1 (plan/protocol.md, "Device session"). An epoch that is
+	// not the store's means the server was restored or replaced, so the uid
+	// sequence the cursor points into may have been reissued: the server
+	// then ignores the cursor and replays the whole vault, rather than
+	// refusing a cursor that is ahead or, worse, continuing from one that is
+	// not and skipping the versions that replaced the ones it saw.
+	Epoch string `json:"epoch,omitempty"`
 	// Applied is a device's completed local checkpoint, never a metadata receipt.
 	Applied *int64 `json:"applied,omitempty"`
-	// DeviceID names the row in the vault's device list that this connection
-	// claims to be, and Token is then that device's auth key rather than the
-	// vault's. Present is what makes a hello a device connecting: absent, the
-	// credential is the vault's, and the session that results may register a
-	// device and nothing else.
-	//
-	// It is deliberately not the same field as Device. Device is a label a
-	// person reads beside a version and two laptops may share it; this is the
-	// identity, and the difference is the whole of what makes revoking one
-	// device rather than "everything called laptop" possible.
+	// DeviceID names the row in the vault's device list this connection
+	// claims to be, and on `revoke` the row being revoked. It is deliberately
+	// not the same field as Device. Device is a label a person reads beside a
+	// version and two laptops may share it; this is the identity, and the
+	// difference is the whole of what makes revoking one device rather than
+	// "everything called laptop" possible.
 	DeviceID string `json:"deviceId,omitempty"`
-	// Claim is the auth key this device wants the vault bound to, sent only
-	// while pairing the first device to an unclaimed vault. Ignored once a
-	// vault has been claimed, so a device sending it every time costs nothing
-	// and a device that never sends it can still be the first.
-	Claim string `json:"claim,omitempty"`
-	// Wrapped is the vault's data key, wrapped under a key derived from the
-	// root secret, sent beside Claim and stored with the auth hash. Opaque
-	// here: the server holds neither key. A claim without a valid one is
-	// refused, so every claimed vault has a data key and no session can be
-	// steered onto a schedule that derives content keys from the root. On a
-	// rotate it is the same data key wrapped under the new root.
-	Wrapped string `json:"wrapped,omitempty"`
 
-	// rotate: the new auth key, whose hash replaces the stored one.
-	//
-	// register, and a hello redeeming an invite: the new device's auth key,
-	// whose hash becomes its row's. The key and not the hash, for the same
-	// reason `claim` is the key: the server stores only the digest either way,
-	// and a hash is a credential nobody can judge, so a device offering the
-	// hash of "password" would be registered with a straight face.
-	// MinClaimLength is the floor for both.
-	//
-	// It is Auth and not Token on a redeeming hello, deliberately. Token is
-	// what a frame authenticates with, and on that frame the invite is; this
-	// is a credential being written down for next time. Sharing the field
-	// would also make "a token and an invite together" unsayable, and that
-	// refusal exists because a hello that carried both used to authenticate on
-	// the token and leave the invite neither redeemed nor refused.
-	Auth string `json:"auth,omitempty"`
-
-	// register, and a hello redeeming an invite: Name is the label for the new
-	// device's row, defaulting to the session's own `device` name when it is
-	// empty, and bounded exactly as that name is. It is never an identifier:
-	// two devices may share one.
+	// rename: Name is the new label for this device's own row, bounded exactly
+	// as the hello's `device` is. It is never an identifier: two devices may
+	// share one.
 	Name string `json:"name,omitempty"`
 
-	// resend: Chunks names bodies this device believes it can supply, for a
-	// server that has lost or quarantined them (I14).
-	//
-	// The same field `fetch` uses, and deliberately: both are "these chunk
-	// names", in opposite directions, and a second field meaning the same thing
-	// is a second place for a validation to be forgotten.
-
-	// revoke: AllowLast is the caller saying out loud that it means to leave
-	// the vault with no devices at all, reachable only by the recovery key.
-	// Refused without it, because that is a thing to want after a house fire
-	// and not a thing to discover you did by clicking the wrong row.
-	AllowLast bool `json:"allowLast,omitempty"`
-
-	// invite: Invite is the random identifier and Sealed the vault's data key
-	// sealed under the invite key, which never reaches the server. TTLMs is
-	// how long the invite lives; zero is the default.
-	//
-	// At hello, Invite in place of a token redeems one, and the hello carrying
-	// it also carries DeviceID, Auth and optionally Name, because redeeming an
-	// invite is what registers the redeeming device: an invite is single use,
-	// server tracked and expiring, which is the authority to register exactly
-	// one device, and the device that issued it holds no root and so could not
-	// have registered a row on the newcomer's behalf.
-	//
-	// A hello carrying both a token and an invite is refused: "in place of" is
-	// the rule, and a server that picked one for you would be redeeming or
-	// discarding an invite the client did not decide about.
+	// Invite, at hello, is the invite token being redeemed: 16 bytes in
+	// unpadded base64url. On `uninvite` it is the invite's id, the non-secret
+	// handle a listing shows, which cannot redeem anything; the two never
+	// meet, because only the device that asked for an invite is ever shown
+	// its token (plan/protocol.md, "Devices and invites").
 	Invite string `json:"invite,omitempty"`
-	Sealed string `json:"sealed,omitempty"`
-	TTLMs  int64  `json:"ttlMs,omitempty"`
+	// invite: TTLMs is how long the invite lives, zero for the default and
+	// never more than the cap; Label is a name for it a person reads in the
+	// listing, bounded like a device name.
+	TTLMs int64  `json:"ttlMs,omitempty"`
+	Label string `json:"label,omitempty"`
 
 	// put
-	Path   string   `json:"path"`
-	Meta   PutMeta  `json:"meta"`
-	Chunks []string `json:"chunks"`
-	// Mac authenticates the entry and Parent names what it was written on top
-	// of. Both are opaque to the server, which holds no key to check them.
-	Mac      string `json:"mac"`
-	Parent   string `json:"parent"`
-	Base     int64  `json:"base"`
-	PrevBase int64  `json:"prevBase"`
+	Path     string   `json:"path"`
+	Meta     PutMeta  `json:"meta"`
+	Chunks   []string `json:"chunks"`
+	Base     int64    `json:"base"`
+	PrevBase int64    `json:"prevBase"`
 
 	// get
 	UID int64 `json:"uid"`
@@ -247,7 +218,7 @@ type In struct {
 
 // PutEntry is one file inside a batched put.
 //
-// The same three fields a single put carries. A batch exists because latency
+// The same fields a single put carries. A batch exists because latency
 // multiplies round trips: two hundred paths were two hundred requests, and on a
 // link with four hundred milliseconds in it that is eighty seconds of waiting
 // for permission to send things the server was always going to want.
@@ -255,8 +226,6 @@ type PutEntry struct {
 	Path     string   `json:"path"`
 	Meta     PutMeta  `json:"meta"`
 	Chunks   []string `json:"chunks"`
-	Mac      string   `json:"mac"`
-	Parent   string   `json:"parent"`
 	Base     int64    `json:"base"`
 	PrevBase int64    `json:"prevBase"`
 }
@@ -273,8 +242,6 @@ func (p PutEntry) Entry(device string) store.Entry {
 		Device:  device,
 		Prev:    p.Meta.Prev,
 		Chunks:  p.Chunks,
-		Mac:     p.Mac,
-		Parent:  p.Parent,
 	}
 }
 
@@ -288,27 +255,28 @@ func (p PutEntry) Entry(device string) store.Entry {
 const MaxBatchEntries = 256
 
 // MaxBatchBytes bounds one batched put two ways: the encoded `putmany` frame
-// may not exceed it, and neither may the summed ciphertext budget of the
-// entries in it (S18). Both are advertised in `ready` so a client can split a
-// batch before sending rather than discover the bound by being refused.
+// may not exceed it, and neither may the summed declared sizes of the entries
+// in it (S18), which is the raw budget of plan/protocol.md ("Limits"). Both are
+// advertised in `ready` so a client can split a batch before sending rather
+// than discover the bound by being refused.
 //
 // The frame bound is what makes "every legal message is receivable" true: the
 // read limit is set above it (server.ReadLimit), so a frame over this cap is
 // read in full and refused with `toolarge`, never dropped with a bare
 // disconnect that the client answers by retrying the identical batch for ever
-// (S22). The budget bound is what stops one authenticated batch streaming
+// (S22). The size bound is what stops one authenticated batch streaming
 // gigabytes of bodies: 256 entries at the 64 MiB file limit was 16 GiB of
-// allowed upload in one exchange. A file whose budget alone exceeds this goes
+// allowed upload in one exchange. A file whose size alone exceeds this goes
 // through a single `put`, which is bounded by perFileMax instead.
 //
 // 16 MiB is thousands of notes at the sizes people write them and small enough
 // that a batch is never why a server ran out of memory holding it.
 const MaxBatchBytes = 16 << 20
 
-// MaxFetchBytes bounds the summed stored size of the bodies one `fetch` may ask
+// MaxFetchBytes bounds the summed raw size of the bodies one `fetch` may ask
 // for (S21). The server knows every size from the same stat that answers
-// presence; a client bounds itself with CiphertextBudget over the files it is
-// fetching, which is never smaller. Over it is `toolarge` with no bodies.
+// presence; a client bounds itself with the declared sizes of the files it is
+// fetching, which are exactly those sums. Over it is `toolarge` with no bodies.
 //
 // 64 MiB matches the default file limit, so one fetch can always carry one
 // file, and a first download of a text vault is still a handful of round trips.
@@ -347,8 +315,6 @@ func (in In) Entry(device string) store.Entry {
 		Device:  device,
 		Prev:    in.Meta.Prev,
 		Chunks:  in.Chunks,
-		Mac:     in.Mac,
-		Parent:  in.Parent,
 	}
 }
 
@@ -356,15 +322,20 @@ func (in In) Entry(device string) store.Entry {
  * Server to client
  * ---------------------------------------------------------------- */
 
-// Ready answers hello and carries the limits a client needs before its first
-// put. It is sent before any catch-up, so a client never has to guess a ceiling
-// or discover one by being rejected.
+// Ready answers a device's hello and carries the limits a client needs before
+// its first put. It is sent before any catch-up, so a client never has to
+// guess a ceiling or discover one by being rejected.
 //
 // Cursor is what the *server* holds. A client compares it with its own and
-// knows immediately how far behind it is. docs/protocol.md's fourth design rule
+// knows immediately how far behind it is. The protocol's fourth design rule
 // is that no persisted boolean decides whether a vault uploads: the client
 // announces what it has, the server answers with what it has, and neither
 // remembers a verdict from last time.
+//
+// Epoch is the store's (PLAN.md section 2.8): minted when the store was made,
+// and different in every backup of it. A client keeps it beside its cursor,
+// and a different one here means its cursor belongs to a history that may
+// have been replaced; see In.Epoch for what the server does about that.
 //
 // Proto is the version this session speaks and MinProto the oldest this server
 // answers. Both are wire.Proto today, and they are sent anyway so a puzzled
@@ -376,70 +347,29 @@ type Ready struct {
 	Proto         int    `json:"proto"`
 	MinProto      int    `json:"minProto"`
 	ServerVersion string `json:"serverVersion"`
+	Epoch         string `json:"epoch"`
 	Cursor        int64  `json:"cursor"`
 	PerFileMax    int64  `json:"perFileMax"`
 	ChunkMax      int64  `json:"chunkMax"`
 	MaxChunks     int    `json:"maxChunks"`
 	MaxBatchBytes int64  `json:"maxBatchBytes"`
 	MaxFetchBytes int64  `json:"maxFetchBytes"`
-	// Wrapped is the vault's wrapped data key. Every claimed vault has one,
-	// because a claim without one is refused, so this is always present on a
-	// session the server let through; docs/protocol.md, "The data key". It is
-	// omitted only for a vault nothing has claimed, which no device can reach
-	// past the handshake.
-	Wrapped string `json:"wrapped,omitempty"`
-}
-
-// Registrar answers a hello that offered the vault's credential rather than a
-// device's. It is the other outcome of a handshake, and it says so in one word
-// rather than leaving a client to work out what it got.
-//
-// A registrar session may register a device and rewrap the data key, which are
-// the two powers the root secret has, and may do nothing else: no entries, no
-// history, no chunk, no device list, no catch-up and no place in the vault's
-// fan-out. So no `ready`, because `ready` promises the ceilings for a put and
-// a backlog behind it, and a reply that promised a catch-up nobody would send
-// is how a client comes to wait for a frame that is not coming.
-//
-// MaxDevices is retained for protocol-5 clients. Zero means no device cap;
-// older servers may advertise a positive limit.
-type Registrar struct {
-	Res           string `json:"res"` // "registrar"
-	ID            int64  `json:"id,omitempty"`
-	Proto         int    `json:"proto"`
-	MinProto      int    `json:"minProto"`
-	ServerVersion string `json:"serverVersion"`
-	MaxDevices    int    `json:"maxDevices"`
-}
-
-// Registered answers a register: the device now has a row and may connect with
-// its own credential.
-//
-// Wrapped is the vault's wrapped data key, which is what the registering
-// session came for. It holds the root, so it can unwrap it and hand the new
-// device the data key itself; the new device never holds the root and so never
-// needs the wrapping again.
-type Registered struct {
-	Res      string `json:"res"` // "registered"
-	ID       int64  `json:"id,omitempty"`
-	DeviceID string `json:"deviceId"`
-	Wrapped  string `json:"wrapped,omitempty"`
 }
 
 // DeviceStatus describes a registered device with its live delivery checkpoint.
 //
-// The device list answers a devices request with every device that may reach this
-// vault, and every invite that could still add one.
+// The device list answers a devices request with every device that may reach
+// this vault, and every invite that could still add one.
 //
 // Neither slice is ever null, for the same reason Batch.Entries is not: a
 // client that iterates one would crash on exactly the vault it is meant to
 // handle. Neither carries a credential either: store.Device has no field that
-// could, and store.Invite carries the identifier and the expiry and never the
-// sealed blob; see the comments there.
+// could, and store.Invite carries the invite's id, its label and its expiry,
+// never its token or anything derived from the token; see the comments there.
 //
 // Invites ride on the device list rather than having an op of their own,
 // because they are one subject. "What can reach my notes" is answered by the
-// rows plus the strings that have not been redeemed yet, and a client that had
+// rows plus the invites that have not been redeemed yet, and a client that had
 // to ask twice would be a client that could show half the answer.
 type DeviceStatus struct {
 	store.Device
@@ -456,11 +386,10 @@ type Applied struct {
 
 // DeviceList answers devices with access and live delivery state.
 type DeviceList struct {
-	Res        string         `json:"res"` // "devices"
-	ID         int64          `json:"id,omitempty"`
-	Devices    []DeviceStatus `json:"devices"`
-	MaxDevices int            `json:"maxDevices"`
-	Invites    []store.Invite `json:"invites"`
+	Res     string         `json:"res"` // "devices"
+	ID      int64          `json:"id,omitempty"`
+	Devices []DeviceStatus `json:"devices"`
+	Invites []store.Invite `json:"invites"`
 }
 
 // Revoked answers a revoke: the row is gone and every session that device had
@@ -543,8 +472,8 @@ type Have struct {
 // Ack means the upload is durable and the entry is committed, in that order.
 //
 // It is withheld until both are true. An ack sent earlier would mean "stored"
-// was a claim a crash could expose, which is the first of the ten durability
-// rules and the one the rest exist to protect.
+// was a claim a crash could expose, which is the first of the durability rules
+// and the one the rest exist to protect.
 //
 // The uid is also how a device knows which write was its own, without comparing
 // any content.
@@ -575,51 +504,46 @@ type Bodies struct {
 	Count int    `json:"count"`
 }
 
-// Invited answers an invite with the moment it stops working, in milliseconds
-// of the server's clock, which is the only thing the server knows about it
-// that the issuing device did not already.
+// Invited answers an invite: the invite's id, its token, and the moment it
+// stops working in milliseconds of the server's clock, or null for an invite
+// that does not expire.
+//
+// The token is the whole credential: the one field anywhere in the protocol
+// that can redeem an invite, sent once, to the device that asked. That device
+// formats the invite string with its own server address and vault name
+// (plan/protocol.md, "The invite string"). The id is the non-secret handle the
+// device list shows and `uninvite` takes, minted beside the token and not
+// derived from it.
 type Invited struct {
 	Res       string `json:"res"` // "invited"
 	ID        int64  `json:"id,omitempty"`
-	ExpiresAt int64  `json:"expiresAt"`
+	Invite    string `json:"invite"`
+	Token     string `json:"token"`
+	ExpiresAt *int64 `json:"expiresAt"`
 }
 
-// Redeemed answers a hello that carried an invite: the vault's data key, as
-// the issuing device sealed it under the invite key, and the id of the device
-// row this redemption registered.
+// Redeemed answers a hello that carried an invite: the device row this
+// redemption registered, under the id the hello asked for, so the redeemer can
+// check the row it is about to keep a credential for is the one it named.
 //
 // The session closes after this. It is not a device session: the row exists
-// now, but nothing on this connection has proved that anyone holds the key it
-// was registered with, and the redeemer has to write the key and the data key
-// down before it can use either. It connects again as a device, and that hello
-// is the proof.
-//
-// DeviceID echoes what was asked for so the redeemer can check the row it is
-// about to store a credential for is the one it named. There is no wrapped
-// data key here and there must not be: the wrapping opens under the root, the
-// redeeming device does not hold one, and a field a client is told to ignore
-// is a field a client eventually uses.
+// now, and the device proves it holds the token it registered by connecting
+// again as a device, which is the only place a syncing session is built. A
+// retry of a redemption whose reply was lost gets this same answer
+// (plan/protocol.md, "Invite redemption", step 2).
 type Redeemed struct {
 	Res      string `json:"res"` // "redeemed"
 	ID       int64  `json:"id,omitempty"`
-	Sealed   string `json:"sealed"`
 	DeviceID string `json:"deviceId"`
 }
 
 // Uninvited answers an uninvite: that invite is gone and the string somebody is
-// holding no longer redeems. It names the invite so a client can tell which of
-// several it cancelled, the way Revoked names the device.
+// holding no longer redeems. It names the invite's id so a client can tell
+// which of several it cancelled, the way Revoked names the device.
 type Uninvited struct {
 	Res    string `json:"res"` // "uninvited"
 	ID     int64  `json:"id,omitempty"`
 	Invite string `json:"invite"`
-}
-
-// Rotated answers a rotate: the vault's auth hash and wrapped data key were
-// replaced together, and every other session on the vault has been closed.
-type Rotated struct {
-	Res string `json:"res"` // "rotated"
-	ID  int64  `json:"id,omitempty"`
 }
 
 // History answers a history request with every version of one path, newest
@@ -638,8 +562,7 @@ type History struct {
 	Res string `json:"res"` // "history"
 	ID  int64  `json:"id,omitempty"`
 	// Path echoes the request, so a client with several in flight can tell
-	// which answer it is holding. Still sealed; the server has never seen the
-	// plaintext and cannot start now.
+	// which answer it is holding.
 	Path    string        `json:"path"`
 	Entries []store.Entry `json:"entries"`
 }
@@ -710,8 +633,8 @@ type AckResult struct {
 // Err is every rejection.
 //
 // ID is present when the error answers a request, and absent on the errors the
-// server sends unasked, the shutdown and rotation notices, which a client reads
-// as the reason the connection is about to close.
+// server sends unasked, the shutdown and revocation notices, which a client
+// reads as the reason the connection is about to close.
 //
 // Retryable is always sent, from the table in Retryable below, so a client has
 // nothing to interpret: back off and reconnect on true, stop on false. It is a
@@ -738,7 +661,7 @@ func Error(code, msg string) Err {
 
 // Retryable says whether reconnecting later can succeed where retrying the same
 // request cannot. It is the "retryable" column of the error table in
-// docs/protocol.md, and the two are kept in step by hand.
+// plan/protocol.md.
 //
 // Only three codes are transient. `busy` is admission pressure or a shutdown.
 // `nospace` is a full disk, which an operator clears. `internal`
@@ -752,4 +675,89 @@ func Retryable(code string) bool {
 		return true
 	}
 	return false
+}
+
+// ErrNotText is a text frame that is not well-formed text: invalid UTF-8, or a
+// JSON string escape naming half of a surrogate pair.
+var ErrNotText = errors.New("the frame is not well-formed text")
+
+// ValidText refuses a text frame that JSON decoding would quietly change.
+//
+// Go's decoder does not refuse invalid UTF-8 or an unpaired surrogate escape
+// such as "\ud800": it substitutes U+FFFD and carries on. For a path that is
+// a silent rename. A device sending one would have its note stored under a
+// name it does not hold, told nothing, and every other device would receive a
+// file its origin cannot find. So a frame that is not well-formed text is
+// refused before it is decoded, as `protostate`, since the two ends no longer
+// agree on what was said. RFC 6455 requires a text frame to be valid UTF-8,
+// and RFC 8259 leaves an unpaired surrogate's meaning undefined, so nothing a
+// correct client sends is refused.
+func ValidText(data []byte) error {
+	if !utf8.Valid(data) {
+		return errors.Join(ErrNotText, errors.New("it is not valid UTF-8"))
+	}
+	inString := false
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		if !inString {
+			if c == '"' {
+				inString = true
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = false
+		case '\\':
+			if i+1 >= len(data) {
+				return nil // unterminated: the decoder refuses it
+			}
+			if data[i+1] != 'u' {
+				i++ // a one-character escape
+				continue
+			}
+			unit, ok := hex4(data, i+2)
+			if !ok {
+				return nil // malformed: the decoder refuses it
+			}
+			i += 5
+			switch {
+			case unit >= 0xdc00 && unit <= 0xdfff:
+				return errors.Join(ErrNotText, errors.New("it escapes a low surrogate with no high surrogate before it"))
+			case unit >= 0xd800 && unit <= 0xdbff:
+				low, ok := uint16(0), false
+				if i+6 < len(data) && data[i+1] == '\\' && data[i+2] == 'u' {
+					low, ok = hex4(data, i+3)
+				}
+				if !ok || low < 0xdc00 || low > 0xdfff {
+					return errors.Join(ErrNotText, errors.New("it escapes a high surrogate with no low surrogate after it"))
+				}
+				i += 6
+			}
+		}
+	}
+	return nil
+}
+
+// hex4 reads four hex digits at data[at:], as a JSON \u escape carries.
+func hex4(data []byte, at int) (uint16, bool) {
+	if at+4 > len(data) {
+		return 0, false
+	}
+	var v uint16
+	for _, c := range data[at : at+4] {
+		var d byte
+		switch {
+		case c >= '0' && c <= '9':
+			d = c - '0'
+		case c >= 'a' && c <= 'f':
+			d = c - 'a' + 10
+		case c >= 'A' && c <= 'F':
+			d = c - 'A' + 10
+		default:
+			return 0, false
+		}
+		v = v<<4 | uint16(d)
+	}
+	return v, true
 }

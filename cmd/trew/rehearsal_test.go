@@ -27,7 +27,6 @@ package main
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -42,6 +41,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/waynehoover/trew/internal/chunks"
+	bodyframe "github.com/waynehoover/trew/internal/frame"
 	"github.com/waynehoover/trew/internal/store"
 	"github.com/waynehoover/trew/internal/wire"
 )
@@ -142,10 +142,15 @@ func TestRestoreRehearsal(t *testing.T) {
 const (
 	rehearsalVault  = "default"
 	rehearsalDevice = "rehearsal-device"
-	// rehearsalKey is the credential the device below connects with. Only its
-	// hash is stored, and it protects a vault that exists for the length of one
-	// test, so it is a fixed string rather than something read from anywhere.
-	rehearsalKey = "rehearsal-device-key-not-a-secret"
+)
+
+// rehearsalRaw is the credential the device below connects with, 32 bytes as a
+// device's token is, and rehearsalKey its wire spelling. Only its hash is
+// stored, and it protects a vault that exists for the length of one test, so it
+// is fixed rather than read from anywhere.
+var (
+	rehearsalRaw = sha256.Sum256([]byte("rehearsal-device-key-not-a-secret"))
+	rehearsalKey = store.EncodeToken(rehearsalRaw[:])
 )
 
 // seeded is what the rehearsal expects to find on the other side of the copy.
@@ -172,15 +177,10 @@ func seedLiveVault(t *testing.T) (string, seededVault) {
 	if err := st.EnsureVault(rehearsalVault, 1); err != nil {
 		t.Fatalf("ensure vault: %v", err)
 	}
-	// Claimed, and with one device registered, because a restore nobody can
-	// connect to is not a restore. The vault hash is what a registration is
-	// checked against; the device's own hash is what it connects with.
-	vaultHash := strings.Repeat("ab", 32)
-	if ok, err := st.ClaimVault(rehearsalVault, vaultHash, testWrapped, 1); err != nil || !ok {
-		t.Fatalf("claiming: ok=%v err=%v", ok, err)
-	}
+	// With one device registered, because a restore nobody can connect to is
+	// not a restore. The device's hash is what it connects with.
 	if err := st.RegisterDevice(rehearsalVault, rehearsalDevice, "rehearsal",
-		hashHex(rehearsalKey), vaultHash, 1); err != nil {
+		store.HashToken(rehearsalRaw[:]), 1); err != nil {
 		t.Fatalf("registering the rehearsal device: %v", err)
 	}
 
@@ -199,7 +199,7 @@ func seedLiveVault(t *testing.T) (string, seededVault) {
 			size += int64(len(b))
 		}
 		e := store.Entry{Path: path, Size: size, MTime: 10, Device: "seed",
-			Chunks: names, Mac: testMac, Deleted: deleted}
+			Chunks: names, Deleted: deleted}
 		uid, err := st.AppendEntry(rehearsalVault, e)
 		if err != nil {
 			t.Fatalf("append %s: %v", path, err)
@@ -259,13 +259,6 @@ func assertBackupMetaAgrees(t *testing.T, dir string, want seededVault) {
 /* ---------------------------------------------------------------- *
  * Driving the built binary
  * ---------------------------------------------------------------- */
-
-// hashHex is what the store keeps instead of a credential: the hex sha-256 of
-// the key a device connects with.
-func hashHex(key string) string {
-	sum := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(sum[:])
-}
 
 func buildBinary(t *testing.T) string {
 	t.Helper()
@@ -402,7 +395,7 @@ func readEverythingBack(t *testing.T, addr string, want seededVault) {
 		return typ, b
 	}
 
-	send(wire.In{Op: "hello", ID: 1, Proto: wire.Proto, Crypto: wire.Crypto,
+	send(wire.In{Op: "hello", ID: 1, Proto: wire.Proto,
 		Vault: rehearsalVault, Device: "rehearsal", DeviceID: rehearsalDevice,
 		Token: rehearsalKey, Cursor: 0})
 
@@ -483,9 +476,13 @@ compare:
 		t.Fatalf("the restored server would not serve its bodies: %s", frame)
 	}
 	for i, n := range names {
-		typ, body := read()
+		typ, framed := read()
 		if typ != websocket.MessageBinary {
-			t.Fatalf("body %d of %d is not a binary frame: %s", i, len(names), body)
+			t.Fatalf("body %d of %d is not a binary frame: %s", i, len(names), framed)
+		}
+		body, err := bodyframe.Decode(framed, store.ChunkMax)
+		if err != nil {
+			t.Fatalf("body %d of %d is not a frame a client can decode: %v", i, len(names), err)
 		}
 		if string(body) != string(want.bodies[n]) {
 			t.Fatalf("chunk %s came back as %q, was %q", n, body, want.bodies[n])

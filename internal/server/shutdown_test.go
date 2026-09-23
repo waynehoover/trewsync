@@ -68,7 +68,7 @@ func TestS16ShutdownLetsAPutInFlightFinishAndAcksIt(t *testing.T) {
 	bodies := []string{"first half", "second half"}
 	names, size := chunkNames(bodies)
 	cl.sendJSON(wire.In{
-		Op: "put", Path: "note.md", Chunks: names, Mac: testMac,
+		Op: "put", Path: "note.md", Chunks: names,
 		Meta: wire.PutMeta{Size: size, MTime: 5},
 	})
 	var want wire.Want
@@ -116,7 +116,7 @@ func TestS16ShutdownDeadlineCutsOffAStalledUploadUnacked(t *testing.T) {
 
 	names, size := chunkNames([]string{"arrives", "never arrives"})
 	cl.sendJSON(wire.In{
-		Op: "put", Path: "note.md", Chunks: names, Mac: testMac,
+		Op: "put", Path: "note.md", Chunks: names,
 		Meta: wire.PutMeta{Size: size, MTime: 5},
 	})
 	cl.recvInto("want", &wire.Want{})
@@ -168,7 +168,7 @@ func TestS16ShutdownWaitsForACommitThatOutlivesTheDeadline(t *testing.T) {
 	bodies := []string{"a body worth committing"}
 	names, size := chunkNames(bodies)
 	cl.sendJSON(wire.In{
-		Op: "put", Path: "note.md", Chunks: names, Mac: testMac,
+		Op: "put", Path: "note.md", Chunks: names,
 		Meta: wire.PutMeta{Size: size, MTime: 5},
 	})
 	cl.recvInto("want", &wire.Want{})

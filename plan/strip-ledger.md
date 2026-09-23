@@ -633,6 +633,53 @@ The other cases of these files use crypto only in setup: the `RegisterDevice` sh
 | `cli/state.test.ts:1231` | a vault that was started and never joined > says the same thing to status, without blaming the server | SPLIT | rule 7 for a config with no credential, with `cli.test.ts:552` | M2 task 10 |
 | `cli/state.test.ts:1245` | a vault that was started and never joined > fails init honestly when the claim succeeds and the registration is not saved | OBSOLETE | none | M2 task 10 |
 
+## M1 outcome: the Go side
+
+The server half of the strip (PLAN M1), applied as this ledger says: every GUARANTEE and SPLIT row kept its assertion with new setup, and only OBSOLETE rows were deleted. The TypeScript rows are M2's. Line numbers are the ledger's, so each row can be found above.
+
+### Where each Go test went
+
+| File | Deleted (OBSOLETE) | Kept, rewritten against protocol 1 |
+|---|---|---|
+| `internal/store/keys_test.go`, now `invites_test.go` | 29, 61, 88, 366, 426, 623 | 107, 177 (the listed id proven not to redeem, field by field), 240, 307, 334 (decided: see below), 468 (the wrapper line dropped), 508, 557 (the both-or-neither half, now racing a revoke of the invite's own issuer), 679, 695 (with the lost-reply retry of hazard 3), 743 (checked to fail with a deferred transaction) |
+| `internal/server/auth_test.go` | 36, 69, 87, 157 | 98 (device and invite digests), 122 (both hello routes), 140 (the 32-byte token floor replaces MinClaimLength), 177 (an empty credential, and a row whose digest is the digest of nothing); 50's surviving half is `cmd/trew` `TestTheFirstInviteWorksOnce` |
+| `internal/server/invite_test.go` | 369, 399, 664 | 73, 129, 147, 215, 244, 293, 307 (one hour and one hour), 328's third subtest, 437 (a device's own credential with an invite), 479 (register and rotate are unknown ops now), 539, 572 (refused as `auth`), 617 (with devices_test 270's rows), 691; 195 moved to the control socket (`cmd/trew/admin_test.go`) |
+| `internal/server/invite_doc_test.go` | | 83, reading plan/protocol.md too; `client/README.md` is left out until M2, and still says ten minutes |
+| `cmd/trew/token_s11_test.go`, now `secretfile_s11_test.go` | 64 | 14, 40, against `writeSecretFile` |
+| `internal/server/unlimited_devices_test.go` | | 10 (through invites), 24 |
+| `internal/server/release_review_test.go` | 69, 89 | 13; 33 as `TestDevicePublicationMayRaceConnectionFailure` |
+| `internal/server/protocol_test.go` | 361, 393, 412, 435, 566, 611, 705, 898, 937, 966, 994 | 43 to 326, 763, 809 (with the `mcp:` rows), 832 (a Basalt protocol 7 hello, hazard 7), 855 (through invites), 1059 (the refusal now byte-identical to a wrong token's), 1087; 479's surviving half is the store identity tests of M1 task 8; 658 as `TestARevokeEvictsEverySessionOfTheDeviceAtOnce` |
+| `internal/server/devices_test.go` | 29, 80, 212, 307, 588, 809 | 96, 333 (invite tokens added to what must not appear), 407, 437, 465, 494, 617, 643, 669, 716, 754; 121 as `TestAStoreWithHistoryAndNoDevicesGetsOneBackFromAnInvite` and the admin tests; 159 as the admin tests; 236 as the lost-reply tests; 270 into invite_test 617; 532 as `TestADeviceMayRevokeTheLastDevice` (hazard 4, decided) |
+| `internal/store/budget_test.go` | 132 | 32, 54 (both directions of the sum), 71, 112, 157, 182 |
+| Tier 2, `internal/store/devices_test.go` | 818, 886, 921, 956 | 133 (a vault that does not exist), 977 (the invite rows' own checks), 374 inverted, 667 as `TestConcurrentRevokesOfOneDeviceDeleteItOnce` |
+| Tier 2, the rest | `migrate_test.go` 107 and 268; `mutation_authorization_test.go` 106; `ops_i17_test.go` 24 | `store_test.go` 1351 and 1383 (a `badpath` row, hazard 6); `backup_test.go` 845 (the same); `migrate_test.go` 207; `session_test.go` 65 (a protocol 7 row); `disclosure_test.go` 224 and 309 (run against a server serving a vault as well as one serving any); the six `main_test.go` rows as first-invite tests; `ops_i17_test.go` 86 (devices for claimed) |
+
+Beyond the ledger, three tests went with the fresh schema rather than the crypto, and one file with the Authenticator: `store_test.go`'s `TestAnEntryFromBeforeTheCountIsStillReadable` is inverted to `TestAChunkCountOfMinusOneIsNotSpecial`, since Trew has no rows from before the column; `main_test.go`'s `TestPurgeAcceptsABackupFromBeforeTheChunkCount` is deleted, since no older Trew schema exists to take a backup with; and `internal/server/server_test.go`, which tested the test suite's own `StaticTokens` authenticator, is deleted with it. `protocol-fixtures.json` still carries five entry cases about the MAC and the parent, because the TypeScript suite reads them; the Go test lists them by name and requires the server to accept them, and M2 deletes them with `goodMac`.
+
+### The unique guarantees, on the Go side
+
+Every Go guarantee in [the list above](#guarantees-with-no-equivalent-elsewhere) survives:
+
+1. `TestACrashBetweenRegisteringAndSpendingLeavesNeither`.
+2. `TestARedeemRacingARevokeLeavesTheVaultConsistent`.
+3. `TestConcurrentRedemptionsOfOneInviteRegisterExactlyOneDevice`, eight handles, twenty times.
+4. `TestI23InvitesAreSingleUseAndExpire`, `TestI23ExpiredInvitesAreSweptAtInsert`, `TestAnExpiredInviteLeavesTheList`, `TestI23AnExpiredInviteIsRefused`.
+5. `ErrNoInvite` in the store; one identical `auth` in `TestI23AnInviteIsRedeemedExactlyOnce` and the disclosure table.
+6. `TestARedemptionOntoAnExistingIdChangesNothing`, `TestARedeemingHelloMustNameTheDeviceItRegisters`, `TestAHelloWithADevicesCredentialAndAnInviteIsRefused`.
+7. `TestTheServerStoresAHashAndNotTheKey`, `TestARedemptionWillNotRegisterAGuessableToken`.
+8. `TestValidBase64URLTakesPaddingOnlyAtTheEnd`, and `TestDecodeTokenTakesOneSpellingOnly` for the stricter decoder credentials now go through.
+9. Decided against the restore epoch: a backup keeps no outstanding invite (`TestABackupCarriesTheDevicesAndNoOutstandingInvite`), because a restore must not revive an invite used or cancelled since; spent rows and devices travel.
+10. `TestI23TheTTLDefaultsAndIsCapped`, `TestInviteTTLIsClampedBeforeDurationConversion`, `TestI23TheDocsStateTheInviteLifetimeTheCodeUses`.
+11. `TestS11WriteSecretFileIsExactAndPrivate`, `TestS11OverwritingA0644FileTightensItTo0600`.
+18. `TestOutstandingInvitesAreVisibleAndCarryNothingThatRedeems` and `TestInvitesListsWhatCanStillBeRedeemed`.
+19. `TestARevokeEvictsEverySessionOfTheDeviceAtOnce`.
+20. `TestDevicePublicationMayRaceConnectionFailure`.
+21. The control socket and the direct path: `TestTheAdminCommandsGoThroughTheRunningServer`, `TestTheAdminCommandsWorkWithNoServerRunning`.
+22. `TestALostReplyRetrySucceedsEvenAfterExpiry` and `TestALostReplyRetryIsRedeemedAgainEvenAfterExpiry`.
+24. `TestTheFirstInviteNamesSomethingADeviceCanDial`, `TestAnExplicitAddressIsWrittenAsGiven`, `TestLocalhostWritesAnInviteThatWorksAsIs`, `TestAPairedVaultWritesNoFirstInvite`, `TestARestartKeepsTheFirstInviteItWrote`, `TestPairingHostsNamesAddressesADeviceCanDial`.
+25. `TestBackupPublishesOverAFaultItInherited` and `TestVerifyNoticesAnEntryNoDeviceWouldAccept`, both seeded with a path the policy refuses.
+26. `TestValidateChecksThePathOnFoldersAndDeletions` and the fixture matrix in `TestValidateRefusesExactlyTheFixturesPaths`.
+
 ## Method
 
 - Inventory: 74 Go test files with 537 top-level `Test` functions (Basalt's 536 plus M0's `internal/store/fts5_test.go`), and 134 TypeScript test files with 1,939 `it`/`test` cases, where an `it.each` table counts once.

@@ -2,14 +2,13 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -18,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/frame"
 	"github.com/waynehoover/trew/internal/store"
 	"github.com/waynehoover/trew/internal/wire"
 )
@@ -59,10 +59,9 @@ type Session struct {
 	joined  bool
 
 	// deviceID is the row in the vault's device list this session
-	// authenticated as, and is empty on a registrar session, which is not a
-	// device. It is written before the session joins the fan-out and read
-	// afterwards by whoever is revoking that device, so the hub's lock is what
-	// publishes it; see Hub.sessionsOf.
+	// authenticated as. It is written before the session joins the fan-out
+	// and read afterwards by whoever is revoking that device, so the hub's
+	// lock is what publishes it; see Hub.detach.
 	deviceID string
 	// Captured at hello, so reusing a revoked ID with a new key cannot grant
 	// its old session permission to mutate the vault.
@@ -70,29 +69,14 @@ type Session struct {
 	// Zero is unknown; otherwise the last applied cursor plus one.
 	applied atomic.Int64
 
-	// registrar is true when this session authenticated with the *vault's*
-	// credential rather than a device's. Such a session may register a device
-	// and rewrap the data key, which are the two powers the root secret has,
-	// and may administer the device list: read it, and take a row off it,
-	// including the last row, which is the one revocation a device may not do.
-	// It may do nothing else, and in particular it holds no place in the
-	// fan-out, receives no entries and reads none. See dispatch for why the
-	// list is the recovery key's business as well as a device's.
-	//
-	// It is a property of how the session was opened, decided once in
-	// handleHello and read by dispatch, rather than a check each handler
-	// remembers to make. That is the narrowing enforced: the vault's auth hash
-	// stopped being a sync credential in protocol 4, and a vault whose devices
-	// could all be bypassed by the credential they replace would be a device
-	// list with no revocation that looks like it works.
-	registrar bool
-
-	// wrapped is the vault's wrapped data key as this session last saw it. A
-	// registrar hands it to each device it registers, which is what lets a
-	// device hold the data key without ever holding the root; a rotate on this
-	// session replaces it, so a register after a rotate hands out the new
-	// wrapping rather than the retired one.
-	wrapped string
+	// revoked is set by the revoke that deleted this session's device row,
+	// under commitMu and in the same critical section that takes the session
+	// out of the fan-out. From then on the writer sends nothing but the notice
+	// saying so (see writeLoop), which is what makes "no live session of a
+	// revoked device is sent anything more" true of frames that were already
+	// queued, and of replies to requests already being served, and not only of
+	// commits that come later (PLAN.md section 2.3.1).
+	revoked atomic.Bool
 
 	// reqID is the id of the request being served, echoed on its reply and on
 	// any error refusing it, and zero between requests so that an error sent
@@ -100,26 +84,11 @@ type Session struct {
 	// goroutine touches it.
 	reqID int64
 
-	// bootstrap is true when this session authenticated with the server's
-	// first-run token rather than a derived key. Such a session may not rotate
-	// the vault; see Grant.
-	bootstrap bool
-
 	// saidSkewed is set once this session has reported a device writing
 	// timestamps its own clock says are impossible. Once, because a first sync
 	// commits thousands of entries and a per-entry warning is a log nobody
 	// reads. Only the session goroutine touches it; see noteFutureMTime.
 	saidSkewed bool
-
-	// authHash is the vault's stored auth hash that this session's credential
-	// matched, on a registrar session, and empty on a device's, which
-	// authenticated against its own row and never against the vault.
-	//
-	// It is what both of a registrar's powers compare-and-swap against: a
-	// rotation may only replace the credential it proved it holds, and a
-	// registration only lands while that credential is still the vault's. Only
-	// the session goroutine touches it.
-	authHash string
 
 	// counted is true while this session is in the server's pre-auth count,
 	// guarded by Server.sessMu (S19).
@@ -147,6 +116,9 @@ type Session struct {
 type outFrame struct {
 	typ  websocket.MessageType
 	data []byte
+	// final marks the one frame a revoked session is still sent: the notice
+	// that it was revoked. See writeLoop.
+	final bool
 }
 
 // pendingChange is a live batch held back during catch-up, already marshalled.
@@ -208,9 +180,19 @@ func (s *Session) writeLoop() {
 		case <-s.dead:
 			return
 		case f := <-s.out:
-			ctx, cancel := context.WithTimeout(s.ctx, s.srv.writeWait)
-			err := s.conn.Write(ctx, f.typ, f.data)
-			cancel()
+			// A revoked device's connection hears one thing after the revoke:
+			// that it was revoked. Anything else still queued, a live batch, a
+			// catch-up page, the reply to a request sent a moment before, is
+			// dropped here, the last point before the socket, because the
+			// revoke has already been answered as done (PLAN.md section 2.3.1).
+			// It is still counted out below, so a drain waiting on it is not
+			// left waiting.
+			var err error
+			if f.final || !s.revoked.Load() {
+				ctx, cancel := context.WithTimeout(s.ctx, s.srv.writeWait)
+				err = s.conn.Write(ctx, f.typ, f.data)
+				cancel()
+			}
 			// Released only now, after the write returned, so a zero on either
 			// counter means the frame has reached the socket rather than merely
 			// left the channel. drain relies on that (S10).
@@ -288,14 +270,20 @@ func (s *Session) drain(timeout time.Duration) {
 // The bytes are reserved before the frame is offered and given back if it is
 // refused, so the counter is never below what the writer will subtract.
 func (s *Session) enqueue(typ websocket.MessageType, data []byte) bool {
-	n := int64(len(data))
+	return s.enqueueFrame(outFrame{typ: typ, data: data})
+}
+
+// enqueueFrame is enqueue for a frame already built, which is how the one
+// frame marked final reaches the queue.
+func (s *Session) enqueueFrame(f outFrame) bool {
+	n := int64(len(f.data))
 	if after := s.queued.Add(n); after > SendQueueBytes && after != n {
 		s.queued.Add(-n)
 		return false
 	}
 	s.inflight.Add(1)
 	select {
-	case s.out <- outFrame{typ, data}:
+	case s.out <- f:
 		return true
 	default:
 		s.queued.Add(-n)
@@ -332,12 +320,17 @@ func (s *Session) send(typ websocket.MessageType, data []byte) error {
 // dropped peer receives everything it missed as catch-up on reconnect. Dropping
 // the frame instead would leave a live peer permanently short one file.
 func (s *Session) trySend(typ websocket.MessageType, data []byte) bool {
+	return s.trySendFrame(outFrame{typ: typ, data: data})
+}
+
+// trySendFrame is trySend for a frame already built.
+func (s *Session) trySendFrame(f outFrame) bool {
 	select {
 	case <-s.dead:
 		return false
 	default:
 	}
-	if !s.enqueue(typ, data) {
+	if !s.enqueueFrame(f) {
 		s.kill(errors.New("send queue overflow, peer too slow"))
 		return false
 	}
@@ -553,19 +546,19 @@ func (s *Session) shutdown() {
 	s.kill(nil)
 }
 
-// evict closes this session from another goroutine because the credential it
-// is holding stopped opening what it opened: a rotation retired a registrar's
-// root, or a revoke deleted a device's row.
+// evict closes this session from another goroutine because the device it
+// authenticated as was revoked.
 //
-// The notice is unsolicited `auth` in both cases, with a message that says
-// which. `auth` is the code a client already stops on, and the two causes want
-// the same thing from it: stop, and do not reconnect with what you have.
+// The notice is unsolicited `auth`, the code a client already stops on, with a
+// message that says what happened and what to do. It is marked final, so it is
+// the one frame the writer still sends to a session the revoke has marked;
+// everything queued ahead of it is dropped (see writeLoop).
 func (s *Session) evict(msg string, cause error) {
 	if s.srv.beforeEvict != nil {
 		s.srv.beforeEvict()
 	}
 	if b, err := json.Marshal(s.errFrame(0, wire.CodeAuth, msg, 0)); err == nil {
-		s.trySend(websocket.MessageText, b)
+		s.trySendFrame(outFrame{typ: websocket.MessageText, data: b, final: true})
 	}
 	s.drain(time.Second)
 	s.kill(cause)
@@ -597,6 +590,9 @@ func (s *Session) run() error {
 	if typ != websocket.MessageText {
 		return s.fatal(wire.CodeProtoState,
 			fmt.Errorf("first frame must be text hello, got %v", typ))
+	}
+	if err := wire.ValidText(data); err != nil {
+		return s.fatal(wire.CodeProtoState, fmt.Errorf("hello: %w", err))
 	}
 	var m wire.In
 	if err := json.Unmarshal(data, &m); err != nil {
@@ -630,6 +626,11 @@ func (s *Session) run() error {
 			return s.fatal(wire.CodeProtoState,
 				fmt.Errorf("unexpected binary frame (%d bytes)", len(data)))
 		}
+		// Before decoding, because decoding would quietly repair what this
+		// refuses: a path with invalid UTF-8 in it arrives as another path.
+		if err := wire.ValidText(data); err != nil {
+			return s.fatal(wire.CodeProtoState, err)
+		}
 		var m wire.In
 		if err := json.Unmarshal(data, &m); err != nil {
 			return s.fatal(wire.CodeProtoState, fmt.Errorf("parse: %w", err))
@@ -657,87 +658,18 @@ func (s *Session) run() error {
 	}
 }
 
-// deviceOps is every op a session must hold a device credential to send. It
-// exists so that a registrar asking for one is told which credential it needs,
-// while a genuinely unknown op is still an unknown op: a client waiting on a
-// reply that will never come looks the same either way, and the two are fixed
-// differently.
-//
-// Not here, and deliberately: `devices`, `revoke` and `uninvite`, which either
-// credential may send. They are the access list rather than the vault's
-// content, and the recovery key is the credential that administers access.
-// See dispatch.
-var deviceOps = map[string]bool{
-	"put": true, "putmany": true, "get": true, "fetch": true,
-	"history": true, "deleted": true, "invite": true,
-	// rename is a device relabelling itself, so it needs a device's own
-	// credential by construction: there is no field naming which row to
-	// change. A registrar has no row of its own and is told so here.
-	"rename": true, "applied": true,
-	// resend writes bodies the vault already refers to and nothing else: no
-	// entry, no uid, no authenticator. A device is the only thing that can
-	// have them, so it is the only thing that can repair them (I14).
-	"resend": true,
-}
-
 // dispatch routes one request. frameLen is the encoded size of the frame it
 // arrived in, which is what maxBatchBytes bounds.
 //
-// What a session may do is decided here, once, from the credential that opened
-// it, rather than by each handler remembering to ask. Per-handler checks are
-// how the next op added becomes the one that forgot, and the op that forgot
-// here would be the vault credential syncing again.
+// Every session is a device's: the only way past hello is a device row whose
+// token matched, so there is no second kind of session to route differently.
+// Basalt had one, the registrar, which could administer the device list and
+// not sync; protocol 1 has no vault credential for it to hold, and the
+// operator's powers are the control socket's (PLAN.md section 2.3.1).
 func (s *Session) dispatch(m wire.In, frameLen int) error {
-	if m.Op == "hello" {
-		return s.fatal(wire.CodeProtoState, errors.New("hello sent twice"))
-	}
-	if s.registrar {
-		switch m.Op {
-		case "register":
-			return s.handleRegister(m)
-		case "rotate":
-			return s.handleRotate(m)
-		// The access list. The recovery key may read who may connect, take one
-		// of them away, and cancel an invite that would add one, and it may
-		// not read or write a note.
-		//
-		// It was register and rotate alone, and two things forced this open.
-		// Emptying the vault is the one revocation nothing on a device can
-		// undo, so it belongs to the credential that can undo it, and a
-		// refusal naming a credential that could not act would be worse than
-		// no gate at all. The recovery key also lets someone remove abandoned
-		// registrations when no paired device remains. See docs/design.md,
-		// "What a device can do to another device", with what it costs: a
-		// leaked root can now stop devices connecting, where before it could
-		// only read and add. Rotation is still what answers that: `revoke` is
-		// conditional on the vault hash this session authenticated under
-		// still being the vault's, exactly as `register` is, and a rotation
-		// deletes every outstanding invite, so a retired root reaches neither
-		// a device row nor an invite.
-		case "devices":
-			return s.handleDevices(m)
-		case "revoke":
-			return s.handleRevoke(m)
-		case "uninvite":
-			return s.handleUninvite(m)
-		case "ping":
-			// Allowed, and the one exception to "nothing else". A pong reads
-			// nothing, writes nothing and says nothing about the vault; it is
-			// how a connection behind NAT stays open, and a registrar that
-			// could not answer for itself would be a registration that fails
-			// on the slow walk to the other device.
-			return s.writeJSON(wire.Pong{Res: "pong"})
-		}
-		if deviceOps[m.Op] {
-			return s.reject(wire.CodeAuth, fmt.Errorf(
-				"this session authenticated with the vault's credential, which may register a device, "+
-					"rotate the vault's secret and administer the device list, and may not sync; "+
-					"%q needs a device's own credential", m.Op))
-		}
-		return s.reject(wire.CodeProtoState, fmt.Errorf("unknown op %q", m.Op))
-	}
-
 	switch m.Op {
+	case "hello":
+		return s.fatal(wire.CodeProtoState, errors.New("hello sent twice"))
 	case "ping":
 		return s.writeJSON(wire.Pong{Res: "pong"})
 	case "put":
@@ -766,32 +698,10 @@ func (s *Session) dispatch(m wire.In, frameLen int) error {
 		return s.handleRevoke(m)
 	case "rename":
 		return s.handleRename(m)
-	case "register":
-		// A device may not mint a credential from the root, because it does
-		// not hold one. That is the boundary and it is narrower than an
-		// earlier version of this comment claimed: a device can still add
-		// another device by issuing an invite, which is the design, since the
-		// recovery key stays offline and something has to admit the next
-		// device. What it cannot do is register without one, rotate, or
-		// produce the key itself. See docs/design.md, "Three credentials".
-		//
-		// A device session also has no vault credential to register under, so
-		// handleRegister would refuse it a second time if this were removed.
-		// This refusal exists to be the one that says what to do instead.
-		return s.reject(wire.CodeAuth, errors.New(
-			"a device may not register another device, because it does not hold the vault's credential; "+
-				"add a device with an invite, or with the recovery key"))
-	case "rotate":
-		// Rotation retires the root secret and rewraps the data key, and a
-		// device holds neither. Letting one through would also mean a stolen
-		// device could write a credential nobody holds into the vault and
-		// leave the recovery key opening nothing.
-		return s.reject(wire.CodeAuth, errors.New(
-			"rotating the vault's secret needs the vault's credential, which a device does not hold; "+
-				"connect with the recovery key"))
 	}
 	// Named, not ignored. A client blocked waiting on a reply it will never
-	// get looks exactly like a hung server.
+	// get looks exactly like a hung server. `register` and `rotate` land here
+	// too: they were Basalt's, and protocol 1 has neither.
 	return s.reject(wire.CodeProtoState, fmt.Errorf("unknown op %q", m.Op))
 }
 
@@ -809,6 +719,9 @@ func (s *Session) handleHello(m wire.In) error {
 	// auth, for the device that has proved it may ask; see docs/design.md, "What
 	// a stranger on the port learns", and
 	// TestAProtoRefusalDoesNotNameTheServerVersion.
+	//
+	// A Basalt plugin meeting this server says protocol 7 and is refused here,
+	// as `proto` with both numbers, before any field it carries is read.
 	if m.Proto < wire.MinProto || m.Proto > wire.Proto {
 		return s.fatal(wire.CodeProto, fmt.Errorf(
 			"protocol %d not supported, this server speaks %d to %d",
@@ -817,19 +730,13 @@ func (s *Session) handleHello(m wire.In) error {
 	if err := s.takeID(m); err != nil {
 		return err
 	}
-	if m.Crypto != wire.Crypto {
-		// The same rule as the proto refusal above, for the same reason.
-		return s.fatal(wire.CodeProto,
-			fmt.Errorf("crypto %q not supported, this server speaks %q",
-				m.Crypto, wire.Crypto))
-	}
 	if m.Vault == "" {
 		return s.fatal(wire.CodeAuth, errors.New("missing vault"))
 	}
 	// Both names are bounded and checked for control characters before either
-	// is logged or handed to the authenticator (S24, I6). They land in log
-	// lines and, for the device, on every entry it writes, and a newline in a
-	// log line is a forged log line.
+	// is logged or looked up (S24, I6). They land in log lines and, for the
+	// device, on every entry it writes, and a newline in a log line is a forged
+	// log line.
 	if err := checkName("vault", m.Vault, store.MaxVaultLen); err != nil {
 		return s.fatal(wire.CodeBadName, err)
 	}
@@ -839,182 +746,161 @@ func (s *Session) handleHello(m wire.In) error {
 	if m.Cursor < 0 {
 		return s.fatal(wire.CodeProtoState, fmt.Errorf("negative cursor %d", m.Cursor))
 	}
-	// A vault is claimed with a data key, always. The check is on the request's
-	// own fields, so it happens before authentication and leaks nothing about
-	// the vault: a device that offers a claim and no usable wrapped key is
-	// refused whether or not the vault was there to be claimed.
-	//
-	// This is what makes the downgrade attack unexpressible. While a vault
-	// could exist either with a data key or without one, a server could choose
-	// which key schedule a client used by leaving `wrapped` out of `ready`,
-	// and the client had no way to tell that from a vault that genuinely had
-	// none. Every claimed vault having one removes the choice rather than
-	// defending against it.
-	if m.Claim != "" && !store.ValidWrapped(m.Wrapped) {
-		return s.fatal(wire.CodeBadEntry, fmt.Errorf(
-			"a vault is claimed with a data key, and the wrapped key offered with this claim is %d bytes; "+
-				"it must be base64url of at most %d", len(m.Wrapped), store.MaxWrappedLen))
-	}
-	// An invite stands in for the vault's credential, so a hello carrying both
-	// is refused rather than resolved. The authenticator used to trigger on
-	// the invite alone, so a both-present hello got token authentication with
-	// the invite silently ignored: neither redeemed nor refused, and the
-	// device that was handed that invite would wait for a pairing that had
-	// already been used up by nothing. One credential per hello, and the
-	// refusal says which two were sent.
-	if m.Token != "" && m.Invite != "" {
-		return s.fatal(wire.CodeBadEntry, errors.New(
-			"this hello carries both a token and an invite, and an invite stands in for a token; send one"))
-	}
-	// A claim binds a vault that nothing has claimed yet, and an invite can
-	// only exist on one that has. Refused rather than resolved, for the same
-	// reason and with the same code.
-	if m.Claim != "" && m.Invite != "" {
-		return s.fatal(wire.CodeBadEntry, errors.New(
-			"this hello carries both a claim and an invite, which are how a vault is bound and how a "+
-				"device is added to one that already exists; send one"))
-	}
 
-	// The fork protocol 4 is about, and the whole of how the narrowing is
-	// enforced rather than remembered.
-	//
-	// Three ways in, and each one names its own credential. A hello carrying
-	// an invite is a device being added, and the invite is the authority. A
-	// hello carrying a deviceId is a device connecting, and its token is that
-	// device's own auth key, checked against that device's row. A hello
-	// carrying neither offers the vault's credential, which since protocol 4
-	// may register a device and rewrap the data key and may not sync.
+	// Two ways in, and each names its own credential (plan/protocol.md,
+	// "Handshake"). A hello carrying an invite is a device joining: the invite
+	// is the authority, and the deviceId and token beside it are the ones the
+	// joining device has chosen and will connect with from then on. A hello
+	// without one is a device connecting, and its token is checked against
+	// that device's own row. There is no third: no vault credential, no claim,
+	// no registrar session.
 	//
 	// There is exactly one place a syncing session is built, helloAsDevice,
 	// and the only way into it is a device row whose hash matched. Redeeming
 	// an invite writes such a row and then closes, rather than becoming that
-	// session itself: a redeemer has proved it holds an invite and has not yet
-	// proved anybody holds the key just registered, and it has to write that
-	// key down before it can use it anyway. The pluggable Authenticator, which
-	// answers "does this token open this vault", is consulted on neither
-	// branch, so no authenticator and no later handler can hand the vault's
-	// credential the sync rights it lost. TestTheVaultCredentialCannotSync.
+	// session itself: the redeemer has proved it holds an invite, and its next
+	// hello, with the token it has just registered, is the proof that it holds
+	// that too.
 	if m.Invite != "" {
 		return s.helloAsInvite(m)
 	}
-	if m.DeviceID != "" {
-		// Shape first, and as `badname` rather than `auth`, because it is a
-		// fact about the request rather than about the vault: refusing a
-		// malformed id as an authentication failure would make the shape of an
-		// id look like the answer to whether that device exists.
-		if !store.ValidDeviceID(m.DeviceID) {
-			return s.fatal(wire.CodeBadName, fmt.Errorf(
-				"device id is %d bytes and must be base64url of at most %d",
-				len(m.DeviceID), store.MaxDeviceIDLen))
-		}
-		// A device connecting is not a vault being claimed, and a server that
-		// picked one for the client would be choosing which credential it
-		// meant. The same rule, and the same code, as the refusals above.
-		if m.Claim != "" {
-			return s.fatal(wire.CodeBadEntry, errors.New(
-				"this hello carries a deviceId, which is a registered device connecting, "+
-					"as well as a claim, which is how a vault is bound; send one"))
-		}
-		return s.helloAsDevice(m)
-	}
-	return s.helloAsRegistrar(m)
+	return s.helloAsDevice(m)
 }
+
+// errNotAuthorised is the one refusal every credential failure at hello gets:
+// no device id, an unknown one, a wrong or malformed token, a reserved id, a
+// vault this server does not serve, and an invite that is unknown, spent,
+// cancelled or expired. Saying which would tell a caller which half to keep
+// guessing, and after a revoke it would confirm that an id was a device here
+// yesterday. The log says which, for the operator.
+var errNotAuthorised = errors.New("not authorised for this vault")
+
+// refuseUnserved is the served-vault check (F19), made on both routes once
+// the request's own shape has been judged and before anything is looked up by
+// the name the caller sent, so an invite for an unserved vault is refused
+// without being spent.
+//
+// After the shape checks, not before them, and with the refusal every
+// credential failure gets. Basalt named the served vault in this refusal, and
+// made it before the shape checks, so a malformed hello was `badname` for the
+// served vault and `auth` for any other: either way a prober could learn the
+// one name worth aiming at. Now every pre-auth answer is a function of the
+// request alone. TestNoPreAuthRefusalDependsOnWhetherTheVaultExists.
+func (s *Session) refuseUnserved(m wire.In) error {
+	if err := s.srv.refuseUnservedVault(m.Vault); err != nil {
+		s.srv.log.Warn("hello for a vault this server does not serve", "remote", s.remote, "err", err)
+		return s.fatal(wire.CodeAuth, errNotAuthorised)
+	}
+	return nil
+}
+
+// unmatchableHash is what a device with no row is compared against, so that an
+// unregistered id and a wrong token take the same constant-time comparison. It
+// has a digest's length and cannot be one: it is not hex.
+var unmatchableHash = strings.Repeat("x", 64)
 
 // helloAsDevice finishes a hello that named a device: the sync path, and the
 // only one there is.
-//
-// No Authenticator on this branch. It answers whether a token opens a *vault*,
-// which since protocol 4 is a different question from whether a connection is
-// a device of that vault, and asking it here is exactly how the vault's
-// credential would find its way back to syncing.
 func (s *Session) helloAsDevice(m wire.In) error {
-	// The served vault, before this looks one up by the name the caller sent
-	// (F19). `DerivedAuth` enforces it on the registrar's route and only
-	// there, so a device of another vault in the same store connected to a
-	// server that had logged that vault as "not served" at startup.
-	//
-	// The same refusal a wrong key gets, and for the same reason: which half
-	// is wrong is not the caller's business.
-	if err := s.srv.refuseUnservedVault(m.Vault); err != nil {
-		return s.fatal(wire.CodeAuth, err)
+	// A hello carrying neither an invite nor a device id offers no credential
+	// at all, and is refused as one that failed rather than as a malformed
+	// id.
+	if m.DeviceID == "" {
+		s.srv.log.Warn("device auth failed", "remote", s.remote, "vault", m.Vault, "why", "no device id")
+		return s.fatal(wire.CodeAuth, errNotAuthorised)
+	}
+	// An id the protocol reserves is refused as a credential, before its shape
+	// is judged (plan/protocol.md, "Device session"), so no future row under
+	// that prefix can ever be connected to as a device.
+	if store.ReservedDeviceID(m.DeviceID) {
+		s.srv.log.Warn("device auth failed", "remote", s.remote, "vault", m.Vault, "why", "reserved device id")
+		return s.fatal(wire.CodeAuth, errNotAuthorised)
+	}
+	// Shape next, and as `badname` rather than `auth`, because it is a fact
+	// about the request rather than about the vault: refusing a malformed id
+	// as an authentication failure would make the shape of an id look like the
+	// answer to whether that device exists.
+	if !store.ValidDeviceID(m.DeviceID) {
+		return s.fatal(wire.CodeBadName, fmt.Errorf(
+			"device id is %d bytes and must be base64url of at most %d",
+			len(m.DeviceID), store.MaxDeviceIDLen))
+	}
+	if err := s.refuseUnserved(m); err != nil {
+		return err
 	}
 	_, stored, ok, err := s.srv.st.DeviceByID(m.Vault, m.DeviceID)
 	if err != nil {
 		return s.fatal(wire.CodeInternal, err)
 	}
-	// A device with no row and a device whose key is wrong are one refusal,
-	// saying neither which, exactly as a wrong vault and a wrong token are.
-	// Telling them apart would tell a caller which half to keep guessing, and
-	// after a revoke it would also confirm that this id was a device here
-	// yesterday.
-	//
-	// Constant time and over the digests, so the comparison is a fixed 32
-	// bytes whatever was offered. A device with no row is compared against a
-	// digest that cannot match rather than skipped, so an unregistered id and
-	// a wrong key take the same time as each other.
-	offered := sha256.Sum256([]byte(m.Token))
-	want, decodeErr := hex.DecodeString(stored)
-	if !ok || decodeErr != nil || len(want) != len(offered) {
-		want = make([]byte, len(offered))
+	// The token is the device's 32 random bytes in unpadded base64url, and
+	// anything else is refused (plan/protocol.md, "Device session"). The
+	// comparison is over the digests and in constant time, and it happens
+	// whatever the token looked like and whether or not the row exists: a
+	// malformed token is hashed as sent and a missing row is compared against
+	// a digest that cannot match, so an unknown id, a wrong token and a
+	// malformed one take the same path and get the same refusal.
+	raw, wellFormed := store.DecodeToken(m.Token, store.DeviceTokenBytes)
+	if !wellFormed {
+		raw = []byte(m.Token)
 	}
-	if subtle.ConstantTimeCompare(offered[:], want) != 1 || !ok {
+	offered := store.HashToken(raw)
+	want := stored
+	if !ok {
+		want = unmatchableHash
+	}
+	if subtle.ConstantTimeCompare([]byte(offered), []byte(want)) != 1 || !ok || !wellFormed {
 		s.srv.log.Warn("device auth failed", "remote", s.remote, "vault", m.Vault,
-			"deviceId", m.DeviceID, "registered", ok)
-		return s.fatal(wire.CodeAuth, errors.New("not authorised for this vault"))
+			"deviceId", m.DeviceID, "registered", ok, "wellFormed", wellFormed)
+		return s.fatal(wire.CodeAuth, errNotAuthorised)
 	}
 
-	// The vault's key material. A device that has converted holds the data key
-	// itself and ignores the wrapping, but the blob is what a device still
-	// carrying the root uses, and it is what says the vault is serveable at
-	// all: a vault with a hash and no wrapped key was written by a build whose
-	// key schedule no longer exists, and serving it would hand a device a
-	// vault it can neither read nor safely add to.
-	hash, wrapped, _, err := s.srv.st.VaultKeys(m.Vault)
-	if err != nil {
-		return s.fatal(wire.CodeInternal, err)
+	if s.srv.beforePublish != nil {
+		s.srv.beforePublish()
 	}
-	if hash != "" && wrapped == "" {
-		return s.fatal(wire.CodeProto, fmt.Errorf(
-			"vault %q was claimed by an older build and has no data key, which this server (version %s) "+
-				"cannot serve: start a fresh data directory and pair the first device again", m.Vault, s.srv.version))
-	}
-	// No rotation check on this path, and that is the point of the feature. A
-	// rotation replaces the root and rewraps the same data key; it touches no
-	// device row, so every device goes on syncing across one. A device refused
-	// here for somebody else's rotation would be a weekend of re-pairing, which
-	// is how a leaked key goes unrotated.
-	// TestRotationLeavesEveryDeviceRowAndEverySessionAlone.
-
 	s.vaultID = m.Vault
 	s.device = m.Device
 	s.deviceID = m.DeviceID
-	s.deviceHash = hex.EncodeToString(offered[:])
-	s.wrapped = wrapped
+	s.deviceHash = offered
 	// Authenticated: out of the pre-auth count, and allowed the full read
 	// limit from here on. Taking sessMu here is also what publishes the fields
 	// just written to any goroutine that later takes it.
 	s.srv.authenticated(s)
 	s.conn.SetReadLimit(ReadLimit)
 
-	if err := s.srv.st.EnsureVault(m.Vault, s.srv.now().UnixMilli()); err != nil {
-		return s.fatal(wire.CodeInternal, err)
-	}
 	latest, err := s.srv.st.LatestUID(m.Vault)
 	if err != nil {
 		return s.fatal(wire.CodeInternal, err)
 	}
+	// The cursor belongs to a history, and the epoch says which (PLAN.md
+	// section 2.8). A client that read its cursor under another epoch is
+	// holding a position in a history this store no longer is: restored from
+	// a backup, or replaced. Its cursor is not honoured, in either direction:
+	// not refused for being ahead, which would leave a client that has not yet
+	// seen the new epoch with no way to learn it, and not continued from,
+	// which would skip every version the new history holds below it. The
+	// whole vault is replayed instead, and `ready` carries the new epoch, so
+	// the client discards its cursor and reconciles against everything
+	// (plan/protocol.md, "Device session"). A client that sends no epoch has
+	// its cursor taken as it is, as before.
+	cursor := m.Cursor
+	if m.Epoch != "" && m.Epoch != s.srv.st.Epoch() {
+		s.srv.log.Warn("device cursor is from another history, replaying the vault from the start",
+			"remote", s.remote, "vault", m.Vault, "deviceId", m.DeviceID, "cursor", m.Cursor, "latest", latest)
+		cursor = 0
+	}
 	// A client ahead of the server is refused, loudly.
 	//
-	// It means the server lost history the client has already applied: restored
-	// from an old backup, or pointed at a different vault. Left alone, the
-	// server reissues uids the client already used for other content, and the
-	// two diverge with both sides reporting success. Refusing costs a manual
-	// intervention; not refusing costs the vault.
-	if m.Cursor > latest {
+	// Under one epoch it means the server lost history the client has already
+	// applied, which a restore is supposed to announce by changing the epoch
+	// and which something else did without it. Left alone, the server reissues
+	// uids the client already used for other content, and the two diverge
+	// with both sides reporting success. Refusing costs a manual intervention;
+	// not refusing costs the vault.
+	if cursor > latest {
 		return s.fatal(wire.CodeCursor, fmt.Errorf(
 			"client cursor %d is ahead of this server's %d: the server is missing history "+
 				"the client has already applied, so it would reissue those uids for other files",
-			m.Cursor, latest))
+			cursor, latest))
 	}
 
 	// Join before the backlog is read, not after.
@@ -1041,20 +927,20 @@ func (s *Session) helloAsDevice(m wire.In) error {
 		if errors.Is(err, store.ErrUnknownDevice) || errors.Is(err, errSessionRevoked) {
 			s.srv.log.Warn("device revoked mid-handshake", "remote", s.remote,
 				"vault", m.Vault, "deviceId", m.DeviceID)
-			return s.fatal(wire.CodeAuth, errors.New("not authorised for this vault"))
+			return s.fatal(wire.CodeAuth, errNotAuthorised)
 		}
 		return s.fatal(wire.CodeInternal, err)
 	}
 
 	// Limits first, so a client knows every ceiling before its first put rather
 	// than discovering one by being rejected.
-	if err := s.writeJSON(s.srv.ready(s.reqID, latest, wrapped)); err != nil {
+	if err := s.writeJSON(s.srv.ready(s.reqID, latest)); err != nil {
 		return err
 	}
 	s.srv.log.Info("session ready", "remote", s.remote, "vault", m.Vault,
-		"device", m.Device, "deviceId", m.DeviceID, "cursor", m.Cursor, "latest", latest, "peers", s.srv.hub.peerCount(m.Vault))
+		"device", m.Device, "deviceId", m.DeviceID, "cursor", cursor, "latest", latest, "peers", s.srv.hub.peerCount(m.Vault))
 
-	cursor, sent, err := s.replay(m.Vault, m.Cursor)
+	cursor, sent, err := s.replay(m.Vault, cursor)
 	if err != nil {
 		return err
 	}
@@ -1074,44 +960,35 @@ func (s *Session) helloAsDevice(m wire.In) error {
 }
 
 // helloAsInvite finishes a hello that carried an invite: the one way a device
-// is added without the vault's own credential.
+// is added.
 //
 // The invite is the authority, and it is the authority to register exactly one
-// device. It is unguessable, single use, server tracked and expiring, which is
-// every property a registration credential needs and is why the spend and the
-// registration are one call into the store rather than two. Under protocol 4
-// they have to be: a device holds no root, so the device that issued this
-// invite could not have registered a row on the newcomer's behalf, and a
-// redemption that handed over a data key without a row would leave somebody
-// holding the vault's content key and no way to connect.
+// device: the one this hello names, under the token this hello carries. It is
+// unguessable, single use, server tracked and expiring, which is every property
+// a registration credential needs and is why the spend and the registration
+// are one call into the store rather than two; see store.RedeemInvite for the
+// five steps and their order.
 //
-// No Authenticator on this branch, for the same reason there is none on
-// helloAsDevice: it answers whether a token opens a vault, and an invite is
-// not a token. A pluggable interface being handed the one credential whose
-// whole point is that it is checked inside the statement that consumes it is
-// how the check comes to happen twice, or not at all.
-//
-// What goes back is the sealed data key and the id of the row just written,
-// and then the session closes. It is not a device session: nothing here has
-// proved that anybody holds the key that was just registered, and the redeemer
-// has to write that key down before it can use it. Its next hello is the
+// What goes back is the id of the row just written, and then the session
+// closes. It is not a device session: nothing here has proved that anybody
+// holds the token that was just registered. The device's next hello is the
 // proof, and helloAsDevice stays the only place a syncing session is built.
 //
-// Refusals. An invite that is unknown, expired, already used or malformed is
-// `auth` and says none of the four, exactly as a wrong token does. A device id
-// or an auth key the server will not write is the request's own fault and is
-// named: `badname` and `badentry`. Every refusal
-// leaves the invite unspent, because the store rolls the spend back with the
-// registration; see store.RedeemInviteFor.
+// A retry of a redemption whose reply was lost is answered `redeemed` again,
+// even after the invite has expired, because the redemption it repeats did not
+// (plan/protocol.md, "Invite redemption", step 2).
+//
+// Refusals. Anything about the invite, unknown, spent, cancelled, expired or
+// malformed, and a device id the vault already has, is the one `auth` refusal
+// every credential failure gets, and writes nothing. The request's own shape
+// is named instead, because it says nothing about the vault and is checked
+// before the invite is looked up: a device id that is not base64url is
+// `badname`, and a token that is not 32 bytes is `badentry`. None of them
+// spends the invite.
 func (s *Session) helloAsInvite(m wire.In) error {
-	// Shape before the invite is touched, so a malformed request cannot burn
-	// one. `badname` and `badentry` rather than `auth`, because these are
-	// facts about the frame and not about the vault: the same rule the device
-	// id shape check on an ordinary hello follows.
-	// Before the invite is looked up, so an invite for an unserved vault is
-	// refused without being spent (F19).
-	if err := s.srv.refuseUnservedVault(m.Vault); err != nil {
-		return s.fatal(wire.CodeAuth, err)
+	if store.ReservedDeviceID(m.DeviceID) {
+		s.srv.log.Warn("invite refused", "remote", s.remote, "vault", m.Vault, "why", "reserved device id")
+		return s.fatal(wire.CodeAuth, errNotAuthorised)
 	}
 	if !store.ValidDeviceID(m.DeviceID) {
 		return s.fatal(wire.CodeBadName, fmt.Errorf(
@@ -1119,38 +996,32 @@ func (s *Session) helloAsInvite(m wire.In) error {
 				"device id it is registering; this one is %d bytes and it must be base64url of at most %d",
 			len(m.DeviceID), store.MaxDeviceIDLen))
 	}
-	if len(m.Auth) < MinClaimLength {
+	token, ok := store.DecodeToken(m.Token, store.DeviceTokenBytes)
+	if !ok {
 		return s.fatal(wire.CodeBadEntry, fmt.Errorf(
-			"redeeming an invite registers the device redeeming it, so this hello must carry the auth "+
-				"key that device will connect with; this one is %d characters, which is too few", len(m.Auth)))
+			"redeeming an invite registers the device redeeming it, so this hello must carry the token "+
+				"that device will connect with: %d random bytes in unpadded base64url, %d characters, "+
+				"and this one is %d characters that are not that",
+			store.DeviceTokenBytes, store.EncodedTokenLen(store.DeviceTokenBytes), len(m.Token)))
 	}
-	// The name defaults to the one this hello already carries, the same rule
-	// `register` follows, so a device that says nothing about its name still
-	// arrives in the list as something a person recognises.
-	name := m.Name
-	if name == "" {
-		name = m.Device
+	if err := s.refuseUnserved(m); err != nil {
+		return err
 	}
-	if err := checkName("device", name, store.MaxDeviceLen); err != nil {
-		return s.fatal(wire.CodeBadName, err)
+	secret, ok := store.DecodeToken(m.Invite, store.InviteTokenBytes)
+	if !ok {
+		s.srv.log.Warn("invite refused", "remote", s.remote, "vault", m.Vault,
+			"deviceId", m.DeviceID, "why", "malformed invite token")
+		return s.fatal(wire.CodeAuth, errNotAuthorised)
 	}
 
-	sum := sha256.Sum256([]byte(m.Auth))
-	sealed, err := s.srv.st.RedeemInviteFor(m.Vault, m.Invite, m.DeviceID, name,
-		hex.EncodeToString(sum[:]), s.srv.now().UnixMilli())
+	retried, err := s.srv.st.RedeemInvite(m.Vault, secret, m.DeviceID, m.Device,
+		store.HashToken(token), s.srv.now().UnixMilli())
 	switch {
 	case err == nil:
 	case errors.Is(err, store.ErrNoInvite), errors.Is(err, store.ErrUnknownVault):
-		// One answer for the two. An unclaimed vault has no invites, and
-		// saying so would tell somebody probing that this vault id is not one
-		// this server serves.
 		s.srv.log.Warn("invite refused", "remote", s.remote, "vault", m.Vault,
 			"deviceId", m.DeviceID, "err", err)
-		return s.fatal(wire.CodeAuth, errors.New("not authorised for this vault"))
-	case errors.Is(err, store.ErrDeviceExists):
-		return s.fatal(wire.CodeBadEntry, fmt.Errorf(
-			"this vault already has a device registered under id %q, so this invite was not spent; "+
-				"redeem it again with an id of this device's own", m.DeviceID))
+		return s.fatal(wire.CodeAuth, errNotAuthorised)
 	case errors.Is(err, store.ErrBadEntry):
 		return s.fatal(wire.CodeBadEntry, err)
 	default:
@@ -1159,102 +1030,11 @@ func (s *Session) helloAsInvite(m wire.In) error {
 	}
 
 	s.srv.log.Info("invite redeemed", "remote", s.remote, "vault", m.Vault,
-		"device", m.Device, "deviceId", m.DeviceID, "name", name)
-	if err := s.writeJSON(wire.Redeemed{
-		Res: "redeemed", ID: s.reqID, Sealed: sealed, DeviceID: m.DeviceID,
-	}); err != nil {
+		"device", m.Device, "deviceId", m.DeviceID, "retried", retried)
+	if err := s.writeJSON(wire.Redeemed{Res: "redeemed", ID: s.reqID, DeviceID: m.DeviceID}); err != nil {
 		return err
 	}
 	return errRedeemed
-}
-
-// helloAsRegistrar finishes a hello that offered the vault's credential.
-//
-// What comes back is a session that may register a device, rotate the vault's
-// secret and administer the device list, and nothing else: no note is read or
-// written on one. It joins no vault's fan-out, so it is sent no entry and
-// is given no `ready`, because `ready` promises
-// the ceilings for a put and a backlog behind it and this session will never
-// get either.
-func (s *Session) helloAsRegistrar(m wire.In) error {
-	creds := Credentials{VaultID: m.Vault, Token: m.Token, Claim: m.Claim, Wrapped: m.Wrapped}
-	grant, err := s.srv.auth(creds)
-	if err != nil {
-		// Logged in full, reported as one word. Telling a caller whether the
-		// vault or the token was wrong tells them which half to keep guessing.
-		s.srv.log.Warn("auth failed", "remote", s.remote, "vault", m.Vault, "err", err)
-		return s.fatal(wire.CodeAuth, errors.New("not authorised for this vault"))
-	}
-	// The vault's key material, one read for both columns, used by both paths
-	// below. After auth and never before it: a first device's claim writes both
-	// columns while it authenticates, so reading any earlier would send that
-	// device an empty wrapped in ready.
-	//
-	// A vault with a hash and no wrapped key cannot be produced by this build,
-	// because a claim without one is refused above. A data directory written by
-	// an older build can hold one, and there is no key schedule left to serve
-	// it under: every content key derives from the data key now. Serving it
-	// would mean handing a device a vault it can neither read nor safely add
-	// to, so the session is refused with something an operator can act on.
-	hash, wrapped, _, err := s.srv.st.VaultKeys(m.Vault)
-	if err != nil {
-		return s.fatal(wire.CodeInternal, err)
-	}
-	// The vault must still be the one that was just authenticated against. A
-	// rotation committed between the authenticator's read and this one would
-	// otherwise hand this device the new blob, which the root it holds cannot
-	// unwrap, under a credential the vault no longer knows.
-	if grant.AuthHash != "" && hash != grant.AuthHash {
-		return s.fatal(wire.CodeAuth, errors.New(
-			"the vault's secret was rotated while this session was authenticating; pair again with the new string"))
-	}
-	if hash != "" && wrapped == "" {
-		return s.fatal(wire.CodeProto, fmt.Errorf(
-			"vault %q was claimed by an older build and has no data key, which this server (version %s) "+
-				"cannot serve: start a fresh data directory and pair the first device again", m.Vault, s.srv.version))
-	}
-
-	if s.srv.beforeRegistrarPublish != nil {
-		s.srv.beforeRegistrarPublish()
-	}
-	s.bootstrap = grant.Bootstrap
-	s.authHash = grant.AuthHash
-	s.wrapped = wrapped
-
-	s.vaultID = m.Vault
-	s.device = m.Device
-	s.registrar = true
-	// Authenticated: out of the pre-auth count, and allowed the full read
-	// limit from here on. Taking sessMu here is also what publishes the fields
-	// just written, registrar and vaultID among them, to the goroutine of
-	// whoever later rotates this vault; see Server.registrarsOn.
-	s.srv.authenticated(s)
-	s.conn.SetReadLimit(ReadLimit)
-	// Publish before rechecking the credential, just as a device joins before
-	// checking its row. A rotation before publication must be caught here;
-	// one after publication will see this session and evict it. Checking only
-	// before publication left a retired root able to list and cancel invites.
-	currentHash, err := s.srv.st.AuthHash(m.Vault)
-	if err != nil {
-		return s.fatal(wire.CodeInternal, err)
-	}
-	if grant.AuthHash != "" && currentHash != grant.AuthHash {
-		return s.fatal(wire.CodeAuth, errors.New(
-			"the vault's secret was rotated while this session was authenticating; pair again with the new string"))
-	}
-
-	if err := s.srv.st.EnsureVault(m.Vault, s.srv.now().UnixMilli()); err != nil {
-		return s.fatal(wire.CodeInternal, err)
-	}
-	// No join, no cursor check and no catch-up: there is nothing this session
-	// may be sent.
-	s.srv.log.Info("registrar ready", "remote", s.remote, "vault", m.Vault,
-		"device", m.Device, "bootstrap", grant.Bootstrap)
-	return s.writeJSON(wire.Registrar{
-		Res: "registrar", ID: s.reqID,
-		Proto: wire.Proto, MinProto: wire.MinProto,
-		ServerVersion: s.srv.version, MaxDevices: 0,
-	})
 }
 
 // errRedeemed ends a session that connected only to redeem an invite. It is not
@@ -1446,14 +1226,18 @@ func (s *Session) flushPendingOnce(cursor int64) (bool, int64) {
 // checkEntry runs every refusal a single put makes, without writing one.
 //
 // Split out of handlePut so a batch can decide per entry and carry on. The
-// order matters and is the order handlePut used: the two named refusals first,
-// because docs/protocol.md gives badname and toolarge their own codes and a
-// client acts on them differently, then Validate, which is the enforcer.
+// order matters: the named refusals first, because the protocol gives badpath
+// and toolarge their own codes and a client acts on them differently, then
+// Validate, which is the enforcer.
+//
+// The path first of all, for every kind of entry and for a rename's source as
+// well as its destination, since the server is the last line of defence
+// against a client that sends a path Obsidian would never hold (PLAN.md
+// section 4.1). The reason code leads the message.
 func (s *Session) checkEntry(e store.Entry) *wire.Err {
-	if e.Path == "" || len(e.Path) > store.MaxPathLen {
-		err := wire.Error(wire.CodeBadName,
-			fmt.Sprintf("path is %d bytes, must be 1 to %d", len(e.Path), store.MaxPathLen))
-		return &err
+	if err := e.CheckPaths(); err != nil {
+		refusal := wire.Error(wire.CodeBadPath, err.Error())
+		return &refusal
 	}
 	if e.Size > s.srv.perFileMax {
 		err := wire.Error(wire.CodeToolarge,
@@ -1466,7 +1250,11 @@ func (s *Session) checkEntry(e store.Entry) *wire.Err {
 		return &err
 	}
 	if err := e.Validate(); err != nil {
-		refusal := wire.Error(wire.CodeBadEntry, err.Error())
+		code := wire.CodeBadEntry
+		if errors.Is(err, store.ErrBadPath) {
+			code = wire.CodeBadPath
+		}
+		refusal := wire.Error(code, err.Error())
 		return &refusal
 	}
 	return nil
@@ -1492,11 +1280,12 @@ func (s *Session) handlePutMany(m wire.In, frameLen int) error {
 	}
 	// The two bounds maxBatchBytes names (S18). The frame, so that a batch
 	// naming enough chunks to matter is refused with a code rather than dying
-	// at the read limit; and the summed budget over every entry, so that one
-	// exchange can never be allowed to upload more than the cap however many
-	// files it carries. The budget is summed over every entry rather than
-	// over what the server lacks, because that is the figure a client can
-	// compute for itself before sending.
+	// at the read limit; and the declared sizes summed over every entry, which
+	// is the raw budget of plan/protocol.md ("Limits"), so that one exchange
+	// can never be allowed to upload more than the cap however many files it
+	// carries. It is summed over every entry rather than over what the server
+	// lacks, because that is the figure a client can compute for itself before
+	// sending.
 	if int64(frameLen) > s.srv.maxBatchBytes {
 		return s.reject(wire.CodeToolarge, fmt.Errorf(
 			"the putmany frame is %d bytes, limit is %d; split the batch", frameLen, s.srv.maxBatchBytes))
@@ -1514,7 +1303,7 @@ func (s *Session) handlePutMany(m wire.In, frameLen int) error {
 	// numbers is not a cap.
 	var budgets int64
 	for _, in := range m.Entries {
-		spend := store.CiphertextBudget(in.Meta.Size, len(in.Chunks))
+		spend := in.Meta.Size
 		// A size the peer chose cannot make the sum smaller. Nothing is
 		// refused here for it: an entry with an impossible size is refused on
 		// its own by `prepare`, and the rest of the batch still commits, which
@@ -1747,6 +1536,13 @@ func (s *Session) prepare(e store.Entry, base, prevBase int64) (missing []string
 	if r := s.checkEntry(e); r != nil {
 		return nil, 0, r
 	}
+	// The collision rule, asked before any body is: an entry that collides
+	// now is refused before its bytes are sent. The commit asks again under
+	// the lock, and that answer is the one that stands.
+	if err := s.srv.st.Collides(s.vaultID, e); errors.Is(err, store.ErrCollision) {
+		r := wire.Error(wire.CodeCollision, err.Error())
+		return nil, 0, &r
+	}
 
 	missing, sizes, err := s.srv.st.Chunks().Missing(s.vaultID, e.Chunks)
 	if err != nil {
@@ -1756,21 +1552,24 @@ func (s *Session) prepare(e store.Entry, base, prevBase int64) (missing []string
 		return nil, 0, &r
 	}
 
-	// What this entry may reference in total, and what it already accounts for.
+	// What this entry may still upload: its declared size, less what the
+	// chunks the server already holds account for. The declared size must be
+	// the sum of the raw chunk lengths (plan/protocol.md, "Chunk bodies"), so
+	// an entry whose held chunks alone exceed it can never be committed, and
+	// is refused as `badentry` before any body is asked for.
 	//
-	// The store re-checks this at commit and is the authority; the point of
-	// doing it here too is that the commit happens *after* the upload, so
+	// The store re-checks the sum at commit and is the authority; the point of
+	// bounding it here too is that the commit happens *after* the upload, so
 	// relying on it alone would let a client write the disk full and only then
 	// be told no. Refusing before the want list goes out costs nothing.
-	budget := store.CiphertextBudget(e.Size, len(e.Chunks))
 	held := heldBytes(e.Chunks, missing, sizes)
-	if held > budget {
-		r := wire.Error(wire.CodeToolarge, fmt.Sprintf(
-			"the chunks named already hold %d bytes for a declared size of %d, budget %d",
-			held, e.Size, budget))
+	if held > e.Size {
+		r := wire.Error(wire.CodeBadEntry, fmt.Sprintf(
+			"the chunks named already hold %d bytes for a declared size of %d, and the size of an "+
+				"entry is the sum of its chunks' lengths", held, e.Size))
 		return nil, 0, &r
 	}
-	return missing, budget - held, nil
+	return missing, e.Size - held, nil
 }
 
 func (s *Session) handlePut(m wire.In) error {
@@ -1813,8 +1612,8 @@ func (s *Session) handlePut(m wire.In) error {
 // gathered rather than by stat'ing them again.
 //
 // Once per reference, not once per distinct chunk: an entry naming the same
-// chunk twice is charged for it twice, which is what the budget means and what
-// TestTheBudgetCountsRepeatedChunksOncePerReference is about.
+// chunk twice is charged for it twice, which is what the declared size counts
+// and what TestTheSizeCountsRepeatedChunksOncePerReference is about.
 //
 // A name that is neither missing nor sized was present when Missing looked and
 // is not now. The sweep can do that; the commit will refuse and the client
@@ -1837,10 +1636,19 @@ func heldBytes(all, missing []string, sizes map[string]int64) int64 {
 // readBodies reads one binary frame per wanted chunk and stores each, refusing
 // once the uploads pass what the entry's declared size can account for.
 //
-// Frames are matched to names by hashing the body, not by position. That is
-// only possible because a chunk name *is* the hash of its body, and it is
-// strictly better than trusting order: a client that reorders, repeats or skips
-// a frame is caught here rather than storing one body under another's name.
+// Each frame is decoded first, here, at the transport boundary
+// (plan/protocol.md, "Chunk bodies"): a marker byte, then the raw chunk or
+// its raw DEFLATE, inflated with a bound so a small payload cannot expand
+// without limit. Everything after this line sees raw bytes and nothing else:
+// the name is the SHA-256 of the raw chunk, the allowance counts raw bytes,
+// and the chunk store holds raw bytes. How a client chose to encode a body
+// never reaches identity.
+//
+// Frames are matched to names by hashing the decoded body, not by position.
+// That is only possible because a chunk name *is* the hash of its body, and it
+// is strictly better than trusting order: a client that reorders, repeats or
+// skips a frame is caught here rather than storing one body under another's
+// name.
 //
 // Every failure in here ends the session. Mid-stream there is no way to tell
 // the client "skip that one and carry on" without both ends agreeing how many
@@ -1881,24 +1689,33 @@ func (s *Session) readBodies(want []string, allowance int64) error {
 				len(outstanding)))
 		}
 
-		name := chunks.Name(body)
+		raw, err := frame.Decode(body, int(s.srv.st.Chunks().Max()))
+		if err != nil {
+			code := wire.CodeBadChunk
+			if errors.Is(err, frame.ErrTooLarge) {
+				code = wire.CodeToolarge
+			}
+			return s.fatal(code, fmt.Errorf("a %d byte body frame could not be read, with %d chunks still wanted: %w",
+				len(body), len(outstanding), err))
+		}
+		name := chunks.Name(raw)
 		if _, wanted := outstanding[name]; !wanted {
 			// Either a body nobody asked for, or one sent twice. Both mean the
 			// remaining frame count is no longer agreed.
 			return s.fatal(wire.CodeBadChunk, fmt.Errorf(
 				"received a %d byte body hashing to %s, which was not among the %d chunks still wanted",
-				len(body), name, len(outstanding)))
+				len(raw), name, len(outstanding)))
 		}
 		// Checked before the write, not after. The point of the bound is that
 		// the bytes never reach the disk.
-		uploaded += int64(len(body))
+		uploaded += int64(len(raw))
 		if uploaded > allowance {
 			return s.fatal(wire.CodeToolarge, fmt.Errorf(
 				"uploads reached %d bytes with %d chunks still wanted, and this entry's "+
 					"declared size allows %d",
 				uploaded, len(outstanding), allowance))
 		}
-		if err := w.Add(name, body); err != nil {
+		if err := w.Add(name, raw); err != nil {
 			return s.fatal(putErrorCode(err), err)
 		}
 		delete(outstanding, name)
@@ -1919,10 +1736,12 @@ func commitCode(err error) string {
 		return wire.CodeStale
 	}
 	switch {
+	case errors.Is(err, store.ErrBadPath):
+		return wire.CodeBadPath
+	case errors.Is(err, store.ErrCollision):
+		return wire.CodeCollision
 	case errors.Is(err, store.ErrBadEntry):
 		return wire.CodeBadEntry
-	case errors.Is(err, store.ErrOverBudget):
-		return wire.CodeToolarge
 	case errors.Is(err, store.ErrChunkMissing):
 		// A body was swept between the upload and the commit. The client is
 		// told which entry and re-uploads; see chunks.DefaultGrace for why this
@@ -2039,9 +1858,9 @@ const clockSkewTolerance = 24 * time.Hour
 // noteFutureMTime says so, once, when a device declares a modification time
 // this server's clock says has not happened yet.
 //
-// `ctime` and `mtime` are the client's, covered by the entry's authenticator
-// and never checked against anything: the server holds no key and has no
-// business overruling what a device says about its own files. A device with a
+// `ctime` and `mtime` are the client's, and never checked against anything:
+// the server has no business overruling what a device says about its own
+// files. A device with a
 // wrong clock therefore writes entries whose timestamps are wrong, and both
 // shells print those timestamps beside every version in a history list.
 //
@@ -2051,11 +1870,11 @@ const clockSkewTolerance = 24 * time.Hour
 // correctly ordered. TestHistoryIsOrderedByArrivalAndNotByAnyClock.
 //
 // What was proposed instead was a server-stamped arrival time that the UI would
-// prefer over the client's. Declined: the server writes it, no key covers it,
-// and a person choosing which version to restore would be reading it. "It
-// cannot write anything either" is the property docs/design.md rests the whole
-// threat model on, and trading a piece of it for a nicer label is the wrong way
-// round. Saying the clock is wrong costs nothing and fixes the cause.
+// prefer over the client's. Basalt declined it because its server could write
+// nothing a key did not cover. A Trew server holds the notes in the clear,
+// so that reason is gone, and PLAN.md section 4.5 gives operations a server
+// commit time for retention; the label a device shows stays the device's own.
+// Saying the clock is wrong costs nothing and fixes the cause.
 //
 // Once per session, because a first sync commits thousands of entries.
 // TestASkewedDeviceIsReportedOncePerSession.
@@ -2080,16 +1899,17 @@ func (s *Session) noteFutureMTime(e store.Entry) {
 
 // handleHistory answers with every version of one path, newest first.
 //
-// The path arrives sealed and is used sealed. The server has never been able to
-// read a path and this is not the place to start: it is a key in a table here,
-// nothing more, and an unknown one simply has no versions.
+// The path is a key in a table here, nothing more, and one that no entry has
+// ever had simply has no versions. It is not held to the path policy, because
+// a question is not a write: a path the policy refuses is one the vault cannot
+// hold, and the honest answer for it is the empty list.
 //
 // An empty list is not an error. The server cannot tell a path that never
 // existed from one whose history was purged, because both are absent, and
 // inventing a distinction it cannot support would be a lie in a recovery tool.
 func (s *Session) handleHistory(m wire.In) error {
 	if m.Path == "" {
-		return s.reject(wire.CodeBadName, errors.New("history needs a path"))
+		return s.reject(wire.CodeBadPath, errors.New("empty: history needs a path"))
 	}
 	if m.Before < 0 {
 		return s.reject(wire.CodeProtoState, fmt.Errorf("negative before %d", m.Before))
@@ -2147,8 +1967,8 @@ func nonNil[T any](entries []T) []T {
 //
 // So: a put with no entry. The client names chunks, the server says which of
 // them it wants, and the bodies arrive and are stored. No uid is allocated, no
-// entry is written, no authenticator is touched, and the vault afterwards is
-// exactly the vault the backup should have been.
+// entry is written, and the vault afterwards is exactly the vault the backup
+// should have been.
 //
 // Two things make it safe to let a device write bodies with no entry:
 //
@@ -2203,9 +2023,11 @@ func (s *Session) handleResend(m wire.In) error {
 	if err := s.writeJSON(wire.Want{Res: "want", ID: s.reqID, Chunks: missing}); err != nil {
 		return err
 	}
-	// These are existing ciphertext chunks, which include encryption overhead
-	// and may belong to older versions larger than today's file ceiling. Bound
-	// them by the chunk ceiling; the per-file limit measures plaintext uploads.
+	// These are bodies of versions the vault already holds, which may be larger
+	// than today's file ceiling: the ceiling can come down after a large file
+	// was stored. Bound them by the chunk ceiling, never by the per-file limit,
+	// or the one body that can heal an old version would be refused for a
+	// limit that version predates.
 	if err := s.readBodies(missing, s.srv.st.Chunks().Max()*int64(len(missing))); err != nil {
 		return err
 	}
@@ -2256,7 +2078,7 @@ func kindOf(e store.Entry) string {
 }
 
 // handleFetch streams the requested chunk bodies as binary frames, in the order
-// requested.
+// requested, each one framed by frame.Encode.
 //
 // Every chunk is checked to be present, and then read and checked against its
 // own name, before any frame is sent. Discovering the third of five is missing
@@ -2349,7 +2171,7 @@ func (s *Session) handleFetch(m wire.In) error {
 			// Did not fit in the budget above, so it is read again. Get
 			// verifies the body against its name, so a chunk that rotted on
 			// disk is reported here rather than shipped to a device that would
-			// fail to decrypt it for reasons it cannot diagnose.
+			// refuse it for reasons it cannot diagnose.
 			var err error
 			body, err = s.srv.st.Chunks().Get(s.vaultID, n)
 			if err != nil {
@@ -2363,7 +2185,10 @@ func (s *Session) handleFetch(m wire.In) error {
 					fmt.Errorf("chunk %d of %d (%s): %w", i+1, len(m.Chunks), n, err))
 			}
 		}
-		if err := s.writeBinary(body); err != nil {
+		// Framed here and nowhere else, at the transport boundary: deflated
+		// when that is shorter, raw otherwise, so every frame is at most one
+		// byte longer than the chunk it carries.
+		if err := s.writeBinary(frame.Encode(body)); err != nil {
 			return err
 		}
 	}
@@ -2393,224 +2218,32 @@ func (s *Session) quarantineIfCorrupt(name string, err error) {
 }
 
 /* ---------------------------------------------------------------- *
- * rotate
- * ---------------------------------------------------------------- */
-
-// handleRotate replaces the vault's auth hash and wrapped data key together and
-// closes every other session on the vault, so a leaked pairing string is retired
-// without the server's history going with it. docs/protocol.md, "The data key,
-// and rotating a leaked secret".
-//
-// The swap is conditional on the hash this session authenticated under, so two
-// devices connected under one root that both rotate cannot both succeed. The
-// loser is refused with `rotated` and its session ends: the credential it is
-// holding is not the vault's any more, and the alternative is what used to
-// happen, which is that the second rotation overwrote the first and the device
-// the first was revoking owned the vault.
-//
-// Registrar sessions only, which dispatch enforces: rotation retires the root
-// secret and rewraps the data key, and since protocol 4 a device holds
-// neither. It touches no device row, so every device keeps syncing across one,
-// which is the expensive half of what per-device credentials removed.
-//
-// Refused with `auth` on a session that authenticated with the bootstrap
-// token, which proved nothing about holding the old root, and with `badentry`
-// on a malformed request. Either refusal leaves the session usable, because
-// neither changed anything. Every claimed vault has a data key, so there is no
-// such thing here as a vault with nothing to re-wrap.
-func (s *Session) handleRotate(m wire.In) error {
-	if s.bootstrap {
-		return s.reject(wire.CodeAuth, errors.New(
-			"this session authenticated with the bootstrap token, and only a session holding the vault's secret may rotate it"))
-	}
-	if len(m.Auth) < MinClaimLength {
-		return s.reject(wire.CodeBadEntry, fmt.Errorf(
-			"the new auth key is %d characters, which is too few", len(m.Auth)))
-	}
-	if !store.ValidWrapped(m.Wrapped) {
-		return s.reject(wire.CodeBadEntry, fmt.Errorf(
-			"the wrapped data key is %d bytes and must be base64url of at most %d", len(m.Wrapped), store.MaxWrappedLen))
-	}
-	if s.authHash == "" {
-		// No authenticator this build ships leaves it empty for a session that
-		// got this far, and a swap with nothing to compare against is the hole
-		// this whole path exists to close, so it is refused rather than guessed.
-		return s.reject(wire.CodeAuth, errors.New(
-			"this session has no credential to rotate away from"))
-	}
-	hash := sha256.Sum256([]byte(m.Auth))
-	next := hex.EncodeToString(hash[:])
-	if s.srv.beforeRotate != nil {
-		s.srv.beforeRotate()
-	}
-	if err := s.authorizedMutation(func() error {
-		return s.srv.st.Rotate(s.vaultID, s.authHash, next, m.Wrapped)
-	}); err != nil {
-		if errors.Is(err, store.ErrRotated) {
-			s.srv.log.Warn("rotate lost the race", "vault", s.vaultID, "device", s.device)
-			return s.fatal(wire.CodeRotated, errors.New(
-				"the vault was rotated by another device, so this rotation was refused; "+
-					"reconnect with the new string and try again"))
-		}
-		if errors.Is(err, store.ErrBadEntry) {
-			return s.reject(wire.CodeBadEntry, err)
-		}
-		s.srv.log.Error("rotate failed", "vault", s.vaultID, "err", err)
-		return s.reject(wire.CodeInternal, errors.New("the vault's secret could not be replaced: "+err.Error()))
-	}
-	// This session's credential is the new one now, so a second rotate from it
-	// swaps against the hash it just wrote rather than the one it arrived with,
-	// and a register after it hands out the new wrapping rather than the
-	// retired one.
-	s.authHash = next
-	s.wrapped = m.Wrapped
-	// Committed. Every device row is untouched and every device goes on
-	// syncing, which is what per-device credentials bought: rotation replaces
-	// the root and rewraps the same data key, and no device holds either.
-	//
-	// What is still closed is any *other* registrar session on this vault.
-	// Those are holding the root that was just retired, and the one thing a
-	// retired root must not do is register a device, which would be permanent
-	// access surviving the rotation that was meant to end it. The conditional
-	// insert in store.RegisterDevice is what actually guarantees that; closing
-	// them is so the holder is told rather than left to discover it.
-	//
-	// In parallel, because each peer is given up to a second to read its
-	// notice before it is closed, and in series seven other devices spent
-	// seven seconds of that before this one was told anything. Shutdown fans
-	// its notices out the same way, for the same reason.
-	others := s.srv.registrarsOn(s.vaultID, s)
-	var wg sync.WaitGroup
-	for _, peer := range others {
-		wg.Add(1)
-		go func(peer *Session) {
-			defer wg.Done()
-			peer.evict("the vault's secret was rotated by another device; "+
-				"the recovery key you are holding no longer opens it", errors.New("vault secret rotated"))
-		}(peer)
-	}
-	wg.Wait()
-	s.srv.log.Info("vault secret rotated", "vault", s.vaultID, "device", s.device, "evicted", len(others))
-	return s.writeJSON(wire.Rotated{Res: "rotated", ID: s.reqID})
-}
-
-/* ---------------------------------------------------------------- *
  * The device list
  * ---------------------------------------------------------------- */
 
-// handleRegister adds a device to the vault's list. Registrar sessions only,
-// which is enforced in dispatch: this is the one power vaults.auth_hash kept
-// when protocol 4 took the sync half away.
+// handleDevices answers with every device that may reach this vault and every
+// invite that could still add one: the only way to answer "what is still
+// connected to my notes".
 //
-// The auth key and not its hash, matching `claim`. Either way the server keeps
-// only the digest, so nothing is revealed by sending the key that the digest
-// would have hidden; what the key buys is that MinClaimLength can be enforced,
-// and a credential nobody can judge is one a client bug binds a device to for
-// ever. See docs/design.md on why the digest is a bare unsalted SHA-256.
-//
-// Registering the same device twice, with the same key, succeeds. That is the
-// half-finished registration: the row committed and the reply was lost, and
-// the caller is a conversion that has to be able to run again after a crash.
-// Answering ErrDeviceExists there would leave a device retrying for ever, so
-// the row is read back and a row that is already exactly what was asked for is
-// the registration having happened (rule 4: the outcome is verified, not the
-// call). A different key under an id the vault already holds is refused, and
-// nothing is overwritten: that is somebody else's device.
-func (s *Session) handleRegister(m wire.In) error {
-	if !store.ValidDeviceID(m.DeviceID) {
-		return s.reject(wire.CodeBadName, fmt.Errorf(
-			"device id is %d bytes and must be base64url of at most %d",
-			len(m.DeviceID), store.MaxDeviceIDLen))
-	}
-	if len(m.Auth) < MinClaimLength {
-		return s.reject(wire.CodeBadEntry, fmt.Errorf(
-			"the device's auth key is %d characters, which is too few", len(m.Auth)))
-	}
-	// The name defaults to the one this hello already carries, which is what
-	// the client sends as --device today, so a device that says nothing about
-	// its name still arrives in the list as something a person recognises.
-	name := m.Name
-	if name == "" {
-		name = s.device
-	}
-	if err := checkName("device", name, store.MaxDeviceLen); err != nil {
-		return s.reject(wire.CodeBadName, err)
-	}
-	if s.authHash == "" {
-		// No authenticator this build ships leaves it empty for a session that
-		// got this far. A registration authorised by no credential at all is
-		// the hole this whole path exists to close, so it is refused rather
-		// than guessed, exactly as rotate does.
-		return s.reject(wire.CodeAuth, errors.New(
-			"this session has no vault credential to register a device under"))
-	}
-	sum := sha256.Sum256([]byte(m.Auth))
-	deviceHash := hex.EncodeToString(sum[:])
-	if s.srv.beforeRegister != nil {
-		s.srv.beforeRegister()
-	}
-	now := s.srv.now().UnixMilli()
-	err := s.authorizedMutation(func() error {
-		return s.srv.st.RegisterDevice(s.vaultID, m.DeviceID, name, deviceHash, s.authHash, now)
-	})
-	switch {
-	case err == nil:
-	case errors.Is(err, store.ErrDeviceExists):
-		_, existing, ok, readErr := s.srv.st.DeviceByID(s.vaultID, m.DeviceID)
-		if readErr != nil {
-			return s.reject(wire.CodeInternal, readErr)
-		}
-		if !ok || subtle.ConstantTimeCompare([]byte(existing), []byte(deviceHash)) != 1 {
-			return s.reject(wire.CodeBadEntry, fmt.Errorf(
-				"this vault already has a different device registered under id %q", m.DeviceID))
-		}
-		s.srv.log.Info("device already registered", "vault", s.vaultID, "deviceId", m.DeviceID)
-	case errors.Is(err, store.ErrRotated):
-		// The vault was rotated between this session's hello and this
-		// registration. Fatal, for the same reason a losing rotate is: the
-		// credential this session is holding no longer opens the vault, and
-		// retrying the same request cannot succeed.
-		return s.fatal(wire.CodeRotated, errors.New(
-			"the vault was rotated by another device, so this registration was refused; "+
-				"reconnect with the new recovery key and try again"))
-	case errors.Is(err, store.ErrUnknownVault), errors.Is(err, store.ErrBadEntry):
-		return s.reject(wire.CodeBadEntry, err)
-	default:
-		s.srv.log.Error("register failed", "vault", s.vaultID, "err", err)
-		return s.reject(wire.CodeInternal, errors.New("the device could not be registered: "+err.Error()))
-	}
-	s.srv.log.Info("device registered", "vault", s.vaultID, "deviceId", m.DeviceID, "name", name)
-	return s.writeJSON(wire.Registered{
-		Res: "registered", ID: s.reqID, DeviceID: m.DeviceID, Wrapped: s.wrapped,
-	})
-}
-
-// handleDevices answers with every device that may reach this vault: the only
-// way to answer "what is still connected to my notes".
-//
-// Either credential may ask. It is the access list rather than the vault's
-// content, it carries no key material, and the recovery key needs it to be
-// able to act: `revoke` takes an id, and a vault whose rows are all
-// crashed pairings has no device left to read the list from. See dispatch.
+// The invites are in the same reply because they are the same question. A row
+// is what has been added and an outstanding invite is what is about to be, and
+// an invite issued on a stolen laptop is invisible until somebody redeems it
+// unless it is listed. Each is listed by its id, label and expiry, and by
+// nothing that redeems it: the id is minted beside the token and is not derived
+// from it (plan/protocol.md, "Devices and invites"; store.Invite).
 func (s *Session) handleDevices(m wire.In) error {
 	ds, err := s.srv.st.Devices(s.vaultID)
 	if err != nil {
 		s.srv.log.Error("listing devices failed", "vault", s.vaultID, "err", err)
 		return s.reject(wire.CodeInternal, errors.New("the device list could not be read: "+err.Error()))
 	}
-	// The invites in the same reply, because they are the same question. A row
-	// is what has been added and an outstanding invite is what is about to be,
-	// and an invite was the one authority on a vault nothing could see: a
-	// string issued on a stolen laptop was invisible until somebody redeemed
-	// it, for up to an hour. Identifier and expiry only; the sealed blob is
-	// never in a listing type, see store.Invite.
 	invites, err := s.srv.st.Invites(s.vaultID, s.srv.now().UnixMilli())
 	if err != nil {
 		s.srv.log.Error("listing invites failed", "vault", s.vaultID, "err", err)
 		return s.reject(wire.CodeInternal, errors.New("the invite list could not be read: "+err.Error()))
 	}
 	return s.writeJSON(wire.DeviceList{
-		Res: "devices", ID: s.reqID, Devices: s.srv.hub.deviceStatus(s.vaultID, ds), MaxDevices: 0, Invites: invites,
+		Res: "devices", ID: s.reqID, Devices: s.srv.hub.deviceStatus(s.vaultID, ds), Invites: invites,
 	})
 }
 
@@ -2620,13 +2253,12 @@ func (s *Session) handleDevices(m wire.In) error {
 // authenticated as. That is the whole authorisation story, and it is deliberate.
 // A device renaming another would need a rule for who may relabel whom, and the
 // only reason to want one is tidying somebody else's device list, which is not
-// worth an authorisation question. A registrar is refused by deviceOps for the
-// same reason: it has no row of its own to rename.
+// worth an authorisation question.
 //
-// The name is checked with the same CheckName that register and invite
-// redemption use, so a name that could not have been chosen at pairing cannot
-// arrive by renaming either. `badname` rather than `badentry`, matching every
-// other refusal about a name's shape.
+// The name is checked with the same CheckName that invite redemption uses, so a
+// name that could not have been chosen at pairing cannot arrive by renaming
+// either. `badname` rather than `badentry`, matching every other refusal about a
+// name's shape.
 //
 // Nothing about the vault's content moves, no uid is spent and no entry is
 // written, so this is not part of the sync stream and nothing replays it. A
@@ -2668,125 +2300,40 @@ func (s *Session) handleRename(m wire.In) error {
 	return s.writeJSON(wire.Renamed{Res: "renamed", ID: s.reqID, Name: m.Name})
 }
 
-// handleRevoke deletes a device's row and closes every session that device has
-// open, in that order, so the reply means both. A device may revoke another and
-// may revoke itself, which is what unlinking is.
+// handleRevoke deletes a device's row and ends everything that device has open,
+// and only then answers, so the reply means all of it (PLAN.md section 2.3.1).
+// A device may revoke another and may revoke itself, which is what unlinking
+// is.
 //
-// **Except the last one.** `allowLast` is admitted from a registrar session and
-// refused from a device, and that is the only asymmetry between the two
-// credentials here. A phone revoking a stolen laptop without anybody finding
-// the recovery key is the entire point of having revocation rather than
-// rotation, so ordinary revocation stays with devices. Emptying the vault is
-// the other thing: nothing about the common case needs it, and it is the one
-// revocation a device cannot undo, because what it leaves is a vault only the
-// recovery key opens. A compromised device could otherwise delete every row
-// including the last and leave its owner holding devices that can no longer
-// reach their own notes, with the offline key the only way back. So the act
-// that can only be undone with the recovery key takes the recovery key.
-// TestADeviceMayNotEmptyTheVault.
+// Including the last one (plan/protocol.md, "Devices and invites"). Basalt
+// refused that from a device, because what it left was a vault only the
+// recovery key opened. Trew has no key a device holds and the server cannot
+// reissue, so the way back from an empty device list is `trew invite` on the
+// server, and a refusal would protect nothing.
 //
-// It costs nothing in the case it is aimed at. A device stolen when it was the
-// only one wants a rotation as well, and a rotation already needs the recovery
-// key, so the person doing this correctly is holding it either way.
-//
-// Deleting the row blocks subsequent persistent mutations, but the open
-// connection must also be closed to stop reads and live deliveries. The reply
-// follows that eviction so it never reports a device removed while its socket
-// is still receiving notes.
-//
-// The order is the guarantee, not luck. The delete lands first, so a connect
-// racing this either does its SawDevice after the delete and is refused, or was
-// already in the hub when the list below is taken and is closed here. See
-// helloAsDevice for the other half.
+// The work is Server.revoke, shared with the control socket, so the rules are
+// one set whichever end asks.
 func (s *Session) handleRevoke(m wire.In) error {
 	if !store.ValidDeviceID(m.DeviceID) {
 		return s.reject(wire.CodeBadName, fmt.Errorf(
 			"device id is %d bytes and must be base64url of at most %d",
 			len(m.DeviceID), store.MaxDeviceIDLen))
 	}
-	if m.AllowLast && !s.registrar {
-		// `auth` rather than `badentry`, because this is about the credential
-		// the session holds and not about the frame: the same field from the
-		// recovery key is honoured. It names the credential and the way back,
-		// because a refusal a person cannot act on sends them looking for a
-		// worse route, and the worse route here is rotating and re-pairing
-		// every device.
-		return s.reject(wire.CodeAuth, errors.New(
-			"leaving this vault with no devices at all is the recovery key's to do, not a device's: "+
-				"it is the one revocation nothing on a device can undo, because what it leaves is a "+
-				"vault only the recovery key opens. Connect with the recovery key to revoke the last "+
-				"device, or revoke any other device from here"))
-	}
-	// The vault credential this session authenticated under, on a registrar,
-	// and empty on a device, which authenticated against its own row. It is
-	// what the delete is made conditional on; see store.RevokeDevice.
-	vaultHash := ""
-	if s.registrar {
-		if s.authHash == "" {
-			// No authenticator this build ships leaves it empty for a session
-			// that got this far, and a delete authorised by no credential at
-			// all is the hole this path exists to close, so it is refused
-			// rather than guessed, exactly as register and rotate do.
-			return s.reject(wire.CodeAuth, errors.New(
-				"this session has no vault credential to revoke a device under"))
-		}
-		vaultHash = s.authHash
-	}
-	if err := s.authorizedMutation(func() error {
-		return s.srv.st.RevokeDevice(s.vaultID, m.DeviceID, vaultHash, m.AllowLast)
-	}); err != nil {
-		switch {
-		case errors.Is(err, errSessionRevoked):
-			return s.fatal(wire.CodeAuth, err)
-		case errors.Is(err, store.ErrUnknownDevice):
-			return s.reject(wire.CodeNoDevice, err)
-		case errors.Is(err, store.ErrRotated):
-			// The vault was rotated between this session's hello and this
-			// revocation, so the recovery key it is holding is retired. Fatal,
-			// for the same reason a losing rotate and a late register are:
-			// retrying cannot succeed, and the point of the guard is that a
-			// retired root stops being able to touch the device list.
-			return s.fatal(wire.CodeRotated, errors.New(
-				"the vault was rotated by another device, so this revocation was refused; "+
-					"reconnect with the new recovery key and try again"))
-		case errors.Is(err, store.ErrLastDevice):
-			// badentry, the same code and the same shape as a hello carrying
-			// two credentials: a well-formed frame the server will not act on,
-			// which the caller fixes by sending a different one. Only a
-			// registrar reaches this, because a device sending allowLast was
-			// refused above and a device not sending it is being told what the
-			// field would cost.
-			if s.registrar {
-				return s.reject(wire.CodeBadEntry, fmt.Errorf(
-					"%s; resend with allowLast to do it anyway", err))
-			}
-			return s.reject(wire.CodeBadEntry, fmt.Errorf(
-				"%s, so it takes the recovery key rather than a device; connect with the recovery "+
-					"key and revoke it there", err))
-		}
+	rev, err := s.srv.revoke(s.vaultID, m.DeviceID, s)
+	switch {
+	case err == nil:
+	case errors.Is(err, errSessionRevoked):
+		return s.fatal(wire.CodeAuth, err)
+	case errors.Is(err, store.ErrUnknownDevice):
+		return s.reject(wire.CodeNoDevice, err)
+	default:
 		s.srv.log.Error("revoke failed", "vault", s.vaultID, "deviceId", m.DeviceID, "err", err)
 		return s.reject(wire.CodeInternal, errors.New("the device could not be revoked: "+err.Error()))
 	}
 
-	// Every session that device has open except this one. This one is left
-	// out because it is about to be told what happened, and evicting it here
-	// would close the socket before the reply reached it.
-	victims := s.srv.hub.sessionsOf(s.vaultID, m.DeviceID, s)
-	var wg sync.WaitGroup
-	for _, peer := range victims {
-		wg.Add(1)
-		go func(peer *Session) {
-			defer wg.Done()
-			peer.evict("this device was revoked and may no longer sync this vault; "+
-				"add it again with an invite from a device that still has the vault",
-				errors.New("device revoked"))
-		}(peer)
-	}
-	wg.Wait()
-
 	self := m.DeviceID == s.deviceID
 	s.srv.log.Info("device revoked", "vault", s.vaultID, "deviceId", m.DeviceID,
-		"by", s.device, "closed", len(victims), "self", self)
+		"by", s.deviceID, "closed", rev.Closed, "invitesCancelled", rev.InvitesCancelled, "self", self)
 	if err := s.writeJSON(wire.Revoked{
 		Res: "revoked", ID: s.reqID, DeviceID: m.DeviceID, Self: self,
 	}); err != nil {
@@ -2794,8 +2341,8 @@ func (s *Session) handleRevoke(m wire.In) error {
 	}
 	if self {
 		// A device that revoked itself is revoked, and a revoked device does
-		// not stay connected. The reply has already gone; Handle drains and
-		// closes behind this.
+		// not stay connected. It left the fan-out with the delete; the reply
+		// has already gone, and Handle drains and closes behind this.
 		return errRevokedSelf
 	}
 	return nil
@@ -2805,36 +2352,28 @@ func (s *Session) handleRevoke(m wire.In) error {
  * invite
  * ---------------------------------------------------------------- */
 
-// handleInvite stores a single-use invite: an unguessable identifier and the
-// vault's data key sealed under a key the server never sees, with an expiry.
-// The data key and not the root, since protocol 4: the issuing device holds no
-// root, and an invite carrying one would hand the newcomer the credential that
-// registers devices and rewraps the vault. See store.go's invites table. The
-// server learns nothing it could use; it holds a blob it cannot open under a
-// name it cannot guess, for a few minutes. docs/protocol.md, "Adding a device
-// with a single-use invite".
+// handleInvite mints a single-use invite and answers with its id, its token and
+// when it expires (plan/protocol.md, "Devices and invites"). The token is the
+// whole credential: it appears in this reply, to the device that asked, and
+// nowhere else, and the server keeps only its digest. The device formats it
+// into an invite string with its own server URL and vault.
 //
-// Device sessions only, which dispatch enforces. An invite is issued by a
-// device that already has the vault, and that is also what retired the
-// explicit bootstrap check this used to carry: a bootstrap session is a
-// registrar, and a registrar never reaches this function, so the check could
-// only ever have been dead code pretending to be a guard.
+// The ttl defaults to DefaultInviteTTL and is capped at MaxInviteTTL rather
+// than refused above it, because the reply says when the invite actually
+// expires and a client asking for longer has nothing to do differently. A
+// negative ttl is refused: an invite cannot expire before it is issued. The
+// operator can mint a longer one, or one that never expires, with `trew
+// invite` on the server, where the choice is deliberate.
 //
-// Refused with `badentry` on a malformed request. The ttl defaults to
-// DefaultInviteTTL and is capped at MaxInviteTTL rather than refused above it,
-// because the reply says when the invite actually expires and a client asking
-// for longer has nothing to do differently.
+// The invite is recorded as this device's, so revoking the device cancels it
+// too: an invite minted on a laptop before the laptop was stolen is exactly
+// the authority the revoke is for (see store.RevokeDevice).
 func (s *Session) handleInvite(m wire.In) error {
-	if !store.ValidInvite(m.Invite) {
-		return s.reject(wire.CodeBadEntry, fmt.Errorf(
-			"the invite identifier is %d bytes and must be base64url of at most %d", len(m.Invite), store.MaxInviteLen))
-	}
-	if !store.ValidSealed(m.Sealed) {
-		return s.reject(wire.CodeBadEntry, fmt.Errorf(
-			"the sealed secret is %d bytes and must be base64url of at most %d", len(m.Sealed), store.MaxSealedLen))
-	}
 	if m.TTLMs < 0 {
 		return s.reject(wire.CodeBadEntry, fmt.Errorf("ttlMs is %d, and an invite cannot expire before it is issued", m.TTLMs))
+	}
+	if err := store.CheckName("invite", m.Label, store.MaxDeviceLen); err != nil {
+		return s.reject(wire.CodeBadName, err)
 	}
 	// Clamp milliseconds before converting to nanoseconds: a large positive
 	// wire value can overflow time.Duration and become a past expiry.
@@ -2845,11 +2384,13 @@ func (s *Session) handleInvite(m wire.In) error {
 	if ttlMs > MaxInviteTTL.Milliseconds() {
 		ttlMs = MaxInviteTTL.Milliseconds()
 	}
-	ttl := time.Duration(ttlMs) * time.Millisecond
 	now := s.srv.now()
-	expiresAt := now.Add(ttl).UnixMilli()
+	expiresAt := now.Add(time.Duration(ttlMs) * time.Millisecond).UnixMilli()
+	var inv store.NewInvite
 	if err := s.authorizedMutation(func() error {
-		return s.srv.st.AddInvite(s.vaultID, m.Invite, m.Sealed, expiresAt, now.UnixMilli())
+		var err error
+		inv, err = s.srv.st.CreateInvite(s.vaultID, m.Label, s.deviceID, &expiresAt, now.UnixMilli())
+		return err
 	}); err != nil {
 		if errors.Is(err, errSessionRevoked) {
 			return s.fatal(wire.CodeAuth, err)
@@ -2860,36 +2401,25 @@ func (s *Session) handleInvite(m wire.In) error {
 		s.srv.log.Error("invite failed", "vault", s.vaultID, "err", err)
 		return s.reject(wire.CodeInternal, errors.New("the invite could not be stored: "+err.Error()))
 	}
-	s.srv.log.Info("invite issued", "vault", s.vaultID, "device", s.device, "expiresAt", expiresAt)
-	return s.writeJSON(wire.Invited{Res: "invited", ID: s.reqID, ExpiresAt: expiresAt})
+	s.srv.log.Info("invite issued", "vault", s.vaultID, "device", s.deviceID,
+		"invite", inv.ID, "expiresAt", expiresAt)
+	return s.writeJSON(wire.Invited{
+		Res: "invited", ID: s.reqID,
+		Invite: inv.ID, Token: store.EncodeToken(inv.Token), ExpiresAt: inv.ExpiresAt,
+	})
 }
 
-// handleUninvite cancels an invite that is still outstanding, so a string
-// somebody is holding stops working before it expires.
-//
-// The companion to being able to see them. An invite is a standing authority
-// to register one device, and until `devices` listed them the only way to
-// retire one was to wait out the hour or rotate the vault, which retires the
-// recovery key with it. Neither is an answer to "I issued that on the laptop I
-// have just lost".
-//
-// Either credential may send it, on the same reasoning as `revoke`: an invite
-// is part of who may connect rather than part of the vault's content. A device
-// cancels the invite it issued a moment ago, and the recovery key cancels one
-// on a vault whose devices are gone.
+// handleUninvite cancels an invite that is still outstanding, by the id a
+// listing shows, so a string somebody is holding stops working before it
+// expires.
 //
 // `nodevice` would be the wrong code and there is deliberately no `noinvite`:
-// an unknown, expired, already redeemed or malformed identifier are one
-// refusal, `badentry`, saying which of the four it was to nobody. Saying more
-// would tell somebody guessing identifiers that they had found a real one, and
-// after a redemption it would confirm that this vault had an invite out a
-// moment ago. It is the same rule the redeem path follows, and the message
+// an unknown, expired, already redeemed or malformed id are one refusal,
+// `badentry`, saying which of the four it was to nobody. Saying more would tell
+// somebody guessing ids that they had found a real one, and after a redemption
+// it would confirm that this vault had an invite out a moment ago. The message
 // says what to do instead, which is to look at the device list.
 func (s *Session) handleUninvite(m wire.In) error {
-	if !store.ValidInvite(m.Invite) {
-		return s.reject(wire.CodeBadEntry, fmt.Errorf(
-			"the invite identifier is %d bytes and must be base64url of at most %d", len(m.Invite), store.MaxInviteLen))
-	}
 	now := s.srv.now().UnixMilli()
 	if err := s.authorizedMutation(func() error {
 		return s.srv.st.CancelInvite(s.vaultID, m.Invite, now)
@@ -2897,17 +2427,18 @@ func (s *Session) handleUninvite(m wire.In) error {
 		if errors.Is(err, errSessionRevoked) {
 			return s.fatal(wire.CodeAuth, err)
 		}
-		if errors.Is(err, store.ErrRotated) {
-			return s.fatal(wire.CodeRotated, errors.New("the vault's secret was rotated; reconnect with the new recovery key"))
-		}
 		if errors.Is(err, store.ErrNoInvite) {
-			return s.reject(wire.CodeBadEntry, errors.New(
-				"this vault has no outstanding invite under that identifier: it may have expired, "+
-					"or been redeemed already, in which case it is a device row now; check the device list"))
+			return s.reject(wire.CodeBadEntry, errNoSuchInvite)
 		}
 		s.srv.log.Error("uninvite failed", "vault", s.vaultID, "err", err)
 		return s.reject(wire.CodeInternal, errors.New("the invite could not be cancelled: "+err.Error()))
 	}
-	s.srv.log.Info("invite cancelled", "vault", s.vaultID, "device", s.device)
+	s.srv.log.Info("invite cancelled", "vault", s.vaultID, "device", s.deviceID, "invite", m.Invite)
 	return s.writeJSON(wire.Uninvited{Res: "uninvited", ID: s.reqID, Invite: m.Invite})
 }
+
+// errNoSuchInvite is the one answer to cancelling an invite that cannot be
+// cancelled, whichever reason it is; see handleUninvite.
+var errNoSuchInvite = errors.New(
+	"this vault has no outstanding invite under that id: it may have expired, " +
+		"or been redeemed already, in which case it is a device row now; check the device list")

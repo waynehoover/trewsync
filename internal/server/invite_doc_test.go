@@ -10,9 +10,8 @@ import (
 	"time"
 )
 
-// The invite lifetime is stated in five docs: the README quickstart, the
-// plugin guide, twice in the server guide (prose and the limits table) and
-// the protocol spec. Each is right for its reader, so they stay, but a
+// The invite lifetime is stated in several docs: the README quickstart, the
+// plugin guide, the server guide, the protocol doc and the protocol spec. Each is right for its reader, so they stay, but a
 // change to either constant used to mean five hand edits and no way to know
 // one was missed. Read the docs here instead, so a miss fails the build.
 //
@@ -89,7 +88,10 @@ func TestI23TheDocsStateTheInviteLifetimeTheCodeUses(t *testing.T) {
 		allowed[phrase] = true
 	}
 
-	docs := []string{"../../README.md", "../../client/README.md",
+	// plan/protocol.md is the spec the constants come from. client/README.md
+	// is not read until the client is flipped (M2): it describes the client's
+	// own flags, which this branch may not touch, and still says ten minutes.
+	docs := []string{"../../README.md", "../../plan/protocol.md",
 		"../../docs/server.md", "../../docs/plugin.md", "../../docs/protocol.md"}
 
 	mentions := 0

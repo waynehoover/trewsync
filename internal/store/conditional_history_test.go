@@ -13,7 +13,7 @@ func renameCurrent(t *testing.T, h *harness, from, to, body string) int64 {
 		t.Fatal(err)
 	}
 	uid, err := h.AppendCurrent("v1", Entry{
-		Path: to, Prev: from, Size: int64(len(body)), Mac: testMac,
+		Path: to, Prev: from, Size: int64(len(body)),
 		Chunks: h.put(t, "v1", body),
 	}, 0, base)
 	if err != nil {
@@ -70,7 +70,7 @@ func TestPurgePreservesRenameSourceHeads(t *testing.T) {
 			if useRememberedHead {
 				base = retired
 			}
-			if _, err := h.AppendCurrent("v1", Entry{Path: "from.md", Mac: testMac}, base, 0); err != nil {
+			if _, err := h.AppendCurrent("v1", Entry{Path: "from.md"}, base, 0); err != nil {
 				t.Errorf("cannot recreate the moved-away path with base=%d: %v", base, err)
 			}
 		})
@@ -171,7 +171,7 @@ func TestStatsAndCapacityExcludeRetiredRenameSources(t *testing.T) {
 	}
 	// Its later deletion is real and remains available to recovery, even
 	// though an earlier incarnation of the same name was moved away.
-	if _, err := h.AppendCurrent("v1", Entry{Path: "from.md", Deleted: true, Mac: testMac}, reused.UID, 0); err != nil {
+	if _, err := h.AppendCurrent("v1", Entry{Path: "from.md", Deleted: true}, reused.UID, 0); err != nil {
 		t.Fatal(err)
 	}
 	deleted, _, err = h.Deleted("v1", true, 0, 0)

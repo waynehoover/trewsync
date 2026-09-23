@@ -1,10 +1,10 @@
 // Package store persists vault metadata in SQLite and delegates chunk bodies to
 // the chunks package.
 //
-// The server never sees plaintext. Paths arrive already encrypted by the client,
-// deterministically, so equality and dedup still work; chunk names are hashes of
-// ciphertext. This layer therefore treats both as opaque strings and never needs
-// to understand vault content.
+// Paths are plaintext vault-relative paths, checked against the protocol's
+// path policy before anything is stored, and chunk names are the SHA-256 of
+// the raw bytes the chunk store holds, so the server can recompute every name
+// and every size from what it has (PLAN.md section 2.2).
 //
 // Entries are append-only. A change, a rename and a delete each add a row rather
 // than mutating one, which is what makes the uid sequence usable as a resume
@@ -17,10 +17,12 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/paths"
 
 	_ "modernc.org/sqlite"
 )
@@ -49,11 +51,11 @@ const (
 
 	// DefaultPerFileMax is what a server advertises unless told otherwise.
 	//
-	// The cost is the client's, not the server's: preparing a file to send holds
-	// the plaintext, the sealed window and whatever the last of it left behind.
-	// Measured through a whole sync on this laptop, peak resident is about
-	// 210 MB plus 2.7 MB per MiB of file, so 64 MiB costs about 430 MB and the
-	// 256 MiB ceiling about 900 MB.
+	// The cost is the client's, not the server's: a download assembles the
+	// whole file in one buffer, about twice the file at peak. Basalt measured
+	// its encrypting client at about 210 MB plus 2.7 MB per MiB of file, so 64
+	// MiB cost about 430 MB and the 256 MiB ceiling about 900 MB; the plaintext
+	// client has not been measured again yet, and does less work per byte.
 	//
 	// 64 MiB by default because the smallest device syncing a vault sets the
 	// limit and the plugin has never run on a phone. It covers images, PDFs and
@@ -69,10 +71,11 @@ const (
 	// client could claim millions of chunks and park the session.
 	MaxChunksPerEntry = 1 << 16 // 65536
 
-	// MaxPathLen bounds an encrypted path. Ciphertext plus encoding is a few
-	// times the plaintext, and Obsidian's own paths are bounded by the
-	// filesystem, so this has room to spare while still being a bound.
-	MaxPathLen = 4096
+	// MaxPathLen bounds a path, in bytes of UTF-8: the protocol's bound, which
+	// the path policy in internal/paths enforces (plan/protocol.md, "Paths").
+	// Named here too because the read limit's arithmetic is written against
+	// the store's constants.
+	MaxPathLen = paths.MaxPathBytes
 
 	// MaxDeviceLen bounds a device name.
 	//
@@ -87,11 +90,12 @@ const (
 	// devices row and, unlike the name, the device's identity.
 	//
 	// A device chooses its own: 16 random bytes, 22 characters of base64url.
-	// The bound is generous for the same reason MaxInviteLen is, and costs the
-	// same. There is no lower bound, because the server cannot check that the
-	// bytes were random and pretending to would be a check that passes on
-	// "AAAAAAAAAAAAAAAAAAAAAA". What makes a collision safe is the primary key
-	// refusing the second registration, not the length.
+	// The bound is generous, leaving room for a longer id without letting a
+	// client park kilobytes in a primary key. There is no lower bound, because
+	// the server cannot check that the bytes were random and pretending to
+	// would be a check that passes on "AAAAAAAAAAAAAAAAAAAAAA". What makes a
+	// collision safe is the redemption refusing an id the vault already has,
+	// not the length.
 	MaxDeviceIDLen = 64
 
 	// MaxVaultLen bounds a vault id, for the same reason as MaxDeviceLen and
@@ -100,48 +104,7 @@ const (
 	// about logs and memory rather than paths. 64 is the device bound, and a
 	// vault name is the same kind of thing.
 	MaxVaultLen = 64
-
-	// MaxWrappedLen bounds the wrapped data key a device stores at claim. The
-	// real thing is 60 bytes of nonce and AES-GCM output, 80
-	// characters in base64url; 256 leaves room for a scheme that pads without
-	// letting an authenticated client park kilobytes in a row the server hands
-	// to every device at hello.
-	MaxWrappedLen = 256
-
-	// MaxSealedLen bounds the sealed data key an invite carries, and
-	// MaxInviteLen the invite identifier. A sealed 32-byte key is 60 bytes,
-	// 80 in base64url; a 128-bit identifier is 22. The bounds are generous for
-	// the same reason MaxWrappedLen is and for the same cost.
-	MaxSealedLen = 256
-	MaxInviteLen = 64
-
-	// ChunkOverheadMax bounds what encryption adds to one chunk: a nonce, an
-	// authentication tag, and any framing. AES-GCM-SIV needs 12 plus 16, so
-	// this is an order of magnitude of headroom, which is deliberate: it is the
-	// slack a future scheme, or padding to obscure sizes, would need. Anything
-	// wanting more than this is a protocol version, not a bigger constant.
-	ChunkOverheadMax = 256
 )
-
-// CiphertextBudget is the most stored ciphertext an entry may reference, given
-// the plaintext size it declares and how many chunks it splits into.
-//
-// A client chunks size bytes of plaintext into n pieces and encrypts each, so
-// the honest total is size + n*overhead and this is an upper bound on it.
-//
-// It exists because size and chunk count were bounded independently, and their
-// product was the real ceiling: an entry declaring one byte could reference
-// 65536 chunks of a megabyte each, and neither bound was violated. Every other
-// unbounded case in this package is closed with a comment saying why; this one
-// was the exception.
-//
-// The comparison is per *reference*, not per distinct body. A file with two
-// identical blocks counts that ciphertext twice, because its declared size
-// counts the plaintext twice, and the two numbers have to be about the same
-// thing to be comparable.
-func CiphertextBudget(size int64, n int) int64 {
-	return size + int64(n)*ChunkOverheadMax
-}
 
 var (
 	// ErrUnknownVault is a write against a vault id with no row. Callers must
@@ -156,36 +119,28 @@ var (
 	// finishes rather than as an error.
 	ErrChunkMissing = errors.New("entry references a chunk the server does not hold")
 
+	// ErrBadPath is a path the protocol refuses (plan/protocol.md, "Paths"),
+	// answered `badpath`. Every refusal is a *PathError carrying the rule that
+	// refused it, which both implementations report identically.
+	ErrBadPath = errors.New("path refused")
+
 	// ErrBadEntry is a structurally invalid entry, rejected on the way in.
 	// docs/protocol.md: validate at put, with a reason, rather than discovering
 	// it on download when it is too late to refuse.
 	ErrBadEntry = errors.New("invalid entry")
 
-	// ErrOverBudget is an entry referencing more ciphertext than its declared
-	// plaintext size can account for. See CiphertextBudget.
-	ErrOverBudget = errors.New("entry references more ciphertext than its declared size allows")
-
-	// ErrRotated is a rotation whose compare-and-swap found another hash in
-	// the row: somebody else rotated the vault between this session's
-	// authentication and its rotate.
-	//
-	// It is a distinct error rather than ErrUnknownVault because the two mean
-	// opposite things to the caller. An unknown vault is nothing to replace; a
-	// lost race is a vault that now belongs to a credential this session does
-	// not hold, and the one thing it must not do is replace it anyway. That is
-	// exactly what an unconditional update did: two devices connected under one
-	// root both rotated, the second overwrote the first, and the device the
-	// first was revoking owned the vault.
-	ErrRotated = errors.New("the vault was rotated by another device")
+	// ErrSizeMismatch is an entry whose declared size is not the sum of its
+	// chunks' lengths (plan/protocol.md, "Chunk bodies"). It is ErrBadEntry as
+	// well, so it is refused as `badentry` like every other shape the entry
+	// itself got wrong. See sizeAccountedFor.
+	ErrSizeMismatch = fmt.Errorf("%w: the declared size is not the sum of its chunks' lengths", ErrBadEntry)
 
 	// ErrDeviceExists is a registration for a device id this vault already
 	// holds. It is its own error because the caller has to be able to tell it
-	// from a server fault: a fault is worth retrying and this never is, and
-	// because the conversion in step 3 of the per-device credentials work is
-	// meant to be idempotent. A device that crashed after registering and
-	// before writing its own config comes back and gets this; the recipe is to
-	// read DeviceByID and treat a row whose hash is already this device's as
-	// the registration having happened, rather than to retry for ever.
+	// from a server fault: a fault is worth retrying and this never is. The one
+	// production path that registers a device is an invite's redemption, which
+	// refuses an existing id as ErrNoInvite; this is RegisterDevice's, which
+	// the tests use to seed a device.
 	ErrDeviceExists = errors.New("this vault already has a device with that id")
 
 	// ErrUnknownDevice is an operation naming a device row that is not there,
@@ -193,24 +148,6 @@ var (
 	// distinct so that a session can tell "you were revoked while connected"
 	// from "the database is broken", and stop rather than retry.
 	ErrUnknownDevice = errors.New("no such device on this vault")
-
-	// ErrLastDevice is a revocation that would leave a vault with no devices
-	// at all. Reachable only by the recovery key after that, which is a real
-	// thing to want and not a thing to do by accident, so RevokeDevice refuses
-	// it unless the caller says the word, and the session refuses the word
-	// itself to anything but the recovery key. See its comment.
-	ErrLastDevice = errors.New("that is the vault's last device")
-
-	// ErrNoInvite is a redemption naming an invite that is unknown, expired or
-	// already used, and it is deliberately one error for the three. Saying
-	// which would tell somebody guessing identifiers that it had found a real
-	// one, and after a redemption it would confirm that this vault had an
-	// invite out a moment ago. The session turns every one of them into the
-	// same `auth` refusal a wrong credential gets.
-	//
-	// A malformed identifier is this too, for the same reason: the shape of an
-	// invite must not be the answer to whether that invite exists.
-	ErrNoInvite = errors.New("no invite on this vault under that identifier")
 )
 
 // Entry is one version of one file.
@@ -220,8 +157,8 @@ var (
 // doc refuses teams outright rather than half-building them.
 type Entry struct {
 	UID     int64  `json:"uid"`
-	Path    string `json:"path"`  // deterministically encrypted by the client
-	Size    int64  `json:"size"`  // plaintext size, as declared by the client
+	Path    string `json:"path"`  // plaintext NFC path, checked by the path policy
+	Size    int64  `json:"size"`  // bytes, the sum of the chunks' raw lengths
 	CTime   int64  `json:"ctime"` // milliseconds, client clock
 	MTime   int64  `json:"mtime"`
 	Folder  bool   `json:"folder"`
@@ -233,29 +170,16 @@ type Entry struct {
 	// deleted-files list suppress the phantom deletion a rename leaves behind.
 	Prev string `json:"prev,omitempty"`
 
-	// Mac authenticates everything in this entry except the uid, and Parent
-	// names the version it was written on top of. Both are the client's, both
-	// are opaque here, and the server can check neither: it holds no key. It
-	// stores them and hands them back so that the devices can, which is the
-	// whole point. An entry without them is one a server could say anything
-	// about: which is why every entry has them.
-	// Always sent, never omitted. An absent field arrives as undefined rather
-	// than as the empty string, and a parent of "" is a real value: the first
-	// version of a file, written on top of nothing.
-	Mac    string `json:"mac"`
-	Parent string `json:"parent"`
-
 	// nChunks is how many chunk rows this entry was written with, read back
-	// from the row, or -1 for one written before the column existed.
+	// from the row.
 	//
 	// Unexported, so it never reaches the wire: it is not the client's
-	// business and it is not covered by the authenticator. It exists so
-	// `attachChunks` can tell a chunk list that lost its tail from one that
-	// was always that long, which neither the ord sequence nor the size check
-	// can see.
+	// business. It exists so `attachChunks` can tell a chunk list that lost
+	// its tail from one that was always that long, which neither the ord
+	// sequence nor the size check can see.
 	nChunks int
 
-	// Chunks names the encrypted chunks of this version, in order. Empty for a
+	// Chunks names the raw chunks of this version, in order. Empty for a
 	// folder, a deletion, and a zero-byte file, and empty rather than absent:
 	// there is no omitempty here, and the read paths fill in an empty slice, so
 	// the field is always an array on the wire. A nil slice marshals to JSON
@@ -281,70 +205,21 @@ const (
 	SyncNormal SyncMode = "NORMAL"
 )
 
+// schema is every table and index a store has, as statements that are safe to
+// run again on a store that already has them.
+//
+// No pragmas. A pragma in a statement applies to the one pooled connection
+// that ran it, so the ones every connection needs (`busy_timeout`,
+// `synchronous`, `foreign_keys` and `temp_store`) are in the connection string
+// in open.go, and the one that is a property of the file, `journal_mode`, is set
+// once when the store is initialised. `temp_store = MEMORY` in particular is
+// load-bearing: see dsn for the production incident behind it and for why it
+// used to reach only one connection.
 const schema = `
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
--- Statement journals in memory, because this server is built to run with a
--- read-only root filesystem and nothing else needs a scratch file.
---
--- SQLite writes a statement journal when a statement inside a transaction may
--- have to be rolled back on its own, which is exactly what a SAVEPOINT is for,
--- and it puts that journal in a temp directory. The shipped container mounts
--- only /data and sets read_only, so there is no temp directory to have: the
--- batched commit added in 0.8.4 asked for one and got
--- SQLITE_IOERR_GETTEMPPATH (6410) on every batch large enough to need it,
--- twenty-two thousand times in a day on the author's own server before anyone
--- noticed, because a single put never takes that path and a failed batch just
--- looks like a client retrying.
---
--- MEMORY is the right answer here rather than a workaround: these
--- transactions hold one batch of entries, the size of which the protocol
--- already bounds, so the journal they would spill is small and the disk it
--- would spill to is one this server is deliberately not given.
-PRAGMA temp_store = MEMORY;
-
 CREATE TABLE IF NOT EXISTS vaults (
   vault_id   TEXT    PRIMARY KEY,
   next_uid   INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
-  -- Hex SHA-256 of the vault's auth key, or empty before a device has claimed
-  -- the vault. The key itself is never stored: a server holding one could
-  -- write to the vault it is meant only to keep, and a stolen disk already
-  -- yields every byte of ciphertext without also handing over the credential.
-  --
-  -- It is the registration credential and nothing else: may register a device,
-  -- may not sync. That is what lets the recovery key put the first device back
-  -- after every device is lost, and it is why revoking a device means
-  -- something, which under one credential every device shared it never could.
-  --
-  -- The narrowing is structural rather than remembered. A session that offers
-  -- this credential is a registrar and the code that serves entries is not
-  -- reachable from it; the sync credential is devices.auth_hash, via
-  -- DeviceByID. Keeping this hash as a sync credential once device rows exist
-  -- would be a vault whose devices can all be bypassed by the one credential
-  -- they were meant to replace: a device list with no revocation, which is
-  -- worse than no list, because it looks like it works.
-  -- TestTheVaultCredentialCannotSync is what stops that coming back.
-  auth_hash  TEXT    NOT NULL DEFAULT '',
-  -- The vault's data key, wrapped by the first device under a key derived
-  -- from the root secret, and empty only before a device has claimed the
-  -- vault. The server cannot open it and never needs to; it stores it so a
-  -- registrar can unwrap it for each device it registers, and so a rotate can
-  -- swap hash and blob in one statement without any device losing the history
-  -- sealed under it. Since protocol 4 a device holds the data key itself and
-  -- ignores this blob; what still reads it is a registration.
-  wrapped    TEXT    NOT NULL DEFAULT '',
-  -- How many times the vault's secret has been rotated. Bumped inside the
-  -- rotation transaction, so it moves at exactly the moment the credential
-  -- and the blob do.
-  --
-  -- A rotation does not touch a device row, so a device session is not
-  -- affected by one at all, and the only session that can be is a
-  -- registrar's, whose two powers are each conditional on this row's
-  -- auth_hash inside the statement that exercises them. So the number is not
-  -- a guard against a half-rotated session; it is the record, and the only
-  -- evidence a vault's secret has ever been replaced.
-  rotations  INTEGER NOT NULL DEFAULT 0,
   -- How many purges have dropped history from this vault. Bumped inside the
   -- purge transaction, and only when the purge removed something, so it moves
   -- exactly when versions leave the store for good.
@@ -358,9 +233,10 @@ CREATE TABLE IF NOT EXISTS vaults (
 );
 
 -- One row per device that may reach this vault. The device chooses its own
--- device_id (16 random bytes, base64url) and its own auth key, and sends only
--- the hash of the key, so the server can recognise a device and can never be
--- one. name is a label a person reads; device_id is the identity.
+-- device_id (16 random bytes, base64url) and its own 32-byte token, and the
+-- row holds only the token's hash (HashToken), so the server can recognise a
+-- device and can never be one. name is a label a person reads; device_id is
+-- the identity.
 --
 -- Revoking is a DELETE and not a revoked_at flag. A tombstone invites the
 -- question "is this row still checked", and the answer must never be "it
@@ -369,44 +245,16 @@ CREATE TABLE IF NOT EXISTS vaults (
 -- is lost by it either, because the audit trail is elsewhere and untouched:
 -- entries.device records which device wrote every version, and revoking does
 -- not rewrite history.
---
--- No foreign key to vaults, matching invites. The vault row is checked inside
--- RegisterDevice's transaction instead, because the rule is not "a vault row
--- exists" but "the vault is claimed", which no foreign key can express.
 CREATE TABLE IF NOT EXISTS devices (
   vault_id   TEXT    NOT NULL,
   device_id  TEXT    NOT NULL,   -- 16 random bytes, base64url, chosen by the device
   name       TEXT    NOT NULL DEFAULT '',
-  auth_hash  TEXT    NOT NULL,   -- hex SHA-256 of this device's auth key
+  auth_hash  TEXT    NOT NULL,   -- hex SHA-256 of the device's 32 raw token bytes
   created_at INTEGER NOT NULL,
   last_seen  INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (vault_id, device_id)
 );
-
--- Single-use invites for adding a device without showing the recovery key
--- again. sealed is the vault's data key sealed under an invite key the server
--- never sees; used is flipped in the same statement that reads the row and in
--- the same transaction that writes the device row, so an invite is never spent
--- without registering a device and no device is ever registered under an
--- invite that is still live (RedeemInviteFor). Expired rows are swept lazily
--- whenever an invite is added to the vault, and every row goes when the
--- vault's secret is rotated: an invite is a device's authority to add a
--- device, and a rotation exists to take a device's authority away.
---
--- Since protocol 4 the blob is the data key rather than the root. A device
--- does not hold the root, so it has none to seal, and an invite that handed
--- one over would give the new device the credential that registers devices
--- and rewraps the vault: everything revoking a device is supposed to take
--- back.
-CREATE TABLE IF NOT EXISTS invites (
-  vault_id   TEXT    NOT NULL,
-  invite     TEXT    NOT NULL,
-  sealed     TEXT    NOT NULL,
-  expires_at INTEGER NOT NULL,
-  used       INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (vault_id, invite)
-);
-
+` + invitesSchema + `
 CREATE TABLE IF NOT EXISTS entries (
   vault_id  TEXT    NOT NULL,
   uid       INTEGER NOT NULL,
@@ -418,25 +266,14 @@ CREATE TABLE IF NOT EXISTS entries (
   deleted   INTEGER NOT NULL DEFAULT 0,
   device    TEXT    NOT NULL DEFAULT '',
   prev_path TEXT    NOT NULL DEFAULT '',
-  -- The client's authenticator over everything in this row that is not the
-  -- uid, and the version it was written on top of. Opaque here: the server
-  -- holds no key, cannot check either, and stores them so the devices can.
-  mac       TEXT    NOT NULL DEFAULT '',
-  parent    TEXT    NOT NULL DEFAULT '',
   -- How many chunk rows this entry was written with.
   --
   -- The ord sequence catches a gap in the middle and the size check catches a
   -- list that lost every row, and between them sits the case neither sees: a
   -- truncated tail. Three chunks becoming two passes both, and the entry then
-  -- reads as a complete shorter file that every device refuses, because the
-  -- client's authenticator covers the chunk list. Nothing recorded what the
-  -- writer wrote, so nothing could tell.
-  --
-  -- Negative one is "written before this column existed", which the migration
-  -- leaves on every older row and which the read path treats as unknown rather
-  -- than as zero. The same shape as the mac column, and for the same reason:
-  -- the server cannot reconstruct what it never stored.
-  n_chunks  INTEGER NOT NULL DEFAULT -1,
+  -- reads as a complete shorter file. Nothing recorded what the writer wrote,
+  -- so nothing could tell. Always written, so there is no "unknown" value.
+  n_chunks  INTEGER NOT NULL,
   PRIMARY KEY (vault_id, uid)
 );
 
@@ -466,7 +303,7 @@ CREATE INDEX IF NOT EXISTS entry_chunks_by_name ON entry_chunks(vault_id, name);
 -- 112 ms against 5.6 ms with this, and the write it costs is 5 us against a
 -- chunk fsync of 7.8 ms.
 CREATE INDEX IF NOT EXISTS entries_by_prev ON entries(vault_id, prev_path, uid);
-`
+` + liveSchema
 
 // Store is the server's whole persistent state: entries in SQLite, bodies in a
 // chunk store.
@@ -475,12 +312,9 @@ type Store struct {
 	chunks *chunks.Store
 	dbPath string
 
-	// hasChunkCount is whether the entries table has `n_chunks`.
-	//
-	// A writable open migrates one in; a read-only open must not, so an older
-	// backup is read without it. Asked once at open rather than at every
-	// query.
-	hasChunkCount bool
+	// identity is the store's identity row, read and validated when it was
+	// opened, before anything was written (PLAN.md section 2.8).
+	identity Identity
 
 	// readOnly is whether this handle was opened for inspection.
 	//
@@ -566,8 +400,8 @@ func (s *Store) Close() error { return s.db.Close() }
 // A seam for tests that have to produce a store in a state no code path can
 // reach: a backup whose row differs from the source in a field nothing here
 // would ever change on its own, for instance, which is what proves the purge's
-// comparison looks at more than the authenticator (R04). Named so that its one
-// legitimate use is obvious and any other is not.
+// comparison looks at every field (R04). Named so that its one legitimate use
+// is obvious and any other is not.
 func (s *Store) ExecForTest(statement string, args ...any) error {
 	_, err := s.db.Exec(statement, args...)
 	return err
@@ -599,8 +433,8 @@ func (s *Store) ensureVaultLocked(vaultID string, now int64) error {
  * Writing
  * ---------------------------------------------------------------- */
 
-// isHex64 is the shape of a SHA-256 digest written out, which is what both the
-// authenticator and the parent name are.
+// isHex64 is the shape of a SHA-256 digest written out, which is what a stored
+// credential is.
 func isHex64(v string) bool {
 	if len(v) != 64 {
 		return false
@@ -614,17 +448,102 @@ func isHex64(v string) bool {
 	return true
 }
 
+// PathError is a path the protocol refuses, and which of its rules refused it.
+//
+// The message begins with the reason code and a colon, "dotprefix: the path
+// ...", because the reason has to reach the person whose file will not sync
+// (PLAN.md section 4.9) and the wire has one code for all of them. A client
+// reads the reason as the text before the first colon. The codes and their
+// order are the fixture's, shared with the TypeScript client.
+type PathError struct {
+	// Field is "path" or "prev": which of the entry's two paths it is.
+	Field  string
+	Reason paths.Reason
+	// Len is the length in bytes the reason is about, which the message gives
+	// so the number that is wrong is in front of the person: the whole path's
+	// for "toolong", the first segment over the limit for "segmenttoolong".
+	Len int
+}
+
+// pathError is the PathError for p, refused by paths.Check with reason r.
+func pathError(field, p string, r paths.Reason) *PathError {
+	n := len(p)
+	if r == paths.ReasonSegmentLong {
+		for _, seg := range strings.Split(p, "/") {
+			if len(seg) > paths.MaxSegmentBytes {
+				n = len(seg)
+				break
+			}
+		}
+	}
+	return &PathError{Field: field, Reason: r, Len: n}
+}
+
+func (e *PathError) Error() string {
+	var why string
+	switch e.Reason {
+	case paths.ReasonUTF8:
+		why = "is not valid UTF-8"
+	case paths.ReasonEmpty:
+		why = "is empty"
+	case paths.ReasonTooLong:
+		why = fmt.Sprintf("is %d bytes of UTF-8, and a path is at most %d", e.Len, paths.MaxPathBytes)
+	case paths.ReasonSegmentLong:
+		why = fmt.Sprintf("has a file or folder name of %d bytes of UTF-8, and a name is at most %d "+
+			"on the disks Obsidian runs on", e.Len, paths.MaxSegmentBytes)
+	case paths.ReasonControl:
+		why = "contains a control character"
+	case paths.ReasonNFC:
+		why = "is not in Unicode normal form C"
+	case paths.ReasonNBSP:
+		why = "contains a no-break space (U+00A0 or U+202F), which Obsidian turns into an ordinary space"
+	case paths.ReasonBackslash:
+		why = "contains a backslash, which Obsidian turns into a slash"
+	case paths.ReasonSlash:
+		why = "begins or ends with a slash"
+	case paths.ReasonEmptySegment:
+		why = "has an empty segment"
+	case paths.ReasonDotSegment:
+		why = "has a segment that is . or .."
+	case paths.ReasonDotPrefix:
+		why = "has a segment that begins with a dot, and such a path never syncs: it is where " +
+			".obsidian, .trash and a client's own state live"
+	case paths.ReasonStaging:
+		why = "contains " + paths.StagingMark + ", which only a client's half-written file carries"
+	default:
+		why = "is refused"
+	}
+	return fmt.Sprintf("%s: the %s %s", e.Reason, e.Field, why)
+}
+
+// Unwrap makes a PathError an ErrBadPath.
+func (e *PathError) Unwrap() error { return ErrBadPath }
+
+// CheckPaths applies the path policy to an entry's path and, on a rename, to
+// the path it came from: the rules of plan/protocol.md, "Paths", through
+// internal/paths, which is where they are written down once for the server.
+func (e Entry) CheckPaths() error {
+	if r := paths.Check(e.Path); r != "" {
+		return pathError("path", e.Path, r)
+	}
+	if e.Prev != "" {
+		if r := paths.Check(e.Prev); r != "" {
+			return pathError("prev", e.Prev, r)
+		}
+	}
+	return nil
+}
+
 // Validate checks an entry's shape. Exported so the session can reject a put
 // before reading any body, and so the reason is the same one in both places.
+//
+// The paths first, and for every kind of entry: a folder and a deletion carry
+// a path like any file, and a check that skipped them would store a folder no
+// client can create or delete. F20 was exactly that shape: a rule applied to
+// files alone, and rows every reader then refused.
 func (e Entry) Validate() error {
-	if e.Path == "" {
-		return fmt.Errorf("%w: empty path", ErrBadEntry)
-	}
-	if len(e.Path) > MaxPathLen {
-		return fmt.Errorf("%w: path is %d bytes, max %d", ErrBadEntry, len(e.Path), MaxPathLen)
-	}
-	if len(e.Prev) > MaxPathLen {
-		return fmt.Errorf("%w: prev path is %d bytes, max %d", ErrBadEntry, len(e.Prev), MaxPathLen)
+	if err := e.CheckPaths(); err != nil {
+		return err
 	}
 	if e.Prev == e.Path && e.Prev != "" {
 		return fmt.Errorf("%w: prev path equals path", ErrBadEntry)
@@ -644,27 +563,6 @@ func (e Entry) Validate() error {
 		if !chunks.ValidName(n) {
 			return fmt.Errorf("%w: chunk %d: %q is not a chunk name", ErrBadEntry, i, n)
 		}
-	}
-
-	// The authenticator's shape, before the split below (F20).
-	//
-	// This used to sit at the end, after the early return for a folder or a
-	// deletion, so those two kinds were committed with an empty MAC and a
-	// malformed parent. Both are entries every honest client then refuses for
-	// ever, and the only party who could have noticed is the one that wrote
-	// them. The server holds no key and cannot check the value; it can insist
-	// there is one of the right shape, so the refusal lands on the writer at
-	// the moment of writing rather than on everybody else afterwards.
-	//
-	// After the checks above, so an entry that is wrong in some other way says
-	// so first: a missing authenticator is the least specific thing that can be
-	// wrong with an entry and the most confusing to be told when the real fault
-	// is the path.
-	if !isHex64(e.Mac) {
-		return fmt.Errorf("%w: mac is not a 64 character hex digest", ErrBadEntry)
-	}
-	if e.Parent != "" && !isHex64(e.Parent) {
-		return fmt.Errorf("%w: parent is neither empty nor a 64 character hex digest", ErrBadEntry)
 	}
 
 	if !e.HasBody() {
@@ -690,10 +588,8 @@ func (e Entry) Validate() error {
 	}
 	// The reverse half: a zero-byte file carries no chunks. Both shapes were
 	// legal, which made an empty note two different things on the wire and a
-	// trap for whoever writes the client. Encrypting empty plaintext does
-	// produce a chunk's worth of ciphertext, so a client has to special case
-	// this either way; the biconditional at least means the server can check
-	// the relationship completely, and an empty note costs no body.
+	// trap for whoever writes the client. The biconditional means the server
+	// can check the relationship completely, and an empty note costs no body.
 	if e.Size == 0 && len(e.Chunks) > 0 {
 		return fmt.Errorf("%w: zero-byte file carries %d chunks; an empty file has none",
 			ErrBadEntry, len(e.Chunks))
@@ -790,7 +686,7 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 	// than likely.
 	still := pending[:0]
 	for _, i := range pending {
-		if err := s.chunksAccountedFor(vaultID, entries[i]); err != nil {
+		if err := s.sizeAccountedFor(vaultID, entries[i]); err != nil {
 			out[i] = ManyResult{Err: err}
 			continue
 		}
@@ -813,7 +709,7 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 
 	committed := 0
 	for _, i := range pending {
-		name := fmt.Sprintf("trew_entry_%d", i)
+		name := fmt.Sprintf("%s_entry_%d", Product, i)
 		if _, err := tx.Exec("SAVEPOINT " + name); err != nil {
 			return nil, err
 		}
@@ -829,7 +725,8 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 		// A refusal this entry earned, rolled back on its own. Anything else is
 		// the database itself, and a batch that cannot talk to its database has
 		// no per-entry answer to give.
-		if !errors.Is(err, ErrStale) && !errors.Is(err, ErrBadEntry) && !errors.Is(err, ErrUnknownVault) {
+		if !errors.Is(err, ErrStale) && !errors.Is(err, ErrBadEntry) && !errors.Is(err, ErrUnknownVault) &&
+			!errors.Is(err, ErrCollision) {
 			return nil, err
 		}
 		if _, rerr := tx.Exec("ROLLBACK TO SAVEPOINT " + name); rerr != nil {
@@ -863,20 +760,43 @@ func checkConditional(e Entry, base, prevBase int64) error {
 	return ValidateBase(prevBase)
 }
 
-// chunksAccountedFor is the presence and budget check, which the caller must
-// hold writeMu across.
-func (s *Store) chunksAccountedFor(vaultID string, e Entry) error {
-	var stored int64
+// sizeAccountedFor is the presence check and the size invariant, which the
+// caller must hold writeMu across: every chunk is a durable body, and the
+// declared size is exactly the sum of their lengths (PLAN.md section 2.2).
+//
+// # Why the sum costs nothing
+//
+// The size check runs on the hot path of every write, inside the commit lock,
+// for up to 256 entries of up to 65,536 chunks each, so its cost was decided
+// rather than inherited (PLAN.md section 2.2 asks that it be written down).
+// It adds no work: the presence check already stats every chunk under this
+// lock, which it must, because presence answered anywhere else races the
+// chunk sweep. That stat returns the body's length, and the chunk store holds
+// raw chunk bytes named by their SHA-256 and verified when stored, so the
+// length on disk is the raw length. Summing what the stat already returned is
+// the whole check. No metadata table carries lengths beside the files, so
+// there is no second record of a length that could disagree with the file it
+// describes.
+//
+// Every reference counts, repeats included: the declared size counts a
+// repeated block once per occurrence, and the sum has to count the same
+// thing. Chunks already held are counted exactly like ones uploaded a moment
+// ago, which is what makes this the authority: an entry pointing at bodies the
+// server has, with nothing uploaded, is checked here and nowhere else.
+func (s *Store) sizeAccountedFor(vaultID string, e Entry) error {
+	var sum int64
 	for i, n := range e.Chunks {
 		size, ok := s.chunks.Size(vaultID, n)
 		if !ok {
 			return fmt.Errorf("%w: chunk %d of %d: %s", ErrChunkMissing, i+1, len(e.Chunks), n)
 		}
-		stored += size
+		// No overflow to guard: 65,536 chunks of at most ChunkMax each is
+		// 2^36 bytes, far inside an int64.
+		sum += size
 	}
-	if budget := CiphertextBudget(e.Size, len(e.Chunks)); stored > budget {
-		return fmt.Errorf("%w: %d chunks holding %d bytes for a declared size of %d, budget %d",
-			ErrOverBudget, len(e.Chunks), stored, e.Size, budget)
+	if sum != e.Size {
+		return fmt.Errorf("%w: %d chunks holding %d bytes for a declared size of %d",
+			ErrSizeMismatch, len(e.Chunks), sum, e.Size)
 	}
 	return nil
 }
@@ -903,6 +823,13 @@ func writeEntry(tx *sql.Tx, vaultID string, e Entry, base *int64, prevBase int64
 		}
 	}
 
+	// The collision rule, after the preconditions so a stale write is told it
+	// is stale first, and before a uid is taken so a refused entry gives its
+	// uid back with its savepoint.
+	if err := checkCollision(tx, vaultID, e); err != nil {
+		return 0, err
+	}
+
 	var uid int64
 	err := tx.QueryRow(
 		`UPDATE vaults SET next_uid = next_uid + 1 WHERE vault_id = ?
@@ -915,10 +842,10 @@ func writeEntry(tx *sql.Tx, vaultID string, e Entry, base *int64, prevBase int64
 	}
 
 	if _, err := tx.Exec(
-		`INSERT INTO entries (vault_id, uid, path, size, ctime, mtime, folder, deleted, device, prev_path, mac, parent, n_chunks)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO entries (vault_id, uid, path, size, ctime, mtime, folder, deleted, device, prev_path, n_chunks)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		vaultID, uid, e.Path, e.Size, e.CTime, e.MTime,
-		boolToInt(e.Folder), boolToInt(e.Deleted), e.Device, e.Prev, e.Mac, e.Parent,
+		boolToInt(e.Folder), boolToInt(e.Deleted), e.Device, e.Prev,
 		len(e.Chunks)); err != nil {
 		return 0, err
 	}
@@ -929,6 +856,11 @@ func writeEntry(tx *sql.Tx, vaultID string, e Entry, base *int64, prevBase int64
 			vaultID, uid, i, n); err != nil {
 			return 0, err
 		}
+	}
+	// The live set moves with the entry, in the same transaction or savepoint,
+	// so the next entry of a batch is checked against the state this one left.
+	if err := moveLive(tx, vaultID, e); err != nil {
+		return 0, err
 	}
 	return uid, nil
 }
@@ -946,13 +878,12 @@ func (s *Store) appendEntry(vaultID string, e Entry, base *int64, prevBase int64
 	// across the check and the commit is what makes "committed implies
 	// serveable" true rather than likely.
 	//
-	// The same stat yields each body's size, and the total is checked against
-	// what the declared plaintext size can account for. This is the
-	// authoritative check: the session bounds uploads as they arrive so a
-	// hostile client cannot write the disk full before being refused, but that
-	// pre-check can be bypassed by referencing chunks the server already holds,
-	// and this one cannot be bypassed at all.
-	if err := s.chunksAccountedFor(vaultID, e); err != nil {
+	// The same stat yields each body's size, and the total must be the size
+	// the entry declares. This is the authoritative check: the session bounds
+	// uploads as they arrive so a hostile client cannot write the disk full
+	// before being refused, but that pre-check can be bypassed by referencing
+	// chunks the server already holds, and this one cannot be bypassed at all.
+	if err := s.sizeAccountedFor(vaultID, e); err != nil {
 		return 0, err
 	}
 
@@ -1008,25 +939,9 @@ func (s *Store) Quarantine(vaultID, name string) error {
  * Reading
  * ---------------------------------------------------------------- */
 
-// entryCols names every column an entry is read from, and is a function of
-// the store because one of them may not be there (R48).
-//
-// `n_chunks` arrived with the truncated-tail check. A read-only open does not
-// migrate, deliberately: an inspection command must not alter what it is
-// inspecting. So a backup written by the previous build has no such column,
-// the schema version still says it is readable, and every entry read failed
-// with `no such column` -- including the one `purge` uses to establish that a
-// backup covers what it is about to delete. A valid backup became unusable
-// because of a column that did not exist when it was taken.
-//
-// Absent, it selects the same -1 the migration writes, which the read path
-// already understands as "written before this was recorded".
+// entryCols names every column an entry is read from.
 func (s *Store) entryCols() string {
-	const shared = `uid, path, size, ctime, mtime, folder, deleted, device, prev_path, mac, parent`
-	if s.hasChunkCount {
-		return shared + `, n_chunks`
-	}
-	return shared + `, -1 AS n_chunks`
+	return `uid, path, size, ctime, mtime, folder, deleted, device, prev_path, n_chunks`
 }
 
 // Batch is a covered range of the uid sequence, in the shape the wire protocol
@@ -1203,7 +1118,7 @@ func (s *Store) Deleted(
 	limit int,
 	beforeUID int64,
 ) ([]Deletion, bool, error) {
-	q := `SELECT e.uid, e.path, e.size, e.ctime, e.mtime, e.folder, e.deleted, e.device, e.prev_path, e.mac, e.parent,
+	q := `SELECT e.uid, e.path, e.size, e.ctime, e.mtime, e.folder, e.deleted, e.device, e.prev_path,
 	             COALESCE((SELECT MAX(r.uid) FROM entries r
 	                        WHERE r.vault_id = e.vault_id AND r.path = e.path
 	                          AND r.deleted = 0 AND r.folder = 0 AND r.uid < e.uid), 0)
@@ -1250,7 +1165,7 @@ func (s *Store) Deleted(
 		var d Deletion
 		var prev sql.NullString
 		if err := rows.Scan(&d.UID, &d.Path, &d.Size, &d.CTime, &d.MTime,
-			&d.Folder, &d.Deleted, &d.Device, &prev, &d.Mac, &d.Parent, &d.RestorableUID); err != nil {
+			&d.Folder, &d.Deleted, &d.Device, &prev, &d.RestorableUID); err != nil {
 			return nil, false, err
 		}
 		d.Prev = prev.String
@@ -1369,9 +1284,8 @@ func attachChunks(tx *sql.Tx, vaultID string, entries []Entry) error {
 			continue // a uid inside the span that this result set does not cover
 		}
 		// ord is the wire order of the chunks and the order the client
-		// reassembles in. A gap here would concatenate the file wrongly and
-		// produce plaintext that fails to decrypt, so it is checked rather
-		// than assumed.
+		// reassembles in. A gap here would concatenate the file wrongly, so it
+		// is checked rather than assumed.
 		if int(ord) != len(entries[i].Chunks) {
 			return fmt.Errorf("entry %d: chunk ord %d out of sequence at position %d",
 				uid, ord, len(entries[i].Chunks))
@@ -1396,13 +1310,8 @@ func attachChunks(tx *sql.Tx, vaultID string, entries []Entry) error {
 		// And as many as it was written with. The ord sequence sees a gap in
 		// the middle and the check above sees a list that lost every row; a
 		// tail that went missing passes both, and the entry then reads as a
-		// complete shorter file that every device refuses, because the
-		// client's authenticator covers the chunk list.
-		//
-		// Skipped where the count is unknown, which is every row written
-		// before the column existed. Counting those now would record whatever
-		// state they are in as the truth.
-		if e.nChunks >= 0 && len(e.Chunks) != e.nChunks {
+		// complete shorter file.
+		if len(e.Chunks) != e.nChunks {
 			return fmt.Errorf("entry %d of vault %q was written with %d chunks and has %d",
 				e.UID, vaultID, e.nChunks, len(e.Chunks))
 		}
@@ -1567,10 +1476,10 @@ func (s *Store) Stats(vaultID string) (Stats, error) {
 }
 
 // Oversize is a live file whose declared size is above some ceiling: the uid
-// of its newest version and that size. Paths are sealed, so these two are all
-// the server can say about it.
+// of its newest version, its path and that size.
 type Oversize struct {
 	UID  int64
+	Path string
 	Size int64
 }
 
@@ -1586,7 +1495,7 @@ type Oversize struct {
 // a purge, which is a stricter rule than "do not strand a file" needs.
 func (s *Store) FilesOver(vaultID string, limit int64) ([]Oversize, error) {
 	rows, err := s.db.Query(
-		`SELECT e.uid, e.size
+		`SELECT e.uid, e.path, e.size
 		   FROM entries e
 		   JOIN (SELECT path, MAX(uid) AS uid FROM entries WHERE vault_id = ? GROUP BY path) latest
 		     ON e.path = latest.path AND e.uid = latest.uid
@@ -1599,7 +1508,7 @@ func (s *Store) FilesOver(vaultID string, limit int64) ([]Oversize, error) {
 	var out []Oversize
 	for rows.Next() {
 		var o Oversize
-		if err := rows.Scan(&o.UID, &o.Size); err != nil {
+		if err := rows.Scan(&o.UID, &o.Path, &o.Size); err != nil {
 			return nil, err
 		}
 		out = append(out, o)
@@ -1823,13 +1732,6 @@ func (s *Store) Purge(vaultID string, grace time.Duration) (PurgeReport, error) 
 // inTx runs fn in a transaction, committing if it returns nil and rolling back
 // otherwise. It is the shape a purge needs: an irreversible delete and the
 // checks that prove it right have to stand or fall together.
-//
-// The two key-material writes now rely on it for the same all-or-nothing
-// reason. AddInvite checks that the vault is claimed, sweeps the expired rows
-// and inserts; Rotate swaps the auth hash and the wrapped data key in one
-// statement and then deletes every outstanding invite, because they seal the
-// root being retired. Half of either is a vault whose credential and whose key
-// material disagree.
 func (s *Store) inTx(fn func(*sql.Tx) error) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -1958,14 +1860,15 @@ type Fault struct {
 	// Chunk is empty for a fault about the entry itself rather than a body.
 	Chunk string
 	// Row names a registry row instead of an entry: `device "alfa"`, `invite
-	// "AAAA"`. Empty for an entry fault, which UID and Path name. The two
+	// "AAAAAAAAAAA"`. Empty for an entry fault, which UID and Path name. The two
 	// cannot both be set, and String prints whichever there is: a fault about
 	// a device row has no uid to print, and printing uid 0 for it would send
 	// somebody looking for an entry.
 	Row string
 	// Reason is one of a fixed vocabulary, because things match on it:
-	// "missing", "corrupt", "nochunks", "straychunks", "shortchunks",
-	// "chunkorder", "nomac", "badparent", "baddevice", "badinvite", "novault".
+	// "missing", "corrupt", "badsize", "nochunks", "straychunks",
+	// "shortchunks", "chunkorder", "badpath", "baddevice", "badinvite",
+	// "novault", "livekeys".
 	//
 	// Kept complete on purpose. It was written as though it were the whole
 	// list and then fell behind the code twice, so anything reading it to
@@ -1975,15 +1878,18 @@ type Fault struct {
 	Detail string
 }
 
+// String is the fault as a person reads it. The path is quoted: paths are in
+// the clear now, and one the policy refuses may hold a character that would
+// otherwise forge a line of the report it is printed in.
 func (f Fault) String() string {
 	switch {
 	case f.Row != "":
 		return fmt.Sprintf("vault %s %s: %s (%s)", f.VaultID, f.Row, f.Reason, f.Detail)
 	case f.Chunk == "":
-		return fmt.Sprintf("vault %s uid %d: %s (%s)", f.VaultID, f.UID, f.Reason, f.Detail)
+		return fmt.Sprintf("vault %s uid %d %q: %s (%s)", f.VaultID, f.UID, f.Path, f.Reason, f.Detail)
 	default:
-		return fmt.Sprintf("vault %s uid %d chunk %s: %s (%s)",
-			f.VaultID, f.UID, f.Chunk, f.Reason, f.Detail)
+		return fmt.Sprintf("vault %s uid %d %q chunk %s: %s (%s)",
+			f.VaultID, f.UID, f.Path, f.Chunk, f.Reason, f.Detail)
 	}
 }
 
@@ -2009,17 +1915,15 @@ type Verification struct {
 }
 
 // Verify walks every live entry and checks that its chunks exist. With deep, it
-// also reads each distinct vault/chunk body once and checks it against its name.
-// Counts and faults still include every reference to that body.
+// also reads each distinct vault/chunk body once and checks it against its name,
+// and checks every entry's declared size against the sum of its chunks'
+// lengths. Counts and faults still include every reference to that body.
 //
 // A dangling reference makes a client retry one download forever, which presents
 // as a sync that never finishes rather than as an error, so it is surfaced
-// explicitly. The corollary of chunk names being hashes of ciphertext is that
-// deep verification is complete for the bytes: no separate size-mismatch check
-// is possible here, and none is needed. What the server still
-// cannot verify is Entry.Size, the *plaintext* size the client declared, because
-// it never sees plaintext. That is a deliberate consequence of the server
-// holding no key, not an omission here.
+// explicitly. The store holds raw chunks named by their SHA-256, so deep
+// verification is complete for the bytes and for the sizes: every name and
+// every declared size can be recomputed from what is on disk.
 //
 // Deep also decodes the registry: see verifyRegistry.
 //
@@ -2037,7 +1941,28 @@ func (s *Store) Verify(deep bool) (Verification, error) {
 	entryFaults, entries, err := s.verifyEntries()
 	v.Faults = append(v.Faults, entryFaults...)
 	v.Entries = entries
+	if err != nil {
+		return v, err
+	}
+	liveFaults, err := s.verifyLive()
+	v.Faults = append(v.Faults, liveFaults...)
 	if err != nil || !deep {
+		return v, err
+	}
+
+	// The size invariant, from what is on the disk, for every version whose
+	// chunks are all present and sound: a chunk already reported missing or
+	// corrupt has no length worth comparing, and a second fault for it would
+	// be noise on the one report somebody reads to find the first.
+	unsound := map[entryKey]bool{}
+	for _, f := range v.Faults {
+		if f.Chunk != "" {
+			unsound[entryKey{f.VaultID, f.UID}] = true
+		}
+	}
+	sizeFaults, err := s.verifySizes(unsound)
+	v.Faults = append(v.Faults, sizeFaults...)
+	if err != nil {
 		return v, err
 	}
 
@@ -2045,6 +1970,76 @@ func (s *Store) Verify(deep bool) (Verification, error) {
 	v.Faults = append(v.Faults, registryFaults...)
 	v.Rows = rowsChecked
 	return v, err
+}
+
+// entryKey names one version across vaults.
+type entryKey struct {
+	vault string
+	uid   int64
+}
+
+// verifySizes is the size invariant, checked again from what is on the disk:
+// every version with a body declares exactly the sum of its chunks' lengths
+// (plan/protocol.md, "Chunk bodies"). The commit refuses one that does not
+// (ErrSizeMismatch), so a fault here is a row written behind the store's back,
+// or a body that is not the one its version was committed with, and a reader
+// assembling it gets a file of the wrong length.
+//
+// Lengths are stat sizes, once per distinct chunk: the deep pass before this
+// has read and hashed every body, so a body whose length is wrong is also a
+// body that failed its hash, and the stat is enough. The map is one entry per
+// distinct chunk, which is what a deep verify already walks.
+func (s *Store) verifySizes(skip map[entryKey]bool) ([]Fault, error) {
+	rows, err := s.db.Query(
+		`SELECT e.vault_id, e.uid, e.path, e.size, c.name
+		   FROM entries e JOIN entry_chunks c
+		     ON c.vault_id = e.vault_id AND c.uid = e.uid
+		  WHERE e.folder = 0 AND e.deleted = 0
+		  ORDER BY e.vault_id, e.uid, c.ord`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type chunkKey struct{ vault, name string }
+	sizes := map[chunkKey]int64{}
+	var faults []Fault
+	var cur Fault
+	var declared, sum int64
+	unknown, open := false, false
+	flush := func() {
+		if open && !unknown && !skip[entryKey{cur.VaultID, cur.UID}] && sum != declared {
+			f := cur
+			f.Reason = "badsize"
+			f.Detail = fmt.Sprintf("declares %d bytes and its chunks hold %d, so it assembles to a file of "+
+				"the wrong length", declared, sum)
+			faults = append(faults, f)
+		}
+	}
+	for rows.Next() {
+		var vault, path, name string
+		var uid, size int64
+		if err := rows.Scan(&vault, &uid, &path, &size, &name); err != nil {
+			return faults, err
+		}
+		if !open || vault != cur.VaultID || uid != cur.UID {
+			flush()
+			cur = Fault{VaultID: vault, UID: uid, Path: path}
+			declared, sum, unknown, open = size, 0, false, true
+		}
+		k := chunkKey{vault, name}
+		n, ok := sizes[k]
+		if !ok {
+			if n, ok = s.chunks.Size(vault, name); !ok {
+				// Missing, which the deep pass has reported already.
+				unknown = true
+				continue
+			}
+			sizes[k] = n
+		}
+		sum += n
+	}
+	flush()
+	return faults, rows.Err()
 }
 
 func (s *Store) verifyChunkRefs(deep bool) (faults []Fault, count int, err error) {
@@ -2125,16 +2120,16 @@ func (s *Store) verifyChunkRefs(deep bool) (faults []Fault, count int, err error
 // row is quieter: a device whose auth_hash has lost a character can never
 // match a credential again, so that device is refused with "not authorised",
 // which is the same thing the server says to a stranger, and no check anywhere
-// ever said the registry was unsound. An invite whose sealed blob is gone
-// redeems into a device holding no data key. Neither is reachable from the
-// entries walk above, because neither is an entry.
+// ever said the registry was unsound. An invite whose token hash is damaged is
+// an invite nobody can redeem, listed as though somebody could. Neither is
+// reachable from the entries walk above, because neither is an entry.
 //
 // What it checks is what the writes check, by calling the same predicates
 // rather than restating them: a row that would be refused today is a fault
-// however it came to be there. Lengths and shapes for the identifiers, the
-// hash digest, and the sealed blob; the two flags an invite carries; and that
-// the vault each row names is a vault this database holds and something has
-// claimed, since a device row can only be inserted onto a claimed one.
+// however it came to be there. Lengths and shapes for the identifiers and the
+// digests, the names, the timestamps that are not times at all, an invite's
+// spent and cancelled marks against each other, and that the vault each row
+// names is a vault this database holds.
 //
 // Deep only, and the count comes back so `verify` can print it. A shallow pass
 // leaves Rows at zero and says nothing about the registry rather than
@@ -2143,17 +2138,11 @@ func (s *Store) verifyChunkRefs(deep bool) (faults []Fault, count int, err error
 // What it deliberately cannot check:
 //
 //   - **Whether a credential is the right one.** The server holds digests of
-//     keys it has never seen. A hash of the correct shape that is not the
-//     hash of any key anybody holds is indistinguishable from one that is,
-//     from here and from anywhere else on this machine.
-//   - **Whether the sealed blob opens.** It is sealed under an invite key that
-//     never reached the server, so its shape is the whole of what can be said
-//     about it.
-//   - **Timestamps against each other.** created_at and last_seen come from
-//     the server's clock, and a clock that went backwards would make an
-//     ordering check fire on a vault that is perfectly sound. Only the
-//     impossible values are refused: a row made at or before the epoch, and a
-//     last_seen before it.
+//     tokens it has never kept. A hash of the correct shape that is not the
+//     hash of any token anybody holds is indistinguishable from one that is.
+//   - **Timestamps against each other.** They come from the server's clock,
+//     and a clock that went backwards would make an ordering check fire on a
+//     vault that is perfectly sound. Only the impossible values are refused.
 //   - **Rows that are missing.** Nothing here can tell a device that was
 //     revoked from one that was lost, because a revocation is a delete and
 //     leaves nothing behind. Rule 6 is about entries and does not reach the
@@ -2166,7 +2155,7 @@ func (s *Store) verifyRegistry() ([]Fault, int, error) {
 
 	rows, err := s.db.Query(
 		`SELECT d.vault_id, d.device_id, d.name, d.auth_hash, d.created_at, d.last_seen,
-		        (SELECT COUNT(*) FROM vaults v WHERE v.vault_id = d.vault_id AND v.auth_hash != '')
+		        (SELECT COUNT(*) FROM vaults v WHERE v.vault_id = d.vault_id)
 		   FROM devices d
 		  ORDER BY d.vault_id, d.device_id`)
 	if err != nil {
@@ -2175,8 +2164,8 @@ func (s *Store) verifyRegistry() ([]Fault, int, error) {
 	for rows.Next() {
 		var vaultID, deviceID, name, authHash string
 		var createdAt, lastSeen int64
-		var claimed int
-		if err := rows.Scan(&vaultID, &deviceID, &name, &authHash, &createdAt, &lastSeen, &claimed); err != nil {
+		var vaults int
+		if err := rows.Scan(&vaultID, &deviceID, &name, &authHash, &createdAt, &lastSeen, &vaults); err != nil {
 			rows.Close()
 			return faults, checked, err
 		}
@@ -2202,9 +2191,8 @@ func (s *Store) verifyRegistry() ([]Fault, int, error) {
 			fault("baddevice", fmt.Sprintf("was created at %d, which is not a time", createdAt))
 		case lastSeen < 0:
 			fault("baddevice", fmt.Sprintf("was last seen at %d, which is not a time", lastSeen))
-		case claimed == 0:
-			fault("novault", "names a vault this database does not hold as a claimed vault, "+
-				"which is not a vault a device row can be registered onto")
+		case vaults == 0:
+			fault("novault", "names a vault this database does not hold")
 		default:
 			if err := CheckName("device", name, MaxDeviceLen); err != nil {
 				fault("baddevice", err.Error())
@@ -2217,61 +2205,89 @@ func (s *Store) verifyRegistry() ([]Fault, int, error) {
 	}
 
 	rows, err = s.db.Query(
-		`SELECT i.vault_id, i.invite, i.sealed, i.expires_at, i.used,
-		        (SELECT COUNT(*) FROM vaults v WHERE v.vault_id = i.vault_id AND v.auth_hash != '')
+		`SELECT i.vault_id, i.id, i.token_hash, i.label, i.created_at, i.expires_at,
+		        i.used_at, i.used_by, i.cancelled_at, i.issued_by,
+		        (SELECT COUNT(*) FROM vaults v WHERE v.vault_id = i.vault_id)
 		   FROM invites i
-		  ORDER BY i.vault_id, i.invite`)
+		  ORDER BY i.vault_id, i.id`)
 	if err != nil {
 		return faults, checked, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var vaultID, invite, sealed string
-		var expiresAt int64
-		var used, claimed int
-		if err := rows.Scan(&vaultID, &invite, &sealed, &expiresAt, &used, &claimed); err != nil {
+		var vaultID, id, tokenHash, label string
+		var createdAt int64
+		var expiresAt, usedAt, cancelledAt sql.NullInt64
+		var usedBy, issuedBy sql.NullString
+		var vaults int
+		if err := rows.Scan(&vaultID, &id, &tokenHash, &label, &createdAt, &expiresAt,
+			&usedAt, &usedBy, &cancelledAt, &issuedBy, &vaults); err != nil {
 			return faults, checked, err
 		}
 		checked++
 		fault := func(reason, detail string) {
 			faults = append(faults, Fault{
 				VaultID: vaultID,
-				Row:     fmt.Sprintf("invite %q", invite),
+				Row:     fmt.Sprintf("invite %q", id),
 				Reason:  reason,
 				Detail:  detail,
 			})
 		}
 		switch {
-		case !ValidInvite(invite):
-			fault("badinvite", fmt.Sprintf(
-				"invite identifier is %d bytes and must be base64url of at most %d",
-				len(invite), MaxInviteLen))
-		case !ValidSealed(sealed):
-			fault("badinvite", fmt.Sprintf(
-				"the sealed data key is %d bytes and must be base64url of at most %d, so "+
-					"redeeming this would hand a device nothing to open the vault with",
-				len(sealed), MaxSealedLen))
-		case expiresAt <= 0:
-			fault("badinvite", fmt.Sprintf(
-				"expires at %d, which is not a time an invite was ever issued with", expiresAt))
-		case used != 0 && used != 1:
-			fault("badinvite", fmt.Sprintf(
-				"used is %d, and an invite is spent or it is not", used))
-		case claimed == 0:
-			fault("novault", "names a vault this database does not hold as a claimed vault, "+
-				"which is not a vault an invite can be issued on")
+		case !ValidInviteID(id):
+			fault("badinvite", fmt.Sprintf("the invite id is %q, which is not %d bytes of base64url",
+				id, InviteIDBytes))
+		case !isHex64(tokenHash):
+			fault("badinvite", "the token hash is not a 64 character hex digest, so nothing can ever redeem it")
+		case createdAt <= 0:
+			fault("badinvite", fmt.Sprintf("was created at %d, which is not a time", createdAt))
+		case expiresAt.Valid && expiresAt.Int64 <= 0:
+			fault("badinvite", fmt.Sprintf("expires at %d, which is not a time", expiresAt.Int64))
+		case usedAt.Valid != usedBy.Valid:
+			fault("badinvite", "is marked spent without saying by whom, or by whom without saying when")
+		case usedAt.Valid && (usedAt.Int64 <= 0 || !ValidDeviceID(usedBy.String)):
+			fault("badinvite", "is marked spent at an impossible time or by an impossible device id")
+		case cancelledAt.Valid && (cancelledAt.Int64 <= 0 || usedAt.Valid):
+			fault("badinvite", "is marked cancelled at an impossible time, or cancelled and spent at once")
+		case issuedBy.Valid && !ValidDeviceID(issuedBy.String):
+			fault("badinvite", "was issued by an impossible device id")
+		case vaults == 0:
+			fault("novault", "names a vault this database does not hold")
+		default:
+			if err := CheckName("invite", label, MaxDeviceLen); err != nil {
+				fault("badinvite", err.Error())
+			}
 		}
 	}
 	return faults, checked, rows.Err()
 }
 
-// declaredChunks is the recorded chunk count, or a literal -1 where the column
-// is not there to read (R48).
-func declaredChunks(has bool) string {
-	if has {
-		return "e.n_chunks"
+// verifyLive recomputes each vault's live set from its entries and reports a
+// `livekeys` fault where the tables the collision rule reads say otherwise.
+//
+// The tables are derived, written in the same transaction as every entry, and
+// rebuilt from the entries if a write finds them disagreeing; see liveSchema.
+// A fault here is drift that nothing has healed yet: the collision rule is
+// answering from a live set that is not the vault's, so it may refuse a path
+// it should accept or accept one it should refuse. Nothing is lost either
+// way, and the next write that meets the disagreement rebuilds them.
+func (s *Store) verifyLive() ([]Fault, error) {
+	vaults, err := s.Vaults()
+	if err != nil {
+		return nil, err
 	}
-	return "-1"
+	var faults []Fault
+	for _, v := range vaults {
+		diff, err := liveDifference(s.db, v)
+		if err != nil {
+			return faults, err
+		}
+		if diff != "" {
+			faults = append(faults, Fault{VaultID: v, Row: "live set", Reason: "livekeys",
+				Detail: "the live set the collision rule reads disagrees with the entries: " + diff})
+		}
+	}
+	return faults, nil
 }
 
 // verifyEntries checks the entries themselves, rather than the bodies they name.
@@ -2287,13 +2303,13 @@ func declaredChunks(has bool) string {
 // folder or a deletion carrying content nobody will ever read.
 func (s *Store) verifyEntries() (faults []Fault, entries int, err error) {
 	rows, err := s.db.Query(
-		`SELECT e.vault_id, e.uid, e.path, e.size, e.folder, e.deleted, e.mac, e.parent,
+		`SELECT e.vault_id, e.uid, e.path, e.prev_path, e.size, e.folder, e.deleted,
 		        (SELECT COUNT(*) FROM entry_chunks c WHERE c.vault_id = e.vault_id AND c.uid = e.uid),
 		        (SELECT COALESCE(MAX(c.ord), -1) FROM entry_chunks c
 		          WHERE c.vault_id = e.vault_id AND c.uid = e.uid),
 		        (SELECT COALESCE(MIN(c.ord), 0) FROM entry_chunks c
 		          WHERE c.vault_id = e.vault_id AND c.uid = e.uid),
-		        ` + declaredChunks(s.hasChunkCount) + `
+		        e.n_chunks
 		   FROM entries e
 		  ORDER BY e.vault_id, e.uid`)
 	if err != nil {
@@ -2306,30 +2322,21 @@ func (s *Store) verifyEntries() (faults []Fault, entries int, err error) {
 		var f Fault
 		var size int64
 		var folder, deleted bool
-		var mac, parent string
+		var prev string
 		var chunkCount, topOrd, lowOrd, declared int
-		if err := rows.Scan(&f.VaultID, &f.UID, &f.Path, &size, &folder, &deleted,
-			&mac, &parent, &chunkCount, &topOrd, &lowOrd, &declared); err != nil {
+		if err := rows.Scan(&f.VaultID, &f.UID, &f.Path, &prev, &size, &folder, &deleted,
+			&chunkCount, &topOrd, &lowOrd, &declared); err != nil {
 			return faults, entries, err
 		}
-		// The authenticator's shape, on every kind (F20). `Validate` used to
-		// skip it for a folder and a deletion, so a store can already hold
-		// rows an honest client refuses for ever. Naming them here with the
-		// vault and the uid is the only way an operator finds out, because
-		// nothing else in the system can: every reader that meets one simply
-		// declines it.
-		if !isHex64(mac) {
-			f.Reason = "nomac"
-			f.Detail = "the authenticator is not a 64 character hex digest, so every client " +
-				"refuses this version. Delete it with a newer write of the same path, or " +
-				"restore from a backup taken before it."
-			faults = append(faults, f)
-			continue
-		}
-		if parent != "" && !isHex64(parent) {
-			f.Reason = "badparent"
-			f.Detail = "the parent is neither empty nor a 64 character hex digest, so every " +
-				"client refuses this version"
+		// The path policy, on every kind of entry and on a rename's source
+		// (hazard 6 of the strip ledger). Validate refuses such a path at the
+		// door, so a store can hold one only if it was written some other way,
+		// and every reader that meets it declines it; naming it here with the
+		// vault and the uid is the only way an operator finds out.
+		if err := (Entry{Path: f.Path, Prev: prev}).CheckPaths(); err != nil {
+			f.Reason = "badpath"
+			f.Detail = err.Error() + ", so no device will accept this version. Delete it with a " +
+				"newer write of the same path, or restore from a backup taken before it."
 			faults = append(faults, f)
 			continue
 		}
@@ -2351,14 +2358,11 @@ func (s *Store) verifyEntries() (faults []Fault, entries int, err error) {
 		// bill of health nobody should act on, and rule 3 has an operator
 		// deleting the last copy on the strength of it.
 		//
-		// Unknown counts are left alone, as the read path leaves them: a row
-		// written before the column existed cannot be checked against
-		// something nobody recorded.
-		case declared >= 0 && chunkCount != declared:
+		case chunkCount != declared:
 			f.Reason = "shortchunks"
 			f.Detail = fmt.Sprintf(
 				"was written with %d chunks and has %d, so it would assemble to the wrong "+
-					"bytes and every client would refuse it", declared, chunkCount)
+					"bytes", declared, chunkCount)
 			faults = append(faults, f)
 		// Both ends, not just the top (R51). The primary key makes the
 		// ordinals distinct, so distinct integers with the right count, a
@@ -2387,7 +2391,7 @@ func scanEntry(r scannable) (Entry, error) {
 	var e Entry
 	var folder, deleted int
 	err := r.Scan(&e.UID, &e.Path, &e.Size, &e.CTime, &e.MTime, &folder, &deleted,
-		&e.Device, &e.Prev, &e.Mac, &e.Parent, &e.nChunks)
+		&e.Device, &e.Prev, &e.nChunks)
 	e.Folder = folder != 0
 	e.Deleted = deleted != 0
 	return e, err
@@ -2412,191 +2416,26 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// migrate brings an older database up to the current schema.
-//
-// CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, so a
-// column added to the schema above never reaches a database made before it.
-// Additive only, and each step is idempotent, because the alternative is a
-// server that starts fine on a fresh directory and fails on the one that has
-// somebody's notes in it.
-func migrate(db *sql.DB) error {
-	// Nothing to migrate before the table exists; the schema will create it.
-	var tables int
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'vaults'`).Scan(&tables); err != nil {
-		return err
-	}
-	if tables == 0 {
-		return nil
-	}
-
-	// auth_hash arrived with the one-secret model, wrapped with the data key. A
-	// database written before either keeps the empty string in the new column.
-	// An unclaimed vault is an ordinary state; a claimed one with no data key
-	// is a vault an older build wrote, and the server refuses that session at
-	// hello rather than guessing at a key schedule that no longer exists.
-	for _, col := range []string{"auth_hash", "wrapped"} {
-		has, err := hasColumn(db, "vaults", col)
-		if err != nil {
-			return err
-		}
-		if !has {
-			if _, err := db.Exec(`ALTER TABLE vaults ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
-				return err
-			}
-		}
-	}
-
-	// The rotation generation. A database written before it starts at zero,
-	// which is right: the count is only ever compared with itself, within one
-	// handshake, so where it starts does not matter and only that it moves
-	// does.
-	if has, err := hasColumn(db, "vaults", "rotations"); err != nil {
-		return err
-	} else if !has {
-		if _, err := db.Exec(
-			`ALTER TABLE vaults ADD COLUMN rotations INTEGER NOT NULL DEFAULT 0`); err != nil {
-			return err
-		}
-	}
-
-	// The purge generation. A database written before it starts at zero, which
-	// is right for the same reason rotations is: a backup taken from it says
-	// generation zero, the first purge afterwards makes it one, and the only
-	// comparison anyone makes is between two of these numbers.
-	if has, err := hasColumn(db, "vaults", "purges"); err != nil {
-		return err
-	} else if !has {
-		if _, err := db.Exec(
-			`ALTER TABLE vaults ADD COLUMN purges INTEGER NOT NULL DEFAULT 0`); err != nil {
-			return err
-		}
-	}
-
-	// The devices table. Unlike a column, a new *table* does reach an older
-	// database on its own: CREATE TABLE IF NOT EXISTS in the schema above does
-	// nothing only to a table that is already there, and this one is not. So
-	// this statement is a second one saying the same thing, in the belt and
-	// braces style the index below is in, and it stays so that migrate reads
-	// as the complete list of what a database from an older build is missing.
-	// TestADatabaseFromAnOlderBuildGainsTheDevicesTable asserts the table is
-	// there and usable, not which statement made it.
-	// Character for character what the schema says, so that the definition
-	// SQLite records is the same one whichever statement created it.
-	if _, err := db.Exec(`
-CREATE TABLE IF NOT EXISTS devices (
-  vault_id   TEXT    NOT NULL,
-  device_id  TEXT    NOT NULL,   -- 16 random bytes, base64url, chosen by the device
-  name       TEXT    NOT NULL DEFAULT '',
-  auth_hash  TEXT    NOT NULL,   -- hex SHA-256 of this device's auth key
-  created_at INTEGER NOT NULL,
-  last_seen  INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (vault_id, device_id)
-)`); err != nil {
-		return err
-	}
-
-	// The index behind Deleted()'s rename suppression. Belt and braces: unlike
-	// CREATE TABLE IF NOT EXISTS, the CREATE INDEX IF NOT EXISTS in the schema
-	// does reach a table that already exists, so this is a second statement
-	// saying the same thing rather than the only one that says it. It stays so
-	// the migration reads as the complete list of what an older database is
-	// missing. TestOpeningADatabaseFromAnOlderBuildAddsTheColumnsAndLosesNothing
-	// asserts the index is there, not which statement made it.
-	if _, err := db.Exec(
-		`CREATE INDEX IF NOT EXISTS entries_by_prev ON entries(vault_id, prev_path, uid)`); err != nil {
-		return err
-	}
-
-	// Every entry carries its own authenticator. A row written before the
-	// columns existed has none and cannot be given one here, because the server
-	// has no key: it keeps the empty string, and a client refuses it.
-	for _, col := range []string{"mac", "parent"} {
-		has, err := hasColumn(db, "entries", col)
-		if err != nil {
-			return err
-		}
-		if !has {
-			if _, err := db.Exec(`ALTER TABLE entries ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
-				return err
-			}
-		}
-	}
-
-	// The chunk count, which older rows do not have and cannot be given: what
-	// the writer wrote is exactly the thing that was never recorded, and
-	// counting the rows that are there now would record the corruption as the
-	// truth. Minus one says "unknown" and the read path leaves those alone.
-	has, err := hasColumn(db, "entries", "n_chunks")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(
-			`ALTER TABLE entries ADD COLUMN n_chunks INTEGER NOT NULL DEFAULT -1`); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func hasColumn(db *sql.DB, table, column string) (bool, error) {
-	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return false, err
-		}
-		if name == column {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
-}
-
 /* ---------------------------------------------------------------- *
  * Who may write to a vault
  * ---------------------------------------------------------------- */
 
-// AuthHash returns the hex SHA-256 of the vault's auth key, or empty when no
-// device has claimed it yet.
-//
-// This is the *vault* credential, whose meaning is narrowing to "may register
-// a device, may not sync"; see the column's comment in the schema. It is not
-// the credential a device syncs under from step 2 onwards, and code reaching
-// for "is this caller allowed to push" wants DeviceByID, not this.
-func (s *Store) AuthHash(vaultID string) (string, error) {
-	var hash string
-	err := s.db.QueryRow(`SELECT auth_hash FROM vaults WHERE vault_id = ?`, vaultID).Scan(&hash)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return hash, err
-}
-
-// ValidWrapped reports whether a wrapped data key is one the server will store:
-// non-empty, within MaxWrappedLen, and base64url with optional padding. The
-// server cannot check what it means; it can refuse a shape nothing could have
-// produced, so a client bug lands on the writer at claim rather than on every
-// other device at hello.
-func ValidWrapped(w string) bool { return validBase64URL(w, MaxWrappedLen) }
-
-// ValidSealed is ValidWrapped for the sealed data key an invite carries. The
-// data key and not the root, since protocol 4; see the invites table.
-func ValidSealed(s string) bool { return validBase64URL(s, MaxSealedLen) }
-
-// ValidInvite is the same check for an invite identifier.
-func ValidInvite(s string) bool { return validBase64URL(s, MaxInviteLen) }
-
-// ValidDeviceID is the same check for a device identifier, so the session can
-// refuse a malformed one at hello with the same rule RegisterDevice applies,
-// rather than reporting the shape of an id as a failure to authenticate. There
-// is no minimum length; see MaxDeviceIDLen.
+// ValidDeviceID is the shape of a device identifier: base64url of at most
+// MaxDeviceIDLen characters, so the session can refuse a malformed one at hello
+// with the same rule a redemption applies, rather than reporting the shape of
+// an id as a failure to authenticate. There is no minimum length; see
+// MaxDeviceIDLen.
 func ValidDeviceID(s string) bool { return validBase64URL(s, MaxDeviceIDLen) }
+
+// ReservedDeviceIDPrefix begins device ids the protocol reserves, and a hello
+// naming one is refused as a credential (plan/protocol.md, "Device session").
+// It can never be a registered device's today, because a colon is not
+// base64url; the refusal is there so that no later row under the prefix, an
+// MCP author for instance, can ever be connected to as a sync device.
+const ReservedDeviceIDPrefix = "mcp:"
+
+// ReservedDeviceID reports whether id is one the protocol reserves.
+func ReservedDeviceID(id string) bool { return strings.HasPrefix(id, ReservedDeviceIDPrefix) }
 
 func validBase64URL(s string, max int) bool {
 	if s == "" || len(s) > max {
@@ -2625,326 +2464,6 @@ func validBase64URL(s string, max int) bool {
 		}
 	}
 	return true
-}
-
-// AddInvite stores a single-use invite for a claimed vault, expiring at
-// expiresAt (milliseconds), and sweeps that vault's expired invites while it is
-// there. Sweeping at insert rather than on a timer keeps the table bounded by
-// what was issued since the last issue, with no goroutine to forget to start;
-// a vault that never issues another invite keeps a handful of dead rows, which
-// redeem refuses anyway.
-//
-// An identifier that is already there is ErrBadEntry, which the session turns
-// into `badentry`: a refusal a retry cannot fix, so the device stops rather
-// than retrying an identifier this vault will never accept again.
-func (s *Store) AddInvite(vaultID, invite, sealed string, expiresAt, now int64) error {
-	if !ValidInvite(invite) {
-		return fmt.Errorf("%w: invite identifier is %d bytes and must be base64url of at most %d",
-			ErrBadEntry, len(invite), MaxInviteLen)
-	}
-	if !ValidSealed(sealed) {
-		return fmt.Errorf("%w: sealed secret is %d bytes and must be base64url of at most %d",
-			ErrBadEntry, len(sealed), MaxSealedLen)
-	}
-	if expiresAt <= now {
-		return fmt.Errorf("%w: invite would expire before it was issued", ErrBadEntry)
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.inTx(func(tx *sql.Tx) error {
-		var hash string
-		err := tx.QueryRow(`SELECT auth_hash FROM vaults WHERE vault_id = ?`, vaultID).Scan(&hash)
-		if errors.Is(err, sql.ErrNoRows) || (err == nil && hash == "") {
-			// An unclaimed vault has no root to seal, so nothing to invite to.
-			return fmt.Errorf("%w: %q is not a claimed vault", ErrUnknownVault, vaultID)
-		}
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`DELETE FROM invites WHERE vault_id = ? AND expires_at < ?`, vaultID, now); err != nil {
-			return err
-		}
-		// An identifier already in use is refused as the client's mistake, not
-		// as a server fault. It used to reach the primary key as a bare insert
-		// and come back as `internal`, which is retryable, so a device that
-		// retried the same invite after a lost reply retried it for ever.
-		//
-		// Refused rather than answered as a success, because the row that is
-		// already there may have been redeemed a moment ago: the sweep above
-		// has just removed the expired ones, and used is not a thing this can
-		// see without racing the redeem. Reporting `invited` for an invite that
-		// is already spent is a success nothing verified, and the device
-		// holding the string would find out only when it failed to pair.
-		var exists int
-		switch err := tx.QueryRow(
-			`SELECT 1 FROM invites WHERE vault_id = ? AND invite = ?`, vaultID, invite).Scan(&exists); {
-		case err == nil:
-			return fmt.Errorf("%w: this vault already has an invite under that identifier; issue a new one", ErrBadEntry)
-		case errors.Is(err, sql.ErrNoRows):
-		default:
-			return err
-		}
-		_, err = tx.Exec(
-			`INSERT INTO invites (vault_id, invite, sealed, expires_at, used) VALUES (?, ?, ?, ?, 0)`,
-			vaultID, invite, sealed, expiresAt)
-		return err
-	})
-}
-
-// spendInviteTx marks an invite used inside the caller's transaction and
-// returns what it sealed, or ErrNoInvite for one that is unknown, expired or
-// already used.
-//
-// The read and the mark are one statement, so two devices redeeming at once
-// cannot both succeed, and a reply lost after the transaction commits has
-// still burned the invite: one use means one, not one delivered.
-//
-// It takes a transaction rather than running on its own because spending an
-// invite is never the whole of what a redemption does. See RedeemInviteFor.
-func spendInviteTx(tx *sql.Tx, vaultID, invite string, now int64) (string, error) {
-	var sealed string
-	err := tx.QueryRow(
-		`UPDATE invites SET used = 1
-		  WHERE vault_id = ? AND invite = ? AND used = 0 AND expires_at >= ?
-		  RETURNING sealed`, vaultID, invite, now).Scan(&sealed)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("%w: vault %q", ErrNoInvite, vaultID)
-	}
-	if err != nil {
-		return "", err
-	}
-	return sealed, nil
-}
-
-// betweenSpendAndRegister runs inside RedeemInviteFor's transaction, after the
-// invite is marked used and before the device row is inserted, and is nil in
-// every build but a test's. Returning an error from it stands in for the
-// process dying in that window.
-//
-// It exists because the whole claim RedeemInviteFor makes is that those two
-// writes are one commit, and the window between them is a few microseconds
-// wide: a test that tried to hit it by timing would be a test that passes when
-// the machine is busy. It is the same device the server package's beforeJoin
-// and beforeRegister hooks use, for the same reason.
-// TestACrashBetweenSpendingAnInviteAndRegisteringSpendsNeither.
-var betweenSpendAndRegister func() error
-
-// RedeemInviteFor spends an invite and registers the device it was redeemed
-// by, in one transaction, and returns what the invite sealed.
-//
-// An invite is already single use, server tracked and expiring, which is
-// exactly the authority to register exactly one device. That is why the two
-// halves are one call: under protocol 4 a device holds no root, so the device
-// that issues an invite cannot register a row for the device redeeming it, and
-// a redemption that did not register one would leave the newcomer holding a
-// data key and no way to connect.
-//
-// **Neither half survives the other failing.** An invite spent with no row
-// behind it is an invite somebody has to notice is gone and reissue; a row
-// under an invite that is still live is a device registered twice over. Both
-// writes are in one transaction. A failure, duplicate id, or process death
-// rolls the spend back too, so the string in somebody's hand still works. TestARedeemThatCannotRegisterLeaves
-// TheInviteUnspent and TestACrashBetweenSpendingAnInviteAndRegisteringSpends
-// Neither.
-//
-// The spend goes first so that a caller holding a bad invite learns nothing
-// about device ids: the refusal it gets is the invite's, before the row is
-// looked at.
-//
-// No vault hash here, and that is not an omission. RegisterDevice's insert is
-// conditional on the vault credential the caller authenticated under still
-// being the vault's, because rotation is what answers a leaked root and a
-// registration a millisecond late would outlive it. An invite is not
-// authorised by the root at all, and rotation deletes every invite on the
-// vault in its own transaction, so an invite issued before a rotation cannot
-// be redeemed after one. The guard is the same guard, one table over.
-// TestARedeemRacingARotationCannotWin.
-func (s *Store) RedeemInviteFor(vaultID, invite, deviceID, name, deviceHash string, now int64) (string, error) {
-	if err := checkDeviceFields(deviceID, name, deviceHash); err != nil {
-		return "", err
-	}
-	if !ValidInvite(invite) {
-		// The same error an unknown one gets: see ErrNoInvite.
-		return "", fmt.Errorf("%w: vault %q", ErrNoInvite, vaultID)
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	var sealed string
-	err := s.inTx(func(tx *sql.Tx) error {
-		var err error
-		if sealed, err = spendInviteTx(tx, vaultID, invite, now); err != nil {
-			return err
-		}
-		if betweenSpendAndRegister != nil {
-			if err := betweenSpendAndRegister(); err != nil {
-				return err
-			}
-		}
-		return insertDeviceTx(tx, vaultID, deviceID, name, deviceHash, "", now)
-	})
-	if err != nil {
-		return "", err
-	}
-	return sealed, nil
-}
-
-// Invite is one outstanding invite, as a device or the recovery key is shown
-// it: which invite, and when it stops working.
-//
-// The sealed blob is deliberately not a field, and neither is anything else
-// the table holds. This is what a list op returns, and an invite is a standing
-// authority to register a device: a listing type with the blob in it is one
-// that hands the blob to everything that ever serialises the list. The
-// identifier alone redeems nothing, because redeeming also takes the invite
-// key, which never reached the server and lives only in the string somebody is
-// holding. What the identifier is for is saying which invite to cancel.
-type Invite struct {
-	ID        string `json:"id"`
-	ExpiresAt int64  `json:"expiresAt"`
-}
-
-// Invites is every invite on a vault that could still be redeemed: unused and
-// not yet expired at now, soonest to expire first.
-//
-// It exists because an invite was the one authority on a vault nothing could
-// see. A string issued on a stolen laptop was invisible until somebody redeemed
-// it, for up to an hour, which made "every row is in the device list" a smaller
-// promise than it sounded: the row that has not appeared yet is the one worth
-// knowing about.
-//
-// Ordered by expiry and then by identifier, for the reason Devices is ordered:
-// two invites issued in the same millisecond need a tiebreak or the order
-// between them belongs to the query plan, and a list that reshuffles between
-// two reads is one nobody can trust they read the same way twice (rule 7).
-//
-// Never nil, so it marshals to [] rather than null.
-//
-// Unlimited, deliberately. What bounds it is the invites themselves: an invite
-// lives at most an hour and AddInvite sweeps the vault's expired ones every
-// time one is issued, so the list is however many a device chose to issue in
-// the last hour. A device that issues a hundred thousand of them is a device
-// already inside the trust boundary for content, and it has worse things
-// available to it than a long reply. A cap here would mean a list that says
-// less than it looks like it says, which is rule 7 and worse than a long one.
-func (s *Store) Invites(vaultID string, now int64) ([]Invite, error) {
-	rows, err := s.db.Query(
-		`SELECT invite, expires_at FROM invites
-		  WHERE vault_id = ? AND used = 0 AND expires_at >= ?
-		  ORDER BY expires_at, invite`, vaultID, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []Invite{}
-	for rows.Next() {
-		var inv Invite
-		if err := rows.Scan(&inv.ID, &inv.ExpiresAt); err != nil {
-			return nil, err
-		}
-		out = append(out, inv)
-	}
-	return out, rows.Err()
-}
-
-// CancelInvite deletes an invite that is still outstanding, so a string somebody
-// is holding stops working before it expires.
-//
-// ErrNoInvite for one that is unknown, expired or already used, which is the
-// same one error those three share everywhere else and for the same reason: an
-// invite is unguessable, and saying which would tell somebody probing that they
-// had found a real one. Here it also means "there is nothing to cancel", which
-// after a redemption is the ordinary state rather than a fault.
-//
-// A delete rather than a used=1, because cancelled and spent are different
-// facts and the row is not evidence of either: `used` is what stops a redeem,
-// and a cancelled invite has not been used by anybody.
-//
-// The read and the delete are one statement, so a cancel racing a redemption
-// resolves one way or the other and never both: either the redeem marked it
-// used first and this is ErrNoInvite, or this removed the row first and the
-// redeem is refused. Nothing in between leaves a device registered under an
-// invite somebody was told had been cancelled.
-func (s *Store) CancelInvite(vaultID, invite string, now int64) error {
-	if !ValidInvite(invite) {
-		// The same error an unknown one gets: see ErrNoInvite.
-		return fmt.Errorf("%w: vault %q", ErrNoInvite, vaultID)
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	res, err := s.db.Exec(
-		`DELETE FROM invites WHERE vault_id = ? AND invite = ? AND used = 0 AND expires_at >= ?`,
-		vaultID, invite, now)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n != 1 {
-		return fmt.Errorf("%w: vault %q", ErrNoInvite, vaultID)
-	}
-	return nil
-}
-
-// OutstandingInvites counts invites that could still be redeemed: unused and
-// not yet expired at now.
-func (s *Store) OutstandingInvites(vaultID string, now int64) (int, error) {
-	var n int
-	err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM invites WHERE vault_id = ? AND used = 0 AND expires_at >= ?`,
-		vaultID, now).Scan(&n)
-	return n, err
-}
-
-// InviteRows counts every invite row for a vault, expired and used included,
-// so a test can see the sweep.
-func (s *Store) InviteRows(vaultID string) (int, error) {
-	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM invites WHERE vault_id = ?`, vaultID).Scan(&n)
-	return n, err
-}
-
-// Wrapped returns the vault's wrapped data key, or empty for a vault nothing
-// has claimed. A claimed vault with no key can only have come from an older
-// build, and the server refuses such a session at hello rather than serving it.
-func (s *Store) Wrapped(vaultID string) (string, error) {
-	var w string
-	err := s.db.QueryRow(`SELECT wrapped FROM vaults WHERE vault_id = ?`, vaultID).Scan(&w)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return w, err
-}
-
-// VaultKeys returns the vault's auth hash, its wrapped data key and how many
-// times it has been rotated. Hash and blob are empty for a vault nothing has
-// claimed.
-//
-// The hash here is the vault credential, with the narrowed meaning in
-// AuthHash's comment: registration, not sync.
-//
-// One query for the three, because they are three columns of the same row and
-// a hello wants all of them. It does not read the row for the whole hello,
-// though: a first device's claim writes hash and blob while it authenticates,
-// so the row is read once on each side of authentication rather than once
-// before it. Reading earlier would send that device an empty wrapped in ready.
-//
-// A rotation cutting across a handshake is not this read's problem any more.
-// Protocol 4 gave devices their own credentials, so a rotation does not touch
-// a device session at all, and the only session it can cut across is a
-// registrar's, whose two powers are each conditional on the vault hash inside
-// the statement that exercises them; see Rotate and RegisterDevice.
-func (s *Store) VaultKeys(vaultID string) (hash, wrapped string, rotations int64, err error) {
-	err = s.db.QueryRow(
-		`SELECT auth_hash, wrapped, rotations FROM vaults WHERE vault_id = ?`,
-		vaultID).Scan(&hash, &wrapped, &rotations)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", 0, nil
-	}
-	return hash, wrapped, rotations, err
 }
 
 // EachEntry calls fn for every entry of a vault, oldest first, with its chunks.
@@ -3013,127 +2532,6 @@ func (s *Store) EachEntry(vaultID string, fn func(Entry) error) error {
 	return nil
 }
 
-// Rotations is the vault's rotation generation on its own: how many times the
-// secret has been replaced. Zero for a vault with no row, which is also where a
-// vault starts.
-//
-// No session re-reads it, because a rotation leaves device sessions alone. It
-// is kept because it is the only record that a vault's secret has ever been
-// replaced, and a rotation that left no trace is one nobody can confirm
-// happened.
-func (s *Store) Rotations(vaultID string) (int64, error) {
-	var n int64
-	err := s.db.QueryRow(`SELECT rotations FROM vaults WHERE vault_id = ?`, vaultID).Scan(&n)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
-	}
-	return n, err
-}
-
-// ClaimVault records the auth key hash and the wrapped data key for a vault
-// that has no hash yet, and reports whether this call is the one that did it.
-//
-// The write is conditional in SQL rather than checked and then written, so two
-// devices arriving at once cannot both believe they claimed it. The loser is
-// told no and can decide what that means; silently accepting the second would
-// hand the vault to whichever connection happened to finish last. Hash and
-// blob go in one statement, because a vault with a hash and no blob is a vault
-// no device can open.
-//
-// An empty wrapped is not refused here, because this is the primitive and the
-// rule about what a claim must carry belongs where the claim arrives: the
-// session refuses one without a data key and DerivedAuth refuses it again.
-// Leaving the primitive able to write the row is also what lets a test build
-// the one an older build could have left behind, to check it is refused.
-func (s *Store) ClaimVault(vaultID, hash, wrapped string, now int64) (bool, error) {
-	if hash == "" {
-		return false, errors.New("refusing to claim a vault with an empty auth hash")
-	}
-	if wrapped != "" && !ValidWrapped(wrapped) {
-		return false, fmt.Errorf("%w: wrapped data key is %d bytes and must be base64url of at most %d",
-			ErrBadEntry, len(wrapped), MaxWrappedLen)
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	if err := s.ensureVaultLocked(vaultID, now); err != nil {
-		return false, err
-	}
-	res, err := s.db.Exec(
-		`UPDATE vaults SET auth_hash = ?, wrapped = ? WHERE vault_id = ? AND auth_hash = ''`,
-		hash, wrapped, vaultID)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n == 1, err
-}
-
-// Rotate replaces a claimed vault's auth hash and wrapped data key, bumps its
-// rotation generation, and deletes every invite on the vault, in one
-// transaction, so there is no moment at which the new credential opens a vault
-// whose blob the new root cannot unwrap, or the other way round, and no invite
-// survives that would hand out the root just retired.
-//
-// It is a compare-and-swap, not an update: prevHash is the hash the caller
-// authenticated under, and the row is only replaced while it still holds that
-// hash. Zero rows affected on a claimed vault means somebody rotated first, and
-// the answer is ErrRotated rather than a quiet success.
-//
-// The condition used to be `auth_hash != ”`, which any claimed vault meets.
-// Two devices connected under one root both sent rotate; the first committed
-// and evicted the second, but closing a socket does not stop a database call
-// already in flight, so the second's unconditional update replaced the first's
-// and the revoked device owned the vault. A caller may only replace the
-// credential it proved it holds.
-//
-// An unclaimed vault, or one with no row, is refused with ErrUnknownVault,
-// because there is nothing to replace. There is no case for a vault with no
-// data key: a claim without one is refused, so every claimed vault has one.
-func (s *Store) Rotate(vaultID, prevHash, hash, wrapped string) error {
-	if prevHash == "" {
-		return errors.New("refusing to rotate without the hash the caller authenticated under")
-	}
-	if hash == "" {
-		return errors.New("refusing to rotate to an empty auth hash")
-	}
-	if !ValidWrapped(wrapped) {
-		return fmt.Errorf("%w: wrapped data key is %d bytes and must be base64url of at most %d",
-			ErrBadEntry, len(wrapped), MaxWrappedLen)
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	return s.inTx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(
-			`UPDATE vaults SET auth_hash = ?, wrapped = ?, rotations = rotations + 1
-			  WHERE vault_id = ? AND auth_hash = ?`,
-			hash, wrapped, vaultID, prevHash)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n != 1 {
-			// Which of the two it is, read inside the same transaction so the
-			// answer describes the row the swap was refused against.
-			var current string
-			switch err := tx.QueryRow(
-				`SELECT auth_hash FROM vaults WHERE vault_id = ?`, vaultID).Scan(&current); {
-			case errors.Is(err, sql.ErrNoRows), err == nil && current == "":
-				return fmt.Errorf("%w: %q", ErrUnknownVault, vaultID)
-			case err != nil:
-				return err
-			}
-			return fmt.Errorf("%w: %q", ErrRotated, vaultID)
-		}
-		_, err = tx.Exec(`DELETE FROM invites WHERE vault_id = ?`, vaultID)
-		return err
-	})
-}
-
 /* ---------------------------------------------------------------- *
  * Devices
  * ---------------------------------------------------------------- */
@@ -3182,63 +2580,34 @@ type Device struct {
 	LastSeen  int64  `json:"lastSeen"` // 0 until the device has connected
 }
 
-// RegisterDevice adds a device to a claimed vault. created_at is now, in
+// RegisterDevice adds a device to a vault. created_at is now, in
 // milliseconds, and last_seen starts at zero, which reads as "has not connected
 // yet" rather than as "was here at the epoch".
 //
-// deviceHash is the hex SHA-256 of that device's own auth key, never the key:
-// the same rule as vaults.auth_hash and for the same reason, that a server
-// holding a key could be a device rather than merely recognise one.
+// deviceHash is HashToken of that device's own raw token, never the token: a
+// server holding a token could be a device rather than merely recognise one.
 //
-// vaultHash is the vault credential the caller authenticated under, and the
-// insert happens only while it is still the vault's. Registration is the one
-// power vaults.auth_hash keeps (see the column's comment), so the caller has
-// to be holding the credential that still has it. An unclaimed vault has none
-// and the answer is ErrUnknownVault; a vault whose hash has moved on is
-// ErrRotated, the same word a rotation that lost its race gets.
-//
-// That guard is not decoration. Rotation exists because a root secret leaked,
-// and rotate is a registrar's op, so the leak-holder and the person rotating
-// are two registrar sessions racing. Without it, the session holding the
-// retired root registers a device a millisecond after the rotation and keeps
-// permanent access to the vault the rotation was meant to take away from it:
-// the ErrRotated incident again, in the one place where the prize is a
-// credential that survives the rotation.
+// Not a path any client reaches. A device comes to exist by redeeming an
+// invite, which is RedeemInvite; this is the same insert, for the tests and
+// tools that need a device without first making an invite for it.
 //
 // A device id this vault already holds is ErrDeviceExists, not a constraint
-// error. AddInvite's story is the precedent: a bare insert surfaced as
-// `internal`, which is retryable, so a device that retried after a lost reply
-// retried for ever.
-//
-// The insert itself is insertDeviceTx, shared with the other way a device
-// comes to exist: RedeemInviteFor, where the authority is an invite rather
-// than the vault's credential.
-func (s *Store) RegisterDevice(vaultID, deviceID, name, deviceHash, vaultHash string, now int64) error {
+// error, because a bare insert surfaces as `internal`, which is retryable.
+func (s *Store) RegisterDevice(vaultID, deviceID, name, deviceHash string, now int64) error {
 	if err := checkDeviceFields(deviceID, name, deviceHash); err != nil {
 		return err
 	}
-	if !isHex64(vaultHash) {
-		// Not ErrUnknownVault: the caller offered no credential at all, which
-		// is a caller bug rather than a fact about the vault.
-		return fmt.Errorf("%w: registering a device names the vault credential it is authorised by, "+
-			"which is a 64 character hex digest", ErrBadEntry)
-	}
-
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-
-	return s.inTx(func(tx *sql.Tx) error {
-		return insertDeviceTx(tx, vaultID, deviceID, name, deviceHash, vaultHash, now)
+	return immediate(s.db, func(q execer) error {
+		return insertDeviceTx(q, vaultID, deviceID, name, deviceHash, now)
 	})
 }
 
 // checkDeviceFields is the shape a device row has to have, wherever the
-// authority to write one came from.
-//
-// Two paths register a device: a registrar holding the vault's credential, and
-// an invite being redeemed. One copy of these three rules, because two copies
-// is how the two paths come to disagree about what a device id is, and the one
-// that disagreed would be the one nobody was looking at.
+// authority to write one came from: one copy of these three rules, because
+// two copies is how two paths come to disagree about what a device id is, and
+// the one that disagreed would be the one nobody was looking at.
 func checkDeviceFields(deviceID, name, deviceHash string) error {
 	if !validBase64URL(deviceID, MaxDeviceIDLen) {
 		return fmt.Errorf("%w: device id is %d bytes and must be base64url of at most %d",
@@ -3254,30 +2623,20 @@ func checkDeviceFields(deviceID, name, deviceHash string) error {
 }
 
 // insertDeviceTx is the conditional insert both registration paths run, inside
-// the caller's transaction, and the diagnosis of which condition refused it.
-//
-// vaultHash is the vault credential the caller authenticated under, and empty
-// when the authority is an invite instead. Either way the vault must be
-// claimed: a vault with no root behind it has no data key for a device to be
-// handed, and an invite cannot exist on one because AddInvite refuses it.
-//
-// The credential check and insert share one statement, so a concurrent root
-// rotation cannot authorise a registration with a retired credential.
+// the caller's transaction: the vault must exist, and a device id it already
+// holds is ErrDeviceExists.
 //
 // Rule 4: the row count is checked rather than the absence of an error,
 // because an insert whose WHERE is false is a successful statement that wrote
 // nothing. Which of the refusals it was is then read inside the same
-// transaction, so the answer describes the rows the insert was actually
-// refused against, the way RevokeDevice's does.
-func insertDeviceTx(tx *sql.Tx, vaultID, deviceID, name, deviceHash, vaultHash string, now int64) error {
-	res, err := tx.Exec(
+// transaction, so the answer describes the rows the insert was refused against.
+func insertDeviceTx(q execer, vaultID, deviceID, name, deviceHash string, now int64) error {
+	res, err := q.Exec(
 		`INSERT INTO devices (vault_id, device_id, name, auth_hash, created_at, last_seen)
 		 SELECT ?, ?, ?, ?, ?, 0
-		  WHERE EXISTS (SELECT 1 FROM vaults
-		                 WHERE vault_id = ? AND auth_hash != '' AND (? = '' OR auth_hash = ?))
+		  WHERE EXISTS (SELECT 1 FROM vaults WHERE vault_id = ?)
 		 ON CONFLICT(vault_id, device_id) DO NOTHING`,
-		vaultID, deviceID, name, deviceHash, now,
-		vaultID, vaultHash, vaultHash)
+		vaultID, deviceID, name, deviceHash, now, vaultID)
 	if err != nil {
 		return err
 	}
@@ -3288,23 +2647,15 @@ func insertDeviceTx(tx *sql.Tx, vaultID, deviceID, name, deviceHash, vaultHash s
 	if n == 1 {
 		return nil
 	}
-
-	var hash string
-	switch err := tx.QueryRow(`SELECT auth_hash FROM vaults WHERE vault_id = ?`, vaultID).Scan(&hash); {
-	case errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("%w: %q is not a claimed vault", ErrUnknownVault, vaultID)
-	case err != nil:
+	var vaults int
+	if err := q.QueryRow(`SELECT COUNT(*) FROM vaults WHERE vault_id = ?`, vaultID).Scan(&vaults); err != nil {
 		return err
 	}
-	if hash == "" {
-		return fmt.Errorf("%w: %q is not a claimed vault", ErrUnknownVault, vaultID)
-	}
-	if vaultHash != "" && hash != vaultHash {
-		return fmt.Errorf("%w: vault %q was rotated, so the credential this registration "+
-			"was authorised by no longer opens it", ErrRotated, vaultID)
+	if vaults == 0 {
+		return fmt.Errorf("%w: %q", ErrUnknownVault, vaultID)
 	}
 	var exists int
-	switch err := tx.QueryRow(
+	switch err := q.QueryRow(
 		`SELECT 1 FROM devices WHERE vault_id = ? AND device_id = ?`,
 		vaultID, deviceID).Scan(&exists); {
 	case err == nil:
@@ -3317,7 +2668,8 @@ func insertDeviceTx(tx *sql.Tx, vaultID, deviceID, name, deviceHash, vaultHash s
 
 // Devices is every device registered to a vault, oldest first, for the list op
 // and for `trew devices`. A vault with none is an empty slice, not an error:
-// an unclaimed vault has no devices and that is not a fault.
+// a new vault has no devices until its first invite is redeemed, and that is not
+// a fault.
 //
 // Ordered by created_at and then by device_id. created_at is a millisecond, so
 // two devices registered inside the same one need a tiebreak or the order
@@ -3367,8 +2719,7 @@ func (s *Store) Devices(vaultID string) ([]Device, error) {
 //
 // The hash is returned beside the Device rather than inside it so that the
 // listing type cannot grow a credential field by accident; see Device. Callers
-// comparing it must do so in constant time over the hashes, as
-// server.DerivedAuth already does for the vault's.
+// comparing it must do so in constant time over the hashes.
 func (s *Store) DeviceByID(vaultID, deviceID string) (d Device, authHash string, ok bool, err error) {
 	err = s.db.QueryRow(
 		`SELECT device_id, name, created_at, last_seen, auth_hash FROM devices
@@ -3383,54 +2734,38 @@ func (s *Store) DeviceByID(vaultID, deviceID string) (d Device, authHash string,
 	return d, authHash, true, nil
 }
 
-// RevokeDevice deletes a device's row. That device cannot connect again, and no
-// other device is disturbed.
+// RevokeDevice deletes a device's row, and cancels every invite that device
+// issued which could still be redeemed, in one transaction, and returns how
+// many invites it cancelled. That device cannot connect again, and no other
+// device is disturbed.
+//
+// The invites go with it because an invite is a bearer credential the device
+// minted: one issued on a laptop before the laptop was stolen would otherwise
+// add the thief's next device after the laptop itself was revoked. That is the
+// shape of authority a revoke exists to end (PLAN.md section 2.3.1), and the
+// owner who meant to use one of those invites asks for another. Invites the
+// operator issued on the server name no device and are untouched.
 //
 // It is a delete rather than a revoked_at flag, for the reason in the table's
 // comment: a flag makes "can this device connect" a question about how many
 // places remember to check it. What is not lost is the history, because
 // entries.device is a separate column on rows this never touches.
 //
-// allowLast is the caller saying, out loud, that it means to leave the vault
-// with no devices at all. Refused by default with ErrLastDevice: a vault whose
-// last device is gone is reachable only by the recovery key, which is a real
-// thing to want after a house fire and not a thing to discover you did by
-// clicking the wrong row. An unknown device is ErrUnknownDevice, and the two
-// are distinct because one is "try again with a different id" and the other is
-// "you already did this". Who may say allowLast is the session's business and
-// not this one's; see handleRevoke, which admits it only from the recovery key.
+// Revoking the last device is allowed (plan/protocol.md, "Devices and
+// invites"): no device holds anything the server cannot reissue, and the way
+// back is `trew invite` on the server. An unknown device is
+// ErrUnknownDevice, the ordinary state after a revoke rather than a fault.
 //
-// vaultHash is the vault credential the caller authenticated under, and empty
-// when the caller is a device, which authenticated against its own row. When
-// it is given the delete happens only while it is still the vault's, and a
-// hash that has moved on is ErrRotated. That is the same guard, and the same
-// word, RegisterDevice uses, for the same incident: a rotation exists to end
-// access somebody should not have, closing a socket does not stop a request
-// already in flight, and a retired root that could still delete device rows
-// would be locking every real device out of the vault the rotation was meant
-// to keep. TestARevokeRacingARotationCannotWin.
-//
-// The count and the delete are one statement, not a read followed by a write.
-// Two devices revoking each other at the same moment would both read two rows,
-// both decide they were not the last, and both delete: the vault ends with zero
-// devices and neither caller was told. Holding writeMu would close that inside
-// one process, and the store is opened by more than one (`trew backup` and
-// `trew purge` run against a live server's directory), so the guarantee has
-// to be in the SQL. TestConcurrentRevokesCannotEmptyTheVault is the test, and
-// it fails against the read-then-write version.
-func (s *Store) RevokeDevice(vaultID, deviceID, vaultHash string, allowLast bool) error {
+// Closing that device's sessions is the server's half, under the same lock as
+// every commit, so a revoke also stops the mutations and the deliveries it has
+// in flight (PLAN.md section 2.3.1); see server.Server.revoke.
+func (s *Store) RevokeDevice(vaultID, deviceID string, now int64) (int, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	return s.inTx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(
-			`DELETE FROM devices
-			  WHERE vault_id = ? AND device_id = ?
-			    AND (? = 1 OR (SELECT COUNT(*) FROM devices WHERE vault_id = ?) > 1)
-			    AND (? = '' OR EXISTS (SELECT 1 FROM vaults
-			                            WHERE vault_id = ? AND auth_hash = ?))`,
-			vaultID, deviceID, boolToInt(allowLast), vaultID,
-			vaultHash, vaultID, vaultHash)
+	cancelled := 0
+	err := immediate(s.db, func(q execer) error {
+		res, err := q.Exec(`DELETE FROM devices WHERE vault_id = ? AND device_id = ?`, vaultID, deviceID)
 		if err != nil {
 			return err
 		}
@@ -3438,39 +2773,23 @@ func (s *Store) RevokeDevice(vaultID, deviceID, vaultHash string, allowLast bool
 		if err != nil {
 			return err
 		}
-		if n == 1 {
-			return nil
-		}
-		// Which of the three it is, read inside the same transaction so the
-		// answer describes the rows the delete was refused against, the way
-		// Rotate's does.
-		if vaultHash != "" {
-			var hash string
-			switch err := tx.QueryRow(
-				`SELECT auth_hash FROM vaults WHERE vault_id = ?`, vaultID).Scan(&hash); {
-			case errors.Is(err, sql.ErrNoRows):
-				return fmt.Errorf("%w: %q is not a claimed vault", ErrUnknownVault, vaultID)
-			case err != nil:
-				return err
-			}
-			if hash != vaultHash {
-				return fmt.Errorf("%w: vault %q was rotated, so the credential this revocation "+
-					"was authorised by no longer opens it", ErrRotated, vaultID)
-			}
-		}
-		var exists int
-		switch err := tx.QueryRow(
-			`SELECT 1 FROM devices WHERE vault_id = ? AND device_id = ?`,
-			vaultID, deviceID).Scan(&exists); {
-		case errors.Is(err, sql.ErrNoRows):
+		if n != 1 {
 			return fmt.Errorf("%w: %q on vault %q", ErrUnknownDevice, deviceID, vaultID)
-		case err != nil:
+		}
+		res, err = q.Exec(`UPDATE invites SET cancelled_at = ?
+		                    WHERE vault_id = ? AND issued_by = ? AND used_at IS NULL AND cancelled_at IS NULL`,
+			now, vaultID, deviceID)
+		if err != nil {
 			return err
 		}
-		return fmt.Errorf("%w: revoking %q would leave vault %q with no devices, "+
-			"reachable only by its recovery key",
-			ErrLastDevice, deviceID, vaultID)
+		n, err = res.RowsAffected()
+		cancelled = int(n)
+		return err
 	})
+	if err != nil {
+		return 0, err
+	}
+	return cancelled, nil
 }
 
 // RenameDevice changes the label on one device's row, and nothing else.
@@ -3478,15 +2797,10 @@ func (s *Store) RevokeDevice(vaultID, deviceID, vaultHash string, allowLast bool
 // A device renames itself: the caller is the authenticated device, so there is
 // no authorisation question to answer here beyond the row existing. `name` is a
 // label a person reads and `device_id` is the identity, which is what makes
-// this a one-column update rather than anything to migrate. Nothing
-// authenticates the label, so there is no MAC to maintain either; see the
-// devices table and verifyRegistry, which reads the name and checks the row
-// around it.
-//
-// Not conditional on the vault hash, unlike RevokeDevice. That guard is there
-// because revoking is destructive and a retired root must not reach it. A
-// device relabelling itself destroys nothing, cannot affect another device, and
-// is undone by doing it again.
+// this a one-column update rather than anything to migrate; verifyRegistry
+// reads the name and checks the row around it. A device relabelling itself
+// destroys nothing, cannot affect another device, and is undone by doing it
+// again.
 //
 // An unknown row is ErrUnknownDevice rather than a silent success, because the
 // case it covers is a device renaming itself after being revoked, and "renamed"

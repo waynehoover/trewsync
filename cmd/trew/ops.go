@@ -284,19 +284,22 @@ func healthOf(st *store.Store) healthJSON {
 }
 
 type vaultStats struct {
-	Vault       string `json:"vault"`
-	Claimed     bool   `json:"claimed"`
-	Files       int64  `json:"files"`
-	Folders     int64  `json:"folders"`
-	Bytes       int64  `json:"bytes"`
-	Deleted     int64  `json:"deleted"`
-	Recoverable int64  `json:"recoverable"`
-	Purged      int64  `json:"purged"`
-	Versions    int64  `json:"versions"`
-	History     int64  `json:"history"`
-	ChunkRefs   int64  `json:"chunkRefs"`
-	LatestUID   int64  `json:"latestUid"`
-	AllocatedTo int64  `json:"allocatedTo"`
+	Vault string `json:"vault"`
+	// Devices is how many devices are paired with the vault. Basalt said
+	// "claimed" here, meaning bound to its first device's key; with no vault
+	// key the question a script can ask is how many devices there are.
+	Devices     int   `json:"devices"`
+	Files       int64 `json:"files"`
+	Folders     int64 `json:"folders"`
+	Bytes       int64 `json:"bytes"`
+	Deleted     int64 `json:"deleted"`
+	Recoverable int64 `json:"recoverable"`
+	Purged      int64 `json:"purged"`
+	Versions    int64 `json:"versions"`
+	History     int64 `json:"history"`
+	ChunkRefs   int64 `json:"chunkRefs"`
+	LatestUID   int64 `json:"latestUid"`
+	AllocatedTo int64 `json:"allocatedTo"`
 	// Purges is the vault's purge generation, the same number a backup's
 	// backup.json records, so a script can tell which backups predate the
 	// history the live store has since dropped.
@@ -335,7 +338,7 @@ func writeStatsJSON(out io.Writer, st *store.Store, vaults []string, bodies int)
 		if err != nil {
 			return err
 		}
-		hash, err := st.AuthHash(v)
+		devices, err := st.Devices(v)
 		if err != nil {
 			return err
 		}
@@ -352,7 +355,7 @@ func writeStatsJSON(out io.Writer, st *store.Store, vaults []string, bodies int)
 			return err
 		}
 		rep.Vaults = append(rep.Vaults, vaultStats{
-			Vault: v, Claimed: hash != "",
+			Vault: v, Devices: len(devices),
 			Files: s.Files, Folders: s.Folders, Bytes: s.Bytes,
 			Deleted: s.Deleted, Recoverable: s.Recoverable, Purged: s.Deleted - s.Recoverable,
 			Versions: s.Versions, History: rec.Versions, ChunkRefs: s.ChunkRefs,

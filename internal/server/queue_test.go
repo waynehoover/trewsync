@@ -13,6 +13,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/frame"
 	"github.com/waynehoover/trew/internal/store"
 	"github.com/waynehoover/trew/internal/wire"
 )
@@ -21,12 +22,13 @@ import (
 // handover from catch-up to live delivery. Review findings S1, S2, S8 and S10.
 
 // seedBodies puts n one-mebibyte bodies in the vault and returns their names,
-// so a fetch can be made to carry several times the send budget.
+// so a fetch can be made to carry several times the send budget. They are
+// incompressible, so each one crosses the wire as a mebibyte.
 func seedBodies(t *testing.T, r *rig, n int) []string {
 	t.Helper()
 	names := make([]string, n)
 	for i := range names {
-		b := bytes.Repeat([]byte{byte(i + 1)}, 1<<20)
+		b := incompressible(i+1, 1<<20)
 		names[i] = chunks.Name(b)
 		if err := r.st.Chunks().Put(testVault, names[i], b); err != nil {
 			t.Fatalf("seed body: %v", err)
@@ -48,7 +50,11 @@ func readBodiesSlowly(t *testing.T, cl *client, names []string, pause time.Durat
 		if typ != websocket.MessageBinary {
 			t.Fatalf("body %d: got a text frame instead: %s", i, data)
 		}
-		if got := chunks.Name(data); got != want {
+		raw, err := frame.Decode(data, store.ChunkMax)
+		if err != nil {
+			t.Fatalf("body %d is not a frame a client can decode: %v", i, err)
+		}
+		if got := chunks.Name(raw); got != want {
 			t.Fatalf("body %d is %s, want %s", i, got, want)
 		}
 		time.Sleep(pause)
@@ -346,7 +352,7 @@ func TestS8TheCatchUpBufferIsBoundedInBytesAsWellAsEntries(t *testing.T) {
 	// and are nowhere near CatchupBufferMax.
 	for i := 0; i < 3; i++ {
 		peer.deliver(store.Entry{
-			UID: int64(1000 + i), Path: "big.md", Size: 1, MTime: 1, Chunks: names, Mac: testMac,
+			UID: int64(1000 + i), Path: "big.md", Size: 1, MTime: 1, Chunks: names,
 		}, false)
 	}
 	select {

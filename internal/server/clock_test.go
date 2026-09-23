@@ -130,7 +130,7 @@ func (c *client) putAt(path string, mtime int64, bodies ...string) int64 {
 	c.t.Helper()
 	names, size := chunkNames(bodies)
 	c.sendJSON(wire.In{
-		Op: "put", Path: path, Chunks: names, Mac: testMac, Base: c.head(path),
+		Op: "put", Path: path, Chunks: names, Base: c.head(path),
 		Meta: wire.PutMeta{Size: size, MTime: mtime},
 	})
 	m := c.recv()

@@ -60,6 +60,9 @@ func cmdService(args []string, out io.Writer) error {
 	// can run beside a live server.
 	dbPath, _ := store.DataDir(*dataDir)
 	if _, err := os.Stat(dbPath); err == nil {
+		if err := store.CheckDataDir(*dataDir); err != nil {
+			return err
+		}
 		lock, err := dirlock.Shared(*dataDir, dirlock.Data)
 		if err != nil {
 			return locked(err, *dataDir, "service", stopFirst)
@@ -146,6 +149,7 @@ func cmdService(args []string, out io.Writer) error {
 	// path with a space, pasted unquoted, would run `backup -data /my` against a
 	// directory that is not the one meant.
 	qExe, qData := shellQuote(exe), shellQuote(data)
+	qInvite, qUser := shellQuote(filepath.Join(data, firstInviteFile)), shellQuote(who)
 	fmt.Fprintf(out, `
 # Save this output as trew.service and review it. Then install it as root:
 #
@@ -155,9 +159,15 @@ func cmdService(args []string, out io.Writer) error {
 #   systemctl status trew
 #   journalctl -u trew -f
 #
-# The token it prints on its first run is in the log:
+# On its first run it writes the first device's invite to a file only the
+# service user can read, and logs where, never the invite itself:
 #
-#   journalctl -u trew | grep '#'
+#   cat %s
+#
+# Every later device gets an invite from the running server, asked as the
+# service user:
+#
+#   sudo -u %s %s invite -data %s
 #
 # Backups do not need the server stopped, so this is a cron or timer away:
 #
@@ -169,7 +179,7 @@ func cmdService(args []string, out io.Writer) error {
 # command destroying history should ask for (I13):
 #
 #   systemctl stop trew && %s purge -data %s -vault %s -confirm %s -backup /somewhere/else && systemctl start trew
-`, qExe, qData, qExe, qData, shellQuote(*vault), shellQuote(*vault))
+`, qInvite, qUser, qExe, qData, qExe, qData, qExe, qData, shellQuote(*vault), shellQuote(*vault))
 	return nil
 }
 
@@ -216,11 +226,11 @@ type unitArgs struct {
 // unit is the systemd unit itself.
 //
 // The hardening is not decoration. This process holds every note you have, in
-// ciphertext it cannot read, and it needs exactly one directory and one socket.
+// the clear, and it needs exactly one directory and one socket.
 // Everything below says so to the kernel, so a defect in it has somewhere it
 // cannot reach.
 //
-// No TLS here on purpose. docs/design.md keeps key material out of this
+// No TLS here on purpose. docs/design.md keeps certificates out of this
 // binary, so put `tailscale serve` or a tunnel in front and leave this bound to
 // localhost.
 func unit(a unitArgs) string {

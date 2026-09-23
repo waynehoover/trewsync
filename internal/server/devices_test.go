@@ -1,335 +1,87 @@
 package server
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/waynehoover/trew/internal/store"
 	"github.com/waynehoover/trew/internal/wire"
 )
 
-// Protocol 4: a device connects as itself, the vault's credential registers
-// devices and does nothing else, and revoking one device means something.
-//
-// docs/protocol.md, "Authentication" and "The device list". The property under
-// most of this: a device list that can be bypassed by a credential every
-// device shares is worse than no list, because it looks like it works.
+// A device connects as itself, with its own token, and revoking one device
+// means something (plan/protocol.md, "Device session" and "Devices and
+// invites"). Basalt's version of this file opened with the vault credential
+// that could not sync; protocol 1 has no vault credential, and the tests that
+// were only about it went with it (plan/strip-ledger.md).
 
-/* ---------------------------------------------------------------- *
- * The narrowing
- * ---------------------------------------------------------------- */
-
-// The vault's own credential cannot sync. Not "is not expected to": every op
-// that touches the vault is refused, there is no `ready` and no catch-up, and
-// the session is in no fan-out, so nothing reaches it either.
-//
-// A credential every device connects with makes a device list a list of rows
-// nothing consults, which is why the narrowing comes before the list.
-func TestTheVaultCredentialCannotSync(t *testing.T) {
-	r := newRigDerived(t)
-	device := claimed(t, r, "a")
-	uid := device.put("secret.md", "not for a registrar")
-
-	reg := registrarWith(t, r, "recovery-key", longKey)
-	for _, op := range []wire.In{
-		{Op: "put", Path: "x.md", Mac: testMac, Meta: wire.PutMeta{MTime: 1}},
-		{Op: "putmany", Entries: []wire.PutEntry{{Path: "x.md", Mac: testMac}}},
-		{Op: "get", UID: uid},
-		{Op: "fetch", Chunks: []string{strings.Repeat("a", 64)}},
-		{Op: "history", Path: "secret.md"},
-		{Op: "deleted"},
-		{Op: "invite", Invite: testInvite, Sealed: testSealed},
-		{Op: "applied"},
-	} {
-		reg.sendJSON(op)
-		msg := reg.expectErr(wire.CodeAuth)
-		if !strings.Contains(msg, op.Op) {
-			t.Fatalf("the refusal of %q does not name it: %q", op.Op, msg)
-		}
-		if !strings.Contains(msg, "device") {
-			t.Fatalf("the refusal of %q does not say what credential it needs: %q", op.Op, msg)
-		}
-	}
-	// `devices` and `revoke` are not on that list, and that is a decision
-	// rather than an omission: the access list is the recovery key's to
-	// administer, and the note is what it may not touch. See
-	// TestTheRecoveryKeyAdministersTheDeviceListAndReadsNoNote.
-	//
-	// Nothing was written, nothing was revoked, and the session is still
-	// usable for the things it may do.
-	if ds, err := r.st.Devices(testVault); err != nil || len(ds) != 1 {
-		t.Fatalf("devices after the refusals: %+v %v", ds, err)
-	}
-	if st := r.mustStats(); st.Versions != 1 {
-		t.Fatalf("%d versions after a registrar tried to write", st.Versions)
-	}
-
-	// And it is in no fan-out: a write by the device reaches nobody here.
-	device.put("another.md", "still not for a registrar")
-	reg.sendJSON(wire.In{Op: "ping"})
-	reg.recvInto("pong", &wire.Pong{})
-	if got := reg.drainBatches(); len(got) != 0 {
-		t.Fatalf("a registrar was sent %d batches of the vault's entries", len(got))
-	}
-}
-
-// The vault's credential offered *as* a device credential opens nothing
-// either, which is the same rule from the other side: there is no id under
-// which the vault's own key is a device's.
-func TestTheVaultCredentialIsNotADeviceCredential(t *testing.T) {
-	r := newRigDerived(t)
-	claimed(t, r, "a")
-	cl := r.dial("impostor")
-	cl.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault,
-		Token: longKey, DeviceID: deviceID("a"), Device: "impostor"})
-	cl.expectErr(wire.CodeAuth)
-	if !cl.closed() {
-		t.Fatal("the vault's key was offered as a device's and the session stayed open")
-	}
-}
-
-// A device that is not registered and a device whose key is wrong get the same
-// refusal, saying neither which. Telling them apart would tell a caller which
-// half to keep guessing, and after a revoke it would confirm that this id was
-// a device here yesterday.
+// devices_test.go:96. A device that is not registered and a device whose token
+// is wrong get the same refusal, saying neither which. Telling them apart would
+// tell a caller which half to keep guessing, and after a revoke it would
+// confirm that this id was a device here yesterday.
 func TestAnUnknownDeviceAndAWrongKeyAreOneRefusal(t *testing.T) {
-	r := newRigDerived(t)
-	claimed(t, r, "a")
+	r := newRig(t)
+	r.device("a")
 
 	wrongKey := r.dial("wrong-key")
-	wrongKey.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault,
+	wrongKey.sendJSON(wire.In{Op: "hello", Vault: testVault,
 		Token: deviceKey("somebody-else"), DeviceID: deviceID("a"), Device: "a"})
 	one := wrongKey.expectErr(wire.CodeAuth)
 
 	noRow := r.dial("no-row")
-	noRow.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault,
+	noRow.sendJSON(wire.In{Op: "hello", Vault: testVault,
 		Token: deviceKey("ghost"), DeviceID: deviceID("ghost"), Device: "ghost"})
 	two := noRow.expectErr(wire.CodeAuth)
 
-	if one != two {
-		t.Fatalf("the two failures are distinguishable:\n  %q\n  %q", one, two)
+	malformed := r.dial("malformed")
+	malformed.sendJSON(wire.In{Op: "hello", Vault: testVault,
+		Token: "not a token", DeviceID: deviceID("a"), Device: "a"})
+	three := malformed.expectErr(wire.CodeAuth)
+
+	if one != two || two != three {
+		t.Fatalf("the failures are distinguishable:\n  %q\n  %q\n  %q", one, two, three)
 	}
 }
 
-/* ---------------------------------------------------------------- *
- * Registering over the wire
- * ---------------------------------------------------------------- */
-
-// The recovery key registers a device, which is what it is written down for:
-// the day every device is gone. Spec test 7.
-func TestTheRecoveryKeyRegistersADeviceWhenEveryDeviceIsGone(t *testing.T) {
-	r := newRigDerived(t)
-	first := claimed(t, r, "a")
-	// Every device is lost.
+// devices_test.go:121, the half that stays. A store with history and no
+// devices at all is not a lost vault: the operator mints an invite on the
+// server, a new device redeems it, and everything the old devices wrote is
+// there. Basalt's way back was the recovery key; Trew's is this, and the
+// control socket's `trew invite` is the same CreateInvite.
+func TestAStoreWithHistoryAndNoDevicesGetsOneBackFromAnInvite(t *testing.T) {
+	r := newRig(t)
+	first := r.dial("a")
+	first.hello(0)
+	uid := first.put("kept.md", "written before every device was lost")
 	first.conn.CloseNow()
-	if err := r.st.RevokeDevice(testVault, deviceID("a"), "", true); err != nil {
+	// Every device is lost.
+	if _, err := r.st.RevokeDevice(testVault, deviceID("a"), r.srv.now().UnixMilli()); err != nil {
 		t.Fatalf("losing every device: %v", err)
 	}
 
-	reg := registrarWith(t, r, "recovery-key", longKey)
-	reg.sendJSON(wire.In{Op: "register", ID: 5, DeviceID: deviceID("replacement"),
-		Auth: deviceKey("replacement"), Name: "the new laptop"})
-	var done wire.Registered
-	reg.recvInto("registered", &done)
-	if done.DeviceID != deviceID("replacement") || done.Wrapped != testWrapped {
-		t.Fatalf("registered was %+v", done)
-	}
-	// The device it registered is a device.
+	inv := r.invite(time.Hour)
+	r.dial("replacement").redeem(inv.Token)
 	cl := r.dial("replacement")
-	cl.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault,
-		Token: deviceKey("replacement"), DeviceID: deviceID("replacement"), Device: "replacement"})
-	cl.recvInto("ready", &wire.Ready{})
-	cl.recvInto("caught-up", &wire.CaughtUp{})
-	ds, err := r.st.Devices(testVault)
-	if err != nil || len(ds) != 1 || ds[0].Name != "the new laptop" {
-		t.Fatalf("devices after the recovery: %+v %v", ds, err)
+	_, got := cl.hello(0)
+	if len(got) != 1 || got[0].UID != uid || got[0].Path != "kept.md" {
+		t.Fatalf("the replacement caught up on %+v, want the note written before", got)
+	}
+	ds := mustDevices(t, r)
+	if len(ds) != 1 || ds[0].ID != deviceID("replacement") {
+		t.Fatalf("devices after the recovery: %+v", ds)
 	}
 }
-
-// What the recovery key may do besides register and rotate: read the access
-// list and take a row off it. What it may not do is read a note.
-//
-// The line is where it is because of two things a narrower one broke. Emptying
-// the vault is the recovery key's alone, and a refusal naming a credential the
-// server would then refuse as well is a dead end rather than an instruction.
-// And a vault whose every row is a pairing that crashed refuses every
-// registration with `full`, so a recovery key that could not prune the list
-// would leave no way back in at all. Both are in the dispatch comment.
-func TestTheRecoveryKeyAdministersTheDeviceListAndReadsNoNote(t *testing.T) {
-	r := newRigDerived(t)
-	device := claimed(t, r, "a")
-	uid := device.put("secret.md", "not for a registrar")
-	device.conn.CloseNow()
-	waitFor(t, "the device to leave", func() bool { return r.srv.Peers(testVault) == 0 })
-
-	reg := registrarWith(t, r, "recovery-key", longKey)
-	reg.sendJSON(wire.In{Op: "register", DeviceID: deviceID("b"), Auth: deviceKey("b"), Name: "phone"})
-	reg.recvInto("registered", &wire.Registered{})
-
-	// It reads the list.
-	reg.sendJSON(wire.In{Op: "devices", ID: 11})
-	var list wire.DeviceList
-	reg.recvInto("devices", &list)
-	if len(list.Devices) != 2 || list.MaxDevices != 0 {
-		t.Fatalf("the recovery key was answered %+v", list)
-	}
-
-	// And takes one off it, which the device it names finds out by being
-	// closed and then refused.
-	reg.sendJSON(wire.In{Op: "revoke", ID: 12, DeviceID: deviceID("b")})
-	var done wire.Revoked
-	reg.recvInto("revoked", &done)
-	if done.DeviceID != deviceID("b") || done.Self {
-		t.Fatalf("revoked was %+v; a registrar is not a device, so it cannot be self", done)
-	}
-	if _, _, ok, _ := r.st.DeviceByID(testVault, deviceID("b")); ok {
-		t.Fatal("the row survived a revoke from the recovery key")
-	}
-
-	// What it still may not do is read what those devices wrote. Note by note,
-	// because "may administer the list" must not have quietly become "may
-	// read the vault".
-	for _, op := range []wire.In{
-		{Op: "get", UID: uid},
-		{Op: "history", Path: "secret.md"},
-		{Op: "deleted"},
-		{Op: "put", Path: "x.md", Mac: testMac, Meta: wire.PutMeta{MTime: 1}},
-	} {
-		reg.sendJSON(op)
-		if msg := reg.expectErr(wire.CodeAuth); !strings.Contains(msg, op.Op) {
-			t.Fatalf("the refusal of %q does not name it: %q", op.Op, msg)
-		}
-	}
-	if st := r.mustStats(); st.Versions != 1 {
-		t.Fatalf("%d versions after a registrar tried to write", st.Versions)
-	}
-}
-
-// A device may not register another device. That is what a device not holding
-// the root buys: a stolen laptop can read what it already had and cannot add a
-// device of its own to the vault behind you.
-func TestADeviceMayNotRegisterAnotherDevice(t *testing.T) {
-	r := newRigDerived(t)
-	cl := claimed(t, r, "a")
-	cl.sendJSON(wire.In{Op: "register", DeviceID: deviceID("smuggled"), Auth: deviceKey("smuggled")})
-	msg := cl.expectErr(wire.CodeAuth)
-	if !strings.Contains(msg, "invite") || !strings.Contains(msg, "recovery key") {
-		t.Fatalf("the refusal does not say how a device is added: %q", msg)
-	}
-	if _, _, ok, _ := r.st.DeviceByID(testVault, deviceID("smuggled")); ok {
-		t.Fatal("a device registered another device")
-	}
-	// The session survives, because nothing was changed.
-	cl.sendJSON(wire.In{Op: "ping"})
-	cl.recvInto("pong", &wire.Pong{})
-}
-
-// Registering the same device, with the same key, twice is the registration
-// having happened.
-//
-// That is what a half-finished registration leaves behind: the row committed
-// and the reply was lost, and the caller is a conversion that has to be able to
-// run again after a crash. Answering "already exists" there leaves a device
-// retrying for ever. A *different* key under an id the vault already holds is
-// somebody else's device and is refused, changing nothing.
-func TestRegisteringTheSameDeviceTwiceIsIdempotent(t *testing.T) {
-	r := newRigDerived(t)
-	claimed(t, r, "a").conn.CloseNow()
-	reg := registrarWith(t, r, "recovery-key", longKey)
-
-	reg.sendJSON(wire.In{Op: "register", DeviceID: "twice", Auth: deviceKey("twice"), Name: "laptop"})
-	reg.recvInto("registered", &wire.Registered{})
-	reg.sendJSON(wire.In{Op: "register", DeviceID: "twice", Auth: deviceKey("twice"), Name: "laptop"})
-	var again wire.Registered
-	reg.recvInto("registered", &again)
-	if again.DeviceID != "twice" || again.Wrapped != testWrapped {
-		t.Fatalf("the repeated registration was answered %+v", again)
-	}
-
-	reg.sendJSON(wire.In{Op: "register", DeviceID: "twice", Auth: deviceKey("somebody-else"), Name: "impostor"})
-	msg := reg.expectErr(wire.CodeBadEntry)
-	if !strings.Contains(msg, "twice") {
-		t.Fatalf("the refusal does not name the id: %q", msg)
-	}
-	_, hash, ok, err := r.st.DeviceByID(testVault, "twice")
-	if err != nil || !ok || hash != hashOf(deviceKey("twice")) {
-		t.Fatalf("the row after the refused registration: ok=%v hash=%q err=%v", ok, hash, err)
-	}
-	ds, _ := r.st.Devices(testVault)
-	if len(ds) != 2 {
-		t.Fatalf("%d devices, want the claimed one and the one registered twice: %+v", len(ds), ds)
-	}
-	if ds[1].Name != "laptop" {
-		t.Fatalf("the refused registration renamed the row to %q", ds[1].Name)
-	}
-}
-
-// The refusals a malformed registration gets, each of which leaves the session
-// usable because nothing was written.
-func TestRegisterRefusals(t *testing.T) {
-	r := newRigDerived(t)
-	claimed(t, r, "a").conn.CloseNow()
-	reg := registrarWith(t, r, "recovery-key", longKey)
-
-	for _, tc := range []struct {
-		why  string
-		msg  wire.In
-		code string
-	}{
-		{"no device id", wire.In{Op: "register", Auth: deviceKey("x")}, wire.CodeBadName},
-		{"a device id that is not base64url", wire.In{Op: "register", DeviceID: "no spaces", Auth: deviceKey("x")}, wire.CodeBadName},
-		{"a device id over the bound", wire.In{Op: "register",
-			DeviceID: strings.Repeat("i", store.MaxDeviceIDLen+1), Auth: deviceKey("x")}, wire.CodeBadName},
-		{"no auth key", wire.In{Op: "register", DeviceID: "d1"}, wire.CodeBadEntry},
-		{"a guessable auth key", wire.In{Op: "register", DeviceID: "d1", Auth: "hunter2"}, wire.CodeBadEntry},
-		{"a name with a newline", wire.In{Op: "register", DeviceID: "d1",
-			Auth: deviceKey("x"), Name: "laptop\ninjected"}, wire.CodeBadName},
-		{"a name over the bound", wire.In{Op: "register", DeviceID: "d1",
-			Auth: deviceKey("x"), Name: strings.Repeat("n", store.MaxDeviceLen+1)}, wire.CodeBadName},
-	} {
-		t.Run(tc.why, func(t *testing.T) {
-			reg.sendJSON(tc.msg)
-			reg.expectErr(tc.code)
-			if _, _, ok, _ := r.st.DeviceByID(testVault, tc.msg.DeviceID); ok {
-				t.Fatalf("a refused registration wrote a row for %q", tc.msg.DeviceID)
-			}
-			reg.sendJSON(wire.In{Op: "ping"})
-			reg.recvInto("pong", &wire.Pong{})
-		})
-	}
-}
-
-// An authenticator that grants a session without saying which vault credential
-// it matched cannot register anything. Refused rather than guessed, exactly as
-// rotate is: a registration authorised by no credential at all is the hole
-// this whole path exists to close.
-func TestARegistrarWithNoVaultCredentialRegistersNothing(t *testing.T) {
-	r := newRig(t) // StaticTokens: a token map, and no vault hash in its grant
-	cl := r.dial("a")
-	cl.registrar()
-	cl.sendJSON(wire.In{Op: "register", DeviceID: "d1", Auth: deviceKey("d1")})
-	msg := cl.expectErr(wire.CodeAuth)
-	if !strings.Contains(msg, "credential") {
-		t.Fatalf("the refusal does not say what is missing: %q", msg)
-	}
-	if ds, _ := r.st.Devices(testVault); len(ds) != 0 {
-		t.Fatalf("%d devices registered by a session with no vault credential", len(ds))
-	}
-}
-
-/* ---------------------------------------------------------------- *
- * The cap
- * ---------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------- *
  * Listing
  * ---------------------------------------------------------------- */
 
-// The list names every device with what a person reads it by, carries no
-// credential, and is never null. Two devices may share a name, because the id
-// is the identity: two laptops both called laptop is a person's problem to fix
-// and not the server's to prevent.
+// devices_test.go:333. The list names every device with what a person reads it
+// by, carries no credential, and is never null. Two devices may share a name,
+// because the id is the identity: two laptops both called laptop is a person's
+// problem to fix and not the server's to prevent.
 func TestTheDeviceListIsUsableAndCarriesNoCredential(t *testing.T) {
 	r := newRig(t)
 	a := r.dial("a")
@@ -338,15 +90,16 @@ func TestTheDeviceListIsUsableAndCarriesNoCredential(t *testing.T) {
 	b.hello(0)
 	// A second device under the same name, registered straight into the store
 	// so that the two really do collide.
-	if err := r.st.RegisterDevice(testVault, "twin", "a", hashOf(deviceKey("twin")),
-		hashOf(testToken), 5); err != nil {
+	if err := r.st.RegisterDevice(testVault, "twin", "a", hashOf(deviceKey("twin")), 5); err != nil {
 		t.Fatalf("registering a second device called a: %v", err)
 	}
+	// And an outstanding invite, whose token must not reach the list either.
+	inv := r.invite(time.Hour)
 
 	a.sendJSON(wire.In{Op: "devices", ID: 40})
 	var got wire.DeviceList
 	a.recvInto("devices", &got)
-	if got.ID != 40 || got.MaxDevices != 0 {
+	if got.ID != 40 {
 		t.Fatalf("the listing was %+v", got)
 	}
 	if len(got.Devices) != 3 {
@@ -363,10 +116,13 @@ func TestTheDeviceListIsUsableAndCarriesNoCredential(t *testing.T) {
 		t.Fatalf("the two devices called a came back as %v", names)
 	}
 
-	// Nothing in the frame is a credential. The listing type has no field for
-	// one, and this is what catches the day somebody adds it.
+	// Nothing in the frame is a credential. The listing types have no field
+	// for one, and this is what catches the day somebody adds it.
 	raw := a.recvRawFor(t, wire.In{Op: "devices"})
-	for _, secret := range []string{hashOf(deviceKey("a")), deviceKey("a"), hashOf(testToken), testToken} {
+	for _, secret := range []string{
+		hashOf(deviceKey("a")), deviceKey("a"),
+		store.EncodeToken(inv.Token), store.HashToken(inv.Token),
+	} {
 		if strings.Contains(raw, secret) {
 			t.Fatalf("the device list carries a credential: %s", raw)
 		}
@@ -374,18 +130,23 @@ func TestTheDeviceListIsUsableAndCarriesNoCredential(t *testing.T) {
 
 	// A vault with no devices lists as [] and not null, so a client that
 	// iterates the result does not crash on exactly the vault it is for.
-	if err := r.st.RevokeDevice(testVault, deviceID("a"), "", false); err != nil {
+	// Asked of the parts handleDevices builds its reply from, because there
+	// is no device left to ask over the wire.
+	for _, id := range []string{deviceID("a"), "twin", deviceID("b")} {
+		if _, err := r.st.RevokeDevice(testVault, id, 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ds, err := r.st.Devices(testVault)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.st.RevokeDevice(testVault, "twin", "", false); err != nil {
+	frame, err := json.Marshal(wire.DeviceList{Res: "devices", ID: 1, Devices: r.srv.hub.deviceStatus(testVault, ds)})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.st.RevokeDevice(testVault, deviceID("b"), "", true); err != nil {
-		t.Fatal(err)
-	}
-	empty := b.recvRawFor(t, wire.In{Op: "devices"})
-	if !strings.Contains(empty, `"devices":[]`) {
-		t.Fatalf("a vault with no devices listed as %s", empty)
+	if !strings.Contains(string(frame), `"devices":[]`) {
+		t.Fatalf("a vault with no devices lists as %s", frame)
 	}
 }
 
@@ -402,8 +163,9 @@ func (c *client) recvRawFor(t *testing.T, m wire.In) string {
  * Revoking
  * ---------------------------------------------------------------- */
 
-// A revoked device cannot connect, and the refusal is the ordinary one: a
-// revoked device connecting is the system working, not a fault.
+// devices_test.go:407. A revoked device cannot connect, and the refusal is the
+// ordinary one: a revoked device connecting is the system working, not a
+// fault.
 func TestARevokedDeviceCannotConnect(t *testing.T) {
 	r := newRig(t)
 	a := r.dial("a")
@@ -419,7 +181,7 @@ func TestARevokedDeviceCannotConnect(t *testing.T) {
 	}
 
 	again := r.dial("a-again")
-	again.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault,
+	again.sendJSON(wire.In{Op: "hello", Vault: testVault,
 		Token: deviceKey("a"), DeviceID: deviceID("a"), Device: "a"})
 	again.expectErr(wire.CodeAuth)
 	if !again.closed() {
@@ -427,8 +189,8 @@ func TestARevokedDeviceCannotConnect(t *testing.T) {
 	}
 }
 
-// Revoking closes the live session the revoked device is holding, and says why
-// in words a person can act on.
+// devices_test.go:437. Revoking closes the live session the revoked device is
+// holding, and says why in words a person can act on.
 //
 // Deleting the row alone would be a revocation the revoked device never
 // notices: it holds an authenticated connection and nothing on a live session
@@ -459,9 +221,9 @@ func TestRevokingClosesTheRevokedDevicesLiveSession(t *testing.T) {
 	waitFor(t, "the revoked session to leave", func() bool { return r.srv.Peers(testVault) == 1 })
 }
 
-// Revoking one device disturbs no other device's session or sync. Spec test 2:
-// the whole point of the feature is that the answer to a stolen laptop is not
-// re-pairing the phone, the desktop and the NAS.
+// devices_test.go:465. Revoking one device disturbs no other device's session
+// or sync: the answer to a stolen laptop is not re-pairing the phone, the
+// desktop and the NAS.
 func TestRevokingOneDeviceDisturbsNoOther(t *testing.T) {
 	r := newRig(t)
 	a := r.dial("a")
@@ -483,14 +245,14 @@ func TestRevokingOneDeviceDisturbsNoOther(t *testing.T) {
 	}
 	// And b's own row is untouched, so it reconnects.
 	again := r.dial("b-again")
-	again.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault,
+	again.sendJSON(wire.In{Op: "hello", Vault: testVault,
 		Token: deviceKey("b"), DeviceID: deviceID("b"), Device: "b"})
 	again.recvInto("ready", &wire.Ready{})
 }
 
-// A device may revoke itself, which is what unlinking becomes, and the session
-// ends: a revoked device does not stay connected, including when it is the one
-// that asked.
+// devices_test.go:494. A device may revoke itself, which is what unlinking is,
+// and the session ends: a revoked device does not stay connected, including
+// when it is the one that asked.
 func TestADeviceMayRevokeItselfAndTheSessionEnds(t *testing.T) {
 	r := newRig(t)
 	a := r.dial("a")
@@ -515,105 +277,39 @@ func TestADeviceMayRevokeItselfAndTheSessionEnds(t *testing.T) {
 	b.recvInto("pong", &wire.Pong{})
 }
 
-// A device may not empty the vault, with or without saying the word, and the
-// recovery key may.
-//
-// Ordinary revocation stays a device's: a phone cutting off a stolen laptop
-// without anybody digging out the recovery key is why revocation exists at
-// all. Emptying the vault is the exception, because it is the one revocation
-// nothing on a device can undo: what it leaves is a vault only the recovery
-// key opens. A compromised device could otherwise delete every row and the
-// last one with it, and its owner would be left holding devices that cannot
-// reach their own notes.
-//
-// It costs nothing in the case it is aimed at, which is the argument for
-// gating it: a device stolen when it was the only one wants a rotation too,
-// and rotating already needs the recovery key.
-func TestADeviceMayNotEmptyTheVault(t *testing.T) {
-	r := newRigDerived(t)
-	a := claimed(t, r, "a")
+// devices_test.go:532, decided (hazard 4). A device may revoke the last device
+// on the vault, itself included (plan/protocol.md, "Devices and invites").
+// Basalt refused it, because what it left was a vault only the recovery key
+// opened. Trew has no key a device holds that the server cannot reissue, so
+// the way back from an empty device list is an invite from the server, and a
+// refusal would protect nothing and strand a person who meant it.
+func TestADeviceMayRevokeTheLastDevice(t *testing.T) {
+	r := newRig(t)
+	a := r.dial("a")
+	a.hello(0)
+	uid := a.put("still-here.md", "the vault keeps its notes")
 
-	// Without the word: told what it would cost, and told whose job it is.
-	a.sendJSON(wire.In{Op: "revoke", DeviceID: deviceID("a")})
-	msg := a.expectErr(wire.CodeBadEntry)
-	if !strings.Contains(msg, "last device") || !strings.Contains(msg, "recovery key") {
-		t.Fatalf("the refusal does not say what it would cost or who can: %q", msg)
+	a.sendJSON(wire.In{Op: "revoke", ID: 7, DeviceID: deviceID("a")})
+	var done wire.Revoked
+	a.recvInto("revoked", &done)
+	if !done.Self || done.ID != 7 {
+		t.Fatalf("revoking the last device was answered %+v", done)
 	}
-
-	// With it: refused as a credential, not as a frame, and the message says
-	// which credential and what to do with it. A refusal that only said no
-	// would send somebody rotating and re-pairing everything instead.
-	a.sendJSON(wire.In{Op: "revoke", ID: 7, DeviceID: deviceID("a"), AllowLast: true})
-	m := a.recv()
-	if m["res"] != "err" || m["code"] != wire.CodeAuth || m["id"] != float64(7) {
-		t.Fatalf("a device saying allowLast was answered %v, want auth", m)
+	if ds := mustDevices(t, r); len(ds) != 0 {
+		t.Fatalf("%d devices after the last one was revoked", len(ds))
 	}
-	said, _ := m["msg"].(string)
-	if !strings.Contains(said, "recovery key") || !strings.Contains(said, "revoke any other device") {
-		t.Fatalf("the refusal does not say what to do instead: %q", said)
-	}
-	if _, _, ok, _ := r.st.DeviceByID(testVault, deviceID("a")); !ok {
-		t.Fatal("the refused revoke deleted the row anyway")
-	}
-	// Both refusals leave the session usable, because neither changed
-	// anything, and this device is still syncing.
-	a.sendJSON(wire.In{Op: "ping"})
-	a.recvInto("pong", &wire.Pong{})
-	a.put("still-here.md", "the refusal did not cost the connection")
-
-	// The recovery key does it, and still has to say the word: the second
-	// confirmation is what keeps it from being a mis-click, and it is now
-	// asked of the credential that can undo it.
-	reg := registrarWith(t, r, "recovery-key", longKey)
-	reg.sendJSON(wire.In{Op: "revoke", DeviceID: deviceID("a")})
-	if msg := reg.expectErr(wire.CodeBadEntry); !strings.Contains(msg, "allowLast") {
-		t.Fatalf("the recovery key was not told how to mean it: %q", msg)
-	}
-	reg.sendJSON(wire.In{Op: "revoke", DeviceID: deviceID("a"), AllowLast: true})
-	reg.recvInto("revoked", &wire.Revoked{})
-	if ds, _ := r.st.Devices(testVault); len(ds) != 0 {
-		t.Fatalf("%d devices after the recovery key emptied the vault", len(ds))
-	}
-	// And the device it emptied is closed, the same as any other revocation.
-	waitFor(t, "the emptied device to leave", func() bool { return r.srv.Peers(testVault) == 0 })
-}
-
-// A revoke under a root the vault no longer knows is refused, so a rotation
-// ends what a leaked recovery key can do to the device list.
-//
-// The same guard registration has, one table over, and it matters more here
-// than it looks: a rotation deliberately leaves every device row alone, so a
-// retired root that could still delete rows would answer a rotation by locking
-// every real device out of the vault.
-func TestARevokeRacingARotationCannotWin(t *testing.T) {
-	r := newRigDerived(t)
-	claimed(t, r, "a").conn.CloseNow()
-	waitFor(t, "the setup sessions to leave", func() bool { return r.srv.Registrars(testVault) == 0 })
-	leaked := registrarWith(t, r, "the-leaked-key", longKey)
-
-	if err := r.st.Rotate(testVault, hashOf(longKey), hashOf(newKey), newWrapped); err != nil {
-		t.Fatalf("the rotation: %v", err)
-	}
-
-	leaked.sendJSON(wire.In{Op: "revoke", ID: 9, DeviceID: deviceID("a"), AllowLast: true})
-	m := leaked.recv()
-	if m["res"] != "err" || m["code"] != wire.CodeRotated || m["id"] != float64(9) {
-		t.Fatalf("a revoke under the retired root was answered %v, want rotated", m)
-	}
-	if m["retryable"] != false {
-		t.Fatalf("the refusal is retryable, so the leaked key would keep trying: %v", m)
-	}
-	if _, _, ok, _ := r.st.DeviceByID(testVault, deviceID("a")); !ok {
-		t.Fatal("the retired root revoked a device, which the rotation cannot take back")
-	}
-	if !leaked.closed() {
-		t.Fatal("a session holding a credential the vault no longer knows was left open")
+	// And the way back works, onto the history that was there.
+	inv := r.invite(time.Hour)
+	r.dial("b").redeem(inv.Token)
+	b := r.dial("b")
+	if _, got := b.hello(0); len(got) != 1 || got[0].UID != uid {
+		t.Fatalf("the device that came back caught up on %+v", got)
 	}
 }
 
-// A revoke naming a device that is not there is its own code: the list the
-// caller was reading is stale and wants refreshing, which is a different act
-// from every other refusal a revoke can get.
+// devices_test.go:617. A revoke naming a device that is not there is its own
+// code: the list the caller was reading is stale and wants refreshing, which is
+// a different act from every other refusal a revoke can get.
 func TestRevokingADeviceThatIsNotThere(t *testing.T) {
 	r := newRig(t)
 	a := r.dial("a")
@@ -632,14 +328,15 @@ func TestRevokingADeviceThatIsNotThere(t *testing.T) {
 	a.recvInto("pong", &wire.Pong{})
 }
 
-// A revoke racing a connect comes out right whichever order they land in.
+// devices_test.go:643. A revoke racing a connect comes out right whichever
+// order they land in.
 //
-// The revoke deletes the row and only then collects the sessions to close, and
-// a connecting device joins the fan-out and only then stamps itself as seen.
-// So either the delete is first, and the stamp finds no row, or the join is
-// first, and the revoke finds the session. Here the revoke lands in the
-// narrower of the two windows: after the credential has been checked and
-// before the session is in anybody's list.
+// The revoke deletes the row and takes the device's sessions out of the fan-out
+// under one lock, and a connecting device joins the fan-out and only then
+// stamps itself as seen, under the same lock. So either the delete is first,
+// and the stamp finds no row, or the join is first, and the revoke finds the
+// session. Here the revoke lands in the narrower of the two windows: after the
+// credential has been checked and before the session is in anybody's list.
 func TestARevokeRacingAConnectAlwaysWins(t *testing.T) {
 	r := newRig(t)
 	keeper := r.dial("keeper")
@@ -649,14 +346,14 @@ func TestARevokeRacingAConnectAlwaysWins(t *testing.T) {
 	var once sync.Once
 	r.srv.beforeJoin = func() {
 		once.Do(func() {
-			if err := r.st.RevokeDevice(testVault, deviceID("racer"), "", false); err != nil {
+			if _, err := r.st.RevokeDevice(testVault, deviceID("racer"), 2); err != nil {
 				t.Errorf("revoking between the credential check and the join: %v", err)
 			}
 		})
 	}
 
 	racer := r.dial("racer")
-	racer.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault,
+	racer.sendJSON(wire.In{Op: "hello", Vault: testVault,
 		Token: deviceKey("racer"), DeviceID: deviceID("racer"), Device: "racer"})
 	racer.expectErr(wire.CodeAuth)
 	if !racer.closed() {
@@ -666,6 +363,8 @@ func TestARevokeRacingAConnectAlwaysWins(t *testing.T) {
 		func() bool { return r.srv.Peers(testVault) == 1 })
 }
 
+// devices_test.go:669. A handshake whose row was revoked and registered again
+// under another token does not complete, and the replacement works.
 func TestReusingARevokedDeviceIDDoesNotCompleteItsOldHandshake(t *testing.T) {
 	r := newRig(t)
 	keeper := r.dial("keeper")
@@ -675,20 +374,16 @@ func TestReusingARevokedDeviceIDDoesNotCompleteItsOldHandshake(t *testing.T) {
 	var once sync.Once
 	r.srv.beforeJoin = func() {
 		once.Do(func() {
-			if err := r.st.RevokeDevice(testVault, deviceID("racer"), "", false); err != nil {
+			if _, err := r.st.RevokeDevice(testVault, deviceID("racer"), 2); err != nil {
 				t.Errorf("revoke before join: %v", err)
 			}
-			rootHash, err := r.st.AuthHash(testVault)
-			if err != nil {
-				t.Errorf("read root hash: %v", err)
-			}
-			if err := r.st.RegisterDevice(testVault, deviceID("racer"), "replacement", hashOf(freshKey), rootHash, 1); err != nil {
+			if err := r.st.RegisterDevice(testVault, deviceID("racer"), "replacement", hashOf(freshKey), 1); err != nil {
 				t.Errorf("reuse revoked id: %v", err)
 			}
 		})
 	}
 	racer := r.dial("racer")
-	racer.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault,
+	racer.sendJSON(wire.In{Op: "hello", Vault: testVault,
 		Token: deviceKey("racer"), DeviceID: deviceID("racer"), Device: "racer"})
 	racer.expectErr(wire.CodeAuth)
 	if !racer.closed() {
@@ -701,7 +396,7 @@ func TestReusingARevokedDeviceIDDoesNotCompleteItsOldHandshake(t *testing.T) {
 	}
 	// The replacement credential remains usable after the old one is refused.
 	replacement := r.dial("replacement")
-	replacement.sendJSON(wire.In{Op: "hello", Crypto: wire.Crypto, Vault: testVault,
+	replacement.sendJSON(wire.In{Op: "hello", Vault: testVault,
 		Token: freshKey, DeviceID: deviceID("racer"), Device: "replacement"})
 	replacement.recvInto("ready", &wire.Ready{})
 }
@@ -710,9 +405,10 @@ func TestReusingARevokedDeviceIDDoesNotCompleteItsOldHandshake(t *testing.T) {
  * last_seen
  * ---------------------------------------------------------------- */
 
-// last_seen moves on connect and not otherwise. It is the only thing that
-// answers "is that laptop still syncing", so a number that moved because
-// somebody listed the devices would be a number that always looks fine.
+// devices_test.go:716. last_seen moves on connect and not otherwise. It is the
+// only thing that answers "is that laptop still syncing", so a number that
+// moved because somebody listed the devices would be a number that always
+// looks fine.
 func TestLastSeenMovesOnConnectAndNotOtherwise(t *testing.T) {
 	r := newRig(t)
 	base := r.srv.now()
@@ -741,19 +437,17 @@ func TestLastSeenMovesOnConnectAndNotOtherwise(t *testing.T) {
 	}
 }
 
-// A device relabels itself, and only itself.
+// devices_test.go:754. A device relabels itself, and only itself.
 //
 // The gap this closes: a device name was chosen once at pairing and there was
 // no way to change it afterwards short of unlinking and pairing again, which
 // makes a new row. The name is what the device list, history and conflict copy
-// filenames are read by, so a typo or a repurposed laptop was permanent.
-//
-// Protocol 5's whole content. The asymmetry worth pinning is that there is no
-// field naming the row: rename is always this device, which is why a registrar
-// cannot send it and why no authorisation rule was needed.
+// filenames are read by, so a typo or a repurposed laptop was permanent. There
+// is no field naming the row: rename is always this device, which is why no
+// authorisation rule was needed.
 func TestADeviceRenamesItself(t *testing.T) {
-	r := newRigDerived(t)
-	device := claimed(t, r, "a")
+	r := newRig(t)
+	device := joined(t, r, "a")
 
 	device.sendJSON(wire.In{Op: "rename", ID: 7, Name: "the-good-laptop"})
 	var done wire.Renamed
@@ -799,23 +493,5 @@ func TestADeviceRenamesItself(t *testing.T) {
 		if d.ID == deviceID("a") && d.Name != "laptop" {
 			t.Fatalf("a refused rename left the name as %q", d.Name)
 		}
-	}
-}
-
-// The recovery key administers the device list and has no row of its own, so it
-// is told which credential a rename needs rather than "unknown op". The
-// distinction matters because a client waiting on a reply that never comes
-// looks the same either way and the two are fixed differently.
-func TestARegistrarHasNoNameToChange(t *testing.T) {
-	r := newRigDerived(t)
-	device := claimed(t, r, "a")
-	device.conn.CloseNow()
-	waitFor(t, "the device to leave", func() bool { return r.srv.Peers(testVault) == 0 })
-
-	reg := registrarWith(t, r, "recovery-key", longKey)
-	reg.sendJSON(wire.In{Op: "rename", Name: "the-server"})
-	msg := reg.expectErr(wire.CodeAuth)
-	if !strings.Contains(msg, "rename") {
-		t.Fatalf("the refusal does not name the op: %q", msg)
 	}
 }
