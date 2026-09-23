@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/trew/internal/chunks"
 )
 
 // SchemaVersion is what this binary's schema is, recorded in the store's
@@ -92,7 +92,7 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 			return nil, err
 		}
 	case Existing, ReadOnly:
-		// Named rather than created. `telimus verify -data /typo` used to make
+		// Named rather than created. `trew verify -data /typo` used to make
 		// an empty store and report it healthy, which is a true statement about
 		// a directory nobody wanted and a false answer to the question asked.
 		if !exists {
@@ -290,7 +290,7 @@ func migrate(db *sql.DB, dbPath string, id Identity) (Identity, error) {
 // because retrying would not refresh what the transaction already read. Taking
 // the lock at BEGIN means the busy timeout waits for it, and every read inside
 // sees the latest commit. That is what several store handles on one directory
-// need, and `telimus backup`, `purge` and the admin commands are exactly that.
+// need, and `trew backup`, `purge` and the admin commands are exactly that.
 //
 // database/sql has no way to ask for it, so the statements are sent by hand on
 // a pinned connection. A connection whose rollback failed is discarded rather

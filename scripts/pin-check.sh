@@ -17,7 +17,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-image=ghcr.io/waynehoover/telimus
+image=ghcr.io/waynehoover/trew
 
 pinned=$(sed -n "s|.*image: $image:\([0-9][^@]*\)@sha256:.*|\1|p" compose.yaml)
 if [ -z "$pinned" ]; then

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { run } from "./cli.ts";
 
 export async function buildMcp(dir: string, entry = "./bin.ts"): Promise<string> {
-  const bundle = join(dir, "telimus.mjs");
+  const bundle = join(dir, "trew.mjs");
   await build({
     entryPoints: [fileURLToPath(new URL(entry, import.meta.url))],
     outfile: bundle,
@@ -34,7 +34,7 @@ export async function openMcp(bundle: string, dir: string, flags: string[] = [],
     stderr: "pipe",
   });
   const client = new Client(
-    { name: "telimus-test", version: "1" },
+    { name: "trew-test", version: "1" },
     modern ? { versionNegotiation: { mode: { pin: "2026-07-28" } } } : {},
   );
   let stderr = "";

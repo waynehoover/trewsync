@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/trew/internal/chunks"
 )
 
 // A verifier must not allocate the same large body once per historical
@@ -33,7 +33,7 @@ func TestDeepVerifyAllocationTracksUniqueBodies(t *testing.T) {
 func sharedVerificationStore(tb testing.TB, refs, size int) *Store {
 	tb.Helper()
 	dir := tb.TempDir()
-	h, err := Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	h, err := Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		tb.Fatal(err)
 	}

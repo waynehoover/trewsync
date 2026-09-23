@@ -64,7 +64,7 @@ function note(i: number): string {
   return out;
 }
 
-const dir = await mkdtemp(join(tmpdir(), "telimus-scale-"));
+const dir = await mkdtemp(join(tmpdir(), "trew-scale-"));
 let plaintext = 0;
 for (let i = 1; i <= COUNT; i++) {
   const path = join(dir, `folder${i % 40}`, `note-${i}.md`);
@@ -110,7 +110,7 @@ const server = new TestServer();
 await server.start();
 const client = new Client({
   vault: new NodeVault(dir),
-  store: new JsonIndexStore(join(dir, ".telimus", "index.json")),
+  store: new JsonIndexStore(join(dir, ".trew", "index.json")),
   url: server.wsUrl,
   ...(await server.deviceCredentials(SECRET, await testWrapped(SECRET), "scale")),
   vaultId: "default",
@@ -130,10 +130,10 @@ const t1 = performance.now();
 await client.settle({}, 2);
 console.log(`idle pass          ${(performance.now() - t1).toFixed(0)} ms`);
 console.log(
-  `local index        ${((await stat(join(dir, ".telimus", "index.json"))).size / 1048576).toFixed(1)} MiB`,
+  `local index        ${((await stat(join(dir, ".trew", "index.json"))).size / 1048576).toFixed(1)} MiB`,
 );
 console.log(
-  `server database    ${((await stat(join(server.dataDir, "telimus.db"))).size / 1048576).toFixed(1)} MiB`,
+  `server database    ${((await stat(join(server.dataDir, "trew.db"))).size / 1048576).toFixed(1)} MiB`,
 );
 
 // A day's editing.

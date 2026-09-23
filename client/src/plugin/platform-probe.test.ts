@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { FakeAdapter } from "./fake.ts";
 import { renderProbeReport, runPlatformProbe, type ProbeReport } from "./platform-probe.ts";
 
-const DIR = ".obsidian/plugins/telimus-sync";
+const DIR = ".obsidian/plugins/trew-sync";
 
 /** Every adapter call the probe itself made, after the test's own setup. */
 let probeCalls: FakeAdapter["calls"] = [];

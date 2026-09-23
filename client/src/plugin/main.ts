@@ -181,7 +181,7 @@ export type State =
   | { kind: "paused" }
   | { kind: "stopped"; why: string; recovery?: "rejoin" };
 
-export default class TelimusPlugin extends Plugin {
+export default class TrewPlugin extends Plugin {
   private config: DeviceConfig | undefined;
   /** The connected client, or undefined between connections. */
   private client: Client | undefined;
@@ -289,15 +289,15 @@ export default class TelimusPlugin extends Plugin {
         }
       });
     }
-    this.ribbonEl = this.addRibbonIcon("refresh-cw", "Telimus Sync", (event) =>
+    this.ribbonEl = this.addRibbonIcon("refresh-cw", "Trew Sync", (event) =>
       this.showMenu(event),
     );
-    this.ribbonEl.addClass("telimus-sync-ribbon");
+    this.ribbonEl.addClass("trew-sync-ribbon");
     // Settings is where somebody looks for a plugin's interface, and Obsidian
     // draws the gear there only for a plugin that registers a tab. Without
     // this the panel existed on the ribbon, the status bar and the command
-    // palette, and Settings said Telimus had no interface at all.
-    this.addSettingTab(new TelimusSettingTab(this));
+    // palette, and Settings said Trew had no interface at all.
+    this.addSettingTab(new TrewSettingTab(this));
 
     this.addCommand({
       id: "preview-sync",
@@ -332,7 +332,7 @@ export default class TelimusPlugin extends Plugin {
     this.addCommand({
       id: "show-status",
       name: "Show status",
-      callback: () => new TelimusModal(this).open(),
+      callback: () => new TrewModal(this).open(),
     });
     this.addCommand({
       id: "recover-deleted",
@@ -359,7 +359,7 @@ export default class TelimusPlugin extends Plugin {
         if (!("extension" in file)) return;
         menu.addItem((item) =>
           item
-            .setTitle("Telimus: version history")
+            .setTitle("Trew: version history")
             .setIcon("history")
             .onClick(() => this.openHistory(file.path)),
         );
@@ -380,14 +380,14 @@ export default class TelimusPlugin extends Plugin {
     // only on the timer. The first version of this guard did exactly that.
     if (typeof this.registerCliHandler === "function") {
       this.registerCliHandler(
-        "telimus:history",
-        "List Telimus version history for a note",
+        "trew:history",
+        "List Trew version history for a note",
         { path: { value: "<path>", description: "Vault path" } },
         async (flags) => this.cliHistory(String(flags["path"] ?? "")),
       );
       this.registerCliHandler(
-        "telimus:restore",
-        "Restore a Telimus version",
+        "trew:restore",
+        "Restore a Trew version",
         {
           path: { value: "<path>", description: "Vault path" },
           uid: { value: "<n>", description: "Version uid", required: true },
@@ -443,7 +443,7 @@ export default class TelimusPlugin extends Plugin {
       // on the server undecryptable here.
       this.unreadable = (err as Error).message;
       this.setState({ kind: "stopped", why: this.unreadable });
-      new Notice(`Telimus: ${this.unreadable}`, 10_000);
+      new Notice(`Trew: ${this.unreadable}`, 10_000);
     }
 
     this.registerObsidianProtocolHandler(INVITE_ACTION, (params) => {
@@ -455,9 +455,9 @@ export default class TelimusPlugin extends Plugin {
         } catch {
           throw new Error("This invite link is invalid. Create a new invite on the other device.");
         }
-        new TelimusModal(this, invite).open();
+        new TrewModal(this, invite).open();
       } catch (err) {
-        new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+        new Notice(`Trew: ${(err as Error).message}`, 10_000);
       }
     });
 
@@ -563,7 +563,7 @@ export default class TelimusPlugin extends Plugin {
         // Whichever it was, this names the state and how to leave it.
         new Notice(
           "Sync is paused until you review these changes. " +
-            "Choose Resume sync from the Telimus menu to continue.",
+            "Choose Resume sync from the Trew menu to continue.",
           10_000,
         );
         void this.togglePause();
@@ -676,7 +676,7 @@ export default class TelimusPlugin extends Plugin {
       item
         .setTitle("Sync settings")
         .setIcon("settings")
-        .onClick(() => new TelimusModal(this).open()),
+        .onClick(() => new TrewModal(this).open()),
     );
     if (event) menu.showAtMouseEvent(event);
     else {
@@ -725,7 +725,7 @@ export default class TelimusPlugin extends Plugin {
     // boolean was not enough: unlinking cleared it, pairing again set it,
     // and the *previous* run woke from its backoff, read the new run's
     // flag, and carried on with the old vault's secret. It reconnected,
-    // failed authentication, and its refusal put "Telimus has stopped: not
+    // failed authentication, and its refusal put "Trew has stopped: not
     // authorised for this vault" on screen while the real client was
     // syncing perfectly well behind it.
     const mine = ++this.generation;
@@ -882,11 +882,11 @@ export default class TelimusPlugin extends Plugin {
     });
     new Notice(
       recovery !== undefined
-        ? `Telimus has stopped: ${cause.message}. ${REJOIN_ADVICE}`
+        ? `Trew has stopped: ${cause.message}. ${REJOIN_ADVICE}`
         : this.everConnected
-          ? `Telimus has stopped: ${cause.message}`
-          : `Telimus could not join this vault: ${cause.message}. ` +
-            `If the pairing string or setup string was wrong, unlink this vault from the Telimus panel and pair again.`,
+          ? `Trew has stopped: ${cause.message}`
+          : `Trew could not join this vault: ${cause.message}. ` +
+            `If the pairing string or setup string was wrong, unlink this vault from the Trew panel and pair again.`,
       0,
     );
   }
@@ -934,7 +934,7 @@ export default class TelimusPlugin extends Plugin {
   private async clientOptions(config: DeviceConfig, mine: number): Promise<ClientOptions> {
     const current = () => mine === this.generation;
     const configDir = this.app.vault.configDir;
-    const log = (message: string, ...rest: unknown[]) => console.info("Telimus:", message, ...rest);
+    const log = (message: string, ...rest: unknown[]) => console.info("Trew:", message, ...rest);
     // Held, because the pass callbacks below read what it stranded. The report
     // cannot carry that: a displaced version is something the adapter did, and
     // the engine is told only that a path was kept.
@@ -1167,7 +1167,7 @@ export default class TelimusPlugin extends Plugin {
    * Offers the server every body this device holds, for the ones it has lost
    * (I14).
    *
-   * The same operation as `telimus repair`, and it is here for the reason
+   * The same operation as `trew repair`, and it is here for the reason
    * `rejoin` is: the documented alternative for a plugin device was nothing at
    * all. A phone can perfectly well be the last machine holding a body the
    * server no longer has, and it has no shell to run the CLI in.
@@ -1234,7 +1234,7 @@ export default class TelimusPlugin extends Plugin {
       // `quiet` and then `start`, which is what rotate and rebase do and for a
       // related reason: a run that is merely disconnected reconnects, and a pass
       // in flight is still writing under the old name. `stop` is not the way to
-      // do this, because it puts "Telimus has stopped" and a cause on screen, and
+      // do this, because it puts "Trew has stopped" and a cause on screen, and
       // nothing here has gone wrong.
       await this.quiet();
       if (this.generation === mine + 1) this.start();
@@ -1372,8 +1372,8 @@ export default class TelimusPlugin extends Plugin {
 
   private async syncOnDemand(verifyContents = false): Promise<void> {
     if (!this.config) {
-      new Notice("Telimus: this vault is not paired yet.");
-      new TelimusModal(this).open();
+      new Notice("Trew: this vault is not paired yet.");
+      new TrewModal(this).open();
       return;
     }
     if (this.paused) {
@@ -1385,10 +1385,10 @@ export default class TelimusPlugin extends Plugin {
       if (this.running && this.state.kind === "offline" && this.wakeLoop) {
         this.setState({ kind: "connecting" });
         this.wakeLoop();
-        new Notice("Telimus: reconnecting…");
+        new Notice("Trew: reconnecting…");
         return;
       }
-      new Notice(`Telimus: ${this.whyNoClient()}`);
+      new Notice(`Trew: ${this.whyNoClient()}`);
       return;
     }
     // Numbered like every other run. A pass takes as long as it takes, and
@@ -1418,13 +1418,13 @@ export default class TelimusPlugin extends Plugin {
       // Both callers discarded this promise, so a pass that threw was a
       // person pressing a button and nothing happening.
       this.passFailed((err as Error).message);
-      new Notice(`Telimus: sync failed: ${(err as Error).message}`, 10_000);
+      new Notice(`Trew: sync failed: ${(err as Error).message}`, 10_000);
       return;
     }
     if (mine !== this.generation) return;
     // The state was set by onPass, once per pass. This is the feedback the
     // command owes.
-    new Notice(`Telimus: ${summarise(report)}`);
+    new Notice(`Trew: ${summarise(report)}`);
   }
 
   private passFailed(why: string): void {
@@ -1443,9 +1443,9 @@ export default class TelimusPlugin extends Plugin {
   private whyNoClient(): string {
     switch (this.state.kind) {
       case "paused":
-        return "Sync is paused. Resume it from the Telimus menu.";
+        return "Sync is paused. Resume it from the Trew menu.";
       case "stopped":
-        return `Telimus has stopped: ${this.state.why}. It will not reconnect until that is fixed.`;
+        return `Trew has stopped: ${this.state.why}. It will not reconnect until that is fixed.`;
       case "connecting":
         return "still connecting to the server.";
       case "loading":
@@ -1479,7 +1479,7 @@ export default class TelimusPlugin extends Plugin {
       if (why !== this.announced.unknown) {
         this.announced.unknown = why;
         new Notice(
-          `Telimus cannot tell whether any notes are waiting to be recovered: ${why}. ` +
+          `Trew cannot tell whether any notes are waiting to be recovered: ${why}. ` +
             `Notes may be sitting in a hidden folder with nothing pointing at them.`,
           30_000,
         );
@@ -1499,7 +1499,7 @@ export default class TelimusPlugin extends Plugin {
         const first = waiting[0]!;
         const rest = waiting.length - 1;
         new Notice(
-          `Telimus kept ${waiting.length} ${waiting.length === 1 ? "version" : "versions"} ` +
+          `Trew kept ${waiting.length} ${waiting.length === 1 ? "version" : "versions"} ` +
             `somewhere Obsidian does not show. ${first.from} is at ${first.at}` +
             `${rest > 0 ? `, and ${rest} more` : ""}. ${first.why}.`,
           30_000,
@@ -1509,7 +1509,7 @@ export default class TelimusPlugin extends Plugin {
     if (report.conflicted > 0) {
       const n = report.conflicted;
       new Notice(
-        `Telimus kept both versions of ${n} ${n === 1 ? "file" : "files"}. ` +
+        `Trew kept both versions of ${n} ${n === 1 ? "file" : "files"}. ` +
           `Look for "Conflicted copy" in the name.`,
         10_000,
       );
@@ -1539,7 +1539,7 @@ export default class TelimusPlugin extends Plugin {
         // of it. A report that named nothing still says the count.
         const detail = attentionLines(report).join(" ");
         new Notice(
-          `Telimus cannot sync ${count} file(s).${detail === "" ? "" : ` ${detail}`}`,
+          `Trew cannot sync ${count} file(s).${detail === "" ? "" : ` ${detail}`}`,
           20_000,
         );
       }
@@ -1556,7 +1556,7 @@ export default class TelimusPlugin extends Plugin {
     // failed read or JSON parse. The latter must not permit a new pairing.
     if (raw === undefined) throw new Error(`Obsidian could not read ${this.dataPath}`);
     if (raw === null) return undefined;
-    return decodeConfig(raw, "the Telimus plugin's saved settings");
+    return decodeConfig(raw, "the Trew plugin's saved settings");
   }
 
   /**
@@ -1663,7 +1663,7 @@ export default class TelimusPlugin extends Plugin {
             onRegistered: () => {
               registered = true;
             },
-            log: (message, ...rest) => console.info("Telimus:", message, ...rest),
+            log: (message, ...rest) => console.info("Trew:", message, ...rest),
           },
         );
       } catch (err) {
@@ -1706,7 +1706,7 @@ export default class TelimusPlugin extends Plugin {
       if (mine !== this.generation) {
         throw new Error(
           "this vault was unlinked while it was being paired. The device row it registered is " +
-            "on the server; remove it with telimus revoke, or pair again.",
+            "on the server; remove it with trew revoke, or pair again.",
         );
       }
       this.config = paired;
@@ -1740,7 +1740,7 @@ export default class TelimusPlugin extends Plugin {
     // straight for `saveVerified`.
     const mine = this.generation;
     const redeemed = await redeemInvite(invite, name, {
-      log: (message, ...rest) => console.info("Telimus:", message, ...rest),
+      log: (message, ...rest) => console.info("Trew:", message, ...rest),
     });
     const config: DeviceConfig = {
       url: invite.url,
@@ -1765,7 +1765,7 @@ export default class TelimusPlugin extends Plugin {
     if (mine !== this.generation) {
       throw new Error(
         "this vault was unlinked while the invite was being redeemed. The device row it " +
-          "registered is on the server; remove it with telimus revoke, or pair again.",
+          "registered is on the server; remove it with trew revoke, or pair again.",
       );
     }
     this.config = config;
@@ -1875,7 +1875,7 @@ export default class TelimusPlugin extends Plugin {
             onRegistered: () => {
               registered = true;
             },
-            log: (message, ...rest) => console.info("Telimus:", message, ...rest),
+            log: (message, ...rest) => console.info("Trew:", message, ...rest),
           },
         );
       } catch (err) {
@@ -1908,7 +1908,7 @@ export default class TelimusPlugin extends Plugin {
         const writeItDown =
           remains.kind === "credential"
             ? `Write down the recovery key on the panel now: it is no longer on this device. ${recoveryKey}. `
-            : "Write the recovery key shown in the Telimus panel down now. ";
+            : "Write the recovery key shown in the Trew panel down now. ";
         throw new Error(
           `the vault was started but this device could not register itself with it: ` +
             `${(err as Error).message}. ${writeItDown}` +
@@ -2218,7 +2218,7 @@ export default class TelimusPlugin extends Plugin {
    */
   openHistory(path: string): void {
     if (!this.client) {
-      new Notice(`Telimus: ${this.whyNoClient()} There is no history to show.`, 8_000);
+      new Notice(`Trew: ${this.whyNoClient()} There is no history to show.`, 8_000);
       return;
     }
     new HistoryModal(this.app, this.historySource(), path).open();
@@ -2263,8 +2263,8 @@ export default class TelimusPlugin extends Plugin {
    * not an exceptional condition for a sync client.
    */
   private async cliHistory(path: string): Promise<string> {
-    if (!path) return "Which note? telimus:history needs a path.";
-    if (!this.client) return `Telimus is ${this.whyNoClient()}`;
+    if (!path) return "Which note? trew:history needs a path.";
+    if (!this.client) return `Trew is ${this.whyNoClient()}`;
     try {
       const versions = await this.client.history(path, { limit: 50 });
       if (versions.length === 0) return `No history found for ${path}.`;
@@ -2272,23 +2272,23 @@ export default class TelimusPlugin extends Plugin {
         .map((v) => `${v.uid}\t${new Date(v.mtime).toISOString()}\t${v.size} B\t${v.device}`)
         .join("\n");
     } catch (err) {
-      return `Telimus could not ask: ${(err as Error).message}`;
+      return `Trew could not ask: ${(err as Error).message}`;
     }
   }
 
   private async cliRestore(path: string, uid: number): Promise<string> {
-    if (!path) return "Which note? telimus:restore needs a path.";
-    if (!Number.isInteger(uid) || uid <= 0) return "Which version? telimus:restore needs a uid.";
-    if (!this.client) return `Telimus is ${this.whyNoClient()}`;
+    if (!path) return "Which note? trew:restore needs a path.";
+    if (!Number.isInteger(uid) || uid <= 0) return "Which version? trew:restore needs a uid.";
+    if (!this.client) return `Trew is ${this.whyNoClient()}`;
     try {
       // Paged as far back as it has to go. One page of two hundred used to
       // be all that was looked at, and a version older than that was one
-      // telimus:history would list and this would then say did not exist.
+      // trew:history would list and this would then say did not exist.
       const version = await this.client.findVersion(path, (v) => v.uid === uid);
       if (!version) return `No version ${uid} of ${path}.`;
       return describeRestore(version, await this.restoreAndSend(version));
     } catch (err) {
-      return `Telimus could not restore: ${(err as Error).message}`;
+      return `Trew could not restore: ${(err as Error).message}`;
     }
   }
 
@@ -2410,7 +2410,7 @@ export default class TelimusPlugin extends Plugin {
   /**
    * Rejoins a server that has lost history this device already applied.
    *
-   * The same operation as `telimus rebase --backup-taken`, and it exists here
+   * The same operation as `trew rebase --backup-taken`, and it exists here
    * because the documented alternative for a plugin device was to unlink and
    * pair again. Re-pairing throws away the index too, but it also throws away
    * the merge base: every note comes back as an ancestor-less new version, and
@@ -2783,14 +2783,14 @@ export default class TelimusPlugin extends Plugin {
     // ribbon tooltip, and it is also what a screen reader reads out.
     if (this.ribbonEl) {
       const glyph = iconFor(state);
-      if (this.ribbonEl.getAttribute("data-telimus-icon") !== glyph) {
+      if (this.ribbonEl.getAttribute("data-trew-icon") !== glyph) {
         setIcon(this.ribbonEl, glyph);
-        this.ribbonEl.setAttribute("data-telimus-icon", glyph);
+        this.ribbonEl.setAttribute("data-trew-icon", glyph);
       }
-      this.ribbonEl.removeClass("telimus-attention", "telimus-working");
+      this.ribbonEl.removeClass("trew-attention", "trew-working");
       const tone = toneFor(state);
       if (tone) this.ribbonEl.addClass(tone);
-      this.ribbonEl.setAttribute("aria-label", `Telimus: ${longStatus(state)}`);
+      this.ribbonEl.setAttribute("aria-label", `Trew: ${longStatus(state)}`);
     }
     this.announceOnAPhone(state);
     for (const listener of this.listeners) listener(state);
@@ -2833,7 +2833,7 @@ export default class TelimusPlugin extends Plugin {
     const at = Date.now();
     if (at - this.lastToldOnAPhone < PHONE_NOTICE_GAP_MS) return;
     this.lastToldOnAPhone = at;
-    new Notice(`Telimus: ${longStatus(state)} Tap the Telimus icon for details.`, 10_000);
+    new Notice(`Trew: ${longStatus(state)} Tap the Trew icon for details.`, 10_000);
   }
 
   private readonly listeners = new Set<(state: State) => void>();
@@ -3010,28 +3010,28 @@ export function describeDeleted(list: DeletedList): string {
 /** One compact status glyph, with the plugin name and details in its tooltip. */
 function paintStatus(el: HTMLElement, state: State): void {
   const icon =
-    el.querySelector<HTMLElement>(".telimus-status-icon") ??
-    el.createSpan({ cls: "telimus-status-icon" });
+    el.querySelector<HTMLElement>(".trew-status-icon") ??
+    el.createSpan({ cls: "trew-status-icon" });
   icon.setAttribute("aria-hidden", "true");
   const glyph = iconFor(state);
-  if (icon.getAttribute("data-telimus-icon") !== glyph) {
+  if (icon.getAttribute("data-trew-icon") !== glyph) {
     setIcon(icon, glyph);
-    icon.setAttribute("data-telimus-icon", glyph);
+    icon.setAttribute("data-trew-icon", glyph);
   }
   // Only when there is one. The settled state has no tone, and addClass with
   // an empty string throws: "The token provided must not be empty", which
   // arrives as a sync error about a DOMTokenList and says nothing about the
   // status bar it came from.
   const tone = toneFor(state);
-  if (el.getAttribute("data-telimus-tone") !== tone) {
-    el.removeClass("telimus-attention", "telimus-working");
+  if (el.getAttribute("data-trew-tone") !== tone) {
+    el.removeClass("trew-attention", "trew-working");
     if (tone !== "") el.addClass(tone);
-    el.setAttribute("data-telimus-tone", tone);
+    el.setAttribute("data-trew-tone", tone);
   }
   // Both, because Obsidian styles aria-label as its own tooltip and a plain
   // title is what shows if it ever stops.
-  el.setAttribute("aria-label", `Telimus Sync: ${longStatus(state)}`);
-  el.setAttribute("title", `Telimus Sync: ${longStatus(state)}`);
+  el.setAttribute("aria-label", `Trew Sync: ${longStatus(state)}`);
+  el.setAttribute("title", `Trew Sync: ${longStatus(state)}`);
 }
 
 /**
@@ -3068,7 +3068,7 @@ function toneFor(state: State): string {
   switch (state.kind) {
     case "stopped":
     case "failed":
-      return "telimus-attention";
+      return "trew-attention";
     // No tone. These used --text-faint, which measures 2.57:1 against the
     // status bar in dark and 2.12:1 in light, under the 3:1 that a UI icon
     // needs to be made out. Offline in particular is the state that means
@@ -3083,10 +3083,10 @@ function toneFor(state: State): string {
     case "connecting":
     case "loading":
     case "syncing":
-      return "telimus-working";
+      return "trew-working";
     case "synced":
       return state.refused > 0 || state.waiting > 0 || state.recoveryUnknown !== undefined
-        ? "telimus-attention"
+        ? "trew-attention"
         : "";
   }
 }
@@ -3113,7 +3113,7 @@ const PHONE_NOTICE_GAP_MS = 5 * 60_000;
  */
 const LISTED_IN_PANEL = 5;
 
-const DOCS = "https://github.com/waynehoover/telimus/blob/main/docs/plugin.md";
+const DOCS = "https://github.com/waynehoover/trew/blob/main/docs/plugin.md";
 
 /** Native settings groups on current Obsidian; flat rows on older releases. */
 function settingGroup(host: HTMLElement): HTMLElement {
@@ -3164,7 +3164,7 @@ function docsLink(el: HTMLElement, text: string): void {
 }
 
 /** Shared settings and modal content. Recovery notices remain visible when needed. */
-class TelimusPanel {
+class TrewPanel {
   private closed = false;
   private unwatch: (() => void) | undefined;
   private stopDelivery: (() => void) | undefined;
@@ -3179,7 +3179,7 @@ class TelimusPanel {
    * does not have to know which one it is in.
    */
   constructor(
-    private readonly plugin: TelimusPlugin,
+    private readonly plugin: TrewPlugin,
     private readonly host: HTMLElement,
     private readonly dismiss: () => void,
     private readonly incomingInvite?: string,
@@ -3216,7 +3216,7 @@ class TelimusPanel {
     this.unwatch?.();
     this.host.empty();
 
-    this.host.addClass("telimus-panel");
+    this.host.addClass("trew-panel");
     const contentEl = this.host;
 
     const problem = this.plugin.configProblem;
@@ -3273,8 +3273,8 @@ class TelimusPanel {
     // screen and then be a number, while the guide told people to look in the
     // panel for them (Codex-03). A person who put their phone down during a
     // sync had no way back to what it had said.
-    const outstanding = contentEl.createDiv("telimus-outstanding");
-    status.addClass("telimus-sync-status");
+    const outstanding = contentEl.createDiv("trew-outstanding");
+    status.addClass("trew-sync-status");
     this.renderDelivery(sync.infoEl);
     status.setAttribute("role", "status");
     let syncButton!: ButtonComponent;
@@ -3285,7 +3285,7 @@ class TelimusPanel {
       });
     });
 
-    const addDevice = contentEl.createEl("details", { cls: "telimus-add-device" });
+    const addDevice = contentEl.createEl("details", { cls: "trew-add-device" });
     addDevice.createEl("summary", { text: "Add another device" });
     this.renderInvite(settingGroup(addDevice));
 
@@ -3299,13 +3299,13 @@ class TelimusPanel {
     // both cursors are shown at all, so being behind has to be visible without
     // opening anything: the summary says how far behind, and the section starts
     // open when it is.
-    const server = contentEl.createEl("details", { cls: "telimus-server" });
+    const server = contentEl.createEl("details", { cls: "trew-server" });
     const serverSummary = server.createEl("summary");
-    const cursors = later(server, "telimus-advice");
-    const connection = later(server, "telimus-advice");
-    const connectionWarning = later(server, "telimus-advice");
+    const cursors = later(server, "trew-advice");
+    const connection = later(server, "trew-advice");
+    const connectionWarning = later(server, "trew-advice");
     this.renderServerAddress(settingGroup(server));
-    const advice = later(primary, "telimus-advice");
+    const advice = later(primary, "trew-advice");
     // Which rows this pass drew, so that a panel left open when the state
     // changes under it grows the recovery it now needs. Everything else here
     // is text a listener can update; a row is not, and a panel that was open
@@ -3378,7 +3378,7 @@ class TelimusPanel {
         // where the modal would have been, which is what `syncNow` and
         // `createInvite` already do.
         if (!this.plugin.paired) {
-          new Notice("Telimus: this vault is not paired yet. There is nothing to recover.");
+          new Notice("Trew: this vault is not paired yet. There is nothing to recover.");
           return;
         }
         this.dismiss();
@@ -3388,7 +3388,7 @@ class TelimusPanel {
 
     // Everything rare, behind one press. Named for what is inside rather than
     // "Advanced", which says nothing and reads as a dare.
-    const manage = contentEl.createEl("details", { cls: "telimus-manage" });
+    const manage = contentEl.createEl("details", { cls: "trew-manage" });
     manage.createEl("summary", { text: "Manage this vault" });
     const management = settingGroup(manage);
     this.renderThisDeviceName(management);
@@ -3406,7 +3406,7 @@ class TelimusPanel {
     // done to the server and not to this vault, and it is here at all for the
     // reason rejoin is: the documented alternative for a plugin device was
     // nothing. A phone may hold the only remaining copy of a body the server
-    // has lost, and it has no shell to run `telimus repair` in (I14).
+    // has lost, and it has no shell to run `trew repair` in (I14).
     row(
       management,
       "Send back what the server has lost",
@@ -3435,9 +3435,9 @@ class TelimusPanel {
             "Do this on your other devices too. Anything still missing is history this " +
               "device never had.",
           );
-          new Notice(`Telimus: ${parts.join(" ")}`, 15_000);
+          new Notice(`Trew: ${parts.join(" ")}`, 15_000);
         } catch (err) {
-          new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+          new Notice(`Trew: ${(err as Error).message}`, 10_000);
         } finally {
           b.setDisabled(false).setButtonText("Send");
         }
@@ -3456,13 +3456,13 @@ class TelimusPanel {
           try {
             await this.plugin.unlink();
           } catch (err) {
-            new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+            new Notice(`Trew: ${(err as Error).message}`, 10_000);
           }
           this.render();
         }),
     );
 
-    docsLink(contentEl.createEl("p", { cls: "telimus-advice" }), "Telimus documentation");
+    docsLink(contentEl.createEl("p", { cls: "trew-advice" }), "Trew documentation");
   }
 
   /**
@@ -3482,7 +3482,7 @@ class TelimusPanel {
     if (issues.length === 0 && retrying.length === 0) return;
 
     if (issues.length > 0) {
-      const list = host.createEl("ul", { cls: "telimus-outstanding-list" });
+      const list = host.createEl("ul", { cls: "trew-outstanding-list" });
       for (const issue of issues.slice(0, LISTED_IN_PANEL)) {
         list.createEl("li", { text: `${issue.path}: ${issue.why}` });
       }
@@ -3491,7 +3491,7 @@ class TelimusPanel {
       const more = state.refused - Math.min(issues.length, LISTED_IN_PANEL);
       if (more > 0) {
         host.createEl("p", {
-          cls: "telimus-advice",
+          cls: "trew-advice",
           text: `And ${more} more not listed here. Sync activity has the full record.`,
         });
       }
@@ -3504,7 +3504,7 @@ class TelimusPanel {
           : ` Next attempt ${new Date(state.pendingAt).toLocaleTimeString()}.`;
       const count = state.pending ?? retrying.length;
       host.createEl("p", {
-        cls: "telimus-advice",
+        cls: "trew-advice",
         text:
           `${count} ${count === 1 ? "file is" : "files are"} waiting to be sent again: ` +
           `${retrying.slice(0, LISTED_IN_PANEL).join(", ")}.${when}`,
@@ -3535,7 +3535,7 @@ class TelimusPanel {
       "Server address",
       "Update this if your server moves to a new address.",
     );
-    const said = later(contentEl, "telimus-advice");
+    const said = later(contentEl, "trew-advice");
     setting
       .addText((text) => {
         address = text;
@@ -3549,7 +3549,7 @@ class TelimusPanel {
           say(said, "");
           try {
             await this.plugin.changeServerAddress(address.getValue());
-            new Notice("Telimus: server address saved.");
+            new Notice("Trew: server address saved.");
             this.render();
           } catch (err) {
             say(said, (err as Error).message);
@@ -3685,12 +3685,12 @@ class TelimusPanel {
     });
 
     list = contentEl.createEl("div");
-    said = later(contentEl, "telimus-advice");
+    said = later(contentEl, "trew-advice");
   }
 
   /** Share delivery checks across open settings surfaces without rebuilding controls. */
   private renderDelivery(host: HTMLElement): void {
-    const line = later(host, "setting-item-description telimus-delivery");
+    const line = later(host, "setting-item-description trew-delivery");
     line.setAttribute("aria-live", "polite");
     this.stopDelivery = watchDelivery(
       this.plugin,
@@ -3719,12 +3719,12 @@ class TelimusPanel {
           codeField.setValue(issued.invite);
           codeField.inputEl.scrollLeft = 0;
           codeRow.settingEl.show();
-          let scanAdvice = "Copy the invite into Telimus on the new device.";
+          let scanAdvice = "Copy the invite into Trew on the new device.";
           try {
             qr.setAttribute("src", inviteQrImage(issued.invite));
             qr.show();
             scanAdvice =
-              "Scan with your phone's camera. Telimus must be installed and enabled in Obsidian.";
+              "Scan with your phone's camera. Trew must be installed and enabled in Obsidian.";
           } catch {
             // Long server addresses can exceed QR capacity. Copy still works.
             qr.hide();
@@ -3732,20 +3732,20 @@ class TelimusPanel {
           say(expiry, `${scanAdvice} Expires at ${when(issued.expiresAt)}.`);
           await copyToClipboard(
             issued.invite,
-            "Copied. Paste it into Telimus on the other device.",
+            "Copied. Paste it into Trew on the other device.",
           );
         } catch (err) {
-          new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+          new Notice(`Trew: ${(err as Error).message}`, 10_000);
         }
       }),
     );
 
-    const qr = contentEl.createEl("img", { cls: "telimus-invite-qr" });
+    const qr = contentEl.createEl("img", { cls: "trew-invite-qr" });
     qr.setAttribute("alt", "Scan to open this invite in Obsidian");
     qr.hide();
-    const expiry = later(contentEl, "telimus-advice");
-    const codeRow = row(contentEl, "Pairing code", "Paste this into Telimus on your other device.");
-    codeRow.settingEl.addClass("telimus-invite-code");
+    const expiry = later(contentEl, "trew-advice");
+    const codeRow = row(contentEl, "Pairing code", "Paste this into Trew on your other device.");
+    codeRow.settingEl.addClass("trew-invite-code");
     codeRow.settingEl.hide();
     codeRow
       .addText((text) => {
@@ -3761,7 +3761,7 @@ class TelimusPanel {
           if (currentInvite === "") return;
           await copyToClipboard(
             currentInvite,
-            "Copied. Paste it into Telimus on the other device.",
+            "Copied. Paste it into Trew on the other device.",
           );
         });
       });
@@ -3777,7 +3777,7 @@ class TelimusPanel {
    * and a button is one tap from a thumb.
    */
   private renderRejoin(contentEl: HTMLElement): void {
-    const said = later(contentEl, "telimus-advice");
+    const said = later(contentEl, "trew-advice");
     let confirmed = false;
     row(
       contentEl,
@@ -3797,7 +3797,7 @@ class TelimusPanel {
               say(
                 said,
                 `This device is at version ${at.local} and the server is at ${at.server}. ` +
-                  `Take a backup of the server first (telimus backup). Press again to rejoin.`,
+                  `Take a backup of the server first (trew backup). Press again to rejoin.`,
               );
               return;
             }
@@ -3808,11 +3808,11 @@ class TelimusPanel {
               `Rejoined the server: ${summarise(report)}. Nothing was deleted, and where the ` +
                 `two sides disagreed both versions were kept.`,
             );
-            new Notice(`Telimus rejoined the server: ${summarise(report)}`, 10_000);
+            new Notice(`Trew rejoined the server: ${summarise(report)}`, 10_000);
             this.render();
           } catch (err) {
             say(said, "");
-            new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+            new Notice(`Trew: ${(err as Error).message}`, 10_000);
           }
         }),
     );
@@ -3884,7 +3884,7 @@ class TelimusPanel {
           new Notice(`This device is now ${said} in the device list.`);
           this.render();
         } catch (err) {
-          new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+          new Notice(`Trew: ${(err as Error).message}`, 10_000);
           b.setDisabled(false).setButtonText("Rename");
         }
       }),
@@ -3921,7 +3921,7 @@ class TelimusPanel {
         await this.plugin.setIgnoredNames(wanted);
         this.render();
       } catch (err) {
-        new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+        new Notice(`Trew: ${(err as Error).message}`, 10_000);
         button.setDisabled(false).setButtonText(was);
       }
     };
@@ -3929,11 +3929,11 @@ class TelimusPanel {
       b.setButtonText("Skip").onClick(async () => {
         const wanted = (field?.getValue() ?? "").trim();
         if (!isIgnorableName(wanted)) {
-          new Notice("Telimus: give one folder or file name, with no slashes in it.");
+          new Notice("Trew: give one folder or file name, with no slashes in it.");
           return;
         }
         if (names.includes(wanted)) {
-          new Notice(`Telimus: ${wanted} is already skipped on this device.`);
+          new Notice(`Trew: ${wanted} is already skipped on this device.`);
           return;
         }
         await change([...names, wanted], b, "Skip");
@@ -3978,7 +3978,7 @@ class TelimusPanel {
       "Versions kept out of sight",
       unknown === undefined
         ? `${waiting} ${waiting === 1 ? "version is" : "versions are"} under a name Obsidian does not show.`
-        : `Telimus cannot tell what is waiting: ${unknown}`,
+        : `Trew cannot tell what is waiting: ${unknown}`,
     ).addButton((b) =>
       b.setButtonText("Look").onClick(() => {
         this.dismiss();
@@ -3988,7 +3988,7 @@ class TelimusPanel {
   }
 
   private renderRotate(contentEl: HTMLElement): void {
-    const said = later(contentEl, "telimus-advice");
+    const said = later(contentEl, "trew-advice");
     let keyField: TextComponent | undefined;
     row(
       contentEl,
@@ -4036,7 +4036,7 @@ class TelimusPanel {
               this.render();
             } catch (err) {
               say(said, "");
-              new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+              new Notice(`Trew: ${(err as Error).message}`, 10_000);
             }
           }),
       );
@@ -4050,7 +4050,7 @@ class TelimusPanel {
    * the reason and the path.
    */
   private renderUnreadable(contentEl: HTMLElement, problem: string): void {
-    contentEl.createEl("p", { text: `Telimus has stopped: ${problem}` });
+    contentEl.createEl("p", { text: `Trew has stopped: ${problem}` });
     contentEl.createEl("p", {
       text:
         `Pairing again would replace the credential in ${this.plugin.dataPath}, so nothing here ` +
@@ -4092,7 +4092,7 @@ class TelimusPanel {
         text: "This vault already contains files. They will be combined with your synced vault.",
       });
       host.createEl("p", {
-        cls: "telimus-advice",
+        cls: "trew-advice",
         text:
           "Files moved or deleted on another device may reappear. " +
           "Conflicting edits may create copies.",
@@ -4147,13 +4147,13 @@ class TelimusPanel {
     //
     // An invite carries the server address and the vault name, and neither was
     // on screen: a person pressed Pair on a base64 blob, and an invite arriving
-    // through `obsidian://telimus?invite=...` filled the field in for them.
+    // through `obsidian://trew?invite=...` filled the field in for them.
     // An unpaired vault pointed at a stranger's server uploads itself to it on
     // the first sync, so the address has to be readable first and the button
     // stays disabled until it is. A setup line claims a server for a vault that
     // does not exist yet, so getting that address wrong is a vault started
     // somewhere nobody meant; the same line answers both.
-    const destination = contentEl.createEl("p", { cls: "telimus-advice" });
+    const destination = contentEl.createEl("p", { cls: "trew-advice" });
     destination.setAttribute("role", "status");
     let goButton: ButtonComponent | undefined;
 
@@ -4220,7 +4220,7 @@ class TelimusPanel {
     // the device list. A skip list is empty for almost everybody. Neither is a
     // decision most people have to make, and a screen that asks anyway is a
     // screen that says all four of these matter equally.
-    const more = contentEl.createEl("details", { cls: "telimus-more-options" });
+    const more = contentEl.createEl("details", { cls: "trew-more-options" });
     more.createEl("summary", { text: "More options" });
     const moreEl = settingGroup(more);
 
@@ -4282,17 +4282,17 @@ class TelimusPanel {
               skipping(),
             );
             new Notice(
-              "Vault started. Telimus is connecting. Write down the recovery key shown in this panel.",
+              "Vault started. Trew is connecting. Write down the recovery key shown in this panel.",
             );
             this.render();
           } catch (err) {
-            new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+            new Notice(`Trew: ${(err as Error).message}`, 10_000);
           }
         });
     });
     showDestination();
 
-    docsLink(host.createEl("p", { cls: "telimus-advice" }), "How pairing works");
+    docsLink(host.createEl("p", { cls: "trew-advice" }), "How pairing works");
   }
 
   /**
@@ -4329,7 +4329,7 @@ class TelimusPanel {
       b.setButtonText("Skip").onClick(() => {
         const wanted = (field?.getValue() ?? "").trim();
         if (!isIgnorableName(wanted)) {
-          new Notice("Telimus: give one folder or file name, with no slashes in it.");
+          new Notice("Trew: give one folder or file name, with no slashes in it.");
           return;
         }
         if (!this.joinSkip.includes(wanted)) this.joinSkip.push(wanted);
@@ -4362,7 +4362,7 @@ class TelimusPanel {
       await this.plugin.pair(key, device, mergeConfirmed, ignore);
       this.joinDraft = undefined;
       this.confirmMerge = false;
-      new Notice("Paired. Telimus is connecting.");
+      new Notice("Paired. Trew is connecting.");
       this.render();
     } catch (err) {
       if (this.closed) return;
@@ -4370,7 +4370,7 @@ class TelimusPanel {
         this.confirmMerge = true;
         this.render();
       } else {
-        new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+        new Notice(`Trew: ${(err as Error).message}`, 10_000);
       }
     }
   }
@@ -4418,7 +4418,7 @@ class TelimusPanel {
     }
     new Setting(contentEl).setName("Write this down").setHeading();
     contentEl.createEl("p", {
-      cls: "telimus-advice",
+      cls: "trew-advice",
       text:
         "Save this key somewhere safe and separate. It is the only way back if every device " +
         "is lost. Anyone with it can access your vault.",
@@ -4445,7 +4445,7 @@ class TelimusPanel {
     // paragraph above, because a row's columns carry the row's padding: the one
     // thing on screen that has to be read character by character was the one
     // thing aligned with nothing.
-    contentEl.createEl("code", { cls: "telimus-pairing", text: key });
+    contentEl.createEl("code", { cls: "trew-pairing", text: key });
 
     // Copy and the acknowledgement on one row, in reading order.
     //
@@ -4483,20 +4483,20 @@ class TelimusPanel {
  * The panel as a modal, which is what the ribbon, the status bar and the
  * command palette open.
  */
-class TelimusModal extends Modal {
-  private panel: TelimusPanel | undefined;
+class TrewModal extends Modal {
+  private panel: TrewPanel | undefined;
 
   constructor(
-    private readonly plugin: TelimusPlugin,
+    private readonly plugin: TrewPlugin,
     private readonly incomingInvite?: string,
   ) {
     super(plugin.app);
   }
 
   override onOpen(): void {
-    this.setTitle("Telimus Sync");
-    this.modalEl.addClass("mod-telimus-panel");
-    this.panel = new TelimusPanel(
+    this.setTitle("Trew Sync");
+    this.modalEl.addClass("mod-trew-panel");
+    this.panel = new TrewPanel(
       this.plugin,
       this.contentEl,
       () => this.close(),
@@ -4518,7 +4518,7 @@ class TelimusModal extends Modal {
  * options to put in one, and that is still true: nothing below is a
  * preference. What it got wrong is what the tab is for. Obsidian shows a
  * plugin's gear in Settings only if it registers one, so refusing the tab
- * meant Settings had no Telimus entry at all, and somebody looking for the
+ * meant Settings had no Trew entry at all, and somebody looking for the
  * plugin's interface in the one place every other plugin keeps it found
  * nothing and concluded there was none. That is a discoverability bug
  * wearing a principle's clothes.
@@ -4527,10 +4527,10 @@ class TelimusModal extends Modal {
  * place. `display` and `hide` are called every time the tab is opened and
  * left, which is exactly the render and teardown the modal already does.
  */
-class TelimusSettingTab extends PluginSettingTab {
-  private panel: TelimusPanel | undefined;
+class TrewSettingTab extends PluginSettingTab {
+  private panel: TrewPanel | undefined;
 
-  constructor(private readonly plugin: TelimusPlugin) {
+  constructor(private readonly plugin: TrewPlugin) {
     super(plugin.app, plugin);
   }
 
@@ -4538,7 +4538,7 @@ class TelimusSettingTab extends PluginSettingTab {
     // Nothing to close: leaving the tab is the person's own business, and a
     // panel that closed Settings out from under them would be a surprise.
     this.panel?.teardown();
-    this.panel = new TelimusPanel(this.plugin, this.containerEl, () => {});
+    this.panel = new TrewPanel(this.plugin, this.containerEl, () => {});
     this.panel.render();
   }
 
@@ -4584,14 +4584,14 @@ class RecoverModal extends Modal {
   private query = "";
   private failure: string | undefined;
 
-  constructor(private readonly plugin: TelimusPlugin) {
+  constructor(private readonly plugin: TrewPlugin) {
     super(plugin.app);
   }
 
   override onOpen(): void {
     this.setTitle("Deleted notes");
-    this.modalEl.addClass("mod-telimus-panel");
-    this.contentEl.addClass("telimus-panel");
+    this.modalEl.addClass("mod-trew-panel");
+    this.contentEl.addClass("trew-panel");
     void this.render();
   }
 
@@ -4614,7 +4614,7 @@ class RecoverModal extends Modal {
   private async fetchPage(before: number | undefined): Promise<void> {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("p", { cls: "telimus-advice", text: "Loading deleted notes…" });
+    contentEl.createEl("p", { cls: "trew-advice", text: "Loading deleted notes…" });
 
     let deleted: DeletedList;
     try {
@@ -4652,7 +4652,7 @@ class RecoverModal extends Modal {
     this.listEl = undefined;
 
     if (this.failure !== undefined) {
-      contentEl.createEl("p", { cls: "telimus-advice", text: this.failure });
+      contentEl.createEl("p", { cls: "trew-advice", text: this.failure });
       new Setting(contentEl).addButton((button) =>
         button.setButtonText("Try again").onClick(() => this.render(this.oldest)),
       );
@@ -4660,7 +4660,7 @@ class RecoverModal extends Modal {
     }
 
     if (this.loaded.length === 0) {
-      contentEl.createEl("p", { cls: "telimus-advice", text: "No deleted notes to restore." });
+      contentEl.createEl("p", { cls: "trew-advice", text: "No deleted notes to restore." });
       return;
     }
 
@@ -4680,7 +4680,7 @@ class RecoverModal extends Modal {
 
     // The filter redraws this and only this, so the field it is typed into
     // survives the keystroke and keeps the caret.
-    this.listEl = contentEl.createDiv("telimus-deleted-list");
+    this.listEl = contentEl.createDiv("trew-deleted-list");
     this.list();
   }
 
@@ -4699,7 +4699,7 @@ class RecoverModal extends Modal {
       : this.loaded;
 
     listEl.createEl("p", {
-      cls: "telimus-advice",
+      cls: "trew-advice",
       text: describeDeleted({ notes: shown, more: this.more && !needle }),
     });
 
@@ -4721,7 +4721,7 @@ class RecoverModal extends Modal {
 
     if (shown.length === 0) {
       listEl.createEl("p", {
-        cls: "telimus-advice",
+        cls: "trew-advice",
         text: needle ? "No deleted note matches that." : "No deleted notes to restore.",
       });
       return;
@@ -4772,7 +4772,7 @@ class RecoverModal extends Modal {
                 if (lost.length > 0) {
                   parts.push(`${lost.length} could not be restored: ${lost[0]!.why}`);
                 }
-                new Notice(`Telimus: ${parts.join(" ")}`, 15_000);
+                new Notice(`Trew: ${parts.join(" ")}`, 15_000);
                 for (const note of chosen) {
                   if (lost.some((r) => r.path === note.path)) continue;
                   this.picked.delete(note.uid);
@@ -4781,7 +4781,7 @@ class RecoverModal extends Modal {
                 }
                 this.list();
               } catch (err) {
-                new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+                new Notice(`Trew: ${(err as Error).message}`, 10_000);
               } finally {
                 this.bulk = false;
               }
@@ -4832,7 +4832,7 @@ class RecoverModal extends Modal {
               if (at >= 0) this.loaded.splice(at, 1);
               this.list();
             } catch (err) {
-              new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+              new Notice(`Trew: ${(err as Error).message}`, 10_000);
             } finally {
               this.restoring.delete(version.uid);
               b.setDisabled(false).setButtonText("Restore");
@@ -4858,7 +4858,7 @@ class StrandedModal extends Modal {
   private closed = false;
   private readonly working = new Set<string>();
 
-  constructor(private readonly plugin: TelimusPlugin) {
+  constructor(private readonly plugin: TrewPlugin) {
     super(plugin.app);
   }
 
@@ -4866,9 +4866,9 @@ class StrandedModal extends Modal {
 
   override onOpen(): void {
     this.setTitle("Versions kept out of sight");
-    this.modalEl.addClass("mod-telimus-panel");
-    this.contentEl.addClass("telimus-panel");
-    this.contentEl.createEl("p", { cls: "telimus-advice", text: "Looking…" });
+    this.modalEl.addClass("mod-trew-panel");
+    this.contentEl.addClass("trew-panel");
+    this.contentEl.createEl("p", { cls: "trew-advice", text: "Looking…" });
     void this.load();
   }
 
@@ -4899,13 +4899,13 @@ class StrandedModal extends Modal {
       // Never folded into the list. An incomplete inventory reads exactly like
       // an empty one, and the difference is whether anything is missing.
       contentEl.createEl("p", {
-        cls: "telimus-advice",
+        cls: "trew-advice",
         text: `This list may be incomplete: ${inventory.why}`,
       });
     }
     if (inventory.waiting.length === 0) {
       contentEl.createEl("p", {
-        cls: "telimus-advice",
+        cls: "trew-advice",
         text: inventory.complete
           ? "Nothing is waiting. Every version this device took off a name was put back."
           : "Nothing is listed, and the record above says why that may not mean nothing is there.",
@@ -4914,9 +4914,9 @@ class StrandedModal extends Modal {
     }
 
     contentEl.createEl("p", {
-      cls: "telimus-advice",
+      cls: "trew-advice",
       text:
-        "These are versions Telimus took off a name and could not put back beside it. " +
+        "These are versions Trew took off a name and could not put back beside it. " +
         "Recovering one writes a visible copy next to the note it came from. The hidden " +
         "copy is left where it is.",
     });
@@ -4936,12 +4936,12 @@ class StrandedModal extends Modal {
               try {
                 const at = await this.plugin.recoverDisplaced(version);
                 new Notice(
-                  `Telimus: recovered to ${at}. The hidden copy is still at ${version.at}.`,
+                  `Trew: recovered to ${at}. The hidden copy is still at ${version.at}.`,
                   15_000,
                 );
                 await this.load();
               } catch (err) {
-                new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+                new Notice(`Trew: ${(err as Error).message}`, 10_000);
                 b.setDisabled(false).setButtonText("Recover a visible copy");
               } finally {
                 this.working.delete(version.at);
@@ -4997,7 +4997,7 @@ function clock(ms: number): string {
 /**
  * What this device syncs with: the address, the protocol and the build.
  *
- * @see TelimusPlugin.connection
+ * @see TrewPlugin.connection
  */
 export interface Connection {
   /** Where this device pairs to, from the saved config. */
@@ -5030,7 +5030,7 @@ export interface Connection {
 export function describeConnection(at: Connection): string {
   return at.server === undefined
     ? `Not connected to ${at.url}.`
-    : `Connected to ${at.url}. Protocol ${at.server.proto}, telimus ${at.server.version}.`;
+    : `Connected to ${at.url}. Protocol ${at.server.proto}, trew ${at.server.version}.`;
 }
 
 /**
@@ -5102,7 +5102,7 @@ function longStatus(state: State): string {
       // Last, and unconditional on the count, because it is the sentence that
       // says the count may be wrong.
       if (state.recoveryUnknown !== undefined) {
-        parts.push(`Telimus cannot tell what is waiting: ${state.recoveryUnknown}.`);
+        parts.push(`Trew cannot tell what is waiting: ${state.recoveryUnknown}.`);
       }
       return parts.join(" ");
     }

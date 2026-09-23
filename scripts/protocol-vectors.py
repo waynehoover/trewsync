@@ -42,9 +42,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Name-derived identifiers, in one place. The product name is not final
 # (see PLAN.md section 10); a rename changes these strings and regenerates.
-INVITE_PREFIX = "telimus1i_"
-STAGING_MARK = ".telimus-tmp-"
-PRODUCT = "telimus"
+INVITE_PREFIX = "trew1i_"
+STAGING_MARK = ".trew-tmp-"
+PRODUCT = "trew"
 
 PROTO = 1
 INVITE_VERSION = 1
@@ -208,7 +208,7 @@ def path_vectors() -> list[dict]:
         ("a trailing dot is a Windows problem, not the server's", "trailing./x.md"),
         ("exactly 1024 bytes", "a" * (MAX_PATH_BYTES - 3) + ".md"),
         ("1024 bytes of two-byte characters", "\u00e9" * (MAX_PATH_BYTES // 2)),
-        ("a staging-looking name that is not the mark", "telimus-tmp-.md"),
+        ("a staging-looking name that is not the mark", "trew-tmp-.md"),
         ("empty", ""),
         ("1025 bytes", "a" * (MAX_PATH_BYTES - 2) + ".md"),
         ("1026 bytes in 513 characters", "\u00e9" * (MAX_PATH_BYTES // 2 + 1)),
@@ -235,7 +235,7 @@ def path_vectors() -> list[dict]:
         ("only dot-dot", ".."),
         ("the config folder", ".obsidian/app.json"),
         ("the trash", ".trash/x.md"),
-        ("a dotted folder deeper down", "a/.telimus/x.md"),
+        ("a dotted folder deeper down", "a/.trew/x.md"),
         ("a dotfile", "notes/.hidden.md"),
         ("the staging mark inside a name", "note.md" + STAGING_MARK + "keep3f9c"),
     ]
@@ -414,7 +414,7 @@ def invite_vectors() -> dict:
     flipped = bytearray(with_crc(body0))
     flipped[3] ^= 0x01
     bad = [
-        ("the wrong prefix", "telimus2i_" + base[len(INVITE_PREFIX) :]),
+        ("the wrong prefix", "trew2i_" + base[len(INVITE_PREFIX) :]),
         ("a Basalt invite", "basalt3i_" + base[len(INVITE_PREFIX) :]),
         ("padded base64", base + "="),
         ("a character outside base64url", base[:20] + "*" + base[21:]),

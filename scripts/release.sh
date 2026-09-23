@@ -131,7 +131,7 @@ if ! $runbookonly; then
 rm -rf "$out"
 mkdir -p "$out/plugin" "$out/server"
 
-echo "telimus $version ($commit)"
+echo "trew $version ($commit)"
 echo
 
 # ---- the server ----------------------------------------------------------
@@ -141,9 +141,9 @@ echo "server  ->  release/server/"
 for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
   goos=${target%/*}
   goarch=${target#*/}
-  name="telimus-$goos-$goarch"
+  name="trew-$goos-$goarch"
   ( CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-      go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$out/server/$name" ./cmd/telimus )
+      go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$out/server/$name" ./cmd/trew )
   printf '  %-24s %s\n' "$name" "$(du -h "$out/server/$name" | cut -f1)"
 done
 
@@ -213,7 +213,7 @@ printf '  %-24s %s\n' "manifest.json" "version $pluginversion, needs Obsidian $m
 # One file per release, with names that match what somebody downloads (I23).
 #
 # There was a single SHA256SUMS covering both, written from `find .` so its
-# lines read ./plugin/main.js and ./server/telimus-linux-amd64. It was attached
+# lines read ./plugin/main.js and ./server/trew-linux-amd64. It was attached
 # to the server release only. Neither half worked: `shasum -c SHA256SUMS` in a
 # directory of downloaded files looks for a plugin/ and a server/ that are not
 # there and reports every file missing, and the plugin release had no checksums
@@ -246,7 +246,7 @@ echo
 echo '  ```bash'
 echo "  shasum -a 256 -c SHA256SUMS"
 for asset in main.js manifest.json styles.css; do
-  echo "  gh attestation verify $asset --repo waynehoover/telimus"
+  echo "  gh attestation verify $asset --repo waynehoover/trew"
 done
 echo '  ```'
 echo
@@ -255,7 +255,7 @@ echo
 echo '  ```bash'
 echo "  shasum -a 256 -c SHA256SUMS"
 for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
-  echo "  gh attestation verify telimus-${target%/*}-${target#*/} --repo waynehoover/telimus"
+  echo "  gh attestation verify trew-${target%/*}-${target#*/} --repo waynehoover/trew"
 done
 echo '  ```'
 
@@ -294,9 +294,9 @@ cliversion=$(python3 -c 'import json;print(json.load(open("client/package.json")
 # The server block, and the verify flag, only where a version was given.
 if [ -n "$serverversion" ]; then
   serverblock=$(cat <<'BLOCK'
-  git tag -a server/v@SERVER@ -m "telimus @SERVER@" && git push origin server/v@SERVER@
-  gh release create server/v@SERVER@ --draft --title "telimus @SERVER@" \
-    --notes-file /tmp/telimus-server-@SERVER@-notes.md \
+  git tag -a server/v@SERVER@ -m "trew @SERVER@" && git push origin server/v@SERVER@
+  gh release create server/v@SERVER@ --draft --title "trew @SERVER@" \
+    --notes-file /tmp/trew-server-@SERVER@-notes.md \
     release/server/*
 
 A draft here too, and finished the same way:
@@ -332,8 +332,8 @@ fi
 template=$(mktemp); trap 'rm -f "$template"' EXIT
 cat > "$template" <<'RUNBOOK'
 
-Before publishing, draft user-facing notes in /tmp/telimus-plugin-@PLUGIN@-notes.md
-and, when shipping a server, /tmp/telimus-server-X.Y.Z-notes.md with its version.
+Before publishing, draft user-facing notes in /tmp/trew-plugin-@PLUGIN@-notes.md
+and, when shipping a server, /tmp/trew-server-X.Y.Z-notes.md with its version.
 Summarize additions, fixes, upgrade steps and known issues since the previous
 component release. Include CLI changes in the plugin notes when they ship
 together. Publish the notes on GitHub; do not commit duplicate changelog docs.
@@ -341,9 +341,9 @@ together. Publish the notes on GitHub; do not commit duplicate changelog docs.
 To publish the plugin, tagged bare because the community directory requires the
 tag to be exactly the manifest version:
 
-  git tag -a @PLUGIN@ -m "Telimus Sync @PLUGIN@" && git push origin @PLUGIN@
-  gh release create @PLUGIN@ --draft --title "Telimus Sync @PLUGIN@" \
-    --notes-file /tmp/telimus-plugin-@PLUGIN@-notes.md \
+  git tag -a @PLUGIN@ -m "Trew Sync @PLUGIN@" && git push origin @PLUGIN@
+  gh release create @PLUGIN@ --draft --title "Trew Sync @PLUGIN@" \
+    --notes-file /tmp/trew-plugin-@PLUGIN@-notes.md \
     release/plugin/main.js release/plugin/manifest.json release/plugin/styles.css \
     release/plugin/SHA256SUMS
 
@@ -368,7 +368,7 @@ To publish the server, on its own tag because it moves on its own clock:
 The headless client builds nothing here, because npm is where it goes. Bump
 client/package.json on its own clock, then:
 
-  git tag -a cli/v@CLI@ -m "telimus CLI @CLI@" && git push origin cli/v@CLI@
+  git tag -a cli/v@CLI@ -m "trew CLI @CLI@" && git push origin cli/v@CLI@
 
 That tag publishes it over OIDC, with no token and no 2FA code.
 

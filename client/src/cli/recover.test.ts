@@ -58,7 +58,7 @@ let server: TestServer;
 const dirs: string[] = [];
 
 async function vaultDir(name: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), `telimus-${name}-`));
+  const dir = await mkdtemp(join(tmpdir(), `trew-${name}-`));
   dirs.push(dir);
   return dir;
 }
@@ -297,7 +297,7 @@ describe("restoring", () => {
         expect(result.stdout).toMatch(/Restored/);
         expect(result.all).toMatch(/recovered\.md/);
         expect(result.all).toMatch(/sync connection dropped/);
-        expect(result.all).toMatch(/telimus sync/);
+        expect(result.all).toMatch(/trew sync/);
       }
       expect((await cli("sync", "--dir", dir)).code).toBe(0);
       expect(await read(dir, "recovered.md")).toBe("the preserved original\n");

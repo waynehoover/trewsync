@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/dirlock"
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/dirlock"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 // cmdHealth asks a running server whether it is answering.
@@ -206,7 +206,7 @@ func writeReclaimable(out io.Writer, rec store.Reclaimable, grace time.Duration)
 	// report with every collectible orphan in the tree unexamined.
 	if !rec.Complete {
 		fmt.Fprintln(out, "  the chunk walk stopped before the end of the store, so there is no reclaimable")
-		fmt.Fprintln(out, "  figure here; telimus verify says what is in the way")
+		fmt.Fprintln(out, "  figure here; trew verify says what is in the way")
 		return
 	}
 	// Four distinct answers, because "nothing would come back" has three

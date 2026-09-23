@@ -203,7 +203,7 @@ function contentsOf(session: Session): string[] {
 
 /**
  * These are not tests of this project's code, and they fail if Obsidian
- * changes rather than if Telimus does. They are here because every sequence
+ * changes rather than if Trew does. They are here because every sequence
  * below is only worth running if the fake answers the way the application
  * does, and "the fake is faithful" is a claim that has to be written down
  * somewhere a test runner can check it against the next version.
@@ -259,7 +259,7 @@ describe("what the fake claims Obsidian does", () => {
   it("leaves every dot-prefixed path out of the index, and puts the root in it", () => {
     const s = new Session();
     s.typed("real.md", "x");
-    s.adapter.seed(".obsidian/plugins/telimus/data.json", "the root secret");
+    s.adapter.seed(".obsidian/plugins/trew/data.json", "the root secret");
     s.adapter.seed("notes/.git/config", "[core]");
     s.adapter.seed(".trash/old.md", "deleted last week");
 
@@ -354,7 +354,7 @@ describe("rename storms", () => {
     s.adapter.fault = (op, path) => {
       // The staged copy is about to be renamed into place, which is the last
       // instant at which the destination can change under the write.
-      if (op === "rename" && path.includes(".telimus-tmp-") && !raced) {
+      if (op === "rename" && path.includes(".trew-tmp-") && !raced) {
         raced = true;
         s.adapter.seed("b.md", "arrived while the write was in flight");
       }
@@ -366,7 +366,7 @@ describe("rename storms", () => {
     );
     expect(s.notes()["b.md"]).toBe("arrived while the write was in flight");
     // And the failed write left nothing of itself behind.
-    expect(s.adapter.filePaths().filter((p) => p.includes(".telimus-tmp-"))).toEqual([]);
+    expect(s.adapter.filePaths().filter((p) => p.includes(".trew-tmp-"))).toEqual([]);
   });
 
   it("keeps a folder rename's notes, all of them, under the new folder", async () => {
@@ -437,7 +437,7 @@ describe("rapid saves", () => {
     );
     // And the complete new copy is beside it, named in the error, so the
     // next pass has something to finish from rather than a half-written note.
-    const staged = s.adapter.filePaths().filter((p) => p.includes(".telimus-tmp-"));
+    const staged = s.adapter.filePaths().filter((p) => p.includes(".trew-tmp-"));
     expect(staged).toHaveLength(1);
     expect(s.adapter.text(staged[0]!)).toBe("from the server");
   });
@@ -701,7 +701,7 @@ describe("the gap a dot-prefixed name leaves", () => {
     const s = new Session({ configDir: ".my-config" });
     s.typed("real.md", "a note");
     await expect(
-      s.vault.write(".my-config/plugins/telimus/data.json", enc.encode("{}"), times),
+      s.vault.write(".my-config/plugins/trew/data.json", enc.encode("{}"), times),
     ).rejects.toThrow(/never synced/);
     // A peer whose config folder is called something else uploads paths under
     // that name, and this device refusing them is the arrangement working.
@@ -719,12 +719,12 @@ describe("the gap a dot-prefixed name leaves", () => {
     s.adapter.fault = (op, path) =>
       op === "writeBinary" && path === "note.md" ? new Error("ENOSPC: disk full") : undefined;
     await expect(s.vault.write("note.md", enc.encode("from the server"), times)).rejects.toThrow(
-      /The complete new content is beside it at \.telimus-tmp-/,
+      /The complete new content is beside it at \.trew-tmp-/,
     );
 
     // Invisible to Obsidian and to the listing, so it is not a note that
     // appeared and it is not one that vanished. Invariant 5 still holds.
-    const staged = s.adapter.filePaths().filter((p) => p.includes(".telimus-tmp-"));
+    const staged = s.adapter.filePaths().filter((p) => p.includes(".trew-tmp-"));
     expect(staged).toHaveLength(1);
     expect(await s.listed()).toEqual(["note.md"]);
     await nothingIsSilentlyMissing(s);

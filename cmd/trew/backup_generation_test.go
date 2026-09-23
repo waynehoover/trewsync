@@ -68,12 +68,12 @@ func TestBackupRecordsTheUIDRangeAndPurgeGenerationItCovers(t *testing.T) {
 	// The file names the database it summarises, so a script can tell a
 	// current summary from one left behind by a build that republished the
 	// database without rewriting this.
-	info, err := os.Stat(filepath.Join(dest, "telimus.db"))
+	info, err := os.Stat(filepath.Join(dest, "trew.db"))
 	if err != nil {
 		t.Fatalf("stat the published database: %v", err)
 	}
 	if m.Database.Bytes != info.Size() {
-		t.Fatalf("backup.json stamps %d bytes, telimus.db beside it is %d", m.Database.Bytes, info.Size())
+		t.Fatalf("backup.json stamps %d bytes, trew.db beside it is %d", m.Database.Bytes, info.Size())
 	}
 	taken, err := time.Parse(time.RFC3339, m.TakenAt)
 	if err != nil {

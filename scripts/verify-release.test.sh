@@ -4,14 +4,14 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-verifier=${TELIMUS_VERIFY_SCRIPT:-"$root/scripts/verify-release.sh"}
+verifier=${TREW_VERIFY_SCRIPT:-"$root/scripts/verify-release.sh"}
 package_path=$PATH
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 mkdir -p "$scratch/bin" "$scratch/assets"
-export TELIMUS_VERIFY_FIXTURE="$scratch/assets"
-export TELIMUS_VERIFY_SERVER_VERSION=1.2.3
-export TELIMUS_VERIFY_CLI_VERSION=1.2.3
+export TREW_VERIFY_FIXTURE="$scratch/assets"
+export TREW_VERIFY_SERVER_VERSION=1.2.3
+export TREW_VERIFY_CLI_VERSION=1.2.3
 
 cat > "$scratch/bin/gh" <<'SH'
 #!/usr/bin/env bash
@@ -27,7 +27,7 @@ case "$1 $2" in
         *) exit 2 ;;
       esac
     done
-    cp "$TELIMUS_VERIFY_FIXTURE"/* "$destination/"
+    cp "$TREW_VERIFY_FIXTURE"/* "$destination/"
     ;;
   'attestation verify') exit 0 ;;
   api*) printf '{"1.2.3":"1.7.2"}\n' ;;
@@ -42,7 +42,7 @@ case "$1 $2" in
   'image rm') exit 0 ;;
   'run --rm')
     printf 'Pulling image from the registry\n' >&2
-    printf 'telimus %s linux/test go-test\n' "$TELIMUS_VERIFY_SERVER_VERSION"
+    printf 'trew %s linux/test go-test\n' "$TREW_VERIFY_SERVER_VERSION"
     ;;
   *) exit 2 ;;
 esac
@@ -52,8 +52,8 @@ cat > "$scratch/bin/npm" <<'SH'
 set -euo pipefail
 case "$1" in
   pack)
-    printf 'tarball fixture\n' > telimus-sync-1.2.3.tgz
-    printf 'telimus-sync-1.2.3.tgz\n'
+    printf 'tarball fixture\n' > trew-sync-1.2.3.tgz
+    printf 'trew-sync-1.2.3.tgz\n'
     ;;
   view) printf 'sha512-fixture\n' ;;
   install)
@@ -62,8 +62,8 @@ case "$1" in
       if [ "$1" = --prefix ]; then destination=$2; shift 2; else shift; fi
     done
     mkdir -p "$destination/node_modules/.bin"
-    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$TELIMUS_VERIFY_CLI_VERSION"\n' > "$destination/node_modules/.bin/telimus"
-    chmod +x "$destination/node_modules/.bin/telimus"
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$TREW_VERIFY_CLI_VERSION"\n' > "$destination/node_modules/.bin/trew"
+    chmod +x "$destination/node_modules/.bin/trew"
     ;;
   *) exit 2 ;;
 esac
@@ -72,14 +72,14 @@ chmod +x "$scratch/bin/gh" "$scratch/bin/docker" "$scratch/bin/npm"
 export PATH="$scratch/bin:$PATH"
 
 plugin_assets=(main.js manifest.json styles.css)
-server_assets=(telimus-linux-amd64 telimus-linux-arm64 telimus-darwin-amd64 telimus-darwin-arm64)
+server_assets=(trew-linux-amd64 trew-linux-arm64 trew-darwin-amd64 trew-darwin-arm64)
 fixture() {
   local asset
   rm -f "$scratch/assets/"*
   if [ "$1" = plugin ]; then
     printf 'module.exports = {};\n' > "$scratch/assets/main.js"
     printf '{"version":"1.2.3","minAppVersion":"1.7.2"}\n' > "$scratch/assets/manifest.json"
-    printf '.telimus { display: block; }\n' > "$scratch/assets/styles.css"
+    printf '.trew { display: block; }\n' > "$scratch/assets/styles.css"
   else
     for asset in "${server_assets[@]}"; do
       printf 'binary fixture for %s\n' "$asset" > "$scratch/assets/$asset"
@@ -120,9 +120,9 @@ done
 
 fixture server
 sums "${server_assets[@]}"
-TELIMUS_VERIFY_SERVER_VERSION=1.2.30 check 1 server 'a different version containing the requested version'
+TREW_VERIFY_SERVER_VERSION=1.2.30 check 1 server 'a different version containing the requested version'
 check 0 cli 'the CLI reports the requested version'
-TELIMUS_VERIFY_CLI_VERSION=1.2.30 check 1 cli 'the CLI reports a different version containing the requested version'
+TREW_VERIFY_CLI_VERSION=1.2.30 check 1 cli 'the CLI reports a different version containing the requested version'
 
 # Run the image workflow's actual version check against the same two replies.
 awk '
@@ -134,7 +134,7 @@ awk '
 [ -s "$scratch/image-check.sh" ] || { echo 'no image version check found'; exit 1; }
 for actual in 1.2.3 1.2.30; do
   result=0
-  REF=example/image@sha256:fixture WANT=1.2.3 TELIMUS_VERIFY_SERVER_VERSION="$actual" \
+  REF=example/image@sha256:fixture WANT=1.2.3 TREW_VERIFY_SERVER_VERSION="$actual" \
     bash -euo pipefail "$scratch/image-check.sh" > "$scratch/output" 2>&1 || result=$?
   if { [ "$actual" = 1.2.3 ] && [ "$result" -eq 0 ]; } || { [ "$actual" != 1.2.3 ] && [ "$result" -eq 1 ]; }; then
     echo "ok: image publication check for $actual"
@@ -151,16 +151,16 @@ cp "$root/scripts/pack-check.sh" "$package_root/scripts/"
 # This fixture tests exact version comparison with a deliberately tiny CLI.
 # The real MCP workflow runs in pack-check and mcp-artifact.test.ts; record
 # delegation here so a metadata fixture need not imitate the protocol.
-cat > "$package_root/client/src/cli/mcp-artifact.run.ts" <<'TELIMUS_PACK_FIXTURE'
+cat > "$package_root/client/src/cli/mcp-artifact.run.ts" <<'TREW_PACK_FIXTURE'
 import { access } from "node:fs/promises";
 if (process.argv.length !== 4) throw new Error("missing artifact or Node executable");
 await access(process.argv[2]);
 await access(process.argv[3]);
 console.info("packed MCP fixture invoked");
-TELIMUS_PACK_FIXTURE
-printf '{"name":"telimus-sync","version":"1.2.3","files":["dist/telimus.mjs"],"bin":{"telimus":"dist/telimus.mjs"}}\n' > "$package_root/client/package.json"
+TREW_PACK_FIXTURE
+printf '{"name":"trew-sync","version":"1.2.3","files":["dist/trew.mjs"],"bin":{"trew":"dist/trew.mjs"}}\n' > "$package_root/client/package.json"
 for actual in 1.2.3 1.2.30; do
-  printf '#!/usr/bin/env node\nconsole.log(process.argv.includes("--version") ? "%s" : "telimus sync telimus pair --version");\n' "$actual" > "$package_root/client/dist/telimus.mjs"
+  printf '#!/usr/bin/env node\nconsole.log(process.argv.includes("--version") ? "%s" : "trew sync trew pair --version");\n' "$actual" > "$package_root/client/dist/trew.mjs"
   result=0
   PATH="$package_path" bash "$package_root/scripts/pack-check.sh" > "$scratch/output" 2>&1 || result=$?
   if { [ "$actual" = 1.2.3 ] && [ "$result" -eq 0 ] && grep -qF 'packed MCP fixture invoked' "$scratch/output"; } || { [ "$actual" != 1.2.3 ] && [ "$result" -eq 1 ]; }; then

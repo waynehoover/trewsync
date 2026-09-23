@@ -166,7 +166,7 @@ describe("a read does not mutate", () => {
     const textBefore = vault.text("note.md");
     const cursorBefore = engine.status().cursor;
 
-    // A real read, answered. This is the request `telimus history` and the
+    // A real read, answered. This is the request `trew history` and the
     // panel's version list both make.
     const asking = t.history(entry.path, { limit: 20 });
     await settle();

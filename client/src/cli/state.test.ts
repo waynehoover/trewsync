@@ -122,7 +122,7 @@ afterEach(async () => {
 });
 
 async function vaultDir(name: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), `telimus-state-${name}-`));
+  const dir = await mkdtemp(join(tmpdir(), `trew-state-${name}-`));
   dirs.push(dir);
   return dir;
 }
@@ -148,7 +148,7 @@ async function pairedWithKey(name = "a"): Promise<{ dir: string; recoveryKey: st
 }
 
 /** The CLI as a separate process, which is the only way two of them contend. */
-function telimus(...argv: string[]): ChildProcess & { stderrText: () => string } {
+function trew(...argv: string[]): ChildProcess & { stderrText: () => string } {
   const child = spawn("bun", ["src/cli/bin.ts", ...argv], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
@@ -424,21 +424,21 @@ describe("a version the client could not put back", () => {
 describe("the vault lock", () => {
   it("refuses a second holder and names the first", async () => {
     const dir = await vaultDir("lock");
-    const release = await lockVault(dir, "telimus sync");
-    await expect(lockVault(dir, "telimus restore")).rejects.toThrow(
-      new RegExp(`telimus sync \\(pid ${process.pid} on `),
+    const release = await lockVault(dir, "trew sync");
+    await expect(lockVault(dir, "trew restore")).rejects.toThrow(
+      new RegExp(`trew sync \\(pid ${process.pid} on `),
     );
     await release();
     // Released, so nobody holds it in between and the next holder gets it.
     expect(await currentHolder(dir)).toBeUndefined();
     await (
-      await lockVault(dir, "telimus restore")
+      await lockVault(dir, "trew restore")
     )();
   });
 
   it("takes over a lock whose holder on this host is dead", async () => {
     const dir = await vaultDir("stale");
-    await mkdir(join(dir, ".telimus"), { recursive: true });
+    await mkdir(join(dir, ".trew"), { recursive: true });
     // A pid nothing is running under. Found by asking, not assumed.
     let dead = 2 ** 22 - 7;
     while (alive(dead)) dead--;
@@ -447,7 +447,7 @@ describe("the vault lock", () => {
       JSON.stringify({
         pid: dead,
         host: (await import("node:os")).hostname(),
-        command: "telimus sync",
+        command: "trew sync",
         since: 1,
       }),
     );
@@ -455,40 +455,40 @@ describe("the vault lock", () => {
     // opinion of a pid (I27). Five attempts to do it from a file each handed
     // one vault to two writers; the exclusion the kernel drops on exit has no
     // staleness to get wrong.
-    const release = await lockVault(dir, "telimus sync");
+    const release = await lockVault(dir, "trew sync");
     expect(await currentHolder(dir)).toMatchObject({ pid: process.pid });
     await release();
   });
 
   it("believes a holder on another host, which it cannot check", async () => {
     const dir = await vaultDir("remote");
-    await mkdir(join(dir, ".telimus"), { recursive: true });
+    await mkdir(join(dir, ".trew"), { recursive: true });
     await writeFile(
       lockPath(dir),
       JSON.stringify({
         pid: 1,
         host: "some-other-machine",
-        command: "telimus sync --watch",
+        command: "trew sync --watch",
         since: 1,
       }),
     );
-    await expect(lockVault(dir, "telimus sync")).rejects.toThrow(/some-other-machine/);
+    await expect(lockVault(dir, "trew sync")).rejects.toThrow(/some-other-machine/);
   });
 
   it("keeps two real processes from syncing one vault at once", async () => {
     const dir = await paired("two");
     await writeFile(join(dir, "note.md"), "a note\n");
 
-    const watcher = telimus("sync", "--watch", "--dir", dir);
+    const watcher = trew("sync", "--watch", "--dir", dir);
     await until(
       "the watcher to be running",
       () => /Watching for changes/.test(watcher.stderrText()),
       30_000,
     );
 
-    const second = telimus("sync", "--dir", dir);
+    const second = trew("sync", "--dir", dir);
     expect(await exited(second)).toBe(1);
-    expect(second.stderrText()).toMatch(/another telimus is using this vault: telimus sync/);
+    expect(second.stderrText()).toMatch(/another trew is using this vault: trew sync/);
     expect(second.stderrText()).toMatch(new RegExp(`pid ${watcher.pid} on`));
 
     // Stopped without cleaning up, as a kill or a crash would leave it.
@@ -503,7 +503,7 @@ describe("the vault lock", () => {
 
     // The next one takes it, because the kernel let go of the exclusion when
     // the watcher died (I27). The record left in the file is debris and is
-    // replaced. `telimus unlock` is still there for a holder on another
+    // replaced. `trew unlock` is still there for a holder on another
     // machine, and is no longer between a crashed cron job and the next run.
     const third = await cli("sync", "--dir", dir, "--json");
     expect(third.code, third.all).toBe(0);
@@ -515,21 +515,21 @@ describe("the vault lock", () => {
     // property means anything: the kernel releases the exclusion when the
     // holder dies, so the next command simply works.
     //
-    // Before this, the same schedule needed `telimus unlock` in between, and
+    // Before this, the same schedule needed `trew unlock` in between, and
     // the five attempts to avoid that each handed one vault to two writers.
     const dir = await paired("kernel");
     await writeFile(join(dir, "note.md"), "a note\n");
 
-    const watcher = telimus("sync", "--watch", "--dir", dir);
+    const watcher = trew("sync", "--watch", "--dir", dir);
     await until(
       "the watcher to be running",
       () => /Watching for changes/.test(watcher.stderrText()),
       30_000,
     );
-    // Held, and a second telimus is turned away while it runs.
+    // Held, and a second trew is turned away while it runs.
     const second = await cli("sync", "--dir", dir);
     expect(second.code, second.all).toBe(1);
-    expect(second.all).toMatch(/another telimus is using this vault/);
+    expect(second.all).toMatch(/another trew is using this vault/);
 
     // Killed outright, as a crash or an OOM would.
     const ended = exited(watcher);
@@ -538,13 +538,13 @@ describe("the vault lock", () => {
 
     const after = await cli("sync", "--dir", dir, "--json");
     expect(after.code, `a killed watcher left the vault wedged: ${after.all}`).toBe(0);
-    expect(after.all).not.toMatch(/telimus unlock/);
+    expect(after.all).not.toMatch(/trew unlock/);
     expect(await currentHolder(dir), "the vault is still held afterwards").toBeUndefined();
   }, 120_000);
 
   it("refuses to unlock a vault whose holder is running", async () => {
     const dir = await paired("held");
-    const watcher = telimus("sync", "--watch", "--dir", dir);
+    const watcher = trew("sync", "--watch", "--dir", dir);
     await until(
       "the watcher to be running",
       () => /Watching for changes/.test(watcher.stderrText()),
@@ -564,7 +564,7 @@ describe("the vault lock", () => {
 
   it("lets a reading command through while a watcher holds the vault", async () => {
     const dir = await paired("read");
-    const watcher = telimus("sync", "--watch", "--dir", dir);
+    const watcher = trew("sync", "--watch", "--dir", dir);
     await until(
       "the watcher to be running",
       () => /Watching for changes/.test(watcher.stderrText()),
@@ -593,7 +593,7 @@ describe("the two ways of asking how a vault is", () => {
     await mkdir(join(dir, STATE_DIR, "tmp"), { recursive: true });
     await writeFile(join(dir, at), "the retained edit\n");
     await writeFile(join(dir, STATE_DIR, "displaced.log"), '{"at":"unfinished');
-    const watcher = telimus("sync", "--watch", "--dir", dir, "--json");
+    const watcher = trew("sync", "--watch", "--dir", dir, "--json");
     let output = "";
     watcher.stdout!.on("data", (chunk: Buffer) => {
       output += chunk.toString();
@@ -622,7 +622,7 @@ describe("the two ways of asking how a vault is", () => {
 
     // What a crash mid-append leaves: a line that names something and cannot
     // be read, so what it named is not in the list beside it.
-    await writeFile(join(dir, STATE_DIR, "displaced.log"), '{"at":"note.md..telimus-tmp-keep0a1');
+    await writeFile(join(dir, STATE_DIR, "displaced.log"), '{"at":"note.md..trew-tmp-keep0a1');
 
     const synced = await cli("sync", "--dir", dir, "--json");
     const status = await cli("status", "--dir", dir, "--json");
@@ -938,7 +938,7 @@ describe("restore, on a vault that cannot say what is waiting", () => {
 
     // A record cut short by a crash: the log names something and cannot say
     // what, so this device cannot establish what is waiting.
-    await writeFile(join(dir, STATE_DIR, "displaced.log"), '{"at":"note.md..telimus-tmp-keep0a1');
+    await writeFile(join(dir, STATE_DIR, "displaced.log"), '{"at":"note.md..trew-tmp-keep0a1');
 
     const out = await cli("restore", "note.md", "--dir", dir, "--json");
     const json = JSON.parse(out.out.at(-1)!) as {
@@ -1006,7 +1006,7 @@ describe("unlinking as one transition", () => {
 
   it("refuses to unlink while another process is syncing the vault", async () => {
     const dir = await paired("busy");
-    const watcher = telimus("sync", "--watch", "--dir", dir);
+    const watcher = trew("sync", "--watch", "--dir", dir);
     await until(
       "the watcher to be running",
       () => /Watching for changes/.test(watcher.stderrText()),
@@ -1014,7 +1014,7 @@ describe("unlinking as one transition", () => {
     );
     const attempt = await cli("unlink", "--dir", dir);
     expect(attempt.code).toBe(1);
-    expect(attempt.all).toMatch(/another telimus is using this vault/);
+    expect(attempt.all).toMatch(/another trew is using this vault/);
     await expect(readFile(configPath(dir), "utf8")).resolves.toMatch(/"deviceSecret"/);
   }, 120_000);
 });
@@ -1122,7 +1122,7 @@ describe("a vault that was started and never joined", () => {
     const attempt = await cli("pair", recoveryKey, "--dir", second);
     expect(attempt.code, attempt.all).toBe(1);
     expect(attempt.all).toMatch(/nothing can connect as/);
-    expect(attempt.all).toMatch(/telimus revoke/);
+    expect(attempt.all).toMatch(/trew revoke/);
     // Nothing here claims to be paired, because nothing here can connect.
     failSavesAfter = Infinity;
     expect(await loadConfig(second)).toBeUndefined();
@@ -1163,7 +1163,7 @@ describe("a vault that was started and never joined", () => {
     const printed = init.err.join("\n").match(/(basalt3_[A-Za-z0-9_-]+)/)![1]!;
     expect(init.all).toMatch(/device row was registered/);
     expect(init.all).toMatch(/never connected/);
-    expect(init.all).toMatch(/telimus revoke/);
+    expect(init.all).toMatch(/trew revoke/);
     failSavesAfter = Infinity;
 
     // The row is really there, and has really never connected. Only the
@@ -1217,7 +1217,7 @@ describe("a vault that was started and never joined", () => {
     expect(attempt.all).toMatch(/could not be read/);
     expect(attempt.all).toMatch(/not known/);
     // The row must not be named for revoking, because it is this device's.
-    expect(attempt.all).not.toMatch(/telimus revoke/);
+    expect(attempt.all).not.toMatch(/trew revoke/);
     expect(attempt.all).not.toMatch(/never connected/);
 
     // And the credential really was written: with the disk reading again this

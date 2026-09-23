@@ -17,7 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/waynehoover/telimus/internal/invite"
+	"github.com/waynehoover/trew/internal/invite"
 	"net"
 	"os"
 	"path/filepath"
@@ -26,12 +26,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/dirlock"
+	"github.com/waynehoover/trew/internal/dirlock"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/server"
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/server"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -43,7 +43,7 @@ import (
 func seeded(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -90,7 +90,7 @@ func seeded(t *testing.T) string {
 // before it is legitimately behind.
 func appendOne(t *testing.T, dir, path, body string) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -111,8 +111,8 @@ func appendOne(t *testing.T, dir, path, body string) {
 	}
 }
 
-// telimus runs a command and returns what it printed.
-func telimus(t *testing.T, args ...string) (string, error) {
+// trew runs a command and returns what it printed.
+func trew(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
 	err := run(context.Background(), args, &out)
@@ -121,9 +121,9 @@ func telimus(t *testing.T, args ...string) (string, error) {
 
 func mustRun(t *testing.T, args ...string) string {
 	t.Helper()
-	out, err := telimus(t, args...)
+	out, err := trew(t, args...)
 	if err != nil {
-		t.Fatalf("telimus %s: %v\n%s", strings.Join(args, " "), err, out)
+		t.Fatalf("trew %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return out
 }
@@ -152,7 +152,7 @@ func TestVerifyDeepFindsARottedBody(t *testing.T) {
 		t.Fatalf("a shallow verify should not have read the bytes:\n%s", shallow)
 	}
 
-	out, err := telimus(t, "verify", "-data", dir, "-deep")
+	out, err := trew(t, "verify", "-data", dir, "-deep")
 	if err == nil {
 		t.Fatalf("a deep verify passed over a corrupt body:\n%s", out)
 	}
@@ -164,7 +164,7 @@ func TestVerifyDeepFindsARottedBody(t *testing.T) {
 func TestVerifyFindsAMissingBody(t *testing.T) {
 	dir := seeded(t)
 	removeOneBody(t, dir)
-	out, err := telimus(t, "verify", "-data", dir)
+	out, err := trew(t, "verify", "-data", dir)
 	if err == nil {
 		t.Fatalf("verify passed over a missing body:\n%s", out)
 	}
@@ -200,7 +200,7 @@ func TestVerifyDeepChecksTheRegistryAndSaysWhatItChecked(t *testing.T) {
 	if shallow := mustRun(t, "verify", "-data", dir); !strings.Contains(shallow, "0 faults") {
 		t.Fatalf("a shallow verify read the registry after all:\n%s", shallow)
 	}
-	out, err := telimus(t, "verify", "-data", dir, "-deep")
+	out, err := trew(t, "verify", "-data", dir, "-deep")
 	if err == nil {
 		t.Fatalf("a deep verify passed over a device nothing can authenticate:\n%s", out)
 	}
@@ -215,7 +215,7 @@ func TestVerifyDeepChecksTheRegistryAndSaysWhatItChecked(t *testing.T) {
 // is what a vault anybody is using has.
 func registryOn(t *testing.T, dir string) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -234,7 +234,7 @@ func registryOn(t *testing.T, dir string) {
 // no store call that writes one, which is the point.
 func execSQL(t *testing.T, dir, query string) {
 	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "telimus.db"))
+	db, err := sql.Open("sqlite", filepath.Join(dir, "trew.db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestBackupRefusesWhenTheSourceIsMissingABody(t *testing.T) {
 	removeOneBody(t, source)
 	dest := filepath.Join(t.TempDir(), "backup")
 
-	out, err := telimus(t, "backup", "-data", source, "-to", dest)
+	out, err := trew(t, "backup", "-data", source, "-to", dest)
 	if err == nil {
 		t.Fatalf("backup reported success from a source with a body missing:\n%s", out)
 	}
@@ -366,7 +366,7 @@ func TestBackupRefusesWhenTheSourceIsMissingABody(t *testing.T) {
 
 func TestBackupNeedsSomewhereToPutIt(t *testing.T) {
 	source := seeded(t)
-	if _, err := telimus(t, "backup", "-data", source); err == nil {
+	if _, err := trew(t, "backup", "-data", source); err == nil {
 		t.Fatal("backup with no -to should refuse")
 	}
 }
@@ -403,7 +403,7 @@ func TestABackupTakenBeforeAPurgeStillHasTheHistory(t *testing.T) {
 // asked only about the newest.
 func readEverything(t *testing.T, dir string) map[string]string {
 	t.Helper()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open %s: %v", dir, err)
 	}
@@ -589,7 +589,7 @@ func TestPurgeRefusesWhileAServerIsRunning(t *testing.T) {
 	stop := serveInBackground(t, dir)
 	defer stop()
 
-	out, err := telimus(t, "purge", "-data", dir, "-confirm", "default", "-no-backup-check")
+	out, err := trew(t, "purge", "-data", dir, "-confirm", "default", "-no-backup-check")
 	if err == nil {
 		t.Fatalf("purge ran against a live server:\n%s", out)
 	}
@@ -633,7 +633,7 @@ func TestStatsRefusesWhileAPurgeHoldsTheDirectory(t *testing.T) {
 	}
 	defer lock.Release()
 
-	out, err := telimus(t, "stats", "-data", dir)
+	out, err := trew(t, "stats", "-data", dir)
 	if err == nil {
 		t.Fatalf("stats ran while a purge held the data directory:\n%s", out)
 	}
@@ -648,7 +648,7 @@ func TestASecondServerRefusesTheSameDirectory(t *testing.T) {
 	stop := serveInBackground(t, dir)
 	defer stop()
 
-	_, err := telimus(t, "serve", "-data", dir, "-addr", "127.0.0.1:0")
+	_, err := trew(t, "serve", "-data", dir, "-addr", "127.0.0.1:0")
 	if err == nil {
 		t.Fatal("a second server took a directory that was already served")
 	}
@@ -820,13 +820,13 @@ func TestCommandsRefuseADataDirectoryThatIsNotThere(t *testing.T) {
 		{"verify", "-data", missing, "-deep"},
 		{"purge", "-data", missing, "-confirm", "default", "-no-backup-check"},
 	} {
-		out, err := telimus(t, args...)
+		out, err := trew(t, args...)
 		if err == nil {
-			t.Fatalf("telimus %s succeeded against a directory that does not exist:\n%s",
+			t.Fatalf("trew %s succeeded against a directory that does not exist:\n%s",
 				strings.Join(args, " "), out)
 		}
-		if !strings.Contains(err.Error(), "no telimus data directory") {
-			t.Fatalf("telimus %s refused unhelpfully: %v", strings.Join(args, " "), err)
+		if !strings.Contains(err.Error(), "no trew data directory") {
+			t.Fatalf("trew %s refused unhelpfully: %v", strings.Join(args, " "), err)
 		}
 	}
 
@@ -848,7 +848,7 @@ func TestServeCreatesADataDirectoryOnItsFirstRun(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, firstInviteFile)); err != nil {
 		t.Fatalf("a first run wrote no invite for its first device: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "telimus.db")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "trew.db")); err != nil {
 		t.Fatalf("serve did not create the database: %v", err)
 	}
 }
@@ -862,13 +862,13 @@ func TestServeCreatesADataDirectoryOnItsFirstRun(t *testing.T) {
 // gets run as root for the rest of its life.
 func TestServicePrintsAUnitWithRealPathsInIt(t *testing.T) {
 	dir := seeded(t)
-	out := mustRun(t, "service", "-data", dir, "-addr", "127.0.0.1:3010", "-vault", "notes", "-user", "telimus")
+	out := mustRun(t, "service", "-data", dir, "-addr", "127.0.0.1:3010", "-vault", "notes", "-user", "trew")
 
 	for _, want := range []string{
 		"[Unit]",
 		"[Service]",
 		"[Install]",
-		"User=telimus",
+		"User=trew",
 		"-addr 127.0.0.1:3010",
 		"-vault notes",
 		"ReadWritePaths=" + dir,
@@ -917,7 +917,7 @@ func TestTheUnitIsHardened(t *testing.T) {
  * and ProtectHome=true makes that unreadable to the unit.
  */
 func TestProtectHomeIsOnlySetWhenItWouldNotBreakTheService(t *testing.T) {
-	inHome := mustRun(t, "service", "-data", "/home/somebody/.telimus")
+	inHome := mustRun(t, "service", "-data", "/home/somebody/.trew")
 	if strings.Contains(inHome, "\nProtectHome=true") {
 		t.Fatalf("ProtectHome was set on a data directory inside a home:\n%s", inHome)
 	}
@@ -925,7 +925,7 @@ func TestProtectHomeIsOnlySetWhenItWouldNotBreakTheService(t *testing.T) {
 		t.Fatalf("nothing said why ProtectHome was missing:\n%s", inHome)
 	}
 
-	elsewhere := mustRun(t, "service", "-data", "/var/lib/telimus")
+	elsewhere := mustRun(t, "service", "-data", "/var/lib/trew")
 	if !strings.Contains(elsewhere, "\nProtectHome=true") {
 		t.Fatalf("ProtectHome was left off where it would have been safe:\n%s", elsewhere)
 	}
@@ -935,7 +935,7 @@ func TestProtectHomeIsOnlySetWhenItWouldNotBreakTheService(t *testing.T) {
 // home somewhere unusual used to get ProtectHome=true and a unit that could
 // not read its own data directory.
 func TestProtectHomeKnowsWhereTheUsersHomeActuallyIs(t *testing.T) {
-	if !underHome("/srv/people/wayne/.telimus", "/srv/people/wayne") {
+	if !underHome("/srv/people/wayne/.trew", "/srv/people/wayne") {
 		t.Fatal("a data directory inside an unusual home was not recognised as such")
 	}
 	if !underHome("/srv/people/wayne", "/srv/people/wayne/") {
@@ -944,10 +944,10 @@ func TestProtectHomeKnowsWhereTheUsersHomeActuallyIs(t *testing.T) {
 	if underHome("/srv/people/wayne-data", "/srv/people/wayne") {
 		t.Fatal("a sibling that merely shares a prefix was taken for the home")
 	}
-	if !underHome("/home/somebody/.telimus", "") {
+	if !underHome("/home/somebody/.trew", "") {
 		t.Fatal("the well-known prefixes stopped working when the home is unknown")
 	}
-	if underHome("/var/lib/telimus", "/") {
+	if underHome("/var/lib/trew", "/") {
 		t.Fatal("a home of / would mark every path as inside it")
 	}
 }
@@ -956,7 +956,7 @@ func TestProtectHomeKnowsWhereTheUsersHomeActuallyIs(t *testing.T) {
 // stays down after one bad night is one you find out about from a device that
 // has been quietly not syncing.
 func TestTheUnitComesBackByItself(t *testing.T) {
-	out := mustRun(t, "service", "-data", "/var/lib/telimus")
+	out := mustRun(t, "service", "-data", "/var/lib/trew")
 	if !strings.Contains(out, "Restart=always") {
 		t.Fatalf("the unit does not restart:\n%s", out)
 	}
@@ -968,18 +968,18 @@ func TestTheUnitComesBackByItself(t *testing.T) {
 }
 
 func TestServiceTellsYouHowToInstallIt(t *testing.T) {
-	out := mustRun(t, "service", "-data", "/var/lib/telimus")
-	for _, want := range []string{"systemctl daemon-reload", "systemctl enable --now telimus", "journalctl"} {
+	out := mustRun(t, "service", "-data", "/var/lib/trew")
+	for _, want := range []string{"systemctl daemon-reload", "systemctl enable --now trew", "journalctl"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("the notes do not mention %q:\n%s", want, out)
 		}
 	}
 	// Purge needs the server stopped and backup does not. Getting that wrong is
 	// a purge that refuses, or worse, a habit of stopping sync to back up.
-	if !strings.Contains(out, "systemctl stop telimus && ") {
+	if !strings.Contains(out, "systemctl stop trew && ") {
 		t.Fatalf("the notes do not say purge needs the server stopped:\n%s", out)
 	}
-	if strings.Contains(out, "systemctl stop telimus && ") && !strings.Contains(out, "Backups do not need the server stopped") {
+	if strings.Contains(out, "systemctl stop trew && ") && !strings.Contains(out, "Backups do not need the server stopped") {
 		t.Fatalf("the notes do not say backup does not:\n%s", out)
 	}
 }
@@ -1018,7 +1018,7 @@ func TestStatsSaysWhatIsThereAndWhatAPurgeWouldDrop(t *testing.T) {
 // short form, because that is the ordinary case and it should stay one number.
 func TestStatsKeepsTheShortLineWhenEveryDeletionIsRecoverable(t *testing.T) {
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -1063,7 +1063,7 @@ func TestStatsRunsAgainstALiveServer(t *testing.T) {
 }
 
 func TestStatsRefusesADirectoryThatIsNotThere(t *testing.T) {
-	if _, err := telimus(t, "stats", "-data", filepath.Join(t.TempDir(), "typo")); err == nil {
+	if _, err := trew(t, "stats", "-data", filepath.Join(t.TempDir(), "typo")); err == nil {
 		t.Fatal("stats reported on a directory that does not exist")
 	}
 }
@@ -1079,7 +1079,7 @@ func TestHealthAsksARunningServer(t *testing.T) {
 	// The port is chosen by the operating system and never printed, so this
 	// checks the shape of the answer rather than a live one: a server that is
 	// not there must fail rather than pass.
-	if _, err := telimus(t, "health", "-addr", "127.0.0.1:1", "-timeout", "2s"); err == nil {
+	if _, err := trew(t, "health", "-addr", "127.0.0.1:1", "-timeout", "2s"); err == nil {
 		t.Fatal("health passed against a port with nothing on it")
 	}
 }
@@ -1100,7 +1100,7 @@ func TestHealthAgainstAServerOnAKnownPort(t *testing.T) {
 	deadline := time.Now().Add(15 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		if _, err := telimus(t, "health", "-addr", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
+		if _, err := trew(t, "health", "-addr", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
 			return
 		} else {
 			lastErr = err
@@ -1113,7 +1113,7 @@ func TestHealthAgainstAServerOnAKnownPort(t *testing.T) {
 // A bare port is what a bind address looks like, and asking about ":3003" must
 // mean this machine rather than being a parse error inside a container.
 func TestHealthUnderstandsABareBindAddress(t *testing.T) {
-	_, err := telimus(t, "health", "-addr", ":1", "-timeout", "2s")
+	_, err := trew(t, "health", "-addr", ":1", "-timeout", "2s")
 	if err == nil {
 		t.Fatal("health passed against a port with nothing on it")
 	}
@@ -1240,7 +1240,7 @@ func TestAPairedVaultWritesNoFirstInvite(t *testing.T) {
 	}
 	var out bytes.Buffer
 	printPairing(&out, "vault.example.ts.net:3003", "default", first)
-	if !strings.Contains(out.String(), "telimus invite") {
+	if !strings.Contains(out.String(), "trew invite") {
 		t.Errorf("a paired vault did not say how to add a device:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), invite.Prefix) {
@@ -1402,7 +1402,7 @@ func TestBackupNeverPrintsANegativeBodyCount(t *testing.T) {
 
 func TestPurgeRefusesItsOwnDirectoryAsABackup(t *testing.T) {
 	dir := seeded(t)
-	out, err := telimus(t, "purge", "-data", dir, "-backup", dir, "-confirm", "default")
+	out, err := trew(t, "purge", "-data", dir, "-backup", dir, "-confirm", "default")
 	if err == nil {
 		t.Fatalf("purge accepted its own data directory as a backup:\n%s", out)
 	}
@@ -1424,7 +1424,7 @@ func TestPurgeRefusesABackupThatIsAnAliasOfTheSourceDirectory(t *testing.T) {
 	if err := os.Symlink(dir, alias); err != nil {
 		t.Skipf("this filesystem will not make a symlink: %v", err)
 	}
-	out, err := telimus(t, "purge", "-data", dir, "-backup", alias, "-confirm", "default")
+	out, err := trew(t, "purge", "-data", dir, "-backup", alias, "-confirm", "default")
 	if err == nil {
 		t.Fatalf("purge accepted a symlink to its own data directory:\n%s", out)
 	}
@@ -1440,7 +1440,7 @@ func TestPurgeRefusesAnUnrelatedVaultThatCountedHigher(t *testing.T) {
 	// is what a second server, or a data directory that was started again,
 	// leaves behind, and its uids satisfy every comparison the old check made.
 	other := t.TempDir()
-	st, err := store.Open(filepath.Join(other, "telimus.db"), filepath.Join(other, "chunks"))
+	st, err := store.Open(filepath.Join(other, "trew.db"), filepath.Join(other, "chunks"))
 	if err != nil {
 		t.Fatalf("open other: %v", err)
 	}
@@ -1458,7 +1458,7 @@ func TestPurgeRefusesAnUnrelatedVaultThatCountedHigher(t *testing.T) {
 		t.Fatalf("close other: %v", err)
 	}
 
-	out, err := telimus(t, "purge", "-data", dir, "-backup", other, "-confirm", "default")
+	out, err := trew(t, "purge", "-data", dir, "-backup", other, "-confirm", "default")
 	if err == nil {
 		t.Fatalf("purge accepted an unrelated vault as a backup:\n%s", out)
 	}
@@ -1478,7 +1478,7 @@ func TestPurgeRefusesABackupWithNoChunkBodies(t *testing.T) {
 		t.Fatalf("remove bodies: %v", err)
 	}
 
-	out, err := telimus(t, "purge", "-data", dir, "-backup", backup, "-confirm", "default")
+	out, err := trew(t, "purge", "-data", dir, "-backup", backup, "-confirm", "default")
 	if err == nil {
 		t.Fatalf("purge accepted a backup holding no bodies:\n%s", out)
 	}
@@ -1525,7 +1525,7 @@ func TestBackupRefusesADestinationInUse(t *testing.T) {
 	}
 	defer held.Release()
 
-	out, err := telimus(t, "backup", "-data", dir, "-to", dest)
+	out, err := trew(t, "backup", "-data", dir, "-to", dest)
 	if err == nil {
 		t.Fatalf("backup replaced a store that was in use:\n%s", out)
 	}
@@ -1548,7 +1548,7 @@ func TestBackupRefusesASecondBackupIntoTheSameDirectory(t *testing.T) {
 	}
 	defer held.Release()
 
-	out, err := telimus(t, "backup", "-data", dir, "-to", dest)
+	out, err := trew(t, "backup", "-data", dir, "-to", dest)
 	if err == nil {
 		t.Fatalf("two backups wrote the same directory at once:\n%s", out)
 	}
@@ -1621,7 +1621,7 @@ func TestThePortAnswersBeforeTheStartupSummaryRuns(t *testing.T) {
 //
 // A stop drains in two halves of shutdownTimeout each and then closes the
 // store. Two managers impose their own deadline on top of that and neither
-// knows the arithmetic: systemd's TimeoutStopSec, written by `telimus service`,
+// knows the arithmetic: systemd's TimeoutStopSec, written by `trew service`,
 // and Docker's stop grace, which defaults to ten seconds if compose does not
 // say otherwise. Ten seconds is exactly the two halves with nothing left for
 // closing the store, so a busy shutdown under compose was killed partway
@@ -1640,7 +1640,7 @@ func TestEveryStopDeadlineOutlastsTheShutdownBudget(t *testing.T) {
 	budget := 2*shutdownTimeout + shutdownTimeout
 
 	written := unit(unitArgs{
-		Binary: "/usr/local/bin/telimus", Data: "/var/lib/telimus", User: "telimus",
+		Binary: "/usr/local/bin/trew", Data: "/var/lib/trew", User: "trew",
 		Addr: ":3003", Vault: "default",
 	})
 	var systemdStop time.Duration
@@ -1688,7 +1688,7 @@ func TestEveryStopDeadlineOutlastsTheShutdownBudget(t *testing.T) {
 	}
 }
 
-// `telimus health` says which kind of unwell (I17).
+// `trew health` says which kind of unwell (I17).
 //
 // /health answers one word naming its case, and reporting only "503 Service
 // Unavailable" would collapse "the disk is full" and "we are shutting down"
@@ -1761,7 +1761,7 @@ func TestPurgeRefusesABackupWhoseBodyIsCorrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = telimus(t, "purge", "-data", dir, "-vault", "default", "-confirm", "default", "-backup", dest)
+	_, err = trew(t, "purge", "-data", dir, "-vault", "default", "-confirm", "default", "-backup", dest)
 	if err == nil {
 		t.Fatal("purge accepted a backup holding a body that will not decrypt")
 	}
@@ -1797,7 +1797,7 @@ func TestPurgeRefusesABackupWhoseRecordDiffers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = telimus(t, "purge", "-data", dir, "-vault", "default", "-confirm", "default", "-backup", dest)
+	_, err = trew(t, "purge", "-data", dir, "-vault", "default", "-confirm", "default", "-backup", dest)
 	if err == nil {
 		t.Fatal("purge accepted a backup whose record of a version differs from this store's")
 	}
@@ -1871,7 +1871,7 @@ func TestThePurgeReleasesItsBackupAfterwards(t *testing.T) {
 func TestARefusedBackupCheckDoesNotKeepTheLock(t *testing.T) {
 	dir := seeded(t)
 	dest := t.TempDir() // not a backup at all
-	if _, err := telimus(t, "purge", "-data", dir, "-vault", "default",
+	if _, err := trew(t, "purge", "-data", dir, "-vault", "default",
 		"-confirm", "default", "-backup", dest); err == nil {
 		t.Fatal("purge accepted a directory that is not a backup")
 	}
@@ -1885,7 +1885,7 @@ func TestARefusedBackupCheckDoesNotKeepTheLock(t *testing.T) {
 // And the same for a refusal that happens *after* the lock has been taken.
 //
 // The test above proves less than it reads: an empty directory is turned away
-// by the `telimus.db` stat, which is several steps before `dirlock.Shared`, so
+// by the `trew.db` stat, which is several steps before `dirlock.Shared`, so
 // the error-path release the R23 fix added is never reached. Removing that
 // release entirely left the whole suite green. This one refuses on a check
 // that only happens once the backup is open, which is the branch in question.
@@ -1898,7 +1898,7 @@ func TestABackupRefusedAfterItIsLockedIsStillReleased(t *testing.T) {
 	// refuses only after opening and reading the backup under its lock.
 	appendOne(t, dir, "later.md", "written after the backup")
 
-	if _, err := telimus(t, "purge", "-data", dir, "-vault", "default",
+	if _, err := trew(t, "purge", "-data", dir, "-vault", "default",
 		"-confirm", "default", "-backup", dest); err == nil {
 		t.Fatal("purge accepted a backup that is behind the store")
 	}
@@ -1913,7 +1913,7 @@ func TestABackupRefusedAfterItIsLockedIsStillReleased(t *testing.T) {
 // health, and the exit code is what a retention script reads.
 //
 // The printed line already told the two apart and the status did not, so
-// `telimus verify -deep -data DIR && rm -rf OLD` -- the step docs/server.md
+// `trew verify -deep -data DIR && rm -rf OLD` -- the step docs/server.md
 // documents, written the natural way -- passed over an empty store and deleted
 // the last copy of the history a purge had just dropped.
 func TestVerifyRefusesAStoreItCheckedNothingIn(t *testing.T) {
@@ -1921,7 +1921,7 @@ func TestVerifyRefusesAStoreItCheckedNothingIn(t *testing.T) {
 	// copied the database before it was populated leaves behind, and what a
 	// path typo produces the first time anything opens it.
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -1932,7 +1932,7 @@ func TestVerifyRefusesAStoreItCheckedNothingIn(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	out, verifyErr := telimus(t, "verify", "-deep", "-data", dir)
+	out, verifyErr := trew(t, "verify", "-deep", "-data", dir)
 	if verifyErr == nil {
 		t.Fatalf("verify passed a store it checked nothing in:\n%s", out)
 	}
@@ -1950,7 +1950,7 @@ func TestVerifyPassesAStoreWithEntriesInIt(t *testing.T) {
 	}
 }
 
-// `telimus stats` reports the numbers it exists to report.
+// `trew stats` reports the numbers it exists to report.
 //
 // Two correct changes made it report none of them. Inspection commands open
 // the store read-only (I15); the health probe writes, because a `SELECT 1`
@@ -1996,7 +1996,7 @@ func TestStatsReportsTheDiskItIsAskedAbout(t *testing.T) {
 	}
 }
 
-// `telimus service` reads the store and does not write to it.
+// `trew service` reads the store and does not write to it.
 //
 // It opens one to run a single `SELECT` and was using the writable open, which
 // creates the directory, runs `migrate`, applies the schema and stamps
@@ -2014,7 +2014,7 @@ func TestServicePrintsAUnitAgainstAReadOnlyStore(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dbPath, 0o600) })
 
-	out, err := telimus(t, "service", "-data", dir)
+	out, err := trew(t, "service", "-data", dir)
 	if err != nil {
 		t.Fatalf("service could not print a unit against a store it only reads: %v\n%s", err, out)
 	}
@@ -2038,7 +2038,7 @@ func TestServeSaysNothingAboutListeningWhenItCannotBind(t *testing.T) {
 	}
 	defer func() { _ = held.Close() }()
 
-	out, err := telimus(t, "serve", "-data", dir, "-addr", held.Addr().String())
+	out, err := trew(t, "serve", "-data", dir, "-addr", held.Addr().String())
 	if err == nil {
 		t.Fatalf("serve started on a port that was taken:\n%s", out)
 	}
@@ -2117,7 +2117,7 @@ func TestVerifyDeepSeesATruncatedChunkList(t *testing.T) {
 				}
 			})
 
-			out, err := telimus(t, "verify", "-deep", "-data", dir)
+			out, err := trew(t, "verify", "-deep", "-data", dir)
 			if err == nil {
 				t.Fatalf("verify passed a version it will not serve:\n%s", out)
 			}

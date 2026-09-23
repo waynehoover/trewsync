@@ -1,11 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
-import TelimusPlugin, { type State } from "./main.ts";
+import TrewPlugin, { type State } from "./main.ts";
 import { App, built, FakeEl, modals, resetStub, type Plugin as StubPlugin } from "./stub.ts";
 import { deferred, nextTurn } from "../core/test-async.ts";
 import type { SyncPreview } from "../core/preview.ts";
 
-type Subject = TelimusPlugin & StubPlugin;
+type Subject = TrewPlugin & StubPlugin;
 const plugins: Subject[] = [];
 afterEach(async () => {
   for (const plugin of plugins.splice(0)) {
@@ -18,11 +18,11 @@ afterEach(async () => {
   resetStub();
 });
 async function load() {
-  const plugin = new TelimusPlugin(
+  const plugin = new TrewPlugin(
     new App() as unknown as ObsidianApp,
     {
-      id: "telimus-sync",
-      dir: ".obsidian/plugins/telimus-sync",
+      id: "trew-sync",
+      dir: ".obsidian/plugins/trew-sync",
     } as PluginManifest,
   ) as Subject;
   plugins.push(plugin);

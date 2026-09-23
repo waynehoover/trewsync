@@ -27,7 +27,7 @@ afterEach(async () => {
 
 /** A vault holding one note and two candidate config folders. */
 async function vaultWith(dirs: string[]): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "telimus-configdir-"));
+  const root = await mkdtemp(join(tmpdir(), "trew-configdir-"));
   made.push(root);
   await writeFile(join(root, "note.md"), "a note\n");
   for (const d of dirs) {
@@ -113,7 +113,7 @@ describe("the flags", () => {
  * `vault.ts` cannot import `STATE_DIR` from `config.ts`, because `config.ts`
  * imports `vault.ts` for its durable writes and a five-character constant is
  * not worth a module cycle. So there are two copies, and this is what stops
- * them drifting: a vault writing its lock and index into `.telimus` while its
+ * them drifting: a vault writing its lock and index into `.trew` while its
  * staging and displaced log went to something else would be two state folders
  * with nothing saying so.
  */

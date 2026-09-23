@@ -24,7 +24,7 @@ export async function httpFixture(
     allowOrigins?: string[];
   } = {},
 ) {
-  const root = await mkdtemp(join(tmpdir(), "telimus-http-"));
+  const root = await mkdtemp(join(tmpdir(), "trew-http-"));
   await saveConfig(root, {
     url: "ws://127.0.0.1:1",
     vaultId: "private-http-vault",
@@ -79,7 +79,7 @@ export async function httpFixture(
         authProvider: { token: async () => key },
       });
       const client = new Client(
-        { name: "telimus-http-test", version: "1" },
+        { name: "trew-http-test", version: "1" },
         {
           versionNegotiation: { mode: modern ? { pin: "2026-07-28" } : "legacy" },
         },
@@ -179,7 +179,7 @@ export async function openHttp(
     ...flags,
   ];
   if (launch.denyRead && process.platform === "darwin") {
-    const profile = join(root, ".telimus/mcp-test.sb");
+    const profile = join(root, ".trew/mcp-test.sb");
     await writeFile(
       profile,
       `(version 1)\n(allow default)\n(deny file-read* (subpath ${JSON.stringify(launch.denyRead)}))\n`,
@@ -229,7 +229,7 @@ export async function openHttp(
       authProvider: { token: async () => key },
     });
     const client = new Client(
-      { name: "telimus-child-http-test", version: "1" },
+      { name: "trew-child-http-test", version: "1" },
       {
         versionNegotiation: { mode: modern ? { pin: "2026-07-28" } : "legacy" },
       },

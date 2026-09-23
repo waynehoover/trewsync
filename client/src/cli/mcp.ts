@@ -14,13 +14,13 @@ export async function cmdMcp(args: Args, io: Console, version: string): Promise<
       roots.map(async (root) => {
         const config = await loadConfig(root.dir);
         if (!config)
-          throw new Error(`${root.id} is not paired. Run telimus init or telimus pair first.`);
+          throw new Error(`${root.id} is not paired. Run trew init or trew pair first.`);
         return config;
       }),
     );
     const listen = args.mcpListen === undefined ? undefined : parseMcpListen(args.mcpListen);
     if (args.mcpWritable && (args.readOnly || configs.some((config) => config.readOnly))) {
-      io.err("telimus mcp: --writable cannot override a read-only device");
+      io.err("trew mcp: --writable cannot override a read-only device");
       return 2;
     }
     const credentialRoot = roots[0]!.dir;
@@ -29,7 +29,7 @@ export async function cmdMcp(args: Args, io: Console, version: string): Promise<
         await readMcpToken(credentialRoot);
       } catch {
         throw new Error(
-          "HTTP MCP requires a readable credential. Run telimus mcp-token for the first configured vault.",
+          "HTTP MCP requires a readable credential. Run trew mcp-token for the first configured vault.",
         );
       }
     }
@@ -45,7 +45,7 @@ export async function cmdMcp(args: Args, io: Console, version: string): Promise<
     function stop(error?: Error) {
       if (error) {
         exitCode = 1;
-        io.err(`telimus mcp: ${error.message.slice(0, 1024)}`);
+        io.err(`trew mcp: ${error.message.slice(0, 1024)}`);
       }
       if (stopping) return;
       stopping = true;
@@ -87,7 +87,7 @@ export async function cmdMcp(args: Args, io: Console, version: string): Promise<
               `WARNING: ${args.mcpListen} carries plaintext notes and credentials. Use a trusted network and a TLS proxy.`,
             );
           io.err(
-            `telimus mcp: HTTP listening on ${args.mcpListen}, ${sessions.map((item, index) => `${roots[index]!.id}: ${item.session.mode}`).join(", ")}`,
+            `trew mcp: HTTP listening on ${args.mcpListen}, ${sessions.map((item, index) => `${roots[index]!.id}: ${item.session.mode}`).join(", ")}`,
           );
         } else {
           protocol = startStdio(

@@ -50,7 +50,7 @@ def b64(raw: bytes) -> str:
 
 
 def token_for(device: str) -> str:
-    return b64(hashlib.sha256(f"telimus transcript token for {device}".encode()).digest())
+    return b64(hashlib.sha256(f"trew transcript token for {device}".encode()).digest())
 
 
 DEVICES = {

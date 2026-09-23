@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/store"
 )
 
-// `telimus verify -deep` names a version whose declared size its chunks do not
+// `trew verify -deep` names a version whose declared size its chunks do not
 // hold, and fails; a shallow verify does not open the bodies and passes.
 func TestVerifyDeepNamesAVersionOfTheWrongSize(t *testing.T) {
 	dir := seeded(t)
@@ -19,7 +19,7 @@ func TestVerifyDeepNamesAVersionOfTheWrongSize(t *testing.T) {
 		}
 	})
 	mustRun(t, "verify", "-data", dir)
-	out, err := telimus(t, "verify", "-deep", "-data", dir)
+	out, err := trew(t, "verify", "-deep", "-data", dir)
 	if err == nil {
 		t.Fatalf("verify -deep passed a version of the wrong size:\n%s", out)
 	}

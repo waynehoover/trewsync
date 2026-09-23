@@ -90,14 +90,14 @@ import type { StoredState } from "../core/vault.ts";
 /**
  * The client's release, written in by the build.
  *
- * esbuild defines it from package.json when it makes `dist/telimus.mjs`, so the
+ * esbuild defines it from package.json when it makes `dist/trew.mjs`, so the
  * one file somebody installs says which release it is and the version matrix
  * in docs/server.md has a number to name. Under the test runner nothing
  * defines it and the fallback says so rather than inventing a number.
  */
-declare const __TELIMUS_VERSION__: string | undefined;
+declare const __TREW_VERSION__: string | undefined;
 export const VERSION: string =
-  typeof __TELIMUS_VERSION__ === "string" ? __TELIMUS_VERSION__ : "development";
+  typeof __TREW_VERSION__ === "string" ? __TREW_VERSION__ : "development";
 
 /** Where output goes, so a test can read it. */
 export interface Console {
@@ -105,31 +105,31 @@ export interface Console {
   err(line: string): void;
 }
 
-export const USAGE = `telimus: self-hosted sync for Obsidian
+export const USAGE = `trew: self-hosted sync for Obsidian
 
-  telimus init HOST:PORT#TOKEN               start a new vault, with the line the server printed
-  telimus invite                             print a single-use invite for another device
-  telimus uninvite ID                        cancel an outstanding invite, from telimus devices
-  telimus pair INVITE                        add this device to a vault, with an invite or its
+  trew init HOST:PORT#TOKEN               start a new vault, with the line the server printed
+  trew invite                             print a single-use invite for another device
+  trew uninvite ID                        cancel an outstanding invite, from trew devices
+  trew pair INVITE                        add this device to a vault, with an invite or its
                                             recovery key
-  telimus sync                               sync once and exit
-  telimus sync --watch                       sync, then keep syncing
-  telimus mcp                                serve notes over stdio, or HTTP with --listen
-  telimus mcp-token                          issue or rotate the HTTP MCP credential
-  telimus status                             what this device thinks the state is
-  telimus preview                            show planned sync changes without writing notes
-  telimus devices                            every device that may reach this vault
-  telimus rename NAME                        change this device's name in the device list
-  telimus revoke ID                          stop one device connecting, from telimus devices
-  telimus deleted                            notes the server still has and you do not
-  telimus history PATH                       every version the server holds of one note
-  telimus restore PATH                       put a note back, newest version first
-  telimus repair                             resend bodies the server has lost, from this device
-  telimus rotate RECOVERY-KEY                give the vault a new secret, keeping its history
-  telimus rebase --backup-taken              rejoin a server restored from an older backup
-  telimus unlink                             forget the pairing, keep the notes
-  telimus unlock                             clear a lock left behind by a telimus that crashed
-  telimus --version                          which release this is
+  trew sync                               sync once and exit
+  trew sync --watch                       sync, then keep syncing
+  trew mcp                                serve notes over stdio, or HTTP with --listen
+  trew mcp-token                          issue or rotate the HTTP MCP credential
+  trew status                             what this device thinks the state is
+  trew preview                            show planned sync changes without writing notes
+  trew devices                            every device that may reach this vault
+  trew rename NAME                        change this device's name in the device list
+  trew revoke ID                          stop one device connecting, from trew devices
+  trew deleted                            notes the server still has and you do not
+  trew history PATH                       every version the server holds of one note
+  trew restore PATH                       put a note back, newest version first
+  trew repair                             resend bodies the server has lost, from this device
+  trew rotate RECOVERY-KEY                give the vault a new secret, keeping its history
+  trew rebase --backup-taken              rejoin a server restored from an older backup
+  trew unlink                             forget the pairing, keep the notes
+  trew unlock                             clear a lock left behind by a trew that crashed
+  trew --version                          which release this is
 
 Options
   --dir DIR        the vault (default: the current directory)
@@ -157,7 +157,7 @@ Options
   --recovery-key K run devices, revoke or uninvite with the vault's recovery key instead of this
                    device's credential, for the last device and for a vault with no device to ask
   --ttl DURATION   how long an invite lasts, like 10m or 1h (default: 10m, at most 1h)
-  --uid N          restore one exact version, from telimus history
+  --uid N          restore one exact version, from trew history
   --to PATH        restore somewhere other than where it came from
   --limit N        how many versions history or deleted shows (default: 20, or all deletions)
   --before UID     for history or deleted: the page before this version
@@ -198,7 +198,7 @@ export async function run(argv: readonly string[], io: Console): Promise<number>
   } catch (err) {
     const error = (err as Error).message;
     if (args.json) io.out(JSON.stringify({ ok: false, error }));
-    else io.err(`telimus: ${error}`);
+    else io.err(`trew: ${error}`);
     return 2;
   }
 
@@ -265,7 +265,7 @@ export async function run(argv: readonly string[], io: Console): Promise<number>
     // be readable.
     const message = withRecovery(err);
     if (args.json) io.out(JSON.stringify({ ok: false, error: message }));
-    else io.err(`telimus: ${message}`);
+    else io.err(`trew: ${message}`);
     return 1;
   }
 }
@@ -309,7 +309,7 @@ function unknownRecovery(vault: { recovery?: Inventory } | undefined): string | 
 
 /** Runs a command that changes the vault under the vault's lock. */
 async function locked(args: Args, command: () => Promise<number>): Promise<number> {
-  const release = await lockVault(args.dir, `telimus ${args.command ?? ""}`.trim());
+  const release = await lockVault(args.dir, `trew ${args.command ?? ""}`.trim());
   try {
     return await command();
   } finally {
@@ -405,7 +405,7 @@ async function cmdInit(args: Args, io: Console): Promise<number> {
     say("");
     say("It is shown once and this device does not keep it: what is on disk here is this");
     say("device's own credential, which can be revoked on its own. Adding a device does not");
-    say("need it, telimus invite does that; the recovery key replaces the vault's secret and is");
+    say("need it, trew invite does that; the recovery key replaces the vault's secret and is");
     say("the only way back if every device is lost. Anyone who has it has the vault, and the");
     say("server has never seen it.");
     say("");
@@ -441,7 +441,7 @@ async function cmdInit(args: Args, io: Console): Promise<number> {
     // the row the registration may already have committed: pairing again
     // registers a second one without explaining the abandoned registration. state.test.ts, "names the row a failed init left".
     const remains = await whatTheDiskHolds(() => loadConfig(args.dir));
-    io.err("telimus: the vault was started but this device could not register itself with it:");
+    io.err("trew: the vault was started but this device could not register itself with it:");
     io.err(`  ${(err as Error).message}`);
     io.err("Write this recovery key down now, before anything else:");
     io.err(`  ${recoveryKey}`);
@@ -491,11 +491,11 @@ async function joinVault(
 export function deviceNameFor(args: Args): string {
   // A name somebody typed is theirs, and one that is too long is refused
   // rather than shortened: it goes beside their notes in a conflict copy and
-  // in `telimus devices`, so quietly handing back a different one is worse
+  // in `trew devices`, so quietly handing back a different one is worse
   // than saying no. `checkName` does the refusing.
   if (args.deviceGiven) return args.device;
 
-  // A derived one is not theirs, and refusing it means `telimus init` fails on
+  // A derived one is not theirs, and refusing it means `trew init` fails on
   // a machine whose only crime is a long hostname. That is what happened: a
   // runner with a 61-character hostname produced a 66-byte default and every
   // pairing test failed with "the device name is 66 bytes". Nobody chose that
@@ -542,7 +542,7 @@ async function refuseIfPaired(dir: string): Promise<void> {
   if (await orphanedIndex(dir)) {
     throw new Error(
       `${dir} is not paired but still holds an index at ${indexPath(dir)}, ` +
-        `left by an unlink that did not finish. Run telimus unlink to clear it, then pair again.`,
+        `left by an unlink that did not finish. Run trew unlink to clear it, then pair again.`,
     );
   }
 }
@@ -561,8 +561,8 @@ async function refuseIfPaired(dir: string): Promise<void> {
  * server transaction, so there is nothing to write until it has answered: the
  * id and the key it registered are made in that call and come back with the
  * data key. A crash before the reply lands leaves this vault unpaired and one
- * row on the server that nobody holds the key to, which shows up in `telimus
- * devices` as a device that has never connected and goes with `telimus revoke`.
+ * row on the server that nobody holds the key to, which shows up in `trew
+ * devices` as a device that has never connected and goes with `trew revoke`.
  * The alternative order strands this device instead; see `redeemInvite`.
  *
  * A **recovery key** buys a registrar session: it may register a device and
@@ -627,10 +627,10 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
       }),
     );
   } else {
-    io.out(`Paired ${args.dir} with ${paired.url} as "${paired.device}". Run telimus sync.`);
+    io.out(`Paired ${args.dir} with ${paired.url} as "${paired.device}". Run trew sync.`);
     io.out(
       `This device has its own credential now, and not the recovery key: ` +
-        `telimus revoke ${paired.deviceId} on any device stops it connecting.`,
+        `trew revoke ${paired.deviceId} on any device stops it connecting.`,
     );
   }
   return 0;
@@ -686,10 +686,10 @@ async function pairWithInvite(invite: Invite, args: Args, io: Console): Promise<
       }),
     );
   } else {
-    io.out(`Paired ${args.dir} with ${config.url} as "${config.device}". Run telimus sync.`);
+    io.out(`Paired ${args.dir} with ${config.url} as "${config.device}". Run trew sync.`);
     io.out(
       `This device has its own credential, and not the vault's recovery key: ` +
-        `telimus revoke ${config.deviceId} on any device stops it connecting.`,
+        `trew revoke ${config.deviceId} on any device stops it connecting.`,
     );
   }
   return 0;
@@ -721,7 +721,7 @@ async function cmdInvite(args: Args, io: Console): Promise<number> {
   }
   io.out(issued.invite);
   io.out("");
-  io.out(`Paste it into telimus pair, or into the Telimus panel, on the new device.`);
+  io.out(`Paste it into trew pair, or into the Trew panel, on the new device.`);
   io.out(`It works once and expires at ${when(issued.expiresAt)}.`);
   return 0;
 }
@@ -755,18 +755,18 @@ async function mustReadBack(dir: string, config: Config): Promise<void> {
 }
 
 /**
- * What `telimus recovery-key` says now, and why there is nothing to print.
+ * What `trew recovery-key` says now, and why there is nothing to print.
  *
  * It used to print the vault's root secret out of this device's config. No
  * device holds one since protocol 4, which is the whole of why revoking one
  * means anything, so the command has nothing to read. Adding a device is
- * `telimus invite`, which is what it was for anyway.
+ * `trew invite`, which is what it was for anyway.
  */
 const NO_RECOVERY_KEY =
   "this device does not hold the vault's recovery key. It was shown once, when the vault was " +
   "started, and it is not on any device on purpose: a device that held it could re-derive " +
   "the vault's credential and register itself again, so revoking it would stop nothing. " +
-  "To add a device, run telimus invite here. If the recovery key is lost, telimus rotate needs " +
+  "To add a device, run trew invite here. If the recovery key is lost, trew rotate needs " +
   "the old one, so there is nothing this can print.";
 
 /**
@@ -835,7 +835,7 @@ async function cmdDevices(args: Args, io: Console): Promise<number> {
     }
     for (const d of devices) {
       const mine = d.id === thisDevice ? "  (this device)" : "";
-      // The id first, because it is what `telimus revoke` takes and the name
+      // The id first, because it is what `trew revoke` takes and the name
       // is not: two laptops may both be called laptop, and a list that put
       // the name where the identity goes would invite revoking the wrong one.
       io.out(
@@ -848,7 +848,7 @@ async function cmdDevices(args: Args, io: Console): Promise<number> {
       maxDevices > 0
         ? `${devices.length} of at most ${maxDevices} devices`
         : `${devices.length} ${devices.length === 1 ? "device" : "devices"}`;
-    io.out(`${count}. telimus revoke ID stops one.`);
+    io.out(`${count}. trew revoke ID stops one.`);
     const stale = devices.filter((d) => d.lastSeen === 0);
     if (stale.length > 0) {
       io.out(
@@ -863,7 +863,7 @@ async function cmdDevices(args: Args, io: Console): Promise<number> {
       "it still holds the vault's key and can decrypt later encrypted content obtained elsewhere.",
     );
     io.out(
-      "If the recovery key was exposed, use telimus rotate. Rotation does not change the data key.",
+      "If the recovery key was exposed, use trew rotate. Rotation does not change the data key.",
     );
     // The invites, beside the rows, because they are the same question. A row
     // is a device that was added and an outstanding invite is one about to be:
@@ -879,7 +879,7 @@ async function cmdDevices(args: Args, io: Console): Promise<number> {
       io.out("");
       io.out(
         `${invites.length} outstanding ${invites.length === 1 ? "invite" : "invites"}. Each one ` +
-          `registers one device and then stops working. telimus uninvite ID cancels one you did ` +
+          `registers one device and then stops working. trew uninvite ID cancels one you did ` +
           `not mean to issue.`,
       );
     }
@@ -900,7 +900,7 @@ async function cmdDevices(args: Args, io: Console): Promise<number> {
  */
 async function cmdUninvite(args: Args, io: Console): Promise<number> {
   const invite = await secretFrom(args.rest[0], args, "the invite");
-  if (!invite) throw new Error("uninvite needs an invite id, from telimus devices");
+  if (!invite) throw new Error("uninvite needs an invite id, from trew devices");
   const canceller = await openRevoker(args, io);
   try {
     await canceller.uninvite(invite);
@@ -911,7 +911,7 @@ async function cmdUninvite(args: Args, io: Console): Promise<number> {
       // real one. What it can say is where to look.
       throw new Error(
         `this vault has no outstanding invite ${invite}: it may have expired, or been redeemed, ` +
-          `in which case it is a device row now. telimus devices shows both.`,
+          `in which case it is a device row now. trew devices shows both.`,
       );
     }
     throw err;
@@ -925,7 +925,7 @@ async function cmdUninvite(args: Args, io: Console): Promise<number> {
   io.out(`Cancelled ${invite}. That string no longer adds a device.`);
   io.out(
     "It does not touch a device already added with it. If it was redeemed before this, the " +
-      "device it added is a row in telimus devices, and telimus revoke ID is what stops that.",
+      "device it added is a row in trew devices, and trew revoke ID is what stops that.",
   );
   return 0;
 }
@@ -1033,9 +1033,9 @@ async function openDeviceList(
  */
 async function cmdRename(args: Args, io: Console): Promise<number> {
   const name = args.rest[0];
-  if (!name) throw new Error("rename needs a name: telimus rename laptop");
+  if (!name) throw new Error("rename needs a name: trew rename laptop");
   // `deviceGiven`, because this name was typed. Without it `deviceNameFor`
-  // takes the derived path and appends a random tail, so `telimus rename laptop`
+  // takes the derived path and appends a random tail, so `trew rename laptop`
   // would have produced `laptop-3f9c`: a name nobody asked for, quietly. A
   // typed name is refused rather than shortened, which is what `checkName`
   // does below and what the server does again.
@@ -1078,14 +1078,14 @@ async function cmdRename(args: Args, io: Console): Promise<number> {
 
 async function cmdRevoke(args: Args, io: Console): Promise<number> {
   const deviceId = args.rest[0];
-  if (!deviceId) throw new Error("revoke needs a device id, from telimus devices");
+  if (!deviceId) throw new Error("revoke needs a device id, from trew devices");
   // Refused here as well as at the server, so somebody who typed it gets the
   // whole command back rather than a round trip and a refusal. The server's
   // is the one that enforces it; this one is the one that helps.
   if (args.allowLast && args.recoveryKey === undefined) {
     throw new Error(
       `--allow-last leaves a vault only its recovery key can reach, and it is the one revocation ` +
-        `no device can undo, so it takes that key: telimus revoke ${deviceId} --allow-last ` +
+        `no device can undo, so it takes that key: trew revoke ${deviceId} --allow-last ` +
         `--recovery-key basalt3_...`,
     );
   }
@@ -1097,7 +1097,7 @@ async function cmdRevoke(args: Args, io: Console): Promise<number> {
     if (err instanceof ProtocolError && err.code === "nodevice") {
       throw new Error(
         `this vault has no device with id ${deviceId}, so the list you were reading is stale. ` +
-          `Run telimus devices again.`,
+          `Run trew devices again.`,
       );
     }
     if (err instanceof ProtocolError && err.code === "badentry" && !args.allowLast) {
@@ -1107,9 +1107,9 @@ async function cmdRevoke(args: Args, io: Console): Promise<number> {
       const said = err.message.replace(/; resend with allowLast.*$/, "");
       throw new Error(
         args.recoveryKey !== undefined
-          ? `${said}. Say it out loud to do it anyway: telimus revoke ${deviceId} --allow-last ` +
+          ? `${said}. Say it out loud to do it anyway: trew revoke ${deviceId} --allow-last ` +
               `--recovery-key basalt3_...`
-          : `${said}. That is the recovery key's to do, not a device's: telimus revoke ${deviceId} ` +
+          : `${said}. That is the recovery key's to do, not a device's: trew revoke ${deviceId} ` +
               `--allow-last --recovery-key basalt3_...`,
       );
     }
@@ -1126,13 +1126,13 @@ async function cmdRevoke(args: Args, io: Console): Promise<number> {
     "It still holds the vault's key and can decrypt later encrypted content obtained elsewhere.",
   );
   io.out(
-    "If the recovery key was exposed, use telimus rotate. Rotation does not change the data key.",
+    "If the recovery key was exposed, use trew rotate. Rotation does not change the data key.",
   );
   if (self) {
     io.out("");
     io.out(
-      `That was this device. It has stopped syncing; run telimus unlink here to forget the pairing, ` +
-        `then telimus pair RECOVERY-KEY to add it again if needed.`,
+      `That was this device. It has stopped syncing; run trew unlink here to forget the pairing, ` +
+        `then trew pair RECOVERY-KEY to add it again if needed.`,
     );
   }
   return 0;
@@ -1160,7 +1160,7 @@ async function cmdRotate(args: Args, io: Console): Promise<number> {
   if (!given) {
     throw new Error(
       "rotate needs the vault's current recovery key, which no device holds: " +
-        "telimus rotate basalt3_...",
+        "trew rotate basalt3_...",
     );
   }
   const config = await mustLoad(args.dir);
@@ -1195,7 +1195,7 @@ async function cmdRotate(args: Args, io: Console): Promise<number> {
         // success block below, because somebody watching a timeout needs to
         // know the key they were shown is the live one.
         io.err(
-          "telimus: the reply was lost, but the rotation did commit. The key above is the vault's.",
+          "trew: the reply was lost, but the rotation did commit. The key above is the vault's.",
         );
       }
       return finishRotate(rotation.recoveryKey, args, io);
@@ -1207,7 +1207,7 @@ async function cmdRotate(args: Args, io: Console): Promise<number> {
       );
     case "unknown":
       throw new Error(
-        `${rotation.why}. Keep both keys and run telimus rotate again with whichever one the ` +
+        `${rotation.why}. Keep both keys and run trew rotate again with whichever one the ` +
           `server accepts.`,
       );
   }
@@ -1229,7 +1229,7 @@ function finishRotate(recoveryKey: string, args: Args, io: Console): number {
   io.out("");
   io.out("Every device keeps syncing: a rotation replaces the vault's secret and touches no");
   io.out("device row. It cannot un-read what a lost device already read, so revoke that device");
-  io.out("too, with telimus devices and telimus revoke ID.");
+  io.out("too, with trew devices and trew revoke ID.");
   return 0;
 }
 
@@ -1264,7 +1264,7 @@ async function cmdRebase(args: Args, io: Console): Promise<number> {
   if (!args.backupTaken) {
     throw new Error(
       `the server is at ${serverCursor} and this device has applied ${local}: the server has lost history. ` +
-        `Take a backup of the server (telimus backup) and of this vault, then run telimus rebase --backup-taken`,
+        `Take a backup of the server (trew backup) and of this vault, then run trew rebase --backup-taken`,
     );
   }
 
@@ -1364,11 +1364,11 @@ async function cmdSync(args: Args, io: Console): Promise<number> {
  * Three ways in, and the argument is still one of them because taking it away
  * would make the common case worse for no gain:
  *
- *   telimus pair basalt3i_...        the argument, as before
- *   telimus pair -                   standard input, for a pipe
- *   telimus pair --key-file ./k      a file, which is what a script should use
+ *   trew pair basalt3i_...        the argument, as before
+ *   trew pair -                   standard input, for a pipe
+ *   trew pair --key-file ./k      a file, which is what a script should use
  *
- * `-` reads to end of input and trims, so `printf %s "$KEY" | telimus pair -`
+ * `-` reads to end of input and trims, so `printf %s "$KEY" | trew pair -`
  * and a here-doc both work. A file is read whole and trimmed for the same
  * reason. Neither is logged, and neither is echoed back.
  */
@@ -1494,7 +1494,7 @@ async function watchForever(config: Config, args: Args, io: Console): Promise<nu
         );
       },
       onSyncFailed: (err) => {
-        io.err(`telimus: a sync failed: ${err.message}. It will try again.`);
+        io.err(`trew: a sync failed: ${err.message}. It will try again.`);
       },
     },
     {
@@ -1527,7 +1527,7 @@ async function watchForever(config: Config, args: Args, io: Console): Promise<nu
     },
   );
   if (fatal) {
-    io.err(`telimus: ${withRecovery(fatal)}`);
+    io.err(`trew: ${withRecovery(fatal)}`);
     io.err("That will not fix itself by trying again.");
     return 1;
   }
@@ -1764,7 +1764,7 @@ async function cmdStatus(args: Args, io: Console): Promise<number> {
     io.out(`unknown  ${local.recoveryUnknown}. There may be versions waiting that are not listed.`);
   }
   if (local.stranded.length > 0) {
-    // The paths, not a directory (R50). This said `.telimus/tmp` because that
+    // The paths, not a directory (R50). This said `.trew/tmp` because that
     // was where the only kind of stranded version lived; a preservation claim
     // that fails now leaves one beside the note it came from, and somebody
     // following the printed path found an empty directory while the only copy
@@ -1773,7 +1773,7 @@ async function cmdStatus(args: Args, io: Console): Promise<number> {
     io.out(`kept     ${local.stranded.length} version(s) this client could not put back:`);
     // With the reason where there is one. A path on its own says a file is
     // there and not which note it came off or why, which is a person opening
-    // `note.md..telimus-tmp-keep3f9c` to find out.
+    // `note.md..trew-tmp-keep3f9c` to find out.
     const known = new Map(local.displaced.map((d) => [d.at, d]));
     for (const at of local.stranded) {
       io.out(`  ${join(args.dir, at)}`);
@@ -1839,7 +1839,7 @@ async function cmdStatus(args: Args, io: Console): Promise<number> {
 /**
  * Sends the server bodies it has lost, without writing a version (I14).
  *
- * `telimus verify` finds a chunk the disk rotted or the server quarantined, and
+ * `trew verify` finds a chunk the disk rotted or the server quarantined, and
  * says it is waiting for a device to resend it. Nothing did. A device whose copy
  * of the note has not changed is correct to consider it synced: the entry is
  * committed, the hashes agree, and a pass has nothing to do. It is holding the
@@ -1895,7 +1895,7 @@ async function cmdRepair(args: Args, io: Console): Promise<number> {
     io.out("");
     io.out(
       "This repairs what this device holds. Run it on your other devices too, then " +
-        "`telimus verify` on the server for what is still missing: history this device " +
+        "`trew verify` on the server for what is still missing: history this device " +
         "never had is not visible from here.",
     );
     return wrong ? 1 : 0;
@@ -1937,7 +1937,7 @@ async function cmdDeleted(args: Args, io: Console): Promise<number> {
     const recoverable = gone.notes.length - lost;
     if (lost === 0) {
       io.out(
-        `${recoverable} deleted, all still recoverable. telimus restore PATH brings one back.`,
+        `${recoverable} deleted, all still recoverable. trew restore PATH brings one back.`,
       );
     } else {
       io.out(
@@ -1953,7 +1953,7 @@ async function cmdDeleted(args: Args, io: Console): Promise<number> {
     // it, and it is the same flag `history` pages with.
     if (gone.more && gone.oldest !== undefined) {
       io.out(
-        `There are older deletions than these. telimus deleted --before ${gone.oldest} ` +
+        `There are older deletions than these. trew deleted --before ${gone.oldest} ` +
           "shows the page before this one.",
       );
     }
@@ -2029,8 +2029,8 @@ async function cmdHistory(args: Args, io: Console): Promise<number> {
           `so --limit ${args.limit} was capped there.`,
       );
     }
-    io.out("telimus restore PATH --uid N brings one of these back.");
-    if (nextBefore !== null) io.out(`Older versions: telimus history PATH --before ${nextBefore}`);
+    io.out("trew restore PATH --uid N brings one of these back.");
+    if (nextBefore !== null) io.out(`Older versions: trew history PATH --before ${nextBefore}`);
     return 0;
   } finally {
     await client.close();
@@ -2101,7 +2101,7 @@ async function cmdRestore(args: Args, io: Console): Promise<number> {
       } else {
         sayRestored();
         io.err(
-          `The restored copy is on this device, but sync did not finish: ${error}. Run telimus sync to retry.`,
+          `The restored copy is on this device, but sync did not finish: ${error}. Run trew sync to retry.`,
         );
       }
       return 1;
@@ -2143,7 +2143,7 @@ async function cmdRestore(args: Args, io: Console): Promise<number> {
       io.out("The restored copy stays on this device because it is read-only.");
     } else {
       io.out(
-        "The restored copy has not been acknowledged by the server. Run telimus sync to retry.",
+        "The restored copy has not been acknowledged by the server. Run trew sync to retry.",
       );
     }
     if (exitCodeFor(report, client.vault) !== 0) {
@@ -2174,11 +2174,11 @@ async function cmdRestore(args: Args, io: Console): Promise<number> {
  * when the server does not, which is half of what somebody reaches for it for,
  * and a version of it that needed a connection would fail exactly then. The
  * cost is a row this device leaves behind, so the row's id is printed: that is
- * what `telimus revoke` takes, and a list somebody cannot act on is worse than
+ * what `trew revoke` takes, and a list somebody cannot act on is worse than
  * no list.
  */
 /**
- * Clears a lock left behind by a telimus that is not running any more.
+ * Clears a lock left behind by a trew that is not running any more.
  *
  * This exists because taking a lock over automatically was wrong five times
  * (R03, R34, R40, R44, R49), each attempt handing one vault to two writers.
@@ -2212,10 +2212,10 @@ async function cmdUnlock(args: Args, io: Console): Promise<number> {
       io.out(`the lock is clear: ${outcome.why}.`);
       return 0;
     case "refused":
-      io.err(`telimus: the lock was not cleared, because ${outcome.why}.`);
+      io.err(`trew: the lock was not cleared, because ${outcome.why}.`);
       return 1;
     case "contested":
-      io.err(`telimus: ${outcome.why}.`);
+      io.err(`trew: ${outcome.why}.`);
       return 1;
   }
 }
@@ -2250,7 +2250,7 @@ async function cmdUnlink(args: Args, io: Console): Promise<number> {
     io.out(`The pairing is gone from this disk, but flushing that removal failed: ${notDurable}`);
     io.out(
       "If the machine loses power before the filesystem catches up, the pairing may come back. " +
-        "Check the disk, and run `telimus unlink` again if it does.",
+        "Check the disk, and run `trew unlink` again if it does.",
     );
   }
   io.out("Nothing was removed from the server.");
@@ -2259,7 +2259,7 @@ async function cmdUnlink(args: Args, io: Console): Promise<number> {
     io.out(
       `This device is still in the vault's device list as ${config.deviceId}. Nothing here can ` +
         `remove it now, because the credential for it has just been forgotten: run ` +
-        `telimus revoke ${config.deviceId} on a device that still syncs.`,
+        `trew revoke ${config.deviceId} on a device that still syncs.`,
     );
   }
   return 0;
@@ -2321,7 +2321,7 @@ export function renderReport(
    * Versions this vault took off a note and could not put anywhere, as
    * vault-relative paths.
    *
-   * Reported here as well as by `status`, because somebody who runs `telimus
+   * Reported here as well as by `status`, because somebody who runs `trew
    * sync` on a timer and reads nothing else was never told (R46, R50). These
    * do not clear themselves: they wait for a person.
    */
@@ -2421,7 +2421,7 @@ export function renderReport(
   }
   // And versions this pass took off a note and could not put anywhere, which
   // `status` reports and a watcher never would have: somebody who runs
-  // `telimus sync` on a timer and nothing else was never told (R46, R50).
+  // `trew sync` on a timer and nothing else was never told (R46, R50).
   if (recoveryUnknown !== undefined) {
     io.out("");
     io.out(`  ${recoveryUnknown}. There may be versions waiting that are not listed.`);
@@ -2596,7 +2596,7 @@ export function parseArgs(argv: readonly string[]): Args {
       continue;
     }
     // Everything after `--` is a word rather than an option. A device id is
-    // base64url and base64url's alphabet includes `-`, so `telimus revoke
+    // base64url and base64url's alphabet includes `-`, so `trew revoke
     // -Xy...` was refused with "no such option" and there was no way to say
     // what was meant. Ids made here no longer start with one; ids from
     // anywhere else still can.
@@ -2765,7 +2765,7 @@ export function parseArgs(argv: readonly string[]): Args {
 
 async function mustLoad(dir: string): Promise<Config> {
   const config = await loadConfig(dir);
-  if (!config) throw new Error(`${dir} is not paired. Run telimus init or telimus pair first.`);
+  if (!config) throw new Error(`${dir} is not paired. Run trew init or trew pair first.`);
   return config;
 }
 

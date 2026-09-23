@@ -32,7 +32,7 @@ import {
   notices,
   resetStub,
 } from "./stub.ts";
-import TelimusPlugin, { connectionDetail, describeConnection, describeDeleted } from "./main.ts";
+import TrewPlugin, { connectionDetail, describeConnection, describeDeleted } from "./main.ts";
 import { describeRestore } from "./history.ts";
 import { Engine, type SyncReport } from "../core/engine.ts";
 import { Client, redeemInvite } from "../core/client.ts";
@@ -62,7 +62,7 @@ afterAll(async () => {
  * against the real declarations, on purpose, and the stub is a different class
  * that happens to have the same shape. Doing it in one place keeps it honest.
  */
-type Testable = TelimusPlugin & StubPlugin;
+type Testable = TrewPlugin & StubPlugin;
 
 /**
  * The recovery key `pairFirst` returned, kept for the tests that add a second
@@ -87,9 +87,9 @@ const keyOf = (plugin: Testable): string => {
 
 function makePlugin(
   app: App,
-  manifest: { id: string; dir?: string } = { id: "telimus", dir: ".obsidian/plugins/telimus" },
+  manifest: { id: string; dir?: string } = { id: "trew", dir: ".obsidian/plugins/trew" },
 ): Testable {
-  return new TelimusPlugin(
+  return new TrewPlugin(
     app as unknown as ObsidianApp,
     manifest as unknown as PluginManifest,
   ) as unknown as Testable;
@@ -236,14 +236,14 @@ const containsElement = (root: FakeEl, target: FakeEl): boolean =>
 /** Which glyph it chose, which is the other half of what it says. */
 const statusIcon = (p: Testable) =>
   p.statusBarItems[0]?.children
-    .find((c) => c.cls.includes("telimus-status-icon"))
+    .find((c) => c.cls.includes("trew-status-icon"))
     ?.attributes.get("data-icon") ?? "";
 
 describe("loading", () => {
   it("comes up unpaired, and says so", async () => {
     const { plugin } = await load();
     expect(plugin.paired).toBe(false);
-    expect(status(plugin)).toBe("Telimus Sync: Not paired.");
+    expect(status(plugin)).toBe("Trew Sync: Not paired.");
     expect(statusIcon(plugin)).toBe("link");
   });
 
@@ -260,14 +260,14 @@ describe("loading", () => {
       "verify-contents",
       "version-history",
     ]);
-    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["Telimus Sync"]);
+    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["Trew Sync"]);
     expect(plugin.statusBarItems.length).toBe(1);
     // create, modify, delete, rename. Without these it only syncs on a timer.
     expect(app.vault.handlerCount()).toBe(4);
     // Those four, plus the file-menu entry that puts history where somebody
     // already looks for it.
     expect(plugin.registeredEvents.length).toBe(5);
-    expect([...plugin.cliHandlers.keys()].sort()).toEqual(["telimus:history", "telimus:restore"]);
+    expect([...plugin.cliHandlers.keys()].sort()).toEqual(["trew:history", "trew:restore"]);
   });
 
   /**
@@ -337,7 +337,7 @@ describe("where its own state goes", () => {
     await startVault(plugin, "laptop");
     await synced(plugin);
 
-    expect(app.vault.adapter.filePaths()).toContain(".obsidian/plugins/telimus/index.json");
+    expect(app.vault.adapter.filePaths()).toContain(".obsidian/plugins/trew/index.json");
     // Nothing of the plugin's leaked into the vault proper.
     const inVault = app.vault.adapter.filePaths().filter((p) => !p.startsWith(".obsidian/"));
     expect(inVault).toEqual(["note.md"]);
@@ -347,14 +347,14 @@ describe("where its own state goes", () => {
     await fresh();
     const { plugin, app } = await load(
       null,
-      { id: "telimus", dir: ".my-config/plugins/telimus" },
+      { id: "trew", dir: ".my-config/plugins/trew" },
       ".my-config",
     );
     app.vault.adapter.seed("note.md", "x");
     await startVault(plugin, "laptop");
     await synced(plugin);
 
-    expect(app.vault.adapter.filePaths()).toContain(".my-config/plugins/telimus/index.json");
+    expect(app.vault.adapter.filePaths()).toContain(".my-config/plugins/trew/index.json");
     expect(app.vault.adapter.filePaths().filter((p) => !p.startsWith(".my-config/"))).toEqual([
       "note.md",
     ]);
@@ -368,12 +368,12 @@ describe("where its own state goes", () => {
    */
   it("works out where it lives when Obsidian does not say", async () => {
     await fresh();
-    const { plugin, app } = await load(null, { id: "telimus" });
+    const { plugin, app } = await load(null, { id: "trew" });
     app.vault.adapter.seed("note.md", "x");
     await startVault(plugin, "laptop");
     await synced(plugin);
 
-    expect(app.vault.adapter.filePaths()).toContain(".obsidian/plugins/telimus/index.json");
+    expect(app.vault.adapter.filePaths()).toContain(".obsidian/plugins/trew/index.json");
     expect(app.vault.adapter.filePaths().some((p) => p.startsWith("undefined"))).toBe(false);
   }, 300_000);
 
@@ -382,12 +382,12 @@ describe("where its own state goes", () => {
     // without somewhere for this to land the plugin would simply never
     // sync, with a status bar still saying "connecting".
     await fresh();
-    const { plugin } = await load(null, { id: "telimus", dir: "somewhere/else" });
+    const { plugin } = await load(null, { id: "trew", dir: "somewhere/else" });
     await expect(startVault(plugin, "laptop")).rejects.toThrow(/outside/);
     await until("it to give up", () => plugin.currentState.kind === "stopped");
     expect(notices.map((n) => n.message).join(" ")).toMatch(/would sync/);
     expect(statusIcon(plugin)).toBe("alert-triangle");
-    expect(status(plugin)).toMatch(/^Telimus Sync: Stopped:/);
+    expect(status(plugin)).toMatch(/^Trew Sync: Stopped:/);
   }, 300_000);
 });
 
@@ -409,7 +409,7 @@ describe("pairing", () => {
     expect(plugin.deviceName).toBe("laptop");
     expect(statusIcon(plugin)).toBe("cloud-check");
     expect(summaries).toContain("1 sent");
-    expect(status(plugin)).toMatch(/^Telimus Sync: (?:1 sent|Up to date), as of /);
+    expect(status(plugin)).toMatch(/^Trew Sync: (?:1 sent|Up to date), as of /);
     // Saved in a form that survives the JSON round trip Obsidian does.
     // No token: the vault has one secret, and what authenticates is derived
     // from it. The server's first-run token is kept only until the vault has
@@ -897,7 +897,7 @@ describe("when things go wrong", () => {
     await plugin.syncNow();
     expect(plugin.currentState.kind).toBe("failed");
     expect(notices.some((n) => n.message.includes("editor disk full"))).toBe(true);
-    expect(notices.some((n) => n.message === "Telimus: up to date")).toBe(false);
+    expect(notices.some((n) => n.message === "Trew: up to date")).toBe(false);
   });
 
   it("shows one busy action and one result for repeated manual sync requests", async () => {
@@ -923,7 +923,7 @@ describe("when things go wrong", () => {
       expect(button.disabled).toBe(true);
       release();
       await Promise.all([first, second]);
-      expect(notices.filter((n) => n.message === "Telimus: up to date")).toHaveLength(1);
+      expect(notices.filter((n) => n.message === "Trew: up to date")).toHaveLength(1);
       expect(button.label).toBe("Sync now");
       expect(button.disabled).toBe(false);
       expect(app.vault.adapter.filePaths().filter((p) => !p.startsWith(".obsidian/"))).toEqual([]);
@@ -1011,7 +1011,7 @@ describe("when things go wrong", () => {
       () => plugin.currentState.kind === "offline",
     );
     expect(statusIcon(plugin)).toBe("cloud-off");
-    expect(status(plugin)).toMatch(/^Telimus Sync: Offline:/);
+    expect(status(plugin)).toMatch(/^Trew Sync: Offline:/);
   }, 300_000);
 
   /**
@@ -1213,19 +1213,19 @@ describe("unlinking", () => {
     await startVault(plugin, "laptop");
     await synced(plugin);
 
-    expect(app.vault.adapter.filePaths()).toContain(".obsidian/plugins/telimus/index.json");
+    expect(app.vault.adapter.filePaths()).toContain(".obsidian/plugins/trew/index.json");
 
     await plugin.unlink();
     expect(plugin.paired).toBe(false);
     expect(plugin.savedData).toBe(null);
     expect(statusIcon(plugin)).toBe("link");
-    expect(status(plugin)).toBe("Telimus Sync: Not paired.");
+    expect(status(plugin)).toBe("Trew Sync: Not paired.");
     expect(app.vault.adapter.text("keep.md")).toBe("still here");
 
     // The index goes too. It records what this device believes it has
     // already synced, and left behind it would be read as fact by the next
     // pairing, possibly against a different server entirely.
-    expect(app.vault.adapter.filePaths()).not.toContain(".obsidian/plugins/telimus/index.json");
+    expect(app.vault.adapter.filePaths()).not.toContain(".obsidian/plugins/trew/index.json");
   }, 300_000);
 
   /**
@@ -1275,7 +1275,7 @@ describe("the panel, which is a modal and a settings tab", () => {
    * It was reachable from the ribbon, the status bar and the command palette,
    * and nowhere else, because the plugin registered no settings tab. Obsidian
    * draws a plugin's gear in Settings only for a plugin that calls
-   * `addSettingTab`, so Settings had no Telimus entry at all and somebody
+   * `addSettingTab`, so Settings had no Trew entry at all and somebody
    * looking for the plugin's interface where every other plugin keeps it
    * found nothing and concluded there was none. Reported by the one person
    * running it, who could not find the settings screen.
@@ -1287,7 +1287,7 @@ describe("the panel, which is a modal and a settings tab", () => {
     const { plugin } = await load();
     expect(
       plugin.settingTabs.length,
-      "the plugin registers no settings tab, so Settings shows no Telimus entry at all",
+      "the plugin registers no settings tab, so Settings shows no Trew entry at all",
     ).toBe(1);
 
     const tab = plugin.settingTabs[0]!;
@@ -1336,7 +1336,7 @@ describe("the panel, which is a modal and a settings tab", () => {
     expect(row.desc).toMatch(/invite from a paired device/i);
     expect(row.desc).toMatch(/recovery key/i);
     expect(row.desc).toMatch(/setup line from your server/i);
-    expect(row.nameEl.children.filter((c) => c.cls === "telimus-help")).toEqual([]);
+    expect(row.nameEl.children.filter((c) => c.cls === "trew-help")).toEqual([]);
 
     // One field holding the line the server printed, rather than a Server and
     // a Token to split it into by hand.
@@ -1523,7 +1523,7 @@ describe("the panel, which is a modal and a settings tab", () => {
       .contentEl.children.flatMap((el) => el.children)
       .filter((el) => el.tag === "a");
     expect(links.map((el) => el.attributes.get("href"))).toContain(
-      "https://github.com/waynehoover/telimus/blob/main/docs/plugin.md",
+      "https://github.com/waynehoover/trew/blob/main/docs/plugin.md",
     );
   }, 300_000);
 
@@ -1630,7 +1630,7 @@ describe("measuring where a pass spent its time", () => {
     const { plugin, app } = await load();
     await plugin.syncNow();
     expect(
-      app.vault.adapter.text(".obsidian/plugins/telimus-sync/pass-timings.ndjson"),
+      app.vault.adapter.text(".obsidian/plugins/trew-sync/pass-timings.ndjson"),
       "a measurement nobody asked for",
     ).toBeUndefined();
   });
@@ -1657,7 +1657,7 @@ describe("a version kept where Obsidian cannot see it", () => {
     // file manager on a device that has none. Sometimes it is the only
     // surviving copy of the note (Codex-08).
     const { plugin, app } = await load();
-    const hidden = "Notes/.telimus-tmp-review/Note.md";
+    const hidden = "Notes/.trew-tmp-review/Note.md";
     app.vault.adapter.seed(hidden, "the paragraph that was displaced\n");
     app.vault.adapter.seed("Notes/Note.md", "what replaced it\n");
 
@@ -1713,7 +1713,7 @@ describe("on a device with no status bar", () => {
       expect(modals.at(-1)!.contentEl.allText()).not.toMatch(/Not connected|allow-origin/);
       const serverDetails = modals
         .at(-1)!
-        .contentEl.children.find((el) => el.cls === "telimus-server")!;
+        .contentEl.children.find((el) => el.cls === "trew-server")!;
       expect(serverDetails.attributes.has("open"), "normal loading expanded diagnostics").toBe(
         false,
       );
@@ -1737,14 +1737,14 @@ describe("on a device with no status bar", () => {
     await fresh();
     const { plugin } = await load();
     const ribbon = plugin.ribbonIcons[0]!;
-    expect(ribbon.title).toBe("Telimus Sync");
+    expect(ribbon.title).toBe("Trew Sync");
 
     await startVault(plugin, "laptop");
     await synced(plugin);
 
     // The same sentence the status bar carries, somewhere a phone shows it.
     const label = ribbon.el.attributes.get("aria-label") ?? "";
-    expect(label, `the ribbon says ${JSON.stringify(label)}`).toMatch(/^Telimus: /);
+    expect(label, `the ribbon says ${JSON.stringify(label)}`).toMatch(/^Trew: /);
     expect(label).not.toMatch(/connecting/);
     expect(ribbon.el.attributes.get("data-icon")).toBe("cloud-check");
   }, 300_000);
@@ -2034,7 +2034,7 @@ describe("unlinking during the handshake", () => {
       // Resume the retired handshake and wait for its actual completion.
       release();
       await finished();
-      expect(await app.vault.adapter.exists(".obsidian/plugins/telimus/index.json")).toBe(false);
+      expect(await app.vault.adapter.exists(".obsidian/plugins/trew/index.json")).toBe(false);
       expect(plugin.currentState.kind).toBe("unpaired");
 
       // The old server holds nothing. It has heard from this device, because
@@ -2118,8 +2118,8 @@ describe("unlink, in order and all the way", () => {
     expect(plugin.paired).toBe(false);
   });
 
-  const INDEX = ".obsidian/plugins/telimus/index.json";
-  const STAGED = ".obsidian/plugins/telimus/.telimus-tmp-index-index.json";
+  const INDEX = ".obsidian/plugins/trew/index.json";
+  const STAGED = ".obsidian/plugins/trew/.trew-tmp-index-index.json";
 
   it("closes, then removes the index, then forgets the pairing", async () => {
     await fresh();
@@ -2396,7 +2396,7 @@ describe("a vault that was started and never joined", () => {
     // that the first one is there.
     expect(failed?.message).toMatch(/device row was registered/);
     expect(failed?.message).toMatch(/never connected/);
-    expect(failed?.message).toMatch(/Write the recovery key shown in the Telimus panel down/);
+    expect(failed?.message).toMatch(/Write the recovery key shown in the Trew panel down/);
 
     // On disk and in memory, the root is still there: the claim may have
     // committed, and throwing it away is a vault nothing will ever open.
@@ -2519,7 +2519,7 @@ describe("a config that cannot be read", () => {
     expect(built.map((s) => s.name)).not.toContain("Pairing string");
     const shown = modals.at(-1)!.contentEl.allText();
     expect(shown).toMatch(/root secret is 32 bytes/);
-    expect(shown).toContain(".obsidian/plugins/telimus/data.json");
+    expect(shown).toContain(".obsidian/plugins/trew/data.json");
 
     await expect(startVault(plugin, "laptop")).rejects.toThrow(/could not be read/);
     await expect(plugin.pair("basalt3_whatever", "laptop")).rejects.toThrow(/could not be read/);
@@ -2690,7 +2690,7 @@ describe("a sync that fails", () => {
     // The index cannot be written: the pass throws on its way out.
     app.vault.adapter.seed("another.md", "y");
     app.vault.adapter.fault = (op, path) =>
-      (op === "writeBinary" || op === "append") && path.includes("/plugins/telimus/")
+      (op === "writeBinary" || op === "append") && path.includes("/plugins/trew/")
         ? new Error("EACCES: index")
         : undefined;
     notices.length = 0;
@@ -2769,8 +2769,8 @@ describe("renaming a folder", () => {
 });
 
 /**
- * `telimus:restore` looked at one page of two hundred
- * versions, so a version older than that was one `telimus:history` would list
+ * `trew:restore` looked at one page of two hundred
+ * versions, so a version older than that was one `trew:history` would list
  * and this would then say did not exist.
  */
 describe("restoring by uid from the command line", () => {
@@ -2786,7 +2786,7 @@ describe("restoring by uid from the command line", () => {
     const client = (plugin as unknown as { client: { findVersion: unknown; history: unknown } })
       .client;
     const versions = (await plugin.cliHandlers
-      .get("telimus:history")!
+      .get("trew:history")!
       .handler({ path: "note.md" })) as string;
     const oldest = Number(versions.trim().split("\n").at(-1)!.split("\t")[0]);
     // Paged one at a time, so the version wanted is not on the first page.
@@ -2807,7 +2807,7 @@ describe("restoring by uid from the command line", () => {
       realFind.call(client, path, match, 1);
 
     const answer = (await plugin.cliHandlers
-      .get("telimus:restore")!
+      .get("trew:restore")!
       .handler({ path: "note.md", uid: oldest })) as string;
     expect(answer).toMatch(/^Restored to note \(restored \d+\)\.md/);
     expect(pages).toBeGreaterThan(1);
@@ -2970,7 +2970,7 @@ describe("on a phone", () => {
       expect(plugin.statusBarItems).toHaveLength(0);
       await startVault(plugin, "phone");
       await until("a sync", () => plugin.currentState.kind === "synced");
-      expect(plugin.ribbonIcons[0]!.el.attributes.get("aria-label")).toMatch(/^Telimus: .*as of/);
+      expect(plugin.ribbonIcons[0]!.el.attributes.get("aria-label")).toMatch(/^Trew: .*as of/);
     } finally {
       Platform.isMobileApp = false;
     }
@@ -3063,7 +3063,7 @@ describe("the recovery header", () => {
   it("says when the list is cut short, without pointing at a command line", () => {
     const text = describeDeleted({ notes: [note("a.md", 3)], more: true });
     expect(text).toMatch(/older deletions than the 1 shown/);
-    expect(text).not.toMatch(/telimus deleted/);
+    expect(text).not.toMatch(/trew deleted/);
   });
 });
 
@@ -3084,7 +3084,7 @@ describe("a restore whose upload fails", () => {
 
     // The upload after the restore cannot save its index.
     app.vault.adapter.fault = (op, path) =>
-      (op === "writeBinary" || op === "append") && path.includes("/plugins/telimus/")
+      (op === "writeBinary" || op === "append") && path.includes("/plugins/trew/")
         ? new Error("EACCES: index")
         : undefined;
     const done = await plugin.recover(deletion);
@@ -3227,7 +3227,7 @@ describe("version history on the file menu (P-D8)", () => {
 
     const { menu, items } = fakeMenu();
     app.workspace.fire("file-menu", menu, { path: "daily/note.md", extension: "md" });
-    expect(items.map((i) => i.title)).toEqual(["Telimus: version history"]);
+    expect(items.map((i) => i.title)).toEqual(["Trew: version history"]);
     expect(items[0]!.icon).toBe("history");
 
     modals.length = 0;
@@ -3289,7 +3289,7 @@ describe("what History says after a restore (P-D1)", () => {
     // has to say so from this path too, which is what returning a path
     // rather than the outcome would have thrown away.
     app.vault.adapter.fault = (op, path) =>
-      (op === "writeBinary" || op === "append") && path.includes("/plugins/telimus/")
+      (op === "writeBinary" || op === "append") && path.includes("/plugins/trew/")
         ? new Error("EACCES: index")
         : undefined;
     const stuck = await restoreFromHistory(plugin);
@@ -3443,7 +3443,7 @@ describe("what is still in flight when a vault is unlinked (P-D2, P-D3)", () => 
     gate.release();
     await pass;
 
-    // Unpaired is the truth. "Telimus has stopped" or a summary of a pass
+    // Unpaired is the truth. "Trew has stopped" or a summary of a pass
     // over a vault that is gone are both louder than the truth and wrong.
     expect(plugin.currentState.kind).toBe("unpaired");
     expect(notices.map((n) => n.message).join(" ")).toBe("");
@@ -3484,10 +3484,10 @@ describe("synced, with files that need a person", () => {
     const set = (s: unknown) => (plugin as unknown as { setState(s: unknown): void }).setState(s);
     set({ kind: "synced", summary: "up to date", at: 1_700_000_000_000, refused: 0 });
     expect(statusIcon(plugin)).toBe("cloud-check");
-    expect(plugin.statusBarItems[0]!.cls).not.toContain("telimus-attention");
+    expect(plugin.statusBarItems[0]!.cls).not.toContain("trew-attention");
     set({ kind: "synced", summary: "1 stuck", at: 1_700_000_000_000, refused: 1 });
     expect(statusIcon(plugin)).not.toBe("cloud-check");
-    expect(plugin.statusBarItems[0]!.cls).toContain("telimus-attention");
+    expect(plugin.statusBarItems[0]!.cls).toContain("trew-attention");
     expect(status(plugin)).toMatch(/1 file needs attention/);
   });
 });
@@ -3520,8 +3520,8 @@ describe("small honesties", () => {
   it("answers the command line in words, whatever happens", async () => {
     await fresh();
     const { plugin } = await load();
-    const history = plugin.cliHandlers.get("telimus:history")!.handler;
-    const restore = plugin.cliHandlers.get("telimus:restore")!.handler;
+    const history = plugin.cliHandlers.get("trew:history")!.handler;
+    const restore = plugin.cliHandlers.get("trew:restore")!.handler;
     expect(await history({})).toMatch(/needs a path/);
     expect(await history({ path: "x.md" })).toMatch(/not paired/);
     expect(await restore({ path: "x.md" })).toMatch(/needs a uid/);
@@ -3567,7 +3567,7 @@ describe("an older Obsidian", () => {
       "verify-contents",
       "version-history",
     ]);
-    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["Telimus Sync"]);
+    expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["Trew Sync"]);
     expect(plugin.statusBarItems.length).toBe(1);
     // The four vault events and the file-menu entry, all after the guard.
     expect(plugin.registeredEvents.length).toBe(5);
@@ -3605,7 +3605,7 @@ describe("what the status bar shows", () => {
       expect(icon, `${state.kind} chose no glyph`).not.toBe("");
       expect(plugin.statusBarItems[0]!.allText()).toBe("");
       expect(plugin.statusBarItems[0]!.children).toHaveLength(1);
-      expect(status(plugin), `${state.kind} has no tooltip`).toMatch(/^Telimus Sync: \S/);
+      expect(status(plugin), `${state.kind} has no tooltip`).toMatch(/^Trew Sync: \S/);
       seen.add(icon);
     }
     // Not all the same glyph, or the bar would say nothing by changing.
@@ -3624,7 +3624,7 @@ describe("what the status bar shows", () => {
     const { plugin } = await load();
     for (const state of states) {
       (plugin as unknown as { setState(s: unknown): void }).setState(state);
-      const sentence = status(plugin).replace(/^Telimus Sync: /, "");
+      const sentence = status(plugin).replace(/^Trew Sync: /, "");
       expect(sentence, `${state.kind} opens mid-sentence`).toMatch(/^[A-Z0-9]/);
     }
   });
@@ -3659,17 +3659,17 @@ it("tints only the state that is actually wrong", async () => {
   const tone = () =>
     (plugin as unknown as { statusEl: { cls: string } }).statusEl.cls
       .split(" ")
-      .filter((c) => c.startsWith("telimus-") && c !== "telimus-status-icon");
+      .filter((c) => c.startsWith("trew-") && c !== "trew-status-icon");
 
   for (const s of [
     { kind: "unpaired" },
     { kind: "offline", why: "x", retryAt: 1, refused: false },
   ]) {
     set(s);
-    expect(tone(), `${s.kind} should carry no colour`).not.toContain("telimus-muted");
+    expect(tone(), `${s.kind} should carry no colour`).not.toContain("trew-muted");
   }
   set({ kind: "stopped", why: "x" });
-  expect(tone()).toContain("telimus-attention");
+  expect(tone()).toContain("trew-attention");
 });
 
 /**
@@ -4375,7 +4375,7 @@ describe("what the panel knows and used to keep to itself", () => {
     expect(to.server!.version, "the build is the fallback, not what ready said").not.toBe(
       "unknown",
     );
-    expect(shown).toContain(`Protocol ${PROTO}, telimus ${to.server!.version}.`);
+    expect(shown).toContain(`Protocol ${PROTO}, trew ${to.server!.version}.`);
     expect(shown).not.toContain("Not connected");
     // An unencrypted connection shows its warning in the server details.
     expect(panelText()).toMatch(/notes are still sealed, the device credential is not/);
@@ -4388,14 +4388,14 @@ describe("what the panel knows and used to keep to itself", () => {
     // different states.
     const off = describeConnection({ url: "wss://homelab.tailnet.ts.net" });
     expect(off).toContain("Not connected to wss://homelab.tailnet.ts.net");
-    expect(off).not.toMatch(/telimus/);
+    expect(off).not.toMatch(/trew/);
     expect(off).not.toMatch(/Protocol/);
 
     const on = describeConnection({
       url: "wss://homelab.tailnet.ts.net",
       server: { proto: 4, version: "0.3.4" },
     });
-    expect(on).toContain("Protocol 4, telimus 0.3.4.");
+    expect(on).toContain("Protocol 4, trew 0.3.4.");
     // The scheme is the whole of what is known about the hop, and wss is the
     // only thing that says something terminated TLS in front.
     //
@@ -4460,7 +4460,7 @@ describe("changing the server address", () => {
     const saved = structuredClone(plugin.savedData) as Record<string, unknown>;
     const cursor = plugin.cursors()!.local;
     expect(cursor).toBeGreaterThan(0);
-    const index = await app.vault.adapter.read(".obsidian/plugins/telimus/index.json");
+    const index = await app.vault.adapter.read(".obsidian/plugins/trew/index.json");
     await server.stop();
     await server.start();
     expect(server.wsUrl).not.toBe(saved["url"]);
@@ -4474,7 +4474,7 @@ describe("changing the server address", () => {
     expect(plugin.connection()!.url).toBe(server.wsUrl);
     expect(plugin.savedData).toEqual({ ...saved, url: server.wsUrl });
     expect(plugin.cursors()!.local).toBe(cursor);
-    expect(await app.vault.adapter.read(".obsidian/plugins/telimus/index.json")).toBe(index);
+    expect(await app.vault.adapter.read(".obsidian/plugins/trew/index.json")).toBe(index);
     expect(await app.vault.adapter.read("kept.md")).toBe("my original note\n");
     const peer = await load(plugin.savedData);
     await synced(peer.plugin);
@@ -4530,7 +4530,7 @@ describe("changing the server address", () => {
     expect(await changing).toBeInstanceOf(Error);
     expect(plugin.savedData).toBe(null);
     expect(plugin.currentState.kind).toBe("unpaired");
-    expect(await app.vault.adapter.exists(".obsidian/plugins/telimus/index.json")).toBe(false);
+    expect(await app.vault.adapter.exists(".obsidian/plugins/trew/index.json")).toBe(false);
     expect(await app.vault.adapter.read("kept.md")).toBe("my original note\n");
   });
 });
@@ -4768,7 +4768,7 @@ describe("the device list in the panel", () => {
  * The documented path for a plugin device was to unlink and pair again, which
  * works and costs the merge base: every note returns as an ancestor-less new
  * version, so the next edit made on two devices at once cannot merge and makes
- * conflict copies instead. The headless client has had `telimus rebase` for
+ * conflict copies instead. The headless client has had `trew rebase` for
  * this since I10; the plugin had the blunt tool on the devices least able to
  * clear up after it.
  *
@@ -4794,7 +4794,7 @@ describe("rejoining a server that lost history (I10, plugin)", () => {
     expect(await rejoining).toBeInstanceOf(Error);
     expect(plugin.savedData).toBe(null);
     expect(plugin.currentState.kind).toBe("unpaired");
-    expect(await app.vault.adapter.exists(".obsidian/plugins/telimus/index.json")).toBe(false);
+    expect(await app.vault.adapter.exists(".obsidian/plugins/trew/index.json")).toBe(false);
     expect(await app.vault.adapter.read("kept.md")).toBe("my original note\n");
   });
 
@@ -4838,7 +4838,7 @@ describe("rejoining a server that lost history (I10, plugin)", () => {
     expect(await rejoining).toBeInstanceOf(Error);
     expect(plugin.savedData).toBe(null);
     expect(plugin.currentState.kind).toBe("unpaired");
-    expect(await app.vault.adapter.exists(".obsidian/plugins/telimus/index.json")).toBe(false);
+    expect(await app.vault.adapter.exists(".obsidian/plugins/trew/index.json")).toBe(false);
     expect(await app.vault.adapter.read("kept.md")).toBe("my original note\n");
   });
 
@@ -4868,7 +4868,7 @@ describe("rejoining a server that lost history (I10, plugin)", () => {
     expect(await rejoining).toBeInstanceOf(Error);
     expect(plugin.savedData).toBe(null);
     expect(plugin.currentState.kind).toBe("unpaired");
-    expect(await app.vault.adapter.exists(".obsidian/plugins/telimus/index.json")).toBe(false);
+    expect(await app.vault.adapter.exists(".obsidian/plugins/trew/index.json")).toBe(false);
     expect(await app.vault.adapter.read("kept.md")).toBe("my original note\n");
   });
 
@@ -4907,7 +4907,7 @@ describe("rejoining a server that lost history (I10, plugin)", () => {
     expect(await rejoining).toBeInstanceOf(Error);
     expect(plugin.savedData).toBe(null);
     expect(plugin.currentState.kind).toBe("unpaired");
-    expect(await app.vault.adapter.exists(".obsidian/plugins/telimus/index.json")).toBe(false);
+    expect(await app.vault.adapter.exists(".obsidian/plugins/trew/index.json")).toBe(false);
     expect(await app.vault.adapter.read("kept.md")).toBe("my original note\n");
   });
 
@@ -4917,7 +4917,7 @@ describe("rejoining a server that lost history (I10, plugin)", () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const dir = await mkdtemp(join(tmpdir(), "telimus-plugin-backup-"));
+    const dir = await mkdtemp(join(tmpdir(), "trew-plugin-backup-"));
     await server.whileStopped(async () => {
       await cp(server.dataDir, dir, { recursive: true });
     });
@@ -4961,10 +4961,10 @@ describe("rejoining a server that lost history (I10, plugin)", () => {
     const stopped = first.plugin.currentState;
     expect(stopped.kind === "stopped" && stopped.recovery).toBe("rejoin");
     // The reason names the way out, rather than a documentation path (I10).
-    expect(status(first.plugin)).toMatch(/telimus rebase --backup-taken/);
+    expect(status(first.plugin)).toMatch(/trew rebase --backup-taken/);
     expect(status(first.plugin)).toMatch(/Rejoin this server/);
     expect(status(first.plugin)).toMatch(/conflict copies instead of merging/);
-    expect(notices.map((n) => n.message).join("\n")).toMatch(/telimus rebase --backup-taken/);
+    expect(notices.map((n) => n.message).join("\n")).toMatch(/trew rebase --backup-taken/);
 
     // The panel offers it, and the first press is a question rather than an
     // answer: nothing has been touched by it.

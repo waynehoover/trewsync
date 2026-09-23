@@ -547,7 +547,7 @@ describe("a hunk that did not apply", () => {
    * that knows is the flags array, which Obsidian discards.
    *
    * Worth being straight about what this test does and does not pin down.
-   * Telimus refuses it, but the overlap check is what refuses it, not the
+   * Trew refuses it, but the overlap check is what refuses it, not the
    * flags: destroying enough context for a hunk to fail also puts the two
    * sides' changed regions close enough to collide. Disabling the flag check
    * leaves this test passing.

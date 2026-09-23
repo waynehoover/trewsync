@@ -12,8 +12,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 /* ---------------------------------------------------------------- *

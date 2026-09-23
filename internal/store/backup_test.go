@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"encoding/json"
-	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/trew/internal/chunks"
 )
 
 // openBackup opens a backup directory the way the server would, which is the
@@ -368,7 +368,7 @@ func TestAnInterruptedSnapshotLeavesThePreviousBackupIntact(t *testing.T) {
 	// Debris from a run that died between the snapshot and the rename. The
 	// staging name is per-operation now, so this is one of the shapes it takes
 	// rather than the only one, and the next run sweeps every one of them.
-	tmp := filepath.Join(dir, ".telimus.db.snapshot.1234")
+	tmp := filepath.Join(dir, ".trew.db.snapshot.1234")
 	if err := os.WriteFile(tmp, []byte("half a database"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -393,7 +393,7 @@ func TestAnInterruptedSnapshotLeavesThePreviousBackupIntact(t *testing.T) {
 		t.Fatalf("read the backup: %v", err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".telimus.db.snapshot") {
+		if strings.HasPrefix(e.Name(), ".trew.db.snapshot") {
 			t.Fatalf("a finished backup left staging debris: %s", e.Name())
 		}
 	}

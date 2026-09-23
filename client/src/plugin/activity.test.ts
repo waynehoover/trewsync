@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ActivityLog } from "./activity.ts";
 import { FakeAdapter } from "./fake.ts";
 
-const path = ".obsidian/plugins/telimus/activity.json";
+const path = ".obsidian/plugins/trew/activity.json";
 describe("local activity log", () => {
   it("retains a bounded log after restart and exports no filenames", async () => {
     const adapter = new FakeAdapter();

@@ -50,7 +50,7 @@ export async function withMcpLocks<T>(
   const releases: (() => Promise<void>)[] = [];
   try {
     for (const root of [...roots].sort((a, b) => (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0)))
-      releases.push(await lockVault(root.dir, "telimus mcp"));
+      releases.push(await lockVault(root.dir, "trew mcp"));
     return await work();
   } finally {
     for (const release of releases.reverse()) await release().catch(() => {});

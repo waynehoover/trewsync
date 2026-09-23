@@ -9,7 +9,7 @@ The most important sections are [Guarantees with no equivalent elsewhere](#guara
 **Classes.**
 
 - **OBSOLETE**: every assertion is about a mechanism that is deleted (root secret, key schedule, sealing, entry MAC, wrapped data key, claim, bootstrap token, registrar session, rotation, recovery key), and no surviving mechanism inherits what it checked. Delete it.
-- **GUARANTEE**: the property survives. The rewrite changes setup, or swaps the mechanism under test for its Telimus successor (sealed chunk for frame, registrar for control socket, sealed invite for invite token), and keeps the assertion.
+- **GUARANTEE**: the property survives. The rewrite changes setup, or swaps the mechanism under test for its Trew successor (sealed chunk for frame, registrar for control socket, sealed invite for invite token), and keeps the assertion.
 - **SPLIT**: some assertions are obsolete and some are guarantees. The rewrite drops the first kind and keeps the second; the row says which is which.
 
 **Lines** are gabbro's, and a TypeScript test is named by its full `describe > it` path. Every file in this ledger has the same line numbers as Basalt at `664a963` (`basalt:server/...` for Go, `basalt:client/...` for TypeScript), because the M0 rename only changed words on existing lines. The one exception is `client/src/cli/cli.test.ts`, which runs 2 lines longer from line 1209 and 4 lines longer from line 1223.
@@ -19,7 +19,7 @@ The most important sections are [Guarantees with no equivalent elsewhere](#guara
 **Scope.**
 
 - **Tier 1, every top-level test**: the files the plan or reuse map deletes wholesale or rewrites heavily because of the crypto, and the files whose cases are mostly about claim, registrar, rotation or keys. Found with `rg` over all 74 Go and 134 TypeScript test files, scored per test rather than per file (a `Mac: testMac` field or a `testKeys(...)` setup line does not make a test about crypto), then read in full.
-- **Tier 2, only the crypto-centric cases** of files adapted in place: the recovery-key, claim and setup-line cases of the plugin, the CLI and `cmd/telimus`; the MAC and wrapped-key cases of the engine and transport. Their setup-only cases are not listed; M2 task 9's "34 files, mostly one line each" covers those.
+- **Tier 2, only the crypto-centric cases** of files adapted in place: the recovery-key, claim and setup-line cases of the plugin, the CLI and `cmd/trew`; the MAC and wrapped-key cases of the engine and transport. Their setup-only cases are not listed; M2 task 9's "34 files, mostly one line each" covers those.
 
 **Mechanisms** named in the "Rewrite against" column:
 
@@ -31,13 +31,13 @@ The most important sections are [Guarantees with no equivalent elsewhere](#guara
 | mcp_tokens | bearer on `/mcp`, `mcp_tokens.token_hash`, scope, expiry | M1 task 2, M4 task 2 |
 | control socket admin | `internal/control`: `invite`, `devices`, `revoke`, `mcp-token` while `serve` runs | M1 task 9 |
 | first-run invite | the invite `serve` mints on an empty store and writes to a private path | M1 task 9 |
-| secret output file | any file Telimus writes a credential to: the first-run invite, `mcp-token --key-out` | M1 task 9 |
+| secret output file | any file Trew writes a credential to: the first-run invite, `mcp-token --key-out` | M1 task 9 |
 | size invariant | `sizeAccountedFor`: the sum of raw chunk lengths equals the declared size, at commit | M1 task 4 |
 | store_identity | product, schema version and epoch, checked before any write | M1 task 8 |
 | path policy | the §4.1 refusals, answered `badpath` | M1 task 3, M0.5 task 3 |
 | frame codec | `marker ∥ payload`, marker 0 raw or 1 deflate: Go `internal/frame`, TypeScript `core/frame.ts` | M1 task 5, M2 task 1, M0.5 task 2 |
 | digest.ts | `chunkName`, `plainDigest`, `isChunkName`, `hex`, `base64urlEncode/Decode`, `randomBytes`, moved out of `crypto.ts` | M2 task 1 |
-| telimus1i_ codec | the new `formatInvite` and `parseInvite` | M0.5 task 1, M2 task 5 |
+| trew1i_ codec | the new `formatInvite` and `parseInvite` | M0.5 task 1, M2 task 5 |
 | DeviceConfig | `{url, vaultId, device, deviceId, deviceToken, readOnly?, ignore?}` and its encode and decode | M2 task 5 |
 | device token generation | the joining client's random 32-byte credential | M2 task 5, task 6 |
 | windowed hash naming | `sealedNames` becoming a windowed hash loop; `planUpload` re-hashing instead of re-sealing | M2 task 4 |
@@ -60,7 +60,7 @@ Tier 1 counts every top-level test in the file.
 | `internal/server/auth_test.go` | same | 9 | 4 | 4 | 1 |
 | `internal/server/invite_test.go` | same | 18 | 3 | 11 | 4 |
 | `internal/server/invite_doc_test.go` | kept; its constants change | 1 | 0 | 1 | 0 |
-| `cmd/telimus/token_s11_test.go` | reuse map: classify; its writer goes in M1 task 9 | 3 | 1 | 2 | 0 |
+| `cmd/trew/token_s11_test.go` | reuse map: classify; its writer goes in M1 task 9 | 3 | 1 | 2 | 0 |
 | `internal/server/unlimited_devices_test.go` | reuse map: classify its claim case | 2 | 0 | 2 | 0 |
 | `internal/server/release_review_test.go` | 3 of 4 cases are registrar or rotation | 4 | 2 | 1 | 1 |
 | `internal/server/protocol_test.go` | reuse map: adapt; 13 of 27 cases are claim or rotation | 27 | 11 | 14 | 2 |
@@ -68,7 +68,7 @@ Tier 1 counts every top-level test in the file.
 | `internal/store/budget_test.go` | M1 task 4: update for the size invariant | 7 | 1 | 5 | 1 |
 | **Go, Tier 1** | | **110** | **34** | **61** | **15** |
 | `client/src/core/crypto.test.ts` | M2 task 9 deletes; the code splits into digest.ts and frame.ts | 60 | 34 | 22 | 4 |
-| `client/src/core/pairing.test.ts` | rewritten for telimus1i_ and DeviceConfig (M2 task 5) | 43 | 7 | 32 | 4 |
+| `client/src/core/pairing.test.ts` | rewritten for trew1i_ and DeviceConfig (M2 task 5) | 43 | 7 | 32 | 4 |
 | `client/src/core/invite.test.ts` | M2 task 9 deletes | 4 | 1 | 2 | 1 |
 | `client/src/core/rotation.test.ts` | M2 task 9 deletes | 9 | 8 | 0 | 1 |
 | `client/src/core/compression-golden.test.ts` | deleted with `compression-golden*.ts` (M2 task 1) | 3 | 1 | 1 | 1 |
@@ -89,8 +89,8 @@ Tier 2 counts only the crypto-centric cases listed below, not the whole file.
 | `internal/server/session_test.go` | 43 | 1 | 0 | 0 | 1 |
 | `internal/server/mutation_authorization_test.go` | 4 | 1 | 1 | 0 | 0 |
 | `internal/server/disclosure_test.go` | 6 | 2 | 0 | 0 | 2 |
-| `cmd/telimus/main_test.go` | 69 | 6 | 0 | 0 | 6 |
-| `cmd/telimus/ops_i17_test.go` | 7 | 2 | 1 | 0 | 1 |
+| `cmd/trew/main_test.go` | 69 | 6 | 0 | 0 | 6 |
+| `cmd/trew/ops_i17_test.go` | 7 | 2 | 1 | 0 | 1 |
 | **Go, Tier 2** | 225 | **24** | **8** | **1** | **15** |
 | `client/src/core/engine.test.ts` | 105 | 6 | 4 | 0 | 2 |
 | `client/src/core/transport.test.ts` | 107 | 7 | 4 | 0 | 3 |
@@ -117,13 +117,13 @@ Across both tiers, 364 tests are classified: 152 obsolete, 140 guarantees, 72 sp
 4. **Expiry**: an expired invite is refused at redemption, a past expiry is refused at insert, expired rows are swept at the next insert, and expired invites leave the listing. `keys_test.go:107, :307`, `invite_test.go:129, :293`. No TypeScript test touches invite expiry; the plan names only codec vectors for it.
 5. **One refusal for spent, unknown, malformed and cancelled invites**: `ErrNoInvite` in the store, a byte-identical `auth` frame on the wire. `keys_test.go:107, :240`, `invite_test.go:147, :244`. `disclosure_test.go:309` covers only a never-issued invite against vault existence.
 6. **A refused redemption never spends the invite**: an existing device id (its row's hash and name untouched), a missing or malformed device id, a missing or short token, a bad name, a hello carrying a token and an invite together. `keys_test.go:695`, `invite_test.go:437, :572, :617`.
-7. **Credentials are stored as SHA-256, never in the clear, and a redemption refuses a device token below the length floor.** `auth_test.go:98, :140`, `invite_test.go:617`. Telimus adds `invites.token_hash` and `mcp_tokens.token_hash`, which nothing tests; M4 task 2 plans the constant-time compare, not the storage.
+7. **Credentials are stored as SHA-256, never in the clear, and a redemption refuses a device token below the length floor.** `auth_test.go:98, :140`, `invite_test.go:617`. Trew adds `invites.token_hash` and `mcp_tokens.token_hash`, which nothing tests; M4 task 2 plans the constant-time compare, not the storage.
 8. **`validBase64URL` takes "=" only as trailing padding**, and it still guards every device id through `ValidDeviceID` (`store.go:2599, :3243`). `keys_test.go:468`.
 9. **Invites travel in a backup and redeem from the restore.** `keys_test.go:334`. Decide against the §2.8 restore epoch before rewriting it either way.
 10. **Invite lifetime**: the default, the cap, refusal of a negative TTL, a clamp that cannot overflow on extreme values, and docs that state the same numbers. `invite_test.go:307`, `release_review_test.go:13`, `invite_doc_test.go:83`. protocol.md keeps `ttlMs` on the wire op, moves the default to one hour and adds `--ttl 0`.
-11. **Secret files are written exactly, atomically, at 0600, and a pre-existing 0644 file is tightened.** `token_s11_test.go:14, :40`. The writer is deleted with the auth-token file (M1 task 9) while Telimus adds two secret outputs: serve's first-run invite and `mcp-token --key-out`.
+11. **Secret files are written exactly, atomically, at 0600, and a pre-existing 0644 file is tightened.** `token_s11_test.go:14, :40`. The writer is deleted with the auth-token file (M1 task 9) while Trew adds two secret outputs: serve's first-run invite and `mcp-token --key-out`.
 12. **Chunk names agree with the server** on fixed SHA-256 vectors, are 64 lowercase hex, and a subarray is named by its own bytes. `crypto.test.ts:341, :359, :386`. No Go test pins a vector; M0.5 task 6 implies moving them into `protocol-fixtures.json`.
-13. **base64url decoding is strict**: every byte value and every length mod 3 round-trip, no padding is emitted, and stray characters, a dangling sextet and nonzero unused bits are refused. `crypto.test.ts:413-461`. digest.ts, device ids and the telimus1i_ codec all rest on it.
+13. **base64url decoding is strict**: every byte value and every length mod 3 round-trip, no padding is emitted, and stray characters, a dangling sextet and nonzero unused bits are refused. `crypto.test.ts:413-461`. digest.ts, device ids and the trew1i_ codec all rest on it.
 14. **Frame behaviour outside M0.5 task 2's list**: compressible text is actually deflated, incompressible input is stored raw at one byte of overhead, the probe's worst case round-trips, text and binary round-trip, the marker per input class is pinned, and a chunk's name never depends on the frame. `crypto.test.ts:117, :132, :146, :174, :189, :625, :632, :638, :648`, `compression-golden.test.ts:18, :32`. Unknown markers, empty bodies and inflation limits are in M0.5 task 2, and inflation limits are already covered by `receive-limits.test.ts` and `transport.test.ts:2168`.
 15. **The restore path checks a server's answers against each other**: get's chunk list must be the history entry's, names must be chunk names, the assembly must be the declared length, get's size must be the entry's, the entry must be the requested note, pages must honour `before`, come newest first and advance, and a declared size needs chunks. `recovery-auth.test.ts:109-306`, 10 of its 12 tests. "The MAC-forgery half" is two tests (90, 100).
 16. **A `redeemed` reply naming a device other than the one asked for is refused** before a credential is kept. The check exists at `transport.ts:1346` and has never been tested; only its registrar twin is, at `rotation.test.ts:117`.
@@ -134,25 +134,25 @@ Across both tiers, 364 tests are classified: 152 obsolete, 140 guarantees, 72 sp
 18. **The invite listing carries nothing that redeems.** `keys_test.go:177`, `invite_test.go:73`. `cli.test.ts:1464` checks only that the whole invite string is absent, which would still pass while a token leaked (hazard 1).
 19. **A revoke evicts all of a device's sessions in parallel**, not one per second in series. `protocol_test.go:658` tests only the rotation path; `handleRevoke` runs the same loop (`session.go:2774`) with no test.
 20. **A connection failure during hello publication is race-free.** `release_review_test.go:33` tests only the registrar hello; `helloAsDevice` publishes the same way (`session.go:996`).
-21. **The credential of last resort** can list devices and invites, cancel invites, revoke, and add a device to a store whose every device is gone. `devices_test.go:121, :159`, `invite_test.go:195`, `cli.test.ts:1570`, all in recovery-key form. In Telimus that is the control socket (M1 task 9), which has no tests yet.
+21. **The credential of last resort** can list devices and invites, cancel invites, revoke, and add a device to a store whose every device is gone. `devices_test.go:121, :159`, `invite_test.go:195`, `cli.test.ts:1570`, all in recovery-key form. In Trew that is the control socket (M1 task 9), which has no tests yet.
 22. **A retried registration whose reply was lost** succeeds when the id and key match and is refused, changing nothing, when they do not. `devices_test.go:236`. protocol.md requires the same of a redemption retry and nothing tests it there (M0.5 task 1).
 23. **The invite codec's error behaviour**: 200 random round trips, paste whitespace, non-ASCII fields, an appended character, flipped unused bits, any single-character change, a transposition, truncation, an unknown version, a length past the end, trailing bytes, a wrong field length, an over-long URL. `pairing.test.ts` (26 codec cases, written against `basalt3_` and `basalt3i_`). M0.5 task 1 plans vectors for base64, lengths, CRC and expiry, which is a subset.
-24. **The first-run credential names an address a device can dial** (never `0.0.0.0`, `[::]` or `:3003`), keeps an explicit address as given, uses `ws://` under `-localhost`, is not printed once the store has devices, and survives a restart. `main_test.go:671, :1189, :1207, :1218, :1294`, all written against `printSetup` and the bootstrap token, which M1 task 9 deletes. The telimus1i_ string embeds the URL, so this matters more than it did.
+24. **The first-run credential names an address a device can dial** (never `0.0.0.0`, `[::]` or `:3003`), keeps an explicit address as given, uses `ws://` under `-localhost`, is not printed once the store has devices, and survives a restart. `main_test.go:671, :1189, :1207, :1218, :1294`, all written against `printSetup` and the bootstrap token, which M1 task 9 deletes. The trew1i_ string embeds the URL, so this matters more than it did.
 25. **A backup publishes over a fault its source already has, and verify names a stored row every reader would refuse.** `backup_test.go:845`, `store_test.go:1383`. Both are seeded only with `nomac`, which M1 tasks 3 and 12 delete.
 26. **Entry validation covers folders and deletions**, not only files (F20). `store_test.go:1351`, seeded only with `mac` and `parent`. The `badpath` matrix in M1 task 11 must include folders and deletions.
 27. **A batch refused because of a later entry applies nothing from earlier ones, and a refused batch does not move the cursor.** `engine.test.ts:2844`, `invariants.test.ts:75`. Both use a forged MAC as the only trigger.
 
 ## Hazards: what the rewrite must not carry over as written
 
-1. **The invite listing's `id` must not be the token.** Basalt lists the redemption identifier itself (`keys_test.go:204`, `invite_test.go:98`), which was safe only because redeeming also needed the invite key, and that never reached the server. A Telimus invite token is the whole credential. The same shape of listing would hand a redeemable token to every paired device, to the plugin's device panel and to `telimus-sync devices`. protocol.md gives the listing `{id, label, expiresAt}` without saying what `id` is. Rewritten tests must assert that the listed handle cannot redeem and that no field equals or contains the token. `cli.test.ts:1464`'s `not.toContain(string)` would pass while the token leaked.
+1. **The invite listing's `id` must not be the token.** Basalt lists the redemption identifier itself (`keys_test.go:204`, `invite_test.go:98`), which was safe only because redeeming also needed the invite key, and that never reached the server. A Trew invite token is the whole credential. The same shape of listing would hand a redeemable token to every paired device, to the plugin's device panel and to `trew-sync devices`. protocol.md gives the listing `{id, label, expiresAt}` without saying what `id` is. Rewritten tests must assert that the listed handle cannot redeem and that no field equals or contains the token. `cli.test.ts:1464`'s `not.toContain(string)` would pass while the token leaked.
 2. **Persist-before-send against "saves nothing".** protocol.md ("Invite redemption") and M0.5 task 1 require the joining client to persist its credential before sending the redemption. `main.test.ts:2823, :2841, :3956, :3987` and `cli.test.ts:1194, :1265` assert that an unreachable server, a refused redemption, or an unload after redemption leaves nothing saved and the vault unpaired. Both hold only if the early credential lives in a pending state that is not "paired" and is cleared on a definite refusal. Settle that in M0.5, then restate those assertions rather than deleting them.
 3. **Lost-reply retry against "an existing id is refused".** `keys_test.go:695` and `invite_test.go:572` refuse a redemption onto an existing device id; protocol.md wants a retried redemption to recover the paired device. The retry must recognise its own row (same id, same token hash) and still refuse a different token under that id, which is `devices_test.go:236`'s rule moved to redemption.
-4. **The last-device rule is undecided.** `plan/protocol.md:123` drops `allowLast` and lets a device revoke the last device, since `telimus invite` on the server is the way back; PLAN.md does not say so. If that stands, `devices_test.go:532`, `internal/store/devices_test.go:374` and `:667`, `cli.test.ts:1408`, `main.test.ts:4564` and the one-device panel shot at `panel-shots.test.ts:303` invert or go, and `keys_test.go:557` keeps only its both-or-neither half. If it does not stand, their refusal messages must stop naming the recovery key.
+4. **The last-device rule is undecided.** `plan/protocol.md:123` drops `allowLast` and lets a device revoke the last device, since `trew invite` on the server is the way back; PLAN.md does not say so. If that stands, `devices_test.go:532`, `internal/store/devices_test.go:374` and `:667`, `cli.test.ts:1408`, `main.test.ts:4564` and the one-device panel shot at `panel-shots.test.ts:303` invert or go, and `keys_test.go:557` keeps only its both-or-neither half. If it does not stand, their refusal messages must stop naming the recovery key.
 5. **Triggers that stop firing.** Some surviving guarantees are exercised only through a MAC failure: `engine.test.ts:2844`, `invariants.test.ts:75`, and `recovery-auth.test.ts:133`, whose regex accepts "not authenticated" as an alternative to "not a chunk name". With the MAC gone they fail for the wrong reason or pass vacuously. Re-seed each with a refusal that survives: a malformed chunk name, a refused path, a shape contradiction.
 6. **`nomac` as the only example.** `backup_test.go:845` and `store_test.go:1383` use a missing authenticator as their only instance of an inherited or reader-refused row. Re-seed them with a row the new policy refuses (a `badpath` path, a size that is not the sum of its chunks) instead of deleting them along with the `nomac` code.
-7. **Probe with Basalt's protocol.** Telimus speaks protocol 1 and Basalt speaks 7. The hello-range tests (`protocol_test.go:832`, `session_test.go:65`, `disclosure_test.go:224`, `server-harness.test.ts:849`) should send a protocol 7 hello with Basalt's fields, so a Basalt plugin meeting a Telimus server is refused as `proto` with both numbers named, not as `auth`.
+7. **Probe with Basalt's protocol.** Trew speaks protocol 1 and Basalt speaks 7. The hello-range tests (`protocol_test.go:832`, `session_test.go:65`, `disclosure_test.go:224`, `server-harness.test.ts:849`) should send a protocol 7 hello with Basalt's fields, so a Basalt plugin meeting a Trew server is refused as `proto` with both numbers named, not as `auth`.
 8. **A warning that inverts.** `panel-shots.test.ts:256` pins "the notes are still sealed, the device credential is not" for a hop without TLS. Without end-to-end encryption the notes are exposed as well. Keep the assertion that the warning is shown and change what it says (§3.6).
-9. **The path bound shrinks.** Basalt allowed 4096 bytes of sealed path (`crypto.test.ts:323`), roughly 3,000 plaintext bytes. Telimus allows 1,024 plaintext bytes (§4.1), so a Basalt vault can hold paths Telimus refuses. Add a long-path case to the M10 inventory and to the §4.9 stranded-list tests.
+9. **The path bound shrinks.** Basalt allowed 4096 bytes of sealed path (`crypto.test.ts:323`), roughly 3,000 plaintext bytes. Trew allows 1,024 plaintext bytes (§4.1), so a Basalt vault can hold paths Trew refuses. Add a long-path case to the M10 inventory and to the §4.9 stranded-list tests.
 10. **`recovery-auth.test.ts` is mostly guarantees.** Two of its twelve tests are MAC forgery; the other ten are the only tests of the restore path's consistency checks (item 15). Rename the file when stripping it, so the next reader does not take it for a crypto-only file.
 
 ## Tier 1 ledger: Go
@@ -174,7 +174,7 @@ Across both tiers, 364 tests are classified: 152 obsolete, 140 guarantees, 72 sp
 | 468 | `TestValidBase64URLTakesPaddingOnlyAtTheEnd` | `validBase64URL` allows "=" only as trailing padding and enforces its ceiling; the three named wrappers inherit it | SPLIT: the `ValidWrapped/Sealed/Invite` line goes; the function stays through `ValidDeviceID` | device id validation | M1 task 2 |
 | 508 | `TestACrashBetweenSpendingAnInviteAndRegisteringSpendsNeither` | A failure injected between spend and register leaves no device and the invite outstanding (529-531, the plan's ":530"); the same string then redeems | GUARANTEE (confirmed) | invite token redemption, atomic `RedeemInvite` | M1 task 2, task 11 |
 | 557 | `TestARedeemRacingARevokeLeavesTheVaultConsistent` | Twenty races of redeem against revoking the only device through two handles: never an empty vault, the redemption is both halves or neither, the revoke fails only with ErrLastDevice | GUARANTEE (confirmed; the never-empty half depends on hazard 4) | invite token redemption against revoke from a device or the control socket | M1 task 11 |
-| 623 | `TestARedeemRacingARotationCannotWin` | Rotation deletes every invite in its own transaction, so a racing redemption either happened or is refused and never redeems afterwards | OBSOLETE (nothing in Telimus retires all invites at once) | none | M1 task 2 |
+| 623 | `TestARedeemRacingARotationCannotWin` | Rotation deletes every invite in its own transaction, so a racing redemption either happened or is refused and never redeems afterwards | OBSOLETE (nothing in Trew retires all invites at once) | none | M1 task 2 |
 | 679 | `TestAnUnclaimedVaultHasNothingToRedeem` | Redeeming against an unclaimed vault is ErrNoInvite, like an unknown invite | GUARANTEE ("unclaimed" becomes unknown vault; the wire form is also `disclosure_test.go:309`) | invite token redemption | M1 task 2 |
 | 695 | `TestARedemptionOntoAnExistingIdChangesNothing` | Redeeming onto an existing device id is ErrDeviceExists; the row's hash and name and the invite are untouched | GUARANTEE (hazard 3) | invite token redemption, lost-reply redemption | M1 task 2, M0.5 task 1 |
 | 743 | `TestConcurrentRedemptionsOfOneInviteRegisterExactlyOneDevice` | Eight handles redeem one invite at once, twenty times: one winner, one row holding the winner's hash, the invite spent, nothing redeems afterwards | GUARANTEE | invite token redemption (a single-statement spend) | M1 task 2, task 11 |
@@ -204,7 +204,7 @@ Across both tiers, 364 tests are classified: 152 obsolete, 140 guarantees, 72 sp
 | 215 | `TestCrashedPairingsDoNotPreventMoreDevicesJoining` | 24 redeemed but never-connected rows do not stop another device joining; 25 rows show last_seen 0 | GUARANTEE | invite token redemption | M1 task 11 |
 | 244 | `TestI23AnInviteIsRedeemedExactlyOnce` | The invite reply echoes its id and an expiry near now plus TTL; redemption returns the device id and no wrapped key; the second, unknown and malformed tries get one identical `auth`; the issuer is untouched | SPLIT: the sealed and wrapped checks go; the rest stays | invite token redemption | M1 task 7, task 11 |
 | 293 | `TestI23AnExpiredInviteIsRefused` | A redemption after expiry is `auth` | GUARANTEE | invite token redemption | M1 task 11 |
-| 307 | `TestI23TheTTLDefaultsAndIsCapped` | No TTL gives `DefaultInviteTTL` (10 minutes); five hours is capped at `MaxInviteTTL` (1 hour); a negative TTL is `badentry` | GUARANTEE (values change: one-hour default and `--ttl 0` per protocol.md) | invite TTL on the wire op and on `telimus invite` | M1 task 1, task 9 |
+| 307 | `TestI23TheTTLDefaultsAndIsCapped` | No TTL gives `DefaultInviteTTL` (10 minutes); five hours is capped at `MaxInviteTTL` (1 hour); a negative TTL is `badentry` | GUARANTEE (values change: one-hour default and `--ttl 0` per protocol.md) | invite TTL on the wire op and on `trew invite` | M1 task 1, task 9 |
 | 328 | `TestI23InviteRefusals` | A registrar may not issue invites; malformed invite requests are `badentry` and the session survives; an unclaimed vault has nothing to redeem | SPLIT: the registrar and sealed-payload subtests go; the third stays (also `disclosure_test.go:309`) | invite token redemption | M1 task 7 |
 | 369 | `TestI23RotateDeletesOutstandingInvites` | A rotation deletes every outstanding invite | OBSOLETE | none | M1 task 7 |
 | 399 | `TestI23AnInviteIdentifierIsRefusedTheSecondTime` | A reused client-chosen invite id is non-retryable `badentry` and changes nothing | OBSOLETE (the server mints tokens; the retryable table stays in `protocol_test.go:232`) | none | M1 task 7 |
@@ -222,7 +222,7 @@ Across both tiers, 364 tests are classified: 152 obsolete, 140 guarantees, 72 sp
 |---|---|---|---|---|---|
 | 83 | `TestI23TheDocsStateTheInviteLifetimeTheCodeUses` | Every invite duration in the README, client README, server, plugin and protocol docs equals the default or maximum TTL, and there are at least five mentions | GUARANTEE (constants and docs both change) | invite TTL constants | M1 task 9, M9 |
 
-### `cmd/telimus/token_s11_test.go` (3)
+### `cmd/trew/token_s11_test.go` (3)
 
 | Line | Test | Asserts | Class | Rewrite against | Owner |
 |---|---|---|---|---|---|
@@ -285,7 +285,7 @@ Across both tiers, 364 tests are classified: 152 obsolete, 140 guarantees, 72 sp
 | 29 | `TestTheVaultCredentialCannotSync` | A registrar is refused every sync op, writes nothing and is in no fan-out | OBSOLETE | none | M1 task 7 |
 | 80 | `TestTheVaultCredentialIsNotADeviceCredential` | The vault key offered as a device key opens nothing | OBSOLETE | none | M1 task 7 |
 | 96 | `TestAnUnknownDeviceAndAWrongKeyAreOneRefusal` | A wrong key and an unregistered id get the same refusal | GUARANTEE | device token hash lookup | M1 task 7 |
-| 121 | `TestTheRecoveryKeyRegistersADeviceWhenEveryDeviceIsGone` | With every device revoked, the recovery key registers one that then syncs | SPLIT: the recovery key goes; getting back into a store with history and no devices stays | control socket admin (`telimus invite`, then redemption) | M1 task 9 |
+| 121 | `TestTheRecoveryKeyRegistersADeviceWhenEveryDeviceIsGone` | With every device revoked, the recovery key registers one that then syncs | SPLIT: the recovery key goes; getting back into a store with history and no devices stays | control socket admin (`trew invite`, then redemption) | M1 task 9 |
 | 159 | `TestTheRecoveryKeyAdministersTheDeviceListAndReadsNoNote` | The recovery key lists and revokes devices but reads and writes no note | SPLIT: listing and revoking move to the admin; "reads no note" goes (the admin has the data directory) | control socket admin | M1 task 9 |
 | 212 | `TestADeviceMayNotRegisterAnotherDevice` | A device's `register` is `auth` and adds no row | OBSOLETE (`register` goes; devices add devices through invites, which are listed) | none | M1 task 7 |
 | 236 | `TestRegisteringTheSameDeviceTwiceIsIdempotent` | The same id and key twice is success; a different key under that id is `badentry` and changes nothing | SPLIT: `register` goes; the retry rule is what a redemption retry needs (hazard 3) | lost-reply redemption | M0.5 task 1 |
@@ -386,37 +386,37 @@ Across both tiers, 364 tests are classified: 152 obsolete, 140 guarantees, 72 sp
 
 ### `client/src/core/pairing.test.ts` (43)
 
-The 26 codec cases were written against `basalt3_` (recovery key) and `basalt3i_` (invite). Every codec property they pin carries over to the telimus1i_ string, which has the same family of layout: a version byte, fixed and length-prefixed fields, CRC-32, base64url.
+The 26 codec cases were written against `basalt3_` (recovery key) and `basalt3i_` (invite). Every codec property they pin carries over to the trew1i_ string, which has the same family of layout: a version byte, fixed and length-prefixed fields, CRC-32, base64url.
 
 | Line | Test | Asserts | Class | Rewrite against | Owner |
 |---|---|---|---|---|---|
-| 36 | round tripping > gives back exactly what went in | url, vault and secret round-trip | GUARANTEE | telimus1i_ codec (url, vault, token) | M0.5 task 1, M2 task 5 |
-| 44 | round tripping > survives a real generated secret, every time | 200 random secrets round-trip, so no length byte is read as data | GUARANTEE | telimus1i_ codec with random tokens | M0.5 task 1, M2 task 5 |
-| 54 | round tripping > survives the whitespace a paste brings with it | Surrounding whitespace is trimmed | GUARANTEE | telimus1i_ codec | M2 task 5 |
-| 59 | round tripping > carries fields that are not ASCII | A non-ASCII vault id round-trips | GUARANTEE | telimus1i_ codec | M2 task 5 |
-| 64 | round tripping > is one word, so it survives being sent in a message | The string is one base64url word after its prefix | GUARANTEE | telimus1i_ codec | M2 task 5 |
-| 75 | round tripping > carries a 32-byte root, and refuses any other length | A 32-byte root round-trips; 20 bytes are refused at format time | SPLIT: the root goes; refusing a fixed field of the wrong length stays, for the 16-byte token | telimus1i_ codec | M0.5 task 1, M2 task 5 |
-| 96 | refusing a string it cannot read completely > refuses something that is not a pairing string at all | "hello" and "" are refused, naming the prefix | GUARANTEE | telimus1i_ codec | M2 task 5 |
+| 36 | round tripping > gives back exactly what went in | url, vault and secret round-trip | GUARANTEE | trew1i_ codec (url, vault, token) | M0.5 task 1, M2 task 5 |
+| 44 | round tripping > survives a real generated secret, every time | 200 random secrets round-trip, so no length byte is read as data | GUARANTEE | trew1i_ codec with random tokens | M0.5 task 1, M2 task 5 |
+| 54 | round tripping > survives the whitespace a paste brings with it | Surrounding whitespace is trimmed | GUARANTEE | trew1i_ codec | M2 task 5 |
+| 59 | round tripping > carries fields that are not ASCII | A non-ASCII vault id round-trips | GUARANTEE | trew1i_ codec | M2 task 5 |
+| 64 | round tripping > is one word, so it survives being sent in a message | The string is one base64url word after its prefix | GUARANTEE | trew1i_ codec | M2 task 5 |
+| 75 | round tripping > carries a 32-byte root, and refuses any other length | A 32-byte root round-trips; 20 bytes are refused at format time | SPLIT: the root goes; refusing a fixed field of the wrong length stays, for the 16-byte token | trew1i_ codec | M0.5 task 1, M2 task 5 |
+| 96 | refusing a string it cannot read completely > refuses something that is not a pairing string at all | "hello" and "" are refused, naming the prefix | GUARANTEE | trew1i_ codec | M2 task 5 |
 | 101 | refusing a string it cannot read completely > tells an invite from a recovery key, in both directions | Each parser names the other kind | OBSOLETE (one kind of string remains; a pasted Basalt string could be named as Basalt's) | none | M2 task 5 |
-| 115 | refusing a string it cannot read completely > refuses a credential with one character appended | A spare character that adds no byte is refused, for both kinds | GUARANTEE | telimus1i_ codec | M2 task 5 |
-| 133 | refusing a string it cannot read completely > refuses a credential whose unused final bits were flipped | Flipped unused bits are refused, for both kinds | GUARANTEE | telimus1i_ codec | M2 task 5 |
-| 153 | refusing a string it cannot read completely > refuses one that lost its end | Cutting 1, 4, 12 or 40 characters is refused | GUARANTEE | telimus1i_ codec | M2 task 5 |
-| 160 | refusing a string it cannot read completely > refuses one with a character changed | Every single-character change is refused (the CRC) | GUARANTEE | telimus1i_ codec | M2 task 5 |
-| 178 | refusing a string it cannot read completely > refuses two characters swapped | Every adjacent transposition is refused | GUARANTEE | telimus1i_ codec | M2 task 5 |
-| 192 | refusing a string it cannot read completely > refuses a version it does not understand | Version 4 with a valid CRC is refused by version | GUARANTEE | telimus1i_ codec | M0.5 task 1 |
-| 201 | refusing a string it cannot read completely > refuses a length that points past the end | A field length past the end is refused | GUARANTEE | telimus1i_ codec | M0.5 task 1 |
-| 209 | refusing a string it cannot read completely > refuses trailing rubbish that decoded cleanly | Extra bytes before a valid CRC are refused | GUARANTEE | telimus1i_ codec | M0.5 task 1 |
-| 220 | refusing to make a string it could not read back > refuses a secret of the wrong length | 8 and 64 bytes are refused at format time | GUARANTEE (secret becomes token) | telimus1i_ codec | M2 task 5 |
-| 225 | refusing to make a string it could not read back > refuses a field too long for its length byte | A 256-character URL is refused | GUARANTEE | telimus1i_ codec | M0.5 task 1 |
-| 238 | server addresses that are long or not ASCII > refuses an address too long to carry | Over-long addresses are refused by both formats | GUARANTEE | `normaliseUrl`, telimus1i_ codec | M2 task 5 |
+| 115 | refusing a string it cannot read completely > refuses a credential with one character appended | A spare character that adds no byte is refused, for both kinds | GUARANTEE | trew1i_ codec | M2 task 5 |
+| 133 | refusing a string it cannot read completely > refuses a credential whose unused final bits were flipped | Flipped unused bits are refused, for both kinds | GUARANTEE | trew1i_ codec | M2 task 5 |
+| 153 | refusing a string it cannot read completely > refuses one that lost its end | Cutting 1, 4, 12 or 40 characters is refused | GUARANTEE | trew1i_ codec | M2 task 5 |
+| 160 | refusing a string it cannot read completely > refuses one with a character changed | Every single-character change is refused (the CRC) | GUARANTEE | trew1i_ codec | M2 task 5 |
+| 178 | refusing a string it cannot read completely > refuses two characters swapped | Every adjacent transposition is refused | GUARANTEE | trew1i_ codec | M2 task 5 |
+| 192 | refusing a string it cannot read completely > refuses a version it does not understand | Version 4 with a valid CRC is refused by version | GUARANTEE | trew1i_ codec | M0.5 task 1 |
+| 201 | refusing a string it cannot read completely > refuses a length that points past the end | A field length past the end is refused | GUARANTEE | trew1i_ codec | M0.5 task 1 |
+| 209 | refusing a string it cannot read completely > refuses trailing rubbish that decoded cleanly | Extra bytes before a valid CRC are refused | GUARANTEE | trew1i_ codec | M0.5 task 1 |
+| 220 | refusing to make a string it could not read back > refuses a secret of the wrong length | 8 and 64 bytes are refused at format time | GUARANTEE (secret becomes token) | trew1i_ codec | M2 task 5 |
+| 225 | refusing to make a string it could not read back > refuses a field too long for its length byte | A 256-character URL is refused | GUARANTEE | trew1i_ codec | M0.5 task 1 |
+| 238 | server addresses that are long or not ASCII > refuses an address too long to carry | Over-long addresses are refused by both formats | GUARANTEE | `normaliseUrl`, trew1i_ codec | M2 task 5 |
 | 244 | server addresses that are long or not ASCII > converts an internationalised hostname to punycode, once, on the way in | IDN hosts become punycode once and round-trip; ASCII is untouched | GUARANTEE | `normaliseUrl` (kept) | M2 task 5 |
 | 255 | server addresses that are long or not ASCII > refuses a hostname that cannot be made into an address | A host with a space is refused | GUARANTEE | `normaliseUrl` (kept) | none |
-| 275 | the invite string > gives back exactly what went in | url, vault, id and key round-trip | GUARANTEE (id and key become the token) | telimus1i_ codec | M2 task 5 |
-| 284 | the invite string > is one word with its own prefix | `^basalt3i_[A-Za-z0-9_-]+$` | GUARANTEE (prefix `telimus1i_`) | telimus1i_ codec | M2 task 5 |
-| 289 | the invite string > refuses one with a character changed or its end lost | Every single change and every cut is refused | GUARANTEE | telimus1i_ codec | M2 task 5 |
-| 306 | the invite string > refuses a version it does not understand | Version 9 is refused | GUARANTEE | telimus1i_ codec | M0.5 task 1 |
-| 314 | the invite string > refuses an id or key of the wrong length rather than making a string it could not read | An 8-byte id and a 16-byte key are refused | SPLIT: the invite key goes; the token length check stays | telimus1i_ codec | M2 task 5 |
-| 319 | the invite string > refuses something that is not an invite at all | "hello" is refused, naming the prefix | GUARANTEE | telimus1i_ codec | M2 task 5 |
+| 275 | the invite string > gives back exactly what went in | url, vault, id and key round-trip | GUARANTEE (id and key become the token) | trew1i_ codec | M2 task 5 |
+| 284 | the invite string > is one word with its own prefix | `^basalt3i_[A-Za-z0-9_-]+$` | GUARANTEE (prefix `trew1i_`) | trew1i_ codec | M2 task 5 |
+| 289 | the invite string > refuses one with a character changed or its end lost | Every single change and every cut is refused | GUARANTEE | trew1i_ codec | M2 task 5 |
+| 306 | the invite string > refuses a version it does not understand | Version 9 is refused | GUARANTEE | trew1i_ codec | M0.5 task 1 |
+| 314 | the invite string > refuses an id or key of the wrong length rather than making a string it could not read | An 8-byte id and a 16-byte key are refused | SPLIT: the invite key goes; the token length check stays | trew1i_ codec | M2 task 5 |
+| 319 | the invite string > refuses something that is not an invite at all | "hello" is refused, naming the prefix | GUARANTEE | trew1i_ codec | M2 task 5 |
 | 351 | the names a device is told to skip > survives a round trip through the stored config | The ignore list round-trips through the config | GUARANTEE (setup: the config's key fields change) | DeviceConfig | M2 task 5 |
 | 361 | the names a device is told to skip > is absent from a config that skips nothing | No `ignore` key when nothing is skipped | GUARANTEE | DeviceConfig | M2 task 5 |
 | 369 | the names a device is told to skip > drops a name it cannot use rather than refusing the file | Bad names and bad JSON are dropped and the config still reads | GUARANTEE | DeviceConfig | M2 task 5 |
@@ -438,7 +438,7 @@ The 26 codec cases were written against `basalt3_` (recovery key) and `basalt3i_
 
 | Line | Test | Asserts | Class | Rewrite against | Owner |
 |---|---|---|---|---|---|
-| 77 | issuing an invite > seals the vault's data key, and nothing that could add a device later | `invite()` returns a `basalt3i_` string with a future expiry; redeeming it yields this device's data key | SPLIT: the data key goes; a string for this vault with a future expiry, which redeems, stays | client `invite()` returning a telimus1i_ string | M2 task 3, task 6 |
+| 77 | issuing an invite > seals the vault's data key, and nothing that could add a device later | `invite()` returns a `basalt3i_` string with a future expiry; redeeming it yields this device's data key | SPLIT: the data key goes; a string for this vault with a future expiry, which redeems, stays | client `invite()` returning a trew1i_ string | M2 task 3, task 6 |
 | 105 | issuing an invite > registers the redeeming device, so it needs no recovery key of its own | Redemption returns an id and credential; the row is listed as "phone" with lastSeen 0; the credential connects | GUARANTEE (server side also `invite_test.go:479`) | `redeemInvite` returning `{deviceId, deviceToken}` | M2 task 6 |
 | 141 | issuing an invite > works once, and the refusal leaves the vault with one new device | A second redemption is "not authorised"; the list gains one device | GUARANTEE (also `main.test.ts:3956`, `cli.test.ts:1194`) | invite token redemption | M2 task 6 |
 | 158 | issuing an invite > cannot be opened by anything but the key in the string | A wrong invite key fails to unseal | OBSOLETE | none | M2 task 9 |
@@ -531,14 +531,14 @@ Only the cases whose subject or assertion is the crypto; the setup-only cases of
 | `internal/server/mutation_authorization_test.go:106` | `TestRetiredRegistrarCannotCancelANewInvite` | OBSOLETE | none; the file's other three tests are revoke races and stay | M1 task 7 |
 | `internal/server/disclosure_test.go:224` | `TestTheProtoAndCryptoRefusalsStillNameWhatThisServerSpeaks` | SPLIT | the crypto-suite half goes; the proto refusal still names the asked version and the range | M1 task 1 |
 | `internal/server/disclosure_test.go:309` | `TestNoPreAuthRefusalDependsOnWhetherTheVaultExists` | SPLIT | the crypto-suite row goes and the invite row sends a token; every other probe must stay byte-identical for a served and an unknown vault | M1 task 7 |
-| `cmd/telimus/main_test.go:671` | `TestServeKeepsItsTokenAcrossRestarts` | SPLIT | the bootstrap token goes; a restart on an empty store must not invalidate a first-run invite already written | M1 task 9 |
-| `cmd/telimus/main_test.go:1189` | `TestTheSetupStringNamesSomethingADeviceCanDial` | SPLIT | `printSetup` goes; the URL inside the first-run invite is never a wildcard bind | M1 task 9 |
-| `cmd/telimus/main_test.go:1207` | `TestAnExplicitAddressIsPrintedAsGiven` | SPLIT | an explicit address goes into the first-run invite unchanged | M1 task 9 |
-| `cmd/telimus/main_test.go:1218` | `TestAClaimedVaultPrintsNoToken` | SPLIT | a store with devices mints and prints no first-run invite, and says `telimus invite` | M1 task 9 |
-| `cmd/telimus/main_test.go:1252` | `TestAClaimedVaultRefusesTheNextClaim` | SPLIT | the claim goes; through the shipped binary the first-run invite redeems once, a second use is non-retryable `auth`, and the first device still connects | M1 task 9, task 11 |
-| `cmd/telimus/main_test.go:1294` | `TestLocalhostPrintsAStringThatCanBePastedAsIs` | SPLIT | under `-localhost` the first-run invite carries a `ws://` loopback URL usable as is | M1 task 9 |
-| `cmd/telimus/ops_i17_test.go:24` | `TestS20AnExisting0644TokenIsTightenedOnLoad` | OBSOLETE | the server loads no secret file in Telimus | M1 task 9 |
-| `cmd/telimus/ops_i17_test.go:86` | `TestI11StartupLogsVersionLatestUIDAndClaimed` | SPLIT | "claimed" goes; version and latest uid in the startup log stay | M1 task 9 |
+| `cmd/trew/main_test.go:671` | `TestServeKeepsItsTokenAcrossRestarts` | SPLIT | the bootstrap token goes; a restart on an empty store must not invalidate a first-run invite already written | M1 task 9 |
+| `cmd/trew/main_test.go:1189` | `TestTheSetupStringNamesSomethingADeviceCanDial` | SPLIT | `printSetup` goes; the URL inside the first-run invite is never a wildcard bind | M1 task 9 |
+| `cmd/trew/main_test.go:1207` | `TestAnExplicitAddressIsPrintedAsGiven` | SPLIT | an explicit address goes into the first-run invite unchanged | M1 task 9 |
+| `cmd/trew/main_test.go:1218` | `TestAClaimedVaultPrintsNoToken` | SPLIT | a store with devices mints and prints no first-run invite, and says `trew invite` | M1 task 9 |
+| `cmd/trew/main_test.go:1252` | `TestAClaimedVaultRefusesTheNextClaim` | SPLIT | the claim goes; through the shipped binary the first-run invite redeems once, a second use is non-retryable `auth`, and the first device still connects | M1 task 9, task 11 |
+| `cmd/trew/main_test.go:1294` | `TestLocalhostPrintsAStringThatCanBePastedAsIs` | SPLIT | under `-localhost` the first-run invite carries a `ws://` loopback URL usable as is | M1 task 9 |
+| `cmd/trew/ops_i17_test.go:24` | `TestS20AnExisting0644TokenIsTightenedOnLoad` | OBSOLETE | the server loads no secret file in Trew | M1 task 9 |
+| `cmd/trew/ops_i17_test.go:86` | `TestI11StartupLogsVersionLatestUIDAndClaimed` | SPLIT | "claimed" goes; version and latest uid in the startup log stay | M1 task 9 |
 
 The other cases of these files use crypto only in setup: the `RegisterDevice` shadow in `internal/store/devices_test.go`, `Mac: testMac` fields, `vaultHello` and `claimed` helpers. Three of them, `internal/store/devices_test.go:374` and `:667` and `internal/server/devices_test.go:532`, depend on the last-device decision (hazard 4).
 
@@ -593,9 +593,9 @@ The other cases of these files use crypto only in setup: the `RegisterDevice` sh
 | `plugin/main.test.ts:5285` | a pairing that outlives the plugin > does not start a loop after unload, starting a vault | OBSOLETE | first and later devices both pair by invite now, so `main.test.ts:3987` covers it | M2 task 7 |
 | `plugin/main.test.ts:5323` | handing over a replacement recovery key > does not send the rotation until the key has been taken | OBSOLETE | none | M2 task 7 |
 | `plugin/panel-shots.test.ts:256` | the panel walk > still says the four things that were paid for in incidents | SPLIT | "revoking does not un-read" and the invite expiry stay (the expiry becomes one hour); "keeps its decryption key" and the recovery-key lines go; the TLS warning inverts (hazard 8) | M2 task 7, task 13 |
-| `plugin/panel-shots.test.ts:320` | the panel walk > puts the invite and the recovery key on screen where they can be read | SPLIT | the invite scene stays with a telimus1i_ string; the recovery-key scene goes | M2 task 13 |
+| `plugin/panel-shots.test.ts:320` | the panel walk > puts the invite and the recovery key on screen where they can be read | SPLIT | the invite scene stays with a trew1i_ string; the recovery-key scene goes | M2 task 13 |
 | `cli/cli.test.ts:160` | pairing a vault > prints a pairing string the other device can use | SPLIT | a shared URL and distinct device names stay; the shared secret goes | M2 task 10 |
-| `cli/cli.test.ts:173` | pairing a vault > takes the one line the server printed, as printed | SPLIT | `pair` takes the invite exactly as `telimus invite` or serve printed it; `init` goes | M2 task 10 |
+| `cli/cli.test.ts:173` | pairing a vault > takes the one line the server printed, as printed | SPLIT | `pair` takes the invite exactly as `trew invite` or serve printed it; `init` goes | M2 task 10 |
 | `cli/cli.test.ts:189` | pairing a vault > says what a setup line looks like when handed something else | OBSOLETE | `init` and the setup line go | M2 task 10 |
 | `cli/cli.test.ts:217` | pairing a vault > cannot reprint the recovery key, and says why | OBSOLETE | none | M2 task 10 |
 | `cli/cli.test.ts:552` | status > says a device never registered itself, rather than blaming the server | SPLIT | rule 7: a config with no credential is neither reachable nor refused | M2 task 10 |
@@ -611,7 +611,7 @@ The other cases of these files use crypto only in setup: the `RegisterDevice` sh
 | `cli/cli.test.ts:1240` | adding a device > pairs with the recovery key, registers a row, and then forgets the key | OBSOLETE | none | M2 task 10 |
 | `cli/cli.test.ts:1265` | adding a device > reaches the server before it says paired | SPLIT | an invite against a dead server never says "Paired"; hazard 2 | M0.5 task 1, M2 task 10 |
 | `cli/cli.test.ts:1275` | adding a device > refuses a recovery key the vault does not know | OBSOLETE | the invite form is `cli.test.ts:1194` | M2 task 10 |
-| `cli/cli.test.ts:1329` | the device list > says, in the listing, that revoking does not un-read anything | SPLIT | "does not un-read" stays; `telimus rotate` and "later encrypted content" go | M2 task 10 |
+| `cli/cli.test.ts:1329` | the device list > says, in the listing, that revoking does not un-read anything | SPLIT | "does not un-read" stays; `trew rotate` and "later encrypted content" go | M2 task 10 |
 | `cli/cli.test.ts:1408` | the device list > refuses to empty the vault from a device, and says whose job it is | SPLIT | decision-dependent (hazard 4); the recovery-key half moves to the control socket or goes | M1 task 9, M2 task 10 |
 | `cli/cli.test.ts:1548` | the device list > refuses --recovery-key where it would have been ignored | OBSOLETE | the flag goes | M2 task 10 |
 | `cli/cli.test.ts:1570` | the device list > lists and revokes with the recovery key, for a vault with no device to ask | SPLIT | listing and revoking with no device left moves to the control socket | M1 task 9 |
@@ -642,10 +642,10 @@ The server half of the strip (PLAN M1), applied as this ledger says: every GUARA
 | File | Deleted (OBSOLETE) | Kept, rewritten against protocol 1 |
 |---|---|---|
 | `internal/store/keys_test.go`, now `invites_test.go` | 29, 61, 88, 366, 426, 623 | 107, 177 (the listed id proven not to redeem, field by field), 240, 307, 334 (decided: see below), 468 (the wrapper line dropped), 508, 557 (the both-or-neither half, now racing a revoke of the invite's own issuer), 679, 695 (with the lost-reply retry of hazard 3), 743 (checked to fail with a deferred transaction) |
-| `internal/server/auth_test.go` | 36, 69, 87, 157 | 98 (device and invite digests), 122 (both hello routes), 140 (the 32-byte token floor replaces MinClaimLength), 177 (an empty credential, and a row whose digest is the digest of nothing); 50's surviving half is `cmd/telimus` `TestTheFirstInviteWorksOnce` |
-| `internal/server/invite_test.go` | 369, 399, 664 | 73, 129, 147, 215, 244, 293, 307 (one hour and one hour), 328's third subtest, 437 (a device's own credential with an invite), 479 (register and rotate are unknown ops now), 539, 572 (refused as `auth`), 617 (with devices_test 270's rows), 691; 195 moved to the control socket (`cmd/telimus/admin_test.go`) |
+| `internal/server/auth_test.go` | 36, 69, 87, 157 | 98 (device and invite digests), 122 (both hello routes), 140 (the 32-byte token floor replaces MinClaimLength), 177 (an empty credential, and a row whose digest is the digest of nothing); 50's surviving half is `cmd/trew` `TestTheFirstInviteWorksOnce` |
+| `internal/server/invite_test.go` | 369, 399, 664 | 73, 129, 147, 215, 244, 293, 307 (one hour and one hour), 328's third subtest, 437 (a device's own credential with an invite), 479 (register and rotate are unknown ops now), 539, 572 (refused as `auth`), 617 (with devices_test 270's rows), 691; 195 moved to the control socket (`cmd/trew/admin_test.go`) |
 | `internal/server/invite_doc_test.go` | | 83, reading plan/protocol.md too; `client/README.md` is left out until M2, and still says ten minutes |
-| `cmd/telimus/token_s11_test.go`, now `secretfile_s11_test.go` | 64 | 14, 40, against `writeSecretFile` |
+| `cmd/trew/token_s11_test.go`, now `secretfile_s11_test.go` | 64 | 14, 40, against `writeSecretFile` |
 | `internal/server/unlimited_devices_test.go` | | 10 (through invites), 24 |
 | `internal/server/release_review_test.go` | 69, 89 | 13; 33 as `TestDevicePublicationMayRaceConnectionFailure` |
 | `internal/server/protocol_test.go` | 361, 393, 412, 435, 566, 611, 705, 898, 937, 966, 994 | 43 to 326, 763, 809 (with the `mcp:` rows), 832 (a Basalt protocol 7 hello, hazard 7), 855 (through invites), 1059 (the refusal now byte-identical to a wrong token's), 1087; 479's surviving half is the store identity tests of M1 task 8; 658 as `TestARevokeEvictsEverySessionOfTheDeviceAtOnce` |
@@ -654,7 +654,7 @@ The server half of the strip (PLAN M1), applied as this ledger says: every GUARA
 | Tier 2, `internal/store/devices_test.go` | 818, 886, 921, 956 | 133 (a vault that does not exist), 977 (the invite rows' own checks), 374 inverted, 667 as `TestConcurrentRevokesOfOneDeviceDeleteItOnce` |
 | Tier 2, the rest | `migrate_test.go` 107 and 268; `mutation_authorization_test.go` 106; `ops_i17_test.go` 24 | `store_test.go` 1351 and 1383 (a `badpath` row, hazard 6); `backup_test.go` 845 (the same); `migrate_test.go` 207; `session_test.go` 65 (a protocol 7 row); `disclosure_test.go` 224 and 309 (run against a server serving a vault as well as one serving any); the six `main_test.go` rows as first-invite tests; `ops_i17_test.go` 86 (devices for claimed) |
 
-Beyond the ledger, three tests went with the fresh schema rather than the crypto, and one file with the Authenticator: `store_test.go`'s `TestAnEntryFromBeforeTheCountIsStillReadable` is inverted to `TestAChunkCountOfMinusOneIsNotSpecial`, since Telimus has no rows from before the column; `main_test.go`'s `TestPurgeAcceptsABackupFromBeforeTheChunkCount` is deleted, since no older Telimus schema exists to take a backup with; and `internal/server/server_test.go`, which tested the test suite's own `StaticTokens` authenticator, is deleted with it. `protocol-fixtures.json` still carries five entry cases about the MAC and the parent, because the TypeScript suite reads them; the Go test lists them by name and requires the server to accept them, and M2 deletes them with `goodMac`.
+Beyond the ledger, three tests went with the fresh schema rather than the crypto, and one file with the Authenticator: `store_test.go`'s `TestAnEntryFromBeforeTheCountIsStillReadable` is inverted to `TestAChunkCountOfMinusOneIsNotSpecial`, since Trew has no rows from before the column; `main_test.go`'s `TestPurgeAcceptsABackupFromBeforeTheChunkCount` is deleted, since no older Trew schema exists to take a backup with; and `internal/server/server_test.go`, which tested the test suite's own `StaticTokens` authenticator, is deleted with it. `protocol-fixtures.json` still carries five entry cases about the MAC and the parent, because the TypeScript suite reads them; the Go test lists them by name and requires the server to accept them, and M2 deletes them with `goodMac`.
 
 ### The unique guarantees, on the Go side
 

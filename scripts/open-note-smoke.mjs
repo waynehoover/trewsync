@@ -21,10 +21,10 @@ if (flag !== "--vault" || !vault || (mode && mode !== "--native-writes") || extr
   );
   process.exit(flag === "--help" ? 0 : 1);
 }
-const scratch = await mkdtemp(join(tmpdir(), "telimus-open-note-"));
+const scratch = await mkdtemp(join(tmpdir(), "trew-open-note-"));
 const resultPath = join(scratch, "result.json");
 const ownedPath = join(scratch, "owned");
-const id = `telimus-open-note-smoke-${randomUUID()}`;
+const id = `trew-open-note-smoke-${randomUUID()}`;
 const require = createRequire(join(root, "client/package.json"));
 let installed = false;
 
@@ -80,16 +80,16 @@ try {
     join(scratch, "manifest.json"),
     JSON.stringify({
       id,
-      name: "Telimus editor check",
+      name: "Trew editor check",
       version: "0.0.0",
       minAppVersion: "1.6.0",
       description: "Temporary native editor regression test.",
-      author: "Telimus",
+      author: "Trew",
       isDesktopOnly: true,
     }),
   );
   const preflight = evaluate(`JSON.stringify({name:app.vault.getName(),
-    state:app.plugins.plugins["telimus-sync"]?.currentState?.kind,
+    state:app.plugins.plugins["trew-sync"]?.currentState?.kind,
     existing:!!app.plugins.manifests[${JSON.stringify(id)}]})`);
   const state = JSON.parse(preflight.slice(preflight.indexOf("{")));
   if (state.name !== vault || state.existing || (state.state && state.state !== "unpaired"))

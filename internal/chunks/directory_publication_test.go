@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/fsync"
+	"github.com/waynehoover/trew/internal/fsync"
 )
 
 func TestRetryFlushesFailedDirectoryPublication(t *testing.T) {

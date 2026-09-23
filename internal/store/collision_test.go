@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/paths"
+	"github.com/waynehoover/trew/internal/paths"
 )
 
 // collisionScenario is one case of the `collisions` section of

@@ -155,7 +155,7 @@ function time(run: () => void): number {
 }
 
 function main(): void {
-  console.log("telimus: what a merge costs on text built to be hard");
+  console.log("trew: what a merge costs on text built to be hard");
   console.log(`  ${cpus()[0]?.model ?? "unknown cpu"}, ${cpus().length} cores`);
   console.log(
     `  ${process.versions.bun ? "bun " + process.versions.bun : "node " + process.version}`,

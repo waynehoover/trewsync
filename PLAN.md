@@ -1,6 +1,6 @@
-# Telimus: self-hosted Obsidian sync with a built-in agent
+# Trew: self-hosted Obsidian sync with a built-in agent
 
-Named for House Telimus in James Islington's *The Will of the Many*, the family that takes Vis in and gives him a name. Said TEL-ih-mus. The name was chosen on 2026-09-22 after a second naming round; it replaced Lyell, which is recorded in [§10](#10-the-name) with the other candidates that did not survive. The on-disk identity (`telimus1i_` invite strings, `.telimus` state directories, the store's product identifier) derives from it, so it is settled, not a placeholder.
+Named for House Trew in James Islington's *The Will of the Many*, the family that takes Vis in and gives him a name. Said TEL-ih-mus. The name was chosen on 2026-09-22 after a second naming round; it replaced Lyell, which is recorded in [§10](#10-the-name) with the other candidates that did not survive. The on-disk identity (`trew1i_` invite strings, `.trew` state directories, the store's product identifier) derives from it, so it is settled, not a placeholder.
 
 This plan is written for agents. Each milestone lists tasks small enough for one session, the Basalt files they start from, and the test that proves them done. Read [plan/reuse-map.md](plan/reuse-map.md), [plan/protocol.md](plan/protocol.md), and [plan/mcp-tools.md](plan/mcp-tools.md) before starting a task that touches those areas.
 
@@ -18,9 +18,9 @@ Three roles, one static Go binary:
 
 | Role | Command | What it does |
 |---|---|---|
-| Server | `telimus serve` | WebSocket sync server. SQLite metadata, content-addressed chunk store, version history, conditional writes, live fan-out. |
-| Agent endpoint | `telimus serve --mcp` | Streamable HTTP MCP at `/mcp` on the same listener. Tools read and write the server's own store, so an agent edit is an ordinary version that every device receives on the next frame. |
-| Headless client | `telimus-sync` (npm) | A paired device without Obsidian: a plaintext mirror on a NAS, a two-way peer, or a live folder on the server host. This is the **existing TypeScript client**, published, not a Go port. See §2.6. |
+| Server | `trew serve` | WebSocket sync server. SQLite metadata, content-addressed chunk store, version history, conditional writes, live fan-out. |
+| Agent endpoint | `trew serve --mcp` | Streamable HTTP MCP at `/mcp` on the same listener. Tools read and write the server's own store, so an agent edit is an ordinary version that every device receives on the next frame. |
+| Headless client | `trew-sync` (npm) | A paired device without Obsidian: a plaintext mirror on a NAS, a two-way peer, or a live folder on the server host. This is the **existing TypeScript client**, published, not a Go port. See §2.6. |
 
 The Obsidian plugin stays TypeScript and is a strip-down of Basalt's plugin: same panels, same preserving-write adapter, same history and recovery screens, minus the recovery key, rotation, and key handling.
 
@@ -50,13 +50,13 @@ What actually carries over:
 
 ### What changes, in one table
 
-| Basalt | Telimus | Why |
+| Basalt | Trew | Why |
 |---|---|---|
 | Sealed paths, sealed chunks, HMAC entry authenticator | Plaintext NFC paths, chunks named by SHA-256 of raw bytes | The server is trusted and needs to read notes for MCP and search. |
-| Root secret, recovery key, wrapped data key, rotation | None. Admin access is shell access to the data directory. | No keys to recover. Losing every device means running `telimus invite` on the server. |
+| Root secret, recovery key, wrapped data key, rotation | None. Admin access is shell access to the data directory. | No keys to recover. Losing every device means running `trew invite` on the server. |
 | Device secret with HKDF-derived auth token | Random 32-byte device token, server stores its SHA-256 | Same devices table, one derivation removed. |
 | Registrar session type, claim, bootstrap token file | Gone. Two hello routes: device session and invite redemption. | Nothing needs privilege separation from a root the devices must not hold. |
-| Invite carries a sealed data key | Invite is a single-use 128-bit token in a `telimus1i_` string | Same QR flow in the plugin. |
+| Invite carries a sealed data key | Invite is a single-use 128-bit token in a `trew1i_` string | Same QR flow in the plugin. |
 | Per-chunk deflate inside the ciphertext, codec pinned by a golden table | Deflate is a wire encoding with a marker byte. Names are over raw bytes, so the codec can never change identities. | Removes the cross-runtime byte-equality requirement and `compression-golden`. |
 | MCP is a separately paired TypeScript CLI on a plaintext directory | MCP is in the server, reading and appending versions in the store | One container instead of two; no second vault copy, no filesystem lock dance, no before-image files. |
 | Before-image sibling files for every agent edit | The displaced version, **pinned by reference** at the time of the operation | History is the copy only if purge cannot reclaim it. An age cutoff does not achieve this; see §4.5. |
@@ -104,16 +104,16 @@ Three credentials, all random, all stored hashed:
 | Credential | Made by | Stored | Used for |
 |---|---|---|---|
 | Device token (32 bytes) | The joining client, at redemption | `devices.auth_hash` | `hello` for a device session. Basalt's table and revoke flow, unchanged. |
-| Invite token (16 bytes) | Server, on `telimus invite` or the wire `invite` op | `invites.token_hash`, expiry, label | One redemption. Carried in the `telimus1i_` string with server URL and vault id. |
-| MCP token (32 bytes) | Server, on `telimus mcp-token` | `mcp_tokens.token_hash`, label, **scope**, **expires_at**, created, last used, used count | `Authorization: Bearer` on `/mcp`. Several may exist; each has a label that becomes the author name on its writes. |
+| Invite token (16 bytes) | Server, on `trew invite` or the wire `invite` op | `invites.token_hash`, expiry, label | One redemption. Carried in the `trew1i_` string with server URL and vault id. |
+| MCP token (32 bytes) | Server, on `trew mcp-token` | `mcp_tokens.token_hash`, label, **scope**, **expires_at**, created, last used, used count | `Authorization: Bearer` on `/mcp`. Several may exist; each has a label that becomes the author name on its writes. |
 
 MCP tokens default to **scope `read`**. Write access is explicit (`--scope write`), and the scope is enforced three times: at tool discovery, at dispatch, and again at the commit boundary against the credential as it stands *then* (§2.3.1). Omitting mutation tools from the tool list is presentation, not enforcement, and does nothing against a hand-written request. Tokens expire (90 days default) and carry a `used_count` alongside `last_used`, because `last_used` throttled to once a minute can miss a stolen token used once. The token's database identity is a generated collision-resistant id, not the first eight hex characters of its hash; eight hex characters are a display fingerprint.
 
 Per-token budgets, not just a global cap: concurrency, sustained request and byte rates, parser and assembly deadlines, and a maximum operation cost. One agent looping on `search_notes` must receive 429 without starving another token or, more importantly, ordinary device sync. Rate-limit failed authentication separately.
 
-The first device pairs from an invite printed by `serve` on first start with an empty store, and re-printable at any time with `telimus invite`. **Invites expire by default** (one hour) and bootstrap credentials go to an explicit private output path rather than to stdout, because a never-expiring invite in a container log is a durable vault credential. `--ttl 0` for a deliberate no-expiry invite is allowed and says so on the tin.
+The first device pairs from an invite printed by `serve` on first start with an empty store, and re-printable at any time with `trew invite`. **Invites expire by default** (one hour) and bootstrap credentials go to an explicit private output path rather than to stdout, because a never-expiring invite in a container log is a durable vault credential. `--ttl 0` for a deliberate no-expiry invite is allowed and says so on the tin.
 
-**Where the plugin keeps its device token** (decided 2026-09-22). In Obsidian's keychain, `app.secretStorage`, when the running app has it (1.11.4 and later), detected at runtime; in `data.json` on older apps. `minAppVersion` stays at 1.7.2, because raising it strands everyone on an older mobile app from updates (Pumice did this, `plan/research/pumice.md`). The keychain takes no vault parameter and may be shared by every vault on the device, so the secret id is scoped to both: `telimus-<vault>-<device>`, lowercased to the id alphabet the API accepts (lowercase alphanumeric and dashes). Migration writes the keychain, reads it back, and only then removes the `data.json` field (rules 3 and 4); a keychain that fails the read-back leaves the old field in place and says so. The point is that the token stops travelling with copies of `.obsidian` (backups, iCloud, git), so a copied vault cannot act as the device. Losing the keychain entry means re-pairing that device, which loses no note. The headless client keeps its 0600 config file.
+**Where the plugin keeps its device token** (decided 2026-09-22). In Obsidian's keychain, `app.secretStorage`, when the running app has it (1.11.4 and later), detected at runtime; in `data.json` on older apps. `minAppVersion` stays at 1.7.2, because raising it strands everyone on an older mobile app from updates (Pumice did this, `plan/research/pumice.md`). The keychain takes no vault parameter and may be shared by every vault on the device, so the secret id is scoped to both: `trew-<vault>-<device>`, lowercased to the id alphabet the API accepts (lowercase alphanumeric and dashes). Migration writes the keychain, reads it back, and only then removes the `data.json` field (rules 3 and 4); a keychain that fails the read-back leaves the old field in place and says so. The point is that the token stops travelling with copies of `.obsidian` (backups, iCloud, git), so a copied vault cannot act as the device. Losing the keychain entry means re-pairing that device, which loses no note. The headless client keeps its 0600 config file.
 
 `mcp:<id>` is not a valid device id. `ValidDeviceID` accepts base64url (`basalt:server/internal/store/store.go:2595`), which has no colon, so the claim that the devices table is reused unchanged is false. Either widen the validator deliberately, with its own test, or give author rows a separate `kind` column and keep device ids as they are. The second is preferable: it also stops the panel leaking the id shape, and it stops an agent appearing as an offline sync peer whose applied-checkpoint everyone waits on.
 
@@ -177,22 +177,22 @@ The headless client is **production code**: it is in `scripts/check.sh`, in CI, 
 
 ### 2.8 Migration from Basalt is a fresh pairing, rehearsed first
 
-Basalt history cannot be read without a data key the server never had. Migration transfers current content; the Basalt history stays an encrypted archive, readable later with the archived recovery material and a compatible Basalt build. A `telimus import-basalt` is later work, not promised.
+Basalt history cannot be read without a data key the server never had. Migration transfers current content; the Basalt history stays an encrypted archive, readable later with the archived recovery material and a compatible Basalt build. A `trew import-basalt` is later work, not promised.
 
 The mechanism is a fresh pairing. **The procedure around it is not "pair and compare counts."** Equal entry counts do not prove equal paths or equal bytes, a server backup cannot show that an unsynced local edit survived (`basalt:docs/security.md:103` says to back up readable local notes separately), and a phone carrying an older tree is a source of writes, not just a download target. Because the plugin id changes, both plugins can sit installed on the same vault at once, which is the one thing the scope refusals forbid.
 
 So M10 becomes: rehearse the whole thing on a disposable copy, settle every device against Basalt first, disable the old writer per directory before enabling the new one, verify by comparing a normalised path/kind/size/SHA-256 inventory against a freshly paired empty witness device, and keep a rollback that can export post-cutover edits. Retirement is earned by a successful restore, not by thirty days elapsing. Details in M10.
 
-**Storage identity, decided here because it constrains M1.** `PRAGMA user_version = 1` collides with Basalt's own schema version 1 (`basalt:server/internal/store/open.go:31`): a Telimus binary opened on a Basalt data directory would find a version it accepts. Every data directory therefore records a **product identifier**, a schema version, and a **store epoch**, all validated before any write. A Basalt directory, an unknown product, or a newer schema is refused with the input left byte-identical. An explicit restore starts a new epoch, and cursors and MCP version preconditions bind to the epoch. Otherwise a restored database that re-issues UIDs makes a stale precondition silently match the wrong version.
+**Storage identity, decided here because it constrains M1.** `PRAGMA user_version = 1` collides with Basalt's own schema version 1 (`basalt:server/internal/store/open.go:31`): a Trew binary opened on a Basalt data directory would find a version it accepts. Every data directory therefore records a **product identifier**, a schema version, and a **store epoch**, all validated before any write. A Basalt directory, an unknown product, or a newer schema is refused with the input left byte-identical. An explicit restore starts a new epoch, and cursors and MCP version preconditions bind to the epoch. Otherwise a restored database that re-issues UIDs makes a stale precondition silently match the wrong version.
 
 ## 3. Architecture
 
 ### 3.1 Repository layout
 
 ```
-telimus/
-  go.mod                      module github.com/waynehoover/telimus
-  cmd/telimus/                 main.go and one file per subcommand
+trew/
+  go.mod                      module github.com/waynehoover/trew
+  cmd/trew/                 main.go and one file per subcommand
   internal/wire/              message shapes, codes, limits            (from basalt server/internal/wire)
   internal/store/             SQLite metadata, history, purge, backup  (from server/internal/store)
   internal/chunks/            content-addressed bodies                 (from server/internal/chunks)
@@ -219,9 +219,9 @@ telimus/
   PLAN.md  plan/              this plan; delete or move to docs/history once shipped
 ```
 
-The Go module lives at the repository root so `go install github.com/waynehoover/telimus/cmd/telimus@latest` works and there is one binary to name.
+The Go module lives at the repository root so `go install github.com/waynehoover/trew/cmd/trew@latest` works and there is one binary to name.
 
-### 3.2 Process model of `telimus serve`
+### 3.2 Process model of `trew serve`
 
 ```
                       ┌────────────────────────────────────────────┐
@@ -233,7 +233,7 @@ The Go module lives at the repository root so `go install github.com/waynehoover
                       │            │                    ├──▶ oplog: audit, pins, idempotency
                       │        Bearer auth               └──▶ Hub.broadcast ──▶ live sessions
                       │                                            (best effort; catch-up is the
-  telimus admin ──unix─▶ control socket ───────────────┘             durable path, §4.8)
+  trew admin ──unix─▶ control socket ───────────────┘             durable path, §4.8)
                       │                                         │
                       └────────────────────────────────────────────┘
                        search worker ◀── indexed_through_uid ──┘   (async, §2.5)
@@ -283,10 +283,10 @@ Version 1 of a new wire protocol, derived from Basalt's protocol 7 by deletion. 
 
 ```yaml
 services:
-  telimus:
-    image: ghcr.io/waynehoover/telimus:X.Y.Z@sha256:…
+  trew:
+    image: ghcr.io/waynehoover/trew:X.Y.Z@sha256:…
     ports: ["127.0.0.1:3003:3003"]
-    volumes: ["./telimus/data:/data"]
+    volumes: ["./trew/data:/data"]
     command: ["serve", "-addr", "0.0.0.0:3003", "--mcp"]
     read_only: true
     cap_drop: [ALL]
@@ -294,7 +294,7 @@ services:
     stop_grace_period: 30s
 ```
 
-Tailscale Serve maps `https://homelab.tail….ts.net:3003` to `127.0.0.1:3003`; the MCP client URL is that origin plus `/mcp`. The homelab's current `basalt` and `basalt-mcp` services (`~/code/homelab/docker-compose.yml:528-620`) collapse into this one. `telimus mcp-token --label "Claude on Mac" --key-out FILE` replaces `basalt mcp-token`.
+Tailscale Serve maps `https://homelab.tail….ts.net:3003` to `127.0.0.1:3003`; the MCP client URL is that origin plus `/mcp`. The homelab's current `basalt` and `basalt-mcp` services (`~/code/homelab/docker-compose.yml:528-620`) collapse into this one. `trew mcp-token --label "Claude on Mac" --key-out FILE` replaces `basalt mcp-token`.
 
 ### 3.6 Threat model, stated plainly
 
@@ -305,7 +305,7 @@ The server is trusted with everything. That is the decision, and it is the right
 **Requirements, not advice:**
 
 - The data volume sits on encrypted storage (LUKS, FileVault, ZFS native). Document where the key lives and how an unattended restart unlocks it. **Owner's decision, 2026-09-22:** the homelab volume is not encrypted and that is accepted; `docs/threat-model.md` S1 records it as an accepted risk with what it costs.
-- Backups are encrypted, **including backups that stay on the same box**. `telimus backup` refuses to write outside the data directory without `--plaintext-ok`, or takes `--encrypt-to <age recipient>`. A backup on the homelab is still a backup another process can read. **Deferred by the owner, 2026-09-22:** no Telimus backup destination yet. The restore rehearsal in M5.5 still runs locally, because rule 11 is about recovery, not about where copies live.
+- Backups are encrypted, **including backups that stay on the same box**. `trew backup` refuses to write outside the data directory without `--plaintext-ok`, or takes `--encrypt-to <age recipient>`. A backup on the homelab is still a backup another process can read. **Deferred by the owner, 2026-09-22:** no Trew backup destination yet. The restore rehearsal in M5.5 still runs locally, because rule 11 is about recovery, not about where copies live.
 - The restore rehearsal (M5.5) exercises the encrypted path, not a plaintext shortcut.
 - Chunk names and paths are sensitive metadata: not in metrics labels, not on unauthenticated endpoints, not in public manifests.
 
@@ -321,7 +321,7 @@ What is gained: the server can verify every chunk name and every declared size f
 
 ### 4.1 Path policy on the server
 
-Plaintext paths make the server the last line of defence against a bad client. Refuse at `put`: empty, longer than 1024 bytes, invalid UTF-8, not NFC, control characters, a leading or trailing `/`, an empty segment, `.` or `..` segments, any segment starting with `.` (this covers `.obsidian`, `.trash`, `.telimus` state folders, and conflicts with the plugin's `isNeverSynced` rule), and the names the adapters reserve for staging (`.telimus-tmp-` prefix). Return `badpath`. The engine keeps validating inbound paths too (`refusedName` in `engine.ts`); two checks are cheaper than one recovery.
+Plaintext paths make the server the last line of defence against a bad client. Refuse at `put`: empty, longer than 1024 bytes, invalid UTF-8, not NFC, control characters, a leading or trailing `/`, an empty segment, `.` or `..` segments, any segment starting with `.` (this covers `.obsidian`, `.trash`, `.trew` state folders, and conflicts with the plugin's `isNeverSynced` rule), and the names the adapters reserve for staging (`.trew-tmp-` prefix). Return `badpath`. The engine keeps validating inbound paths too (`refusedName` in `engine.ts`); two checks are cheaper than one recovery.
 
 **The server's keyspace is Obsidian's** (decided 2026-09-22). Two further rules, because an MCP write has no filesystem to stop it and the two production clients disagreed:
 
@@ -410,9 +410,9 @@ Preserve typed storage failures through the stack, and keep "refused before comm
 
 §4.1 lets the server refuse a path. A file that trips any of those rules (most plausibly a path over 1,024 bytes, since Basalt allowed 4,096, or a control character in a Linux filename; not NFD, which both adapters already normalise to NFC before upload at `basalt:client/src/core/vault.ts:136-145`) then silently never syncs, forever, and the only trace is a log line on a machine nobody reads.
 
-`badpath` must reach the person: the plugin's stranded list with the path and the reason, and `telimus-sync status` for the headless client. `refusedName` in `engine.ts` is the existing hook. This is an M2 task and an M3 acceptance step, not a nicety.
+`badpath` must reach the person: the plugin's stranded list with the path and the reason, and `trew-sync status` for the headless client. `refusedName` in `engine.ts` is the existing hook. This is an M2 task and an M3 acceptance step, not a nicety.
 
-Also document, rather than leave to be discovered, that any segment beginning with `.` is unsyncable. That is correct and deliberate (it covers `.obsidian`, `.trash`, `.telimus`), and it also means a user's `.attachments` folder will never sync.
+Also document, rather than leave to be discovered, that any segment beginning with `.` is unsyncable. That is correct and deliberate (it covers `.obsidian`, `.trash`, `.trew`), and it also means a user's `.attachments` folder will never sync.
 
 ### 4.10 Note content is untrusted input to the agent
 
@@ -451,16 +451,16 @@ Goal: a repository where every Basalt test passes under the new name, still encr
 Tasks:
 
 - Copy `basalt/server` to the repo root as the Go module, `basalt/client` to `client/` (including `client/styles.css`), `manifest.json`, `versions.json`, `scripts/`, `Dockerfile`, `compose.yaml`, `llm.md`, `llms.txt`, `protocol-fixtures.json`, `.github/workflows`, `LICENSE`, `.prettierrc`, `.prettierignore`, `.gitignore`, and all of `docs/`. Exclude only `tmp/` and `release/`. `docs/findings.md`, `docs/documentation-review.md` and `docs/reviews/` are Basalt history but are copied verbatim, because the review IDs they define are cited hundreds of times in the code (`plan/research/basalt-lessons.md` §3); `docs/index-journal.md` has no history sections and is copied whole.
-- Rename the module to `github.com/waynehoover/telimus`, `basaltd` to `telimus`, `BASALT_DATA` to `TELIMUS_DATA`, the `.basalt` state directory to `.telimus`, `.basalt-tmp-` staging marks to `.telimus-tmp-`, the plugin id to `telimus-sync`, the `obsidian://basalt-sync` protocol action to `obsidian://telimus`, the systemd unit name, the Docker image name, the npm package name (unpublished). Keep `basalt3i_`/`basalt3_` prefixes for now; they die in M2.
+- Rename the module to `github.com/waynehoover/trew`, `basaltd` to `trew`, `BASALT_DATA` to `TREW_DATA`, the `.basalt` state directory to `.trew`, `.basalt-tmp-` staging marks to `.trew-tmp-`, the plugin id to `trew-sync`, the `obsidian://basalt-sync` protocol action to `obsidian://trew`, the systemd unit name, the Docker image name, the npm package name (unpublished). Keep `basalt3i_`/`basalt3_` prefixes for now; they die in M2.
 - Write `CLAUDE.md`: the layout table above, the durability rules by reference, "do not lose a note", the `scripts/check.sh` gate, and the rule that every write to a live Obsidian vault goes through the `obsidian` CLI.
 - Copy `docs/design.md` and keep the eleven rules with their numbers. Remove the key, credential, and threat-model sections; they are rewritten in M9.
 - Verify FTS5 in the pinned `modernc.org/sqlite` with a one-line test; record the result in `docs/development.md`.
 - **Measure the inventory.** Record the Basalt commit, per-file line counts, and the test-assertion ledger from §2.1 (which assertions are obsolete with the crypto, which are still guarantees). This replaces the reuse percentages, which did not survive checking.
 - Run `go test -race ./...`, `bun run test`, `bun run stress`, `bun run build`, `scripts/check.sh`. All green under the new name.
 
-Done when: `scripts/check.sh` exits 0 and the built plugin loads in a scratch vault against `telimus serve`.
+Done when: `scripts/check.sh` exits 0 and the built plugin loads in a scratch vault against `trew serve`.
 
-**Status: done, 2026-09-22.** `scripts/check.sh` passed 32 of 32 on the final tree, and the built plugin loaded in a brand-new vault on Obsidian 1.13.7, claimed a fresh `telimus serve`, and synced notes both ways with a headless client (`docs/development.md`, "The fork from Basalt").
+**Status: done, 2026-09-22.** `scripts/check.sh` passed 32 of 32 on the final tree, and the built plugin loaded in a brand-new vault on Obsidian 1.13.7, claimed a fresh `trew serve`, and synced notes both ways with a headless client (`docs/development.md`, "The fork from Basalt").
 
 ### M0.5. Contract slice (M, sequential gate)
 
@@ -490,7 +490,7 @@ Done when: a TypeScript client pairs, uploads raw and deflated notes, fetches th
 
 ### M1. Server: plaintext protocol 1 (L, lane A, after M0.5)
 
-Goal: `telimus serve` speaks [plan/protocol.md](plan/protocol.md). Go tests green, and the M0.5 slice keeps passing continuously. M1 is no longer validated Go-only, because a real TypeScript counterparty exists from M0.5 onward.
+Goal: `trew serve` speaks [plan/protocol.md](plan/protocol.md). Go tests green, and the M0.5 slice keeps passing continuously. M1 is no longer validated Go-only, because a real TypeScript counterparty exists from M0.5 onward.
 
 Tasks, in order:
 
@@ -503,11 +503,11 @@ Tasks, in order:
 7. **session hello.** Delete `helloAsRegistrar`, `handleRotate`, `handleRegister`, `handleInvite`'s sealed form, `handleUninvite` registrar branch, the `registrar`/`wrapped`/`bootstrap`/`authHash` fields, `Credentials`/`Grant`/`Authenticator`/`DerivedAuth`/`MinClaimLength`. `helloAsDevice` drops `VaultKeys`; refuse `device_id` with the `mcp:` prefix. `helloAsInvite` redeems the token. `authorizedMutation` loses its registrar branch. Start: `session.go:798-1258, 2421-2913`, `server.go:136-179, 694-799`, `authorization.go`.
 8. **storage identity.** `store_identity` per §2.8: product, schema version, epoch, validated before any write. A Basalt directory, an unknown product, or a newer schema is refused and the input left byte-identical. An explicit restore mints a new epoch; cursors and MCP preconditions bind to it.
 9. **admin via the control socket.** `internal/control`: a unix socket in the data directory, mode 0600, served by `serve`, carrying `invite`, `devices`, `revoke`, `mcp-token`. The CLI subcommands talk to it when a server is running and open the store directly only under an exclusive lock when one is not (§2.3.1). Read-only `stats`, `verify`, `backup` keep direct shared access. Delete `loadOrCreateToken`, `printSetup`, `copyToken`, the `auth-token` file. `serve` on an empty store mints one invite, default one-hour TTL, written to an explicit private path rather than stdout.
-10. **escape hatch.** `telimus cat --path P [--uid N]` and `telimus export --uid N --to FILE`, reading the store directly. Twenty lines, and the property that makes the whole thing trustworthy: the notes come back out with the binary and nothing else. This is also the 2am tool.
+10. **escape hatch.** `trew cat --path P [--uid N]` and `trew export --uid N --to FILE`, reading the store directly. Twenty lines, and the property that makes the whole thing trustworthy: the notes come back out with the binary and nothing else. This is also the 2am tool.
 11. **tests.** Apply §2.1's ledger rather than deleting test files wholesale: `keys_test.go:530` (invite redemption rollback) and `:557` (revoke race) keep their assertions with rewritten setup. Rewrite `devices_test.go` redemption cases for token invites. Add: revoke racing an upload, an MCP preparation, an invite creation, and a token recreation, each asserting no later version reaches the revoked connection; wrong-product-directory startup leaves bytes identical; `badpath` matrix; size-invariant refusals; frame decode bounds; author-row id validity. `protocol-fixtures.json` gains the path rules and the five format policies. The full ledger is [plan/strip-ledger.md](plan/strip-ledger.md): 254 tests in 18 files classified (100 obsolete, 128 guarantees, 26 split) plus the crypto cases of 17 adapted files. Its unique guarantees must survive: eight store handles redeeming one invite register exactly one device (`keys_test.go:743`); an expired invite is refused (no TypeScript test covers this); spent, unknown, malformed and cancelled invites get one identical refusal; a refused redemption never spends the invite; credentials are stored only as SHA-256; secret files are written atomically at 0600. Tests that fire only through a MAC failure or a `nomac` row (`engine.test.ts:2844`, `invariants.test.ts:75`, `backup_test.go:845`, `store_test.go:1383`) need a new trigger or they will pass vacuously. **Security hazard:** Basalt's invite listing (`Store.Invites`, `internal/store/store.go:2830`) returns the redemption identifier, which was safe only because redeeming also needed the invite key that never reached the server. With a bearer invite token that listing would hand every paired device a working credential. The listing must return a separate non-secret invite id, never the token or anything that redeems, with a test that no field of the listing redeems (`cli.test.ts:1481` checks only the whole string).
 12. **backup/verify/purge.** `backup.go` drops the `nomac` inheritance and the token copy, and carries operations, pins, and audit rows. `verify -deep` also checks `Σ sizes == size`. `purge` implements the pinned survivor set of §4.5, with `--dry-run` and a preview that uses the same survivor calculation as execution.
 
-Done when: `go test -race ./...` green; the M0.5 TypeScript client pairs from an invite, puts a two-chunk note with one deflated body, fetches it back, renames it with `prevBase`, gets `stale` on a raced put, sees `badpath` for `.obsidian/app.json`; a revoked device's live session stops receiving within the revoke reply; and `telimus cat` prints a note the plugin wrote.
+Done when: `go test -race ./...` green; the M0.5 TypeScript client pairs from an invite, puts a two-chunk note with one deflated body, fetches it back, renames it with `prevBase`, gets `stale` on a raced put, sees `badpath` for `.obsidian/app.json`; a revoked device's live session stops receiving within the revoke reply; and `trew cat` prints a note the plugin wrote.
 
 **Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "Protocol and store (M0.5, M1)". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
 
@@ -521,13 +521,13 @@ Tasks:
 2. **chunk.ts.** `sizesFor` drops `SEAL_OVERHEAD` (`basalt:client/src/core/chunk.ts:31, 214`). Chunk names become `chunkName(rawChunk)`.
 3. **transport.ts.** `PROTO = 1`. Delete `crypto` from every hello, `wrapped` from `ServerLimits` and `readReady`, `helloAsRegistrar`, `register`, `rotate`; `redeem` takes `{invite, deviceId, auth, device}`; `invite()` returns `{token, expiresAt}`. Delete `mac`/`parent` from `WireEntry`, `BatchEntry`, `wireEntry`, `put`. `fetch` decodes frames before the hash check (`transport.ts:2007`); `sendBodies` encodes. `encodedEntryBytes` counts UTF-8 bytes with `TextEncoder` (`transport.ts:274-280`). `entryBudget` becomes `size`. Start: lines listed in `plan/reuse-map.md`.
 4. **engine.ts.** Delete `dataKey`, `derived`/`keysReady`/`settleKeys`/`failKeys`, `authFor`, `mustBeOurs`, the `mac`/`parent` shape checks, the `unsealed` cache and its prune, `Scanned.sealed`; rename `KEEP_SEALED_BELOW` to `KEEP_BODIES_BELOW` rather than deleting it (it is the memory policy for attachments over 8 MiB, used at `engine.ts:2338`, `:2380`, `:3828`, not crypto); `sealedPath`/`plaintextPath` become identity; `sealedNames` becomes a windowed hash loop that still hashes one file's chunks concurrently (serial hashing measured 56 MiB/s against 151 MiB/s, `crypto.ts:589-610`); `planUpload` re-hashes instead of re-sealing; `assemble` decodes frames. `acceptBatch` no longer awaits keys. `contentOf`'s expected-digest checks stay as consistency checks. Twenty-nine touch points; the reuse map lists every line.
-5. **pairing.ts.** New `DeviceConfig {url, vaultId, device, deviceId, deviceToken, readOnly?, ignore?}`; `encodeConfig/decodeConfig` for it; delete `formatPairing/parsePairing` (recovery key), `secret`, `dataKey`, `deviceSecret`, `deviceCredential`'s key checks. New `formatInvite/parseInvite` for `telimus1i_` (version byte, 16-byte token, length-prefixed URL and vault id, CRC-32). `joinDestination` keeps its invite branch, loses the setup-line branch. The device token goes to the keychain when present (§2.3), with the read-back migration and its tests: keychain present, absent, failing the read-back, and two vaults on one device keeping two tokens.
+5. **pairing.ts.** New `DeviceConfig {url, vaultId, device, deviceId, deviceToken, readOnly?, ignore?}`; `encodeConfig/decodeConfig` for it; delete `formatPairing/parsePairing` (recovery key), `secret`, `dataKey`, `deviceSecret`, `deviceCredential`'s key checks. New `formatInvite/parseInvite` for `trew1i_` (version byte, 16-byte token, length-prefixed URL and vault id, CRC-32). `joinDestination` keeps its invite branch, loses the setup-line branch. The device token goes to the keychain when present (§2.3), with the read-back migration and its tests: keychain present, absent, failing the read-back, and two vaults on one device keeping two tokens.
 6. **client.ts.** Delete `Registrar`, `registerAsDevice`, `wrappedForClaim`, `proveDeviceConnects`, the sealing in `invite()`, `history()`, `deleted()`, `recoveryIsOurs`; `redeemInvite` returns `{deviceId, deviceToken}`; `credentialsFor` passes the token. Everything from `serial` through `mutateLocal`, `runForever`, and the report renderers is untouched.
 7. **plugin main.ts.** Delete `pairFirst`'s root-secret flow, `pendingFirstPairing`, `renderRecoveryKey`, `writtenDown`, `abandonRecoveryKey`, `freshRecoveryKey`, `rotate`, `renderRotate`, the recovery-key row, the `basalt3_` branch in `pair()` and `renderPairing`. The pairing panel becomes one field, "Invite", one button, "Pair", plus the existing device-name and skip-list options and the populated-vault confirmation. Rewrite the strings listed in the reuse map. `invite-qr.ts` keeps the QR over the new string and protocol action.
 8. **plugin vault.ts and the rest.** Import `plainDigest` from `digest.ts`; no other change. `history.ts`, `activity.ts`, `conflicts.ts`, `delivery.ts`, `preview.ts`, `visible-poll.ts`, `first-sync.ts`, `transfer.ts`, `resume.ts`, `stub.ts`, `fake.ts`, `styles.css` unchanged.
-9. **test-server.ts and fake-socket.ts.** `credentials()` pairs through an invite created with `telimus invite` (`TestServer.cli`). `ready()` fixture drops `wrapped`. Delete `crypto.test.ts`, `rotation.test.ts`, `invite.test.ts`, the MAC-forgery half of `recovery-auth.test.ts`, `plugin/rotate.test.ts`. Rewrite `testKeys`/`testWrapped` call sites (34 files, mostly one line each).
-10. **src/node, published.** Rename `client/src/cli` to `client/src/node`. Keep `vault.ts` (`NodeVault`, `JsonIndexStore`), `exclusion.ts`, `lock.ts`, `config.ts`, `client-options.ts`, and `cli.ts` with `pair`, `sync`, `status`, `history`, `deleted`, `restore`, `unlink`. Delete `mcp*.ts` **only once the Go tools pass against their fixtures** (§2.1). Keep the semantic vectors until M5 proves the port. Delete `init`, `invite`-as-registrar, `rotate`, `rebase`. This package is **published** as `telimus-sync` and is in the release process (§2.7). `NodeVault` gains the plugin's normalized-name mapping for U+00A0 and U+202F (§4.1), tested with a file named with a non-breaking space on disk that round-trips through both clients to one server path. `esbuild.config.mjs` builds both bundles.
-11. **refused paths surface.** `badpath` from the server lands in the plugin's stranded list with path and reason, and in `telimus-sync status` (§4.9). Test with a path over 1,024 bytes and with a control-character filename, both created directly on disk (an NFD name cannot reach the server; see §4.9).
+9. **test-server.ts and fake-socket.ts.** `credentials()` pairs through an invite created with `trew invite` (`TestServer.cli`). `ready()` fixture drops `wrapped`. Delete `crypto.test.ts`, `rotation.test.ts`, `invite.test.ts`, the MAC-forgery half of `recovery-auth.test.ts`, `plugin/rotate.test.ts`. Rewrite `testKeys`/`testWrapped` call sites (34 files, mostly one line each).
+10. **src/node, published.** Rename `client/src/cli` to `client/src/node`. Keep `vault.ts` (`NodeVault`, `JsonIndexStore`), `exclusion.ts`, `lock.ts`, `config.ts`, `client-options.ts`, and `cli.ts` with `pair`, `sync`, `status`, `history`, `deleted`, `restore`, `unlink`. Delete `mcp*.ts` **only once the Go tools pass against their fixtures** (§2.1). Keep the semantic vectors until M5 proves the port. Delete `init`, `invite`-as-registrar, `rotate`, `rebase`. This package is **published** as `trew-sync` and is in the release process (§2.7). `NodeVault` gains the plugin's normalized-name mapping for U+00A0 and U+202F (§4.1), tested with a file named with a non-breaking space on disk that round-trips through both clients to one server path. `esbuild.config.mjs` builds both bundles.
+11. **refused paths surface.** `badpath` from the server lands in the plugin's stranded list with path and reason, and in `trew-sync status` (§4.9). Test with a path over 1,024 bytes and with a control-character filename, both created directly on disk (an NFD name cannot reach the server; see §4.9).
 12. **stress.** `harness.ts` pairs devices through invites. Re-run every `*.stress.ts` except `mcp.stress.ts`, which is retired here and reborn in M5.
 13. **screenshots.** Regenerate the gallery; the pairing scenes change, everything else should be pixel-close.
 14. **platforms.** The Windows inbound refusal list and the persistent unsupported or untested notice (§4.12), with tests that each reserved name, forbidden character and trailing dot or space arrives as a stranded path with its reason when the platform is Windows.
@@ -538,23 +538,23 @@ Done when: two plugin instances in two scratch vaults and one headless client pa
 
 ### M3. First real acceptance (S)
 
-Pair the Mac test vault and the Pixel against a local `telimus serve` over Tailscale. Exercise pairing, edits both ways, an attachment, a conflict, history compare, deleted-note restore, a refused path, revoke while the other device is connected, and re-pair. Write `docs/server.md` and `docs/plugin.md` from Basalt's, minus keys. Not the homelab yet.
+Pair the Mac test vault and the Pixel against a local `trew serve` over Tailscale. Exercise pairing, edits both ways, an attachment, a conflict, history compare, deleted-note restore, a refused path, revoke while the other device is connected, and re-pair. Write `docs/server.md` and `docs/plugin.md` from Basalt's, minus keys. Not the homelab yet.
 
 ### M4. MCP on the server: read tools (M, lane C, after M1)
 
-Goal: `telimus serve --mcp` answers the read half of [plan/mcp-tools.md](plan/mcp-tools.md) over streamable HTTP with bearer auth.
+Goal: `trew serve --mcp` answers the read half of [plan/mcp-tools.md](plan/mcp-tools.md) over streamable HTTP with bearer auth.
 
 Tasks:
 
 1. **SDK, or not.** Add `github.com/modelcontextprotocol/go-sdk` at its latest tagged release, use its streamable HTTP handler in stateless mode, mount at `/mcp` behind auth middleware, and record the pin in `docs/development.md`. **Evaluate hand-rolling first.** `asciimoo/hister` serves MCP from 854 lines of plain JSON-RPC with no SDK dependency at all (`server/mcp.go`; its `go.mod` has no `modelcontextprotocol` entry). Given that the tool surface here is fixed, the transport is one HTTP path, and the SDK's API is still moving, a hand-rolled handler may be the smaller long-term cost. Decide in M4 with the reason written down. **Decided 2026-09-22: hand-rolled server, SDK client in the tests.** The server speaks MCP's streamable HTTP itself: stateless `POST /mcp` with `application/json` replies, `GET` and `DELETE` answered 405, the protocol version negotiated from the client's request among 2025-06-18, 2025-11-25 and 2026-07-28 (answering with the client's version when supported, else the newest). The go-sdk (v1.8.0, 2026-09-14, which speaks every version from 2024-11-05 to 2026-07-28) is a **test-only** dependency: its client drives the handler in the M4 and M5 tests at every protocol version it supports, so interoperability is proven by an implementation that is not ours. Linking its `mcp` package into the server would pull in `golang.org/x/oauth2`, `google/jsonschema-go`, segmentio's assembly-accelerated JSON and base64, `uritemplate` and `x/time/rate`, plus a 12,000-line streamable transport, for three JSON-RPC methods (`initialize`, `tools/list`, `tools/call`) and one notification; test-only imports never reach the binary. Recorded in `docs/development.md`.
-2. **Auth.** Middleware: `Authorization: Bearer <43 base64url chars>`, constant-time compare against `mcp_tokens.token_hash`, 401 with `WWW-Authenticate: Bearer realm="telimus"`, update `last_used` at most once a minute. Origin header must equal an `--allow-origin` value or be absent (non-browser clients). Body limit 8 MiB, response limit 1 MiB, 32 concurrent requests, 429 with `Retry-After: 1` beyond.
+2. **Auth.** Middleware: `Authorization: Bearer <43 base64url chars>`, constant-time compare against `mcp_tokens.token_hash`, 401 with `WWW-Authenticate: Bearer realm="trew"`, update `last_used` at most once a minute. Origin header must equal an `--allow-origin` value or be absent (non-browser clients). Body limit 8 MiB, response limit 1 MiB, 32 concurrent requests, 429 with `Retry-After: 1` beyond.
 3. **notes package.** `Assemble(store, chunks, vault, uid) ([]byte, error)`, `IsText(path)`, `Page(text, startLine, maxLines, budget)`, the opaque cursor codec, `CompareLines` (LCS with the 1e6 cell cap and `coarse` fallback). Port from `basalt:client/src/cli/mcp-read.ts`, `mcp-inspect.ts`.
 4. **search package, asynchronous.** Per §2.5: an index worker driven by a durable `indexed_through_uid`, never inside the commit transaction. Generational rebuild (capture head, build, replay, verify, switch) with the previous generation queryable meanwhile. Corruption detectable independently of `index_version`. Tag parser ported from `basalt:client/src/cli/mcp-markdown.ts` (frontmatter YAML `tags` scalar or sequence, inline `#tags` outside code, HTML, `%%` comments, links; NFC-fold and lowercase for matching), using `goldmark` for structure and `gopkg.in/yaml.v3` node positions for source ranges. **A parse failure limits tag extraction and is reported; it never rejects a sync entry.**
 5. **search semantics.** Literal substring search stays literal (§2.5). Use the index only where it cannot omit a match; scan within a documented budget where it can; report `complete: false` honestly. Fixture set: one- and two-character queries, substrings inside words, punctuation, case, Unicode, multiline, run against the Basalt reference scan as the oracle.
 6. **tools.** `vault_status`, `list_notes`, `read_note`, `search_notes`, `note_history`, `deleted_notes`, `compare_versions`, `delivery_status`. Shapes and bounds per the spec. `read_note` returns `uid` as the base.
 7. **as-of listing, corrected.** The stated predicate (latest row per path at or below the pinned head) leaves rename *sources* visible: with `A.md` at uid 1 renamed to `B.md` at uid 2, pinning head 2 returns both paths. Basalt already has the retirement predicate (`basalt:server/internal/store/conditional.go:11`); an as-of query must cap normal entries **and** rename retirements at the snapshot head.
 8. **cursors that can expire.** A pinned uid does not keep its row alive across purge. Listing cursors account for renames, deletes, reused paths, store epoch, and retention; search cursors pin an index generation. Either lease a short-lived snapshot or return an explicit expired-cursor result. Do not silently return a different world. `compare_versions` resolves an omitted `toUid` once and carries it through continuation, or successive pages compare against different heads.
-9. **auth.** Read-only by default; scope checked at discovery, dispatch, and commit (§2.3). Per-token budgets, not just the global cap. `telimus serve --mcp`, `--allow-origin` reused.
+9. **auth.** Read-only by default; scope checked at discovery, dispatch, and commit (§2.3). Per-token budgets, not just the global cap. `trew serve --mcp`, `--allow-origin` reused.
 10. **untrusted envelope.** Implement §4.10: the `schema_version`/`tool`/`security`/`trusted`/`untrusted_content` result shape, the per-tool warning text, and the single normalisation function every untrusted string passes through. This lands with the *read* tools, not later, because the read tools are what first hands note bytes to a model.
 11. **tests.** Go tests with the SDK's client over an in-process handler: every tool, every bound, pagination continuity across a concurrent commit and across a rename, 401/403/413/429, a token revoked mid-session losing at the commit boundary, an expired token, a write attempted with a read token by hand-built request. An index test that corrupts the index with a matching `index_version` and proves the corruption is still detected. A rebuild that runs while device writes continue. **Injection fixtures:** notes containing instruction-shaped text, envelope-imitating framing, control characters and lone surrogates, asserted to arrive under `untrusted_content`, normalised, and never in `trusted`.
 
@@ -569,12 +569,12 @@ Goal: the mutation half of the spec, safe under kill and under concurrent device
 Tasks:
 
 1. **`CommitOperation`.** Per §4.3: a distinct all-or-nothing API, not a flag on `AppendMany`, and no individual-write fallback. Device `putmany` keeps its partial-success semantics untouched. Prepare outside the write lock; recheck credential, scope, epoch, and every base under the commit boundary; precompute and bound the reply before committing.
-2. **oplog.** `operations`, `op_entries`, `op_pins`, `op_keys` written in the operation's own transaction. Record operation id, actor id and label as they were, tool, server commit time, request digest, affected paths, before and after UIDs, and outcome. Never record bearer tokens or note bodies. Revoking an actor does not erase its history. `telimus audit --since` reads it.
+2. **oplog.** `operations`, `op_entries`, `op_pins`, `op_keys` written in the operation's own transaction. Record operation id, actor id and label as they were, tool, server commit time, request digest, affected paths, before and after UIDs, and outcome. Never record bearer tokens or note bodies. Revoking an actor does not erase its history. `trew audit --since` reads it.
 3. **idempotency.** `(actor_id, idempotency_key)` with the canonical request digest and the recorded result (§4.8). Replay returns the same result; the same key with different input refuses. Define result retention and provide an operation lookup for a lost reply.
 4. **exact edits.** Port `replacement` (unique `old`, non-overlapping, ≤32 edits, ≤8 KiB each, ≤64 KiB total, result ≤1 MiB), `append`, `prepend` (BOM-aware) from `basalt:client/src/cli/mcp-notes.ts:157-261`.
 5. **tools.** `create_note`, `create_directory`, `edit_note`, `append_note`, `prepend_note`, `delete_note`, `move_note`, `restore_note`, `add_tags`, `remove_tags`, `manage_tags`, `rename_tag`. Per §4.3. Preview-then-apply binds a vault snapshot head and requires it unchanged at commit, which is what catches a new backlink or a namespace change that per-entry bases cannot see.
 6. **links.** Port `changeLinks` from `mcp-links.ts` on goldmark's AST: Markdown links, images, definitions, `[[wiki|alias]]`, `![[embed]]`, fragments, encoded paths, shortest unambiguous wiki names. Regression cases from `mcp-links.test.ts` become Go table tests. A link-based mutation either scans authoritative content or proves its link index is current: `note_links` needs a real schema and a maintenance task, which the spec referenced but never defined.
-7. **undo.** A compensating operation that verifies every affected head still equals the original operation's outputs, and refuses or offers restore-to-copy otherwise (§4.5). Moves and tag or backlink batches undo as a unit. Exposed in the plugin's history panel and as `telimus undo OPID`.
+7. **undo.** A compensating operation that verifies every affected head still equals the original operation's outputs, and refuses or offers restore-to-copy otherwise (§4.5). Moves and tag or backlink batches undo as a unit. Exposed in the plugin's history panel and as `trew undo OPID`.
 8. **author rows.** Author identity for MCP tokens without squatting on `device_id` (§2.3): its own `kind`, valid ids, a label that reaches conflict-copy names and history, and no agent appearing as an offline peer whose applied checkpoint everyone waits for.
 9. **crash matrix.** Seams: after bodies stored before append; after append before broadcast; after broadcast before reply. SIGKILL at each; restart; assert the version is either fully present with all bodies or absent, never a dangling entry, and that the idempotency key resolves the unknown-outcome case into one discoverable result. Reuse `basalt:client/src/stress/faults.ts` by pointing it at the Go process, or port `seam.ts` to Go.
 10. **retention under purge.** Edit a note untouched for a year, purge immediately with defaults, restart, and read its exact former bytes. Repeat across a backup and restore. This is the test the earlier `-keep-since` design fails.
@@ -592,16 +592,16 @@ Goal: the maintainer can tell a healthy vault from a quiet failure, recover from
 Tasks:
 
 - **Threat model written before deployment**, per §3.6: encrypted storage and backup coverage, key custody, TLS termination, service-user permissions, secret output handling, snapshots, logs, and the limits of protection against a running-host compromise. Chunk identifiers and paths are named as sensitive metadata.
-- **`telimus doctor`.** One command that diagnoses instead of leaving the maintainer to infer. Modelled on `hister doctor`, which checks "configuration, connectivity, authentication, and index compatibility" and states plainly that it "does not repair data". A diagnostic that cannot mutate is one you can run while worried. Checks: data directory and lock state, product identifier, schema version and epoch, a sampled chunk-store integrity pass, index lag and generation, MCP token validity and expiry, device last-seen and applied lag, free space, last verified backup, and reachability of the configured origin. Exit non-zero on anything actionable.
+- **`trew doctor`.** One command that diagnoses instead of leaving the maintainer to infer. Modelled on `hister doctor`, which checks "configuration, connectivity, authentication, and index compatibility" and states plainly that it "does not repair data". A diagnostic that cannot mutate is one you can run while worried. Checks: data directory and lock state, product identifier, schema version and epoch, a sampled chunk-store integrity pass, index lag and generation, MCP token validity and expiry, device last-seen and applied lag, free space, last verified backup, and reachability of the configured origin. Exit non-zero on anything actionable.
 - **Observability as a package, not log lines.** `hister` carries `server/metrics/` and `server/diagnostics/` as first-class packages rather than scattered instrumentation; do the same. `/health` is inherited and is not a vault-health verdict; "the process is listening" says nothing about whether notes are arriving. Add structured operation ids and bounded metrics: commit latency, lock wait, stale refusals, auth failures, rate-limit responses, active and evicted peers, applied lag per device, index lag and failures, database, WAL and chunk sizes, free space, last verified backup, last successful restore rehearsal. Credentials, note bodies, paths, and chunk digests stay out of metric labels.
 - **Alerts with remedies** for disk pressure, failed backups, missing chunks, repeated commit failures, index lag, and a device that has stopped advancing. Detailed diagnostics only over authenticated or local access.
 - **Restore rehearsal for real.** Restore an encrypted backup into a separate directory on a separate port with production clients unable to reach it. Verify every expected version and body, operation pins, audit rows, rename and deletion recovery, and a freshly paired device's downloaded bytes. Rebuild search from the restored store. Measure recovery time and write down the data-loss window the backup schedule implies.
-- **Restore the vault to a point in time** (decided 2026-09-22). `telimus restore --to-uid N`, through the control socket, dry run by default and `--apply` to commit: one `CommitOperation` that appends a new version for every path whose head differs from its state at `N`, tombstones paths created since, pins every displaced head (§4.5), and is itself undoable. History is never rewritten or rewound (PKV Sync's force-moved branch broke per-file history and checkpoints, `plan/research/pkv-sync.md`). Tests: restore across renames, deletions and paths created since; restore then undo returns byte-identical heads; a device offline during the restore converges without conflict copies for paths it did not touch. A plugin action comes after v1.
+- **Restore the vault to a point in time** (decided 2026-09-22). `trew restore --to-uid N`, through the control socket, dry run by default and `--apply` to commit: one `CommitOperation` that appends a new version for every path whose head differs from its state at `N`, tombstones paths created since, pins every displaced head (§4.5), and is itself undoable. History is never rewritten or rewound (PKV Sync's force-moved branch broke per-file history and checkpoints, `plan/research/pkv-sync.md`). Tests: restore across renames, deletions and paths created since; restore then undo returns byte-identical heads; a device offline during the restore converges without conflict copies for paths it did not touch. A plugin action comes after v1.
 - **Faults beyond SIGKILL.** Disk full during chunk and database writes, failed directory fsync, missing and corrupt chunks, slow peers, dropped replies, restart loops, parser failures. Keep deterministic seams and failing seeds. SIGKILL alone is not evidence for power-loss durability.
-- **`docs/operations.md`**, the 2am document: how to tell whether a note is lost, how to read a path's history from the shell, how to extract a version with `telimus cat` and nothing else, how to roll back an agent's overnight run, what `badpath` in the logs means, what to do when the index is behind.
+- **`docs/operations.md`**, the 2am document: how to tell whether a note is lost, how to read a path's history from the shell, how to extract a version with `trew cat` and nothing else, how to roll back an agent's overnight run, what `badpath` in the logs means, what to do when the index is behind.
 - **Soak.** A defined period on disposable representative data, including a phone offline while the agent edits. The exit criterion is no unexplained loss, divergence, or unbounded retries, not zero conflict copies, which are an expected outcome, not a defect.
 
-Done when: each fault produces an actionable status, preserves acknowledged content, and has a tested recovery path; `telimus doctor` reports every injected fault correctly and exits non-zero; and the operator has personally performed a restore rather than read about one.
+Done when: each fault produces an actionable status, preserves acknowledged content, and has a tested recovery path; `trew doctor` reports every injected fault correctly and exits non-zero; and the operator has personally performed a restore rather than read about one.
 
 **Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "Retention and history". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
 
@@ -609,11 +609,11 @@ Done when: each fault produces an actionable status, preserves acknowledged cont
 ### M9. Packaging, docs, release (M, can start after M3)
 
 - `Dockerfile` and `compose.yaml` from Basalt with the new name, `--mcp` in the example command, one port.
-- `telimus service` unit; `telimus health`; `telimus doctor` from M5.5.
+- `trew service` unit; `trew health`; `trew doctor` from M5.5.
 - **Reach, not just a Dockerfile.** `asciimoo/hister` ships Homebrew, Docker, a Nix flake and goreleaser binaries for every platform, and it is the difference between a project people can try and one they read about. Add `.goreleaser.yml` (which also produces the release attestations this milestone wants), a Homebrew tap, and `flake.nix`. `go install` and Docker alone are not distribution.
-- **Self-update.** `telimus update`, as `hister` has. This is a binary someone runs for years on a box they rarely log into; make upgrading it one command that checks the release feed and verifies the signature.
+- **Self-update.** `trew update`, as `hister` has. This is a binary someone runs for years on a box they rarely log into; make upgrading it one command that checks the release feed and verifies the signature.
 - **A docs site, in-repo.** `hister` keeps its docs site in the repository beside the code so they version together. Same here: the `docs/` markdown becomes a small static site, published from the same tag as the binary.
-- `scripts/check.sh` with the CI drift guard; CI jobs mirrored from `basalt/.github/workflows/ci.yml` (server, client, stress, mounted filesystem, case-folding, systemd, docker, restore rehearsal; note that Basalt already has this at `basalt:scripts/check.sh:152`; what M5.5 adds is rehearsing *this* migration, not the concept). Release workflow with attestations; plugin assets `main.js`, `manifest.json`, `styles.css`; the `telimus-sync` npm package (§2.7); `versions.json` maintenance; tags `X.Y.Z` for the plugin and `server/vX.Y.Z` for the binary.
+- `scripts/check.sh` with the CI drift guard; CI jobs mirrored from `basalt/.github/workflows/ci.yml` (server, client, stress, mounted filesystem, case-folding, systemd, docker, restore rehearsal; note that Basalt already has this at `basalt:scripts/check.sh:152`; what M5.5 adds is rehearsing *this* migration, not the concept). Release workflow with attestations; plugin assets `main.js`, `manifest.json`, `styles.css`; the `trew-sync` npm package (§2.7); `versions.json` maintenance; tags `X.Y.Z` for the plugin and `server/vX.Y.Z` for the binary.
 - Docs, few files, plain: `README.md`, `docs/server.md`, `docs/plugin.md`, `docs/agent.md` (MCP setup, token handling, scopes, what the agent can and cannot do, and the plain statement that a token reads the whole vault), `docs/client.md` (headless), `docs/operations.md` (M5.5), `docs/design.md` (rules, threat model rewritten for a trusted server, conflicts, MCP principles), `docs/protocol.md`, `docs/development.md`, `docs/compared.md` (add "built-in agent" and "no encryption" rows honestly), `llm.md`.
 - **`README.md` written to the shape that works.** Modelled on `asciimoo/hister`, which reached 4,900 stars in eight months as a self-hosted Go binary with the same audience: one bold line of value ("Your own Obsidian sync, with an agent inside it"); a link row of Demo · Download · Quickstart · Docs; a screenshot before any prose; a numbered quickstart that reaches first success in about five steps and is honest about friction ("keep this terminal open"); eight **bold-led** feature bullets; a standalone **Privacy** section; a **Why this?** section; then development, community and licence. Add `CHANGELOG.md`, `CONTRIBUTING.md` and `SECURITY.md` at the root.
 - **The Privacy section is not optional and it goes in the README.** This project *removed* end-to-end encryption, so the honest account in §3.6 is exactly what a prospective user most needs before installing, and burying it in `docs/design.md` would be a form of misrepresentation. State plainly: the server reads your notes, that is what makes the agent possible; the data volume must be encrypted; backups must be encrypted; an MCP token reads the whole vault and its results reach your model provider. `hister` does this well and it costs them nothing.
@@ -631,13 +631,13 @@ The earlier version of this milestone was seven steps ending in "verify counts".
 1. **Rehearse the whole procedure on a disposable copy first.** Include attachments, large notes, nested renames, deleted notes, conflict copies, Unicode names, and a device that was offline with edits. Do not connect the rehearsal to the live vault.
 2. **Settle every device against Basalt.** Bring each online, account for local-only changes and conflicts. A device that cannot participate is frozen and gets an explicit later rejoin procedure; an unknown old tree does not get to join blindly and start writing.
 3. **Freeze and capture.** Pause writers. Take and verify both the Basalt server backup and a snapshot of readable local vault content (`basalt:docs/security.md:103`). Record the inventory. Archive the backup, its recovery key, and a compatible Basalt build together. Write down the rollback window and who owns edits made during it.
-4. **Disable the old writer per directory** before enabling the new one. Deploy Telimus on an isolated address for verification. Pair the primary vault, upload, then **download to a freshly paired empty witness device and compare normalised paths, kinds, sizes, and SHA-256 content hashes.** Check excluded content explicitly rather than assuming it was meant to be excluded.
+4. **Disable the old writer per directory** before enabling the new one. Deploy Trew on an isolated address for verification. Pair the primary vault, upload, then **download to a freshly paired empty witness device and compare normalised paths, kinds, sizes, and SHA-256 content hashes.** Check excluded content explicitly rather than assuming it was meant to be excluded.
 5. **Migrate the phone** from a verified local backup against the reconciled inventory. Confirm no two sync systems share a local directory. Exercise offline edits, catch-up, delete and restore, and conditional undo. Start MCP **read-only**; issue a write token deliberately and separately.
-6. **If validation fails:** stop new writers, preserve the Telimus server, export post-cutover changes, then reconcile against the frozen Basalt baseline. Do not point the old plugin at a changed directory and hope the old server sorts it out.
-7. **Retire on evidence, not elapsed time.** The old services and data go only after a Telimus backup has been restored successfully, both devices pass the inventory check, and the rollback is no longer needed. Record the accepted result; keep the Basalt archive under an explicit policy.
+6. **If validation fails:** stop new writers, preserve the Trew server, export post-cutover changes, then reconcile against the frozen Basalt baseline. Do not point the old plugin at a changed directory and hope the old server sorts it out.
+7. **Retire on evidence, not elapsed time.** The old services and data go only after a Trew backup has been restored successfully, both devices pass the inventory check, and the rollback is no longer needed. Record the accepted result; keep the Basalt archive under an explicit policy.
 8. Update `~/code/homelab` docs and the compose comments; remove the second MCP route.
 
-Done when: independent downloads match the agreed source inventory, every participating device has converged, a Telimus backup has been restored, and rollback has been rehearsed with post-cutover edits in play.
+Done when: independent downloads match the agreed source inventory, every participating device has converged, a Trew backup has been restored, and rollback has been rehearsed with post-cutover edits in play.
 
 ## 6. Sequence and dependencies
 
@@ -665,7 +665,7 @@ Carried from Basalt without softening:
 - Subagents run on the session's model; reports from subagents are verified, not relayed.
 - The five fix-defect shapes an outside reviewer keeps finding in Basalt (`~/.claude/projects/-Users-wayne-code-basalt/memory/basalt-protocol-and-reviews.md`): a seam before the check it proves, a vacuous test, a `finally` that deletes recovery data, a comment describing a removed mechanism, a fix applied to one of two adapters. Read every fix for them.
 
-New for Telimus:
+New for Trew:
 
 - Every MCP mutation test asserts the displaced version is still readable by UID after the write, **and still readable after a default purge**. The universal form of this ("read every previous UID as former bytes") does not apply to creates, folders, and tombstones; those assert their own shape instead.
 - Every server-side path or size check has a test that a hand-built client can trip it. Scope enforcement is tested against a hand-built request, not against the tool list.
@@ -706,20 +706,20 @@ Newly deferred, with the condition for reopening written down rather than left a
 
 ## 10. The name
 
-**Telimus**, said TEL-ih-mus. It is House Telimus from James Islington's *The Will of the Many* (the adoptive house that takes Vis in). It carries no meaning about sync or history, and that was accepted knowingly: the name was chosen for being clean everywhere, easy to say and spell from hearing, and liked, after roughly 280 candidates across two rounds.
+**Trew**, said TEL-ih-mus. It is House Trew from James Islington's *The Will of the Many* (the adoptive house that takes Vis in). It carries no meaning about sync or history, and that was accepted knowingly: the name was chosen for being clean everywhere, easy to say and spell from hearing, and liked, after roughly 280 candidates across two rounds.
 
 Checked on 2026-09-22:
 
 | Check | Result |
 |---|---|
-| npm `telimus`, `telimus-sync` | free |
-| GitHub repositories named `telimus` | 0 |
+| npm `trew`, `trew-sync` | free |
+| GitHub repositories named `trew` | 0 |
 | Obsidian community registry | no match |
 | Web search, with and without software terms | no product collision. Telemus (a defence electronics firm, and Telemus AI) is a near-homophone spelled differently. |
 
 These are absence checks on one day, not reservations. Domain and trademark clearance were not done.
 
-The first round rejected Telimus because `telimus-sync` puts two sibilants together (TEL-ih-mus-SINK). On a second hearing that was judged acceptable, which also reopened the question for Talus below.
+The first round rejected Trew because `trew-sync` puts two sibilants together (TEL-ih-mus-SINK). On a second hearing that was judged acceptable, which also reopened the question for Talus below.
 
 ### Why not the others
 
@@ -765,14 +765,14 @@ Settled now, before the invite format and on-disk identity freeze:
 
 | Thing | Value |
 |---|---|
-| Go module | `github.com/waynehoover/telimus` |
-| Binary | `telimus` |
-| Environment | `TELIMUS_DATA` |
-| State directory | `.telimus`, staging marks `.telimus-tmp-` |
-| Plugin id | `telimus-sync` |
-| Protocol action | `obsidian://telimus` |
-| Invite prefix | `telimus1i_` |
-| npm package | `telimus-sync` |
-| Auth realm | `WWW-Authenticate: Bearer realm="telimus"` |
-| Docker image | `ghcr.io/waynehoover/telimus` |
-| Store product id | `telimus` (§2.8) |
+| Go module | `github.com/waynehoover/trew` |
+| Binary | `trew` |
+| Environment | `TREW_DATA` |
+| State directory | `.trew`, staging marks `.trew-tmp-` |
+| Plugin id | `trew-sync` |
+| Protocol action | `obsidian://trew` |
+| Invite prefix | `trew1i_` |
+| npm package | `trew-sync` |
+| Auth realm | `WWW-Authenticate: Bearer realm="trew"` |
+| Docker image | `ghcr.io/waynehoover/trew` |
+| Store product id | `trew` (§2.8) |

@@ -11,7 +11,7 @@ import (
 // rule and its live set on the hot path of a first sync (see liveSchema).
 func BenchmarkABatchOfNewNotes(b *testing.B) {
 	dir := b.TempDir()
-	st, err := OpenWithSync(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"), SyncNormal)
+	st, err := OpenWithSync(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"), SyncNormal)
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 func TestServiceInstallKeepsReviewedUnit(t *testing.T) {
-	if os.Getenv("TELIMUS_SERVICE_INSTALL_HELPER") == "1" {
+	if os.Getenv("TREW_SERVICE_INSTALL_HELPER") == "1" {
 		for i, arg := range os.Args {
 			if arg == "--" {
 				if err := run(context.Background(), os.Args[i+1:], os.Stdout); err != nil {
@@ -26,9 +26,9 @@ func TestServiceInstallKeepsReviewedUnit(t *testing.T) {
 
 	dir := t.TempDir()
 	reviewed := mustRun(t, "service", "-data", filepath.Join(dir, "my notes"),
-		"-addr", "127.0.0.1:4312", "-vault", "personal notes", "-user", "telimus",
-		"-binary", "/opt/my tools/telimus", "-max-file", "134217728")
-	if err := os.WriteFile(filepath.Join(dir, "telimus.service"), []byte(reviewed), 0o600); err != nil {
+		"-addr", "127.0.0.1:4312", "-vault", "personal notes", "-user", "trew",
+		"-binary", "/opt/my tools/trew", "-max-file", "134217728")
+	if err := os.WriteFile(filepath.Join(dir, "trew.service"), []byte(reviewed), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Follow the printed command, changing only the privileged destination.
@@ -36,8 +36,8 @@ func TestServiceInstallKeepsReviewedUnit(t *testing.T) {
 	installed := filepath.Join(dir, "installed.service")
 	command := ""
 	for _, line := range strings.Split(reviewed, "\n") {
-		if strings.HasPrefix(line, "#   ") && strings.Contains(line, "/etc/systemd/system/telimus.service") {
-			command = strings.ReplaceAll(strings.TrimPrefix(line, "#   "), "/etc/systemd/system/telimus.service", shellQuote(installed))
+		if strings.HasPrefix(line, "#   ") && strings.Contains(line, "/etc/systemd/system/trew.service") {
+			command = strings.ReplaceAll(strings.TrimPrefix(line, "#   "), "/etc/systemd/system/trew.service", shellQuote(installed))
 			break
 		}
 	}
@@ -48,14 +48,14 @@ func TestServiceInstallKeepsReviewedUnit(t *testing.T) {
 	if err := os.Mkdir(bin, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	wrapper := "#!/bin/sh\nexec \"$TELIMUS_SERVICE_TEST_BINARY\" -test.run=^TestServiceInstallKeepsReviewedUnit$ -- \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "telimus"), []byte(wrapper), 0o700); err != nil {
+	wrapper := "#!/bin/sh\nexec \"$TREW_SERVICE_TEST_BINARY\" -test.run=^TestServiceInstallKeepsReviewedUnit$ -- \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "trew"), []byte(wrapper), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"TELIMUS_SERVICE_TEST_BINARY="+os.Args[0], "TELIMUS_SERVICE_INSTALL_HELPER=1", "TELIMUS_DATA="+filepath.Join(dir, "default-data"))
+		"TREW_SERVICE_TEST_BINARY="+os.Args[0], "TREW_SERVICE_INSTALL_HELPER=1", "TREW_DATA="+filepath.Join(dir, "default-data"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("installation example: %v\n%s", err, out)
 	}

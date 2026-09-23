@@ -164,13 +164,13 @@ async function atSize(size: number): Promise<Row> {
   let journalCompareMs = 0;
 
   const device = async (name: string): Promise<{ c: Client; dir: string }> => {
-    const dir = await mkdtemp(join(tmpdir(), `telimus-pass-${name}-`));
+    const dir = await mkdtemp(join(tmpdir(), `trew-pass-${name}-`));
     dirs.push(dir);
     const c = new Client({
       // Wrapped exactly as the plugin wraps its own, so the desktop rows and
       // the Android rows are measuring the same things under the same names.
       vault: timedVault(new NodeVault(dir), filesystemMs),
-      store: new JsonIndexStore(join(dir, ".telimus", "index.json"), {
+      store: new JsonIndexStore(join(dir, ".trew", "index.json"), {
         onSave: (cost) => {
           journalCompareMs += cost.compareMs;
         },
@@ -352,7 +352,7 @@ function table(rows: Row[]): void {
 }
 
 async function main(): Promise<void> {
-  console.log("telimus: what a quiet pass costs, as the vault grows");
+  console.log("trew: what a quiet pass costs, as the vault grows");
   console.log(`  ${cpus()[0]?.model ?? "unknown cpu"}, ${cpus().length} cores`);
   console.log(
     `  ${process.versions.bun ? "bun " + process.versions.bun : "node " + process.version}`,

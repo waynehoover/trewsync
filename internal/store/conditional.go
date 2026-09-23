@@ -16,7 +16,7 @@ const notRetiredByRename = `NOT EXISTS (
    WHERE moved.vault_id = e.vault_id AND moved.prev_path = e.path AND moved.uid > e.uid)`
 
 // TODO(PLAN.md section 4.5): this is today's survivor set, heads and the rename
-// records they need, which is all Basalt and a device-only Telimus have. Once
+// records they need, which is all Basalt and a device-only Trew have. Once
 // MCP operations exist they pin the versions they displace (op_pins), and purge
 // must keep every unexpired pin as well, in this set, so its preview and its
 // execution still agree; until then purge removes exactly what it always has.

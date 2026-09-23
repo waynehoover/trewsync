@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"github.com/waynehoover/telimus/internal/invite"
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/invite"
+	"github.com/waynehoover/trew/internal/store"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,9 +17,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/frame"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/frame"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // S16: SIGTERM in the middle of an upload ends in one of two states, an ack
@@ -141,7 +141,7 @@ func waitForServer(t *testing.T, addr string, out *safeBuffer) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := telimus(t, "health", "-addr", addr, "-timeout", "500ms"); err == nil {
+		if _, err := trew(t, "health", "-addr", addr, "-timeout", "500ms"); err == nil {
 			return
 		}
 		time.Sleep(25 * time.Millisecond)

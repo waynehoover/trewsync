@@ -50,7 +50,7 @@ import { loadConfig, saveConfig } from "./config.ts";
 
 let root: string;
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "telimus-race-"));
+  root = await mkdtemp(join(tmpdir(), "trew-race-"));
 });
 afterEach(async () => {
   for (const fn of [stat, open, rename, access, readdir, cp, link, lstat]) {
@@ -96,12 +96,12 @@ function shortWrites(most: number): void {
 
 const enc = new TextEncoder();
 const temps = async (dir: string) =>
-  (await readdir(dir)).filter((n) => n.includes(".telimus-tmp-"));
+  (await readdir(dir)).filter((n) => n.includes(".trew-tmp-"));
 /** The state folder's entries, with the staging folder counted only if it holds anything. */
 async function stateDir(): Promise<string[]> {
   const out: string[] = [];
-  for (const name of await readdir(join(root, ".telimus"))) {
-    if (name === "tmp" && (await readdir(join(root, ".telimus", "tmp"))).length === 0) continue;
+  for (const name of await readdir(join(root, ".trew"))) {
+    if (name === "tmp" && (await readdir(join(root, ".trew", "tmp"))).length === 0) continue;
     out.push(name);
   }
   return out.sort();
@@ -155,10 +155,10 @@ describe("a write the filesystem cuts short", () => {
 
   it("is finished for the index too", async () => {
     shortWrites(11);
-    const store = new JsonIndexStore(join(root, ".telimus", "index.json"));
+    const store = new JsonIndexStore(join(root, ".trew", "index.json"));
     const state = { cursor: 7, entries: { "a.md": { size: 1 } }, remote: {}, pending: ["b.md"] };
     await store.save(state);
-    expect(await new JsonIndexStore(join(root, ".telimus", "index.json")).load()).toEqual(state);
+    expect(await new JsonIndexStore(join(root, ".trew", "index.json")).load()).toEqual(state);
   });
 
   it("refuses a write that makes no progress, and leaves no temporary", async () => {
@@ -188,7 +188,7 @@ describe("the config on disk", () => {
   it("is owner-readable only, complete, and alone in its directory", async () => {
     const c = config();
     await saveConfig(root, c);
-    const file = join(root, ".telimus", "config.json");
+    const file = join(root, ".trew", "config.json");
     expect(((await stat(file)).mode & 0o777).toString(8)).toBe("600");
     expect(Buffer.compare((await loadConfig(root))!.secret!, c.secret!)).toBe(0);
     expect(await stateDir()).toEqual(["config.json"]);
@@ -446,11 +446,11 @@ describe("temporary files, ours and not", () => {
     const v = new NodeVault(root);
     await v.write("deep/note.md", enc.encode("x"), { mtime: 1, ctime: 1 });
     expect((await readdir(join(root, "deep"))).filter((n) => n.includes(TEMP_MARK))).toEqual([]);
-    expect(await readdir(join(root, ".telimus", "tmp"))).toEqual([]);
+    expect(await readdir(join(root, ".trew", "tmp"))).toEqual([]);
   });
 
   it("reaps a stale temporary a crash left, and keeps a fresh one", async () => {
-    const staging = join(root, ".telimus", "tmp");
+    const staging = join(root, ".trew", "tmp");
     await mkdir(staging, { recursive: true });
     const stale = join(staging, `old.md${TEMP_MARK}zz`);
     const fresh = join(staging, `new.md${TEMP_MARK}yy`);
@@ -469,7 +469,7 @@ describe("temporary files, ours and not", () => {
 /**
  * F25. A restore into a mounted subdirectory has to land.
  *
- * `create` stages under the vault's own `.telimus/tmp` and hard-links the
+ * `create` stages under the vault's own `.trew/tmp` and hard-links the
  * result into place, which is what makes it exclusive: a link creates the
  * name or fails, so it cannot replace a note that appeared since. Its
  * fallback covered the filesystems that have no hard links and not the case
@@ -505,7 +505,7 @@ describe("creating a file across a mount boundary", () => {
  * R37. Replacing an existing note under a mounted subdirectory.
  *
  * The preserving write stages the incoming version under the vault's own
- * `.telimus/tmp` and hard-links it into the note's directory, and a link cannot
+ * `.trew/tmp` and hard-links it into the note's directory, and a link cannot
  * cross a filesystem. On a vault assembled out of several mounts that link
  * failed *after* the original had been moved aside: the note's own name was
  * empty, its bytes were at a conflict path, and the incoming version had
@@ -514,9 +514,9 @@ describe("creating a file across a mount boundary", () => {
  * Which filesystem the staging is on is now asked before anything moves.
  */
 describe("replacing a note across a mount boundary", () => {
-  /** Makes everything under `.telimus/tmp` report a device of its own. */
+  /** Makes everything under `.trew/tmp` report a device of its own. */
   function stagingOnAnotherMount(): void {
-    const staging = `${sep}.telimus${sep}tmp`;
+    const staging = `${sep}.trew${sep}tmp`;
     const realStat = vi.mocked(lstat).getMockImplementation()!;
     vi.mocked(lstat).mockImplementation((async (path: PathLike, opts?: StatOptions) => {
       const info = (await realStat(path, opts)) as unknown as { dev: number };

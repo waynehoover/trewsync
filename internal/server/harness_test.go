@@ -19,10 +19,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/frame"
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/frame"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 const testVault = "v1"
@@ -59,7 +59,7 @@ func newRig(t *testing.T) *rig {
 	// Discard by default: a failing test prints what it asserts, and the
 	// server's own log would bury it.
 	var out io.Writer = io.Discard
-	if os.Getenv("TELIMUS_TEST_LOG") != "" {
+	if os.Getenv("TREW_TEST_LOG") != "" {
 		out = os.Stderr
 	}
 	log := slog.New(slog.NewTextHandler(out, nil))
@@ -150,7 +150,7 @@ func (r *rig) device(name string) (id, key string) {
 	return id, key
 }
 
-// invite mints an invite on the test vault through the store, as `telimus
+// invite mints an invite on the test vault through the store, as `trew
 // invite` on the server would, living ttl from the rig's clock.
 func (r *rig) invite(ttl time.Duration) store.NewInvite {
 	r.t.Helper()

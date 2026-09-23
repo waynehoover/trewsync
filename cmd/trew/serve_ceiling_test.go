@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 /* ---------------------------------------------------------------- *
@@ -27,7 +27,7 @@ import (
 func dirWithLargeFiles(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestTheRefusalOffersOnlyRemediesAStoppedServerHas(t *testing.T) {
 	}
 	// It says where the flag goes when the server is not started by hand,
 	// which is the state anyone hitting this at three in the morning is in.
-	for _, want := range []string{"telimus service -max-file 30", "Docker"} {
+	for _, want := range []string{"trew service -max-file 30", "Docker"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("the refusal does not say %q:\n%s", want, msg)
 		}
@@ -190,7 +190,7 @@ func TestTheRefusalOffersOnlyRemediesAStoppedServerHas(t *testing.T) {
 	}
 }
 
-// `telimus service` is the documented way to turn "run it by hand with
+// `trew service` is the documented way to turn "run it by hand with
 // -max-file" into something permanent, and the unit it printed had no
 // -max-file in it at all. So the flag was dropped silently, the unit refused to
 // start, and Restart=always with RestartSec=5 and no start limit reprinted the
@@ -224,7 +224,7 @@ func fmtInt64Flag(n int64) string { return "-max-file " + fmt.Sprintf("%d", n) }
 // than necessary.
 func TestServiceRefusesToWriteAUnitThatWouldNotStart(t *testing.T) {
 	dir := dirWithLargeFiles(t)
-	out, err := telimus(t, "service", "-data", dir, "-max-file", "20")
+	out, err := trew(t, "service", "-data", dir, "-max-file", "20")
 	if err == nil {
 		t.Fatalf("service printed a unit that could never start:\n%s", out)
 	}
@@ -242,7 +242,7 @@ func TestServiceRefusesToWriteAUnitThatWouldNotStart(t *testing.T) {
 	}
 }
 
-// The ordinary case is a data directory that does not exist yet: `telimus
+// The ordinary case is a data directory that does not exist yet: `trew
 // service` is run before the first serve. There is nothing to check and
 // nothing to refuse.
 func TestServiceStillPrintsForADirectoryThatIsNotThereYet(t *testing.T) {

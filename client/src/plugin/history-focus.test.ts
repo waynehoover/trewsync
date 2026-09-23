@@ -39,7 +39,7 @@ async function fixture() {
   opened.push(modal);
   modal.open();
   await nextTurn();
-  const more = (modal.contentEl as unknown as FakeEl).querySelector(".telimus-history-button")!;
+  const more = (modal.contentEl as unknown as FakeEl).querySelector(".trew-history-button")!;
   more.focus();
   more.fire("click");
   const loading = (modal as unknown as { paging: Promise<void> }).paging;

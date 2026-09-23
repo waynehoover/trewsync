@@ -74,8 +74,8 @@ if (
 ) {
   throw new Error("Unknown scene or theme. See --help.");
 }
-const id = "telimus-release-screenshots";
-const scratch = await mkdtemp(join(tmpdir(), "telimus-screenshots-"));
+const id = "trew-release-screenshots";
+const scratch = await mkdtemp(join(tmpdir(), "trew-screenshots-"));
 const out = options.has("--output")
   ? resolve(options.get("--output"))
   : join(root, "docs/assets/screenshots");
@@ -137,7 +137,7 @@ try {
           build.onLoad({ filter: /\/plugin\/main\.ts$/ }, async (args) => ({
             contents:
               (await readFile(args.path, "utf8")) +
-              "\nexport { TelimusPanel, TelimusModal, RecoverModal, paintStatus };\n",
+              "\nexport { TrewPanel, TrewModal, RecoverModal, paintStatus };\n",
             loader: "ts",
           }));
         },

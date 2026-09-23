@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/frame"
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/frame"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // frameVectors is the `frames` section of protocol-fixtures.json, which the

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 // A Basalt data directory, as a stopped Basalt server leaves one: its
@@ -125,12 +125,12 @@ func TestServeRefusesABasaltDirectoryAndChangesNothing(t *testing.T) {
 func TestEveryCommandRefusesABasaltDirectoryAndChangesNothing(t *testing.T) {
 	dir := basaltDataDir(t)
 	// The same database under this product's name, which is the case that
-	// gets past "there is no telimus data directory here".
+	// gets past "there is no trew data directory here".
 	b, err := os.ReadFile(filepath.Join(dir, "basalt.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "telimus.db"), b, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "trew.db"), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before := dirDigest(t, dir)
@@ -142,12 +142,12 @@ func TestEveryCommandRefusesABasaltDirectoryAndChangesNothing(t *testing.T) {
 		{"purge", "-data", dir, "-vault", "default", "-confirm", "default", "-no-backup-check"},
 		{"service", "-data", dir},
 	} {
-		_, err := telimus(t, args...)
+		_, err := trew(t, args...)
 		if !errors.Is(err, store.ErrForeignStore) {
-			t.Errorf("telimus %s: %v, want ErrForeignStore", strings.Join(args, " "), err)
+			t.Errorf("trew %s: %v, want ErrForeignStore", strings.Join(args, " "), err)
 		}
 		if after := dirDigest(t, dir); after != before {
-			t.Fatalf("telimus %s changed the directory:\nbefore\n%s\nafter\n%s",
+			t.Fatalf("trew %s changed the directory:\nbefore\n%s\nafter\n%s",
 				strings.Join(args, " "), before, after)
 		}
 	}
@@ -160,7 +160,7 @@ func TestABackupIsNotWrittenIntoABasaltDirectory(t *testing.T) {
 	source := seeded(t)
 	dest := basaltDataDir(t)
 	before := dirDigest(t, dest)
-	_, err := telimus(t, "backup", "-data", source, "-to", dest)
+	_, err := trew(t, "backup", "-data", source, "-to", dest)
 	if !errors.Is(err, store.ErrForeignStore) {
 		t.Fatalf("a backup into a Basalt directory returned %v", err)
 	}

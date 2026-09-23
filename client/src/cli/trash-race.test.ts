@@ -39,7 +39,7 @@ afterEach(async () => {
 });
 
 async function scratch(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-trash-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-trash-"));
   dirs.push(dir);
   return dir;
 }

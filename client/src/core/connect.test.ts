@@ -4,7 +4,7 @@
  *
  * Anything that syncs waits for the backlog, because a pass that runs before
  * catch-up finishes sees a vault the server already has files for and uploads
- * the lot. `telimus status` and the cursor probe in `telimus rebase` do not
+ * the lot. `trew status` and the cursor probe in `trew rebase` do not
  * sync: they read the server's cursor out of the handshake and close. Making
  * them wait meant a device weeks behind unsealed and MAC checked every entry
  * of the backlog before printing one line.

@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/fsync"
+	"github.com/waynehoover/trew/internal/fsync"
 )
 
 // NameLen is the length of a chunk name in characters.

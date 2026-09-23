@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// pairingHosts, which the first invite and `telimus invite` both name their
+// pairingHosts, which the first invite and `trew invite` both name their
 // addresses from. A bind address is not an address: a wildcard is replaced by
 // this machine's interfaces, never by the wildcard, loopback or a link-local
 // address, and an explicit address is already the answer. When nothing can be

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/trew/internal/chunks"
 )
 
 // treeDigest is every file and directory under dir with its contents' hash
@@ -223,7 +223,7 @@ func refusedUnchanged(t *testing.T, dir string, want error) {
 // whose names they share, and the bootstrap token.
 //
 // The one that matters most is Create, which is `serve`. Before this, `serve`
-// pointed at a Basalt directory found no telimus.db, made one, and adopted
+// pointed at a Basalt directory found no trew.db, made one, and adopted
 // Basalt's chunk tree: every body in it unreferenced by the new store, so the
 // first purge afterwards would have deleted all of them.
 func TestABasaltDirectoryIsRefusedAndLeftByteIdentical(t *testing.T) {

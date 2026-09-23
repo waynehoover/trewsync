@@ -1,7 +1,7 @@
 /**
  * The vault lock, and the ways it could be handed to two processes.
  *
- * It is the only thing standing between two `telimus` processes and two engines
+ * It is the only thing standing between two `trew` processes and two engines
  * writing notes, config and index over each other from state neither saw. So
  * the property under everything here is the same one: two callers never both
  * come back holding it.
@@ -38,7 +38,7 @@ afterAll(async () => {
 });
 
 async function vault(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-lock-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-lock-"));
   dirs.push(dir);
   return dir;
 }
@@ -77,7 +77,7 @@ describe("taking the vault lock", () => {
     const winners = results.filter((r) => r.status === "fulfilled");
     expect(winners.length, `${winners.length} callers were all told they hold the vault`).toBe(1);
     for (const loser of results.filter((r) => r.status === "rejected")) {
-      expect((loser as PromiseRejectedResult).reason.message).toMatch(/another telimus/);
+      expect((loser as PromiseRejectedResult).reason.message).toMatch(/another trew/);
     }
   });
 
@@ -113,7 +113,7 @@ describe("taking the vault lock", () => {
   it("refuses while a holder on this host is alive, and frees on release", async () => {
     const dir = await vault();
     const release = await lockVault(dir, "sync --watch");
-    await expect(lockVault(dir, "sync")).rejects.toThrow(/another telimus is using this vault/);
+    await expect(lockVault(dir, "sync")).rejects.toThrow(/another trew is using this vault/);
     await release();
     // And it is free again afterwards.
     await (
@@ -123,19 +123,19 @@ describe("taking the vault lock", () => {
 });
 
 /**
- * What I27 is for: a crashed telimus does not wedge the next one.
+ * What I27 is for: a crashed trew does not wedge the next one.
  *
  * Every one of the five failed takeover attempts was trying to synthesise this
  * property out of a file, and could not, because "the holder is dead" is a
  * conclusion and acting on a conclusion is two steps. The kernel does it in
  * one: the exclusion goes away when the process does.
  */
-describe("recovering from a telimus that died", () => {
+describe("recovering from a trew that died", () => {
   it("takes a vault whose holder is gone, with nobody typing anything", async () => {
     const dir = await vault();
     await staleLock(dir);
 
-    // No `telimus unlock`. This is the whole change.
+    // No `trew unlock`. This is the whole change.
     const release = await lockVault(dir, "after the crash");
     expect(await currentHolder(dir)).toMatchObject({ pid: process.pid });
     await release();
@@ -156,7 +156,7 @@ describe("recovering from a telimus that died", () => {
   });
 
   it("clears debris that names nobody, rather than refusing for ever", async () => {
-    // Holding the kernel's exclusion establishes that no local telimus is
+    // Holding the kernel's exclusion establishes that no local trew is
     // inside, so a file that cannot be read is not a holder: it is litter.
     // Without the exclusion this has to refuse, because it cannot know.
     const dir = await vault();
@@ -170,7 +170,7 @@ describe("recovering from a telimus that died", () => {
   it("does not take one a live process is holding", async () => {
     const dir = await vault();
     const release = await lockVault(dir, "sync --watch");
-    await expect(lockVault(dir, "sync")).rejects.toThrow(/another telimus is using this vault/);
+    await expect(lockVault(dir, "sync")).rejects.toThrow(/another trew is using this vault/);
     await release();
     await (
       await lockVault(dir, "sync")
@@ -267,7 +267,7 @@ describe("releasing the vault lock", () => {
  *
  * What differs is the recovery, and only the recovery. A holder that died
  * still holds the vault as far as this path can tell, because telling would
- * mean guessing, and `telimus unlock` is the way out.
+ * mean guessing, and `trew unlock` is the way out.
  */
 describe("the vault lock with no kernel exclusion", () => {
   beforeEach(() => {
@@ -291,7 +291,7 @@ describe("the vault lock with no kernel exclusion", () => {
     // link either creates the name or fails.
     const dir = await vault();
     // The competitor takes the lock during that instant and keeps it, which
-    // is what a second `telimus` process does: it is not going to hand it back
+    // is what a second `trew` process does: it is not going to hand it back
     // while the first is still deciding.
     let theirs: (() => Promise<void>) | undefined;
     midPublish.pause = async () => {
@@ -333,7 +333,7 @@ describe("the vault lock with no kernel exclusion", () => {
       // The way out has to be in the message. A refusal that leaves somebody
       // guessing which terminal to look in is the cost of not taking over,
       // and it is only worth paying if the message pays it back.
-      expect(why).toMatch(/telimus unlock/);
+      expect(why).toMatch(/trew unlock/);
     }
   });
 
@@ -345,7 +345,7 @@ describe("the vault lock with no kernel exclusion", () => {
     await release();
 
     await staleLock(dir);
-    await expect(lockVault(dir, "sync")).rejects.toThrow(/telimus unlock/);
+    await expect(lockVault(dir, "sync")).rejects.toThrow(/trew unlock/);
 
     await writeFile(
       lockPath(dir),

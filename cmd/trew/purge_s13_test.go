@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 // emptyDataDir is a real data directory the server would accept, with the
@@ -14,7 +14,7 @@ import (
 func emptyDataDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := store.Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -33,7 +33,7 @@ func emptyDataDir(t *testing.T) string {
 func TestS13PurgeRefusesAMisspeltVaultAndListsTheRealOnes(t *testing.T) {
 	dir := seeded(t) // holds vault "default"
 
-	out, err := telimus(t, "purge", "-data", dir, "-vault", "defualt", "-confirm", "defualt", "-no-backup-check")
+	out, err := trew(t, "purge", "-data", dir, "-vault", "defualt", "-confirm", "defualt", "-no-backup-check")
 	if err == nil {
 		t.Fatalf("purge of a misspelt vault succeeded:\n%s", out)
 	}
@@ -49,7 +49,7 @@ func TestS13PurgeRefusesAMisspeltVaultAndListsTheRealOnes(t *testing.T) {
 // An empty store says so plainly rather than offering an empty list.
 func TestS13PurgeOfAVaultInAnEmptyStoreSaysThereAreNone(t *testing.T) {
 	dir := emptyDataDir(t)
-	_, err := telimus(t, "purge", "-data", dir, "-vault", "whatever", "-confirm", "whatever", "-no-backup-check")
+	_, err := trew(t, "purge", "-data", dir, "-vault", "whatever", "-confirm", "whatever", "-no-backup-check")
 	if err == nil {
 		t.Fatal("purge of a vault in an empty store succeeded")
 	}

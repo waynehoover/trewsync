@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/trew/internal/chunks"
 )
 
 /* ---------------------------------------------------------------- *
@@ -141,7 +141,7 @@ func TestADatabaseFromAnOlderBuildIsRefusedAndLeftAsItWas(t *testing.T) {
 // never started. The identity, epoch included, is untouched by it too.
 func TestMigratingTwiceChangesNothing(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "telimus.db")
+	dbPath := filepath.Join(dir, "trew.db")
 
 	first, err := Open(dbPath, filepath.Join(dir, "chunks"))
 	if err != nil {

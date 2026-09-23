@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 // The escape hatch: a note straight out of the store. seeded holds note.md in
@@ -36,7 +36,7 @@ func TestCatPrintsTheLiveVersionOrTheOneAskedFor(t *testing.T) {
 		{[]string{"-path", "note.md", "-uid", "999"}, "no uid"},
 		{[]string{}, "-path"},
 	} {
-		out, err := telimus(t, append([]string{"cat", "-data", dir}, c.args...)...)
+		out, err := trew(t, append([]string{"cat", "-data", dir}, c.args...)...)
 		if err == nil || !strings.Contains(err.Error(), c.says) {
 			t.Errorf("cat %v: %v (printed %q), want a refusal saying %q", c.args, err, out, c.says)
 		}
@@ -54,7 +54,7 @@ func TestCatOfADeletedNoteNamesTheVersionsLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Close()
-	_, err = telimus(t, "cat", "-data", dir, "-path", "note.md")
+	_, err = trew(t, "cat", "-data", dir, "-path", "note.md")
 	if err == nil || !strings.Contains(err.Error(), "uids 3, 2, 1") {
 		t.Fatalf("cat of a deleted note said %v, want the versions with contents named", err)
 	}
@@ -76,7 +76,7 @@ func TestCatRefusesABodyThatIsNotItsName(t *testing.T) {
 	if err := os.WriteFile(p, []byte("version thre3"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := telimus(t, "cat", "-data", dir, "-path", "note.md")
+	out, err := trew(t, "cat", "-data", dir, "-path", "note.md")
 	if err == nil || strings.Contains(out, "thre3") {
 		t.Fatalf("cat of a rotted body printed %q (%v)", out, err)
 	}
@@ -98,7 +98,7 @@ func TestExportWritesOneVersionToANewFileOnly(t *testing.T) {
 	if info, err := os.Stat(to); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("the exported file is %v (%v), want mode 600", info.Mode(), err)
 	}
-	if _, err := telimus(t, "export", "-data", dir, "-uid", "1", "-to", to); err == nil {
+	if _, err := trew(t, "export", "-data", dir, "-uid", "1", "-to", to); err == nil {
 		t.Fatal("export wrote over a file that was there")
 	}
 	if got, _ := os.ReadFile(to); string(got) != "version two" {
@@ -106,7 +106,7 @@ func TestExportWritesOneVersionToANewFileOnly(t *testing.T) {
 	}
 	// A deletion has no contents to export, and nothing is written for it.
 	del := filepath.Join(t.TempDir(), "deletion")
-	if _, err := telimus(t, "export", "-data", dir, "-uid", "6", "-to", del); err == nil {
+	if _, err := trew(t, "export", "-data", dir, "-uid", "6", "-to", del); err == nil {
 		t.Fatal("a deletion was exported")
 	}
 	if _, err := os.Stat(del); !errors.Is(err, os.ErrNotExist) {

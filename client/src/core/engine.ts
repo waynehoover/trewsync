@@ -214,7 +214,7 @@ export function refuseIfBehind(serverCursor: number, ownCursor: number): void {
  */
 export const REJOIN_ADVICE =
   "To rejoin it and keep what only this device holds, back the server up and then run " +
-  "telimus rebase --backup-taken here, or press Rejoin this server in the Telimus panel. " +
+  "trew rebase --backup-taken here, or press Rejoin this server in the Trew panel. " +
   "Unlinking and pairing again also works, and it resets the merge base, so the next " +
   "edit made on two devices at once makes conflict copies instead of merging.";
 
@@ -502,7 +502,7 @@ export interface SyncOptions {
  * is the whole of what a device can see. A body belonging to a version this
  * device never had is not on this disk and is not in this index: there is
  * nothing here that could notice it is gone, let alone supply it. The
- * authoritative list of what a vault is still missing comes from `telimus
+ * authoritative list of what a vault is still missing comes from `trew
  * verify` on the server, and both shells say so rather than implying that a
  * clean repair means a whole vault.
  */
@@ -807,7 +807,7 @@ function nextStepFor(code: string | undefined): string {
     case "nochunk":
       return "The server no longer holds its content. Restore it from a backup, or write it again from a device that still has it.";
     case "cursor":
-      return "The server has lost history this device applied. Back the server up, then telimus rebase.";
+      return "The server has lost history this device applied. Back the server up, then trew rebase.";
     default:
       return "";
   }
@@ -2000,7 +2000,7 @@ export class Engine {
         // to find out what is already known.
         //
         // Dropped from the work list, because there is no work: it was left
-        // there, so `telimus status` reported an ignored folder as "N files
+        // there, so `trew status` reported an ignored folder as "N files
         // with work outstanding" for the rest of the vault's life. Rule 7,
         // and the counter above is where an ignored path is meant to show.
         this.pending.delete(path);
@@ -3105,7 +3105,7 @@ export class Engine {
    * Sends the server bodies it has lost, without writing a version (I14).
    *
    * A body can go missing while every row stays exactly as it was: a disk rots
-   * one and `telimus verify` quarantines it, or a restore brings back a
+   * one and `trew verify` quarantines it, or a restore brings back a
    * database and a chunk tree of slightly different ages. Every device that
    * wants that version then downloads for ever, which presents as a sync that
    * never finishes rather than as an error anybody can act on.
@@ -3127,7 +3127,7 @@ export class Engine {
    * in this index: nothing here could notice it is gone. `couldNotOffer` is the
    * one kind of "cannot help" a device can see for itself, a note whose local
    * copy has moved on from what the server acknowledged. The authoritative list
-   * of what a vault still lacks is `telimus verify` on the server, and both
+   * of what a vault still lacks is `trew verify` on the server, and both
    * shells say so, because a clean repair here is not the same claim as a whole
    * vault and reporting it as one would be the comfortable lie.
    */
@@ -4868,7 +4868,7 @@ export class Engine {
    *
    * Nothing is lost by forgetting it. A batch naming the path again repopulates
    * it, and a file reappearing at that path is a new file, which is what it is.
-   * The server keeps the history either way, and `telimus deleted` reads it from
+   * The server keeps the history either way, and `trew deleted` reads it from
    * there rather than from here.
    */
   private prune(onDisk: Map<string, unknown>): void {

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/fsync"
-	"github.com/waynehoover/telimus/internal/invite"
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/fsync"
+	"github.com/waynehoover/trew/internal/invite"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 // firstInviteFile is where `serve` writes the first device's invite, inside the
@@ -175,24 +175,24 @@ func mintFirstInvite(st *store.Store, vault string, urls []string, path string, 
 // printPairing says what the server is and how the next device joins it. It
 // names the file an invite is in and never prints the invite.
 func printPairing(out io.Writer, addr, vault string, first firstInvite) {
-	fmt.Fprintf(out, "telimus %s listening on %s, serving vault %q\n", resolveVersion(version, moduleVersion()), addr, vault)
+	fmt.Fprintf(out, "trew %s listening on %s, serving vault %q\n", resolveVersion(version, moduleVersion()), addr, vault)
 	fmt.Fprintln(out)
 	switch {
 	case first.Written:
 		fmt.Fprintln(out, "No device is paired with this vault yet. The invite for the first one is in")
 		fmt.Fprintf(out, "  %s\n", first.Path)
-		fmt.Fprintf(out, "and works once, until %s. Paste a line from it into Telimus on that device.\n",
+		fmt.Fprintf(out, "and works once, until %s. Paste a line from it into Trew on that device.\n",
 			first.ExpiresAt.UTC().Format(time.RFC3339))
 		fmt.Fprintln(out, "Each line names one address of this server; use the one the device can reach.")
 	case first.Outstanding:
 		fmt.Fprintln(out, "No device is paired with this vault yet, and an invite for one is still outstanding.")
-		fmt.Fprintf(out, "If this server wrote it, it is in %s. `telimus invite` makes another.\n", first.Path)
+		fmt.Fprintf(out, "If this server wrote it, it is in %s. `trew invite` makes another.\n", first.Path)
 	case first.NoAddress:
 		fmt.Fprintln(out, "No device is paired with this vault yet, and this server cannot tell which address")
 		fmt.Fprintln(out, "devices reach it at, so it wrote no invite. Start it with -url wss://your-host:port,")
-		fmt.Fprintln(out, "the name TLS is terminated at, or run `telimus invite -url wss://your-host:port`.")
+		fmt.Fprintln(out, "the name TLS is terminated at, or run `trew invite -url wss://your-host:port`.")
 	default:
-		fmt.Fprintln(out, "To add a device, run `telimus invite` on this server, or make an invite on a")
+		fmt.Fprintln(out, "To add a device, run `trew invite` on this server, or make an invite on a")
 		fmt.Fprintln(out, "device that already has the vault.")
 	}
 }

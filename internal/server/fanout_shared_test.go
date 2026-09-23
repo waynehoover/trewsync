@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 func TestFanoutSharesImmutableFramesAcrossLiveAndCatchingUpPeers(t *testing.T) {

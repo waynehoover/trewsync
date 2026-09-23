@@ -11,7 +11,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 async function directory(paired = true) {
-  const root = await mkdtemp(join(tmpdir(), "telimus-mcp-token-"));
+  const root = await mkdtemp(join(tmpdir(), "trew-mcp-token-"));
   roots.push(root);
   if (paired)
     await saveConfig(root, {
@@ -27,7 +27,7 @@ it("issues an independent bearer once and stores only its verified hash at 0600"
   const issued = await cli("mcp-token", "--dir", root);
   expect(issued.code, issued.err).toBe(0);
   expect(issued.out).toMatch(/^[A-Za-z0-9_-]{43}$/);
-  const file = join(root, ".telimus/mcp-token.json");
+  const file = join(root, ".trew/mcp-token.json");
   const text = await readFile(file, "utf8");
   const hash = createHash("sha256").update(issued.out).digest("hex");
   expect(JSON.parse(text)).toEqual({ hash, id: hash.slice(0, 8), issued: expect.any(Number) });
@@ -55,9 +55,9 @@ it("writes --key-out privately without echoing the key and refuses to overwrite 
   expect((await stat(key)).mode & 0o777).toBe(0o600);
   expect(result.out + result.err).not.toContain(token);
   expect(result.out + result.err).toContain(key);
-  const before = await readFile(join(root, ".telimus/mcp-token.json"));
+  const before = await readFile(join(root, ".trew/mcp-token.json"));
   expect((await cli("mcp-token", "--dir", root, "--key-out", key)).code).not.toBe(0);
-  expect(await readFile(join(root, ".telimus/mcp-token.json"))).toEqual(before);
+  expect(await readFile(join(root, ".trew/mcp-token.json"))).toEqual(before);
   expect((await readFile(key, "utf8")).trim()).toBe(token);
 });
 it.each([false, true])(
@@ -69,12 +69,12 @@ it.each([false, true])(
     const key = join(alias ? join(outside, "vault-alias") : root, "agent-key.txt");
     const first = await cli("mcp-token", "--dir", root);
     expect(first.code, first.err).toBe(0);
-    const before = await readFile(join(root, ".telimus/mcp-token.json"));
+    const before = await readFile(join(root, ".trew/mcp-token.json"));
     const result = await cli("mcp-token", "--dir", root, "--key-out", key);
     expect(result.code).not.toBe(0);
     expect(result.err).toContain("outside the vault");
     await expect(readFile(key)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await readFile(join(root, ".telimus/mcp-token.json"))).toEqual(before);
+    expect(await readFile(join(root, ".trew/mcp-token.json"))).toEqual(before);
   },
 );
 it("rotates and revokes without taking the running vault owner lock", async () => {
@@ -88,7 +88,7 @@ it("rotates and revokes without taking the running vault owner lock", async () =
     expect(next.code, next.err).toBe(0);
     expect(next.out).not.toBe(first.out);
     expect((await cli("mcp-token", "--dir", root, "--revoke")).code).toBe(0);
-    await expect(readFile(join(root, ".telimus/mcp-token.json"))).rejects.toMatchObject({
+    await expect(readFile(join(root, ".trew/mcp-token.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   } finally {
@@ -97,8 +97,8 @@ it("rotates and revokes without taking the running vault owner lock", async () =
 });
 it("refuses issuance flags during revocation without changing the credential", async () => {
   const root = await directory();
-  await writeFile(join(root, ".telimus/mcp-token.json"), "existing credential");
+  await writeFile(join(root, ".trew/mcp-token.json"), "existing credential");
   const result = await cli("mcp-token", "--dir", root, "--revoke", "--key-out", join(root, "key"));
   expect(result.code).toBe(2);
-  expect(await readFile(join(root, ".telimus/mcp-token.json"), "utf8")).toBe("existing credential");
+  expect(await readFile(join(root, ".trew/mcp-token.json"), "utf8")).toBe("existing credential");
 });

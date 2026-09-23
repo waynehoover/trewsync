@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/store"
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // The protocol, server side. plan/protocol.md is the contract; every test here
@@ -509,7 +509,7 @@ func TestADeviceIDIsBoundedAndBase64URL(t *testing.T) {
 // disclosure_test.go.
 //
 // Hazard 7: the probe is a Basalt plugin, protocol 7 with Basalt's crypto
-// field and a bootstrap token, so a Basalt device meeting a Telimus server is
+// field and a bootstrap token, so a Basalt device meeting a Trew server is
 // refused as `proto`, naming both numbers, and not as `auth`.
 func TestAHelloOutsideTheRangeIsRefusedNamingBothNumbers(t *testing.T) {
 	for _, proto := range []int{7, 2, 0} {

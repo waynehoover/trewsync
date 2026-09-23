@@ -1,4 +1,4 @@
-// Package control is the private socket `telimus serve` answers the operator
+// Package control is the private socket `trew serve` answers the operator
 // on, and the client the administrative commands use to reach it (PLAN.md
 // section 2.3.1).
 //

@@ -2,7 +2,7 @@
 
 [Developer documentation](development.md) · [Plain-language privacy guide](security.md)
 
-Telimus serves one person's trusted devices through one server. The product
+Trew serves one person's trusted devices through one server. The product
 priorities are preserving notes, keeping deployment small, and reducing repeat
 transfers. This is an engineering reference, not a setup guide.
 
@@ -274,7 +274,7 @@ scope. These are scope decisions, not claims that alternatives cannot solve them
 | NFS, SMB, or other network filesystems | Unsupported. |
 | A vault spanning several mounts | Outside the tested setup. |
 | Another sync tool on the same local vault | Unsupported. |
-| Two Telimus writers to one local vault | Unsupported; CLI exclusion enforces one CLI writer. |
+| Two Trew writers to one local vault | Unsupported; CLI exclusion enforces one CLI writer. |
 
 Editing on separate devices is supported. Running the plugin and CLI against
 the same local directory is a different case and must be avoided. Filesystem
@@ -310,7 +310,7 @@ backup protects against some operational failures; it does not prove freshness.
 ### What a stranger on the port learns
 
 Unauthenticated callers can reach health, the initial handshake, and protocol
-refusals. These can reveal that Telimus is present, supported protocol numbers,
+refusals. These can reveal that Trew is present, supported protocol numbers,
 and a bounded readiness reason. They do not include vault contents, paths, or
 the server release. The release is advertised after authentication.
 
@@ -356,7 +356,7 @@ can retain it until device registration finishes, so an error must preserve and
 explain that recovery state.
 
 The MCP token is independently random, not derived from another vault key.
-Its hash lives in unsynced `.telimus` state. Rotating or revoking it does not
+Its hash lives in unsynced `.trew` state. Rotating or revoking it does not
 change device registration, recovery access or encryption keys.
 
 ## What a device can do to another device
@@ -389,7 +389,7 @@ separately. Operator steps are in [Security and privacy](security.md).
 
 Revocation does not erase local notes or the data key. It also does not prevent
 decryption of future ciphertext obtained from another device, backup, or other
-source. Rotation does not change that. Telimus does not provide forward secrecy
+source. Rotation does not change that. Trew does not provide forward secrecy
 through device revocation.
 
 ### What the authenticator proves, and what it does not

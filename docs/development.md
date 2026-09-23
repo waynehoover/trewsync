@@ -1,4 +1,4 @@
-# Develop Telimus
+# Develop Trew
 
 [Documentation](index.md)
 
@@ -23,10 +23,10 @@ use, start with the [server](server.md), [plugin](plugin.md), or
 ## Repository layout
 
 ```text
-go.mod, cmd/, internal/  telimus: server, store, backup, verification, purge
+go.mod, cmd/, internal/  trew: server, store, backup, verification, purge
 client/src/core/         shared sync engine, crypto, chunking, merging, transport
 client/src/plugin/       Obsidian plugin and Vault adapter
-client/src/cli/          telimus CLI and filesystem adapter
+client/src/cli/          trew CLI and filesystem adapter
 client/src/stress/       fault, crash, collision, and scale coverage
 scripts/                 validation and release tools
 ```
@@ -50,7 +50,7 @@ bun run build
 ```
 
 The client tests build and run a real Go server. `bun run build` produces
-`client/dist/telimus.mjs` and the three plugin assets under `client/dist/plugin/`.
+`client/dist/trew.mjs` and the three plugin assets under `client/dist/plugin/`.
 Use `bun run format` for TypeScript formatting.
 
 Before pushing, run the complete local gate from the repository root:
@@ -139,7 +139,7 @@ with a paused real pipe. Malformed envelope shutdown has a regression for a
 paused stdin descriptor that previously kept the process alive after draining.
 
 `mcp-artifact.test.ts` builds the actual production configuration, copies only
-`telimus.mjs` into an empty installation and removes its build inputs before
+`trew.mjs` into an empty installation and removes its build inputs before
 launch. On macOS, sandbox-exec also denies the child access to the repository.
 The test initializes, lists, reads and edits over both transports with the official
 client, verifies the backup, and checks the plugin bundle for MCP SDK leakage.
@@ -209,7 +209,7 @@ Real Tailscale Serve acceptance passed on 2026-09-15 with a Linux headless clien
 and official SDK clients on macOS. Both protocol families negotiated through
 HTTPS; exact edits, verified before-images, stale retries, token rotation,
 revocation and restart were exercised. Mac and Android Obsidian devices received
-the expected edited bytes and original before-image through ordinary Telimus sync.
+the expected edited bytes and original before-image through ordinary Trew sync.
 Temporary vaults also exercised native/container exclusion and SIGKILL recovery
 on that Linux host. This does not replace CI's mounted-filesystem or systemd checks.
 
@@ -269,7 +269,7 @@ Keep the test vault open until cleanup finishes.
 Use `--device phone` to preview the settings at phone width with Obsidian's
 mobile styles. The script checks action alignment, field widths, tap targets,
 and horizontal overflow. This is a layout preview, not Android or iOS acceptance.
-Use `--output /tmp/telimus-screenshots` for review images without replacing the
+Use `--output /tmp/trew-screenshots` for review images without replacing the
 published gallery. A failed layout check leaves a `.failed.png` for inspection.
 
 <details>
@@ -343,7 +343,7 @@ it. GitHub is the home for changelogs; do not duplicate them in repository docs.
 To check an asset's build provenance:
 
 ```bash
-gh attestation verify main.js --repo waynehoover/telimus
+gh attestation verify main.js --repo waynehoover/trew
 ```
 
 An attestation identifies the build source. It is not a security audit or proof
@@ -356,25 +356,25 @@ not just final agreement.
 
 The screenshot script includes activity, conflict comparison, first-sync
 preview, and attachment history scenes. Use a disposable Obsidian vault and
-`--output /tmp/telimus-captures` for review images. Phone CSS previews are not
+`--output /tmp/trew-captures` for review images. Phone CSS previews are not
 native Android acceptance.
 
 ## The fork from Basalt (M0)
 
-Telimus began as a copy of Basalt Sync at commit `664a963` (Basalt Sync 0.10.0,
+Trew began as a copy of Basalt Sync at commit `664a963` (Basalt Sync 0.10.0,
 protocol 7), renamed, with every Basalt check passing before anything was
 removed. The steps, each gated by a full `scripts/check.sh` run:
 
 1. A faithful copy, same layout, still named Basalt: 32 passed, 0 failed,
    0 skipped (two checks are CI only: systemd's verdict on the unit and the
    loopback filesystem).
-2. The rename. `basalt`, `Basalt`, `BASALT` and `basaltd` became `telimus`,
-   `Telimus`, `TELIMUS` and `telimus`; the module became
-   `github.com/waynehoover/telimus`; the invite protocol action became
-   `obsidian://telimus`; the manifest description was rewritten to pass the
+2. The rename. `basalt`, `Basalt`, `BASALT` and `basaltd` became `trew`,
+   `Trew`, `TREW` and `trew`; the module became
+   `github.com/waynehoover/trew`; the invite protocol action became
+   `obsidian://trew`; the manifest description was rewritten to pass the
    community directory's rules (no "Obsidian", ends with a period).
 3. The Go module moved from `server/` to the repository root, so
-   `go install github.com/waynehoover/telimus/cmd/telimus@latest` names one
+   `go install github.com/waynehoover/trew/cmd/trew@latest` names one
    binary. Release tags stay `server/vX.Y.Z` until M9 decides the release
    scheme; they are release triggers, not Go module versions.
 
@@ -391,10 +391,10 @@ IDs they define are cited throughout the code.
 
 ### Inventory at the fork
 
-Counted with the same method at Basalt `664a963` and at the Telimus fork; the
+Counted with the same method at Basalt `664a963` and at the Trew fork; the
 only difference is the FTS5 probe below.
 
-| Area | Basalt `664a963` | Telimus at M0 |
+| Area | Basalt `664a963` | Trew at M0 |
 |---|---|---|
 | Go non-test | 13,588 lines in 18 files | 13,588 lines in 18 files |
 | Go test | 22,895 lines in 73 files, 536 top-level `Test` functions | 22,941 lines in 74 files, 537 |
@@ -415,7 +415,7 @@ can build on FTS5 without a second dependency.
 
 On 2026-09-22, against Obsidian 1.13.7 on macOS: the built plugin was
 installed in a brand-new vault, loaded unpaired with no captured errors, and
-claimed a fresh `telimus serve -localhost` through its first-device flow
+claimed a fresh `trew serve -localhost` through its first-device flow
 (`pairFirst`, with the recovery key handed over before the claim). A note
 written through the `obsidian` CLI reached the server; a headless client
 paired from an invite the plugin created and downloaded it byte-identical; a
@@ -444,7 +444,7 @@ an implementation that is not this one. Linking its `mcp` package into the
 server was measured and rejected: it pulls `golang.org/x/oauth2`,
 `google/jsonschema-go`, segmentio's assembly-accelerated JSON and base64,
 `uritemplate` and `x/time/rate` into the binary, beside a 12,000-line
-streamable transport. Test-only imports are not linked into `telimus`.
+streamable transport. Test-only imports are not linked into `trew`.
 
 ### Latent issues in the chunker
 

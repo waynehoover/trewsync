@@ -202,7 +202,7 @@ export function parsePairing(input: string): Pairing {
   const text = input.trim();
   if (text.startsWith(INVITE_PREFIX)) {
     throw new Error(
-      "this is an invite, not a recovery key. It adds a device: give it to telimus pair, or to the Telimus panel on the new device.",
+      "this is an invite, not a recovery key. It adds a device: give it to trew pair, or to the Trew panel on the new device.",
     );
   }
   if (!text.startsWith(PAIRING_PREFIX)) {
@@ -286,7 +286,7 @@ export function formatInvite(inv: Invite): string {
  * Every one of the three carries a server address, and until this existed the
  * panel showed none of them: a person pressed Pair on a string of base64 and
  * found out where their vault had gone by watching it upload (R083-05). An
- * invite that arrived through `obsidian://telimus?invite=...` is worse
+ * invite that arrived through `obsidian://trew?invite=...` is worse
  * again, because it can be sent by anybody who can get a link in front of
  * somebody, and the panel filled the field in for them.
  *
@@ -319,7 +319,7 @@ export function joinDestination(
 export function parseInvite(input: string): Invite {
   const text = input.trim();
   if (text.startsWith(PAIRING_PREFIX)) {
-    throw new Error("this is a recovery key, not an invite; telimus pair takes either");
+    throw new Error("this is a recovery key, not an invite; trew pair takes either");
   }
   if (!text.startsWith(INVITE_PREFIX)) {
     throw new Error(`not an invite: it should start with ${INVITE_PREFIX}`);
@@ -370,8 +370,8 @@ export const DEVICE_ID_BYTES = 16;
  * A fresh device id.
  *
  * Base64url's alphabet includes `-`, and an id beginning with one is a word a
- * command line reads as an option: `telimus revoke -Xy...` was refused with "no
- * such option" rather than revoking anything. `telimus revoke` accepts `--`
+ * command line reads as an option: `trew revoke -Xy...` was refused with "no
+ * such option" rather than revoking anything. `trew revoke` accepts `--`
  * before an id for the ones that arrive from elsewhere, and this makes sure
  * none arrives from here. One character of entropy is given up out of 128 bits,
  * which is not a bound anybody was relying on: what makes a collision safe is
@@ -385,7 +385,7 @@ export function generateDeviceId(): string {
  * A fresh invite id, under the same rule and for the same reason.
  *
  * The rule above was written for device ids and applied only to them, so
- * `telimus uninvite -Y-Ucn...` was refused with "no such option" for about one
+ * `trew uninvite -Y-Ucn...` was refused with "no such option" for about one
  * invite in sixty-four: an invite nobody could cancel except by waiting out
  * its expiry. The rule belongs to every id this project hands somebody to type.
  */
@@ -503,7 +503,7 @@ export interface DeviceConfig {
  * Raised when a config holds nothing to connect with.
  *
  * Its own class because a shell has to tell it apart from a refusal by a
- * server. Nothing was asked of anybody: `telimus status` reports such a device
+ * server. Nothing was asked of anybody: `trew status` reports such a device
  * as neither reachable nor refused (rule 7), and calling it "not authorised"
  * sent somebody hunting a server problem that was not there.
  */
@@ -780,7 +780,7 @@ function asciiHost(url: string): string {
  *
  * The vault name is there so the plugin can start a vault that is not called
  * `default` (R083-14). It could not, and the documented answer was to install
- * the CLI, run `telimus init --vault-id` into a throwaway directory, issue an
+ * the CLI, run `trew init --vault-id` into a throwaway directory, issue an
  * invite from it, pair the plugin with that, then unlink and revoke the
  * throwaway device. That is a lot of steps to name something, and every one of
  * them is a step at which the only copy of a recovery key is somewhere

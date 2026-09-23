@@ -6,7 +6,7 @@
 # right exactly when releases only ever go forwards, and wrong the first time
 # they do not: a patch to an old minor, or a prerelease put out for one person
 # to try, would take `latest` from the newest stable release and hand every
-# `docker run ghcr.io/.../telimus` an older or unfinished server. Nothing would
+# `docker run ghcr.io/.../trew` an older or unfinished server. Nothing would
 # say so. The compose file pins a version, so the people who would find out are
 # the ones following the README, which is the worst set to pick.
 #
@@ -32,7 +32,7 @@ set -euo pipefail
 tag=${1:?usage: release-tags.sh <tag> [existing-tags-file]}
 
 # Full syntax, anchored. A tag is what decides the version people run and what
-# `telimus version` will print for the life of that image, and "close enough to
+# `trew version` will print for the life of that image, and "close enough to
 # a version" is how server/v1.2 or server/v1.2.3.4 would get published as
 # something no ref resolves.
 if [[ ! "$tag" =~ ^server/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then

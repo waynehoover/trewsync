@@ -18,15 +18,15 @@ set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 fails=0
-image=ghcr.io/waynehoover/telimus
+image=ghcr.io/waynehoover/trew
 
 mkdir -p "$work/scripts" "$work/docs"
 cp "$here/pin-check.sh" "$work/scripts/"
 
 pin() { # pin <version> -- write compose.yaml and the docs naming that image
-  printf 'services:\n  telimus:\n    image: %s:%s@sha256:%064d\n' "$image" "$1" 0 > "$work/compose.yaml"
+  printf 'services:\n  trew:\n    image: %s:%s@sha256:%064d\n' "$image" "$1" 0 > "$work/compose.yaml"
   printf 'Run `docker run %s:%s@sha256:%064d`\n' "$image" "$1" 0 > "$work/docs/server.md"
-  printf '# telimus\n' > "$work/README.md"
+  printf '# trew\n' > "$work/README.md"
 }
 
 git -C "$work" init -q

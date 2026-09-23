@@ -173,7 +173,7 @@ export function textSizesFor(size: number): ChunkSizes {
  *
  * LiveSync's larger sizes are not a mistake on their side. Each of their chunks
  * is a CouchDB document, so a chunk carries a document's cost and fewer is
- * better. Telimus writes a file into a content-addressed directory.
+ * better. Trew writes a file into a content-addressed directory.
  */
 export const BINARY_SIZES: ChunkSizes = { min: 128 * 1024, avg: 256 * 1024, max: 1024 * 1024 };
 
@@ -280,7 +280,7 @@ export interface Chunk {
  * built from.
  *
  * It does not base64 anything. LiveSync encodes binary chunks because CouchDB
- * stores strings; Telimus sends binary WebSocket frames, so the bytes go as
+ * stores strings; Trew sends binary WebSocket frames, so the bytes go as
  * bytes and a third of the transfer is not spent on encoding.
  */
 export function* chunkBytes(

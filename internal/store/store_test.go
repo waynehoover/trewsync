@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/paths"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/paths"
 )
 
 type harness struct {
@@ -32,7 +32,7 @@ func newTestStore(t *testing.T) *harness {
 
 func openAt(t *testing.T, dir string) *harness {
 	t.Helper()
-	s, err := Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	s, err := Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -1091,7 +1091,7 @@ func TestEntriesAndChunksSurviveAReopen(t *testing.T) {
 // Rule 7: a status describes the vault, not what was convenient to count.
 //
 // Purge keeps the newest version per path, which for a deleted note is the
-// deletion record itself, so the content behind it goes. `telimus stats` went
+// deletion record itself, so the content behind it goes. `trew stats` went
 // on reporting "deleted and still recoverable" over exactly those, which is
 // telling somebody their note is safe when nothing can bring it back. The
 // client already told the truth here; the server did not.
@@ -1236,7 +1236,7 @@ func TestADeletionIsStillListedWhenThePathWasReusedAfterARename(t *testing.T) {
 // Its query joined entries to their chunk rows, so an entry whose chunk rows are
 // gone had nothing to join to and was never examined. An entry declaring a size
 // with no chunks behind it is a note that reads as empty rather than as an
-// error, and `telimus verify` called the vault clean.
+// error, and `trew verify` called the vault clean.
 func TestVerifyNoticesAnEntryWhoseChunksAreGone(t *testing.T) {
 	h := newTestStore(t)
 	e := h.file(t, "note.md", "the content of a note")
@@ -1530,7 +1530,7 @@ func TestATruncatedChunkListIsRefused(t *testing.T) {
 
 // And a count of -1 is not special. Basalt's migration left -1 on rows written
 // before the column existed, and its reader took that as "unknown" and served
-// them. Telimus has no such rows, since its schema has had the column from the
+// them. Trew has no such rows, since its schema has had the column from the
 // first, so -1 is only a count that disagrees with the chunk rows, and it is
 // refused like any other: an entry that cannot say how many chunks it has
 // cannot prove it was stored whole.
@@ -1771,8 +1771,8 @@ func TestAppendManyWithNoTempDirectory(t *testing.T) {
 	// to make one and SQLite consults these when it wants a scratch file rather
 	// than when it connects.
 	h := newTestStore(t)
-	t.Setenv("SQLITE_TMPDIR", "/nonexistent-telimus-temp")
-	t.Setenv("TMPDIR", "/nonexistent-telimus-temp")
+	t.Setenv("SQLITE_TMPDIR", "/nonexistent-trew-temp")
+	t.Setenv("TMPDIR", "/nonexistent-trew-temp")
 
 	// Enough entries, each with a chunk, that the statement journal is worth
 	// writing. One or two never reached the failure.

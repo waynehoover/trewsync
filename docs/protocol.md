@@ -2,7 +2,7 @@
 
 [Developer documentation](development.md) · [Design and threat model](design.md)
 
-Telimus uses WebSocket connections. Text frames carry JSON control messages;
+Trew uses WebSocket connections. Text frames carry JSON control messages;
 binary frames carry encrypted chunk bodies. Contents and paths are encrypted,
 but sizes, timestamps, device labels, and routing metadata are readable by the
 server. Use TLS to protect credentials and traffic in transit.

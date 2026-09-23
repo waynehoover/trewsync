@@ -33,7 +33,7 @@ let root: string,
 const hosts: Host[] = [];
 const registries: ReturnType<typeof createTools>[] = [];
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "telimus-mcp-history-"));
+  root = await mkdtemp(join(tmpdir(), "trew-mcp-history-"));
   writer = new NodeVault(root);
   await writer.probeCase();
   reader = new McpReader(new NodeVault(root, { observeOnly: true, alsoIgnore: ["Secret"] }));
@@ -121,8 +121,8 @@ it("pages history including an exact-full final page and reads an authenticated 
   ];
   for (const body of bodies) await save("daily.md", body);
   await inspect();
-  await mkdir(join(root, ".telimus/tmp"), { recursive: true });
-  const staged = join(root, ".telimus/tmp/replace.old");
+  await mkdir(join(root, ".trew/tmp"), { recursive: true });
+  const staged = join(root, ".trew/tmp/replace.old");
   await writeFile(staged, "staged bytes");
   const old = new Date(Date.now() - STALE_TEMP_MS - 60000);
   await utimes(staged, old, old);
@@ -174,7 +174,7 @@ it("refuses excluded and symlinked history sources before asking the server", as
   for (const path of [
     "Secret/hidden.md",
     "linked/hidden.md",
-    ".telimus/config.json",
+    ".trew/config.json",
     "../visible.md",
   ])
     await expect(history.content(path, 1)).rejects.toThrow();

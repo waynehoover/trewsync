@@ -27,7 +27,7 @@ const enc = new TextEncoder();
 // real enumeration in place while allowing the same collision on macOS.
 const normalForm = (name: string): string => name.normalize("NFC").replaceAll("~", "");
 beforeEach(async () => {
-  root = await realpath(await mkdtemp(join(tmpdir(), "telimus-mcp-read-")));
+  root = await realpath(await mkdtemp(join(tmpdir(), "trew-mcp-read-")));
   reader = new McpReader(new NodeVault(root, { observeOnly: true }));
 });
 afterEach(async () => {
@@ -133,7 +133,7 @@ it("lists a directory with a backup-shaped name as an ordinary folder", async ()
   expect(listed.omitted.backups).toBe(0);
 });
 it("does not list outside metadata after a directory is replaced during enumeration", async () => {
-  const outside = await realpath(await mkdtemp(join(tmpdir(), "telimus-mcp-outside-")));
+  const outside = await realpath(await mkdtemp(join(tmpdir(), "trew-mcp-outside-")));
   try {
     await put("folder/inside.md", "inside");
     await writeFile(join(outside, "outside-private-title.md"), "secret");

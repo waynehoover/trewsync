@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/waynehoover/telimus/internal/invite"
+	"github.com/waynehoover/trew/internal/invite"
 )
 
 // The sizes of the three random things a vault's access is made of.
@@ -140,7 +140,7 @@ type NewInvite struct {
 // issuedBy is the device asking, or empty for the operator, who asks on the
 // server; revoking that device cancels the invite (see RevokeDevice). expiresAt
 // is milliseconds, or nil for an invite that never expires, which is the
-// deliberate choice `telimus invite -ttl 0` makes. Sweeping at creation
+// deliberate choice `trew invite -ttl 0` makes. Sweeping at creation
 // rather than on a timer keeps the table bounded by what was issued since the
 // last issue, with no goroutine to forget to start. Spent rows are not swept:
 // a redemption whose reply was lost is recognised by its row.

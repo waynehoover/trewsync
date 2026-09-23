@@ -11,7 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // What a revoke means, all three parts of it (PLAN.md section 2.3.1): no later

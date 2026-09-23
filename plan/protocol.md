@@ -69,7 +69,7 @@ There is no registrar session, no claim, no bootstrap token, no `crypto` field, 
 ### The invite string
 
 ```text
-telimus1i_ <base64url( version=1 || token[16] || len(url) || url || len(vault) || vault || crc32 )>
+trew1i_ <base64url( version=1 || token[16] || len(url) || url || len(vault) || vault || crc32 )>
 ```
 
 Settled in M0.5, and pinned by the `invite` section of `protocol-fixtures.json` (vectors from `scripts/protocol-vectors.py`, consumed by `internal/invite` and `client/src/core/invite-string.ts`):
@@ -83,7 +83,7 @@ Settled in M0.5, and pinned by the `invite` section of `protocol-fixtures.json` 
 - A decoder trims ASCII space, tab, CR and LF at both ends, and nothing else.
 - The prefix is derived from the product name, which is not final (PLAN §10); it lives in one constant on each side and in the fixtures.
 
-Created by `telimus invite` on the server host or by the wire `invite` op from a device. **Invites expire by default** (one hour, both routes), and `--ttl 0` is the deliberate, explicit way to make one that does not. Bootstrap credentials are written to a private path, not to stdout, because a never-expiring invite in a container log is a durable vault credential. The plugin renders it as a QR of `obsidian://telimus?invite=<string>`.
+Created by `trew invite` on the server host or by the wire `invite` op from a device. **Invites expire by default** (one hour, both routes), and `--ttl 0` is the deliberate, explicit way to make one that does not. Bootstrap credentials are written to a private path, not to stdout, because a never-expiring invite in a container log is a durable vault credential. The plugin renders it as a QR of `obsidian://trew?invite=<string>`.
 
 ## Paths
 
@@ -96,7 +96,7 @@ Every `path` and `prev` on the wire is the plaintext vault-relative path, `/`-se
 - leading or trailing `/`, or an empty segment
 - a segment equal to `.` or `..`
 - a segment beginning with `.`
-- a segment containing the staging mark `.telimus-tmp-`
+- a segment containing the staging mark `.trew-tmp-`
 - U+00A0 or U+202F anywhere, because Obsidian's `normalizePath` turns them into ordinary spaces and the server's keyspace is Obsidian's (PLAN §4.1)
 - a backslash anywhere, because `normalizePath` turns it into a slash
 
@@ -177,17 +177,17 @@ The batch budget is **not** `size + 64` per entry. That is not an exact wire-mem
 -> {op:"uninvite", id, invite}      <- {res:"uninvited", id, invite}
 ```
 
-**Settled in M1.** A label is at most 64 bytes with no control characters (`badname`). `ttlMs` of 0 or absent is the one-hour default, anything above an hour is clamped to it before it is converted, so no value overflows into a past expiry, and a negative one is `badentry`. `invited.expiresAt` is null only for an invite that never expires, which only `telimus invite -ttl 0` on the server can make. `uninvite` of an id that is unknown, malformed, spent, cancelled or expired is one `badentry` naming the device list. **Revoking a device cancels the invites it issued**, in the same transaction as the delete: an invite a laptop minted before it was stolen would otherwise add the thief's next device after the laptop was revoked. Invites the operator made name no device and are untouched. **A backup does not carry an outstanding invite**: restoring an old copy must not revive an invite that has since been used or cancelled, so the snapshot keeps only spent rows, and `telimus backup` prints how many it left out.
+**Settled in M1.** A label is at most 64 bytes with no control characters (`badname`). `ttlMs` of 0 or absent is the one-hour default, anything above an hour is clamped to it before it is converted, so no value overflows into a past expiry, and a negative one is `badentry`. `invited.expiresAt` is null only for an invite that never expires, which only `trew invite -ttl 0` on the server can make. `uninvite` of an id that is unknown, malformed, spent, cancelled or expired is one `badentry` naming the device list. **Revoking a device cancels the invites it issued**, in the same transaction as the delete: an invite a laptop minted before it was stolen would otherwise add the thief's next device after the laptop was revoked. Invites the operator made name no device and are untouched. **A backup does not carry an outstanding invite**: restoring an old copy must not revive an invite that has since been used or cancelled, so the snapshot keeps only spent rows, and `trew backup` prints how many it left out.
 
 **Settled in M1: what a revoke means on the server** (PLAN §2.3.1). The row is deleted and the device's sessions are taken out of the fan-out inside one hold on the commit lock, which every mutation and every broadcast also takes, so no commit after the revoke can reach them and no mutation they have in flight can commit (each rechecks the row under that lock). Those sessions are also marked, and their writer sends nothing more but the unsolicited `auth` notice: a batch already queued, a catch-up page, or the reply to a request sent a moment before is dropped at the socket. Basalt deleted the row, released the lock, and only then looked for the sessions, so a commit from another device landing in that window was broadcast to a device already reported revoked.
 
 `invite` in a listing, in `invited` and in `uninvite` is the invite's **id**: 8 random bytes, base64url, minted with the invite and stored beside it. It is not the token and not derived from it. Basalt listed the redemption identifier itself, which was safe only because redeeming also needed a key that never reached the server; with a bearer token that listing would hand every paired device a working invite. Nothing in any listing can redeem an invite, and a test proves it field by field. `token` appears once, in `invited`, to the device that asked; the device formats the string with its own server URL and vault.
 
-**The first device.** `telimus serve` on a store with no devices and no outstanding invite mints one invite (one-hour TTL) and writes its string atomically, mode 0600, to `<data>/first-invite` (or `-invite-out FILE`). It logs that path and the expiry, never the string, because a container log is not a private place. `telimus invite` on the server host (through the control socket while `serve` runs) prints a fresh invite to stdout, or writes it to `-out FILE`.
+**The first device.** `trew serve` on a store with no devices and no outstanding invite mints one invite (one-hour TTL) and writes its string atomically, mode 0600, to `<data>/first-invite` (or `-invite-out FILE`). It logs that path and the expiry, never the string, because a container log is not a private place. `trew invite` on the server host (through the control socket while `serve` runs) prints a fresh invite to stdout, or writes it to `-out FILE`.
 
 **Settled in M1: the address an invite carries.** `-url` when given, which must be canonical `ws://` or `wss://`, and is checked before the port opens. Otherwise `-localhost` gives `ws://127.0.0.1:PORT`. Otherwise each address of this machine a device could dial, as Basalt's pairing lines named them, with `wss://`, which is what those lines meant without a scheme. The first-invite file holds one invite string per address, one per line, all carrying the same token: a device redeems whichever it can reach and the others die with it. When no address can be found, no invite is minted, and `serve` says to start it with `-url`. A restart inside the hour leaves the file alone, since its invite is still outstanding.
 
-`devices` includes MCP author rows so the panel shows agents. **Not as `id` starting with `mcp:`**, because `ValidDeviceID` accepts base64url (`basalt:server/internal/store/store.go:2595`), which has no colon, so that scheme is not the unchanged devices table it was described as. Author rows carry their own `kind` and a valid id, and they are refused as `hello` credentials. An author row must not present as an offline sync peer whose applied checkpoint other devices wait on. Revoking the last real device is allowed from a device session; recovery is `telimus invite` on the server, so `allowLast` is gone (settled in M0.5: without a vault key, no device holds anything the server cannot reissue). `register` and `rotate` are gone.
+`devices` includes MCP author rows so the panel shows agents. **Not as `id` starting with `mcp:`**, because `ValidDeviceID` accepts base64url (`basalt:server/internal/store/store.go:2595`), which has no colon, so that scheme is not the unchanged devices table it was described as. Author rows carry their own `kind` and a valid id, and they are refused as `hello` credentials. An author row must not present as an offline sync peer whose applied checkpoint other devices wait on. Revoking the last real device is allowed from a device session; recovery is `trew invite` on the server, so `allowLast` is gone (settled in M0.5: without a vault key, no device holds anything the server cannot reissue). `register` and `rotate` are gone.
 
 ## Errors
 
@@ -222,4 +222,4 @@ The four upload budgets, stated separately: **raw** bytes, the sum of declared s
 
 ## MCP over HTTP
 
-Not part of the WebSocket protocol, listed here because it shares the listener. `POST`/`GET`/`DELETE /mcp` per MCP streamable HTTP, `Authorization: Bearer <43 base64url chars>`, `WWW-Authenticate: Bearer realm="telimus"` on 401. Every other path without `Upgrade: websocket` is 426 as today, except `/health`.
+Not part of the WebSocket protocol, listed here because it shares the listener. `POST`/`GET`/`DELETE /mcp` per MCP streamable HTTP, `Authorization: Bearer <43 base64url chars>`, `WWW-Authenticate: Bearer realm="trew"` on 401. Every other path without `Upgrade: websocket` is 426 as today, except `/health`.

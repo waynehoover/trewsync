@@ -330,7 +330,7 @@ func TestRevokingADeviceDoesNotTouchTheHistoryItWrote(t *testing.T) {
 
 // Hazard 4, decided: revoking the last device is allowed (plan/protocol.md,
 // "Devices and invites"). Basalt refused it, because what it left was a vault
-// only the recovery key opened; Telimus has no key a device holds that the
+// only the recovery key opened; Trew has no key a device holds that the
 // server cannot reissue, and the way back is an invite from the server. So the
 // last revoke succeeds, the history it leaves is untouched, and the vault can
 // still be given a device.
@@ -467,7 +467,7 @@ func TestSawDeviceOnARevokedDeviceSaysSoAndDoesNotRecreateIt(t *testing.T) {
  * ---------------------------------------------------------------- */
 
 // Registration and revocation race with live sessions and with each other, and
-// the store is opened by more than one process (`telimus backup` and `telimus
+// the store is opened by more than one process (`trew backup` and `trew
 // purge` run against a live server's directory), so the guarantees have to be
 // in the SQL rather than in this process's mutex.
 
@@ -598,9 +598,9 @@ func TestConcurrentRegistrationsOfOneIDUnderTwoKeysCannotFlipTheRow(t *testing.T
 //
 // Through two Store handles on one directory, because that is the shape the
 // guarantee has to survive: writeMu makes a read-then-write atomic within one
-// process, and the store is opened by more than one process (`telimus
-// backup` and `telimus purge` run against a live server's directory, and
-// `telimus revoke` does when no server is running).
+// process, and the store is opened by more than one process (`trew
+// backup` and `trew purge` run against a live server's directory, and
+// `trew revoke` does when no server is running).
 //
 // Basalt's version of this raced two devices revoking each other and asserted
 // that the vault never ended empty. With the last-device rule gone (hazard 4)

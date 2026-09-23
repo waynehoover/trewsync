@@ -6,7 +6,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // The epoch a hello may carry (plan/protocol.md, "Device session"). A cursor

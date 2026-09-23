@@ -124,18 +124,18 @@ export class HistoryModal extends Modal {
   override onOpen(): void {
     this.closed = false;
     this.setTitle(`History of ${this.path}`);
-    this.modalEl.addClass("mod-telimus-history", "mod-sidebar-layout");
+    this.modalEl.addClass("mod-trew-history", "mod-sidebar-layout");
     const sidebar = this.contentEl.createDiv("modal-sidebar mod-history");
     // setTitle above is invisible under mod-sidebar-layout, which collapses
     // the modal header, so the path goes here instead. Without it the modal
     // never says which note you are looking at the history of.
-    sidebar.createDiv({ cls: "telimus-history-heading", text: this.path });
+    sidebar.createDiv({ cls: "trew-history-heading", text: this.path });
     this.listEl = sidebar.createDiv("modal-sidebar-inner");
     this.versionsEl = this.listEl.createDiv("modal-sidebar-list");
-    this.moreEl = this.listEl.createEl("button", { cls: "telimus-history-button" });
+    this.moreEl = this.listEl.createEl("button", { cls: "trew-history-button" });
     this.moreEl.setAttribute("type", "button");
     this.moreEl.addEventListener("click", () => void this.load());
-    this.paneEl = this.contentEl.createDiv("telimus-history-content-container");
+    this.paneEl = this.contentEl.createDiv("trew-history-content-container");
     void this.load();
   }
 
@@ -201,7 +201,7 @@ export class HistoryModal extends Modal {
       // it here took the Load more button away, so an offline moment while
       // the modal opened left a window whose only recovery was closing it
       // and opening it again.
-      new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+      new Notice(`Trew: ${(err as Error).message}`, 10_000);
       this.failed = (err as Error).message;
       this.render();
       return;
@@ -238,7 +238,7 @@ export class HistoryModal extends Modal {
     this.moreEl.setAttribute("aria-disabled", String(this.paging !== undefined));
     this.moreEl.toggle(!this.exhausted && (this.versions.length > 0 || this.failed !== undefined));
     if (this.paging && this.versions.length === 0) {
-      this.versionsEl.createEl("p", { cls: "telimus-history-empty", text: "Loading history…" });
+      this.versionsEl.createEl("p", { cls: "trew-history-empty", text: "Loading history…" });
       return;
     }
     if (this.versions.length === 0 && this.failed !== undefined) {
@@ -247,12 +247,12 @@ export class HistoryModal extends Modal {
       // question rather than the vault. This says what happened, and the
       // button under it asks again.
       this.versionsEl.createEl("p", {
-        cls: "telimus-history-empty",
+        cls: "trew-history-empty",
         text: `The history could not be read: ${this.failed}`,
       });
     } else if (this.versions.length === 0) {
       this.versionsEl.createEl("p", {
-        cls: "telimus-history-empty",
+        cls: "trew-history-empty",
         text: "The server holds no history for this note.",
       });
       return;
@@ -310,7 +310,7 @@ export class HistoryModal extends Modal {
     if (!version) {
       this.paneEl.addClass("mod-empty");
       this.paneEl.createEl("p", {
-        cls: "telimus-history-content-empty",
+        cls: "trew-history-content-empty",
         text: "Select a version to see it.",
       });
       return;
@@ -338,11 +338,11 @@ export class HistoryModal extends Modal {
     restore.addEventListener("click", () => void this.restore(version));
 
     if (previewReason(version) !== undefined) {
-      this.paneEl.createEl("p", { cls: "telimus-history-content-empty", text: this.text });
+      this.paneEl.createEl("p", { cls: "trew-history-content-empty", text: this.text });
       return;
     }
     const pre = this.paneEl.createEl("pre", {
-      cls: this.showDiff ? "telimus-history-diff" : "telimus-history-text",
+      cls: this.showDiff ? "trew-history-diff" : "trew-history-text",
     });
     if (!this.showDiff) {
       pre.setText(this.text);
@@ -354,9 +354,9 @@ export class HistoryModal extends Modal {
     // out the single colour the stylesheet says is unreadable.
     for (const line of this.text.split("\n")) {
       const cls = line.startsWith("+")
-        ? "telimus-added"
+        ? "trew-added"
         : line.startsWith("-")
-          ? "telimus-removed"
+          ? "trew-removed"
           : "";
       // Never an empty class: addClass throws on one, and createSpan
       // takes the same path.
@@ -426,7 +426,7 @@ export class HistoryModal extends Modal {
       new Notice(describeRestore(version, done), done.sent ? undefined : 10_000);
       this.close();
     } catch (err) {
-      new Notice(`Telimus: ${(err as Error).message}`, 10_000);
+      new Notice(`Trew: ${(err as Error).message}`, 10_000);
     } finally {
       this.restoring = false;
       if (!this.closed) this.renderPane();

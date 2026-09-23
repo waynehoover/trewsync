@@ -22,7 +22,7 @@ import * as stub from "./plugin/stub.ts";
 import type { Plugin as StubPlugin } from "./plugin/stub.ts";
 
 const run = promisify(execFile);
-const CLI = "dist/telimus.mjs";
+const CLI = "dist/trew.mjs";
 const PLUGIN = "dist/plugin/main.js";
 
 let plugin = "";
@@ -77,7 +77,7 @@ describe("the plugin bundle", () => {
       string,
       unknown
     >;
-    expect(manifest["id"]).toBe("telimus-sync");
+    expect(manifest["id"]).toBe("trew-sync");
     expect(manifest["isDesktopOnly"]).toBe(false);
 
     // The shipped manifest has to be the repository's own, because the
@@ -95,8 +95,8 @@ describe("the plugin bundle", () => {
 describe("the headless bundle", () => {
   it("runs, and says what it is", async () => {
     const { stdout } = await run("node", [CLI, "--help"]);
-    expect(stdout).toMatch(/telimus sync/);
-    expect(stdout).toMatch(/telimus pair/);
+    expect(stdout).toMatch(/trew sync/);
+    expect(stdout).toMatch(/trew pair/);
   });
 
   /**
@@ -206,7 +206,7 @@ describe("the plugin bundle, loaded and run", () => {
   it("exports something Obsidian can construct", () => {
     const Built = loadBundle();
     const app = new stub.App();
-    const instance = new Built(app, { id: "telimus", dir: ".obsidian/plugins/telimus" });
+    const instance = new Built(app, { id: "trew", dir: ".obsidian/plugins/trew" });
     expect(instance).toBeInstanceOf(stub.Plugin);
   });
 
@@ -217,9 +217,9 @@ describe("the plugin bundle, loaded and run", () => {
     const Built = loadBundle();
 
     const appA = new stub.App();
-    const a = new Built(appA, { id: "telimus", dir: ".obsidian/plugins/telimus" });
+    const a = new Built(appA, { id: "trew", dir: ".obsidian/plugins/trew" });
     const appB = new stub.App();
-    const b = new Built(appB, { id: "telimus", dir: ".obsidian/plugins/telimus" });
+    const b = new Built(appB, { id: "trew", dir: ".obsidian/plugins/trew" });
 
     try {
       await a.onload();

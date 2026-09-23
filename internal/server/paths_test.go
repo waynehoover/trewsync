@@ -12,7 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // pathVector is one case of the `paths` section of protocol-fixtures.json:

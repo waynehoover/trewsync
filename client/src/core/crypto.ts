@@ -20,7 +20,7 @@
  * upload a fresh name; content-defined chunking would still cut at exactly the
  * right boundaries and the client would then send every chunk anyway, for ever,
  * reporting success throughout. LiveSync randomises its per-chunk salt and can
- * afford to because it deduplicates on the plaintext hash instead. Telimus
+ * afford to because it deduplicates on the plaintext hash instead. Trew
  * deduplicates on the wire, so the determinism has to be in the cipher.
  *
  * The nonce is HMAC of the plaintext under a separate key, truncated to 96

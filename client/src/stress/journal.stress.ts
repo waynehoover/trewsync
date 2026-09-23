@@ -28,7 +28,7 @@ afterAll(async () => {
 });
 
 async function root(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-journal-stress-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-journal-stress-"));
   dirs.push(dir);
   return dir;
 }

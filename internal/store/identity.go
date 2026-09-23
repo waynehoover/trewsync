@@ -14,19 +14,19 @@ import (
 	"strings"
 )
 
-// Product is what a Telimus data directory says it is, in its store_identity
+// Product is what a Trew data directory says it is, in its store_identity
 // row (PLAN.md section 2.8), and the stem of every file name this package
 // gives a data directory.
 //
 // Derived names come from it rather than being spelled out, because the
 // product name is not final (PLAN.md section 10) and a rename should be one
 // constant.
-const Product = "telimus"
+const Product = "trew"
 
 // basaltDatabase is the database file a Basalt data directory holds. A
 // directory with one is Basalt's, whatever else it contains, and is refused
 // before anything is created in it: the two products share the chunk tree's
-// name and the lock files' names, so a fresh telimus.db beside a basalt.db
+// name and the lock files' names, so a fresh trew.db beside a basalt.db
 // would adopt Basalt's bodies, and a later purge would sweep every one of
 // them as unreferenced.
 const basaltDatabase = "basalt.db"
@@ -37,7 +37,7 @@ const basaltDatabase = "basalt.db"
 // and the directory is left as it was found.
 var ErrForeignStore = errors.New("this is not a " + Product + " data directory")
 
-// ErrFutureSchema is a database written by a newer telimus.
+// ErrFutureSchema is a database written by a newer trew.
 var ErrFutureSchema = errors.New("this database was written by a newer " + Product)
 
 // Identity is what a store says about itself: which product wrote it, which
@@ -325,7 +325,7 @@ func readIdentity(q querier, dbPath string) (Identity, bool, error) {
 // Basalt's is the one worth recognising by name, because it is the directory
 // somebody migrating is most likely to point this at, and its schema version
 // is 1: the same number this build's first schema has, which is exactly why
-// the identity row exists (PLAN.md section 2.8). A Telimus build from before
+// the identity row exists (PLAN.md section 2.8). A Trew build from before
 // protocol 1 wrote Basalt's schema too, and gets the same answer.
 func foreignWithoutIdentity(q querier, dbPath string) error {
 	rows, err := q.Query(`SELECT name FROM sqlite_master WHERE type = 'table'`)

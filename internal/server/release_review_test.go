@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/wire"
+	"github.com/waynehoover/trew/internal/wire"
 )
 
 // release_review_test.go:13. A ttl near the int64 limit is clamped to the cap

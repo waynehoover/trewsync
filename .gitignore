@@ -1,6 +1,6 @@
 # Build output
-/telimus
-/go/telimus
+/trew
+/go/trew
 
 # Local server state
 *.db
@@ -12,7 +12,7 @@ release/
 client/release/
 
 # Locally built server binary
-/server/telimus
+/server/trew
 
 # Relay working files, not part of the project.
 tmp/

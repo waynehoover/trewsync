@@ -547,7 +547,7 @@ export class Client {
    * decides they are local-only, and uploads the lot.
    *
    * `waitForBacklog: false` is for the two callers that ask a question and
-   * close: `telimus status` and the cursor probe in `telimus rebase`. Both want
+   * close: `trew status` and the cursor probe in `trew rebase`. Both want
    * `ready.cursor`, which is the server's own number and is already here when
    * `start` returns, and a device weeks behind was paying minutes of unsealing
    * and MAC checking to print one line (R1). Closing straight after is what
@@ -972,7 +972,7 @@ export class Client {
   /**
    * Sends the server bodies it has lost, writing no version (I14).
    *
-   * What `telimus verify` finds and nothing could previously fix: a chunk the
+   * What `trew verify` finds and nothing could previously fix: a chunk the
    * disk rotted and the server quarantined, or one a restore left behind. Every
    * device that wants that version downloads for ever, and no ordinary pass
    * repairs it, because a device whose copy has not changed is correct to
@@ -1122,7 +1122,7 @@ export class Client {
    * A single page used to be all anybody looked at: fifty versions for the
    * newest with content, five hundred for a version by uid. A note edited
    * more often than that, or deleted and re-created enough times, had older
-   * versions that `telimus history` would list and `telimus restore --uid`
+   * versions that `trew history` would list and `trew restore --uid`
    * would then say did not exist. Recovery is the one place that answer must
    * not be a page size.
    *
@@ -1199,7 +1199,7 @@ export class Client {
    */
   async invite(ttlMs?: number): Promise<{ invite: string; expiresAt: number }> {
     // Not `randomBytes` straight: an id whose base64url starts with `-` is a
-    // word the command line reads as an option, and `telimus uninvite` could
+    // word the command line reads as an option, and `trew uninvite` could
     // not cancel one.
     const id = generateInviteId();
     const key = randomBytes(INVITE_KEY_LENGTH);
@@ -1905,8 +1905,8 @@ export interface JoiningVault {
  * Registers this device against a vault it holds the root of, and returns the
  * config of a device that holds no root.
  *
- * The two ways in are `telimus init` and the panel's "start a new vault", which
- * arrive with a bootstrap token and a secret nobody has seen yet, and `telimus
+ * The two ways in are `trew init` and the panel's "start a new vault", which
+ * arrive with a bootstrap token and a secret nobody has seen yet, and `trew
  * pair RECOVERY-KEY` and the panel's pairing form, which arrive with a secret
  * somebody pasted. Both end in the same place, which is the point: a row on
  * the vault, the credential for it, the data key, and no root.
@@ -1921,8 +1921,8 @@ export interface JoiningVault {
  *    the only copy of the recovery key and is why it is written there; a
  *    pairing has the key in somebody's hand already.
  *  - **Between the registration and the save.** One row on the server that
- *    nobody holds the credential for. It shows in `telimus devices` as a device
- *    that has never connected and goes with `telimus revoke`, which is exactly
+ *    nobody holds the credential for. It shows in `trew devices` as a device
+ *    that has never connected and goes with `trew revoke`, which is exactly
  *    the failure the invite path has and is documented with.
  *  - **After the save.** A finished device. The connection below only confirms
  *    it, so failing there costs a retry and no state.
@@ -1935,7 +1935,7 @@ export interface JoiningVault {
  * The first two crash points are walked against a real server in
  * cli/state.test.ts, "a vault that was started and never joined ": the
  * refusal that hands the recovery key back and pairs again with it, notes and
- * all, and the row a failed save leaves for `telimus revoke` to take.
+ * all, and the row a failed save leaves for `trew revoke` to take.
  */
 export async function registerAsDevice(
   joining: JoiningVault,
@@ -2058,7 +2058,7 @@ export async function whatTheDiskHolds(
 
 /**
  * What to do next when registering this device did not finish: one counsellor
- * for `telimus init`, `telimus pair` and both of the panel's pairing paths.
+ * for `trew init`, `trew pair` and both of the panel's pairing paths.
  *
  * It answers from what the disk says rather than from which step threw (rule
  * 4), because that is the only thing that tells the states apart, and it is
@@ -2110,15 +2110,15 @@ export function adviseAfterRegistering(what: {
     case "credential":
       return cli
         ? `This device is registered with the vault and ${where} holds its credential; ` +
-            `run telimus sync here to finish, or telimus unlink to start again.`
-        : `This device is registered with the vault; Telimus will connect as it on the next attempt.`;
+            `run trew sync here to finish, or trew unlink to start again.`
+        : `This device is registered with the vault; Trew will connect as it on the next attempt.`;
     case "unreadable":
       return (
         `${where} could not be read (${remains.why}), so what this device holds is not known and ` +
         `nothing should be revoked on the strength of it: a credential that was written and ` +
         `cannot be read back is still the only copy of its row's key. Fix that first, ` +
         (cli
-          ? `then telimus status here says whether this device has one.`
+          ? `then trew status here says whether this device has one.`
           : `then reload the plugin, which says whether this device has one.`)
       );
     default: {
@@ -2126,13 +2126,13 @@ export function adviseAfterRegistering(what: {
         remains.kind !== "root"
           ? "Pair again"
           : cli
-            ? "Run telimus unlink here and telimus pair with the recovery key"
+            ? "Run trew unlink here and trew pair with the recovery key"
             : "Unlink this vault and pair again with the recovery key on the panel";
       return (
         `A device row ${registered ? "was" : "may have been"} registered with the vault and its ` +
         `credential is not here, so nothing can connect as that device. ${wayBack}, then ` +
         (cli
-          ? `telimus devices lists that row as never connected and telimus revoke ID removes it.`
+          ? `trew devices lists that row as never connected and trew revoke ID removes it.`
           : `the device list shows that row as never connected, with Revoke beside it.`)
       );
     }
@@ -2201,8 +2201,8 @@ export async function proveDeviceConnects(
  * is in a reply that never arrived and the invite that carried it is spent:
  * that device is stuck, and the retry with a fresh invite registers a second
  * row and strands the first. This way a crash costs a row nobody holds the key
- * to, which is visible in `telimus devices` as a device that has never
- * connected and is removed with `telimus revoke`, and the local vault is left
+ * to, which is visible in `trew devices` as a device that has never
+ * connected and is removed with `trew revoke`, and the local vault is left
  * exactly as unpaired as it was found, so the retry is the ordinary path.
  *
  * The caller saves what this returns, durably, and reads it back before it

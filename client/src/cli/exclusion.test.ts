@@ -10,7 +10,7 @@
  *
  * So the self-test is checked against mechanisms built to lie. That is the
  * whole of this file, and it is worth having because everything above treats
- * "I hold the exclusion" as proof that no other telimus is inside the vault: a
+ * "I hold the exclusion" as proof that no other trew is inside the vault: a
  * mechanism that reports success without excluding would have this client
  * write over a live holder's record.
  */
@@ -28,7 +28,7 @@ afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
 async function stateDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-exclusion-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-exclusion-"));
   dirs.push(dir);
   return dir;
 }

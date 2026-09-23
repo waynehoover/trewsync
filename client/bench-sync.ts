@@ -128,7 +128,7 @@ async function contentsOf(dir: string): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const walk = async (at: string, prefix: string): Promise<void> => {
     for (const item of await readdir(at, { withFileTypes: true })) {
-      if (item.name === ".telimus" || item.name === ".trash") continue;
+      if (item.name === ".trew" || item.name === ".trash") continue;
       const path = prefix ? `${prefix}/${item.name}` : item.name;
       if (item.isDirectory()) await walk(join(at, item.name), path);
       else {
@@ -170,7 +170,7 @@ const WIRES: Array<{ name: string; wire: Wire }> = [
 ];
 
 async function main() {
-  console.log("telimus: a whole vault, timed and checked");
+  console.log("trew: a whole vault, timed and checked");
   console.log(
     `  ${cpus()[0]?.model ?? "unknown cpu"}, ${cpus().length} cores, ${mib(totalmem())} MiB`,
   );
@@ -197,11 +197,11 @@ async function run(wire: Wire) {
   const clients: Client[] = [];
 
   const device = async (name: string) => {
-    const dir = await mkdtemp(join(tmpdir(), `telimus-bench-${name}-`));
+    const dir = await mkdtemp(join(tmpdir(), `trew-bench-${name}-`));
     dirs.push(dir);
     const c = new Client({
       vault: new NodeVault(dir),
-      store: new JsonIndexStore(join(dir, ".telimus", "index.json")),
+      store: new JsonIndexStore(join(dir, ".trew", "index.json")),
       url: proxy.url,
       ...(await server.deviceCredentials(secret, await testWrapped(secret), name)),
       vaultId: "default",

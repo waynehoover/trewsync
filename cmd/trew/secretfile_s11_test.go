@@ -8,7 +8,7 @@ import (
 )
 
 // S11: a file holding a credential is written atomically, durably, at 0600,
-// and verified. Basalt's was the auth token; Telimus writes the first device's
+// and verified. Basalt's was the auth token; Trew writes the first device's
 // invite (and, with `-out`, any invite), which adds a device to the vault, so
 // the writer and its two tests stay (plan/strip-ledger.md, unique guarantee
 // 11). The third test, the token copied into a backup, went with the token.
@@ -18,14 +18,14 @@ import (
 func TestS11WriteSecretFileIsExactAndPrivate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, firstInviteFile)
-	if err := writeSecretFile(path, "telimus1i_the-invite\n"); err != nil {
+	if err := writeSecretFile(path, "trew1i_the-invite\n"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}
-	if string(got) != "telimus1i_the-invite\n" {
+	if string(got) != "trew1i_the-invite\n" {
 		t.Fatalf("content is %q", got)
 	}
 	info, err := os.Stat(path)

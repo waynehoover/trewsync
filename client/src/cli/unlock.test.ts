@@ -1,5 +1,5 @@
 /**
- * `telimus unlock`, which is what replaced automatic stale-lock takeover.
+ * `trew unlock`, which is what replaced automatic stale-lock takeover.
  *
  * Five attempts at deciding on its own that a holder was gone each handed one
  * vault to two writers (R03, R34, R40, R44, R49). The decision is the same one
@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 async function vault(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "telimus-unlock-"));
+  const dir = await mkdtemp(join(tmpdir(), "trew-unlock-"));
   dirs.push(dir);
   return dir;
 }
@@ -121,7 +121,7 @@ describe("unlock", () => {
     // removed and something complained afterwards.
     const still = JSON.parse(await readFile(lockPath(dir), "utf8")) as { command: string };
     expect(still.command).toBe("sync --watch");
-    await expect(lockVault(dir, "sync")).rejects.toThrow(/another telimus/);
+    await expect(lockVault(dir, "sync")).rejects.toThrow(/another trew/);
     await release();
   });
 
@@ -204,14 +204,14 @@ describe("unlock", () => {
     // back it would have written over the new holder's lock.
     const now = JSON.parse(await readFile(lockPath(dir), "utf8")) as { command: string };
     expect(now.command, "the live holder's lock was written over").toBe("sync");
-    await expect(lockVault(dir, "sync")).rejects.toThrow(/another telimus/);
+    await expect(lockVault(dir, "sync")).rejects.toThrow(/another trew/);
     await release!();
   });
 
   it("never takes a live holder's lock aside, even for an instant", async () => {
     // The window this command could open by itself. Moving a running holder's
     // lock out of the way, even to decide to put it back, leaves the vault
-    // looking free, and a `telimus sync` starting in that instant takes it
+    // looking free, and a `trew sync` starting in that instant takes it
     // beside the holder: two writers on one vault, caused by the command whose
     // whole job is to stop that. So an ordinary refusal touches nothing.
     const dir = await vault();

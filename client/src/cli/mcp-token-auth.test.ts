@@ -31,14 +31,14 @@ let root: string;
 let token: string;
 let path: string;
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "telimus-mcp-auth-"));
+  root = await mkdtemp(join(tmpdir(), "trew-mcp-auth-"));
   await saveConfig(root, {
     url: "ws://127.0.0.1:1",
     vaultId: "default",
     device: "test",
     secret: new Uint8Array(32).fill(7),
   });
-  path = join(root, ".telimus/mcp-token.json");
+  path = join(root, ".trew/mcp-token.json");
   const issued = await cli("mcp-token", "--dir", root);
   expect(issued.code, issued.err).toBe(0);
   token = issued.out;
@@ -98,10 +98,10 @@ it.each(["EACCES", "EIO"])("refuses %s without exposing file details", async (co
 });
 it("keeps the credential outside note reads by name, leaf alias and ancestor alias", async () => {
   await symlink(path, join(root, "credential.md"));
-  await symlink(join(root, ".telimus"), join(root, "public"));
-  await symlink(path, join(root, ".telimus/alias.md"));
+  await symlink(join(root, ".trew"), join(root, "public"));
+  await symlink(path, join(root, ".trew/alias.md"));
   const reader = new McpReader(new NodeVault(root, { observeOnly: true }));
-  for (const name of [".telimus/alias.md", "credential.md", "public/alias.md"])
+  for (const name of [".trew/alias.md", "credential.md", "public/alias.md"])
     await expect(reader.read({ path: name })).rejects.toThrow(/excluded|link/);
   expect((await reader.list({})).entries).toEqual([]);
 });
@@ -110,17 +110,17 @@ it.each(["leaf", "state"])("does not read a credential through a %s symlink", as
     await rename(path, join(root, "saved"));
     await symlink(join(root, "saved"), path);
   } else {
-    await rename(join(root, ".telimus"), join(root, "saved"));
-    await symlink(join(root, "saved"), join(root, ".telimus"));
+    await rename(join(root, ".trew"), join(root, "saved"));
+    await symlink(join(root, "saved"), join(root, ".trew"));
   }
   await expect(readMcpToken(root)).rejects.toMatchObject({ status: 503 });
 });
 it("does not issue or rotate through staging outside the vault", async () => {
-  const outside = await mkdtemp(join(tmpdir(), "telimus-mcp-stage-"));
+  const outside = await mkdtemp(join(tmpdir(), "trew-mcp-stage-"));
   try {
     const before = await readFile(path);
-    await rm(join(root, ".telimus/tmp"), { recursive: true, force: true });
-    await symlink(outside, join(root, ".telimus/tmp"));
+    await rm(join(root, ".trew/tmp"), { recursive: true, force: true });
+    await symlink(outside, join(root, ".trew/tmp"));
     const result = await cli("mcp-token", "--dir", root);
     expect(result.code).not.toBe(0);
     expect(result.out).toBe("");
@@ -157,7 +157,7 @@ it("prints no credential if flushing its published directory fails", async () =>
   const actualOpen = vi.mocked(open).getMockImplementation()!;
   vi.mocked(open).mockImplementation(async (...args: Parameters<typeof open>) => {
     const handle = await actualOpen(...args);
-    if (String(args[0]) === join(root, ".telimus"))
+    if (String(args[0]) === join(root, ".trew"))
       vi.spyOn(handle, "sync").mockRejectedValueOnce(
         Object.assign(new Error("injected directory flush failure"), { code: "EIO" }),
       );

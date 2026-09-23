@@ -87,7 +87,7 @@ func dialWithOrigin(t *testing.T, origin string) error {
 
 func testLogger() *slog.Logger {
 	var out io.Writer = io.Discard
-	if os.Getenv("TELIMUS_TEST_LOG") != "" {
+	if os.Getenv("TREW_TEST_LOG") != "" {
 		out = os.Stderr
 	}
 	return slog.New(slog.NewTextHandler(out, nil))

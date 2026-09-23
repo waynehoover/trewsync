@@ -16,9 +16,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/telimus/internal/chunks"
-	"github.com/waynehoover/telimus/internal/frame"
-	"github.com/waynehoover/telimus/internal/store"
+	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trew/internal/frame"
+	"github.com/waynehoover/trew/internal/store"
 )
 
 // protocol-transcripts.json, replayed against a real server on a fresh store

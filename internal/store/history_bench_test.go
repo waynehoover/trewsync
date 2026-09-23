@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/telimus/internal/chunks"
+	"github.com/waynehoover/trew/internal/chunks"
 )
 
 // The four queries that grow with history, against a database shaped like a
@@ -37,7 +37,7 @@ type vaultShape struct {
 func buildVault(tb testing.TB, sh vaultShape) (*Store, string) {
 	tb.Helper()
 	dir := tb.TempDir()
-	st, err := Open(filepath.Join(dir, "telimus.db"), filepath.Join(dir, "chunks"))
+	st, err := Open(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"))
 	if err != nil {
 		tb.Fatal(err)
 	}
