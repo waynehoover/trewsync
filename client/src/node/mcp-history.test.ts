@@ -95,6 +95,7 @@ async function connectedTools() {
     mode: "writable",
     writer,
     reader,
+    device: "laptop",
     client: () => client,
     stopping: () => false,
     changed: () => {},

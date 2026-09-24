@@ -66,6 +66,7 @@ it("preserves the unsent before-image through the note transaction and restart",
       text: "\r\nBooked the hotel.\r\n",
     },
     () => {},
+    "laptop",
   );
   expect(result.applied).toBe(true);
   expect(result.beforeImage, "the unsent source has an independent durable name").toBeTypeOf(
@@ -96,7 +97,8 @@ async function seeded(
   await vault.create("Daily.md", bytes, times);
   await vault.flush();
   const changed: string[] = [];
-  const run = (request: NoteMutation) => mutateNote(vault, request, (path) => changed.push(path));
+  const run = (request: NoteMutation) =>
+    mutateNote(vault, request, (path) => changed.push(path), "laptop");
   return { vault, bytes, base: await digest(bytes), run, changed };
 }
 async function survivors(): Promise<Record<string, string>> {
@@ -244,6 +246,7 @@ it("does not create a missing append target", async () => {
     vault,
     { kind: "append", path: "missing.md", base: "a".repeat(64), text: "text" },
     () => {},
+    "laptop",
   );
   expect(result).toMatchObject({ applied: false, error: { code: "not_found_local" } });
   expect(await readdir(root)).toEqual([]);
@@ -553,6 +556,10 @@ it("flushes an independent saved branch before reporting the race durable", asyn
   expect(result.preserved).toHaveLength(1);
   const kept = await lstat(join(root, result.preserved[0]!));
   expect(synced).toContain(kept.ino);
+  // Saved on this disk, not by the agent: named after this device, the author
+  // of what it holds, where it used to say "MCP".
+  expect(result.preserved[0]).toMatch(/^Daily \(Conflicted copy laptop \d{12}\)\.md$/);
+  expect((await survivors())[result.preserved[0]!]).toBe("independent branch");
 });
 
 it("reports uncertainty if flushing the independent preserved branch fails", async () => {
@@ -561,7 +568,7 @@ it("reports uncertainty if flushing the independent preserved branch fails", asy
   let failed = false;
   vi.mocked(open).mockImplementation(async (...args) => {
     const handle = await realOpen(...args);
-    if (String(args[0]).includes(" (Conflicted copy MCP "))
+    if (String(args[0]).includes(" (Conflicted copy laptop "))
       handle.sync = async () => {
         failed = true;
         throw new Error("preserved file fsync failed");

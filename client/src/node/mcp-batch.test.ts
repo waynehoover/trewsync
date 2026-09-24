@@ -29,6 +29,7 @@ it("deletes only after independently preserving the exact unsent source", async 
     vault,
     { kind: "delete", path: "note.md", base } as unknown as NoteMutation,
     () => {},
+    "laptop",
   );
   expect(result).toMatchObject({ applied: true, durable: true });
   expect(await vault.exists("note.md")).toBe(false);
@@ -43,6 +44,7 @@ it("does not report a racing save at the deleted name as an ordinary deletion", 
     vault,
     { kind: "delete", path: "note.md", base } as unknown as NoteMutation,
     () => {},
+    "laptop",
   );
   expect(result).toMatchObject({ applied: false, error: { code: "race" } });
   expect(await readFile(join(root, "note.md"), "utf8")).toBe("independent save");
@@ -67,6 +69,7 @@ it.each(["create", "readback", "flush"])(
       vault,
       { kind: "delete", path: "note.md", base } as unknown as NoteMutation,
       () => {},
+      "laptop",
     );
     expect(result.applied).toBe(false);
     expect(result.error).toBeDefined();
@@ -92,6 +95,7 @@ it("preserves every before-image before touching the first original in a batch",
       { kind: "append", path: "b.md", base: b, text: " changed" },
     ],
     () => {},
+    "laptop",
   );
   expect(result.complete).toBe(false);
   expect(await readFile(join(root, "a.md"), "utf8")).toBe("UNSENT A");
@@ -109,6 +113,7 @@ it("validates every base before creating any batch recovery files", async () => 
       { kind: "delete", path: "b.md", base: "a".repeat(64) },
     ],
     () => {},
+    "laptop",
   );
   expect(result.error?.code).toBe("stale");
   expect(create).not.toHaveBeenCalled();
@@ -128,6 +133,7 @@ it("rechecks all originals after the last batch backup before publishing anythin
       { kind: "append", path: "b.md", base: b, text: " changed" },
     ],
     () => {},
+    "laptop",
   );
   expect(result.error?.code).toBe("stale");
   expect(await readFile(join(root, "a.md"), "utf8")).toBe("A");
@@ -148,6 +154,7 @@ it("retains honest per-file outcomes and all before-images after partial publica
       text: " changed",
     })),
     () => {},
+    "laptop",
   );
   expect(result.complete).toBe(false);
   expect(result.results).toHaveLength(3);
@@ -177,6 +184,7 @@ it("rechecks a no-op base while the rest of its batch is being preserved", async
       { kind: "spans", path: "b.md", base: b, edits: [] },
     ],
     () => {},
+    "laptop",
   );
   expect(result.error?.code).toBe("stale");
   expect(await readFile(join(root, "a.md"), "utf8")).toBe("A");

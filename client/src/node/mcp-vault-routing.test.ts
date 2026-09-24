@@ -35,6 +35,7 @@ async function vault(id: string, readOnly = false) {
     mode: readOnly ? "read-only" : "writable",
     writer,
     reader,
+    device: "laptop",
     client: () => client,
     stopping: () => false,
     changed: () => {},
