@@ -41,8 +41,8 @@ afterEach(async () => await tidy(open, dirs, server));
 
 const BASELINE = "PREEXISTING BRANCH\nOriginal first line.\nOriginal second line.\nClosing line.\n";
 
-/** A conflict copy of note.md, named after the device that kept it. */
-const COPY = /^note \(Conflicted copy phone \d{12}\)\.md$/;
+/** A conflict copy of note.md, named after the author of the bytes it holds: the agent. */
+const COPY = /^note \(Conflicted copy Claude on Mac \d{12}\)\.md$/;
 
 interface Race {
   readonly agent: Agent;
