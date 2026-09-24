@@ -50,6 +50,24 @@ In ordinary conflict handling, the incoming version takes the conflict name.
 An edit detected during replacement can instead be preserved under a new name.
 Neither rule provides mutual exclusion with the editor.
 
+A conflict copy is named after the author of the bytes it holds, as
+`<name> (Conflicted copy <author> <stamp>)`. For an incoming version that is
+the device the server recorded on it: another device's name, or an MCP
+token's label for an agent's write. For bytes that were on this disk (an edit
+a download or a deletion displaced, or one saved while a conflict review was
+applied) and for a merge this device made, it is this device's name, which is
+also the fallback for a version with no recorded author, such as one kept in
+an index saved before 2026-09-23. Until then every copy carried the name of the
+device that made it, so a phone keeping the Mac's text named it after the
+phone. The author is made safe as a filename component: characters a platform
+refuses become `-`, other whitespace and control characters one space (spaces
+themselves stay), direction overrides are removed, the adapters' staging mark
+is broken up, a `(Conflicted copy ` inside it loses its bracket so the copy
+still pairs with its note, and it is cut to 32 characters; the whole path is
+kept within the protocol's segment and path limits by shortening the author
+first. What recognises a copy, the conflict review and the name MCP refuses to
+create, reads any author, and the pattern is the one it always was.
+
 A read-only CLI device must record local reconciliation separately from
 uploading. Otherwise a successfully preserved or merged remote version remains
 eligible on every pass. Its local edit remains held back even after that remote

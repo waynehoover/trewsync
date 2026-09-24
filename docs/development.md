@@ -565,7 +565,11 @@ UI driven over the WebView's DevTools socket); on the Mac through the
 - A conflict: the phone paused (which closes its connection), both devices
   changed the same line, the phone resumed; both texts were kept, the
   phone's under the note's name and the Mac's as `From the Mac (Conflicted
-  copy android-a1c2 202609230941).md`, identical on both devices.
+  copy android-a1c2 202609230941).md`, identical on both devices. That copy
+  carried the name of the phone, which made it; since the owner's decision the
+  same day a copy is named after the author of what it holds, so it would now
+  carry the Mac's device name: `From the Mac (Conflicted copy Mac
+  202609230941).md` for a Mac called Mac.
 - History compare on the phone: the history modal listed four versions with
   their devices and showed the oldest against the current as a coloured diff.
 - Deleted-note restore: a note deleted on the Mac left the phone within two
@@ -1077,10 +1081,16 @@ link fails its companion test.
 `note_history`, `trewd audit` and the batches a device receives name the agent,
 and authors are never in the device list or delivery status. A device that
 meets an agent's edit to text it changed offline keeps both, the agent's
-bytes in a conflict copy named after the device that kept it, which is the
-engine's convention and not what PLAN.md section 2.4 expected
-(`client/src/node/agent-author.test.ts`, and the correction in
-plan/mcp-tools.md, "Authentication and authorship").
+bytes in a conflict copy named after the agent's label, as PLAN.md section 2.4
+expected. That took the owner's decision of 2026-09-23 that a copy is named
+after the author of the bytes it holds, for every conflict: the engine keeps
+each version's recorded `device` in its remote state (`RemoteState.device`,
+absent in older indexes, which fall back to the device's own name) and names
+each copy after whoever wrote its bytes, this device for what was on its disk
+(`Engine.copyAuthor`, `client/src/core/copy-author.test.ts` for every site,
+and `client/src/node/agent-author.test.ts` against the real server and the
+HTTP tools, labels with a slash and a colon and one over 32 characters
+included).
 
 **Tests.** `write_test.go` drives every tool through the go-sdk client and,
 after each write, reads the displaced version by `previousUid` as its exact

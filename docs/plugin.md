@@ -233,6 +233,13 @@ Meeting notes.md
 Meeting notes (Conflicted copy laptop 202608311412).md
 ```
 
+The name in the copy says whose words are in it: here, the version the laptop
+wrote, kept beside the one you have. A copy of an agent's edit carries the
+name its access token was given, such as `Claude on Mac`. A copy with this
+device's own name holds something that was on this device, such as an edit
+saved while a newer version was arriving. Characters a file name cannot hold
+are replaced, and a long name is shortened.
+
 Choose **Review conflicts** from the TrewSync menu. Compare the original and
 preserved copy, then keep either one or edit a combined version. **Decide later**
 leaves both files in place. If a file changes while you review it, refresh the
