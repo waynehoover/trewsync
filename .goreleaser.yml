@@ -1,0 +1,91 @@
+# The trewd binaries, for every platform the server builds and runs on.
+#
+# goreleaser builds and checksums; it does not tag, publish or upload. The
+# release is still a draft made by hand and finished by
+# .github/workflows/attest.yml, which runs this, attests what it built, signs
+# the packslip manifest, uploads and only then publishes (R16). The same
+# command builds the local copy in scripts/release.sh, so the two cannot drift.
+#
+# Always run as a snapshot:
+#
+#   TREWD_VERSION=0.2.0 goreleaser release --snapshot --clean
+#
+# goreleaser reads one tag line and parses it as semver, and the server's tags
+# are `server/vX.Y.Z`, which it cannot parse without the paid monorepo feature.
+# A snapshot needs no tag at all, and nothing below reads goreleaser's idea of
+# the version: the number stamped into the binary comes from TREWD_VERSION,
+# which the caller takes from the tag, and a run without it fails rather than
+# stamping something invented.
+#
+# The platforms are the ones trewd compiles for with CGO_ENABLED=0 and 64-bit
+# integers. Windows is not here because the data-directory lock is flock(2),
+# which Windows does not have, and a server that cannot lock its store is one
+# that can be run twice against it. 32-bit targets are not here because the
+# note functions use integers past 2^31. OpenBSD and NetBSD are not here
+# because free-space reporting uses a statfs field they spell differently.
+# Each is refused rather than shipped half-working; see docs/development.md.
+version: 2
+
+project_name: trewd
+
+# Inside release/, which .gitignore already ignores. Go stamps whether the tree
+# was modified into every binary, and untracked build output that git can see
+# would make every target after the first one say it was (see
+# scripts/attest-trigger.test.sh).
+dist: release/goreleaser
+
+before:
+  hooks: []
+
+builds:
+  - id: trewd
+    main: ./cmd/trewd
+    binary: trewd
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    # The same flags scripts/release.sh has always used, so a binary built by
+    # this is byte-identical to one built by hand from the same commit.
+    ldflags:
+      - -s -w -X main.version={{ .Env.TREWD_VERSION }}
+    # The commit's time, not the build's, so file times do not differ between
+    # two builds of one commit. The bytes are what is checksummed; this keeps
+    # the archive metadata honest too.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - linux
+      - darwin
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+      - riscv64
+    ignore:
+      - goos: darwin
+        goarch: riscv64
+      - goos: freebsd
+        goarch: riscv64
+
+# Bare executables, named the way every earlier release named them and the way
+# `trewd update`, the Homebrew formula and scripts/verify-release.sh look for
+# them: trewd-<os>-<arch>. No archive to unpack is one less thing for an
+# updater to get wrong, and packslip records them as `raw`.
+archives:
+  - id: trewd
+    ids: [trewd]
+    formats: [binary]
+    name_template: "trewd-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+# Nothing goreleaser would publish. The release is made as a draft by hand,
+# its notes are written by a person, and it is published by attest.yml last.
+release:
+  disable: true
+changelog:
+  disable: true
+snapshot:
+  version_template: "{{ .Env.TREWD_VERSION }}"

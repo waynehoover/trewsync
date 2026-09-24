@@ -20,12 +20,38 @@ cd "$(dirname "$0")/.."
 image=ghcr.io/waynehoover/trew
 
 pinned=$(sed -n "s|.*image: $image:\([0-9][^@]*\)@sha256:.*|\1|p" compose.yaml)
+newest=$(git tag --list 'server/v*' | sed 's|server/v||' | sort -V | tail -1)
+
+# Before the first server release there is no image to pin, and compose.yaml
+# builds from the checkout instead, between the markers pin-compose.sh
+# replaces. That is correct exactly until a server release exists.
 if [ -z "$pinned" ]; then
-  echo "could not read a tag@digest pin out of compose.yaml" >&2
+  if ! grep -q '^ *# pin-compose: begin' compose.yaml || ! grep -q '^ *build:' compose.yaml; then
+    echo "compose.yaml neither pins $image by tag and digest nor builds from the checkout" >&2
+    exit 1
+  fi
+  if [ -z "$newest" ]; then
+    echo "no server release yet, and compose.yaml builds from the checkout"
+    # And nothing names a numbered image that cannot exist yet.
+    stale=$(grep -rn "$image:[0-9]" docs README.md compose.yaml 2>/dev/null || true)
+    if [ -n "$stale" ]; then
+      echo "these name a $image release, and there is none:" >&2
+      echo "$stale" >&2
+      exit 1
+    fi
+    exit 0
+  fi
+  tagged=$(git rev-list -n1 "server/v$newest" 2>/dev/null || echo none)
+  if [ "$tagged" = "$(git rev-parse HEAD)" ]; then
+    echo "this is the commit server/v$newest tags, so its image does not exist yet."
+    echo "Pin it once it is published: scripts/pin-compose.sh"
+    exit 0
+  fi
+  echo "server/v$newest is released, and compose.yaml still builds from the checkout." >&2
+  echo "Pin the published image:  scripts/pin-compose.sh" >&2
   exit 1
 fi
 
-newest=$(git tag --list 'server/v*' | sed 's|server/v||' | sort -V | tail -1)
 if [ -z "$newest" ]; then
   echo "no server/v* tag in the repository, nothing to compare against"
   exit 0

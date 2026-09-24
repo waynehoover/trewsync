@@ -15,9 +15,12 @@
 #   client, tagged  cli/vX.Y.Z     npm, and nothing here
 #
 # Each tag shape is whatever its own ecosystem demands: Obsidian requires the
-# plugin's to be exactly the manifest version with no `v`, Go requires
-# server/vX.Y.Z to resolve a module in a subdirectory, and npm requires nothing
-# of the client, which matches the server for the sake of looking like it.
+# plugin's to be exactly the manifest version with no `v`, and npm requires
+# nothing of the client, which matches the server for the sake of looking like
+# it. The server's prefix is Basalt's, whose Go module lived in server/ and
+# needed server/vX.Y.Z to resolve; this module is at the root, so `go install`
+# does not resolve these tags, and the prefix now only keeps the lines apart
+# (and names the packslip project, github.com/waynehoover/trew/server).
 #
 # The plugin release holds exactly the three files Obsidian downloads and
 # nothing else. Anything extra is a file the installer will never fetch and one
@@ -37,33 +40,78 @@ root=$(pwd)
 out="$root/release"
 
 # --prepare, which is the step that has to be committed before a release is
-# built (I23). It writes versions.json and stops. Nothing else here runs,
-# because the whole point is that its output is a commit rather than an asset.
+# built (I23). It writes manifest.json and versions.json and stops. Nothing else
+# here runs, because the whole point is that its output is a commit rather than
+# an asset.
+#
+#   scripts/release.sh --prepare 0.11.0   bump the plugin to 0.11.0
+#   scripts/release.sh --prepare          record the version manifest.json has
+#
+# One step for both files, because they are one fact said twice: the version
+# the plugin is, and the oldest Obsidian that runs it. Bumping one by hand and
+# forgetting the other is how a release ships a manifest versions.json has
+# never heard of.
+#
+# It refuses a version that is not greater than every version versions.json
+# already names. Obsidian offers the newest entry an install can run, so an
+# entry below the newest is one nobody is ever offered, and an entry equal to
+# one already released is a second release under a version the directory has
+# already served, which Obsidian will not notice and cannot tell apart.
+# Re-running it for the version it has just prepared is the one exception,
+# and changes nothing.
 if [ "${1:-}" = --prepare ]; then
-  minapp=$(python3 -c 'import json;print(json.load(open("manifest.json"))["minAppVersion"])')
-  pluginversion=$(python3 -c 'import json;print(json.load(open("manifest.json"))["version"])')
-  python3 - "$pluginversion" "$minapp" <<'PY'
-import json, os, sys
+  python3 - "${2:-}" <<'PY'
+import json, os, re, sys
 
-version, minapp = sys.argv[1], sys.argv[2]
+asked = sys.argv[1]
+manifest = json.load(open("manifest.json"))
+minapp = manifest["minAppVersion"]
+version = asked or manifest["version"]
+
+def parse(v):
+    # Obsidian compares plain X.Y.Z, and the community directory requires the
+    # tag to be exactly this, so nothing else is a plugin version.
+    if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", v):
+        sys.exit("release: %r is not a plugin version (X.Y.Z, no v, no suffix)" % v)
+    return tuple(int(p) for p in v.split("."))
+
 path = "versions.json"
-# In place, keeping every older entry: Obsidian looks up the newest version an
-# install can run, and a file rewritten with only the current one tells an
-# older install that nothing it can run exists.
 known = json.load(open(path)) if os.path.exists(path) else {}
-known[version] = minapp
-with open(path, "w") as f:
-    json.dump(known, f, indent=2)
-    f.write("\n")
+new = parse(version)
+newest = max(known, key=parse) if known else None
+
+prepared = (version == manifest["version"] and known.get(version) == minapp
+            and newest == version)
+if not prepared and newest is not None and new <= parse(newest):
+    sys.exit("release: %s is not greater than %s, the newest version versions.json names.\n"
+             "  Obsidian offers the newest entry an install can run, so a lower one is never\n"
+             "  offered, and an equal one is a second release under a version already served."
+             % (version, newest))
+
+if not prepared:
+    # manifest.json keeps its own layout (tabs), with only the version changed,
+    # so the diff is the one line that means something.
+    text = open("manifest.json").read()
+    text, n = re.subn(r'("version"\s*:\s*")[^"]*(")', r"\g<1>%s\g<2>" % version, text, count=1)
+    if n != 1:
+        sys.exit("release: could not find the version in manifest.json")
+    open("manifest.json", "w").write(text)
+    # In place, keeping every older entry: Obsidian looks up the newest version
+    # an install can run, and a file rewritten with only the current one tells
+    # an older install that nothing it can run exists.
+    known[version] = minapp
+    with open(path, "w") as f:
+        json.dump(known, f, indent=2)
+        f.write("\n")
+print("plugin %s needs Obsidian %s" % (version, minapp))
 PY
-  echo "versions.json: plugin $pluginversion needs Obsidian $minapp"
   echo
-  if git diff --quiet -- versions.json; then
+  if git diff --quiet -- versions.json manifest.json; then
     echo "Already said so. Nothing to commit; run scripts/release.sh next."
   else
-    git --no-pager diff -- versions.json
+    git --no-pager diff -- manifest.json versions.json
     echo
-    echo "Commit this, then run scripts/release.sh. Obsidian reads the file at"
+    echo "Commit this, then run scripts/release.sh. Obsidian reads versions.json at"
     echo "the tag, so it has to be in the commit the tag points at."
   fi
   exit 0
@@ -118,7 +166,14 @@ fi
 # a file that exists on one machine. The same goes for a .go file the server
 # build picks up. Ignored files are excluded, which is what --exclude-standard
 # does, so release/ and dist/ do not count.
-untracked=$(git ls-files --others --exclude-standard -- server client manifest.json versions.json)
+#
+# The server's paths are the ones this repository has: cmd/, internal/ and the
+# module files. This list named `server` for as long as it was Basalt's, whose
+# Go code lived in server/, and after the fork there was no server/ to look in:
+# an untracked .go file under cmd/trewd was compiled into every release binary
+# while this said nothing (scripts/release-prepare.test.sh).
+untracked=$(git ls-files --others --exclude-standard -- \
+  cmd internal go.mod go.sum .goreleaser.yml client manifest.json versions.json)
 if ! $runbookonly && [ -n "$untracked" ]; then
   echo "release: these are not in git, and the build reads them anyway:" >&2
   echo "$untracked" | sed 's/^/  /' >&2
@@ -137,15 +192,21 @@ echo
 # ---- the server ----------------------------------------------------------
 # Static, because the point of a single binary is that the machine it lands on
 # needs nothing else. Pure-Go SQLite is what makes CGO_ENABLED=0 possible.
-echo "server  ->  release/server/"
-for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
-  goos=${target%/*}
-  goarch=${target#*/}
-  name="trewd-$goos-$goarch"
-  ( CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-      go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$out/server/$name" ./cmd/trewd )
-  printf '  %-24s %s\n' "$name" "$(du -h "$out/server/$name" | cut -f1)"
-done
+#
+# Every platform in .goreleaser.yml, by scripts/build-server.sh, which is what
+# the attest workflow rebuilds them with. Only when a version is given: the
+# version is stamped into the binary and printed in every journal, and a
+# `git describe` string is not one anybody meant to ship.
+if [ -n "$serverversion" ]; then
+  echo "server  ->  release/server/"
+  "$root/scripts/build-server.sh" "$serverversion" "$out/server" > /dev/null
+  for f in "$out/server"/trewd-*; do
+    printf '  %-24s %s\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+  done
+else
+  rmdir "$out/server"
+  echo "server  not built: give the version to build it, scripts/release.sh 0.5.1"
+fi
 
 # ---- the plugin ----------------------------------------------------------
 echo
@@ -222,16 +283,21 @@ printf '  %-24s %s\n' "manifest.json" "version $pluginversion, needs Obsidian $m
 # Written from inside each directory so the paths are bare names, which is what
 # the files are called once downloaded, which is the only spelling under which
 # `shasum -c` is a check rather than a puzzle.
+#
+# The server's is goreleaser's, written over the binaries it built, and is only
+# checked here; the plugin's is written here.
+parts=plugin
+[ -n "$serverversion" ] && parts="server plugin"
 echo
-for part in server plugin; do
-  ( cd "$out/$part" && find . -type f -not -name SHA256SUMS -print0 \
-      | sort -z | xargs -0 -n1 basename | tr '\n' '\0' | xargs -0 shasum -a 256 > SHA256SUMS )
+( cd "$out/plugin" && find . -type f -not -name SHA256SUMS -print0 \
+    | sort -z | xargs -0 -n1 basename | tr '\n' '\0' | xargs -0 shasum -a 256 > SHA256SUMS )
+for part in $parts; do
   echo "release/$part/SHA256SUMS"
   sed 's/^/  /' "$out/$part/SHA256SUMS"
 done
 
 # And that they verify here, so nobody finds out they do not from a download.
-for part in server plugin; do
+for part in $parts; do
   ( cd "$out/$part" && shasum -a 256 -c --status SHA256SUMS ) \
     || { echo "release: release/$part/SHA256SUMS does not check out here" >&2; exit 1; }
 done
@@ -250,14 +316,21 @@ for asset in main.js manifest.json styles.css; do
 done
 echo '  ```'
 echo
-echo "and for the server release:"
-echo
-echo '  ```bash'
-echo "  shasum -a 256 -c SHA256SUMS"
-for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
-  echo "  gh attestation verify trew-${target%/*}-${target#*/} --repo waynehoover/trew"
-done
-echo '  ```'
+if [ -n "$serverversion" ]; then
+  # The names were trew-<os>-<arch>, from before the command was renamed, so
+  # every one of these told a reader to verify a file the release did not have.
+  echo "and for the server release, where the manifest is the one attest.yml signs:"
+  echo
+  echo '  ```bash'
+  echo "  shasum -a 256 -c SHA256SUMS"
+  for f in "$out/server"/trewd-*; do
+    echo "  gh attestation verify $(basename "$f") --repo waynehoover/trew"
+  done
+  echo "  packslip verify packslip.server.sigstore.json \\"
+  echo "    --identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@ \\"
+  echo "    --issuer https://token.actions.githubusercontent.com --artifact trewd-linux-amd64"
+  echo '  ```'
+fi
 
 fi  # ! $runbookonly
 
@@ -303,7 +376,10 @@ A draft here too, and finished the same way:
 
   gh workflow run attest.yml -f tag=server/v@SERVER@
 
-which rebuilds, signs and checksums the binaries and then publishes it.
+which rebuilds the binaries with goreleaser, attests and checksums them, signs
+packslip.server.sigstore.json (the manifest trewd update and mise install
+from, signed with the identity of that workflow) and then publishes it. A
+release without that manifest is one no trewd update will install.
 
 Pushing that tag is also what builds and pushes the container image. Once it is
 published, pin it:
@@ -315,6 +391,12 @@ at, because the image is built by the tag being pushed and the digest does not
 exist while that commit is being written, so main stays green and the plugin
 and client tags can go on the same commit without waiting for the image. It
 excuses that one commit only: the next thing to land has to carry the pin.
+
+Then render the Homebrew formula from the sums that were published, not the
+ones built here, and copy it into the tap (docs/development.md says where):
+
+  gh release download server/v@SERVER@ --repo waynehoover/trew --pattern SHA256SUMS --dir /tmp/trewd-@SERVER@
+  scripts/homebrew-formula.sh @SERVER@ /tmp/trewd-@SERVER@/SHA256SUMS > packaging/homebrew/trewd.rb
 BLOCK
   )
   verifyserver=" --server @SERVER@"
@@ -337,6 +419,12 @@ and, when shipping a server, /tmp/trew-server-X.Y.Z-notes.md with its version.
 Summarize additions, fixes, upgrade steps and known issues since the previous
 component release. Include CLI changes in the plugin notes when they ship
 together. Publish the notes on GitHub; do not commit duplicate changelog docs.
+
+The plugin's version is set, with its versions.json entry, by one committed
+step before any of this, and it refuses a version that is not newer than every
+one versions.json already names:
+
+  scripts/release.sh --prepare X.Y.Z
 
 To publish the plugin, tagged bare because the community directory requires the
 tag to be exactly the manifest version:

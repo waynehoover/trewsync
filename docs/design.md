@@ -431,6 +431,16 @@ no pages and has no browser login. It has no OAuth, no per-note or per-folder
 read control (a token reads the whole vault), and no whole-file writer.
 Per-token path scoping for writes is deferred, and would not restrict reads.
 
+The plugin does not update itself. Obsidian installs and updates community
+plugins from the directory, reading the release that matches the manifest and
+`versions.json`, and the directory's guidelines forbid a plugin that downloads
+and runs code of its own; PKV Sync does, and it is the pattern this refuses. An
+updater inside the plugin would also be a second way for code to arrive on
+every device, one Obsidian's review and the release attestations never see.
+The server is different: `trewd update` replaces a binary the operator
+installed by hand, only after verifying the release manifest, and never
+replaces one a package manager owns.
+
 Notes and ordinary attachments are the target. Large media libraries, arbitrary
 filesystem layouts, and untrusted collaborators require a different product
 scope. These are scope decisions, not claims that alternatives cannot solve them.

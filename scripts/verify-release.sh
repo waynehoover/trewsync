@@ -58,7 +58,11 @@ check_release() { # check_release <tag> <what>
   local required=() asset
   case "$what" in
     plugin) required=(main.js manifest.json styles.css) ;;
-    server) required=(trewd-linux-amd64 trewd-linux-arm64 trewd-darwin-amd64 trewd-darwin-arm64) ;;
+    # Every platform .goreleaser.yml builds (scripts/goreleaser-check.sh holds
+    # the list), because `trewd update` on a machine whose binary is missing
+    # is told there is no build for it.
+    server) required=(trewd-linux-amd64 trewd-linux-arm64 trewd-linux-riscv64
+                      trewd-darwin-amd64 trewd-darwin-arm64 trewd-freebsd-amd64 trewd-freebsd-arm64) ;;
   esac
   printf '\n== %s, from the %s release\n' "$what" "$tag"
   mkdir -p "$dir"
@@ -99,7 +103,8 @@ check_release() { # check_release <tag> <what>
   if need gh; then
     local f n=0
     for f in "$dir"/*; do
-      case "$(basename "$f")" in SHA256SUMS|err) continue ;; esac
+      # The manifest is a signature itself, checked below, and is not attested.
+      case "$(basename "$f")" in SHA256SUMS|err|packslip*.sigstore.json) continue ;; esac
       if gh attestation verify "$f" --repo "$repo" >/dev/null 2>&1; then
         n=$((n + 1))
       else
@@ -107,6 +112,32 @@ check_release() { # check_release <tag> <what>
       fi
     done
     [ "$n" = 0 ] || note "$n asset(s) attested to $repo"
+  fi
+
+  # The server's signed manifest, which `trewd update` will not install a
+  # release without, checked the way it checks it: signed by the release
+  # workflow of this repository through GitHub's issuer, with every binary
+  # matching the digest and size it signs.
+  if [ "$what" = server ]; then
+    local bundle="$dir/packslip.server.sigstore.json" args=() covered=0
+    if [ ! -s "$bundle" ]; then
+      wrong "the $tag release has no packslip.server.sigstore.json, so trewd update refuses it"
+    elif need packslip; then
+      for asset in "${required[@]}"; do
+        if [ -s "$dir/$asset" ]; then
+          args+=(--artifact "$dir/$asset")
+          covered=$((covered + 1))
+        fi
+      done
+      if packslip verify "$bundle" \
+           --identity-prefix "https://github.com/$repo/.github/workflows/attest.yml@" \
+           --issuer https://token.actions.githubusercontent.com \
+           ${args[@]+"${args[@]}"} > "$work/packslip.out" 2>&1; then
+        note "packslip.server.sigstore.json is signed by $repo's attest.yml, and $covered binaries match it"
+      else
+        wrong "packslip does not verify the $tag manifest: $(tr '\n' ' ' < "$work/packslip.out")"
+      fi
+    fi
   fi
 }
 

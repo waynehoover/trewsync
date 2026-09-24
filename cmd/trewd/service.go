@@ -41,6 +41,12 @@ func cmdService(args []string, out io.Writer) error {
 	// TestTheUnitCarriesTheFileCeiling.
 	maxFile := fs.Int64("max-file", store.DefaultPerFileMax,
 		"largest file to accept, in bytes; written into the unit, because a unit that drops it will not start on a vault holding a larger file")
+	// The same flag serve takes, carried into the unit for the same reason as
+	// the ceiling: a server somebody ran by hand with -mcp and then installed
+	// as a service would otherwise come back up without its MCP endpoint, and
+	// every agent pointed at it would get a 404 with nothing in the journal.
+	serveMCP := fs.Bool("mcp", false,
+		"write -mcp into the unit, so the service also serves the MCP endpoint at /mcp")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -144,7 +150,7 @@ func cmdService(args []string, out io.Writer) error {
 	}
 
 	fmt.Fprint(out, unit(unitArgs{Binary: exe, Data: data, Addr: *addr, Vault: *vault, User: who,
-		Home: home, MaxFile: server.ClampPerFileMax(*maxFile)}))
+		Home: home, MaxFile: server.ClampPerFileMax(*maxFile), MCP: *serveMCP}))
 	// The examples are shell, not systemd, so their paths are shell-quoted. A
 	// path with a space, pasted unquoted, would run `backup -data /my` against a
 	// directory that is not the one meant.
@@ -221,6 +227,8 @@ type unitArgs struct {
 	Home string
 	// MaxFile is the file ceiling the unit will run with, in bytes.
 	MaxFile int64
+	// MCP is whether the unit's serve also serves /mcp.
+	MCP bool
 }
 
 // unit is the systemd unit itself.
@@ -260,8 +268,9 @@ func unit(a unitArgs) string {
 		// is a number in this binary, and a unit whose ceiling moves when the
 		// binary is upgraded is a unit that stops starting on a vault holding a
 		// file the old default allowed.
-		fmt.Sprintf("ExecStart=%s serve -data %s -addr %s -vault %s -max-file %d",
-			systemdArg(a.Binary), systemdArg(a.Data), systemdArg(a.Addr), systemdArg(a.Vault), a.MaxFile),
+		fmt.Sprintf("ExecStart=%s serve -data %s -addr %s -vault %s -max-file %d%s",
+			systemdArg(a.Binary), systemdArg(a.Data), systemdArg(a.Addr), systemdArg(a.Vault), a.MaxFile,
+			mcpArg(a.MCP)),
 		"",
 		"# SIGTERM is what serve already listens for, and it finishes what it is",
 		"# doing: an ack means stored, and a shutdown must not turn one into a lie.",
@@ -304,6 +313,14 @@ func unit(a unitArgs) string {
 		"WantedBy=multi-user.target",
 		"",
 	}, "\n")
+}
+
+// mcpArg is the unit's -mcp, when the service serves MCP.
+func mcpArg(on bool) string {
+	if on {
+		return " -mcp"
+	}
+	return ""
 }
 
 // protectHome emits ProtectHome only when it would not break the service.

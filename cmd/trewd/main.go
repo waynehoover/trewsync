@@ -98,6 +98,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return cmdService(rest, out)
 		case "health":
 			return cmdHealth(rest, out)
+		case "update":
+			return cmdUpdate(rest, out)
 		case "stats":
 			return cmdStats(rest, out)
 		case "invite":
@@ -123,7 +125,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return nil
 		default:
 			return fmt.Errorf("unknown command %q (try serve, invite, devices, revoke, uninvite, mcp-token, audit, "+
-				"undo, cat, export, backup, verify, purge, stats, service, health, version)", cmd)
+				"undo, cat, export, backup, verify, purge, stats, service, health, update, version)", cmd)
 		}
 	}
 	return cmdServe(ctx, args, out)

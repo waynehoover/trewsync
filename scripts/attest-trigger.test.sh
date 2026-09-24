@@ -161,9 +161,12 @@ for job in plugin server; do
   fi
 done
 
-# Build a tiny real Go program in a clean temporary checkout, using all four
-# commands from the workflow. Its build metadata must name that clean commit;
-# generating one binary inside the checkout used to dirty the next three.
+# Build a tiny real Go program in a clean temporary checkout, with the
+# workflow's own build step, which runs goreleaser through
+# scripts/build-server.sh. Its build metadata must name that clean commit;
+# generating one binary inside the checkout used to dirty the next three, and
+# goreleaser's working directory is inside the checkout too, so this is also
+# what shows .gitignore keeps it out of git's sight.
 echo "building attested server binaries:"
 fixture="$scratch/checkout"
 mkdir -p "$fixture/cmd/trewd"
@@ -175,8 +178,11 @@ var version = "dev"
 
 func main() { println(version) }
 GO
+mkdir -p "$fixture/scripts"
+cp "$root/.goreleaser.yml" "$root/.gitignore" "$fixture/"
+cp "$root/scripts/build-server.sh" "$root/scripts/release-tools.sh" "$fixture/scripts/"
 git -c init.templateDir= init -q "$fixture" || exit 1
-git -C "$fixture" add go.mod cmd || exit 1
+git -C "$fixture" add go.mod cmd scripts .goreleaser.yml .gitignore || exit 1
 git -C "$fixture" -c user.name=Test -c user.email=test@example.test \
   -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -qm fixture || exit 1
 revision=$(git -C "$fixture" rev-parse HEAD) || exit 1
@@ -188,7 +194,7 @@ if [[ ! -s "$scratch/build.sh" ]] || ! (
   fail "the extracted server build did not execute successfully"
   cat "$scratch/build.log" >&2
 else
-  for target in linux-amd64 linux-arm64 darwin-arm64 darwin-amd64; do
+  for target in linux-amd64 linux-arm64 linux-riscv64 darwin-arm64 darwin-amd64 freebsd-amd64 freebsd-arm64; do
     binary="$fixture/attested/trewd-$target"
     if ! go version -m "$binary" > "$scratch/metadata" 2>&1; then
       fail "$target has no readable Go build metadata"
@@ -201,6 +207,53 @@ else
     fi
   done
 fi
+
+# The signed manifest `trewd update` refuses to install without. What it pins
+# is in cmd/trewd/update.go, and each of these is a way for the two to stop
+# agreeing that no release would say out loud until somebody's update refused.
+echo "signing the server's release manifest:"
+server_job=$(awk '/^  server:/ { inside = 1 } inside' "$workflow" | settings)
+packslip_step=$(printf '%s\n' "$server_job" | awk '/uses: jdx\/packslip@/ { inside = 1 } inside && /^      - name:/ { exit } inside')
+if [ -n "$packslip_step" ]; then
+  ok "the server job signs a packslip manifest"
+else
+  fail "the server job signs no packslip manifest, so trewd update refuses every release"
+fi
+for want in \
+  "project: github.com/\${{ github.repository }}/server" \
+  "version: \${{ steps.source.outputs.version }}" \
+  "commit: \${{ steps.source.outputs.commit }}" \
+  "tag: \${{ inputs.tag }}" \
+  "artifacts: attested/trewd-*" \
+  "bin: trewd" \
+  "attest: link"; do
+  if printf '%s\n' "$packslip_step" | grep -qF "$want"; then
+    ok "  with $want"
+  else
+    fail "the packslip step does not say $want"
+  fi
+done
+if grep -qF 'updateProject  = "github.com/waynehoover/trew/server"' "$root/cmd/trewd/update.go" \
+  && grep -qF '/.github/workflows/attest.yml@"' "$root/cmd/trewd/update.go"; then
+  ok "and trewd update pins that project and this workflow"
+else
+  fail "trewd update no longer pins github.com/waynehoover/trew/server signed by attest.yml"
+fi
+# Before publish, so a failed signature leaves a draft.
+order=$(printf '%s\n' "$server_job" | grep -nE 'uses: jdx/packslip@|- name: publish' | cut -d: -f1 | tr '\n' ' ')
+read -r sign_at publish_at <<< "$order"
+if [ -n "${publish_at:-}" ] && [ "$sign_at" -lt "$publish_at" ]; then
+  ok "  before the release is published"
+else
+  fail "the manifest is signed after the release is published, or not at all"
+fi
+for perm in "id-token: write" "attestations: write" "contents: write"; do
+  if settings "$workflow" | grep -qE "^  ${perm%%:*}: write"; then
+    ok "  and the workflow may: $perm"
+  else
+    fail "the workflow lacks $perm, which the packslip action needs"
+  fi
+done
 
 if [ "$fails" != 0 ]; then
   echo "$fails check(s) failed"
