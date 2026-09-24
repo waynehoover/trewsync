@@ -1,6 +1,6 @@
 # CLI reference
 
-[Documentation](index.md) · [CLI quick start](../client/README.md)
+[Documentation](index.md) · [CLI guide](client.md)
 
 This page covers the headless client, the `trew-sync` npm package, whose
 command is `trew`. The server's command is `trewd`, and its commands are in
@@ -140,7 +140,7 @@ can run while a watcher holds the vault. Sync checks the plan again before writi
 and keeps that paired directory in sync. Pair it separately with `pair`;
 MCP has no pairing or device-administration tools. Use Node 22 or newer and a
 dedicated headless directory on local macOS or Linux storage. See the
-[host configuration](../client/README.md#connect-a-local-agent).
+[host configuration](client.md#configure-a-local-host).
 
 The process holds the same vault lock as `sync --watch`. Stop the watcher before
 starting the host, and use one host process per directory. Root aliases do not
@@ -396,7 +396,7 @@ ordinary sync uploads.
 Use an IP literal or `localhost`, with brackets for IPv6, such as `[::1]:3010`.
 Wildcard addresses are refused. A named non-loopback interface prints a warning
 because the listener carries plaintext notes and credentials. Put TLS in front
-of it for network use; see the [service and Tailscale example](../client/README.md#connect-over-http).
+of it for network use; see the [service and Tailscale example](client.md#connect-over-http).
 
 A request carrying `Origin` is refused unless that exact canonical HTTP or HTTPS
 origin was supplied with `--allow-origin`, for example `https://app.example.com`.
