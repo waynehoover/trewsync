@@ -73,6 +73,65 @@ git -C "$work" tag -d server/v0.6.0 >/dev/null
 printf 'Run `docker run %s:0.4.0`\n' "$image" > "$work/docs/server.md"; commit "stale runbook"
 want fail "a doc naming an image tag that is not the pinned one"
 
+# ---- before the first server release: compose builds from the checkout -------
+#
+# There is no image to pin until a server release exists, so compose.yaml
+# builds locally between two markers. That is right exactly until the first
+# server tag, excused on that tag's own commit like the pin above, and then
+# pin-compose.sh turns the local build into the pin.
+local_build() {
+  cat > "$work/compose.yaml" <<'YAML'
+services:
+  trew:
+    # pin-compose: begin
+    # Built from this checkout until a release exists.
+    build:
+      context: .
+    image: trewd:local
+    # pin-compose: end
+    container_name: trew
+YAML
+  printf 'Run `docker compose up -d --build`\n' > "$work/docs/server.md"
+}
+for t in $(git -C "$work" tag --list); do git -C "$work" tag -d "$t" >/dev/null; done
+local_build; commit "build locally"
+want pass "no server release, and compose builds from the checkout"
+printf 'Run `docker run %s:0.4.0`\n' "$image" > "$work/docs/server.md"; commit "names an image"
+want fail "no server release, and a doc names a numbered image that cannot exist"
+local_build; commit "build locally again"
+git -C "$work" tag server/v0.6.0
+want pass "the commit the first server tag points at, still building locally"
+printf 'later\n' >> "$work/NOTES.md"; commit "after the first release"
+want fail "a later commit that still builds locally after a server release"
+printf 'services:\n  trew:\n    image: somewhere/else:1\n' > "$work/compose.yaml"; commit "neither"
+want fail "a compose file that neither pins the image nor builds from the checkout"
+
+# pin-compose.sh turning the local build into the pin, against a registry that
+# answers with a fixed digest.
+mkdir -p "$work/fakebin"
+cat > "$work/fakebin/docker" <<'SH'
+#!/usr/bin/env bash
+printf 'Name: x\nMediaType: y\nDigest: sha256:%064d\n' 7
+SH
+chmod +x "$work/fakebin/docker"
+cp "$here/pin-compose.sh" "$work/scripts/"
+local_build; commit "build locally for the pin"
+if (cd "$work" && PATH="$work/fakebin:$PATH" bash scripts/pin-compose.sh 0.6.0 >/dev/null 2>&1); then
+  pin_line=$(grep -c "image: $image:0.6.0@sha256:$(printf '%064d' 7)" "$work/compose.yaml")
+  if [ "$pin_line" = 1 ] && ! grep -q 'pin-compose:\|build:\|trewd:local' "$work/compose.yaml" \
+     && grep -q '^    container_name: trew$' "$work/compose.yaml"; then
+    printf '  ok   %s\n' "pin-compose replaces the local build with the pin, and only that"
+  else
+    printf '  FAIL %s\n%s\n' "pin-compose left the wrong compose file" "$(sed 's/^/       /' "$work/compose.yaml")"
+    fails=$((fails + 1))
+  fi
+  commit "compose: pin the 0.6.0 server image"
+  want pass "the pin pin-compose wrote"
+else
+  printf '  FAIL %s\n' "pin-compose failed against the local build"
+  fails=$((fails + 1))
+fi
+
 if [ $fails -eq 0 ]; then
   echo "the pin check excuses one commit and no others"
   exit 0

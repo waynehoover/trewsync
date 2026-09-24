@@ -46,7 +46,21 @@ if [ -z "$digest" ]; then
 fi
 echo "digest $digest"
 
-before=$(grep -c "$image:[0-9]" compose.yaml docs/*.md README.md 2>/dev/null | awk -F: '{s+=$2} END {print s}')
+# `|| true`, because grep exits 1 when it counts nothing, which is the ordinary
+# answer on the first pin (compose.yaml built from the checkout and named no
+# image), and pipefail would end the script there without a word.
+before=$( { grep -c "$image:[0-9]" compose.yaml docs/*.md README.md 2>/dev/null || true; } \
+  | awk -F: '{s+=$2} END {print s+0}')
+
+# The first pin replaces the local build. Until a server release existed there
+# was no image to name, and compose.yaml built from the checkout between two
+# markers; everything between them, markers included, becomes the pin, and
+# the two lines below keep it current from then on.
+if grep -q '^ *# pin-compose: begin' compose.yaml; then
+  PIN_IMAGE=$image PIN_VERSION=$version PIN_DIGEST=$digest perl -0pi -e '
+    s{^( *)\# pin-compose: begin\n.*?^ *\# pin-compose: end\n}{$1\# The digest came from:\n$1\#   docker buildx imagetools inspect $ENV{PIN_IMAGE}:$ENV{PIN_VERSION}\n$1image: $ENV{PIN_IMAGE}:$ENV{PIN_VERSION}\@$ENV{PIN_DIGEST}\n}ms
+  ' compose.yaml
+fi
 
 # Both the pinned line and the comment above it that says where the digest came
 # from, so the file never explains itself with the wrong command.
