@@ -369,7 +369,12 @@ func (m *mutation) submit(op store.Operation, render func(store.OpResult) (trust
 	c := m.c
 	op.Vault = c.h.vault
 	op.ActorID, op.ActorHash, op.ActorLabel = c.cred.token.ID, c.cred.hash, c.cred.token.Label
-	op.Tool, op.IdempotencyKey, op.RequestDigest, op.Epoch = c.tool.Name, m.key, m.digest, m.epoch
+	if op.Tool == "" {
+		// Recorded as the tool's name, except where the operation names
+		// itself: an undo is recorded as one whoever asked for it.
+		op.Tool = c.tool.Name
+	}
+	op.IdempotencyKey, op.RequestDigest, op.Epoch = m.key, m.digest, m.epoch
 	op.ClientName, op.ClientVersion = c.client.Name, c.client.Version
 	op.MaxResult = mutationResultBytes
 	op.Render = func(r store.OpResult) ([]byte, error) {
@@ -597,6 +602,13 @@ func opMessage(oe *store.OpError) string {
 		return "the server refuses this path; nothing was written"
 	case oe.Code == store.OpCodeResultTooLarge:
 		return "the result would be larger than a reply can carry; nothing was written"
+	case oe.Code == store.OpCodeAlreadyUndone:
+		return "the operation was undone while this undo was being prepared; nothing was written"
+	case oe.Code == store.OpCodeNotEmpty:
+		return "a folder the operation created was filled while this undo was being prepared; nothing was written. " +
+			"Call it again: the folder is then kept"
+	case oe.Code == store.OpCodeNotFound:
+		return "no such operation on this vault; nothing was written"
 	}
 	return "the server refused the operation it built, and nothing was written; its log says why"
 }

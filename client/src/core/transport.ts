@@ -41,14 +41,17 @@ import { base64urlDecode, chunkName, isChunkName } from "./digest.ts";
 import { FrameError, decodeFrame, encodeFrame } from "./frame.ts";
 
 /**
- * The protocol version this client speaks. A mismatch is refused, not negotiated.
+ * The protocol version this client speaks, and the only one: its hello asks
+ * for it, a server answers in the version asked for or refuses the hello, and
+ * a `ready` in any other version is refused here.
  *
- * Version 1 of TrewSync's protocol (plan/protocol.md): Basalt's protocol 7 with
- * the encryption taken out. Paths and bodies are plaintext, a device connects
- * with a random token of its own, and a new device joins by redeeming an
- * invite. Upgrade the server and all clients together; there is no fallback.
+ * Version 2 of TrewSync's protocol (plan/protocol.md): version 1, which is
+ * Basalt's protocol 7 with the encryption taken out, and undo (`undo`, and the
+ * operation behind each `history` entry). A server of protocol 2 still answers
+ * a client of protocol 1, so the upgrade order is the server first; this
+ * client meeting a server of protocol 1 is refused at hello, and says so.
  */
-export const PROTO = 1;
+export const PROTO = 2;
 
 /** How long a request may go unanswered before the connection is considered dead. */
 export const REQUEST_TIMEOUT_MS = 60_000;
@@ -113,6 +116,52 @@ export interface WireEntry {
   readonly device: string;
   readonly prev?: string;
   readonly chunks: string[];
+  /**
+   * On a `history` entry, the operation that wrote the version, when an agent
+   * or an undo did (protocol 2). Never on a batch entry.
+   */
+  readonly op?: OperationRef;
+}
+
+/**
+ * The operation that wrote a version, as a history names it (plan/protocol.md,
+ * "Undo (protocol 2)"): the id an undo names, what it was, who made it, and
+ * the undo in place that undid it, if one has.
+ */
+export interface OperationRef {
+  readonly id: string;
+  /** What it was: an agent's tool (`edit_note`, `move_note`, ...), `undo` or `undo_to_copy`. */
+  readonly tool: string;
+  /** Who made it: `mcp` an agent's token, `operator` `trewd undo`, `device` a device's undo. */
+  readonly kind: string;
+  readonly undoneBy?: string;
+}
+
+/** One thing an undo did, in the order it did them. */
+export interface UndoStep {
+  /**
+   * `restore`, `move_back` (from `from`), `remove`, `remove_folder`,
+   * `keep_folder` (with `why`), `copy` (to `copy`), or
+   * `nothing` (in a copy, a path with nothing to copy).
+   */
+  readonly action: string;
+  readonly path: string;
+  readonly from?: string;
+  readonly copy?: string;
+  readonly before?: number;
+  readonly after?: number;
+  readonly why?: string;
+}
+
+/** What an undo committed: its own id, what it undid, and what it did. */
+export interface UndoResult {
+  readonly opId: string;
+  readonly undoes: string;
+  readonly toCopy: boolean;
+  readonly committedAt: number;
+  readonly steps: UndoStep[];
+  /** The versions it wrote, which also reach this device in a batch. */
+  readonly entries: { path: string; uid: number; previousUid: number; prev?: string }[];
 }
 
 /** A covered range of the uid sequence, with everything in it that exists. */
@@ -2282,6 +2331,98 @@ export class Transport {
   }
 
   /**
+   * Undoes one operation of the vault (protocol 2; plan/protocol.md, "Undo
+   * (protocol 2)"), by the id a history entry's `op` names.
+   *
+   * An undo puts back what the operation displaced, as one operation, and
+   * only if every path it changed still holds what it left there. A note
+   * changed since refuses it with `stale`, naming who changed what, and
+   * `toCopy` then writes each version the operation replaced beside its note
+   * and changes nothing else. Anything no retry changes is `noundo`, whose
+   * message begins with the reason. The versions it wrote reach this device
+   * as an ordinary batch before this resolves.
+   */
+  async undo(opId: string, opts: { toCopy?: boolean } = {}): Promise<UndoResult> {
+    if (opId === "") throw new Error("an undo names the operation it undoes");
+    const reply = await this.request(
+      { op: "undo", opId, ...(opts.toCopy === true ? { toCopy: true } : {}) },
+      "undone",
+    );
+    if (reply["res"] !== "undone") {
+      throw new ProtocolError("protostate", `expected undone, got ${JSON.stringify(reply)}`);
+    }
+    const own = reply["opId"];
+    if (typeof own !== "string" || own === "" || reply["undoes"] !== opId) {
+      throw this.malformed(
+        `an undone for ${JSON.stringify(reply["undoes"])}, which is not the ${JSON.stringify(opId)} that was undone`,
+      );
+    }
+    if (reply["toCopy"] !== (opts.toCopy === true)) {
+      throw this.malformed("an undone that did not do what was asked, in place or as a copy");
+    }
+    const steps = reply["steps"];
+    const entries = reply["entries"];
+    if (!Array.isArray(steps) || !Array.isArray(entries)) {
+      throw this.malformed("an undone with no list of steps or entries");
+    }
+    const text = (row: Record<string, unknown>, key: string): string | undefined => {
+      const v = row[key];
+      return typeof v === "string" && v !== "" ? v : undefined;
+    };
+    return {
+      opId: own,
+      undoes: opId,
+      toCopy: opts.toCopy === true,
+      committedAt: this.count(reply, "committedAt", "undone"),
+      steps: steps.map((raw, i) => {
+        const row = raw as Record<string, unknown>;
+        const action = text(row ?? {}, "action");
+        const path = text(row ?? {}, "path");
+        if (action === undefined || path === undefined) {
+          throw this.malformed(`an undone whose step ${i} names no action or no path`);
+        }
+        const step: {
+          action: string;
+          path: string;
+          from?: string;
+          copy?: string;
+          before?: number;
+          after?: number;
+          why?: string;
+        } = { action, path };
+        for (const key of ["from", "copy", "why"] as const) {
+          const v = text(row, key);
+          if (v !== undefined) step[key] = v;
+        }
+        for (const key of ["before", "after"] as const) {
+          const v = row[key];
+          if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) step[key] = v;
+        }
+        return step;
+      }),
+      entries: entries.map((raw, i) => {
+        const row = raw as Record<string, unknown>;
+        const path = text(row ?? {}, "path");
+        const uid = row?.["uid"];
+        const previousUid = row?.["previousUid"];
+        if (
+          path === undefined ||
+          typeof uid !== "number" ||
+          !Number.isSafeInteger(uid) ||
+          uid <= 0 ||
+          typeof previousUid !== "number" ||
+          !Number.isSafeInteger(previousUid) ||
+          previousUid < 0
+        ) {
+          throw this.malformed(`an undone whose entry ${i} is not a path and two uids`);
+        }
+        const prev = text(row, "prev");
+        return { path, uid, previousUid, ...(prev !== undefined ? { prev } : {}) };
+      }),
+    };
+  }
+
+  /**
    * Changes this device's own label in the vault's device list.
    *
    * Only its own: there is no field naming a row, because the row is the one
@@ -2486,8 +2627,8 @@ export function checkName(what: "vault" | "device", name: string): void {
  * A server that does not speak this client's protocol refuses the hello, and
  * the refusal arrives here as the close reason. Its message names the server's
  * range and version; this adds the client's version and the one instruction
- * that follows from the upgrade order, which is the server first. Kept against
- * the next version, not for any version that exists.
+ * that follows from the upgrade order, which is the server first: a server of
+ * protocol 1 meeting this client of protocol 2 is the case it is for.
  */
 function protoRefusal(err: unknown): unknown {
   if (err instanceof ProtocolError && err.code === "proto") {
@@ -2661,6 +2802,24 @@ function entriesOf(value: unknown, what: string): WireEntry[] {
         throw new ProtocolError(
           "protostate",
           `${what}[${i}] names ${JSON.stringify(name)}, which is not a chunk name`,
+        );
+      }
+    }
+    // The operation behind a version, when there is one (protocol 2). The
+    // history panel offers to undo by its id, so an id that is not a string
+    // is not one to offer.
+    if (row.op !== undefined) {
+      const op = row.op as Partial<OperationRef> | null;
+      if (
+        typeof op?.id !== "string" ||
+        op.id === "" ||
+        typeof op.tool !== "string" ||
+        typeof op.kind !== "string" ||
+        (op.undoneBy !== undefined && typeof op.undoneBy !== "string")
+      ) {
+        throw new ProtocolError(
+          "protostate",
+          `${what}[${i}] names an operation it does not describe`,
         );
       }
     }

@@ -137,6 +137,8 @@ func (o *operator) Handle(_ context.Context, req control.Request) control.Reply 
 			return control.Refused(control.CodeInternal, err.Error())
 		}
 		return control.Reply{Audit: &control.Audit{Operations: b, More: more, Vault: o.vault, Epoch: epoch}}
+	case "undo":
+		return o.undo(req)
 	}
 	return control.Refused(control.CodeBadRequest, fmt.Sprintf("unknown request %q", req.Op))
 }

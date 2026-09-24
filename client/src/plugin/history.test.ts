@@ -7,6 +7,8 @@
  * a restore never overwrites, and paging asks for what it does not already have.
  */
 
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { deferred, nextTurn } from "../core/test-async.ts";
 
@@ -671,5 +673,199 @@ describe("bounded, accessible previews", () => {
     await nextTurn();
     expect(rendered(modal)).toContain("version 2");
     modal.close();
+  });
+});
+
+/**
+ * "Undo this change", for a version an agent's operation wrote (PLAN.md
+ * section 4.5, M5 task 7), against the real server with `-mcp`: the agent
+ * writes through the HTTP tools under a token minted on the server, and the
+ * device undoes it from the panel over protocol 2. Restore stays what it
+ * was, a write that replaces nothing, and is offered beside the undo.
+ */
+describe("undoing an agent's change from the history panel", () => {
+  /** One MCP tool call, stateless at 2025-11-25, and its envelope. */
+  async function tool(
+    token: string,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+        "MCP-Protocol-Version": "2025-11-25",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name, arguments: args },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      result: { isError?: boolean; structuredContent: { trusted: Record<string, unknown> } };
+    };
+    expect(body.result.isError, JSON.stringify(body.result)).toBeFalsy();
+    return body.result.structuredContent.trusted;
+  }
+
+  /**
+   * A device on a server with `-mcp`, a note it wrote, and the agent's edit of
+   * that note, which the device then holds.
+   */
+  async function agentEdited(): Promise<{
+    adapter: FakeAdapter;
+    client: Client;
+    source: HistorySource;
+  }> {
+    server = new TestServer();
+    server.extraArgs = ["-mcp"];
+    await server.start();
+    const keyFile = join(server.dataDir, "agent.key");
+    await server.cli(
+      "mcp-token",
+      "-label",
+      "Claude on Mac",
+      "-scope",
+      "write",
+      "-key-out",
+      keyFile,
+    );
+    const token = (await readFile(keyFile, "utf8")).trim();
+
+    const adapter = new FakeAdapter();
+    const client = new Client({
+      vault: new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian"),
+      store: new ObsidianIndexStore(adapter, ".obsidian/plugins/trew/index.json"),
+      url: server.wsUrl,
+      ...(await server.deviceCredentials("laptop")),
+      vaultId: "default",
+      device: "laptop",
+      timeoutMs: 20_000,
+      coalesceWrites: false,
+    });
+    clients.push(client);
+    await client.connect();
+    await revisions(adapter, client, "note.md", ["the words before the agent\n"]);
+
+    const read = await tool(token, "read_note", { path: "note.md" });
+    await tool(token, "edit_note", {
+      path: "note.md",
+      base: read["uid"],
+      epoch: read["epoch"],
+      edits: [{ old: "before the agent", new: "the agent wrote" }],
+    });
+    await client.settle({ coalesceWrites: false });
+    expect(adapter.text("note.md")).toBe("the words the agent wrote\n");
+
+    const source: HistorySource = {
+      history: (path, opts) => client.history(path, opts),
+      contentAt: async (v) => new TextDecoder().decode(await client.contentAt(v)),
+      restoreVersion: async (v) => ({ path: (await client.restore(v)).path, sent: true }),
+      currentText: async (path) => adapter.text(path),
+      undoOperation: (v, opts) => client.undo(v.operation!.id, opts),
+    };
+    return { adapter, client, source };
+  }
+
+  it("undoes the agent's edit to the exact former bytes, beside a Restore that is unchanged", async () => {
+    const { adapter, client, source } = await agentEdited();
+    const [agents, mine] = await source.history("note.md", { limit: PAGE });
+    expect(agents!.operation).toMatchObject({ tool: "edit_note", kind: "mcp" });
+    expect(agents!.operation!.undoneBy).toBeUndefined();
+    expect(agents!.device).toBe("Claude on Mac");
+    expect(mine!.operation, "a version the device synced names no operation").toBeUndefined();
+
+    const modal = new HistoryModal(new App() as never, source, "note.md");
+    modal.open();
+    await until("the agent's version and its undo", () =>
+      rendered(modal).includes("Undo this change"),
+    );
+    expect(rendered(modal)).toContain("Written by the agent “Claude on Mac” (edit_note).");
+    expect(buttons(modal).some((b) => b.text === "Restore")).toBe(true);
+
+    // The device's own version has a Restore and no undo.
+    rows(modal)[1]!.click();
+    await until("the device's version", () => rendered(modal).includes("the words before"));
+    expect(buttons(modal).some((b) => b.text === "Undo this change")).toBe(false);
+    expect(buttons(modal).some((b) => b.text === "Restore")).toBe(true);
+
+    rows(modal)[0]!.click();
+    await until("the agent's version again", () => rendered(modal).includes("Undo this change"));
+    buttons(modal)
+      .find((b) => b.text === "Undo this change")!
+      .click();
+    await until(
+      "the undo on disk",
+      () => adapter.text("note.md") === "the words before the agent\n",
+    );
+    expect(notices.map((n) => n.message)).toContain(
+      "TrewSync: Undid the change. The note is as it was before it.",
+    );
+    // No copy: an undo puts the note back where it is, replacing the agent's.
+    expect(adapter.filePaths().filter((p) => p.endsWith(".md"))).toEqual(["note.md"]);
+
+    const after = await client.history("note.md", { limit: PAGE });
+    expect(after[0]!.operation).toMatchObject({ tool: "undo", kind: "device" });
+    expect(after[0]!.device).toBe("laptop");
+    expect(after[1]!.operation?.undoneBy).toBe(after[0]!.operation!.id);
+    expect(await client.contentAt(after[0]!)).toEqual(
+      new TextEncoder().encode("the words before the agent\n"),
+    );
+  });
+
+  it("counts an edit on this device that was not sent yet as a change since", async () => {
+    const { adapter, client } = await agentEdited();
+    const [agents] = await client.history("note.md", { limit: PAGE });
+    // Written to disk and not synced: the undo sends it first, so the server
+    // refuses the undo rather than commit it over words it had not seen.
+    await adapter.write("note.md", "typed here, not yet sent\n", {
+      mtime: 9_000_000,
+      ctime: 2_000_000,
+    });
+    await expect(client.undo(agents!.operation!.id)).rejects.toMatchObject({ code: "stale" });
+    expect(adapter.text("note.md")).toBe("typed here, not yet sent\n");
+    const [head] = await client.history("note.md", { limit: PAGE });
+    expect(head!.device).toBe("laptop");
+    expect(await client.contentAt(head!)).toEqual(
+      new TextEncoder().encode("typed here, not yet sent\n"),
+    );
+  });
+
+  it("refuses when the note changed since, changes nothing, and then writes the copy", async () => {
+    const { adapter, client, source } = await agentEdited();
+    await revisions(adapter, client, "note.md", ["the person's own words since\n"]);
+
+    const modal = new HistoryModal(new App() as never, source, "note.md");
+    modal.open();
+    await until("the person's version", () => rendered(modal).includes("own words since"));
+    expect(buttons(modal).some((b) => b.text === "Undo this change")).toBe(false);
+    rows(modal)[1]!.click();
+    await until("the agent's version", () => rendered(modal).includes("Undo this change"));
+    buttons(modal)
+      .find((b) => b.text === "Undo this change")!
+      .click();
+    await until("the refusal", () => rendered(modal).includes("Not undone"));
+    // Who changed it, from the server's refusal.
+    expect(rendered(modal)).toMatch(/stale: .*note\.md.*laptop/s);
+    expect(adapter.text("note.md")).toBe("the person's own words since\n");
+    const before = await client.history("note.md", { limit: PAGE });
+    expect(before[1]!.operation?.undoneBy).toBeUndefined();
+
+    buttons(modal)
+      .find((b) => b.text.startsWith("Keep both"))!
+      .click();
+    const original = before.at(-1)!;
+    const copy = `note (restored ${original.uid}).md`;
+    await until("the copy on disk", () => adapter.text(copy) !== undefined);
+    expect(adapter.text(copy)).toBe("the words before the agent\n");
+    expect(adapter.text("note.md")).toBe("the person's own words since\n");
+    expect(notices.map((n) => n.message)).toContain(
+      `TrewSync: Wrote the earlier version beside the note, as ${copy}. Nothing else was changed.`,
+    );
   });
 });

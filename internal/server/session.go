@@ -84,6 +84,13 @@ type Session struct {
 	// goroutine touches it.
 	reqID int64
 
+	// proto is the protocol version this session speaks: the one its hello
+	// asked for, within the server's range, and what its ready is answered in.
+	// A session of protocol 1 is answered exactly as protocol 1 was, with no
+	// undo and history entries without their operation (wire.Proto). Written
+	// at hello and read only by the session goroutine.
+	proto int
+
 	// saidSkewed is set once this session has reported a device writing
 	// timestamps its own clock says are impossible. Once, because a first sync
 	// commits thousands of entries and a per-entry warning is a log nobody
@@ -698,6 +705,12 @@ func (s *Session) dispatch(m wire.In, frameLen int) error {
 		return s.handleRevoke(m)
 	case "rename":
 		return s.handleRename(m)
+	case "undo":
+		// Protocol 2's. A session of protocol 1 is told it is unknown, as a
+		// protocol 1 server tells it.
+		if s.proto >= wire.ProtoUndo {
+			return s.handleUndo(m)
+		}
 	}
 	// Named, not ignored. A client blocked waiting on a reply it will never
 	// get looks exactly like a hung server. `register` and `rotate` land here
@@ -708,8 +721,8 @@ func (s *Session) dispatch(m wire.In, frameLen int) error {
 func (s *Session) handleHello(m wire.In) error {
 	// Version before credentials: refusing on proto is not a security answer
 	// and a client on the wrong version deserves to be told so plainly. The
-	// range is one version wide today and the check is written as a range on
-	// purpose; see wire.Proto.
+	// range is 1 to 2, and the session is answered in the version its hello
+	// asked for; see wire.Proto.
 	//
 	// Both numbers and nothing else. Nothing has authenticated yet, so this
 	// refusal is what anyone on the internet gets for one JSON frame, and it
@@ -727,6 +740,7 @@ func (s *Session) handleHello(m wire.In) error {
 			"protocol %d not supported, this server speaks %d to %d",
 			m.Proto, wire.MinProto, wire.Proto))
 	}
+	s.proto = m.Proto
 	if err := s.takeID(m); err != nil {
 		return err
 	}
@@ -934,7 +948,7 @@ func (s *Session) helloAsDevice(m wire.In) error {
 
 	// Limits first, so a client knows every ceiling before its first put rather
 	// than discovering one by being rejected.
-	if err := s.writeJSON(s.srv.ready(s.reqID, latest)); err != nil {
+	if err := s.writeJSON(s.srv.ready(s.reqID, latest, s.proto)); err != nil {
 		return err
 	}
 	s.srv.log.Info("session ready", "remote", s.remote, "vault", m.Vault,
@@ -1951,7 +1965,28 @@ func (s *Session) handleHistory(m wire.In) error {
 		s.srv.log.Error("history", "vault", s.vaultID, "err", err)
 		return s.reject(wire.CodeInternal, errors.New("could not read history"))
 	}
-	return s.writeJSON(wire.History{Res: "history", ID: s.reqID, Path: m.Path, Entries: nonNil(entries)})
+	if s.proto < wire.ProtoUndo {
+		return s.writeJSON(wire.History{Res: "history", ID: s.reqID, Path: m.Path, Entries: nonNil(entries)})
+	}
+	// Protocol 2: each version an operation wrote names it, which is what
+	// the history panel offers to undo.
+	uids := make([]int64, len(entries))
+	for i, e := range entries {
+		uids[i] = e.UID
+	}
+	refs, err := s.srv.st.WrittenBy(s.vaultID, uids)
+	if err != nil {
+		s.srv.log.Error("history", "vault", s.vaultID, "err", err)
+		return s.reject(wire.CodeInternal, errors.New("could not read history"))
+	}
+	out := make([]wire.HistoryEntry, len(entries))
+	for i, e := range entries {
+		out[i] = wire.HistoryEntry{Entry: e}
+		if ref, ok := refs[e.UID]; ok {
+			out[i].Op = &ref
+		}
+	}
+	return s.writeJSON(wire.HistoryV2{Res: "history", ID: s.reqID, Path: m.Path, Entries: out})
 }
 
 // handleDeleted answers with every path whose newest version is a deletion.

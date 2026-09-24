@@ -1,4 +1,6 @@
-# Wire protocol, version 1 (draft for M1 and M2)
+# Wire protocol, version 1 (draft for M1 and M2), and version 2
+
+Version 2 is version 1 and undo, settled in M5; see [Undo (protocol 2)](#undo-protocol-2). Everything else in this document is both versions.
 
 Derived from Basalt's protocol 7 (`basalt:docs/protocol.md`) by removing encryption.
 
@@ -26,10 +28,12 @@ Two session types.
 ### Device session
 
 ```text
--> {op:"hello", id, proto:1, vault, deviceId, token, device, cursor, epoch?}
-<- {res:"ready", id, proto:1, minProto:1, serverVersion, epoch, cursor,
+-> {op:"hello", id, proto:2, vault, deviceId, token, device, cursor, epoch?}
+<- {res:"ready", id, proto:2, minProto:1, serverVersion, epoch, cursor,
     perFileMax, chunkMax, maxChunks, maxBatchBytes, maxFetchBytes}
 ```
+
+`proto` is 1 or 2, and `ready.proto` is the one the hello asked for (see [Undo (protocol 2)](#undo-protocol-2)); the clients of this tree ask for 2.
 
 `token` is the device's random 32-byte credential, unpadded base64url (43 characters). The server decodes it, refuses anything that is not exactly 32 bytes, and compares SHA-256 of the 32 raw bytes against `devices.auth_hash` in constant time. A `deviceId` starting with `mcp:` is refused with `auth`.
 
@@ -42,7 +46,7 @@ Two session types.
 ### Invite redemption
 
 ```text
--> {op:"hello", id, proto:1, vault, device, invite, deviceId, token}
+-> {op:"hello", id, proto:2, vault, device, invite, deviceId, token}
 <- {res:"redeemed", id, deviceId}
 ```
 
@@ -191,6 +195,45 @@ The batch budget is **not** `size + 64` per entry. That is not an exact wire-mem
 
 `devices` includes MCP author rows so the panel shows agents. **Not as `id` starting with `mcp:`**, because `ValidDeviceID` accepts base64url (`basalt:server/internal/store/store.go:2595`), which has no colon, so that scheme is not the unchanged devices table it was described as. Author rows carry their own `kind` and a valid id, and they are refused as `hello` credentials. An author row must not present as an offline sync peer whose applied checkpoint other devices wait on. Revoking the last real device is allowed from a device session; recovery is `trewd invite` on the server, so `allowLast` is gone (settled in M0.5: without a vault key, no device holds anything the server cannot reissue). `register` and `rotate` are gone.
 
+## Undo (protocol 2)
+
+**Settled in M5 (2026-09-23).** Protocol 2 is protocol 1 with undo (PLAN §4.5), and nothing in protocol 1 changed. The server speaks 1 to 2 and answers each session in the version its hello asked for: `ready.proto` is that version, and a session of protocol 1 is answered exactly as protocol 1 was, so `undo` is an unknown op there and history entries carry no `op`. The upgrade order is the server first (`docs/server.md`, "Upgrade order"), so every device on protocol 1 keeps syncing through the server's upgrade; a device on protocol 2 meeting a server of protocol 1 is refused at hello with `proto`, naming both ranges, and says to upgrade the server. The version is the negotiation rather than a capability in `ready` because the range was put there for exactly this (`internal/wire/wire.go`, `Proto`), and because a history entry's shape changes with it.
+
+Two things are new.
+
+**`history` names the operation behind a version.** Each entry an agent operation or an undo wrote carries `op`:
+
+```text
+<- {res:"history", id, path, entries:[{uid, path, size, ctime, mtime, folder, deleted, device, prev?, chunks,
+                                      op?:{id, tool, kind, undoneBy?}}]}
+```
+
+`id` is the operation's id (16 bytes, base64url), `tool` what it was (`edit_note`, `move_note`, `undo`, `undo_to_copy`, and the rest of plan/mcp-tools.md), `kind` who made it (`mcp`, an agent's token; `operator`, `trewd undo` on the server; `device`, a device's undo), and `undoneBy` the undo in place that undid it, when one has. A version a device wrote has no `op`. The entry's `device` is the label the version was written under, as for every version: the token's label, `trewd undo`, or the device's name.
+
+**`undo` undoes one operation.**
+
+```text
+-> {op:"undo", id, opId, toCopy?}
+<- {res:"undone", id, opId, undoes, toCopy, committedAt,
+    steps:[{action, path, from?, copy?, before?, after?, why?}],
+    entries:[{path, uid, previousUid, prev?}]}
+```
+
+An undo is a compensating operation, not a rollback: it appends versions that put back what the operation displaced, as one operation, and only if every path the operation changed still holds the version the operation left there. An edit or a deletion is written back with the exact former bytes; a move is moved back, with the note's own links as they were and the backlinks the move edited; a create is deleted, that exact version, with the folders it made while nothing else is in them. With `toCopy` each version the operation replaced is written to a new, free path beside its note (`Note (restored 12).md`, then `Note (restored 12) 2.md`), and nothing already in the vault is changed.
+
+The versions reach every device as an ordinary `batch`, the asking device included, before the reply: the server wrote them, so unlike a put's there is no echo to spare. `steps` say what was done to each path, in order: `restore`, `move_back` (from `from`), `remove`, `remove_folder`, `keep_folder` (with `why`), `copy` (to `copy`) and `nothing` (in a copy, a path that held nothing to copy). `opId` is the undo's own id, which a later undo of the undo names; `undoes` is the operation undone.
+
+A device may undo any operation of the vault: an agent's, another device's undo, the operator's. The vault is one person's, and a device could write the same bytes back by hand; what an undo adds is doing it as one operation against the heads the operation left, and a row in the log. An agent may undo only its own operations (plan/mcp-tools.md, `undo_operation`).
+
+Undoing an operation twice is refused, because the first undo moved every head the second would need, and the log names the undo that did it. An undo may be undone, which is a redo; the original then cannot be undone again. Refusals, all before anything is written, with the reason first in the message and a colon:
+
+- `stale`: a path the operation changed holds another version now (the message names each, its head and who wrote it), or the store was restored since the operation. The copy is the answer to the first.
+- `noundo`: `not_found`, no such operation on the vault; `already_undone`; `gone`, a version the undo needs is no longer in the store, because its pin expired and a purge took it; `nothing_to_undo`, an operation that changed nothing, or a copy of one that only created; `not_empty`, a folder the operation made that holds something at the commit that it did not a moment before; `exists`, a file where the undo needs a folder; `badpath`, a copy whose name the path rules refuse.
+- `collision`: a path the undo writes back folds onto one created since.
+- `badentry`: `opId` is not an operation id.
+- `auth`: the device was revoked; the session ends.
+- `internal`: the store failed, or could not confirm the commit. Asking again is safe: an undo that did commit is refused as already undone.
+
 ## Errors
 
 | code | meaning | retryable | session |
@@ -212,6 +255,7 @@ The batch budget is **not** `size + 64` per entry. That is not an exact wire-mem
 | `nocontent` | a `get` for a folder or a deletion, which has no body | no | rejects |
 | `nochunk` | a `fetch` or `resend` naming a body the server does not hold or no entry refers to | no | rejects |
 | `nodevice` | a `revoke` for a device id this vault does not have | no | rejects |
+| `noundo` | an `undo` (protocol 2) that cannot be done; the message begins with why | no | rejects |
 | `internal` | server fault, not committed | yes | ends in handshake, else rejects |
 
 `rotated` is removed.

@@ -501,18 +501,17 @@ func TestADeviceIDIsBoundedAndBase64URL(t *testing.T) {
  * I9: version negotiation
  * ---------------------------------------------------------------- */
 
-// 1 is the only protocol. A client asking for anything else is refused at hello
-// with both numbers in the message, which is the whole of what the negotiation
-// machinery is kept for: when the next version lands, this is how a client on
-// the wrong one learns which end to upgrade. The server's version is not in
-// this message, because nothing has authenticated when it is sent; see
-// disclosure_test.go.
+// 1 and 2 are the protocols. A client asking for anything else is refused at
+// hello with both numbers in the message, which is the whole of what the
+// negotiation machinery is kept for: this is how a client on the wrong version
+// learns which end to upgrade. The server's version is not in this message,
+// because nothing has authenticated when it is sent; see disclosure_test.go.
 //
 // Hazard 7: the probe is a Basalt plugin, protocol 7 with Basalt's crypto
 // field and a bootstrap token, so a Basalt device meeting a TrewSync server is
 // refused as `proto`, naming both numbers, and not as `auth`.
 func TestAHelloOutsideTheRangeIsRefusedNamingBothNumbers(t *testing.T) {
-	for _, proto := range []int{7, 2, 0} {
+	for _, proto := range []int{7, 3, 0} {
 		r := newRig(t)
 		r.srv.SetVersion("4.5.6")
 		cl := r.dial("old-phone")

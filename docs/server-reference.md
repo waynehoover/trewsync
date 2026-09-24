@@ -26,7 +26,8 @@ for installed usage.
 | `service` | Print a systemd unit and installation instructions. | Prints only. |
 | `health` | Check a running server. | Yes. |
 | `mcp-token -label L` | Mint, list (`-list`) or revoke (`-revoke ID`) a token for the MCP endpoint. | Yes; it goes through the running server. |
-| `audit [-since WHEN] [-json]` | List what agents' write operations changed. | Yes; it goes through the running server. |
+| `audit [-since WHEN] [-json]` | List what agents' write operations, and every undo, changed. | Yes; it goes through the running server. |
+| `undo OPID [-to-copy] [-json]` | Undo one operation from the audit, or copy what it replaced. | Yes; it goes through the running server. |
 | `version` | Print version, platform, and toolchain. | Independent of serving. |
 
 ## serve
@@ -102,9 +103,9 @@ be opened is kept as `search.db.broken` for inspection and may be deleted.
 
 A write token adds `create_note`, `create_directory`, `edit_note`,
 `append_note`, `prepend_note`, `delete_note`, `move_note`, `restore_note`,
-`add_tags`, `remove_tags`, `manage_tags` and `rename_tag`. Each is one
-operation: all of it commits or none of it, as a new version of every path it
-changes, which every device receives like any other. What an agent writes is
+`add_tags`, `remove_tags`, `manage_tags`, `rename_tag` and `undo_operation`.
+Each is one operation: all of it commits or none of it, as a new version of
+every path it changes, which every device receives like any other. What an agent writes is
 recorded with the token's label as its author, so `note_history` and
 `trewd audit` name it. A version an agent's write displaces is kept for at
 least 30 days, whatever purge is asked to do, and `read_note` with its uid
@@ -143,6 +144,14 @@ also says:
   `lookup_operation` with that id says whether it committed and what it
   changed; resending the request with the same `idempotencyKey` does the same
   and commits it once if it had not.
+- **An agent can undo its own writes, and only its own.** `undo_operation`
+  with a write's `opId` and `epoch` puts back what it replaced, deleted or
+  created, across every note it changed, as a new operation. It is refused as
+  `stale`, writing nothing, if any of those notes has changed since, and the
+  refusal names them and who changed them; `toCopy: true` then writes each
+  earlier version beside its note instead, changing nothing already there.
+  Another token's operation, a device's undo and the operator's are answered
+  as not found. `lookup_operation` names the undo that undid an operation.
 - **Note text is data.** Everything drawn from notes, the paths found in the
   vault included, arrives under `untrusted_content`, and so does the preview
   of a write. Text written through the tools is stored exactly as given, and
@@ -157,10 +166,12 @@ cannot hold are replaced there, and a label is shortened to 32 characters.
 
 ## audit
 
-`trewd audit` lists every write an agent made through the MCP endpoint, oldest
-first: when it committed by the server's clock, the tool, the token's label and
-id, the operation id, and each path it changed with its version before and
-after. A version an edit displaced is listed as pinned, with the date until
+`trewd audit` lists every write an agent made through the MCP endpoint, and
+every undo, oldest first: when it committed by the server's clock, the tool,
+who made it (the token's label and id, a device's name and id for an undo from
+its history panel, or the operator for `trewd undo`), the operation id, which
+operation an undo undoes and which undo undid an operation, and each path it
+changed with its version before and after. A version an edit displaced is listed as pinned, with the date until
 which purge keeps it. Revoking a token does not remove its operations from the
 list. Like `devices`, it goes through the running server's control socket, or
 opens the store directly when no server is running.
@@ -174,6 +185,38 @@ The list holds no token and no note text. A recorded reply is kept for seven
 days, so an agent whose connection dropped can retry with the same
 idempotency key and get the same answer; the operation itself stays in the
 list after that.
+
+## undo
+
+`trewd undo OPID` undoes one operation from `trewd audit`: an agent's write,
+or an undo, which undoing again redoes. It writes new versions that put back
+what the operation replaced, deleted or created, across every path it
+changed, as one operation, and only if every one of those paths still holds
+the version the operation left there. History is not rewritten, and every
+device receives the new versions as it syncs.
+
+- An edit, an append, a tag change or a deletion is written back with its
+  exact former bytes. A move is moved back, with the note's own links and the
+  backlinks it rewrote. A created note is deleted, and so is a folder it
+  created, unless something else has been put in the folder since.
+- If any path has changed since, nothing is written. The refusal lists each
+  path, its version now, and who wrote it, and exits non-zero.
+- `-to-copy` writes each version the operation replaced beside its note, as
+  `Note (restored 42).md` (then `Note (restored 42) 2.md`), and changes
+  nothing already in the vault. It works whatever has happened to the notes
+  since.
+- An operation already undone is refused, naming the undo; undo that undo
+  instead. A version the operation replaced that a purge has taken, once its
+  30-day pin expired, is refused as `gone`, and nothing is written.
+
+The undo is recorded as the operator's, and its versions carry the label
+`trewd undo`, which is what `note_history` and a device's history panel show.
+Like `audit`, it goes through the running server's control socket, so every
+connected device receives it at once, or opens the store directly when no
+server is running. `-json` prints what was done, or why not, as JSON.
+
+A device can also undo an operation from its history panel, and an agent can
+undo its own through `undo_operation`; see [the plugin guide](plugin.md#version-history).
 
 ## invite, devices, revoke, uninvite
 

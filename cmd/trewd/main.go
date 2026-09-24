@@ -112,6 +112,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return cmdMCPToken(rest, out)
 		case "audit":
 			return cmdAudit(rest, out)
+		case "undo":
+			return cmdUndo(rest, out)
 		case "cat":
 			return cmdCat(rest, out)
 		case "export":
@@ -121,7 +123,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return nil
 		default:
 			return fmt.Errorf("unknown command %q (try serve, invite, devices, revoke, uninvite, mcp-token, audit, "+
-				"cat, export, backup, verify, purge, stats, service, health, version)", cmd)
+				"undo, cat, export, backup, verify, purge, stats, service, health, version)", cmd)
 		}
 	}
 	return cmdServe(ctx, args, out)

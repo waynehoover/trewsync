@@ -56,6 +56,22 @@
   color: var(--text-muted);
 }
 
+/* Who wrote a version through an operation (an agent, or an undo), above its
+ * text, and why an undo of it was refused, with the copy offered under it. */
+.mod-trew-history .trew-history-operation {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  margin: 0 0 8px;
+}
+
+.mod-trew-history .trew-history-refusal {
+  border-left: 2px solid var(--text-warning);
+  padding: 0 0 0 8px;
+  margin: 0 0 12px;
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+}
+
 .mod-trew-history .modal-setting-titlebar {
   display: flex;
   align-items: center;

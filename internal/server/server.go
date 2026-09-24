@@ -600,14 +600,15 @@ func (s *Server) Store() *store.Store { return s.st }
 // never succeed.
 //
 // The epoch is the store's, so a client can tell a history it has followed
-// from one that has been restored under it. The protocol range is sent whole
-// even though it is one version wide, because that is what a client names when
-// the next bump refuses it; see wire.Proto.
-func (s *Server) ready(id, cursor int64) wire.Ready {
+// from one that has been restored under it. The session is answered in proto,
+// the version its hello asked for, and the server's range is sent whole
+// beside it, because that is what a client names when a bump refuses it; see
+// wire.Proto.
+func (s *Server) ready(id, cursor int64, proto int) wire.Ready {
 	return wire.Ready{
 		Res:           "ready",
 		ID:            id,
-		Proto:         wire.Proto,
+		Proto:         proto,
 		MinProto:      wire.MinProto,
 		ServerVersion: s.version,
 		Epoch:         s.st.Epoch(),

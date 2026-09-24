@@ -36,6 +36,17 @@ import (
 // server's clock at commit, never a client's mtime, since retention is counted
 // from it (section 4.5) and a device clock can say anything.
 //
+// actor_kind says what the actor is. An agent's MCP token ('mcp') makes every
+// operation but one kind: an undo (PLAN.md section 4.5, undo.go) may also be
+// asked for by the operator through `trewd undo` ('operator', whose id is
+// OperatorActorID) or by a device from the plugin's history panel ('device',
+// whose id is the device's own). None of the three is a device row that
+// syncs, except the device, which already was one.
+//
+// undoes, on an undo, is the operation it compensates for. An undo is an
+// operation like any other, with its own paths and pins, so an undo can be
+// undone in its turn.
+//
 // seq orders the log. The id is random, so it cannot, and committed_at can tie
 // within a millisecond; seq is what an audit listing pages by. AUTOINCREMENT so
 // a sequence number is never handed out twice, even if a row ever went.
@@ -58,6 +69,15 @@ import (
 // 'write', and the source it retired, role 'source'. before_uid is NULL where
 // the path had never held a version.
 //
+// before_state is what the path held at before_uid: 'none' (no version),
+// 'gone' (a deletion, or a rename away from it) or 'live' (a note or a
+// folder, which the operation pinned). Recorded because an undo has to know
+// what to put back, and once a pin has expired and purge has taken the
+// version, the uid alone cannot say whether there was anything there. NULL
+// only on a row schema 3 carried over from schema 2 whose version was
+// already gone, where nothing can say; an undo refuses such a path rather
+// than guess (undo.go).
+//
 // # op_pins
 //
 // The versions an operation displaced, each held against purge until
@@ -73,37 +93,7 @@ import (
 // disagree. Keyed by actor, as PLAN.md section 3.3 has it: an actor id is a
 // random 16-byte token id and unique across vaults, and two agents using one
 // key are two keys.
-const oplogSchema = `
-CREATE TABLE IF NOT EXISTS operations (
-  seq               INTEGER PRIMARY KEY AUTOINCREMENT,
-  id                TEXT    NOT NULL UNIQUE,
-  vault_id          TEXT    NOT NULL,
-  actor_id          TEXT    NOT NULL,
-  actor_kind        TEXT    NOT NULL CHECK (actor_kind IN ('mcp')),
-  actor_label       TEXT    NOT NULL,
-  tool              TEXT    NOT NULL,
-  request_digest    TEXT    NOT NULL,
-  idempotency_key   TEXT,
-  epoch             TEXT    NOT NULL,
-  committed_at      INTEGER NOT NULL,
-  outcome           TEXT    NOT NULL CHECK (outcome IN ('committed', 'noop')),
-  snapshot_head     INTEGER,
-  client_name       TEXT    NOT NULL DEFAULT '',
-  client_version    TEXT    NOT NULL DEFAULT '',
-  result            BLOB,
-  result_expires_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS operations_by_time ON operations(vault_id, committed_at);
-
-CREATE TABLE IF NOT EXISTS op_entries (
-  op_id      TEXT    NOT NULL REFERENCES operations(id),
-  ord        INTEGER NOT NULL,
-  role       TEXT    NOT NULL CHECK (role IN ('write', 'source')),
-  path       TEXT    NOT NULL,
-  before_uid INTEGER,
-  after_uid  INTEGER NOT NULL,
-  PRIMARY KEY (op_id, ord)
-);
+const oplogSchema = operationsSchema + opEntriesSchema + `
 
 CREATE TABLE IF NOT EXISTS op_pins (
   op_id      TEXT    NOT NULL REFERENCES operations(id),
@@ -123,6 +113,109 @@ CREATE TABLE IF NOT EXISTS op_keys (
   PRIMARY KEY (actor_id, idempotency_key)
 );
 `
+
+// operationsSchema is the operations table and its indexes, apart from the
+// rest of the log because schema 3 rebuilds it (rebuildOperations) and the
+// rebuilt table must be exactly the one a new store is made with.
+const operationsSchema = `
+CREATE TABLE IF NOT EXISTS operations (
+  seq               INTEGER PRIMARY KEY AUTOINCREMENT,
+  id                TEXT    NOT NULL UNIQUE,
+  vault_id          TEXT    NOT NULL,
+  actor_id          TEXT    NOT NULL,
+  actor_kind        TEXT    NOT NULL CHECK (actor_kind IN ('mcp', 'operator', 'device')),
+  actor_label       TEXT    NOT NULL,
+  tool              TEXT    NOT NULL,
+  undoes            TEXT    REFERENCES operations(id),
+  request_digest    TEXT    NOT NULL,
+  idempotency_key   TEXT,
+  epoch             TEXT    NOT NULL,
+  committed_at      INTEGER NOT NULL,
+  outcome           TEXT    NOT NULL CHECK (outcome IN ('committed', 'noop')),
+  snapshot_head     INTEGER,
+  client_name       TEXT    NOT NULL DEFAULT '',
+  client_version    TEXT    NOT NULL DEFAULT '',
+  result            BLOB,
+  result_expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS operations_by_time ON operations(vault_id, committed_at);
+CREATE INDEX IF NOT EXISTS operations_by_undoes ON operations(undoes);
+`
+
+// opEntriesSchema is op_entries, which schema 3 rebuilds to add before_state.
+const opEntriesSchema = `
+CREATE TABLE IF NOT EXISTS op_entries (
+  op_id        TEXT    NOT NULL REFERENCES operations(id),
+  ord          INTEGER NOT NULL,
+  role         TEXT    NOT NULL CHECK (role IN ('write', 'source')),
+  path         TEXT    NOT NULL,
+  before_uid   INTEGER,
+  before_state TEXT    CHECK (before_state IN ('none', 'gone', 'live')),
+  after_uid    INTEGER NOT NULL,
+  PRIMARY KEY (op_id, ord)
+);
+CREATE INDEX IF NOT EXISTS op_entries_by_after ON op_entries(after_uid);
+`
+
+// rebuildOplog is schema 2 to 3: the operations table with the actor kinds an
+// undo brings (the operator, a device) and the undoes column, and op_entries
+// with before_state. SQLite cannot widen a CHECK constraint or put a column
+// anywhere but last in place, so each table is made again, exactly as a new
+// store makes it, and every row copied into it, sequence numbers included, so
+// no audit listing's order or page changes. op_pins and op_keys are untouched:
+// they name operations by id, and every id is still there.
+//
+// A schema 2 row's before_state is worked out from what schema 2 kept: no
+// before_uid is 'none'; a pinned one was live, because schema 2 pinned exactly
+// the versions that were; an unpinned one still in the store is what that
+// version says it is. One that is neither pinned nor present had its pin
+// expire and its version purged, or was a deletion purge was free to take,
+// and nothing left can say which, so it is NULL, and an undo refuses that path
+// rather than guess.
+//
+// It runs with foreign keys off, on the connection that runs it, which is the
+// procedure SQLite documents for changing a table other tables refer to
+// (lang_altertable.html, "Making Other Kinds Of Table Schema Changes"), and
+// with legacy_alter_table on, so renaming an old table out of the way leaves
+// the other tables' REFERENCES naming "operations" rather than following it.
+// PRAGMA foreign_key_check then proves every reference still lands before the
+// transaction commits (open.go, rebuilding).
+func rebuildOplog(q execer) error {
+	for _, stmt := range []string{
+		`ALTER TABLE operations RENAME TO operations_schema2`,
+		`DROP INDEX IF EXISTS operations_by_time`,
+		`DROP INDEX IF EXISTS operations_by_undoes`,
+		operationsSchema,
+		`INSERT INTO operations (seq, id, vault_id, actor_id, actor_kind, actor_label, tool, request_digest,
+		                         idempotency_key, epoch, committed_at, outcome, snapshot_head, client_name,
+		                         client_version, result, result_expires_at)
+		 SELECT seq, id, vault_id, actor_id, actor_kind, actor_label, tool, request_digest, idempotency_key,
+		        epoch, committed_at, outcome, snapshot_head, client_name, client_version, result,
+		        result_expires_at
+		   FROM operations_schema2 ORDER BY seq`,
+		`DROP TABLE operations_schema2`,
+
+		`ALTER TABLE op_entries RENAME TO op_entries_schema2`,
+		opEntriesSchema,
+		`INSERT INTO op_entries (op_id, ord, role, path, before_uid, before_state, after_uid)
+		 SELECT p.op_id, p.ord, p.role, p.path, p.before_uid,
+		        CASE
+		          WHEN p.before_uid IS NULL THEN 'none'
+		          WHEN EXISTS (SELECT 1 FROM op_pins k WHERE k.op_id = p.op_id AND k.uid = p.before_uid) THEN 'live'
+		          ELSE (SELECT CASE WHEN e.path = p.path AND e.deleted = 0 THEN 'live' ELSE 'gone' END
+		                  FROM entries e JOIN operations o ON o.vault_id = e.vault_id
+		                 WHERE o.id = p.op_id AND e.uid = p.before_uid)
+		        END,
+		        p.after_uid
+		   FROM op_entries_schema2 p`,
+		`DROP TABLE op_entries_schema2`,
+	} {
+		if _, err := q.Exec(stmt); err != nil {
+			return fmt.Errorf("rebuilding the operation log: %w", err)
+		}
+	}
+	return nil
+}
 
 // Bounds on what an operation carries.
 const (
@@ -248,10 +341,16 @@ func (s *Store) clock() time.Time {
 type Operation struct {
 	Vault string
 
+	// ActorKind is what the actor is: ActorMCP, the default when empty, or,
+	// for an undo alone, ActorOperator or ActorDevice (see oplogSchema).
+	ActorKind string
 	// ActorID is the MCP token's id, which is also its author id, and
 	// ActorHash the stored hash of the token it authenticated with
 	// (MCPTokenHash). The hash is compared, not recorded: a token minted
 	// later under the same id cannot carry a request made with the old one.
+	// For a device they are its device id and the hash of its token, checked
+	// the same way; for the operator, OperatorActorID and no hash, because
+	// reaching the control socket is the operator's credential.
 	ActorID   string
 	ActorHash string
 	// ActorLabel is the name the request was prepared under, which every
@@ -260,8 +359,13 @@ type Operation struct {
 	// was prepared with.
 	ActorLabel string
 
-	// Tool is what the operation is recorded as: the MCP tool's name.
+	// Tool is what the operation is recorded as: the MCP tool's name, or
+	// UndoTool or UndoToCopyTool for an undo, whoever asked for it.
 	Tool string
+	// Undoes is, for an undo, the id of the operation it undoes, which the
+	// log records beside it. An undo in place (UndoTool) commits only if no
+	// other undo in place of the same operation has (ErrAlreadyUndone).
+	Undoes string
 	// IdempotencyKey is the caller's name for this request, or empty. The
 	// same key with the same RequestDigest replays the recorded reply; with a
 	// different one it is refused (PLAN.md section 4.8).
@@ -311,10 +415,17 @@ type Operation struct {
 // Base is the path's head as the caller read it, and zero asserts that the
 // path holds nothing live: an exclusive create, as AppendCurrent's zero base
 // is. PrevBase, for a move (Entry.Prev set), is the source's head.
+//
+// EmptyFolder, on a deletion of a folder, commits it only if nothing live is
+// left inside the folder once the entries before it are written: an undo
+// removes a folder its operation made only when the folder is empty (PLAN.md
+// M5 task 7), and a note someone put in it since the plan was made must stop
+// the whole operation rather than be left inside a folder that is gone.
 type OpEntry struct {
-	Entry    Entry
-	Base     int64
-	PrevBase int64
+	Entry       Entry
+	Base        int64
+	PrevBase    int64
+	EmptyFolder bool
 }
 
 // OpCheck is a precondition with no write: Path must still be at Base, or,
@@ -431,6 +542,19 @@ const (
 	OpCodeKeyReused      = "key_reused"
 	OpCodeResultTooLarge = "result_too_large"
 	OpCodeInternal       = "internal"
+
+	// The refusals only an undo earns (undo.go). already_undone is an
+	// operation an undo in place has already compensated for; not_empty is
+	// a folder the operation made that holds something it did not; gone is a
+	// before-image purge has removed; nothing_to_undo is an operation that
+	// wrote nothing an undo could put back, or a copy with nothing to copy;
+	// not_found is an operation id this vault, or this caller, has no
+	// operation under.
+	OpCodeAlreadyUndone = "already_undone"
+	OpCodeNotEmpty      = "not_empty"
+	OpCodeGone          = "gone"
+	OpCodeNothingToUndo = "nothing_to_undo"
+	OpCodeNotFound      = "not_found"
 )
 
 var (
@@ -467,6 +591,15 @@ var (
 	ErrResultTooLarge = errors.New("the operation's reply would be larger than the caller can send")
 	// ErrDuplicatePath is an operation naming one path twice.
 	ErrDuplicatePath = errors.New("the operation names one path twice")
+	// ErrAlreadyUndone is an undo in place of an operation another undo in
+	// place has already compensated for.
+	ErrAlreadyUndone = errors.New("this operation has already been undone")
+	// ErrFolderFilled is a folder deletion marked EmptyFolder whose folder
+	// still holds something live at the commit. Every deletion is refused
+	// then (ErrFolderNotEmpty, which is stale); an undo's is refused first,
+	// and as not_empty, because its answer is not a device's: asked again,
+	// the undo keeps the folder rather than reconcile anything.
+	ErrFolderFilled = errors.New("the folder is not empty")
 )
 
 // OpError is why an operation did not commit, or why nobody can say whether it
@@ -700,6 +833,33 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 		}
 	}
 
+	// 4b. What an undo undoes: an operation of this vault and its epoch and,
+	// for an undo in place, one no other undo in place has compensated for.
+	// Two undos of one operation prepared at once both find the heads it
+	// left; the first to commit moves them, so the second's bases refuse it
+	// too, and this names the reason rather than leaving it to a stale path.
+	if op.Undoes != "" {
+		var vault, epochOf string
+		var undoneBy sql.NullString
+		err := q.QueryRow(
+			`SELECT o.vault_id, o.epoch,
+			        (SELECT u.id FROM operations u WHERE u.undoes = o.id AND u.tool = ? ORDER BY u.seq LIMIT 1)
+			   FROM operations o WHERE o.id = ?`, UndoTool, op.Undoes).Scan(&vault, &epochOf, &undoneBy)
+		switch {
+		case errors.Is(err, sql.ErrNoRows) || (err == nil && vault != op.Vault):
+			return OpResult{}, refused(opID, OpCodeNotFound, "", 0, fmt.Errorf(
+				"%w: no operation %s on this vault", ErrNoOperation, op.Undoes))
+		case err != nil:
+			return OpResult{}, err
+		case epochOf != epoch:
+			return OpResult{}, refused(opID, OpCodeStale, "", 0, fmt.Errorf(
+				"%w: operation %s was recorded before the store was restored", ErrEpochChanged, op.Undoes))
+		case op.Tool == UndoTool && undoneBy.Valid:
+			return OpResult{}, refused(opID, OpCodeAlreadyUndone, "", 0, fmt.Errorf(
+				"%w: operation %s undid it", ErrAlreadyUndone, undoneBy.String))
+		}
+	}
+
 	// 5. The checks, then the entries, each against the state the earlier
 	// ones left.
 	for _, c := range op.Checks {
@@ -740,6 +900,20 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 					"%w: the move's source was prepared against uid %d, and is at uid %d", ErrStale, oe.PrevBase, source))
 			}
 		}
+		if oe.EmptyFolder {
+			// A live folder counts itself once in live_dirs and once more for
+			// every live path beneath it (dirsOf), with the entries before
+			// this one already applied, so one is empty.
+			var refs int64
+			if err := q.QueryRow(`SELECT COALESCE((SELECT refs FROM live_dirs WHERE vault_id = ? AND path = ?), 0)`,
+				op.Vault, e.Path).Scan(&refs); err != nil {
+				return OpResult{}, err
+			}
+			if refs > 1 {
+				return OpResult{}, refused(opID, OpCodeNotEmpty, e.Path, head, fmt.Errorf(
+					"%w: %d live paths are inside it", ErrFolderFilled, refs-1))
+			}
+		}
 
 		base := oe.Base
 		uid, err := writeEntry(q, op.Vault, e, &base, oe.PrevBase)
@@ -749,7 +923,8 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 		case errors.Is(err, ErrStale):
 			// The base checks above are writeEntry's own, so this is reached
 			// only by a folder deletion with something live still in it
-			// (ErrFolderNotEmpty).
+			// (ErrFolderNotEmpty), one not marked EmptyFolder: an undo's is
+			// refused above as not_empty.
 			return OpResult{}, refused(opID, OpCodeStale, e.Path, head, err)
 		case errors.Is(err, ErrBadEntry), errors.Is(err, ErrUnknownVault):
 			return OpResult{}, refused(opID, OpCodeInternal, e.Path, 0, err)
@@ -794,11 +969,11 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 	resultUntil := res.CommittedAt + s.retention.ResultFor.Milliseconds()
 	pinUntil := res.CommittedAt + s.retention.PinFor.Milliseconds()
 	if _, err := q.Exec(
-		`INSERT INTO operations (id, vault_id, actor_id, actor_kind, actor_label, tool, request_digest,
+		`INSERT INTO operations (id, vault_id, actor_id, actor_kind, actor_label, tool, undoes, request_digest,
 		                         idempotency_key, epoch, committed_at, outcome, snapshot_head,
 		                         client_name, client_version, result, result_expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		opID, op.Vault, op.ActorID, AuthorKindMCP, op.ActorLabel, op.Tool, op.RequestDigest,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		opID, op.Vault, op.ActorID, op.kind(), op.ActorLabel, op.Tool, nullableText(op.Undoes), op.RequestDigest,
 		nullableText(op.IdempotencyKey), epoch, res.CommittedAt, outcome, nullableInt(op.SnapshotHead),
 		clientInfo(op.ClientName), clientInfo(op.ClientVersion), reply, resultUntil); err != nil {
 		return OpResult{}, fmt.Errorf("recording the operation: %w", err)
@@ -814,9 +989,17 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 	ord := 0
 	pins := map[int64]bool{}
 	record := func(role, path string, before int64, beforeGone bool, after int64) error {
+		state := BeforeLive
+		switch {
+		case before == 0:
+			state = BeforeNone
+		case beforeGone:
+			state = BeforeGone
+		}
 		if _, err := q.Exec(
-			`INSERT INTO op_entries (op_id, ord, role, path, before_uid, after_uid) VALUES (?, ?, ?, ?, ?, ?)`,
-			opID, ord, role, path, nullableUID(before), after); err != nil {
+			`INSERT INTO op_entries (op_id, ord, role, path, before_uid, before_state, after_uid)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			opID, ord, role, path, nullableUID(before), state, after); err != nil {
 			return fmt.Errorf("recording the paths the operation changed: %w", err)
 		}
 		ord++
@@ -912,7 +1095,30 @@ func (s *Store) operationTx(fn func(q execer) error) (done bool, err error) {
 }
 
 // checkActor is the credential as it stands in the caller's transaction.
+//
+// The operator has none to check: whoever reaches the control socket, mode
+// 0600 in the data directory, can already read the database beside it
+// (PLAN.md section 2.3.1). A device is checked as every device mutation is
+// under the commit lock, its row still there with the hash it connected with,
+// so a device revoked between asking and committing loses here.
 func checkActor(q querier, op Operation, now int64) error {
+	switch op.kind() {
+	case ActorOperator:
+		return nil
+	case ActorDevice:
+		var hash string
+		err := q.QueryRow(`SELECT auth_hash FROM devices WHERE vault_id = ? AND device_id = ?`,
+			op.Vault, op.ActorID).Scan(&hash)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("%w: the device was revoked", ErrActorCannotWrite)
+		case err != nil:
+			return err
+		case subtle.ConstantTimeCompare([]byte(hash), []byte(op.ActorHash)) != 1:
+			return fmt.Errorf("%w: the device under this id is not the one the request was made by", ErrActorCannotWrite)
+		}
+		return nil
+	}
 	var hash, scope string
 	var expires sql.NullInt64
 	var author sql.NullString
@@ -947,13 +1153,29 @@ func (op Operation) validate(opID string) *OpError {
 	bad := func(format string, args ...any) *OpError {
 		return refused(opID, OpCodeInternal, "", 0, fmt.Errorf("%w: "+format, append([]any{ErrBadEntry}, args...)...))
 	}
-	switch {
+	switch kind := op.kind(); {
 	case op.Vault == "":
 		return bad("an operation names its vault")
-	case !ValidMCPTokenID(op.ActorID):
+	case kind == AuthorKindMCP && !ValidMCPTokenID(op.ActorID):
 		return bad("the actor id %q is not an MCP token id", op.ActorID)
-	case !isHex64(op.ActorHash):
+	case kind == ActorDevice && !ValidDeviceID(op.ActorID):
+		return bad("the actor id %q is not a device id", op.ActorID)
+	case kind == ActorOperator && (op.ActorID != OperatorActorID || op.ActorHash != ""):
+		return bad("the operator is recorded as %q, with no credential", OperatorActorID)
+	case kind != AuthorKindMCP && kind != ActorDevice && kind != ActorOperator:
+		return bad("the actor kind %q is not one an operation has", kind)
+	case kind != ActorOperator && !isHex64(op.ActorHash):
 		return bad("the actor's token hash is a 64 character hex digest")
+	case kind != AuthorKindMCP && op.Undoes == "":
+		// The operator and the devices make undos and nothing else: every
+		// other agent operation is an MCP tool's.
+		return bad("only an undo is recorded as the %s's", kind)
+	case op.Undoes != "" && !ValidOperationID(op.Undoes):
+		return bad("the operation undone, %q, is not an operation id", op.Undoes)
+	case op.Undoes != "" && op.Tool != UndoTool && op.Tool != UndoToCopyTool:
+		return bad("an operation that undoes another is recorded as %q or %q", UndoTool, UndoToCopyTool)
+	case op.Undoes == "" && (op.Tool == UndoTool || op.Tool == UndoToCopyTool):
+		return bad("an undo names the operation it undoes")
 	case op.ActorLabel == "":
 		return bad("an operation's actor has a label, which its writes are recorded as")
 	case op.Tool == "":
@@ -1015,6 +1237,9 @@ func (op Operation) validate(opID string) *OpError {
 		}
 		if e.Device != op.ActorLabel {
 			return bad("the entry for %q is recorded as %q, and the operation's actor is %q", e.Path, e.Device, op.ActorLabel)
+		}
+		if oe.EmptyFolder && !e.Deleted {
+			return bad("the entry for %q commits only if its folder is empty, and deletes nothing", e.Path)
 		}
 		if err := name(e.Path); err != nil {
 			return err
@@ -1195,12 +1420,16 @@ func lookupKey(q execer, release bool, vaultID, actorID, key, digest, epoch stri
 // OperationRecord is one operation as the audit shows it and as a lost reply
 // is resolved from.
 type OperationRecord struct {
-	Seq            int64  `json:"seq"`
-	ID             string `json:"id"`
-	ActorID        string `json:"actorId"`
-	ActorKind      string `json:"actorKind"`
-	ActorLabel     string `json:"actorLabel"`
-	Tool           string `json:"tool"`
+	Seq        int64  `json:"seq"`
+	ID         string `json:"id"`
+	ActorID    string `json:"actorId"`
+	ActorKind  string `json:"actorKind"`
+	ActorLabel string `json:"actorLabel"`
+	Tool       string `json:"tool"`
+	// Undoes is, for an undo, the operation it undoes; UndoneBy is, for any
+	// operation, the undo in place that undid it, if one has.
+	Undoes         string `json:"undoes,omitempty"`
+	UndoneBy       string `json:"undoneBy,omitempty"`
 	RequestDigest  string `json:"requestDigest"`
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 	Epoch          string `json:"epoch"`
@@ -1234,7 +1463,18 @@ type OperationPath struct {
 	// AfterUID the version that changed it.
 	BeforeUID *int64 `json:"beforeUid"`
 	AfterUID  int64  `json:"afterUid"`
+	// BeforeState is what the path held at BeforeUID: BeforeNone,
+	// BeforeGone or BeforeLive, or "" where nothing can say (a row carried
+	// over from schema 2 whose version was already gone; see op_entries).
+	BeforeState string `json:"beforeState,omitempty"`
 }
+
+// What a path held before an operation changed it, as op_entries records it.
+const (
+	BeforeNone = "none"
+	BeforeGone = "gone"
+	BeforeLive = "live"
+)
 
 // Pin is a version an operation displaced and until when purge keeps it.
 type Pin struct {
@@ -1251,16 +1491,23 @@ const (
 	AuditPathsMax = 1000
 )
 
-const operationCols = `seq, id, actor_id, actor_kind, actor_label, tool, request_digest, idempotency_key, epoch,
-  committed_at, outcome, snapshot_head, client_name, client_version, result_expires_at`
+// operationCols are an operation's columns, read from operations as o. The
+// undo that undid it is the first undo in place naming it, which the commit
+// makes the only one (ErrAlreadyUndone).
+const operationCols = `o.seq, o.id, o.actor_id, o.actor_kind, o.actor_label, o.tool, o.undoes,
+  (SELECT u.id FROM operations u WHERE u.undoes = o.id AND u.tool = '` + UndoTool + `' ORDER BY u.seq LIMIT 1),
+  o.request_digest, o.idempotency_key, o.epoch, o.committed_at, o.outcome, o.snapshot_head, o.client_name,
+  o.client_version, o.result_expires_at`
 
 func scanOperation(r scannable) (OperationRecord, error) {
 	var o OperationRecord
-	var key sql.NullString
+	var key, undoes, undoneBy sql.NullString
 	var head sql.NullInt64
-	err := r.Scan(&o.Seq, &o.ID, &o.ActorID, &o.ActorKind, &o.ActorLabel, &o.Tool, &o.RequestDigest, &key,
-		&o.Epoch, &o.CommittedAt, &o.Outcome, &head, &o.ClientName, &o.ClientVersion, &o.ResultExpiresAt)
+	err := r.Scan(&o.Seq, &o.ID, &o.ActorID, &o.ActorKind, &o.ActorLabel, &o.Tool, &undoes, &undoneBy,
+		&o.RequestDigest, &key, &o.Epoch, &o.CommittedAt, &o.Outcome, &head, &o.ClientName, &o.ClientVersion,
+		&o.ResultExpiresAt)
 	o.IdempotencyKey = key.String
+	o.Undoes, o.UndoneBy = undoes.String, undoneBy.String
 	if head.Valid {
 		v := head.Int64
 		o.SnapshotHead = &v
@@ -1274,7 +1521,8 @@ func operationDetail(q querier, o *OperationRecord, limit int) error {
 		return err
 	}
 	rows, err := q.Query(
-		`SELECT role, path, before_uid, after_uid FROM op_entries WHERE op_id = ? ORDER BY ord LIMIT ?`, o.ID, limit)
+		`SELECT role, path, before_uid, before_state, after_uid FROM op_entries WHERE op_id = ? ORDER BY ord LIMIT ?`,
+		o.ID, limit)
 	if err != nil {
 		return err
 	}
@@ -1282,10 +1530,12 @@ func operationDetail(q querier, o *OperationRecord, limit int) error {
 	for rows.Next() {
 		var p OperationPath
 		var before sql.NullInt64
-		if err := rows.Scan(&p.Role, &p.Path, &before, &p.AfterUID); err != nil {
+		var state sql.NullString
+		if err := rows.Scan(&p.Role, &p.Path, &before, &state, &p.AfterUID); err != nil {
 			rows.Close()
 			return err
 		}
+		p.BeforeState = state.String
 		if before.Valid {
 			v := before.Int64
 			p.BeforeUID = &v
@@ -1325,7 +1575,7 @@ func (s *Store) LookupOperation(vaultID, id string) (OperationRecord, bool, erro
 		return OperationRecord{}, false, err
 	}
 	defer tx.Rollback()
-	o, err := scanOperation(tx.QueryRow(`SELECT `+operationCols+` FROM operations WHERE vault_id = ? AND id = ?`, vaultID, id))
+	o, err := scanOperation(tx.QueryRow(`SELECT `+operationCols+` FROM operations o WHERE o.vault_id = ? AND o.id = ?`, vaultID, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return OperationRecord{}, false, nil
 	}
@@ -1358,9 +1608,9 @@ func (s *Store) Operations(vaultID string, since, after int64, limit int) ([]Ope
 	}
 	defer tx.Rollback()
 	rows, err := tx.Query(
-		`SELECT `+operationCols+` FROM operations
-		  WHERE vault_id = ? AND committed_at >= ? AND seq > ?
-		  ORDER BY seq LIMIT ?`, vaultID, since, after, limit+1)
+		`SELECT `+operationCols+` FROM operations o
+		  WHERE o.vault_id = ? AND o.committed_at >= ? AND o.seq > ?
+		  ORDER BY o.seq LIMIT ?`, vaultID, since, after, limit+1)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1410,21 +1660,22 @@ func (s *Store) verifyOplog() ([]Fault, int, error) {
 		faults = append(faults, Fault{VaultID: vault, Row: fmt.Sprintf("operation %q", id), Reason: reason, Detail: detail})
 	}
 	rows, err := s.db.Query(
-		`SELECT o.vault_id, o.id, o.actor_id, o.actor_kind, o.actor_label, o.tool, o.request_digest,
+		`SELECT o.vault_id, o.id, o.actor_id, o.actor_kind, o.actor_label, o.tool, o.undoes, o.request_digest,
 		        o.idempotency_key, o.epoch, o.committed_at, o.outcome, o.result_expires_at,
-		        (SELECT COUNT(*) FROM vaults v WHERE v.vault_id = o.vault_id)
+		        (SELECT COUNT(*) FROM vaults v WHERE v.vault_id = o.vault_id),
+		        COALESCE((SELECT u.vault_id FROM operations u WHERE u.id = o.undoes), '')
 		   FROM operations o ORDER BY o.seq`)
 	if err != nil {
 		return nil, 0, err
 	}
 	checked := 0
 	for rows.Next() {
-		var vault, id, actor, kind, label, tool, digest, epoch, outcome string
-		var key sql.NullString
+		var vault, id, actor, kind, label, tool, digest, epoch, outcome, undoneVault string
+		var key, undoes sql.NullString
 		var committed, resultUntil int64
 		var vaults int
-		if err := rows.Scan(&vault, &id, &actor, &kind, &label, &tool, &digest, &key, &epoch,
-			&committed, &outcome, &resultUntil, &vaults); err != nil {
+		if err := rows.Scan(&vault, &id, &actor, &kind, &label, &tool, &undoes, &digest, &key, &epoch,
+			&committed, &outcome, &resultUntil, &vaults, &undoneVault); err != nil {
 			rows.Close()
 			return faults, checked, err
 		}
@@ -1432,8 +1683,16 @@ func (s *Store) verifyOplog() ([]Fault, int, error) {
 		switch {
 		case !ValidOperationID(id):
 			fault(vault, id, "badop", fmt.Sprintf("the id is not %d bytes of base64url", OperationIDBytes))
-		case !ValidMCPTokenID(actor) || kind != AuthorKindMCP:
-			fault(vault, id, "badop", fmt.Sprintf("the actor %q of kind %q is not an MCP token", actor, kind))
+		case !validActor(kind, actor):
+			fault(vault, id, "badop", fmt.Sprintf("the actor %q of kind %q is not an MCP token, a device or the operator",
+				actor, kind))
+		case undoes.Valid != (tool == UndoTool || tool == UndoToCopyTool):
+			fault(vault, id, "badop", fmt.Sprintf("recorded as %q, undoing %q: an undo, and only an undo, names "+
+				"the operation it undoes", tool, undoes.String))
+		case kind != AuthorKindMCP && !undoes.Valid:
+			fault(vault, id, "badop", fmt.Sprintf("recorded as the %s's, which makes undos and nothing else", kind))
+		case undoes.Valid && undoneVault != vault:
+			fault(vault, id, "badop", fmt.Sprintf("undoes %q, which is not an operation on this vault", undoes.String))
 		case label == "" || CheckName("actor", label, MaxMCPLabelLen) != nil:
 			fault(vault, id, "badop", "the actor's label is empty or not a name")
 		case tool == "" || CheckName("tool", tool, MaxToolNameLen) != nil:
@@ -1459,7 +1718,8 @@ func (s *Store) verifyOplog() ([]Fault, int, error) {
 	}
 
 	rows, err = s.db.Query(
-		`SELECT p.op_id, COALESCE(o.vault_id, ''), o.id IS NULL, p.role, p.path, p.before_uid, p.after_uid
+		`SELECT p.op_id, COALESCE(o.vault_id, ''), o.id IS NULL, p.role, p.path, p.before_uid, p.before_state,
+		        p.after_uid
 		   FROM op_entries p LEFT JOIN operations o ON o.id = p.op_id
 		  ORDER BY p.op_id, p.ord`)
 	if err != nil {
@@ -1469,8 +1729,9 @@ func (s *Store) verifyOplog() ([]Fault, int, error) {
 		var id, vault, role, path string
 		var orphan bool
 		var before sql.NullInt64
+		var state sql.NullString
 		var after int64
-		if err := rows.Scan(&id, &vault, &orphan, &role, &path, &before, &after); err != nil {
+		if err := rows.Scan(&id, &vault, &orphan, &role, &path, &before, &state, &after); err != nil {
 			rows.Close()
 			return faults, checked, err
 		}
@@ -1481,6 +1742,8 @@ func (s *Store) verifyOplog() ([]Fault, int, error) {
 			fault(vault, id, "badop", fmt.Sprintf("the recorded path %q is one the policy refuses", path))
 		case after <= 0 || (before.Valid && before.Int64 <= 0):
 			fault(vault, id, "badop", fmt.Sprintf("the path %q is recorded as uid %v to %d", path, before.Int64, after))
+		case state.Valid && (state.String == BeforeNone) == before.Valid:
+			fault(vault, id, "badop", fmt.Sprintf("the path %q held %q before, at uid %v", path, state.String, before.Int64))
 		}
 	}
 	rows.Close()

@@ -40,7 +40,13 @@ import (
 // (PLAN.md section 4.5). A new table alone reaches an older store through
 // `CREATE TABLE IF NOT EXISTS` and fences nothing; the version is what makes
 // the older build refuse, with ErrFutureSchema, before its purge can run.
-const SchemaVersion = 2
+//
+// Version 3 is undo (PLAN.md section 4.5): operations made by the operator and
+// by devices, and the operation an undo undoes. The build at version 2 would
+// read an operator's undo as an agent's, fail to verify it, and let an undo be
+// undone as though it were the operation it compensated for, so it is fenced
+// off the same way.
+const SchemaVersion = 3
 
 // migrations are the steps from one schema version to the next, keyed by the
 // version they upgrade from. Each step runs inside the transaction that
@@ -54,7 +60,13 @@ var migrations = map[int]func(q execer) error{
 		_, err := q.Exec(oplogSchema)
 		return err
 	},
+	// 2 to 3: operations and op_entries rebuilt for undo, every row kept.
+	2: rebuildOplog,
 }
+
+// withoutForeignKeys are the steps that rebuild a table other tables refer
+// to, which SQLite's procedure runs with foreign keys off (rebuildOplog).
+var withoutForeignKeys = map[int]bool{2: true}
 
 // execer is what a migration or an initialisation needs from a transaction.
 type execer interface {
@@ -269,7 +281,11 @@ func migrate(db *sql.DB, dbPath string, id Identity) (Identity, error) {
 				dbPath, id.SchemaVersion, id.SchemaVersion+1)
 		}
 		next := id.SchemaVersion + 1
-		if err := immediate(db, func(q execer) error {
+		run := immediate
+		if withoutForeignKeys[id.SchemaVersion] {
+			run = rebuilding
+		}
+		if err := run(db, func(q execer) error {
 			if err := step(q); err != nil {
 				return err
 			}
@@ -334,6 +350,77 @@ func immediate(db *sql.DB, fn func(q execer) error) error {
 	if err := fn(pinned{conn, ctx}); err != nil {
 		abandon()
 		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		abandon()
+		return err
+	}
+	return nil
+}
+
+// rebuilding is immediate for a migration step that rebuilds a table other
+// tables refer to: foreign keys off and legacy_alter_table on, both set on the
+// pinned connection before the transaction begins, because SQLite ignores a
+// change to either inside one. Before the commit, PRAGMA foreign_key_check
+// must find no reference that lands nowhere, or the step is rolled back. Both
+// pragmas are put back on the connection whatever happened, and a connection
+// that cannot be put back is discarded rather than returned to the pool with
+// its foreign keys off.
+func rebuilding(db *sql.DB, fn func(q execer) error) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	restore := func() {
+		_, e1 := conn.ExecContext(ctx, "PRAGMA legacy_alter_table = OFF")
+		_, e2 := conn.ExecContext(ctx, "PRAGMA foreign_keys = ON")
+		if e1 != nil || e2 != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}
+	defer restore()
+	for _, p := range []string{"PRAGMA foreign_keys = OFF", "PRAGMA legacy_alter_table = ON", "BEGIN IMMEDIATE"} {
+		if _, err := conn.ExecContext(ctx, p); err != nil {
+			return err
+		}
+	}
+	abandon := func() {
+		if _, err := conn.ExecContext(ctx, "ROLLBACK"); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}
+	q := pinned{conn, ctx}
+	if err := fn(q); err != nil {
+		abandon()
+		return err
+	}
+	rows, err := q.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		abandon()
+		return err
+	}
+	var dangling []string
+	for rows.Next() {
+		var table, parent string
+		var rowid sql.NullInt64
+		var fk int
+		if err := rows.Scan(&table, &rowid, &parent, &fk); err != nil {
+			rows.Close()
+			abandon()
+			return err
+		}
+		dangling = append(dangling, fmt.Sprintf("%s row %d names a %s that is not there", table, rowid.Int64, parent))
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		abandon()
+		return err
+	}
+	if len(dangling) > 0 {
+		abandon()
+		return fmt.Errorf("the rebuilt tables do not hold together: %v", dangling)
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		abandon()
