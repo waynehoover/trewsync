@@ -1,6 +1,6 @@
 # TrewSync documentation
 
-**Self-hosted vault sync with full version history, on a server you run.**
+**Your own Obsidian sync, with an agent inside it.**
 
 [Back to TrewSync](../README.md)
 
@@ -9,14 +9,16 @@
 - [Is TrewSync right for you?](compared.md): compare hosting, features, and fit.
 - [Install with your agent](../llm.md): a runbook for the server, plugin, and verification.
 - [Server setup](server.md): run the server and connect your first device.
-- [Obsidian plugin](plugin.md): pair devices, check sync, and recover notes.
-- [Command-line client](../client/README.md): keep a mirror without Obsidian.
+- [Obsidian plugin](plugin.md): pair devices, check sync, recover notes, and undo an agent's change.
+- [Connect an agent](agent.md): the server's MCP endpoint, tokens, and what an agent can and cannot do.
+- [Command-line client](client.md): keep a mirror without Obsidian.
 - [Security and privacy](security.md): what the server can read, and what protects your notes.
 
 ## Run your server
 
 - [Server maintenance](server-operations.md): backups, restoration, monitoring, and purging history.
 - [Server reference](server-reference.md): commands, flags, limits, and health responses.
+- [CLI reference](cli-reference.md): every command and flag of the headless client.
 
 ## Develop TrewSync
 
