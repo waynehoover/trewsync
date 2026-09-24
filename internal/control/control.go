@@ -11,9 +11,10 @@
 // same commit lock, the same eviction. It carries the MCP token commands too
 // (`mcp-token`, `mcp-tokens`, `mcp-revoke`), under the same lock, the read of
 // the agents' operation log (`audit`), so the log a person reads is the one
-// the running server is writing, and the undo of an operation in it (`undo`),
-// committed and broadcast to the devices by the server that holds the commit
-// lock, as every other write is.
+// the running server is writing, the undo of an operation in it (`undo`) and
+// the restore of the vault to a uid (`restore`), each committed and broadcast
+// to the devices by the server that holds the commit lock, as every other
+// write is, and what `trewd doctor` asks of a running server (`status`).
 //
 // The socket is a unix socket in the data directory, mode 0600, so whoever can
 // reach it can already read the database beside it: the socket is not a new
@@ -50,7 +51,7 @@ const requestTimeout = 30 * time.Second
 // Request is one operation the operator asks of the running server.
 type Request struct {
 	// Op is "invite", "devices", "revoke", "uninvite", "mcp-token",
-	// "mcp-tokens", "mcp-revoke", "audit" or "undo".
+	// "mcp-tokens", "mcp-revoke", "audit", "undo", "restore" or "status".
 	Op string `json:"op"`
 
 	// invite and mcp-token. TTLMs is the lifetime, and Never says the
@@ -85,6 +86,12 @@ type Request struct {
 	// undo: the operation to undo, and whether as the copy.
 	OpID   string `json:"opId,omitempty"`
 	ToCopy bool   `json:"toCopy,omitempty"`
+
+	// restore: the uid to put the vault back to, the head a dry run was
+	// planned at (zero for none), and whether to commit it.
+	ToUID int64 `json:"toUid,omitempty"`
+	Head  int64 `json:"head,omitempty"`
+	Apply bool  `json:"apply,omitempty"`
 }
 
 // Reply is the answer to one Request: exactly one of its parts is set, and
@@ -101,8 +108,50 @@ type Reply struct {
 	MCPTokens  *MCPTokens  `json:"mcpTokens,omitempty"`
 	MCPRevoked *MCPRevoked `json:"mcpRevoked,omitempty"`
 
-	Audit *Audit `json:"audit,omitempty"`
-	Undo  *Undo  `json:"undo,omitempty"`
+	Audit   *Audit   `json:"audit,omitempty"`
+	Undo    *Undo    `json:"undo,omitempty"`
+	Restore *Restore `json:"restore,omitempty"`
+	Status  *Status  `json:"status,omitempty"`
+}
+
+// Restore is a restore to a uid the server planned, committed or refused. A
+// dry run is a plan with Applied false; a refusal, like an undo's, is an
+// answer with the store's code and reason and the paths it is about.
+type Restore struct {
+	Vault string `json:"vault"`
+	ToUID int64  `json:"toUid"`
+	// Head is the vault head the plan was made at, which a dry run's
+	// `-head` names so the apply is refused if the vault moves.
+	Head      int64           `json:"head"`
+	Applied   bool            `json:"applied"`
+	Unchanged int             `json:"unchanged"`
+	Steps     json.RawMessage `json:"steps,omitempty"`
+
+	// Applied: the restore's operation id and commit time, and the versions
+	// it wrote.
+	OpID        string          `json:"opId,omitempty"`
+	CommittedAt int64           `json:"committedAt,omitempty"`
+	Entries     json.RawMessage `json:"entries,omitempty"`
+
+	// Refused.
+	Code   string          `json:"code,omitempty"`
+	Reason string          `json:"reason,omitempty"`
+	Gone   json.RawMessage `json:"gone,omitempty"`
+}
+
+// Status is what a running server knows that its data directory does not:
+// its version, the addresses it names in invites, what /health would answer,
+// the search index's state, which devices are connected and how far each has
+// applied, and its metrics. Each part is the producing package's own shape.
+type Status struct {
+	Vault     string          `json:"vault"`
+	Version   string          `json:"version"`
+	StartedAt int64           `json:"startedAt"`
+	URLs      []string        `json:"urls"`
+	Health    json.RawMessage `json:"health"`
+	Index     json.RawMessage `json:"index,omitempty"`
+	Devices   json.RawMessage `json:"devices"`
+	Metrics   json.RawMessage `json:"metrics"`
 }
 
 // Undo is an undo the server did or refused. Refused is an answer, not an

@@ -304,7 +304,7 @@ CREATE INDEX IF NOT EXISTS entry_chunks_by_name ON entry_chunks(vault_id, name);
 -- 112 ms against 5.6 ms with this, and the write it costs is 5 us against a
 -- chunk fsync of 7.8 ms.
 CREATE INDEX IF NOT EXISTS entries_by_prev ON entries(vault_id, prev_path, uid);
-` + liveSchema + mcpTokensSchema + oplogSchema
+` + liveSchema + mcpTokensSchema + oplogSchema + purgeMarksSchema
 
 // Store is the server's whole persistent state: entries in SQLite, bodies in a
 // chunk store.
@@ -1784,6 +1784,11 @@ func (s *Store) Purge(vaultID string, grace time.Duration) (PurgeReport, error) 
 		if rep.VersionsRemoved > 0 {
 			if _, err := tx.Exec(
 				`UPDATE vaults SET purges = purges + 1 WHERE vault_id = ?`, vaultID); err != nil {
+				return err
+			}
+			// And the mark a restore to a uid reads (PurgedThrough): the
+			// newest uid this purge could have taken history below.
+			if err := markPurged(tx, vaultID); err != nil {
 				return err
 			}
 		}
