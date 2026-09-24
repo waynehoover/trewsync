@@ -269,9 +269,12 @@ func MCPEditable(p string) bool {
 
 // conflictCopy is the name the engine gives the copy it keeps when a merge is
 // abandoned, as conflictOriginal in client/src/core/conflicts.ts reads it
-// back: "<name> (Conflicted copy <device> <twelve digits>)", with an optional
-// " <n>" when that name was taken, and then the extension. JavaScript's \d is
-// ASCII without the u flag, as it is here.
+// back: "<name> (Conflicted copy <author> <twelve digits>)", with an optional
+// " <n>" when that name was taken, and then the extension. The author is
+// whoever wrote the copy's bytes (conflictCopyPath in client/src/core/merge.ts):
+// any device's name or a token's label, spaces included, so anything but a
+// slash stands between "copy " and the stamp. JavaScript's \d is ASCII without
+// the u flag, as it is here.
 var conflictCopy = regexp.MustCompile(`^(.*) \(Conflicted copy [^/]+ [0-9]{12}\)(?: [0-9]+)?(\.[^/]*)?$`)
 
 // ConflictCopy reports whether p has the shape of a conflict copy's name.

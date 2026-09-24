@@ -222,6 +222,7 @@ func TestWriteArgumentsAreStrictAndThePathPoliciesHold(t *testing.T) {
 		{"create_note", map[string]any{"path": "plugins/main.js", "content": "alert(1)"}, "unsupported_format"},
 		{"create_note", map[string]any{"path": "a/x.trew-tmp-1.md", "content": "x"}, "reserved_name"},
 		{"create_note", map[string]any{"path": "n (Conflicted copy phone 202609101200).md", "content": "x"}, "reserved_name"},
+		{"create_note", map[string]any{"path": "n (Conflicted copy Claude on Mac 202609230941).md", "content": "x"}, "reserved_name"},
 		{"create_note", map[string]any{"path": "note.md", "content": "x"}, "exists"},
 		{"create_note", map[string]any{"path": "Note.md", "content": "x"}, "collision"},
 		{"create_note", map[string]any{"path": "note.md/child.md", "content": "x"}, "exists"},
