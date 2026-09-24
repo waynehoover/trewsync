@@ -151,7 +151,9 @@ also says:
 A person or agent on a device sees an agent's write as a version from another
 device. When a device had changed the same text meanwhile, it keeps both: its
 own at the note's path, and the agent's in a conflict copy beside it, which
-is named after the device that kept it.
+is named after the token's label, the author of what it holds:
+`note (Conflicted copy Claude on Mac 202609230941).md`. Characters a file name
+cannot hold are replaced there, and a label is shortened to 32 characters.
 
 ## audit
 

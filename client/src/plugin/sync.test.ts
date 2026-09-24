@@ -637,7 +637,7 @@ describe("a device that only receives, while Obsidian's index catches up", () =>
     const phone = await device("android-a1c2");
     const mac = await device("Mac");
     const edited = "From the Mac.md";
-    const copy = "From the Mac (Conflicted copy android-a1c2 202609230941).md";
+    const copy = "From the Mac (Conflicted copy Mac 202609230941).md";
     const v1 = "# From the Mac\n\nWritten on the Mac.\n";
     const v2 = "# From the Mac\n\nWritten on the Mac, and edited on the phone.\n";
     mac.adapter.seed(edited, v1, 1_790_192_400_000);
@@ -645,8 +645,9 @@ describe("a device that only receives, while Obsidian's index catches up", () =>
     expect(phone.text(edited)).toBe(v1);
     const [authored] = await mac.client.history(edited, { limit: 1 });
 
-    // The phone kept the Mac's version under a conflict name, whose bytes are
-    // the ones the Mac already has for the other note, and edited that note.
+    // The phone kept the Mac's version under a conflict name, named after the
+    // Mac whose words it holds, whose bytes are the ones the Mac already has
+    // for the other note, and edited that note.
     mac.adapter.holdWatcher();
     phone.adapter.seed(copy, v1, 1_790_192_410_000);
     phone.adapter.seed(edited, v2, 1_790_192_420_000);

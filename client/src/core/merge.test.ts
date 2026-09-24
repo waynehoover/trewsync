@@ -6,8 +6,11 @@ import {
   fitsExactDiff,
   mergeText,
   mergeTextCharacters,
-  sanitiseDevice,
+  sanitiseAuthor,
 } from "./merge.ts";
+import { conflictOriginal } from "./conflicts.ts";
+import { MAX_PATH_BYTES, MAX_SEGMENT_BYTES, pathReason } from "./path-policy.ts";
+import { firstFreeName } from "./paths.ts";
 
 /**
  * diff-match-patch used the way its own documentation shows, with none of the
@@ -294,21 +297,104 @@ describe("refusing to merge rather than losing an edit", () => {
 });
 
 describe("conflict copy names", () => {
-  it("reads as a conflict copy, with the device and when", () => {
+  it("reads as a conflict copy, with the author and when", () => {
     const at = new Date(2026, 7, 27, 15, 4);
     expect(conflictCopyPath("notes/Meeting.md", "Waynes-MacBook", at)).toBe(
       "notes/Meeting (Conflicted copy Waynes-MacBook 202608271504).md",
     );
+    // An agent's token label, as its writes carry it: spaces and all.
+    expect(conflictCopyPath("From the Mac.md", "Claude on Mac", at)).toBe(
+      "From the Mac (Conflicted copy Claude on Mac 202608271504).md",
+    );
   });
 
-  it("sanitises the device name on the way into the path", () => {
-    // A device name with a slash in it would otherwise create a folder, and
-    // one with a space is merely ugly. Passing it through unsanitised was
-    // untested while the fixture above happened to contain nothing unsafe.
+  it("sanitises the author on the way into the path", () => {
+    // A name with a slash in it would otherwise create a folder. Passing it
+    // through unsanitised was untested while the fixture above happened to
+    // contain nothing unsafe.
     const at = new Date(2026, 7, 27, 15, 4);
     expect(conflictCopyPath("n.md", "Wayne's iPad / spare", at)).toBe(
-      "n (Conflicted copy Wayne's-iPad-spare 202608271504).md",
+      "n (Conflicted copy Wayne's iPad - spare 202608271504).md",
     );
+    // A label is whatever an operator typed, and the server stores anything
+    // but a control character in one.
+    expect(conflictCopyPath("n.md", "Claude/Mac: work", at)).toBe(
+      "n (Conflicted copy Claude-Mac- work 202608271504).md",
+    );
+  });
+
+  it("makes a name the server accepts and the conflict review finds, from any label", () => {
+    const at = new Date(2026, 8, 23, 9, 41);
+    for (const label of [
+      "Claude on Mac",
+      'a/b:c*d?e"f<g>h|i\\j',
+      "tab\tnew\nline\u0000nul\u007fdel\u0085next",
+      "no\u00a0break\u202fnarrow",
+      "\u202eevil\u202c txt.md",
+      "x.trew-tmp-y",
+      "..trew-tmp-",
+      "trailing dots... ",
+      "lone \ud800 surrogate",
+      "e\u0301 decomposed",
+      "🧑\u200d💻".repeat(20),
+      "...",
+      "",
+      // A label holding the copy's own words would otherwise be read as the
+      // start of the copy, pairing it with a note that does not exist.
+      "x (Conflicted copy y 202609230941) z",
+    ]) {
+      const copy = conflictCopyPath("notes/n.md", label, at);
+      expect(pathReason(copy), `${JSON.stringify(label)} gave ${JSON.stringify(copy)}`).toBe(
+        undefined,
+      );
+      expect(conflictOriginal(copy), JSON.stringify(copy)).toBe("notes/n.md");
+    }
+    // What nothing is left of falls back to a word rather than to no name.
+    expect(conflictCopyPath("n.md", "...", at)).toBe("n (Conflicted copy device 202609230941).md");
+  });
+
+  it("shortens an over-long author to 32 whole characters", () => {
+    const at = new Date(2026, 8, 23, 9, 41);
+    const label = "Claude on the office Mac mini, the one by the window";
+    expect(conflictCopyPath("n.md", label, at)).toBe(
+      "n (Conflicted copy Claude on the office Mac mini, t 202609230941).md",
+    );
+    // Whole characters: forty four-byte emoji are cut to thirty-two, never
+    // inside a surrogate pair.
+    const emoji = sanitiseAuthor("😀".repeat(40));
+    expect([...emoji]).toHaveLength(32);
+    expect(emoji).toBe("😀".repeat(32));
+  });
+
+  it("keeps the whole path within the protocol's limits, the author cut first", async () => {
+    const at = new Date(2026, 8, 23, 9, 41);
+    const bytes = (s: string) => new TextEncoder().encode(s).length;
+    // A note name with room for the copy's words and a few letters of the
+    // author, but not all of them.
+    const long = `${"n".repeat(210)}.md`;
+    const copy = conflictCopyPath(long, "Claude on Mac", at);
+    expect(copy).toBe(`${"n".repeat(210)} (Conflicted copy Claude 202609230941).md`);
+    expect(bytes(copy) + 4, copy).toBeLessThanOrEqual(MAX_SEGMENT_BYTES);
+    expect(conflictOriginal(copy)).toBe(long);
+    // And the number a second copy in the same minute takes still fits.
+    const second = await firstFreeName(copy, async (p) => p === copy);
+    expect(pathReason(second), second).toBe(undefined);
+
+    // A name already at the limit: the author goes to one character, and then
+    // the note's own name gives up what is still needed.
+    const full = `${"é".repeat(125)}.md`;
+    expect(bytes(full)).toBe(253);
+    const cut = conflictCopyPath(full, "Claude on Mac", at);
+    expect(pathReason(cut), cut).toBe(undefined);
+    expect(bytes(cut) + 4).toBeLessThanOrEqual(MAX_SEGMENT_BYTES);
+    expect(cut).toMatch(/^é+ \(Conflicted copy C 202609230941\)\.md$/);
+
+    // The path's own limit, where the folders in front take most of it.
+    const deep = `${"d/".repeat(480)}${"n".repeat(60)}.md`;
+    const under = conflictCopyPath(deep, "Claude on Mac", at);
+    expect(pathReason(under), under).toBe(undefined);
+    expect(bytes(under) + 4).toBeLessThanOrEqual(MAX_PATH_BYTES);
+    expect(under.startsWith("d/".repeat(480))).toBe(true);
   });
 
   it("keeps the extension where an extension belongs", () => {
@@ -332,15 +418,17 @@ describe("conflict copy names", () => {
     expect(name).toContain("202601020304");
   });
 
-  it("makes a device name safe on every platform", () => {
-    expect(sanitiseDevice("Wayne's MacBook Pro")).toBe("Wayne's-MacBook-Pro");
-    expect(sanitiseDevice('bad/\\:*?"<>|chars')).toBe("bad-chars");
-    // A leading dot would make the conflict copy invisible in the moment
-    // somebody is looking for it.
-    expect(sanitiseDevice(".hidden")).toBe("hidden");
-    expect(sanitiseDevice("...")).toBe("device");
-    expect(sanitiseDevice("")).toBe("device");
-    expect(sanitiseDevice("x".repeat(100)).length).toBeLessThanOrEqual(32);
+  it("makes an author's name safe on every platform", () => {
+    // Spaces stay: the name is the one somebody gave.
+    expect(sanitiseAuthor("Wayne's MacBook Pro")).toBe("Wayne's MacBook Pro");
+    expect(sanitiseAuthor('bad/\\:*?"<>|chars')).toBe("bad-chars");
+    expect(sanitiseAuthor("  two   spaces\tand\na line ")).toBe("two spaces and a line");
+    expect(sanitiseAuthor("x.trew-tmp-y")).toBe("x-trew-tmp-y");
+    expect(sanitiseAuthor(".hidden")).toBe("hidden");
+    // Nothing left is nothing, and the caller chooses what to use instead.
+    expect(sanitiseAuthor("...")).toBe("");
+    expect(sanitiseAuthor("")).toBe("");
+    expect([...sanitiseAuthor("x".repeat(100))]).toHaveLength(32);
   });
 });
 

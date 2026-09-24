@@ -252,12 +252,18 @@ func TestConflictCopyNamesAreTheEnginesShape(t *testing.T) {
 		"n (Conflicted copy phone 202609101200) 2.md":         true,
 		"README (Conflicted copy phone.v2 202609101200)":      true,
 		"a/b (Conflicted copy Claude-on-Mac 202609171130).md": true,
-		"n (restored 42).md":                                  false,
-		"n (Conflicted copy phone 2026091012).md":             false,
-		"n (Conflicted copy a/b 202609101200).md":             false,
-		"n (Conflicted copy phone 202609101200)x":             false,
-		"Conflicted copy phone 202609101200.md":               false,
-		"n (Conflicted copy phone ٢٠٢٦٠٩١٠١٢٠٠).md":           false,
+		// Named after the author of the copy's bytes: a token's label as the
+		// engine makes it safe, spaces, brackets and all (2026-09-23).
+		"From the Mac (Conflicted copy Claude on Mac 202609230941).md": true,
+		"n (Conflicted copy Claude-Mac- work 202609230941) 2.md":       true,
+		"n (Conflicted copy Claude (work) 202609230941).md":            true,
+		"n (Conflicted copy  202609230941).md":                         false,
+		"n (restored 42).md":                                           false,
+		"n (Conflicted copy phone 2026091012).md":                      false,
+		"n (Conflicted copy a/b 202609101200).md":                      false,
+		"n (Conflicted copy phone 202609101200)x":                      false,
+		"Conflicted copy phone 202609101200.md":                        false,
+		"n (Conflicted copy phone ٢٠٢٦٠٩١٠١٢٠٠).md":                    false,
 	} {
 		if got := ConflictCopy(p); got != want {
 			t.Errorf("ConflictCopy(%q) = %v, want %v", p, got, want)

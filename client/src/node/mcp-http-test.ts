@@ -43,6 +43,7 @@ export async function httpFixture(
     mode: options.mode ?? "read-only",
     reader,
     writer,
+    device: "laptop",
     client: options.client ?? (() => undefined),
     stopping: () => false,
     changed() {},

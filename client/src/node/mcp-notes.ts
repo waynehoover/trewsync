@@ -336,10 +336,20 @@ export async function checkPrepared(vault: NodeVault, plan: PreparedNote): Promi
     );
 }
 
+/**
+ * Publishes a prepared change, keeping anything it displaces.
+ *
+ * `device` is this device's name. What the write can displace is a save made
+ * on this disk while the agent's change was being applied, never the agent's
+ * own bytes, so the copy that keeps it is named after this device, as every
+ * conflict copy is named after the author of what it holds. It used to say
+ * `MCP`, which named the one writer whose words were not in it.
+ */
 export async function applyNote(
   vault: NodeVault,
   plan: PreparedNote,
   changed: (path: string) => void,
+  device: string,
 ): Promise<MutationResult> {
   const { result, before, proposed, times } = plan;
   let publishing = false;
@@ -366,7 +376,7 @@ export async function applyNote(
     } else {
       await checkPrepared(vault, plan);
       const keepAt = await firstFreeName(
-        conflictCopyPath(result.path, "MCP", new Date()),
+        conflictCopyPath(result.path, device, new Date()),
         async (path) => (await vault.checkPath(path, { allowMissing: true })).exists,
       );
       await vault.checkPath(result.path);
@@ -469,12 +479,13 @@ export async function mutateNote(
   vault: NodeVault,
   request: NoteMutation,
   changed: (path: string) => void,
+  device: string,
 ): Promise<MutationResult> {
   let plan: PreparedNote | undefined;
   try {
     plan = await prepareNote(vault, request);
     await preserveNote(vault, plan, changed);
-    return await applyNote(vault, plan, changed);
+    return await applyNote(vault, plan, changed, device);
   } catch (error) {
     return {
       ...(plan?.result ?? { applied: false, path: request.path, preserved: [] }),

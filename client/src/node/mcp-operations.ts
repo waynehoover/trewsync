@@ -196,6 +196,8 @@ export async function applyOperation(
   operation: VaultOperation,
   changes: readonly PlannedChange[],
   changed: (path: string) => void,
+  /** This device's name, for what a write displaces (`applyNote`). */
+  device: string,
 ) {
   try {
     batchBounds(
@@ -223,7 +225,7 @@ export async function applyOperation(
       if (change.action === "edit")
         requests.push({ kind: "spans", path: change.path, base: change.base, edits: change.edits });
     if (source) requests.push({ kind: "delete", path: source.path, base: source.base });
-    const result = await applyBatch(vault, requests, changed);
+    const result = await applyBatch(vault, requests, changed, device);
     return { ...result, ambiguousLinks: current.ambiguousLinks, phase: "apply" };
   } catch (error) {
     return {

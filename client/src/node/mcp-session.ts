@@ -66,6 +66,7 @@ export async function prepareMcpSession(
     mode,
     reader,
     writer,
+    device: opts.device,
     client: () =>
       state === "ready" && current && !current.transport.isClosed ? current : undefined,
     stopping: () => stopping,

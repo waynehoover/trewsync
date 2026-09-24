@@ -180,6 +180,8 @@ export interface McpSession {
   readonly mode: "read-only" | "writable";
   readonly reader: McpReader;
   readonly writer: NodeVault;
+  /** This device's name, which a copy of a save a write displaced is named after. */
+  readonly device: string;
   client(): Client | undefined;
   stopping(): boolean;
   changed(): void;
@@ -403,7 +405,7 @@ function sessionTools(session: McpSession, register: RegisterTool) {
     return localWork(
       request.path,
       signal,
-      (changed) => mutateNote(session.writer, request, changed),
+      (changed) => mutateNote(session.writer, request, changed, session.device),
       captured,
     );
   }
@@ -416,7 +418,14 @@ function sessionTools(session: McpSession, register: RegisterTool) {
       return session.reader.run(() => previewOperation(session.reader.vault, request), signal);
     return localWork(request.kind === "tags" ? "" : request.path, signal, (changed) =>
       session.reader.run(() =>
-        applyOperation(session.writer, session.reader.vault, request, changes, changed),
+        applyOperation(
+          session.writer,
+          session.reader.vault,
+          request,
+          changes,
+          changed,
+          session.device,
+        ),
       ),
     );
   }

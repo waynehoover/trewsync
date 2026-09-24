@@ -174,6 +174,7 @@
 import { diff_match_patch, type Diff } from "diff-match-patch";
 
 import { regions } from "./merge-regions.ts";
+import { MAX_PATH_BYTES, MAX_SEGMENT_BYTES, STAGING_MARK } from "./path-policy.ts";
 import { splitName } from "./paths.ts";
 
 /**
@@ -1103,7 +1104,8 @@ function describe(text: string): string {
 }
 
 /**
- * The name for the copy kept when a merge is abandoned.
+ * The name for the copy kept when a merge is abandoned, or when anything else
+ * has to go beside a note rather than over it.
  *
  * Shaped after Obsidian's, which is `<name> (Conflicted copy <device> <stamp>)`
  * with the stamp being `toLocaleString("sv")` stripped of separators to twelve
@@ -1117,8 +1119,23 @@ function describe(text: string): string {
  * are not looking. Here the local content stays where it is and the incoming
  * version takes the new name: a sync you did not ask for never rewrites the file
  * you are editing.
+ *
+ * And in whose name is in it. `author` is whoever wrote the bytes the copy
+ * holds, which is what somebody finding the copy wants to know: the device an
+ * incoming version came from as the server recorded it, an agent's token label
+ * for a version written through MCP, and this device's own name for bytes that
+ * were on this disk. Until 2026-09-23 it was always the device that made the
+ * copy, so a phone keeping the Mac's text named it after the phone
+ * (docs/design.md, "Conflicts: keep both").
+ *
+ * The name stays within the protocol's limits on a name and a path, with room
+ * for the number `firstFreeName` may add, so the copy can go up like any other
+ * file. The author is shortened first, down to one character, and only then
+ * the note's own name, since the copy has to go on saying which note it is.
+ * A path too long even then is left as it is, and the server's refusal of it
+ * is what says so.
  */
-export function conflictCopyPath(path: string, device: string, at: Date): string {
+export function conflictCopyPath(path: string, author: string, at: Date): string {
   const { stem, ext } = splitName(path);
 
   const p = (n: number, width = 2) => String(n).padStart(width, "0");
@@ -1126,22 +1143,97 @@ export function conflictCopyPath(path: string, device: string, at: Date): string
     `${at.getFullYear()}${p(at.getMonth() + 1)}${p(at.getDate())}` +
     `${p(at.getHours())}${p(at.getMinutes())}`;
 
-  return `${stem} (Conflicted copy ${sanitiseDevice(device)} ${stamp})${ext}`;
+  return fitted(stem, sanitiseAuthor(author) || "device", ` ${stamp})${ext}`);
+}
+
+const COPY_OPEN = " (Conflicted copy ";
+/** What `firstFreeName` may add after the parenthesis: " 2" up to " 999". */
+const COPY_NUMBER_BYTES = 4;
+/** The longest author a copy's name carries, in whole characters. */
+const AUTHOR_CHARS = 32;
+
+const utf8 = new TextEncoder();
+const byteLength = (s: string): number => utf8.encode(s).length;
+
+/** `<stem> (Conflicted copy <author><tail>`, cut to fit as `conflictCopyPath` says. */
+function fitted(stem: string, author: string, tail: string): string {
+  const cut = stem.lastIndexOf("/") + 1;
+  const dir = stem.slice(0, cut);
+  let name = stem.slice(cut);
+  // The last segment's budget is the tighter of the two limits: its own, and
+  // what the folders in front of it leave of the path's.
+  const room = Math.min(MAX_SEGMENT_BYTES, MAX_PATH_BYTES - byteLength(dir));
+  const fixed = byteLength(COPY_OPEN) + byteLength(tail) + COPY_NUMBER_BYTES;
+  const over = (): number => byteLength(name) + byteLength(author) + fixed - room;
+  if (over() > 0) author = clipped(author, byteLength(author) - over());
+  if (over() > 0) name = clipped(name, byteLength(name) - over());
+  return `${dir}${name}${COPY_OPEN}${author}${tail}`;
 }
 
 /**
- * Reduces a device name to something safe in a filename on every platform.
+ * The longest prefix of `s` within `limit` UTF-8 bytes, in whole characters,
+ * without trailing spaces, dots or hyphens, and never empty.
  *
- * Obsidian sanitises its device name for the same reason. The set here is the
- * union of what Windows, macOS and Linux object to, plus the leading dot, since
- * a conflict copy that starts with one becomes invisible in the very moment
- * somebody needs to find it.
+ * Never empty because an empty author is not a name `conflictOriginal` reads
+ * as a copy, and a copy nobody can find is the failure a copy exists to
+ * prevent. Whole characters because half of one is a lone surrogate, which is
+ * not UTF-8 and which the server refuses in a path.
  */
-export function sanitiseDevice(device: string): string {
-  const cleaned = device
-    .replace(/[-\\/:*?"<>|\s]/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^[.\-\s]+|[.\-\s]+$/g, "")
-    .slice(0, 32);
-  return cleaned || "device";
+function clipped(s: string, limit: number): string {
+  let out = "";
+  let used = 0;
+  for (const ch of s) {
+    const n = byteLength(ch);
+    if (out !== "" && used + n > limit) break;
+    out += ch;
+    used += n;
+  }
+  const trimmed = out.replace(/[\s.-]+$/u, "");
+  return trimmed === "" ? out : trimmed;
+}
+
+/**
+ * Reduces an author's name to something safe inside a filename on every
+ * platform, or to nothing when nothing safe is left.
+ *
+ * Obsidian sanitises its device name for the same reason. What arrives here is
+ * no longer only this device's own name: it is any device's, as the server
+ * recorded it, and an agent token's label, which an operator typed and which
+ * can hold anything the server stores (`store.CheckName`: 64 bytes, no C0
+ * control characters). So:
+ *
+ * - The characters Windows, macOS and Linux refuse in a name, `\ / : * ? " < > |`,
+ *   become `-`; a slash would otherwise make a folder.
+ * - Every other whitespace or control character becomes a space, and a run of
+ *   spaces or of hyphens becomes one. The path rules refuse control characters
+ *   and the no-break spaces outright. Spaces themselves are kept: `Claude on
+ *   Mac` is the name somebody gave, and it is what the copy should say.
+ * - Direction overrides are dropped, because they make a name display in an
+ *   order other than the one it has.
+ * - The staging mark `.trew-tmp-` is broken up, because the adapters take any
+ *   name holding it for a temporary of their own, which no listing shows.
+ * - The opening of a copy's own words, `(Conflicted copy `, loses its bracket,
+ *   because `conflictOriginal` reads the last one in a name as where the copy
+ *   begins, and an author holding it would pair the copy with a note that
+ *   does not exist, so the review would never offer it.
+ * - A lone surrogate becomes `-`, because it cannot be written as UTF-8.
+ * - Leading and trailing dots, hyphens and spaces go, as they always have, so
+ *   `...` is no name at all and the caller falls back to another.
+ * - At most 32 characters, counted whole.
+ */
+export function sanitiseAuthor(name: string): string {
+  const cleaned = name
+    .replace(/[\ud800-\udfff]/gu, "-")
+    .normalize("NFC")
+    .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, "")
+    .replace(/[\\/:*?"<>|]/gu, "-")
+    .replace(/[\s\p{Cc}]+/gu, " ")
+    .replaceAll(STAGING_MARK, "-trew-tmp-")
+    .replaceAll(COPY_OPEN.trimStart(), "Conflicted copy ")
+    .replace(/-{2,}/gu, "-")
+    .replace(/^[\s.-]+|[\s.-]+$/gu, "");
+  return [...cleaned]
+    .slice(0, AUTHOR_CHARS)
+    .join("")
+    .replace(/[\s.-]+$/u, "");
 }

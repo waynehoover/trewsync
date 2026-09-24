@@ -1392,10 +1392,13 @@ export default class TrewPlugin extends Plugin {
    * conflict copies under a label the vault does not know.
    *
    * The restart is the part that is easy to leave out. The engine is handed
-   * `device` when it is built and reads it at every conflict copy, so a config
-   * saved under a running loop renames the device list and nothing else: the
-   * next conflict copy still carries the old name, and it does until Obsidian
-   * is restarted. That is a rename that half worked and said it worked.
+   * `device` when it is built and says it in every hello, which is the name
+   * the server records on this device's versions and so the name every
+   * conflict copy of them carries, and it reads it again for each copy of
+   * what is on this disk. A config saved under a running loop renames the
+   * device list and nothing else: the next copy still carries the old name,
+   * and it does until Obsidian is restarted. That is a rename that half
+   * worked and said it worked.
    *
    * A reconnect costs a handshake, once, for something done rarely. The
    * alternative is threading a mutable name through the engine so a pass in

@@ -35,7 +35,7 @@ it("previews exact tag spans and applies them with every original preserved", as
   const preview = await previewOperation(observer, op);
   expect(preview.changes).toHaveLength(2);
   expect(preview.changes[0]!.edits.some((edit) => edit.old.includes("old"))).toBe(true);
-  const result = await applyOperation(vault, observer, op, preview.changes, () => {});
+  const result = await applyOperation(vault, observer, op, preview.changes, () => {}, "laptop");
   expect(result.complete).toBe(true);
   expect(await readFile(join(root, "a.md"), "utf8")).toBe(
     '---\r\nkeep:  yes # comment\r\ntags: ["new"]\r\n---\r\nUNSENT A #new/child\r\n',
@@ -53,7 +53,7 @@ it("refuses changed plans, new affected notes and stale bases before any write",
   const preview = await previewOperation(observer, op);
   await seed("b.md", "#old new arrival");
   const create = vi.spyOn(vault, "create");
-  const result = await applyOperation(vault, observer, op, preview.changes, () => {});
+  const result = await applyOperation(vault, observer, op, preview.changes, () => {}, "laptop");
   expect(result.error?.code).toBe("plan_changed");
   expect(create).not.toHaveBeenCalled();
   expect(await readFile(join(root, "a.md"), "utf8")).toBe("#old UNSENT");
@@ -65,7 +65,7 @@ it("moves after updating exact backlinks and outbound relative destinations", as
   const op: VaultOperation = { kind: "move", path: "Project/A.md", to: "Archive/A.md" };
   const preview = await previewOperation(observer, op);
   expect(preview.changes).toHaveLength(2);
-  const result = await applyOperation(vault, observer, op, preview.changes, () => {});
+  const result = await applyOperation(vault, observer, op, preview.changes, () => {}, "laptop");
   expect(result.complete).toBe(true);
   expect(await vault.exists("Project/A.md")).toBe(false);
   expect(await readFile(join(root, "Archive/A.md"), "utf8")).toBe(
@@ -86,7 +86,7 @@ it("keeps the source and all before-images if a backlink application fails after
   midNoteMutation.durable = async (path) => {
     if (path === "B.md") await writeFile(join(root, "Index.md"), "new local link save");
   };
-  const result = await applyOperation(vault, observer, op, preview.changes, () => {});
+  const result = await applyOperation(vault, observer, op, preview.changes, () => {}, "laptop");
   expect(result.complete).toBe(false);
   expect(await readFile(join(root, "A.md"), "utf8")).toBe("UNSENT A");
   expect(await readFile(join(root, "B.md"), "utf8")).toBe("UNSENT A");
@@ -115,9 +115,9 @@ it("rejects supplied edits that would remove prose outside the semantic operatio
   preview.changes[0]!.edits[0]!.end = 17;
   preview.changes[0]!.edits[0]!.old = "#old UNSENT prose";
   const create = vi.spyOn(vault, "create");
-  expect(await applyOperation(vault, observer, operation, preview.changes, () => {})).toMatchObject(
-    { complete: false, error: { code: "plan_changed" } },
-  );
+  expect(
+    await applyOperation(vault, observer, operation, preview.changes, () => {}, "laptop"),
+  ).toMatchObject({ complete: false, error: { code: "plan_changed" } });
   expect(create).not.toHaveBeenCalled();
   expect(await readFile(join(root, "a.md"), "utf8")).toBe("#old UNSENT prose");
 });
@@ -131,7 +131,14 @@ it("does not overwrite a move destination occupied during exclusive creation", a
     if (path === "b.md") await writeFile(join(root, path), "independent destination");
     return create(path, bytes, times);
   });
-  const result = await applyOperation(vault, observer, operation, preview.changes, () => {});
+  const result = await applyOperation(
+    vault,
+    observer,
+    operation,
+    preview.changes,
+    () => {},
+    "laptop",
+  );
   expect(result).toMatchObject({ complete: false, error: { code: "exists" } });
   expect(await readFile(join(root, "a.md"), "utf8")).toBe("UNSENT A");
   expect(await readFile(join(root, "Index.md"), "utf8")).toBe("[[a]]");

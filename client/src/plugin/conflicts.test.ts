@@ -65,7 +65,7 @@ it("locks the combined editor until the submitted version has been saved", async
     review: () => reviewConflict(vault, pair),
     resolve: async (review, choice, edited) => {
       await pending.promise;
-      await resolveConflict(vault, review, choice, edited);
+      await resolveConflict(vault, "laptop", review, choice, edited);
       written.resolve();
     },
   });

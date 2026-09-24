@@ -1049,10 +1049,13 @@ describe("renaming this device", () => {
     expect(after.json()["thisDevice"], "the rename made a new row").toBe(mine);
   }, 60_000);
 
-  it("is what conflict copies made afterwards are named by", async () => {
+  it("is what conflict copies of its words made afterwards are named by", async () => {
     // The half a person would otherwise discover from a filename. The engine
-    // is handed the name when it is built, so a config saved under a running
-    // loop would rename the list and nothing else.
+    // is handed the name when it is built and says it in its hello, which is
+    // the name the server records on what this device writes and so the name
+    // a copy of those words carries on any device (a copy is named after the
+    // author of its bytes). A config saved under a running loop would rename
+    // the list and nothing else.
     await fresh();
     const { a, b } = await twoDevices();
     await write(a, "note.md", "the original\n");
@@ -1061,16 +1064,20 @@ describe("renaming this device", () => {
 
     expect((await cli("rename", "renamed-one", "--dir", b, "--json")).code).toBe(0);
 
-    // Both sides edit it, and only a's edit reaches the server, so b has to
-    // keep both.
+    // Both sides edit it, and only b's edit reaches the server, so a has to
+    // keep both, with b's words in the copy.
     await write(a, "note.md", "changed on a\n");
     await write(b, "note.md", "changed on b\n");
-    expect((await cli("sync", "--dir", a)).code).toBe(0);
-    expect((await cli("sync", "--dir", b, "--no-merge")).code).toBe(0);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    expect((await cli("sync", "--dir", a, "--no-merge")).code).toBe(0);
 
-    const copies = (await readdir(b)).filter((n) => n.includes("Conflicted copy"));
-    expect(copies.length, `copies: ${copies.join(", ")}`).toBeGreaterThan(0);
-    expect(copies.join(" "), "a conflict copy still carries the old name").toContain("renamed-one");
+    const copies = (await readdir(a)).filter((n) => n.includes("Conflicted copy"));
+    expect(copies, `copies: ${copies.join(", ")}`).toHaveLength(1);
+    expect(await readFile(join(a, copies[0]!), "utf8")).toBe("changed on b\n");
+    expect(copies[0], "a conflict copy still carries the old name").toMatch(
+      /^note \(Conflicted copy renamed-one \d{12}\)\.md$/,
+    );
+    expect(await readFile(join(a, "note.md"), "utf8")).toBe("changed on a\n");
   }, 120_000);
 
   it("refuses a name the server would refuse, before asking it", async () => {

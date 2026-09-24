@@ -26,6 +26,8 @@ export async function applyBatch(
   vault: NodeVault,
   requests: readonly NoteMutation[],
   changed: (path: string) => void,
+  /** This device's name, for what a write displaces (`applyNote`). */
+  device: string,
 ) {
   const plans: PreparedNote[] = [];
   const results: (MutationResult & { attempted?: boolean })[] = requests.map((request) => ({
@@ -53,7 +55,7 @@ export async function applyBatch(
     // to change before a later backup failed. This is the publication barrier.
     for (at = 0; at < plans.length; at++) await checkPrepared(vault, plans[at]!);
     for (at = 0; at < plans.length; at++) {
-      const result = await applyNote(vault, plans[at]!, changed);
+      const result = await applyNote(vault, plans[at]!, changed, device);
       results[at] = { ...result, attempted: true };
       if (result.error) {
         failure = result.error;
