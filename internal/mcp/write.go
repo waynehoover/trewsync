@@ -46,6 +46,11 @@ import (
 // The seams of a write, for Config.Seam: where the crash matrix (PLAN.md M5
 // task 9) kills the server, and what each one leaves behind.
 const (
+	// SeamUploading is in the middle of storing the bodies of a write that
+	// has more than one: the first is durable and the rest are not yet
+	// written. A kill here leaves some of the operation's chunks and not the
+	// others, named by nothing, which purge reclaims.
+	SeamUploading = "uploading"
 	// SeamBodies is after the bodies are durable and before the commit lock:
 	// a kill here leaves chunks nothing names, which purge reclaims.
 	SeamBodies = "bodies"
@@ -299,9 +304,20 @@ func (c *call) content(e *store.Entry, body []byte) [][]byte {
 // (PLAN.md section 4.3, step 3). Outside every lock: bodies are content
 // addressed, named by nothing until an entry commits, and reclaimed by purge
 // if none ever does.
+//
+// The first body is stored on its own and the rest after it, so that a write
+// of several has a moment at which some of its bodies are durable and the
+// others are not written: SeamUploading, where the crash matrix kills an
+// upload in the middle. It costs one more directory flush, at an agent's pace.
 func (c *call) storeBodies(bodies [][]byte) error {
 	if len(bodies) > 0 {
-		if err := c.h.st.Chunks().PutAll(c.h.vault, bodies); err != nil {
+		if err := c.h.st.Chunks().PutAll(c.h.vault, bodies[:1]); err != nil {
+			return err
+		}
+	}
+	if len(bodies) > 1 {
+		c.h.at(SeamUploading)
+		if err := c.h.st.Chunks().PutAll(c.h.vault, bodies[1:]); err != nil {
 			return err
 		}
 	}
@@ -588,20 +604,26 @@ func opMessage(oe *store.OpError) string {
 // liveNote is the note at path, which must be live at base: stale when the
 // path has moved on (its currentUid is the path's own, never the vault's), and
 // not_found when base is its head but that is not a note.
+//
+// One read decides both. The head was read first and the entry after it, and
+// a commit landing between the two made a note that had moved on read as one
+// that was gone (TestEditsRacingACommitAreStaleNeverNotFound). The head is
+// the path's own entry, or the rename that took it away, as Store.Head counts
+// it.
 func (c *call) liveNote(path string, base int64) (store.Entry, error) {
-	head, _, err := c.h.st.Head(c.h.vault, path)
+	e, state, movedAt, err := c.h.st.EntryAsOf(c.h.vault, path, 0)
 	if err != nil {
 		return store.Entry{}, err
 	}
-	if head != base {
+	head := e.UID
+	if state == store.PathMoved {
+		head = movedAt
+	}
+	switch {
+	case head != base:
 		return store.Entry{}, &ToolError{Code: "stale", Message: "the note changed since that base; read it again and reconsider",
 			Path: path, CurrentUID: &head}
-	}
-	e, state, _, err := c.h.st.EntryAsOf(c.h.vault, path, 0)
-	switch {
-	case err != nil:
-		return store.Entry{}, err
-	case state != store.PathLive || e.UID != base:
+	case state != store.PathLive:
 		return store.Entry{}, &ToolError{Code: "not_found", Message: "no note is at that path now; deleted_notes and note_history say what was"}
 	case e.Folder:
 		return store.Entry{}, &ToolError{Code: "not_note_content", Message: "that path is a folder"}

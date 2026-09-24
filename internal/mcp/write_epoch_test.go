@@ -3,10 +3,12 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/waynehoover/trew/internal/chunks"
 	"github.com/waynehoover/trew/internal/search"
 )
 
@@ -197,4 +199,53 @@ func TestAWritesSeamsComeInOrderAroundItsCommit(t *testing.T) {
 	if got := fmt.Sprint(seen); got != want {
 		t.Fatalf("seams %s, want %s", got, want)
 	}
+
+	// A write of several bodies passes SeamUploading first, with the first
+	// body durable and the second not yet written.
+	r.h.seam = nil
+	r.write("one.md", "one\n")
+	head := r.write("two.md", "two\n")
+	args := map[string]any{"paths": []any{"one.md", "two.md"}, "tags": []any{"crash"}}
+	p := previewed(t, invoke(t, a.cs, "add_tags", args))
+	seen = nil
+	var stored map[string]bool
+	r.h.seam = func(point string) {
+		seen = append(seen, point)
+		if point == SeamUploading {
+			stored = chunkNames(t, r.st.Chunks().VaultDir(testVault))
+		}
+	}
+	w = wrote(t, invoke(t, a.cs, "add_tags", apply(args, p)))
+	r.h.seam = nil
+	if got := fmt.Sprint(seen); got != fmt.Sprint([]string{SeamUploading, SeamBodies, SeamCommitted, SeamBroadcast}) {
+		t.Fatalf("the seams of a write of two bodies: %s", got)
+	}
+	var durable int
+	for _, e := range w.Entries {
+		if stored[chunks.Name([]byte(r.bytesAt(e.UID)))] {
+			durable++
+		}
+	}
+	if len(w.Entries) != 2 || durable != 1 || w.Entries[0].UID != head+1 {
+		t.Fatalf("at %s, %d of the %d bodies were durable, want 1 of 2", SeamUploading, durable, len(w.Entries))
+	}
+}
+
+// chunkNames is every body stored under dir.
+func chunkNames(t *testing.T, dir string) map[string]bool {
+	t.Helper()
+	names := map[string]bool{}
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && chunks.ValidName(d.Name()) {
+			names[d.Name()] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return names
 }

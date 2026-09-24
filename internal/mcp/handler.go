@@ -51,9 +51,10 @@ type Config struct {
 	// Now is the clock, time.Now when nil.
 	Now func() time.Time
 	// Seam, when set, is called at each named point of a write between its
-	// preparation and its reply (SeamBodies, SeamCommitted, SeamBroadcast),
-	// which is where the crash matrix (PLAN.md M5 task 9) kills the server.
-	// Nil in every production build.
+	// preparation and its reply (SeamUploading, SeamBodies, SeamCommitted,
+	// SeamBroadcast), which is where the crash matrix (PLAN.md M5 task 9)
+	// kills the server. Nil in every production build: only a trewd built
+	// with the crashmatrix tag sets it (cmd/trewd/testseam.go).
 	Seam func(point string)
 }
 

@@ -217,6 +217,6 @@ From Basalt's suites, re-targeted at the store:
 - `mcp-markdown.test.ts`, `mcp-links.test.ts`: every regression case (URL fragment after parentheses, `%%` in code, combining marks in renamed nested tags, code labels in links, nested images, character references).
 - `mcp-operations.test.ts`, `mcp-batch.test.ts`: plan hashing, `plan_changed`, scan bounds, atomic batch.
 - `mcp-http.test.ts`, `mcp-http-concurrency.test.ts`: auth codes, limits, 33rd request → 429, token revoked mid-flight, 17 competing edits on one base yield exactly one success and 16 `stale`.
-- `mcp.stress.ts`: phone races and the crash matrix, per PLAN M5.
+- `mcp.stress.ts`: phone races and the crash matrix, per PLAN M5. Ported as `client/src/stress/mcp-races.stress.ts` and `mcp-crash.stress.ts`, with the kill and fault cases the stress suite cannot make in `cmd/trewd/crash_test.go` (docs/development.md, "The crash matrix and the phone races (M5)").
 
 New: after every mutation, `read_note {uid: previousUid}` returns the exact former bytes; `note_history` lists the agent's device label; a plugin connected during the write receives the batch before the tool reply is sent (observable through the hub in tests).

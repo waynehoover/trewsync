@@ -19,6 +19,14 @@ import (
 // store, with the search index worker beside it. Without the flag nothing is
 // registered at /mcp, and it is answered as any other path is.
 
+// testSeam is the endpoint's Config.Seam: nil here, and set only by
+// testseam.go, which is compiled into a trewd built with the crashmatrix tag
+// and into no other. It is how the crash matrix (PLAN.md M5 task 9) holds a
+// real server at a point of a write and kills it there. Nothing a request
+// carries reaches it, and a production build holds no code that reads the
+// variable that arms it (TestAProductionBuildHasNoTestSeam).
+var testSeam func(point string)
+
 // mcpEndpoint is what serving MCP needs to keep, to stop it in order.
 type mcpEndpoint struct {
 	handler *mcp.Handler
@@ -43,7 +51,7 @@ func startMCP(dataDir string, srv *server.Server, vault string, origins []string
 			idx = nil
 		}
 	}
-	cfg := mcp.Config{Server: srv, Vault: vault, AllowOrigins: origins, Log: log, Version: srv.Version()}
+	cfg := mcp.Config{Server: srv, Vault: vault, AllowOrigins: origins, Log: log, Version: srv.Version(), Seam: testSeam}
 	if idx != nil {
 		// Only a real index goes in the interface: a typed nil there would be
 		// an index that is not nil and panics.
