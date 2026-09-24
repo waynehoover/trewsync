@@ -61,7 +61,7 @@ hid later body tags. Regression tests cover inline links, reference definitions,
 autolinks and both inline and fenced code. Source-span tests also exposed a
 Unicode-normalization error that left a combining mark in renamed nested tags.
 
-## Post-0.8.2 performance work — September 10, 2026
+## Post-0.8.2 performance work, September 10, 2026
 
 Local changes based on `aba03b4`; Node 22.23.2, Apple M4 Pro, macOS.
 The CLI measurements use real filesystem adapters and the released 0.8.2 server.
@@ -359,7 +359,7 @@ attachment preparation are not preempted. Run
 `bun run test src/core/responsive-upload.test.ts src/core/upload-ordering.test.ts`
 from `client/` to exercise this ordering without a latency threshold.
 
-## Protocol 7 measurements — September 10, 2026
+## Protocol 7 measurements, September 10, 2026
 
 Protocol 7 changes originally measured on top of `920324c`; Node 22.23.2, Go 1.27.1,
 Apple M4 Pro, macOS arm64. [Raw results](reviews/0.7.1-metrics.json) include
@@ -480,7 +480,7 @@ a new note and **100–121 ms for five repeat edits**. These are saved-file to
 server-acknowledgement times, not phone-delivery measurements. All six versions
 were fetched back and matched exactly; the temporary note's deletion synced.
 
-## Open editors and foreground notes — September 9, 2026
+## Open editors and foreground notes, September 9, 2026
 
 A native Obsidian 1.13.7 reproduction found that the 0.7.0 plugin temporarily
 renamed every replaced note into a conflict copy. The open editor followed that
@@ -797,6 +797,20 @@ These projects informed TrewSync's design and regression cases:
 | [obsidian-headless](https://github.com/obsidianmd/obsidian-headless) | Locking, read-only mirror, and conflict-policy evaluations. |
 | [goldmark](https://github.com/yuin/goldmark) (MIT) | The server's Markdown parser. Its link parser and link reference definition transformer (v1.8.6) are copied into `internal/notes/goldmark_link.go` with the licence, and patched to follow micromark. |
 | [asciimoo/hister](https://github.com/asciimoo/hister) | The untrusted-content envelope: structural separation, the warning beside each tool, one normalisation function. Design only; no code is used. |
+
+### Other self-hosted Obsidian sync projects
+
+Investigated on 2026-09-22; the reports are in [plan/research/](../plan/research/README.md).
+Copyleft or unlicensed code from these projects is never copied, in any form, tests and templates included.
+
+| Project | Licence | What TrewSync took |
+|---|---|---|
+| [NoX Sync](https://github.com/mapherez/nox-sync) (mapherez) | GPL-3.0 | No code. Two reproduced deletion bugs that shaped the headless client's safeguards ([report](../plan/research/nox-sync.md)). |
+| [Obsyncian](https://community.obsidian.md/plugins/obsyncian) (aabulkhairov) | MIT, plugin only | No code. The best account of the Obsidian community directory's review, which the lint gate follows, and the release rule that `manifest.json` and `versions.json` move together ([report](../plan/research/obsyncian.md)). |
+| [Syncidian](https://github.com/shangeethsivan/Syncidian) (shangeethsivan) | MIT | The ephemeral-storage check (planned for `trewd doctor`, M5.5), and the case against making Git the source of truth ([report](../plan/research/syncidian.md)). |
+| [Pumice](https://github.com/search5/pumice) (search5) | Client BSD-3, server unlicensed | No code. Its transport history, publishing and sharing as "serve pinned versions", and not raising `minAppVersion` ([report](../plan/research/pumice.md)). |
+| [PKV Sync](https://github.com/CyberKurry/pkv-sync) (CyberKurry) | AGPL-3.0-only | No code. The closest competitor, with a built-in MCP; ideas only, including the lost-update hole TrewSync's conditional writes avoid ([report](../plan/research/pkv-sync.md)). |
+| [LiteSync](https://github.com/KJoner/litesync) (KJoner) | Plugin MIT, server AGPL-3.0 | The plugin's platform probe, adapted with its notice into `client/src/plugin/platform-probe.ts`; evidence for pinned retention ([report](../plan/research/litesync.md)). |
 
 The old source comparison recorded LiveSync 1.0.27 (`dd280a4`), Sync Engine
 3.1.4 (`edb9d42`), and Fast Note Sync 2.4.0 (`1bfb406`). Those observations are

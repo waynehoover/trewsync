@@ -4,12 +4,12 @@ Seven code-level investigations, one per project, each written by an agent that 
 
 | Report | Project | License | What it is | Verdict |
 |---|---|---|---|---|
-| [pkv-sync.md](pkv-sync.md) | PKV Sync (CyberKurry) | AGPL-3.0-only | Rust server, one bare git repo per vault, built-in MCP | Closest competitor. Ideas only. Its MCP is much cruder than ours and has a lost-update hole. |
-| [pumice.md](pumice.md) | Pumice (search5) | Client BSD-3, server unlicensed | Plaintext-capable server with MCP, publish and share | Ideas only. Its transport history is the most useful lesson in the set. |
-| [litesync.md](litesync.md) | LiteSync (KJoner) | Plugin MIT, server AGPL-3.0 | E2E sync, history, three-way merge | One adaptable file (platform probe). Strong evidence for pinned retention. |
-| [syncidian.md](syncidian.md) | Syncidian (shangeethsivan) | MIT | Server with GitHub as source of truth, MCP | One adaptable file (ephemeral-storage check). A worked example of why Git must not be authoritative. |
-| [obsyncian.md](obsyncian.md) | Obsyncian (aabulkhairov) | MIT (plugin only, server closed) | Hosted commercial E2E sync | No code. The best source on the new Obsidian directory review. |
-| [nox-sync.md](nox-sync.md) | NoX Sync (mapherez) | GPL-3.0 | Manual sync, Go backend | No code. Two reproduced deletion bugs that shape the headless client. |
+| [pkv-sync.md](pkv-sync.md) | [PKV Sync](https://github.com/CyberKurry/pkv-sync) (CyberKurry) | AGPL-3.0-only | Rust server, one bare git repo per vault, built-in MCP | Closest competitor. Ideas only. Its MCP is much cruder than ours and has a lost-update hole. |
+| [pumice.md](pumice.md) | [Pumice](https://github.com/search5/pumice) (search5) | Client BSD-3, server unlicensed | Plaintext-capable server with MCP, publish and share | Ideas only. Its transport history is the most useful lesson in the set. |
+| [litesync.md](litesync.md) | [LiteSync](https://github.com/KJoner/litesync) (KJoner) | Plugin MIT, server AGPL-3.0 | E2E sync, history, three-way merge | One adaptable file (platform probe). Strong evidence for pinned retention. |
+| [syncidian.md](syncidian.md) | [Syncidian](https://github.com/shangeethsivan/Syncidian) (shangeethsivan) | MIT | Server with GitHub as source of truth, MCP | One adaptable file (ephemeral-storage check). A worked example of why Git must not be authoritative. |
+| [obsyncian.md](obsyncian.md) | [Obsyncian](https://community.obsidian.md/plugins/obsyncian) (aabulkhairov) | MIT (plugin only, server closed) | Hosted commercial E2E sync | No code. The best source on the new Obsidian directory review. |
+| [nox-sync.md](nox-sync.md) | [NoX Sync](https://github.com/mapherez/nox-sync) (mapherez) | GPL-3.0 | Manual sync, Go backend | No code. Two reproduced deletion bugs that shape the headless client. |
 | [basalt-lessons.md](basalt-lessons.md) | Basalt Sync (ours) | MIT | The fork source | Nearly every lesson survives in copied code; the strip is where they get lost. Corrects the M0 copy list and the reuse map. |
 
 ## 1. Code we can actually use
