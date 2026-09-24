@@ -5,7 +5,7 @@
 Keep independent backups, monitor available disk space, and test restoration
 before you need it. These examples use `/var/lib/trew` for server data and
 `/srv/trew-backup` for a backup. Substitute your actual paths and run
-`trew` as an account with access to them.
+`trewd` as an account with access to them.
 
 ## Backup
 
@@ -34,9 +34,9 @@ For Compose:
 ```bash
 sudo install -d -m 700 -o 65532 -g 65532 /srv/trew-backups
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
-  trewd backup -to /backup/snapshot
+  trew backup -to /backup/snapshot
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
-  trewd verify -deep -data /backup/snapshot
+  trew verify -deep -data /backup/snapshot
 ```
 
 The destination must be outside the data directory; TrewSync refuses nested
@@ -213,11 +213,11 @@ its image and volume:
 sudo install -d -m 700 -o 65532 -g 65532 /srv/trew-backups
 docker compose stop trew
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
-  trewd backup -to /backup/before-purge
+  trew backup -to /backup/before-purge
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
-  trewd verify -deep -data /backup/before-purge
+  trew verify -deep -data /backup/before-purge
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
-  trewd purge -confirm default -backup /backup/before-purge -grace 0
+  trew purge -confirm default -backup /backup/before-purge -grace 0
 docker compose start trew
 ```
 
