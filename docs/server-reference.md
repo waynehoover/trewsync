@@ -25,6 +25,7 @@ for installed usage.
 | `purge -confirm VAULT -backup DIR` | Remove old versions and unused content. | No. |
 | `service` | Print a systemd unit and installation instructions. | Prints only. |
 | `health` | Check a running server. | Yes. |
+| `update [-dry-run]` | Replace this binary with the newest verified server release. | Yes; restart it afterwards. |
 | `mcp-token -label L` | Mint, list (`-list`) or revoke (`-revoke ID`) a token for the MCP endpoint. | Yes; it goes through the running server. |
 | `audit [-since WHEN] [-json]` | List what agents' write operations, and every undo, changed. | Yes; it goes through the running server. |
 | `undo OPID [-to-copy] [-json]` | Undo one operation from the audit, or copy what it replaced. | Yes; it goes through the running server. |
@@ -287,6 +288,7 @@ use `health` to check whether the running server can accept writes.
 | `-max-file N` | File limit to preserve in the unit. |
 | `-user NAME` | Service account; default is the caller. |
 | `-binary PATH` | Installed binary path; default is the running executable. |
+| `-mcp` | Also serve the MCP endpoint at `/mcp`, as `serve -mcp` does. |
 
 The generated unit uses a 30-second stop timeout and limits repeated restarts.
 After fixing a repeated startup failure, `systemctl reset-failed trew` may be
@@ -312,6 +314,29 @@ Inspect logs, capacity, mounts, and permissions according to the result. Do not
 restart repeatedly just because the store is busy. Use `verify -deep` for
 integrity checks. Health responses are unauthenticated and intentionally omit
 vault names, paths, and detailed storage figures.
+
+## update
+
+`trewd update` replaces the running binary with the newest server release,
+after checking who built it. It needs the
+[packslip](https://github.com/jdx/packslip) CLI on `PATH`
+(`mise use -g github:jdx/packslip`); without it, it refuses.
+
+| Flag | Meaning |
+|---|---|
+| `-dry-run` | Download and verify, then stop without replacing anything. |
+| `-version X.Y.Z` | Install this release instead of the newest; never an older one. |
+| `-binary PATH` | Replace this trewd instead of the running one. |
+| `-feed URL` | Read releases from this GitHub API base, such as a mirror. |
+| `-packslip PATH` | The packslip executable to verify with. |
+
+It installs a release only when its `packslip.server.sigstore.json` is signed
+by this repository's release workflow, the downloaded binary matches the
+digest and size signed for it and the release's `SHA256SUMS`, and the new
+binary runs here and reports the version it was released as. The replacement
+is one rename in the binary's directory, so an interrupted update leaves the
+old binary in place. It refuses an older release, a development build, and a
+binary Homebrew, Nix or mise installed, and it does not restart the server.
 
 ## Ceilings
 

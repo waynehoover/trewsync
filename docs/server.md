@@ -25,14 +25,16 @@ From a copy of this repository:
 
 ```bash
 git clone https://github.com/waynehoover/trew.git
-cd trew-sync
-docker compose up -d
+cd trew
+docker compose up -d --build
 docker compose logs trew
 ```
 
-The included [compose.yaml](../compose.yaml) pins a server image and its digest,
-preserves data in a named volume, and exposes port 3003 only on the host's
-loopback interface.
+The included [compose.yaml](../compose.yaml) builds the server image from the
+checkout until the first server release is published, and from then on pins
+that release's image and its digest. It preserves data in a named volume,
+serves sync and the MCP endpoint (`-mcp`) on the one port 3003, and exposes
+that port only on the host's loopback interface.
 
 For a quick trial without cloning:
 
@@ -55,8 +57,8 @@ removing it removes the server's notes and history.
 
 Download the matching binary from a
 [server release](https://github.com/waynehoover/trew/releases?q=server):
-Linux amd64/arm64 or macOS amd64/arm64. Make it executable and run it with a
-writable data directory:
+Linux amd64/arm64/riscv64, macOS amd64/arm64 or FreeBSD amd64/arm64. Make it
+executable and run it with a writable data directory:
 
 ```bash
 chmod +x trewd-linux-amd64
@@ -75,6 +77,20 @@ trewd service -data /var/lib/trew -addr 127.0.0.1:3003 \
 This prints a systemd unit and installation commands; review and follow them.
 It does not install the service itself. The generated unit includes restart
 handling and a 30-second shutdown allowance.
+
+### Homebrew, mise or Nix
+
+Once the first server release is published:
+
+```bash
+brew install waynehoover/tap/trewd                   # macOS or Linux
+mise use -g packslip:github.com/waynehoover/trew/server   # verified from the signed manifest
+nix run github:waynehoover/trew -- version           # built from source by the flake
+```
+
+A binary downloaded by hand is upgraded with `trewd update`, which verifies the
+release before replacing anything ([reference](server-reference.md#update)).
+Homebrew, mise and Nix installs are upgraded through their own tool instead.
 
 ## Secure access
 

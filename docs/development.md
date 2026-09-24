@@ -407,6 +407,127 @@ runbook. `scripts/release.sh --runbook` prints instructions without building or
 publishing. The workflows build and check release assets; verify the published
 files with [scripts/verify-release.sh](../scripts/verify-release.sh).
 
+Nothing described below has been published: there is no GitHub repository for
+TrewSync yet. Everything is configured and checked locally and in CI; the first
+real release is the first run of the publishing half.
+
+### What each release carries
+
+| Release | Tag | Assets | Built by | Installed by |
+|---|---|---|---|---|
+| Plugin | `X.Y.Z` | `main.js`, `manifest.json`, `styles.css`, `SHA256SUMS` | `bun run build`, rebuilt and attested by `attest.yml` | Obsidian, from the community directory |
+| Server | `server/vX.Y.Z` | `trewd-<os>-<arch>` for seven platforms, `SHA256SUMS`, `packslip.server.sigstore.json`; the container image | goreleaser through `scripts/build-server.sh`, rebuilt, attested and signed by `attest.yml`; the image by `release.yml` | hand, `trewd update`, Homebrew, mise, Nix, Docker |
+| Headless client | `cli/vX.Y.Z` | the `trew-sync` npm package | `npm-publish.yml` | npm |
+
+**The plugin version step.** `scripts/release.sh --prepare X.Y.Z` sets the
+plugin's version in `manifest.json` and adds its `versions.json` entry, in one
+step committed before the tag, and refuses a version that is not greater than
+every entry `versions.json` already names (Obsyncian and Pumice, in
+[plan/research](../plan/research/README.md)). Obsidian offers the newest entry
+an install can run, so a lower entry is never offered, and an equal one is a
+second release under a version already served. `attest.yml` checks again, at
+the tag, that the manifest and `versions.json` agree.
+`scripts/release-prepare.test.sh` holds the cases.
+
+**The server binaries.** [.goreleaser.yml](../.goreleaser.yml) builds
+Linux amd64, arm64 and riscv64, macOS amd64 and arm64, and FreeBSD amd64 and
+arm64: every platform trewd compiles for with CGO off and 64-bit integers.
+Refused, with the reason in the config: Windows (the data-directory lock is
+flock(2)), 32-bit targets (the note functions use integers past 2^31), and
+OpenBSD and NetBSD (free-space reporting reads a statfs field they spell
+differently). The Linux binaries are started in the release workflow, arm64
+and riscv64 under QEMU; the macOS and FreeBSD ones are built and never started
+by CI. goreleaser always runs as a snapshot, with the version from the tag in
+`TREWD_VERSION`, because it parses one tag line as semver and cannot read
+`server/vX.Y.Z` without its paid monorepo feature. Its output is byte-identical
+to `go build -trimpath -ldflags "-s -w -X main.version=V"`, which
+`scripts/goreleaser-check.sh` asserts. goreleaser and packslip are fetched at
+versions pinned by digest in `scripts/release-tools.sh`.
+
+`go install ...@server/vX.Y.Z` does not resolve: the module is at the
+repository root, so Go looks for `vX.Y.Z` tags, which no release line makes.
+The `server/` prefix came from Basalt, whose module lived in `server/`.
+
+### The signed manifest, and `trewd update`
+
+A server release carries `packslip.server.sigstore.json`, a
+[packslip](https://packslip.dev) manifest: a Sigstore bundle holding a signed
+statement of every binary's name, digest, size, platform and executable path.
+`attest.yml` signs it with `jdx/packslip` after goreleaser has built and
+`attest-build-provenance` has attested the binaries, and before the draft is
+published, so a release that cannot be signed stays a draft. It is keyless:
+signed with that workflow's own GitHub identity, so there is no key to keep.
+
+- **Project** `github.com/waynehoover/trew/server`. A subpath, because the
+  plugin releases from the same repository; `server`, because packslip reads a
+  version out of a tag whose prefix is the tool's subpath followed by `/`, so
+  `server/v0.2.0` names 0.2.0. The bundle's file name follows from it.
+- **Only trewd.** The plugin is installed by Obsidian from the directory and
+  the client by npm, neither of which reads packslip, so signing them would add
+  an assertion nobody checks. Their provenance is the GitHub attestation and
+  npm's own.
+- **Linux artifacts say `libc: gnu`.** packslip infers it for every Linux
+  artifact and has no way to say "none" short of declaring the file portable.
+  The binaries are static (`requires.libs` is empty), so they run on musl too;
+  a consumer on a musl host that takes the manifest literally may not select
+  them.
+
+`trewd update` reads the releases endpoint, takes the newest non-draft,
+non-prerelease `server/v` release (or the one `-version` names), downloads this
+platform's binary, `SHA256SUMS` and the manifest beside the installed binary,
+and installs nothing until: `packslip verify` accepts the manifest against the
+pin `--identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@`
+and `--issuer https://token.actions.githubusercontent.com`, with the binary as
+`--artifact`; its report names that scheme and signer; the signed statement,
+read by trewd itself, is for this project and this version and signs this
+file's digest and size; `SHA256SUMS` agrees; and the new binary runs and says
+it is that version for this platform. Then one rename and a directory flush. It
+refuses a downgrade, a development build, a binary Homebrew, Nix or mise owns,
+and a container. The pin is the workflow, not only the repository: a bundle
+another workflow of the repository signed is not a release.
+
+It runs the packslip CLI rather than verifying Sigstore itself; the measured
+reason is in [research](research.md#evaluated-alternatives). The tests: the Go
+unit tests in `cmd/trewd/update_test.go` run the whole command against a feed
+served from memory with a fake packslip, one case per refusal, each asserting
+the installed binary is byte-identical afterwards with nothing left beside it.
+`scripts/packslip-check.sh` then does it for real: it builds a goreleaser
+snapshot, signs it with `packslip keygen` and `packslip create --no-log`,
+checks the statement's shape and `packslip verify --allow-unlogged` on every
+binary, serves the signed feed on 127.0.0.1, and runs a trewd built with the
+`updatetest` tag (`cmd/trewd/update_testpin.go`, which swaps the pin for that
+key and nothing else) against it, tampered and untampered; a release build
+refuses the same feed because a key is not the workflow. The keyless path
+itself, Fulcio and Rekor, cannot be exercised without publishing and is
+first checked by `scripts/verify-release.sh --server` on the first release.
+
+### Homebrew, mise, Nix and Docker
+
+- **Homebrew.** [packaging/homebrew/trewd.rb](../packaging/homebrew/trewd.rb)
+  is the formula for the tap `github.com/waynehoover/homebrew-tap`, where it
+  goes as `Formula/trewd.rb` so that `brew install waynehoover/tap/trewd`
+  works. It installs the release's bare binaries for macOS and Linux, arm64 and
+  amd64, and declares a `brew services` service on 127.0.0.1:3003 without MCP.
+  `scripts/homebrew-formula.sh VERSION SHA256SUMS` renders it from the
+  published sums and refuses sums that miss a platform;
+  `scripts/homebrew-formula.test.sh` evaluates the result against a stand-in
+  for Homebrew's DSL. The tap repository does not exist yet. `brew style`
+  passes on the file; `brew audit`, which needs a tap, has not been run.
+- **mise.** `mise use -g packslip:github.com/waynehoover/trew/server` installs
+  trewd from the signed manifest, verified against the repository's identity.
+- **Nix.** [flake.nix](../flake.nix) builds trewd from source with the release
+  flags, version `unstable-<rev>`, over only `go.mod`, `go.sum`, `cmd/` and
+  `internal/`; [flake.lock](../flake.lock) pins nixpkgs. `vendorHash` changes
+  whenever `go.sum` does, and `scripts/flake-check.sh` prints the new one. It
+  runs nix if installed and otherwise nix in a container (store in the
+  `trew-nix-store` volume).
+- **Docker.** `compose.yaml` builds the image from the checkout until the first
+  server release, because the only image it could name was Basalt's, which has
+  `/trew` inside rather than `/trewd`. `scripts/pin-compose.sh` replaces the
+  local build with the published image by tag and digest, and
+  `scripts/pin-check.sh` fails from the first server tag's next commit until it
+  has. The compose command adds `-mcp`; the image's default command does not.
+
 Every GitHub release must include a short user-facing changelog: what is new
 or fixed since that component's previous release, upgrade steps, and known
 issues. Include CLI changes in the plugin notes when they ship together.

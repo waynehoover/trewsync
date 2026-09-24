@@ -759,6 +759,8 @@ requirements or measurements change, with compatibility and preservation tests.
 | Streaming server import | The recorded first-sync cost did not justify another durable ingestion path; remeasure for larger vaults and real networks. |
 | Alternative codec (I25) | Encoded bytes affect chunk identities. Require a measured benefit and a migration plan; see the historical review evidence. |
 | Diff-match-patch fork (I26) | The evaluated fork produced different diffs and lacked equivalent line-mode/deadline behavior. A dependency swap would change merge results. |
+| `trewd update` verifying Sigstore itself (September 24, 2026) | Linking `sigstore-go` v1.3.0 would let the binary check the release manifest's certificate chain and log entry with nothing else installed. Measured: the module graph goes from 41 modules to 368, and a verifier alone builds to 18 MB beside trewd's 14 MB. Hand-writing the check with the standard library was rejected as security code nobody reviews, against trust roots that rotate. `trewd update` runs the packslip CLI instead, the format's reference verifier, and checks the statement's project, version, digest and size itself. Revisit if requiring the CLI proves a real obstacle. |
+| A release key embedded in trewd | An Ed25519 signature over SHA256SUMS, checked with the standard library, needs a long-lived key in CI secrets and a custody story for it. The keyless manifest pins the release workflow instead, which is also what mise checks, so there is no key to lose. |
 
 Basalt evaluated data-key epochs, re-encryption, and device signatures for
 access revocation and author attribution, and left them out of scope. TrewSync has
@@ -796,7 +798,9 @@ These projects informed TrewSync's design and regression cases:
 | [Fast Note Sync](https://github.com/haierkeys/obsidian-fast-note-sync) | A regression involving a file/folder collision at the same path. |
 | [obsidian-headless](https://github.com/obsidianmd/obsidian-headless) | Locking, read-only mirror, and conflict-policy evaluations. |
 | [goldmark](https://github.com/yuin/goldmark) (MIT) | The server's Markdown parser. Its link parser and link reference definition transformer (v1.8.6) are copied into `internal/notes/goldmark_link.go` with the licence, and patched to follow micromark. |
-| [asciimoo/hister](https://github.com/asciimoo/hister) | The untrusted-content envelope: structural separation, the warning beside each tool, one normalisation function. Design only; no code is used. |
+| [asciimoo/hister](https://github.com/asciimoo/hister) | The untrusted-content envelope: structural separation, the warning beside each tool, one normalisation function. Also the packaging shape: goreleaser binaries for every platform, a Homebrew tap, a Nix flake and a self-updating binary. Design only; no code is used. |
+| [GoReleaser](https://goreleaser.com) (MIT) | Builds and checksums the trewd release binaries (`.goreleaser.yml`); run as a tool, not linked. |
+| [packslip](https://github.com/jdx/packslip) (MIT) | The signed release manifest a server release carries, which `trewd update` verifies through its CLI and mise installs from. Run as a tool, not linked. |
 
 ### Other self-hosted Obsidian sync projects
 
