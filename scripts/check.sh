@@ -154,6 +154,26 @@ run "every doc comment names what it sits on" "" \
 run "every action is pinned to a commit" "" \
   bash "$root/scripts/actions-pinned.sh"
 
+# ---- packaging -------------------------------------------------------------
+#
+# What a release is built and signed with. goreleaser and packslip are fetched
+# at the versions scripts/release-tools.sh pins, into a cache of its own, so
+# these need the network the first time and nothing installed.
+run "goreleaser builds every platform" "" \
+  bash "$root/scripts/goreleaser-check.sh"
+run "the release manifest signs and verifies, and trewd update installs only what it names" "" \
+  bash "$root/scripts/packslip-check.sh"
+run "the release version step refuses what it should" "" \
+  bash "$root/scripts/release-prepare.test.sh"
+run "the Homebrew formula renders from the release sums" "" \
+  bash "$root/scripts/homebrew-formula.test.sh"
+# With nix, or with nix in a container. Having neither is a skip, not a pass.
+if command -v nix >/dev/null 2>&1 || { [ "$skip_docker" = 0 ] && docker info >/dev/null 2>&1; }; then
+  run "the flake builds trewd" "" bash "$root/scripts/flake-check.sh"
+else
+  skip "the flake builds trewd" "neither nix nor a docker daemon"
+fi
+
 # ---- the restore rehearsal -------------------------------------------------
 #
 # Behind a build tag, so it is not one of the six hundred tests above that a

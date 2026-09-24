@@ -150,6 +150,40 @@ jobs:
       - name: every action is pinned to a commit
         run: scripts/actions-pinned.sh
 
+  # What a release is built and signed with, checked on every change rather
+  # than found wrong on the day of a release, which is the one run of any of
+  # this that cannot fail quietly. goreleaser and packslip come from
+  # scripts/release-tools.sh, pinned by version and digest there.
+  packaging:
+    name: packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: goreleaser builds every platform
+        run: scripts/goreleaser-check.sh
+
+      # packslip signs a snapshot with a throwaway key and `trewd update` is
+      # run against a feed served from it: the real signer is attest.yml's
+      # GitHub identity, which only a release can use.
+      - name: the release manifest signs and verifies, and trewd update installs only what it names
+        run: scripts/packslip-check.sh
+
+      - name: the release version step refuses what it should
+        run: scripts/release-prepare.test.sh
+
+      - name: the Homebrew formula renders from the release sums
+        run: scripts/homebrew-formula.test.sh
+
+      # Nix in a container, which is what the script does wherever nix itself
+      # is not installed, so this is the same check a laptop runs.
+      - name: the flake builds trewd
+        run: scripts/flake-check.sh
+
   # docs/server.md has carried the restore rehearsal as prose since the backup
   # was written, and a recovery path tested only in docs is a rumour. Not
   # because the steps are wrong: because nobody has run them since the backup
