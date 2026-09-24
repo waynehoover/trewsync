@@ -850,9 +850,13 @@ func writeEntry(tx execer, vaultID string, e Entry, base *int64, prevBase int64)
 		}
 	}
 
-	// The collision rule, after the preconditions so a stale write is told it
-	// is stale first, and before a uid is taken so a refused entry gives its
-	// uid back with its savepoint.
+	// A folder is deleted only once nothing live is in it (ErrFolderNotEmpty),
+	// and the collision rule after that, both after the preconditions so a
+	// stale write is told it is stale first, and before a uid is taken so a
+	// refused entry gives its uid back with its savepoint.
+	if err := checkEmptied(tx, vaultID, e); err != nil {
+		return 0, err
+	}
 	if err := checkCollision(tx, vaultID, e); err != nil {
 		return 0, err
 	}
@@ -1109,6 +1113,13 @@ type Deletion struct {
 // exists under another name, and a recovery list that is mostly noise is one
 // nobody reads.
 //
+// A folder's deletion is never listed. Folder deletions travel (docs/design.md,
+// "Folders"), and one is a deletion row like a file's, told apart only by the
+// version it follows being a folder entry. It is not a note: there is nothing
+// in it to restore, and every file that was in it is listed by a deletion of
+// its own. Listed, each folder rename and each emptied folder was a phantom
+// in the deleted-notes list.
+//
 // # Recognising the tail of a rename
 //
 // Older history represents a rename with two entries: the new path carrying
@@ -1153,7 +1164,10 @@ func (s *Store) Deleted(
 	        FROM entries e
 	        JOIN (SELECT path, MAX(uid) AS uid FROM entries WHERE vault_id = ? GROUP BY path) latest
 	          ON e.path = latest.path AND e.uid = latest.uid
-	       WHERE e.vault_id = ? AND e.deleted = 1`
+	       WHERE e.vault_id = ? AND e.deleted = 1
+	         AND COALESCE((SELECT p.folder FROM entries p
+	                        WHERE p.vault_id = e.vault_id AND p.path = e.path AND p.uid < e.uid
+	                        ORDER BY p.uid DESC LIMIT 1), 0) = 0`
 	args := []any{vaultID, vaultID}
 	if beforeUID > 0 {
 		q += ` AND e.uid < ?`

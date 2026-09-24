@@ -23,6 +23,8 @@ function report(over: Partial<SyncReport> = {}): SyncReport {
     deletedRemotely: 0,
     restored: 0,
     foldersCreated: 0,
+    foldersDeletedLocally: 0,
+    foldersDeletedRemotely: 0,
     unchanged: 0,
     waiting: 0,
     retrying: 0,

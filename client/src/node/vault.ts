@@ -300,6 +300,16 @@ export const midPreserve = composite({
 });
 
 /**
+ * The instant before an empty folder another device deleted is removed, which
+ * is where a note saved into it at the last moment lands. `rmdir` is the
+ * check, so the folder must be kept with the note in it. It does nothing in
+ * every build.
+ */
+export const midRemoveFolder = composite({
+  pause: seam("cli/vault:removeFolder"),
+});
+
+/**
  * The two instants inside a preserving write.
  *
  * Added by the fault driver rather than by a defect, which is the first time
@@ -2382,6 +2392,49 @@ export class NodeVault implements Vault {
     }
 
     await this.intoTrash(full, full);
+  }
+
+  /**
+   * Removes an empty folder, and only an empty one.
+   *
+   * `rmdir` is the check. It is one system call that removes a directory the
+   * kernel finds empty and refuses one holding anything, hidden files and
+   * ignored ones included, so there is no moment between a look and a removal
+   * for a note saved into the folder to be lost in: the note is either in it
+   * before the call, which then refuses, or it has nowhere to land after.
+   * Never `rm`, and never the trash, which would carry anything inside away
+   * with it (docs/design.md, "Folders").
+   */
+  async removeFolder(path: string): Promise<boolean> {
+    this.invalidateListing();
+    const full = await this.absolute(path);
+    await this.insideForReal(full);
+    try {
+      const at = await lstat(full);
+      // A file or a link at the name is not a folder this can remove.
+      if (!at.isDirectory()) return false;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return true;
+      throw err;
+    }
+    await midRemoveFolder.pause(full);
+    try {
+      await rmdir(full);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return true;
+      // Linux answers ENOTEMPTY, and POSIX allows EEXIST for the same thing.
+      if (code === "ENOTEMPTY" || code === "EEXIST") return false;
+      throw err;
+    }
+    // The folder's own entries were owed a flush by the writes that made
+    // them, and there is nothing left to open and sync: what is owed now is
+    // its parent, which lost an entry.
+    for (const owed of this.unflushed) {
+      if (owed === full || owed.startsWith(`${full}${sep}`)) this.unflushed.delete(owed);
+    }
+    this.unflushed.add(dirname(full));
+    return true;
   }
 
   /**

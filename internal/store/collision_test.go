@@ -247,9 +247,22 @@ func agreeOnRandomHistory(t *testing.T, seed int64, randomPath func(*rand.Rand) 
 		case len(live) > 0:
 			victim := live[rng.Intn(len(live))]
 			base, _ := h.CurrentUID("v1", victim.Path)
-			if _, err := h.AppendCurrent("v1", Entry{Path: victim.Path, Deleted: true, MTime: 1},
-				base, 0); err != nil {
+			// A folder goes only once nothing live is in it (ErrFolderNotEmpty),
+			// which the live set this step read says by itself.
+			holding := ""
+			for _, l := range live {
+				if strings.HasPrefix(l.Path, victim.Path+"/") {
+					holding = l.Path
+					break
+				}
+			}
+			_, err := h.AppendCurrent("v1", Entry{Path: victim.Path, Deleted: true, MTime: 1}, base, 0)
+			switch {
+			case holding == "" && err != nil:
 				t.Fatalf("seed %d step %d: deleting %q: %v", seed, step, victim.Path, err)
+			case holding != "" && !errors.Is(err, ErrFolderNotEmpty):
+				t.Fatalf("seed %d step %d: deleting %q with %q live in it was answered %v",
+					seed, step, victim.Path, holding, err)
 			}
 			continue
 		default:

@@ -165,6 +165,28 @@ const giveBack: Scenario = {
   supersedes: true,
 };
 
+/**
+ * A folder another device deleted is removed here while somebody saves a note
+ * into it (docs/design.md, "Folders").
+ *
+ * The removal is `rmdir`, which the disk refuses for a folder holding
+ * anything, so there is no look beforehand for the save to land behind: the
+ * folder stays, with the note in it. Nothing of this device's own is in the
+ * folder, which is empty or it would not be being removed, so the
+ * competitor's note is the one version to look for.
+ */
+const emptied: Scenario = {
+  supersedes: true,
+  name: "a note is saved into a folder as it is removed",
+  setup: async (g) => {
+    await mkdir(join(g.dir, "Emptied"));
+  },
+  run: async (g) => {
+    await g.vault.removeFolder("Emptied");
+  },
+  interfere: async (g, token) => await g.save("Emptied/saved.md", `# saved\n\n${token}\n`),
+};
+
 export const SCENARIOS: readonly Scenario[] = [
   overwrite,
   remove,
@@ -172,4 +194,5 @@ export const SCENARIOS: readonly Scenario[] = [
   giveBack,
   collide,
   unplaceable,
+  emptied,
 ];

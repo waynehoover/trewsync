@@ -747,8 +747,9 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 		case errors.Is(err, ErrCollision):
 			return OpResult{}, refused(opID, OpCodeCollision, e.Path, 0, err)
 		case errors.Is(err, ErrStale):
-			// The checks above are writeEntry's own, so this is not reached;
-			// kept so that a change to one cannot become a commit.
+			// The base checks above are writeEntry's own, so this is reached
+			// only by a folder deletion with something live still in it
+			// (ErrFolderNotEmpty).
 			return OpResult{}, refused(opID, OpCodeStale, e.Path, head, err)
 		case errors.Is(err, ErrBadEntry), errors.Is(err, ErrUnknownVault):
 			return OpResult{}, refused(opID, OpCodeInternal, e.Path, 0, err)

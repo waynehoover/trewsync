@@ -165,6 +165,8 @@ The batch budget is **not** `size + 64` per entry. That is not an exact wire-mem
 
 **`resend` is an upload path.** It receives repair bodies through `readBodies` (`basalt:server/internal/server/session.go:2161`, esp. `:2209`); it is not a download handler and does not encode outgoing frames. PLAN M1 said otherwise and was wrong.
 
+**Settled 2026-09-23: folder deletions travel.** Protocol 7 never carried one, by a client rule rather than a wire one: a folder's files were deleted one by one and the folder entry stayed live, so a folder rename left the old name on every other device. A device now sends a folder's deletion, the same shape as a file's (`deleted: true`, `folder: false`, `base` the folder entry's uid), after the deletions and moves of everything in it have committed. The server refuses a deletion with `stale` while any live path lies beneath its path, judged against the state the earlier entries of the batch left, so a batch that deletes a folder's files ahead of the folder commits all of it; a rename's retirement of its source is not a deletion and is not asked, which keeps a case-only folder rename moving one entry at a time (collision rule 1). Why refuse rather than accept and let a receiver put the folder back is in `docs/design.md`, "Folders". A receiving device removes the folder only if it is empty there, and puts it back (a folder `put` based on the deletion's uid) when something keeps it. `deleted` leaves out a deletion whose previous version was a folder entry. Nothing else on the wire changes, and a client that never sends folder deletions is unaffected.
+
 ## Devices and invites
 
 ```text
@@ -201,7 +203,7 @@ The batch budget is **not** `size + 64` per entry. That is not an exact wire-mem
 | `badchunk` | invalid name, undecodable frame, or hash mismatch | no | ends mid-upload, else rejects |
 | `badpath` | path refused by the rules above | no | rejects the entry |
 | `collision` | another live path has the same folded key (PLAN §4.1) | no | rejects the entry |
-| `stale` | target or rename source changed | no | keeps the session |
+| `stale` | target or rename source changed, or a folder deletion with a live path beneath it | no | keeps the session |
 | `badentry` | invalid entry, including `size ≠ Σ chunks` | no | rejects |
 | `badname` | invalid vault or device name | no | ends at hello, else rejects |
 | `toolarge` | limit exceeded | no | ends if framing cannot continue |
