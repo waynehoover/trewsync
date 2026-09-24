@@ -41,7 +41,9 @@ import { base64urlDecode, chunkName, isChunkName } from "./digest.ts";
 import { FrameError, decodeFrame, encodeFrame } from "./frame.ts";
 
 /**
- * The protocol version this client speaks. A mismatch is refused, not negotiated.
+ * The protocol version this client speaks, and the only one: its hello asks
+ * for it, a server answers in the version asked for or refuses the hello, and
+ * a `ready` in any other version is refused here.
  *
  * Version 2 of TrewSync's protocol (plan/protocol.md): version 1, which is
  * Basalt's protocol 7 with the encryption taken out, and undo (`undo`, and the
@@ -2329,23 +2331,6 @@ export class Transport {
   }
 
   /**
-   * Changes this device's own label in the vault's device list.
-   *
-   * Only its own: there is no field naming a row, because the row is the one
-   * this session authenticated as. A device relabelling another would need a
-   * rule for who may relabel whom, and the only thing that wants one is tidying
-   * somebody else's list.
-   *
-   * The name is echoed back and checked against what was sent, for the reason
-   * every other reply here is checked: the server is the authority on what the
-   * device list says, and a client that believed its own request would not
-   * notice a server that stored something else.
-   *
-   * Nothing about the vault's content moves. No uid is spent, no entry is
-   * written, and a pass running on another device is unaffected; that device
-   * sees the new label the next time it lists.
-   */
-  /**
    * Undoes one operation of the vault (protocol 2; plan/protocol.md, "Undo
    * (protocol 2)"), by the id a history entry's `op` names.
    *
@@ -2437,6 +2422,23 @@ export class Transport {
     };
   }
 
+  /**
+   * Changes this device's own label in the vault's device list.
+   *
+   * Only its own: there is no field naming a row, because the row is the one
+   * this session authenticated as. A device relabelling another would need a
+   * rule for who may relabel whom, and the only thing that wants one is tidying
+   * somebody else's list.
+   *
+   * The name is echoed back and checked against what was sent, for the reason
+   * every other reply here is checked: the server is the authority on what the
+   * device list says, and a client that believed its own request would not
+   * notice a server that stored something else.
+   *
+   * Nothing about the vault's content moves. No uid is spent, no entry is
+   * written, and a pass running on another device is unaffected; that device
+   * sees the new label the next time it lists.
+   */
   async rename(name: string): Promise<string> {
     const reply = await this.request({ op: "rename", name }, "renamed");
     if (reply["res"] !== "renamed") {
@@ -2625,8 +2627,8 @@ export function checkName(what: "vault" | "device", name: string): void {
  * A server that does not speak this client's protocol refuses the hello, and
  * the refusal arrives here as the close reason. Its message names the server's
  * range and version; this adds the client's version and the one instruction
- * that follows from the upgrade order, which is the server first. Kept against
- * the next version, not for any version that exists.
+ * that follows from the upgrade order, which is the server first: a server of
+ * protocol 1 meeting this client of protocol 2 is the case it is for.
  */
 function protoRefusal(err: unknown): unknown {
   if (err instanceof ProtocolError && err.code === "proto") {

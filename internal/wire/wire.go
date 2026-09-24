@@ -360,10 +360,10 @@ func (in In) Entry(device string) store.Entry {
 // and a different one here means its cursor belongs to a history that may
 // have been replaced; see In.Epoch for what the server does about that.
 //
-// Proto is the version this session speaks and MinProto the oldest this server
-// answers. Both are wire.Proto today, and they are sent anyway so a puzzled
-// client can name both ends in its error, and so the next protocol bump has
-// something to negotiate with.
+// Proto is the version this session speaks, which is the one its hello asked
+// for, and MinProto the oldest this server answers (wire.MinProto). A client
+// holds the first to its own version and names both ends in its error when
+// they differ.
 type Ready struct {
 	Res           string `json:"res"` // "ready"
 	ID            int64  `json:"id,omitempty"`

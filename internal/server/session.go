@@ -721,8 +721,8 @@ func (s *Session) dispatch(m wire.In, frameLen int) error {
 func (s *Session) handleHello(m wire.In) error {
 	// Version before credentials: refusing on proto is not a security answer
 	// and a client on the wrong version deserves to be told so plainly. The
-	// range is one version wide today and the check is written as a range on
-	// purpose; see wire.Proto.
+	// range is 1 to 2, and the session is answered in the version its hello
+	// asked for; see wire.Proto.
 	//
 	// Both numbers and nothing else. Nothing has authenticated yet, so this
 	// refusal is what anyone on the internet gets for one JSON frame, and it
