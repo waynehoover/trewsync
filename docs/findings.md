@@ -235,12 +235,12 @@ the referenced logo is unchanged.
 
 | Defect | Result after the fix | Regression coverage |
 |---|---|---|
-| A root credential retired during authentication could keep a registrar session. | Publication is followed by a credential recheck, closing the gap around rotation. | [release_review_test.go](../server/internal/server/release_review_test.go): rotation before registrar publication. |
-| Rotation and asynchronous logging read unfinished session identity. | Both read identity only after authentication publishes it under the session mutex. | [release_review_test.go](../server/internal/server/release_review_test.go): unpublished handshake and connection-failure races. |
-| Large invite TTLs overflowed before the expiry cap applied. | Milliseconds are clamped before duration conversion. | [release_review_test.go](../server/internal/server/release_review_test.go): overflowing positive TTL. |
-| SQLite interpreted a `?` in the data path as URI syntax. | Filesystem paths are encoded before connection options are added. | [path_test.go](../server/internal/store/path_test.go): special characters remain in the real database path. |
-| Read-only inspection recreated missing chunk directories. | Inspection refuses missing storage without creating it. | [open_test.go](../server/internal/store/open_test.go): missing chunk storage remains absent. |
-| Repair applied the plaintext file limit to encrypted chunk bodies. | Repair uses the ciphertext chunk limit, allowing valid repairs under a small file ceiling. | [resend_test.go](../server/internal/server/resend_test.go): exact repaired bytes and unchanged history. |
+| A root credential retired during authentication could keep a registrar session. | Publication is followed by a credential recheck, closing the gap around rotation. | [release_review_test.go](../internal/server/release_review_test.go): rotation before registrar publication. |
+| Rotation and asynchronous logging read unfinished session identity. | Both read identity only after authentication publishes it under the session mutex. | [release_review_test.go](../internal/server/release_review_test.go): unpublished handshake and connection-failure races. |
+| Large invite TTLs overflowed before the expiry cap applied. | Milliseconds are clamped before duration conversion. | [release_review_test.go](../internal/server/release_review_test.go): overflowing positive TTL. |
+| SQLite interpreted a `?` in the data path as URI syntax. | Filesystem paths are encoded before connection options are added. | [path_test.go](../internal/store/path_test.go): special characters remain in the real database path. |
+| Read-only inspection recreated missing chunk directories. | Inspection refuses missing storage without creating it. | [open_test.go](../internal/store/open_test.go): missing chunk storage remains absent. |
+| Repair applied the plaintext file limit to encrypted chunk bodies. | Repair uses the ciphertext chunk limit, allowing valid repairs under a small file ceiling. | [resend_test.go](../internal/server/resend_test.go): exact repaired bytes and unchanged history. |
 
 ### Verification scope
 
