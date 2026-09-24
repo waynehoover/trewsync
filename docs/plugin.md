@@ -7,7 +7,9 @@ earlier versions from inside Obsidian. Start with a
 [configured server](server.md) and Obsidian **1.7.2 or newer**.
 
 Use a local vault on macOS, Linux, or Android. iOS is untested; Windows is not
-supported. Back up an existing vault before pairing, and disable other sync
+supported. The plugin pairs on both, and says so in its panel for as long as
+it runs; the [platform table](../README.md#platforms) says what that means.
+Back up an existing vault before pairing, and disable other sync
 services for that vault. Each device should have its own local copy.
 
 ## Install
@@ -184,7 +186,7 @@ Restoring also tries to upload the copy to the server. Other devices receive
 it when they next sync.
 
 **Undo this change** appears on a version an agent wrote through the server's
-MCP endpoint, and on one an undo wrote. Unlike Restore, it replaces: it puts
+[MCP endpoint](agent.md), and on one an undo wrote. Unlike Restore, it replaces: it puts
 back what that operation changed, in every note it changed, as it was before,
 and every device receives the result. The panel names who wrote the version:
 the agent by its token's label, an undo on the server, or an undo from a

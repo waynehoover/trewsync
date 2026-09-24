@@ -3,9 +3,9 @@
 [Documentation](index.md) · [Get started](server.md)
 
 Choose TrewSync if you want to sync a personal Obsidian vault through your own
-server, with version history and a small plugin interface, and you are content
-for that server to read your notes. You run one server and add your devices
-with invites.
+server, with version history, and an agent that reads and edits the same notes
+through that server, and you are content for the server to read your notes.
+You run one server and add your devices with invites.
 
 The biggest choice is how much you want to manage yourself.
 
@@ -16,7 +16,8 @@ The biggest choice is how much you want to manage yourself.
 | Hosting | Your TrewSync server | Managed by Obsidian | Your chosen backend, including CouchDB or S3-compatible storage |
 | Setup | Run the server, install the plugin manually, pair devices | Subscribe and set up Sync in Obsidian | Install the plugin and configure a supported backend |
 | File scope | Notes and attachments | Notes, attachments, and configurable vault settings | Notes and attachments, with options for settings, themes, and plugins |
-| Encryption | None end to end: your server holds notes in plaintext; TLS protects them in transit | End-to-end encryption available and enabled by default for new vaults | End-to-end encryption available |
+| End-to-end encryption | **None.** Your server holds notes and their history in plaintext; TLS protects them in transit | Available, and on by default for new vaults | Available |
+| Built-in agent | An MCP endpoint in the server: read tools with any token; exact edits, moves and tag changes with a write token, each recorded and undoable | None built in | None built in |
 | Cost model | Free MIT software; you cover hosting and maintenance | Subscription | Open-source software; hosting costs depend on your setup |
 
 Obsidian's [Sync overview](https://obsidian.md/sync),
@@ -24,7 +25,9 @@ Obsidian's [Sync overview](https://obsidian.md/sync),
 [settings guide](https://obsidian.md/help/sync/settings), and the
 [LiveSync documentation](https://github.com/vrtmrz/obsidian-livesync) describe
 those options. Comparison checked September 10, 2026; see their documentation
-for current plans and features.
+for current plans and features. The built-in agent row was added on
+September 24, 2026 without re-checking those pages; check them before relying
+on it.
 
 ## What you get with TrewSync
 
@@ -41,6 +44,14 @@ ones. LiveSync also uses chunking; it is not unique to TrewSync.
 restore a copy. When edits cannot be merged, TrewSync keeps both versions for you
 to review. History stays until you explicitly purge it on the server.
 
+**An agent on the same notes.** The server's MCP endpoint lets an agent such
+as Claude Code read, search and compare versions of every note, and with a
+write token edit them. Its edits are ordinary versions: history keeps what they
+replaced and you can undo them. This is only possible because the server reads
+your notes. An MCP server that reads a local vault folder works with any sync
+service, TrewSync's included, but it is a second writer beside the sync and
+has none of the server's history or undo.
+
 **A focused setup.** One server per vault, no fixed device limit, and a panel for
 sync and recovery. There is no database service to install alongside TrewSync.
 
@@ -51,7 +62,9 @@ sync and recovery. There is no database service to install alongside TrewSync.
 - **Consider LiveSync if you want storage choices or configuration sync.** It
   offers a broader set of backends and plugin features.
 - **Choose either of those if the server must not read your notes.** Both
-  offer end-to-end encryption; TrewSync does not.
+  offer end-to-end encryption; TrewSync does not, and its agent endpoint,
+  once a token exists, sends what the agent reads to the agent's model
+  provider.
 - **Try TrewSync if you already run a homelab and want a focused personal sync
   service.** Be comfortable maintaining it and keeping independent backups.
 

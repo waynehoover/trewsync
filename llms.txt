@@ -1,12 +1,15 @@
 # TrewSync
 
-> Self-hosted vault sync with full version history, on a server you run.
+> Self-hosted Obsidian sync with full version history and a built-in agent endpoint, on a server you run.
 
-TrewSync syncs notes and attachments through a server the user controls. The server
-holds notes and their history in plaintext; there is no end-to-end encryption.
-The supported client environment is macOS, Linux, and Android with local
-storage; Android sync runs in the foreground. The CLI is experimental. Settings
-and plugins do not sync.
+TrewSync syncs notes and attachments through a server the user controls. The
+server holds notes and their history in plaintext; there is no end-to-end
+encryption. With `-mcp` it also serves an MCP endpoint at `/mcp`, where an
+agent holding a token reads the whole vault and, with a write token, makes
+exact, recorded, undoable edits; what the agent reads reaches its model
+provider. The supported client environment is macOS, Linux, and Android with
+local storage; Android sync runs in the foreground. The CLI is experimental.
+Settings and plugins do not sync.
 
 For installation requests, start with the agent runbook. Follow linked references
 only as needed. The URLs below point to Markdown on the main branch; use matching
@@ -14,19 +17,21 @@ release documentation and release notes when installed behavior differs.
 
 ## Install and use
 
-- [Agent installation runbook](https://raw.githubusercontent.com/waynehoover/trew/main/llm.md): Set up the server, secure connection, plugin, pairing, and verification.
+- [Agent installation runbook](https://raw.githubusercontent.com/waynehoover/trew/main/llm.md): Set up the server, secure connection, plugin, pairing, verification, and optionally the agent endpoint.
 - [Server setup](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server.md): Docker, binaries, TLS, and upgrades.
-- [Obsidian plugin](https://raw.githubusercontent.com/waynehoover/trew/main/docs/plugin.md): Pairing, status, history, and recovery.
-- [CLI guide](https://raw.githubusercontent.com/waynehoover/trew/main/client/README.md): Optional headless mirror and automation.
-- [Security and privacy](https://raw.githubusercontent.com/waynehoover/trew/main/docs/security.md): What the server reads, devices and invites, revocation, and backups.
+- [Obsidian plugin](https://raw.githubusercontent.com/waynehoover/trew/main/docs/plugin.md): Pairing, status, history, undo, and recovery.
+- [Connect an agent](https://raw.githubusercontent.com/waynehoover/trew/main/docs/agent.md): The MCP endpoint, tokens and scopes, the tools, writing safely, undo, and the untrusted-content envelope.
+- [Command-line client](https://raw.githubusercontent.com/waynehoover/trew/main/docs/client.md): Optional headless mirror and automation.
+- [Security and privacy](https://raw.githubusercontent.com/waynehoover/trew/main/docs/security.md): What the server reads, devices and invites, agent tokens, revocation, and backups.
 - [Server maintenance](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server-operations.md): Backup, restore, repair, and purge.
 
 ## Reference
 
-- [Server command reference](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server-reference.md): Flags, limits, and health checks.
+- [Server command reference](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server-reference.md): Flags, limits, audit, undo, and health checks.
 - [CLI reference](https://raw.githubusercontent.com/waynehoover/trew/main/docs/cli-reference.md): Commands, flags, and outcomes.
 
 ## Optional
 
 - [Product comparison](https://raw.githubusercontent.com/waynehoover/trew/main/docs/compared.md): Which sync option fits the user's needs.
-- [Developer documentation](https://raw.githubusercontent.com/waynehoover/trew/main/docs/development.md): Design, protocol, measurements, and review history.
+- [Design and threat model](https://raw.githubusercontent.com/waynehoover/trew/main/docs/design.md): Durability rules, conflicts, folders, and the agent endpoint's principles.
+- [Developer documentation](https://raw.githubusercontent.com/waynehoover/trew/main/docs/development.md): Protocol, measurements, and review history.

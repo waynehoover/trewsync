@@ -6,8 +6,8 @@ TrewSync is designed for one person's trusted devices and a server they control.
 **The server can read your notes.** It stores their contents, their filenames
 and every earlier version in plaintext. That is deliberate: it is what lets the
 server check everything it holds, hand a note back with nothing but the server
-itself (`trewd cat`), and host the planned built-in agent that reads and edits
-the same notes. There is no end-to-end encryption. If you need a server that
+itself (`trewd cat`), and host the built-in agent endpoint that reads and
+edits the same notes. There is no end-to-end encryption. If you need a server that
 cannot read what it stores, TrewSync is the wrong tool.
 
 ## What the server holds
@@ -92,7 +92,34 @@ restore.
   do not trust. The CLI's read-only mode controls that client's sync behavior;
   it is not a restricted server credential.
 
-## HTTP access for an agent
+## An agent's token
+
+A token from `trewd mcp-token` opens the server's MCP endpoint to an agent.
+[Connect an agent](agent.md) is the full guide; what matters for privacy:
+
+- **It reads the whole vault.** There is no per-note or per-folder read
+  control. A write token can also change any note outside the dot-prefixed
+  folders.
+- **What the agent reads reaches its model provider.** Every note, search
+  result and diff a tool returns goes to the agent, and from there to whoever
+  runs its model. Revoking the token cannot take back what was already read.
+- **The token is the only lock on `/mcp`.** Keep the endpoint behind Tailscale
+  or an identity-aware proxy, never on an open port. The server stores only
+  the token's SHA-256, shows it once, and records how often and when each
+  token was used (`trewd mcp-token -list`).
+- **Tokens expire**, after 90 days by default. Revoke one with
+  `trewd mcp-token -revoke ID`; a request it has in flight is refused before
+  it is answered.
+- **Read scope is the default.** A write token is made only with
+  `-scope write`, and every write it makes is recorded with its label, keeps
+  what it replaced for at least 30 days, and can be undone (`trewd audit`,
+  `trewd undo`).
+- **Notes can carry instructions aimed at the agent.** Results keep note text
+  apart from the server's own facts and say it is untrusted, but whether the
+  agent obeys text it reads is up to the agent. Give write access only to an
+  agent you have watched work.
+
+## HTTP access for an agent on a headless copy
 
 `trew mcp --listen` exposes readable notes from a paired device. The MCP client
 and any model service it uses can receive plaintext note content. Whoever
@@ -128,7 +155,7 @@ old-key operations are cancelled. An admitted edit still finishes its preservati
 transaction. Rotation cannot retract notes already received by a client or model.
 Read any uncertain result before trying another edit.
 
-The [service example](../client/README.md#connect-over-http) describes the intended
+The [service example](client.md#connect-over-http) describes the intended
 Tailscale arrangement. Real Tailscale, Cloudflare and phone-client acceptance
 have not been exercised for this release.
 

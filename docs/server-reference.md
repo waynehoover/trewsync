@@ -75,8 +75,9 @@ restart while it is still outstanding leaves the file alone.
 read tools over the notes the server stores: `vault_status`, `list_notes`,
 `read_note`, `search_notes`, `note_history`, `deleted_notes`,
 `compare_versions`, `delivery_status` and `lookup_operation`. A token minted
-with `-scope write` also gets the write tools, below. A client authenticates
-with `Authorization: Bearer <token>`:
+with `-scope write` also gets the write tools, below. [Connect an agent](agent.md)
+is the guide to setting a client up. A client authenticates with
+`Authorization: Bearer <token>`:
 
 ```bash
 trewd mcp-token -label "Claude on Mac"                   # prints the token once

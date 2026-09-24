@@ -25,7 +25,7 @@ From a copy of this repository:
 
 ```bash
 git clone https://github.com/waynehoover/trew.git
-cd trew-sync
+cd trew
 docker compose up -d
 docker compose logs trew
 ```
@@ -200,6 +200,15 @@ With a binary installation, use `trewd health` and
 Before relying on the service, set up
 [backups and a restore rehearsal](server-operations.md#backup). History grows
 until you explicitly purge it; there is no automatic retention policy.
+
+## Let an agent in
+
+The server can also serve an MCP endpoint at `/mcp` on the same port, for an
+agent such as Claude Code to read and, with a write token, edit the notes. It
+is off until you start `serve` with `-mcp`, and it refuses every request until
+you make a token with `trewd mcp-token`. A token reads the whole vault, and
+what the agent reads reaches its model provider, so read
+[Connect an agent](agent.md) before making one.
 
 ## Upgrade order
 

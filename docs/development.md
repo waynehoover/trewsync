@@ -3,8 +3,9 @@
 [Documentation](index.md)
 
 This section is for contributors and reviewers. For installation and everyday
-use, start with the [server](server.md), [plugin](plugin.md), or
-[CLI](../client/README.md) guide.
+use, start with the [server](server.md), [plugin](plugin.md), [agent](agent.md)
+or [CLI](client.md) guide. [CONTRIBUTING.md](../CONTRIBUTING.md) says what a
+change needs, and [SECURITY.md](../SECURITY.md) how to report a vulnerability.
 
 ## Technical reference
 
@@ -85,6 +86,10 @@ rapid edits, and incoming updates, using the production timers and a local test
 server. Its in-memory adapters do not measure a phone's filesystem or network.
 
 ## MCP verification
+
+This section is the headless client's own MCP server, `trew mcp`. The server's
+endpoint is covered under [The MCP endpoint (M4)](#the-mcp-endpoint-m4) and
+the sections after it.
 
 The stdio and HTTP implementations use the pinned official MCP SDK 2.0.0. Protocol tests
 exercise its legacy `2025-11-25` and modern `2026-07-28` modes, cancellation and
@@ -388,6 +393,86 @@ added or removed, change this table in the same commit.
 That was 56 warnings, and no errors, at the commit that added the gate. Writing
 the name TrewSync added nine of the sentence-case kind, so it is 65.
 
+### Submitting to the community directory
+
+The plugin is installed by hand until it is listed. The directory no longer
+takes pull requests to `obsidianmd/obsidian-releases` (that repository is now a
+mirror the directory's bot updates); a plugin is added at
+[community.obsidian.md](https://community.obsidian.md), and the directory
+reviews it automatically from the repository (plan/research/obsyncian.md,
+section 5). This is the flow, written from that investigation and not yet
+walked for TrewSync:
+
+1. **Settle what is permanent.** The id `trew-sync` cannot change once listed,
+   and the display name TrewSync is what the directory's fuzzy trademark check
+   reads. `manifest.json`'s `id`, `name` and `description` must not contain
+   "obsidian" or "plugin"; the description must be 10 to 250 characters, start
+   with a capital, end with a period, and use only letters, digits, spaces and
+   `.,!?'"-`. The current description passes.
+2. **Make the manifest and the release agree.** The directory reads
+   `manifest.json` at the head of the default branch and installs from the
+   GitHub release whose tag is exactly its `version`, with no `v`, carrying
+   `main.js`, `manifest.json` and `styles.css`. A manifest version with no such
+   release gets a plugin de-listed, which is what happened to Obsyncian; so
+   bump `manifest.json` and `versions.json` only in the commit that is
+   released, and publish the release before the bump reaches the default
+   branch. `versions.json` maps each plugin version to its `minAppVersion`.
+3. **Pass the review locally.** `bun run lint` is the directory's own
+   `recommended` config ([above](#the-community-directory-review)), and fails
+   on any error. An error makes that release uninstallable; warnings pass,
+   and each accepted one has its reason in the ledger.
+4. **Keep the README's [Disclosures](../README.md#disclosures) current.** The
+   developer policies require disclosing payment, accounts, network use,
+   access to files outside the vault, ads, server-side telemetry and closed
+   source. Ours says there is none of those but network use, which is only the
+   server the user pairs with, and says in the same block that the server
+   stores notes in plaintext and that the MCP endpoint exposes them to an
+   agent's model provider. Client-side telemetry and a plugin that updates
+   itself are forbidden outright, and TrewSync has neither.
+5. **Submit.** Sign in at community.obsidian.md, link the GitHub account that
+   owns the repository, and add the plugin by repository. Read the automated
+   review's findings for the first release before announcing it.
+6. **Every release is reviewed again.** A later release can be refused for an
+   error a new version of the rules finds, so the lint pin moves deliberately.
+
+What is not settled: whether the directory's review reads the repository at
+the tag or at the default branch for anything beyond `manifest.json`, and what
+a human reviewer asks about the adapter-level preserving writes. Record both
+here when the first submission answers them.
+
+## The docs site
+
+The documentation is Markdown in this repository, readable on GitHub as it is.
+`scripts/docs-site` turns it into a small static site that versions with the
+code, because it is built from the same checkout:
+
+```bash
+go run ./scripts/docs-site -out /tmp/trew-docs
+```
+
+It renders `README.md` (as the site's front page), `CHANGELOG.md`,
+`CONTRIBUTING.md`, `SECURITY.md`, `llm.md` and every page under `docs/` with
+goldmark, the Markdown parser the server already depends on, so the site adds
+no dependency. Links between pages are rewritten from `.md` to `.html`, and
+`docs/assets` is copied beside them, so the screenshots load. A link to a
+file the site does not publish, such as `compose.yaml` or `plan/`, goes to the
+file on GitHub at the same ref (`-ref`, `main` by default). The pages are
+plain HTML with one small stylesheet that follows the system's light or dark
+setting.
+
+`go test ./scripts/docs-site` builds the site into a temporary directory and
+fails on any relative link, image included, that points at a file which does
+not exist, in the Markdown and in the built site alike. It runs in
+`scripts/check.sh` with the rest of `go test ./...`, so a moved screenshot or
+a renamed page fails the gate.
+
+**Publishing, not done yet.** The site would be published from the same tag
+as the server binary, by a job in `release.yml` that runs after the image is
+promoted: build with `-ref` set to the tag, upload the directory with
+`actions/upload-pages-artifact`, and deploy it with `actions/deploy-pages` to
+GitHub Pages, each action pinned to a commit as `scripts/actions-pinned.sh`
+requires. Until that job exists, the Markdown on GitHub is the documentation.
+
 ## Performance work
 
 From `client/`, use `bun run bench`, `bun run bench:sync`, `bun run scale`, and
@@ -411,7 +496,10 @@ Every GitHub release must include a short user-facing changelog: what is new
 or fixed since that component's previous release, upgrade steps, and known
 issues. Include CLI changes in the plugin notes when they ship together.
 Publish the notes with `--notes-file` and read the release body back to verify
-it. GitHub is the home for changelogs; do not duplicate them in repository docs.
+it. [CHANGELOG.md](../CHANGELOG.md) collects the same notes for all three
+components in one place: add a line under **Unreleased** with a user-visible
+change, and at a release move those lines under the release's heading and use
+them as its notes.
 
 To check an asset's build provenance:
 
@@ -422,8 +510,9 @@ gh attestation verify main.js --repo waynehoover/trew
 An attestation identifies the build source. It is not a security audit or proof
 that the application is defect-free.
 
-The current source speaks protocol 1, TrewSync's own; Basalt's releases speak
-protocol 7, and the two refuse each other at hello, naming both numbers. Build
+The current server speaks protocols 1 and 2, TrewSync's own, and its clients
+speak 2; Basalt's releases speak protocol 7, and Basalt and TrewSync refuse
+each other at hello, naming both numbers. Build
 the server and clients together for local testing. No compatibility fallback is
 provided. Tests exercise preserved bytes across concurrent writers, not just
 final agreement.

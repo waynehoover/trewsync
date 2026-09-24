@@ -10,7 +10,9 @@ disk and its backups can read every note. Tell the user this before installing
 if they have not already chosen TrewSync knowing it. The plugin runs on macOS,
 Linux, and Android with local vault storage. iOS is untested; Windows is
 unsupported. Android sync requires Obsidian in the foreground. The CLI is
-experimental and optional.
+experimental and optional. The server can also serve an MCP endpoint for an
+agent; a token for it reads the whole vault and what the agent reads reaches
+its model provider, so set it up only when the user asks for it.
 
 Repository: <https://github.com/waynehoover/trew>.
 Use the [server setup](docs/server.md), [plugin guide](docs/plugin.md), and
@@ -56,7 +58,7 @@ the user requested a development build. Release channels have different tags:
 | Component | Tag / artifact |
 |---|---|
 | Obsidian plugin | Bare `X.Y.Z`; `main.js`, `manifest.json`, `styles.css`, and `SHA256SUMS`. |
-| Server | `server/vX.Y.Z`; container image or `trew-OS-ARCH` binary. |
+| Server | `server/vX.Y.Z`; container image or `trewd-OS-ARCH` binary. |
 | CLI, if requested | `trew-sync` on npm; source tags use `cli/vX.Y.Z`. |
 
 List releases and choose the newest compatible stable plugin and server. Do not
@@ -96,7 +98,7 @@ Clone the official repository into a new dedicated deployment directory:
 
 ```bash
 git clone https://github.com/waynehoover/trew.git
-cd trew-sync
+cd trew
 docker compose config
 ```
 
@@ -314,52 +316,55 @@ repeated approvals for routine work already authorized by the user.
 
 Only install the CLI if the user also wants a copy on a machine without
 Obsidian. It needs Node 22 or newer and its **own local directory**. Follow the
-[CLI guide](client/README.md), pair with `--read-only` for a mirror, and supply
+[CLI guide](docs/client.md), pair with `--read-only` for a mirror, and supply
 an invite through `--key-file` or standard input. Do not run it in a vault the
 plugin is already syncing. Read-only mode is local behavior, not a server access
 restriction.
 
-## Optional: an MCP host
+## Optional: an agent on the server
 
-When the user wants an agent to work with their notes, pair a dedicated headless
-directory first, using a separate invite. Do not use the plugin's live vault or
-copy its credentials. Configure the host with the absolute Node 22+ executable,
-absolute `trew.mjs` path and `mcp --dir /absolute/path/to/agent-vault`, following
-the [CLI host example](client/README.md#connect-a-local-agent). One host owns the
-directory's lock and sync loop; stop any existing watcher first. Use `--read-only`
-when edits are outside the authorized scope. It omits mutations while incoming
-sync still changes the local copy.
+Only when the user wants an agent to read or edit their notes. Tell them first,
+in plain words, that a token reads the whole vault and that everything the
+agent reads reaches its model provider; record that they agreed. Follow
+[Connect an agent](docs/agent.md).
 
-Verify initialization and local reads, then wait for `sync_status.writeReady`
-before an authorized edit. Supply the base from `read_note` and exact unique
-old-to-new spans; append adds only the supplied text, with no automatic newline.
-Read the before-image and compare unrelated bytes afterward. Follow pagination
-and inspect skipped or incomplete results. Local `applied`/`durable` fields do
-not prove delivery; read the change and backup from another device if delivery
-is part of the task. On a lost response or stale base, reread and reconsider,
-never blindly retry with a fresh base. Follow the
-[recovery example](docs/cli-reference.md#inspect-and-recover) to inspect a backup
-or server version and recover it to a new path. Keep recovery copies for the owner.
+1. Start the server with `-mcp`. Under Compose, add
+   `command: ["serve", "-addr", "0.0.0.0:3003", "-mcp"]` to the service,
+   preserving any flags already there (the file-size limit in particular),
+   and run `docker compose up -d`. Check the log says it is serving MCP.
+2. Make a **read** token into a private file, never the conversation:
+   `trewd mcp-token -label "NAME" -key-out /private/path/agent.key` on a binary
+   installation, or under Compose
+   `(umask 077 && docker compose exec -T trew /trewd mcp-token -label "NAME" > /private/path/agent-token.txt)`.
+   The label is the author name devices will see on the agent's versions and
+   conflict copies, and cannot be changed. Make a write token (`-scope write`)
+   only when the user explicitly authorizes edits, as a separate token.
+3. Configure the client with the `https://` address of the endpoint, the
+   secure address from section 4 with `/mcp` appended, and the token as an
+   `Authorization: Bearer` header. For Claude Code, `claude mcp add --transport
+   http NAME URL --header "Authorization: Bearer TOKEN"`, reading the token from
+   the file rather than pasting it.
+4. Verify with `vault_status`, then `list_notes` and `read_note` on the test
+   note from section 7. For a write token, append a line to that test note
+   with `append_note` using the `uid` and `epoch` `read_note` returned, check
+   the line arrives on a device, then undo it with `undo_operation` and check
+   it is gone there too.
 
-For authorized HTTP access, follow the [service and proxy runbook](client/README.md#connect-over-http):
-issue `trew mcp-token --dir DIR --key-out /private/path/new-mcp.key` outside the
-vault, run `trew mcp --dir DIR --listen 127.0.0.1:3010`, and enable `--writable`
-only if edits are authorized and the device is writable. Put the token in the
-client's bearer-auth configuration, never in a note or model prompt. Tailscale
-Serve can publish the loopback listener; its TLS terminator sees plaintext notes.
-Every request still needs the token. Rotation uses `mcp-token` again; revocation
-uses `mcp-token --revoke`. Old-key queued work is cancelled when the change is
-observed, while admitted edits finish. The client must support a static bearer
-and reach the endpoint; OAuth is outside this release. Real Tailscale HTTPS,
-credential rotation and restart were verified with official SDK clients. Collie
-and a specific phone MCP client remain untested. If the phone just prompts an
-agent on the Mac, configure the Mac's MCP client and use stdio when it supports it.
+Report the token's label, scope and expiry, never the token. `trewd mcp-token
+-list` shows its use; `trewd mcp-token -revoke ID` ends it. `trewd audit`
+lists what a write token changed and `trewd undo OPID` reverses one change.
+
+The headless client also has its own MCP server, `trew mcp`, over a separately
+paired directory; use it only when the user asks for that arrangement, and
+follow the [CLI guide](docs/client.md#a-local-agent). Never point it at the
+plugin's live vault or copy the plugin's credentials.
 
 ## Working from development source
 
-This source tree speaks protocol 1, TrewSync's own. Basalt's releases speak its
-protocol 7, and the two refuse each other at the handshake, naming both
-numbers. For source builds, build the server and clients from the same
+This source tree's server speaks protocols 1 and 2, and its plugin and CLI
+speak protocol 2 (protocol 1 with undo); upgrade the server first. Basalt's
+releases speak its protocol 7, and Basalt and TrewSync refuse each other at
+the handshake, naming both numbers. For source builds, build the server and clients from the same
 checkout. Keep existing data and credentials, and verify the reported protocol
 after connecting. `trew preview --json` provides a read-only plan for CLI
 vaults.
