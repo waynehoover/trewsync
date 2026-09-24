@@ -91,6 +91,83 @@ whole-file fallback can also exceed an older phone's memory on large attachments
 The 64 MiB default was informed by desktop measurements, not a measured bound
 for every phone.
 
+## Folders
+
+A folder's deletion travels, and it never takes a file with it. Until
+2026-09-23 it did not travel at all, a rule inherited from Basalt: renaming
+`Projects Old` to `Projects New` left an empty `Projects Old` on every other
+device, and an empty folder deleted on one device stayed on the rest.
+
+The device that removes a folder it synced sends the folder's deletion at the
+end of the pass, after the deletions and moves of everything that was in it
+have committed, deepest folder first, and only while the server holds nothing
+live beneath it. Files still travel one by one, exactly as before.
+
+A device receiving a folder's deletion removes the folder at the end of its
+pass, once that pass's own deletions have landed, and only if the folder is
+empty on its disk at that moment. The headless client's removal is `rmdir`,
+which the kernel refuses for a directory holding anything. Neither Obsidian
+adapter can remove only an empty folder (read out of 1.13.7: desktop `rmdir`
+refuses a directory unless told to recurse, and mobile `rmdir` always
+recurses), so the plugin moves the folder to a hidden name, looks again there,
+and removes only what it has just seen to be empty; anything saved into it
+before the move is still in it, and the folder goes back. Nothing in a folder
+is deleted or trashed for the folder's sake.
+
+What is still in the folder decides what happens to it:
+
+- **Kept, and put back on the server**: a file this device has not sent or
+  has edited, a note written after the deletion, a folder inside it that
+  stays, and anything the listing never shows, such as a dot-prefixed file
+  (Finder's `.DS_Store` is one), a file this device ignores, or one two names
+  claim. The folder goes back as a live folder based on the deletion it
+  answers, and the device that deleted it creates it again.
+- **Waiting**: a file whose deletion this device has received and not yet
+  applied, and a synced, unchanged file whose server version is older than
+  the folder's deletion, whose own deletion is therefore still to come. The
+  folder is removed once they have gone.
+
+So a folder's deletion arriving before, with or after the deletions of its
+files, in one pass or across a reconnect, ends in the same place, and a folder
+deleted on one device while another writes a note into it ends with the note on
+every device and the folder live, whichever syncs first.
+
+**The server refuses a folder's deletion while anything live is beneath it**,
+as `stale` (`ErrFolderNotEmpty` in `internal/store/collision.go`). Accepting it
+and leaving the next device to put the folder back was the alternative, and
+it would leave histories in which a folder went while a note in it stayed. A
+device reading one cannot tell a note written in the race, which should keep
+the folder, from a file deletion still to come, which should let it go.
+Refused, a folder's deletion in the history always comes after everything in
+the folder has gone, so whatever a device finds in a deleted folder is either
+something it has not sent or something written afterwards, and both keep the
+folder. The deleting device reads what arrived and decides again, as it does
+for any stale write. A rename's retirement of its source is not a deletion and
+is not refused, which is what lets a case-only folder rename move its entry
+and its files one move at a time.
+
+A case-only folder rename still travels as a move (plan/protocol.md, "Paths",
+collision rule 1). On a disk that folds case the two spellings are one folder,
+so neither is read as a deletion there: nothing sends a deletion for either,
+and nothing removes the folder. On a disk that keeps case apart the old
+spelling is an empty folder of its own, and it goes.
+
+A folder another device put back after this one removed it is created again
+here. A read-only device sends no folder deletions and reports each as held
+back. The deletion review asks once, about the files a folder's deletion
+removes; the folder's own deletion adds no second question, and a device
+receiving it is not asked. The deleted-notes list leaves folders out: nothing
+in one can be restored, and every file that was in it is listed by its own
+deletion.
+
+**History from before the change is not migrated.** Folder entries left live
+by a removal under the old rule stay live on the server. A device that made
+such a removal and still has its record of the folder, which it keeps for as
+long as the server holds the folder live, sends the deletion on its first
+pass under the new rule; every other device then removes its copy only if it
+is empty there. A folder no device has that record of stays until someone
+deletes it again.
+
 ## Agent edits in the headless client
 
 The MCP process is a local author on each explicitly configured paired directory. Its writes

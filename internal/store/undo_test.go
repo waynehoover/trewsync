@@ -198,7 +198,7 @@ func TestAFolderFilledAfterThePlanRefusesTheUndoAtTheCommit(t *testing.T) {
 	before := h.footprint(t)
 	_, err = h.CommitOperation(h.operatorOp(plan))
 	oe := h.refusedWith(t, err, OpCodeNotEmpty, before)
-	if oe.Path != "a" || !errors.Is(err, ErrFolderNotEmpty) {
+	if oe.Path != "a" || !errors.Is(err, ErrFolderFilled) {
 		t.Fatalf("refused %v", err)
 	}
 	if got, _ := h.headBytes(t, "a/agent.md"); got != "the agent's" {

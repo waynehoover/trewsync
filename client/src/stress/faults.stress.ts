@@ -55,6 +55,7 @@ const REACHES: Record<string, readonly string[]> = {
     "cli/vault:replace.staged",
     "cli/vault:replace.nameFree",
   ],
+  "a note is saved into a folder as it is removed": ["cli/vault:removeFolder"],
   "a displaced version has nowhere to go": [
     "cli/vault:preserve.beforeClaim",
     "cli/vault:replace.staged",

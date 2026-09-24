@@ -594,9 +594,12 @@ var (
 	// ErrAlreadyUndone is an undo in place of an operation another undo in
 	// place has already compensated for.
 	ErrAlreadyUndone = errors.New("this operation has already been undone")
-	// ErrFolderNotEmpty is a folder deletion marked EmptyFolder whose folder
-	// still holds something live at the commit.
-	ErrFolderNotEmpty = errors.New("the folder is not empty")
+	// ErrFolderFilled is a folder deletion marked EmptyFolder whose folder
+	// still holds something live at the commit. Every deletion is refused
+	// then (ErrFolderNotEmpty, which is stale); an undo's is refused first,
+	// and as not_empty, because its answer is not a device's: asked again,
+	// the undo keeps the folder rather than reconcile anything.
+	ErrFolderFilled = errors.New("the folder is not empty")
 )
 
 // OpError is why an operation did not commit, or why nobody can say whether it
@@ -908,7 +911,7 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 			}
 			if refs > 1 {
 				return OpResult{}, refused(opID, OpCodeNotEmpty, e.Path, head, fmt.Errorf(
-					"%w: %d live paths are inside it", ErrFolderNotEmpty, refs-1))
+					"%w: %d live paths are inside it", ErrFolderFilled, refs-1))
 			}
 		}
 
@@ -918,8 +921,10 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 		case errors.Is(err, ErrCollision):
 			return OpResult{}, refused(opID, OpCodeCollision, e.Path, 0, err)
 		case errors.Is(err, ErrStale):
-			// The checks above are writeEntry's own, so this is not reached;
-			// kept so that a change to one cannot become a commit.
+			// The base checks above are writeEntry's own, so this is reached
+			// only by a folder deletion with something live still in it
+			// (ErrFolderNotEmpty), one not marked EmptyFolder: an undo's is
+			// refused above as not_empty.
 			return OpResult{}, refused(opID, OpCodeStale, e.Path, head, err)
 		case errors.Is(err, ErrBadEntry), errors.Is(err, ErrUnknownVault):
 			return OpResult{}, refused(opID, OpCodeInternal, e.Path, 0, err)

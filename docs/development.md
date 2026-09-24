@@ -608,9 +608,19 @@ Findings:
 4. The "Trew has stopped: this device was revoked" notice stayed on screen
    after re-pairing. Fixed: the notice is taken down when the state leaves
    that stop, by pairing again, unlinking or a recovery.
-5. Folder deletions do not travel (a deliberate rule inherited from Basalt,
-   `client/src/core/engine.ts`, "Folder deletions do not travel"): empty
-   folders deleted on the Mac stayed on the phone.
+5. Folder deletions did not travel (a deliberate rule inherited from Basalt):
+   empty folders deleted on the Mac stayed on the phone, and a folder renamed
+   on one device left its old name, empty, on the other. Changed on
+   2026-09-23 with the owner's approval (`docs/design.md`, "Folders"): the
+   deleting device sends the folder's deletion after its files', the server
+   refuses one while anything live is in the folder, and a receiving device
+   removes the folder only if it is empty there, putting it back when
+   something keeps it; no file is deleted or trashed for a folder's sake.
+   Covered by `client/src/core/folder-deletion.test.ts`,
+   `client/src/plugin/folders.test.ts`, `client/src/node/folders.test.ts`,
+   `internal/store/folder_deletion_test.go` and
+   `client/src/stress/folders.stress.ts`. Folders left behind by the old rule
+   are not migrated. Not yet repeated with real devices.
 6. Not TrewSync: a meeting-notes exporter on this Mac ran `obsidian create
    vault=NAME ...` with `vault=` after the command, which the CLI ignores,
    so it created an empty note in whichever vault was active (the test
