@@ -28,10 +28,12 @@ Two session types.
 ### Device session
 
 ```text
--> {op:"hello", id, proto:1, vault, deviceId, token, device, cursor, epoch?}
-<- {res:"ready", id, proto:1, minProto:1, serverVersion, epoch, cursor,
+-> {op:"hello", id, proto:2, vault, deviceId, token, device, cursor, epoch?}
+<- {res:"ready", id, proto:2, minProto:1, serverVersion, epoch, cursor,
     perFileMax, chunkMax, maxChunks, maxBatchBytes, maxFetchBytes}
 ```
+
+`proto` is 1 or 2, and `ready.proto` is the one the hello asked for (see [Undo (protocol 2)](#undo-protocol-2)); the clients of this tree ask for 2.
 
 `token` is the device's random 32-byte credential, unpadded base64url (43 characters). The server decodes it, refuses anything that is not exactly 32 bytes, and compares SHA-256 of the 32 raw bytes against `devices.auth_hash` in constant time. A `deviceId` starting with `mcp:` is refused with `auth`.
 
@@ -44,7 +46,7 @@ Two session types.
 ### Invite redemption
 
 ```text
--> {op:"hello", id, proto:1, vault, device, invite, deviceId, token}
+-> {op:"hello", id, proto:2, vault, device, invite, deviceId, token}
 <- {res:"redeemed", id, deviceId}
 ```
 

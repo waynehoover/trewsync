@@ -1097,6 +1097,74 @@ link index and without it. `injection_write_test.go` is task 11: poisoned
 text written through the tools is stored exactly and read back by the next
 session only under `untrusted_content`, normalised.
 
+### Undo (M5 task 7)
+
+PLAN.md section 4.5: a compensating operation, never a rollback. Four ways
+in, one store path.
+
+**The store** (`internal/store/undo.go`). `PlanUndo` reads an operation's
+paths from `op_entries`, each path's head now, the version the operation left
+and the before-image it pinned, and builds the operation that puts them back,
+outside the write lock. Every entry is based on the operation's output, so
+`CommitOperation` refuses the whole undo if any path moved since, and the plan
+names each such path, its head and the label that wrote it (`Changed`). The
+in-place undo writes in five passes, each before the next: folders the
+operation removed, checks of the folders the restores land in, notes put back
+and moves reversed (one entry with `prev`, so a move and its backlinks come
+back together), notes it created removed, and folders it created removed
+deepest first when nothing is left in them (`EmptyFolder`, refused at the
+commit as `not_empty` if one was filled meanwhile, before the server's own
+rule for every folder deletion would answer `stale`). A restore into a folder
+deleted since writes the note and no folder entry: a device makes the folder on
+disk for the note it writes, as it did before. The copy writes each
+before-image to `name (restored UID).md`, the plugin's name for a restore whose
+path is taken, and touches nothing. Schema 3 added `before_state` to
+`op_entries`, what a path held before the operation, since after a purge the
+uid alone cannot say whether it held a note; `migrate3_test.go` keeps every
+schema 2 row and sequence number through the rebuild.
+
+**Who is the actor.** An undo is an operation like an agent's write, recorded
+as `undo` or `undo_to_copy` with `undoes` naming its target, and an undo in
+place marks its target undone (`undoneBy`), so a second undo of it is refused
+and a redo (undoing the undo) is allowed. The operator is actor kind
+`operator`, id `operator`, label `trewd undo`, with no device row, so it is in
+no device list and no sync peer waits on it. A device's undo is kind `device`
+under its own id and name, its credential rechecked under the commit lock. An
+agent's is kind `mcp` under its token.
+
+**Who may undo what.** The operator and any device may undo any operation of
+the vault: the vault is one person's, and a device could write the same bytes
+back by hand. An agent may undo only its own (`UndoRequest.OnlyActor`), and
+another token's operation, a device's undo or the operator's is `not_found`
+to it, so text in a note cannot talk an agent into undoing someone else's
+work. `lookup_operation` matches kind as well as id for the same reason.
+
+**The ways in.** `trewd undo` goes through the control socket, or the store
+under the exclusive lock with no server running (`cmd/trewd/undo.go`).
+Protocol 2's `undo` serves a device (`internal/server/undo.go`), broadcasting
+the versions to every device, the asking one included, before the `undone`
+reply; a session of protocol 1 is answered as protocol 1 was, with `undo` an
+unknown op and history entries without `op`. `undo_operation` is the MCP tool
+(`internal/mcp/undo.go`). The plugin's history panel offers "Undo this change"
+on a version whose history entry names an operation; `Client.undo` settles
+first, so an edit on this device not yet sent refuses the undo as `stale`
+rather than being merged with it afterwards, and settles again so the undo's
+versions are on disk when it returns.
+
+**Tests.** `internal/store/undo_test.go`: each kind undone, a folder kept or
+filled at the commit, a person's edit refusing the whole undo with nothing
+written, a moved path refusing a move's undo, the copy and its second free
+name, undo twice refused, an undo undone, a purged before-image `gone`, a
+revoked device losing at the commit. `internal/mcp/undo_test.go`: every tool's
+operation undone to the exact former bytes in the store and on a device paired
+afterwards, the batch refusal and the copy, a retry replayed by its key, and
+an agent kept to its own operations. `internal/server/undo_test.go` and
+`cmd/trewd/undo_test.go` the wire and the command, and the protocol 1 session.
+`client/src/plugin/history.test.ts` the panel against the real server with
+`-mcp`: an agent's HTTP edit undone to its former bytes, a refusal and then
+the copy, and an unsent local edit refusing the undo; each was seen failing
+with the undo broken.
+
 ### Latent issues in the chunker
 
 Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,

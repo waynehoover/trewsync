@@ -183,8 +183,22 @@ occupied, the copy appears beside it, for example `Note (restored 42).md`.
 Restoring also tries to upload the copy to the server. Other devices receive
 it when they next sync.
 
+**Undo this change** appears on a version an agent wrote through the server's
+MCP endpoint, and on one an undo wrote. Unlike Restore, it replaces: it puts
+back what that operation changed, in every note it changed, as it was before,
+and every device receives the result. The panel names who wrote the version:
+the agent by its token's label, an undo on the server, or an undo from a
+device. This device's unsent changes are sent first. If any note the operation
+changed has been edited since, here or on a device that has synced the edit,
+nothing is changed; the panel says which note and who edited it, and offers **Keep both: write the earlier versions as
+copies**, which writes each earlier version beside its note, as
+`Note (restored 42).md`, and leaves everything else alone. An undo can itself
+be undone. A version already undone shows no undo button.
+
 History remains available until the server operator
-[purges it](server-operations.md#purge).
+[purges it](server-operations.md#purge). An agent's version keeps the note's
+earlier version for at least 30 days, whatever purge is asked to do; after
+that, undoing it may be refused because the earlier version is gone.
 
 ## Deleted notes
 

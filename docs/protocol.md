@@ -59,8 +59,8 @@ A hello opens one of two sessions: a device session, or an invite redemption.
 ### Device session
 
 ```text
--> {op:"hello", id, proto:1, vault, deviceId, token, device, cursor, epoch?}
-<- {res:"ready", id, proto:1, minProto:1, serverVersion, epoch, cursor,
+-> {op:"hello", id, proto:2, vault, deviceId, token, device, cursor, epoch?}
+<- {res:"ready", id, proto:2, minProto:1, serverVersion, epoch, cursor,
     perFileMax, chunkMax, maxChunks, maxBatchBytes, maxFetchBytes}
 ```
 
@@ -95,7 +95,7 @@ server** is the way out.
 ### Invite redemption
 
 ```text
--> {op:"hello", id, proto:1, vault, device, invite, deviceId, token}
+-> {op:"hello", id, proto:2, vault, device, invite, deviceId, token}
 <- {res:"redeemed", id, deviceId}
 ```
 
