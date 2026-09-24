@@ -5,7 +5,7 @@ budget. Give Claude the prompt below to pick everything up.
 
 ## The prompt to paste
 
-> Resume TrewSync from plan/handoff/README.md. Read it, CLAUDE.md and
+> Resume TrewSync from plan/handoff/README.md. Read it, AGENTS.md and
 > PLAN.md first. Finish the three stopped worktrees in the order the handoff
 > gives, verifying each and merging it into m1-flip only when
 > scripts/check.sh passes on the merged tree. Then continue the remaining

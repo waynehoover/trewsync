@@ -203,7 +203,7 @@ Every defect was in reading the measurements, not in taking them:
   sending the URI that brings Obsidian to the foreground, so every sample of
   one run was skipped.
 - The `&` in that URI reached the phone's shell unquoted and split the command
-  into three. `adb shell` is a second shell, which is the case CLAUDE.md's rule
+  into three. `adb shell` is a second shell, which is the case AGENTS.md's rule
   about inlining payloads exists for.
 - The collection window read the log after three and a half minutes in which
   the phone had been asleep. Android suspends a backgrounded WebView and

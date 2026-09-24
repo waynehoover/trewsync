@@ -86,7 +86,7 @@ a scaling claim drawn across the two would be an artefact of the runtime. The
 only scaling figure here worth anything. The change is a rewrite of the code that decides what happens to
 somebody's notes, and a work set that misses a path is a note that stops
 syncing while every status says the vault is fine. That is the
-"do not lose a note" rule in [CLAUDE.md](../CLAUDE.md) and rule 7 in
+"do not lose a note" rule in [AGENTS.md](../AGENTS.md) and rule 7 in
 [the design](design.md#the-durability-rules), which says a status describes the
 vault rather than the filter. It is not rule 1, which an earlier version of
 this cited: rule 1 is about acknowledging only after a write is durable, and it

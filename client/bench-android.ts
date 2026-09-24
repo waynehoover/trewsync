@@ -353,7 +353,7 @@ async function atSize(size: number): Promise<void> {
       // `adb shell` joins its arguments and hands the string to `sh` on the
       // device, so an unquoted `&` in the URI is a shell operator there: the
       // last run split `...&overwrite&silent` into three commands and failed
-      // with "silent: inaccessible or not found". This is CLAUDE.md's rule
+      // with "silent: inaccessible or not found". This is AGENTS.md's rule
       // about never inlining a payload into a shell argument, and the second
       // shell is the one that is easy to forget.
       await adb("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", `'${uri}'`);
