@@ -2347,7 +2347,7 @@ export default class TrewPlugin extends Plugin {
     new HistoryModal(this.app, this.historySource(), path).open();
   }
 
-  /** What HistoryModal needs, which is four calls and no plugin internals. */
+  /** What HistoryModal needs, which is five calls and no plugin internals. */
   historySource(): HistorySource {
     return {
       history: async (path, opts) => {
@@ -2361,6 +2361,17 @@ export default class TrewPlugin extends Plugin {
       // The outcome, not a sentence: the modal says it with the same
       // describeRestore every other restore surface uses.
       restoreVersion: (version) => this.restoreAndSend(version),
+      // The operation behind the version, undone by the server as one
+      // operation (protocol 2). Unlike a restore it replaces what the
+      // operation wrote, and only while nothing has changed it since.
+      undoOperation: async (version, opts) => {
+        if (!this.client) throw new Error(this.whyNoClient());
+        if (version.operation === undefined)
+          throw new Error(
+            "this version was not written by an operation, so there is nothing to undo",
+          );
+        return this.client.undo(version.operation.id, opts);
+      },
       currentText: async (path, maxBytes) => {
         // The note can go between the look and the read: somebody deleting
         // it while its history is loading. That is a diff against nothing,

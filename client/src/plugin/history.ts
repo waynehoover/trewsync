@@ -3,6 +3,7 @@ import { Modal, Notice, type App } from "obsidian";
 
 import { looksLikeText } from "../core/chunk.ts";
 import type { Version } from "../core/client.ts";
+import { ProtocolError, type OperationRef, type UndoResult } from "../core/transport.ts";
 
 /** Where a restore landed, and whether it went any further. */
 export interface Restored {
@@ -46,6 +47,51 @@ export interface HistorySource {
   restoreVersion(version: Version): Promise<Restored>;
   /** What is on disk now, for the diff. Undefined when the note is gone. */
   currentText(path: string, maxBytes?: number): Promise<string | undefined>;
+  /**
+   * Undoes the operation that wrote a version (protocol 2), in place or, with
+   * `toCopy`, as copies beside the notes. Absent where there is no server to
+   * ask, and then the panel offers no undo.
+   *
+   * A different thing from `restoreVersion`, and kept apart on purpose.
+   * Restore writes one version back without replacing anything, and is the
+   * panel's answer for every version. Undo is the server's compensating
+   * operation (PLAN.md section 4.5): it replaces what an agent's operation
+   * wrote with what was there before, across every note the operation
+   * changed, and only while none of them has been changed since.
+   */
+  undoOperation?(version: Version, opts: { toCopy: boolean }): Promise<UndoResult>;
+}
+
+/**
+ * Who wrote a version through an operation, as the pane says it. The label is
+ * the one the version was written under: the agent token's label, `trewd undo`
+ * for the operator, or the name of the device that asked for an undo.
+ */
+export function describeOperation(op: OperationRef, device: string): string {
+  const who =
+    op.kind === "mcp"
+      ? `Written by the agent “${device}” (${op.tool}).`
+      : op.tool === "undo" || op.tool === "undo_to_copy"
+        ? op.kind === "operator"
+          ? "Written by an undo on the server (trewd undo)."
+          : `Written by an undo from ${device}.`
+        : `Written by ${device} (${op.tool}).`;
+  return op.undoneBy !== undefined ? `${who} This change has been undone since.` : who;
+}
+
+/** What an undo did, for the notice that follows it. */
+export function describeUndo(done: UndoResult): string {
+  if (done.toCopy) {
+    const copies = done.steps.filter((s) => s.action === "copy" && s.copy !== undefined);
+    const where = copies.map((s) => s.copy!).join(", ");
+    return copies.length === 1
+      ? `Wrote the earlier version beside the note, as ${where}. Nothing else was changed.`
+      : `Wrote the ${copies.length} earlier versions beside their notes: ${where}. Nothing else was changed.`;
+  }
+  const notes = new Set(done.entries.map((e) => e.path)).size;
+  return notes === 1
+    ? "Undid the change. The note is as it was before it."
+    : `Undid the change across ${notes} paths. Each is as it was before it.`;
 }
 
 /** How many versions a page holds. Sync pages too, and for the same reason. */
@@ -81,6 +127,12 @@ export class HistoryModal extends Modal {
   private closed = false;
   private reading = false;
   private restoring = false;
+  private undoing = false;
+  /**
+   * Why the last undo of the chosen version was refused, while it is still
+   * chosen, and whether the copy is the way on (a note changed since).
+   */
+  private undoRefusal: { uid: number; message: string; offerCopy: boolean } | undefined;
   /** Keep only the selected version, including an in-flight download. */
   private preview: { uid: number; text: Promise<string> } | undefined;
   private versions: Version[] = [];
@@ -328,14 +380,47 @@ export class HistoryModal extends Modal {
       this.showDiff = !this.showDiff;
       void this.choose(version);
     });
-    toggle.disabled = this.restoring || previewReason(version) !== undefined;
+    toggle.disabled = this.restoring || this.undoing || previewReason(version) !== undefined;
 
     const restore = actions.createEl("button", {
       cls: "mod-cta",
       text: this.restoring ? "Restoring…" : "Restore",
     });
-    restore.disabled = this.reading || this.restoring || version.deleted || version.folder;
+    restore.disabled =
+      this.reading || this.restoring || this.undoing || version.deleted || version.folder;
     restore.addEventListener("click", () => void this.restore(version));
+
+    // Only for a version an operation wrote, and not one already undone: an
+    // undo in place of it would be refused, and the log names the undo that
+    // did it, which is itself a version in this list with its own button.
+    const op = version.operation;
+    if (op !== undefined && this.source.undoOperation !== undefined) {
+      if (op.undoneBy === undefined) {
+        const undo = actions.createEl("button", {
+          text: this.undoing ? "Undoing…" : "Undo this change",
+        });
+        undo.disabled = this.restoring || this.undoing;
+        undo.addEventListener("click", () => void this.undo(version, false));
+      }
+      this.paneEl.createEl("p", {
+        cls: "trew-history-operation",
+        text: describeOperation(op, version.device),
+      });
+      const refusal = this.undoRefusal?.uid === version.uid ? this.undoRefusal : undefined;
+      if (refusal !== undefined) {
+        const box = this.paneEl.createDiv("trew-history-refusal");
+        box.createEl("p", { text: `Not undone, and nothing was changed: ${refusal.message}` });
+        if (refusal.offerCopy) {
+          const copy = box.createEl("button", {
+            text: this.undoing
+              ? "Writing copies…"
+              : "Keep both: write the earlier versions as copies",
+          });
+          copy.disabled = this.restoring || this.undoing;
+          copy.addEventListener("click", () => void this.undo(version, true));
+        }
+      }
+    }
 
     if (previewReason(version) !== undefined) {
       this.paneEl.createEl("p", { cls: "trew-history-content-empty", text: this.text });
@@ -361,7 +446,7 @@ export class HistoryModal extends Modal {
   }
 
   private async choose(version: Version): Promise<void> {
-    if (this.closed || this.restoring) return;
+    if (this.closed || this.restoring || this.undoing) return;
     const mine = ++this.loading;
     this.chosen = version;
     this.reading = true;
@@ -410,8 +495,56 @@ export class HistoryModal extends Modal {
     this.renderPane();
   }
 
+  /**
+   * Undoes the operation behind a version, or writes its before-images as
+   * copies. A refusal stays in the pane, beside the version it is about,
+   * rather than in a notice that is gone before it is read: it says which
+   * notes changed and who changed them, and, for a note changed since, offers
+   * the copy, which changes nothing already there.
+   */
+  private async undo(version: Version, toCopy: boolean): Promise<void> {
+    if (
+      this.closed ||
+      this.restoring ||
+      this.undoing ||
+      version.operation === undefined ||
+      this.source.undoOperation === undefined
+    )
+      return;
+    this.undoing = true;
+    this.renderPane();
+    try {
+      const done = await this.source.undoOperation(version, { toCopy });
+      new Notice(`TrewSync: ${describeUndo(done)}`, 10_000);
+      this.undoRefusal = undefined;
+      this.close();
+    } catch (err) {
+      const message = (err as Error).message;
+      if (err instanceof ProtocolError && (err.code === "stale" || err.code === "noundo")) {
+        this.undoRefusal = {
+          uid: version.uid,
+          message,
+          offerCopy: err.code === "stale" && !toCopy,
+        };
+      } else {
+        new Notice(`TrewSync: ${message}`, 10_000);
+      }
+    } finally {
+      this.undoing = false;
+      if (!this.closed) this.renderPane();
+    }
+  }
+
   private async restore(version: Version): Promise<void> {
-    if (this.closed || this.restoring || this.reading || version.deleted || version.folder) return;
+    if (
+      this.closed ||
+      this.restoring ||
+      this.undoing ||
+      this.reading ||
+      version.deleted ||
+      version.folder
+    )
+      return;
     this.restoring = true;
     this.renderPane();
     try {

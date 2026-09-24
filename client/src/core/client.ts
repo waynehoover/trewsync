@@ -42,8 +42,10 @@ import {
   Transport,
   type DeviceRow,
   type InviteRow,
+  type OperationRef,
   type ServerLimits,
   type SocketLike,
+  type UndoResult,
   type WireEntry,
 } from "./transport.ts";
 import { MemoryIndexStore, type FileStat, type IndexStore, type Vault } from "./vault.ts";
@@ -1146,6 +1148,7 @@ export class Client {
       device: e.device,
       chunks: e.chunks.length,
       contentId: contentId(e.chunks),
+      ...(e.op !== undefined ? { operation: e.op } : {}),
     };
   }
 
@@ -1187,6 +1190,26 @@ export class Client {
   /* ------------------------------------------------------------ *
    * The device list
    * ------------------------------------------------------------ */
+
+  /**
+   * Undoes one operation of the vault, by the id a version's `operation`
+   * names (plan/protocol.md, "Undo (protocol 2)").
+   *
+   * This device's own changes are sent first, so an edit made here since the
+   * operation counts as a change since: the undo is then refused as `stale`
+   * rather than committed over it, and never has to be merged with it
+   * afterwards. With `toCopy` nothing already in the vault is changed; each
+   * version the operation replaced is written beside its note instead.
+   *
+   * The versions the undo wrote arrive as an ordinary batch before this
+   * resolves; the settle after it puts them on disk here.
+   */
+  async undo(opId: string, opts: { toCopy?: boolean } = {}): Promise<UndoResult> {
+    await this.settle({ coalesceWrites: false });
+    const done = await this.serial(() => this.transport.undo(opId, opts));
+    await this.settle({ coalesceWrites: false });
+    return done;
+  }
 
   /**
    * Every device that may reach this vault, and every invite that could still
@@ -1361,6 +1384,12 @@ export interface Version {
    * under the old name.
    */
   readonly previousPath?: string;
+  /**
+   * The operation that wrote this version, when an agent or an undo did
+   * (protocol 2): what the history panel offers to undo. A version a device
+   * wrote by syncing has none.
+   */
+  readonly operation?: OperationRef;
 }
 
 /**
