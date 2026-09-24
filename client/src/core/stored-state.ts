@@ -148,6 +148,10 @@ function checkRemote(path: string, state: unknown, refuse: (what: string) => Err
   if (typeof state["hash"] !== "string") {
     throw refuse(`${at}.hash is ${describe(state["hash"])}, not a string`);
   }
+  // Optional: an index saved before versions carried their author has none.
+  if (state["device"] !== undefined && typeof state["device"] !== "string") {
+    throw refuse(`${at}.device is ${describe(state["device"])}, not a string`);
+  }
   if (state["heads"] !== undefined) {
     if (
       !isObject(state["heads"]) ||

@@ -8,17 +8,15 @@
  * and the agent's go beside them in a conflict copy, byte for byte. The
  * server's history names the agent by its label.
  *
- * The copy's name is the engine's convention, and that convention names it
- * after the device that kept it, not after the author of what is in it
- * (`conflictCopyPath(path, this.opts.device, ...)`, and plugin/main.test.ts:
- * "b has to keep both and name the copy after itself"). PLAN.md section 2.4
- * expected `(Conflicted copy Claude on Mac ...)`; that needs the engine to
- * carry the incoming version's device into its remote state, a change to the
- * plugin's naming for every conflict, which is the owner's to decide. The
- * name is pinned here as it is, so that a change to it is a decision someone
- * sees.
+ * The copy is named after the author of the bytes it holds, which is the
+ * agent (decided 2026-09-23): `note (Conflicted copy Claude on Mac <stamp>).md`,
+ * where it used to carry the phone's name, the device that kept it. A label is
+ * whatever the operator typed, so one with characters a filename cannot hold
+ * and one longer than a copy's name carries are driven through the same
+ * phone, on a real disk, and each copy is read back from the server by its
+ * name, which proves the server took that name too.
  *
- * Against the real server with `-mcp`, a token minted through its control
+ * Against the real server with `-mcp`, tokens minted through its control
  * socket, and the agent's calls made over HTTP as any MCP client makes them.
  */
 
@@ -83,24 +81,37 @@ async function tool(
   return { trusted: env.trusted, untrusted: env.untrusted_content };
 }
 
+/** A write token with this label, minted through the server's control socket. */
+async function mint(label: string): Promise<string> {
+  const scratch = await mkdtemp(join(tmpdir(), "trew-agent-"));
+  dirs.push(scratch);
+  const keyFile = join(scratch, "agent.key");
+  await server!.cli("mcp-token", "-label", label, "-scope", "write", "-key-out", keyFile);
+  return (await readFile(keyFile, "utf8")).trim();
+}
+
+/**
+ * Each note, the label of the agent that edits it, and the author its copy is
+ * named after: the label as given, one with a slash and a colon made safe,
+ * and one cut to the 32 characters a copy's name carries.
+ */
+const agents = [
+  { path: "note.md", label: "Claude on Mac", author: "Claude on Mac" },
+  { path: "slash.md", label: "Claude/Mac: work", author: "Claude-Mac- work" },
+  {
+    path: "long.md",
+    label: "Claude on the office Mac mini, the one by the window",
+    author: "Claude on the office Mac mini, t",
+  },
+];
+
 describe("an agent's edit on a device", () => {
-  it("keeps the agent's edit beside the phone's, and the history names the agent", async () => {
+  it("keeps the agent's edit beside the phone's, named after the agent", async () => {
     server = new TestServer();
     server.extraArgs = ["-mcp"];
     await server.start();
-    const scratch = await mkdtemp(join(tmpdir(), "trew-agent-"));
-    dirs.push(scratch);
-    const keyFile = join(scratch, "agent.key");
-    await server.cli(
-      "mcp-token",
-      "-label",
-      "Claude on Mac",
-      "-scope",
-      "write",
-      "-key-out",
-      keyFile,
-    );
-    const token = (await readFile(keyFile, "utf8")).trim();
+    const tokens = new Map<string, string>();
+    for (const a of agents) tokens.set(a.path, await mint(a.label));
 
     const dir = await mkdtemp(join(tmpdir(), "trew-phone-"));
     dirs.push(dir);
@@ -121,25 +132,28 @@ describe("an agent's edit on a device", () => {
     };
 
     const original = "# Note\n\nThe original sentence.\n";
-    await writeFile(join(dir, "note.md"), original);
+    for (const a of agents) await writeFile(join(dir, a.path), original);
     const first = phone();
     await first.connect();
     await first.settle({}, 8);
     first.close();
 
-    // The phone is offline. The agent reads the note and changes the
+    // The phone is offline. Each agent reads its note and changes the
     // sentence; the phone changes the same sentence another way.
-    const read = await tool(token, "read_note", { path: "note.md" });
-    expect(read.untrusted["content"]).toBe(original);
-    const agents = "# Note\n\nThe agent's rewritten sentence.\n";
-    await tool(token, "edit_note", {
-      path: "note.md",
-      base: read.trusted["uid"],
-      epoch: read.trusted["epoch"],
-      edits: [{ old: "The original sentence.", new: "The agent's rewritten sentence." }],
-    });
+    const agentsText = "# Note\n\nThe agent's rewritten sentence.\n";
     const phones = "# Note\n\nThe phone's own sentence.\n";
-    await writeFile(join(dir, "note.md"), phones);
+    for (const a of agents) {
+      const token = tokens.get(a.path)!;
+      const read = await tool(token, "read_note", { path: a.path });
+      expect(read.untrusted["content"]).toBe(original);
+      await tool(token, "edit_note", {
+        path: a.path,
+        base: read.trusted["uid"],
+        epoch: read.trusted["epoch"],
+        edits: [{ old: "The original sentence.", new: "The agent's rewritten sentence." }],
+      });
+      await writeFile(join(dir, a.path), phones);
+    }
 
     const again = phone();
     await again.connect();
@@ -147,20 +161,28 @@ describe("an agent's edit on a device", () => {
 
     const names = await readdir(dir);
     const copies = names.filter((n) => n.includes("Conflicted copy"));
-    expect(copies, names.join(", ")).toHaveLength(1);
-    // Named after the device that kept it; see the note at the top.
-    expect(copies[0]).toMatch(/^note \(Conflicted copy phone \d{12}\)\.md$/);
-    // Both texts survive, the phone's where it was and the agent's in the
-    // copy (rule 10: the bytes, not agreement).
-    expect(await readFile(join(dir, "note.md"), "utf8")).toBe(phones);
-    expect(await readFile(join(dir, copies[0]!), "utf8")).toBe(agents);
+    expect(copies, names.join(", ")).toHaveLength(agents.length);
+    for (const a of agents) {
+      const stem = a.path.slice(0, -".md".length);
+      const copy = copies.find((n) => n.startsWith(`${stem} (`));
+      expect(copy, `no copy of ${a.path} in ${names.join(", ")}`).toBeDefined();
+      // Named after the agent, whose words are in it, and not the phone.
+      const named = /^(.+) \(Conflicted copy (.+) \d{12}\)\.md$/.exec(copy!);
+      expect(named?.[1], copy).toBe(stem);
+      expect(named?.[2], copy).toBe(a.author);
+      // Both texts survive, the phone's where it was and the agent's in the
+      // copy (rule 10: the bytes, not agreement).
+      expect(await readFile(join(dir, a.path), "utf8")).toBe(phones);
+      expect(await readFile(join(dir, copy!), "utf8")).toBe(agentsText);
+      // And the phone uploaded it: the server took the name and holds the
+      // agent's bytes under it.
+      expect(await server.cli("cat", "-path", copy!)).toBe(agentsText);
+    }
 
-    // And the server's history names the agent by its label, beside the
-    // phone's two versions, and the copy the phone uploaded is the agent's
-    // version kept, with the agent's bytes.
-    const history = await tool(token, "note_history", { path: "note.md" });
+    // The server's history names the agent by its label, beside the phone's
+    // two versions.
+    const history = await tool(tokens.get("note.md")!, "note_history", { path: "note.md" });
     const devices = (history.untrusted["versions"] as { device: string }[]).map((v) => v.device);
     expect(devices).toEqual(["phone", "Claude on Mac", "phone"]);
-    expect(await server.cli("cat", "-path", copies[0]!)).toBe(agents);
   }, 120_000);
 });

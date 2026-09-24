@@ -59,7 +59,7 @@ import { looksLikeMarkupPath, wellFormedMarkup } from "./markup.ts";
 import { chunkName, chunkNames, plainDigest } from "./digest.ts";
 import { pathReason, type PathReason } from "./path-policy.ts";
 import { describeWindowsRefusal, windowsRefusal } from "./windows-names.ts";
-import { conflictCopyPath, mergeText } from "./merge.ts";
+import { conflictCopyPath, mergeText, sanitiseAuthor } from "./merge.ts";
 import {
   decide,
   needsRehash,
@@ -870,6 +870,19 @@ function spellingHeads(
   };
 }
 
+/**
+ * The author a version carries into `remote`, which is what a conflict copy
+ * holding it is named after (`Engine.copyAuthor`).
+ *
+ * Only content keeps one: no copy ever holds a folder or a deletion, and every
+ * byte in the state file is paid for on every save. An empty name is no author.
+ */
+function recordedAuthor(e: WireEntry): Pick<Remote, "device"> {
+  return !e.folder && !e.deleted && typeof e.device === "string" && e.device !== ""
+    ? { device: e.device }
+    : {};
+}
+
 function pathBase(state: Remote | undefined, path: string, basedOn: number | undefined): number {
   if (basedOn !== undefined && state && state.uid !== basedOn)
     throw new ProtocolError("stale", "The path changed while preparing this write.");
@@ -1361,6 +1374,7 @@ export class Engine {
         mtime: e.mtime,
         size: e.size,
         hash: contentId(e.chunks),
+        ...recordedAuthor(e),
         // The sender's spelling, kept only while it is not the one this
         // device uses (R10). It is what the next upload of this path names
         // as the path it used to have, so the correction travels as a
@@ -1545,6 +1559,9 @@ export class Engine {
           mtime: newest.mtime,
           size: newest.size,
           hash: contentId(newest.chunks),
+          // The writer that got there first, whose version the next pass
+          // keeps beside this device's if the two cannot be merged.
+          ...recordedAuthor(newest),
           ...spellingHeads(known, path, wire, newest.uid),
         });
         this.pending.add(path);
@@ -4365,6 +4382,8 @@ export class Engine {
         bytes,
         { mtime: d.remote.mtime, ctime: d.remote.mtime },
         report,
+        // Found on this disk, and still the incoming version's bytes.
+        this.copyAuthor(d.remote),
       )
     ) {
       return "kept";
@@ -4456,6 +4475,11 @@ export class Engine {
    *
    * A vault with no `replace` falls back to the plain write, guarded only by
    * the stat, which is what every vault had before.
+   *
+   * `author` wrote `content`: an incoming version's author for a download,
+   * and this device for a merge it made. It names the copy `content` goes to
+   * when the write cannot land. What the write displaces was on this disk, so
+   * its copy carries this device's name.
    */
   private async writePreserving(
     path: string,
@@ -4463,6 +4487,7 @@ export class Engine {
     content: Uint8Array,
     times: Times,
     report: SyncReport,
+    author: string,
   ): Promise<boolean> {
     const vault = this.opts.vault;
     if (vault.replace === undefined) {
@@ -4472,8 +4497,8 @@ export class Engine {
     // The name a displaced version will take, worked out here because conflict
     // naming is the engine's and a name a person recognises is the point of
     // it. A sibling, so the adapter's move onto it is a rename inside one
-    // directory.
-    const keepAt = await this.freeConflictPath(path);
+    // directory. Whatever it displaces is this disk's, so this device's name.
+    const keepAt = await this.freeConflictPath(path, this.opts.device);
     const out = await vault.replace(path, expect, content, times, keepAt);
 
     if (out.keptAt !== undefined) {
@@ -4499,7 +4524,12 @@ export class Engine {
       // same choose-then-truncate the adapters spent two rounds of review
       // having removed, reintroduced one level up in the code that handles
       // their answer.
-      const beside = await placeBeside(() => this.freeConflictPath(path), content, times, vault);
+      const beside = await placeBeside(
+        () => this.freeConflictPath(path, author),
+        content,
+        times,
+        vault,
+      );
       this.landed(beside);
       this.log("kept the incoming version beside", path, { at: beside });
       this.activity("conflict", path, beside);
@@ -4536,8 +4566,9 @@ export class Engine {
     // not be read, was the one case the preserving removal was not used, and
     // the pass reported it as an ordinary deletion rather than as a conflict.
     // A folder has no baseline either and is not a thing an editor rewrites,
-    // but the adapter keeps what it finds and that costs nothing.
-    const keepAt = await this.freeConflictPath(path);
+    // but the adapter keeps what it finds and that costs nothing. What it
+    // keeps is an edit on this disk, so the copy carries this device's name.
+    const keepAt = await this.freeConflictPath(path, this.opts.device);
     const out = await vault.removeExpecting(path, this.expecting(digest), keepAt);
     return out.keptAt;
   }
@@ -4640,6 +4671,7 @@ export class Engine {
         content,
         { mtime: d.remote.mtime, ctime: d.remote.mtime },
         report,
+        this.copyAuthor(d.remote),
       )
     ) {
       return false;
@@ -4948,6 +4980,8 @@ export class Engine {
           merged,
           { mtime: wroteAt, ctime: entry.ctime },
           report,
+          // Both sides' words, combined here: this device made the text.
+          this.opts.device,
         )
       ) {
         // Something else was at the path and has been kept. The merge did not
@@ -4986,21 +5020,40 @@ export class Engine {
   }
 
   /**
-   * A conflict copy path nothing is using yet.
+   * A conflict copy path nothing is using yet, named after `author`, who wrote
+   * the bytes the copy will hold (`conflictCopyPath`).
    *
-   * The name carries the device and the time to the minute, so two conflicts
-   * on one path from one device inside the same minute produced the same
-   * name, and the second write replaced the first. Two passes inside a minute
-   * is ordinary: the write debounce is measured in seconds.
+   * The name carries the author and the time to the minute, so two conflicts
+   * on one path inside the same minute produced the same name, and the second
+   * write replaced the first. Two passes inside a minute is ordinary: the
+   * write debounce is measured in seconds.
    *
    * That lost a note. A conflict copy is the only surviving record of one
    * side of a divergence, and quietly overwriting it is the failure the
    * conflict copy exists to prevent, one level up.
    */
-  private freeConflictPath(path: string): Promise<string> {
-    return firstFreeName(conflictCopyPath(path, this.opts.device, new Date(this.now())), (p) =>
+  private freeConflictPath(path: string, author: string): Promise<string> {
+    return firstFreeName(conflictCopyPath(path, author, new Date(this.now())), (p) =>
       this.opts.vault.exists(p),
     );
+  }
+
+  /**
+   * Who wrote an incoming version, for the name of the copy that keeps it: the
+   * device the server recorded on it, or an agent token's label.
+   *
+   * This device's own name when the version has no author worth the name. That
+   * is an index saved before versions carried theirs, which is every state file
+   * written before 2026-09-23; this device's own writes, which record none
+   * because the author is this device; and a version whose recorded device is
+   * empty, or nothing but characters a filename cannot hold. Every copy was
+   * named after this device before, so an unknown author reads as it always
+   * did rather than as a guess, and never as an empty name, which
+   * `conflictOriginal` would not recognise as a copy at all.
+   */
+  private copyAuthor(remote: RemoteState | undefined): string {
+    const device = remote?.device;
+    return device !== undefined && sanitiseAuthor(device) !== "" ? device : this.opts.device;
   }
 
   /**
@@ -5010,7 +5063,8 @@ export class Engine {
    * name. Obsidian does the opposite, putting local content in the conflict
    * copy and overwriting the file with the server's, so a sync rewrites the
    * file you have open and your version appears somewhere you were not
-   * looking.
+   * looking. The new name is the incoming version's author's, not this
+   * device's: it is their words in it.
    *
    * Both are then uploaded: the copy so other devices get it, and the local
    * file so the server's newest word for that path is what is actually here.
@@ -5034,7 +5088,8 @@ export class Engine {
     if (!remote) return;
     const incoming = inHand ?? (await this.contentOf(remote.uid, remote.hash, remote.size));
     const copyPath = await placeBeside(
-      () => this.freeConflictPath(path),
+      // The incoming version's bytes, so its author's name.
+      () => this.freeConflictPath(path, this.copyAuthor(remote)),
       incoming,
       { mtime: remote.mtime, ctime: remote.mtime },
       this.opts.vault,

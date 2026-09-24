@@ -840,6 +840,20 @@ describe("concurrent edits, which is where notes get lost", () => {
     // And a conflict copy exists, so somebody can see there was a conflict.
     const copies = a.vault.paths().filter((p) => p.includes("Conflicted copy"));
     expect(copies.length).toBeGreaterThan(0);
+
+    // Named after whoever wrote what is in it (2026-09-23). A sent first, so
+    // B kept A's words beside its own, and the copy says A on both devices,
+    // not B, which made it.
+    for (const d of [a, b]) {
+      const held = d.vault
+        .paths()
+        .filter((p) => p.includes("Conflicted copy"))
+        .map((p) => [p, d.vault.text(p)] as const);
+      expect(held, `${d.name} holds ${JSON.stringify(held)}`).toHaveLength(1);
+      expect(held[0]![1]).toBe("# Note\n\nA's completely different sentence.\n");
+      expect(held[0]![0]).toMatch(/^note \(Conflicted copy a \d{12}\)\.md$/);
+      expect(d.vault.text("note.md")).toBe("# Note\n\nB's entirely other sentence.\n");
+    }
   }, 240_000);
 
   it("keeps both when an attachment changed on both sides", async () => {

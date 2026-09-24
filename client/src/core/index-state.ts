@@ -105,6 +105,15 @@ export interface RemoteState {
    * the same bytes are always the same list; see digest.ts and chunk.ts.
    */
   readonly hash: string;
+  /**
+   * Who wrote this version, as the server recorded it: another device's name,
+   * or an agent token's label for a version written through MCP.
+   *
+   * What a conflict copy holding this version is named after. Absent for this
+   * device's own writes, for folders and deletions, which no copy holds, and in
+   * an index saved before 2026-09-23.
+   */
+  readonly device?: string;
 }
 
 /**

@@ -21,7 +21,14 @@ export interface ConflictReview extends ConflictPair {
 export type ConflictChoice = "original" | "copy" | "edited";
 const TEXT_LIMIT = 128 * 1024;
 
-/** Copies remain discoverable on other devices and after the local log rotates. */
+/**
+ * Copies remain discoverable on other devices and after the local log rotates.
+ *
+ * Any author between "copy" and the stamp, spaces included: a copy is named
+ * after whoever wrote its bytes (`conflictCopyPath`), which is any device's
+ * name or an agent's label. The pattern is the one it has always been, so a
+ * name read as a copy before is read as one now, and nothing else is.
+ */
 export function conflictOriginal(copy: string): string | undefined {
   const match = /^(.*) \(Conflicted copy [^/]+ \d{12}\)(?: \d+)?(\.[^/]*)?$/.exec(copy);
   return match ? match[1] + (match[2] ?? "") : undefined;
@@ -71,9 +78,15 @@ export async function reviewConflict(vault: Vault, pair: ConflictPair): Promise<
   return { ...pair, ...(current ? { current } : {}), preserved };
 }
 
-/** Run in Client.serial so sync cannot interleave; adapters guard editor races. */
+/**
+ * Run in Client.serial so sync cannot interleave; adapters guard editor races.
+ *
+ * `device` is this device's name. A file edited while the choice is applied
+ * is kept under a conflict copy's name, and those bytes were written here.
+ */
 export async function resolveConflict(
   vault: Vault,
+  device: string,
   review: ConflictReview,
   choice: ConflictChoice,
   edited?: string,
@@ -97,7 +110,7 @@ export async function resolveConflict(
       "One of these files changed. Refresh the comparison before choosing a version.",
     );
   const keepAt = (path: string) =>
-    firstFreeName(conflictCopyPath(path, "review", new Date()), (p) => vault.exists(p));
+    firstFreeName(conflictCopyPath(path, device, new Date()), (p) => vault.exists(p));
   if (choice !== "original") {
     const bytes =
       // `edited` is defined whenever the choice is "edited": refused above otherwise.

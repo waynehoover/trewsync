@@ -107,6 +107,11 @@ export const corpus: [string, (s: Record<string, unknown>) => unknown, RegExp][]
     (s) => ({ ...s, remote: { "a.md": { ...remoteA(), hash: 5 } }, pending: [] }),
     /hash is 5/,
   ],
+  [
+    "a remote state whose author is a number",
+    (s) => ({ ...s, remote: { "a.md": { ...remoteA(), device: 5 } }, pending: [] }),
+    /device is 5, not a string/,
+  ],
   ["pending as an object", (s) => ({ ...s, pending: {} }), /pending is not a list/],
   ["pending holding a number", (s) => ({ ...s, pending: [7] }), /pending\[0\] is 7/],
   [
@@ -129,6 +134,10 @@ describe("what a saved index must look like", () => {
   it("accepts a complete, correct index, and nothing at all", () => {
     expect(validateStoredState(good())).toEqual(good());
     expect(validateStoredState(undefined)).toBeUndefined();
+    // A version's author, which an index saved before 2026-09-23 lacks.
+    const authored = good();
+    authored.remote["a.md"] = { ...remoteA(), device: "Claude on Mac" };
+    expect(validateStoredState(authored)).toEqual(authored);
   });
 
   it("keeps the epoch its cursor was read under, and invents none", () => {

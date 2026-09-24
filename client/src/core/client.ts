@@ -1023,7 +1023,7 @@ export class Client {
       if (this.closing) throw new Error("This client is closed.");
       if (this.opts.readOnly)
         throw new Error("Turn off receive-only mode before resolving conflicts.");
-      await resolveConflict(this.opts.vault, review, choice, edited);
+      await resolveConflict(this.opts.vault, this.opts.device, review, choice, edited);
       this.engine.noteChanged(review.original);
       this.engine.noteChanged(review.copy);
       try {

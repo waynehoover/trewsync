@@ -545,13 +545,16 @@ describe("renaming this device from the panel", () => {
     expect(mine?.name, JSON.stringify(list.devices)).toBe("the-good-laptop");
   }, 300_000);
 
-  it("is what a conflict copy made afterwards is named by", async () => {
+  it("is what a conflict copy of its words made afterwards is named by", async () => {
     // The half that has to be a test rather than a comment. The engine is
-    // handed `device` when it is built and reads it at every conflict copy, so
-    // saving the config under a running loop renames the device list and
-    // nothing else: the next copy still carries the old name, and does until
-    // Obsidian restarts. Removing the `quiet`/`start` in `renameDevice` passes
-    // every other test in this file, which is how this one came to exist.
+    // handed `device` when it is built and says it in every hello, which is
+    // the name the server records on every version this device writes, and a
+    // conflict copy is named after the author of the bytes it holds. So saving
+    // the config under a running loop renames the device list and nothing
+    // else: the next copy of this device's words, on any device, still carries
+    // the old name, and does until Obsidian restarts. Removing the
+    // `quiet`/`start` in `renameDevice` passes every other test in this file,
+    // which is how this one came to exist.
     await fresh();
     const a = await load();
     a.app.vault.adapter.seed("note.md", "# Note\n\nThe original.\n");
@@ -572,28 +575,34 @@ describe("renaming this device from the panel", () => {
     await until("the rename to land", () => b.plugin.deviceName === "renamed-desktop");
     await until("it to reconnect", () => b.plugin.currentState.kind === "synced");
 
-    // Now diverge, so b has to keep both and name the copy after itself.
+    // Now diverge, b first, so a has to keep both and keeps b's words in the
+    // copy, which is then named after b.
+    const bs = "# Note\n\nB's other sentence.\n";
     a.app.vault.adapter.seed("note.md", "# Note\n\nA's sentence.\n", 9_000_000_000_000);
-    b.app.vault.adapter.seed("note.md", "# Note\n\nB's other sentence.\n", 9_000_000_000_000);
+    b.app.vault.adapter.seed("note.md", bs, 9_000_000_000_000);
     for (let i = 0; i < 5; i++) {
-      await a.plugin.syncNow();
       await b.plugin.syncNow();
+      await a.plugin.syncNow();
     }
 
-    const copies = b.app.vault.adapter
-      .filePaths()
-      .filter((path) => path.includes("Conflicted copy"));
-    expect(copies.length, `paths: ${b.app.vault.adapter.filePaths().join(", ")}`).toBeGreaterThan(
-      0,
-    );
-    // Named for the new name, and not for the old one. Spelled as the whole
-    // "Conflicted copy <name>" because `renamed-desktop` contains `desktop`:
-    // a bare `not.toContain("desktop")` fails on the right answer, which is
-    // how the first version of this assertion was wrong.
-    expect(copies.join(" "), "a conflict copy still carries the old name").toMatch(
-      /Conflicted copy renamed-desktop/,
-    );
-    expect(copies.join(" ")).not.toMatch(/Conflicted copy desktop\b/);
+    for (const [who, app] of [
+      ["a", a.app],
+      ["b", b.app],
+    ] as const) {
+      const copies = app.vault.adapter
+        .filePaths()
+        .filter((path) => path.includes("Conflicted copy"));
+      expect(copies, `${who} holds: ${app.vault.adapter.filePaths().join(", ")}`).toHaveLength(1);
+      expect(app.vault.adapter.text(copies[0]!), `${who}'s copy`).toBe(bs);
+      // Named for the new name, and not for the old one, nor for a, which
+      // made it. Spelled as the whole "Conflicted copy <name>" because
+      // `renamed-desktop` contains `desktop`: a bare `not.toContain("desktop")`
+      // fails on the right answer, which is how the first version of this
+      // assertion was wrong.
+      expect(copies[0], "a conflict copy still carries the old name").toMatch(
+        /^note \(Conflicted copy renamed-desktop \d{12}\)\.md$/,
+      );
+    }
   }, 300_000);
 
   it("says no to an empty name and to the name it already has", async () => {
@@ -1470,7 +1479,7 @@ describe("a device that only receives, while Obsidian's index catches up", () =>
   it("does not delete a new note it received in the pass that updated another", async () => {
     const { phone, mac } = await pair();
     const edited = "From the Mac.md";
-    const copy = "From the Mac (Conflicted copy android-a1c2 202609230941).md";
+    const copy = "From the Mac (Conflicted copy Mac 202609230941).md";
     const v1 = "# From the Mac\n\nWritten on the Mac.\n";
     const v2 = "# From the Mac\n\nWritten on the Mac, and edited on the phone.\n";
     mac.app.vault.adapter.seed(edited, v1, 1_790_192_400_000);
@@ -1479,8 +1488,9 @@ describe("a device that only receives, while Obsidian's index catches up", () =>
     await settleBoth(phone.plugin, mac.plugin);
     const [authored] = await clientOf(mac.plugin).history(edited, { limit: 1 });
 
-    // The phone kept the Mac's version under a conflict name and edited the
-    // note, so the copy holds the bytes the Mac's note held until now.
+    // The phone kept the Mac's version under a conflict name, named after the
+    // Mac whose words it holds, and edited the note, so the copy holds the
+    // bytes the Mac's note held until now.
     mac.app.vault.adapter.holdWatcher();
     phone.app.vault.adapter.seed(copy, v1, 1_790_192_410_000);
     phone.app.vault.adapter.seed(edited, v2, 1_790_192_420_000);
