@@ -765,7 +765,7 @@ access revocation and author attribution, and left them out of scope. TrewSync h
 no data key, so only device signatures remain relevant: they would restore the
 author attribution that went with the entry authenticator, at the cost of key
 distribution, history and backup compatibility, and migration work. The
-[design](design.md#what-the-server-can-and-cannot-do) states the resulting
+[design](design.md#threat-model-the-server-is-trusted) states the resulting
 limits; the mechanism is not inherently impossible.
 
 ### Locking
@@ -790,13 +790,16 @@ These projects informed TrewSync's design and regression cases:
 
 | Project | Influence |
 |---|---|
+| [Basalt Sync](https://github.com/waynehoover/basalt-sync) (MIT) | TrewSync is a fork of it, at `664a963` (Basalt Sync 0.10.0, protocol 7): the server, the sync engine, the plugin, the headless client, the eleven durability rules and the tests that hold them. What changed is recorded in PLAN.md and the [fork notes](development.md#the-fork-from-basalt-m0). |
 | [Self-hosted LiveSync](https://github.com/vrtmrz/obsidian-livesync) | Content-defined chunking, the 48-byte window, a BOM-boundary regression, and text-merge approaches. |
 | [Obsidian Sync](https://obsidian.md/sync) | Remembering the last synced content as a merge base; shipped-app behavior also informed protocol review. |
 | [Sync Engine](https://github.com/hesprs/sync-engine) | Correctness checks beside benchmarks, corpus shape, latency scenarios, and trash behavior. |
 | [Fast Note Sync](https://github.com/haierkeys/obsidian-fast-note-sync) | A regression involving a file/folder collision at the same path. |
 | [obsidian-headless](https://github.com/obsidianmd/obsidian-headless) | Locking, read-only mirror, and conflict-policy evaluations. |
 | [goldmark](https://github.com/yuin/goldmark) (MIT) | The server's Markdown parser. Its link parser and link reference definition transformer (v1.8.6) are copied into `internal/notes/goldmark_link.go` with the licence, and patched to follow micromark. |
-| [asciimoo/hister](https://github.com/asciimoo/hister) | The untrusted-content envelope: structural separation, the warning beside each tool, one normalisation function. Design only; no code is used. |
+| [StevenStavrakis/obsidian-mcp](https://github.com/StevenStavrakis/obsidian-mcp/tree/bd900974adc6d7451f1f9d0f09d46b14307714f8) | The scope of the MCP tools: read, create, edit, search, tag, directory and namespace tools ([evaluation](#mcp-tool-expansion-september-16-2026)). Scope only; no code is used. |
+| [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk) (v1.8.0) | The test client that drives the server's hand-written MCP endpoint at every protocol version it speaks, so interoperability is checked by an implementation that is not TrewSync's. A test-only dependency: none of it is in the `trewd` binary ([decision](development.md#the-mcp-transport-hand-rolled-with-the-sdk-as-the-test-client)). |
+| [asciimoo/hister](https://github.com/asciimoo/hister) | The untrusted-content envelope: structural separation, the warning beside each tool, one normalisation function. Also the case for a hand-rolled MCP handler without an SDK, the planned `doctor` command that diagnoses without repairing, keeping the docs site in the repository beside the code, and the README's shape, with its standalone Privacy section. Design only; no code is used. |
 
 ### Other self-hosted Obsidian sync projects
 

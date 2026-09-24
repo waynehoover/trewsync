@@ -186,7 +186,72 @@ pass under the new rule; every other device then removes its copy only if it
 is empty there. A folder no device has that record of stays until someone
 deletes it again.
 
-## Agent edits in the headless client
+## The agent endpoint
+
+`trewd serve -mcp` answers MCP at `/mcp` on the devices' listener. The user
+guide is [Connect an agent](agent.md); the tool contract is
+[plan/mcp-tools.md](../plan/mcp-tools.md). The principles it holds to:
+
+- **Tools work on the store, not on files.** A read assembles a version's
+  chunks; a write chunks the new bytes, stores the bodies durably, and
+  appends entries through the same write path a device's `put` takes, under
+  the same commit lock, then broadcasts through the same hub. There is no
+  second copy of the vault, no filesystem lock and no before-image file: the
+  version an agent's write displaces stays in history, pinned.
+- **An agent's write is one operation.** `CommitOperation` commits every entry
+  of a write or none of them, beside a device's `putmany`, which stays
+  deliberately partial. The operation row, its entries, its pins and its
+  recorded reply are written in the same transaction. Preparation (reading
+  heads, computing bytes, storing bodies) happens outside the lock; the
+  credential, its scope, the store epoch and every base are checked again
+  inside it, so a token revoked in between loses there.
+- **Every write names what it read.** A mutation's `base` is the uid the agent
+  read, the same precondition a device's `put` carries, bound to the store
+  epoch. A move, a deletion and a tag change are previewed, and the apply is
+  bound to the vault head the preview read, which catches a new backlink or a
+  changed namespace that no per-note base can see. That is conservative: any
+  write in between refuses the apply.
+- **No whole-file writer.** Exact unique spans, append, prepend and create.
+  Exact edits are not a semantic safety boundary (a whole small note can be
+  one span), which is why retention, audit and undo carry the weight.
+- **What a write displaces is pinned.** Every displaced version is pinned for
+  at least 30 days from the operation's commit, by the server's clock, and
+  purge's survivor set includes unexpired pins. An age cutoff on the version
+  would not do: a note last edited a year ago has an old previous version, and
+  its before-image would be purgeable the day the agent edited it.
+- **Undo is a compensating operation.** It appends new versions, and only if
+  every path the operation changed still holds what the operation left there;
+  otherwise it refuses, or writes the earlier versions beside their notes.
+  History is never rewritten. An agent undoes only its own token's
+  operations; a device and the operator may undo any.
+- **Committed, delivered and known are three facts.** `committed: true` is
+  durable, not delivered: delivery is what devices confirm through applied
+  checkpoints. A reply lost after a commit is resolved by the idempotency key
+  or `lookup_operation`, and an outcome the server cannot determine is
+  reported as `committed: "unknown"`, never as a refusal.
+- **Note content is untrusted.** Every result separates what the server
+  vouches for (`trusted`) from everything drawn from note bytes
+  (`untrusted_content`), passes the second through one normalisation
+  function, and repeats the warning in every tool's description. The
+  boundary is in the data rather than in a convention a client must follow.
+- **Scope is enforced three times.** A read token is shown only the read tools
+  (presentation), a write tool it calls is refused at dispatch (enforcement,
+  whatever the client was shown), and a write re-checks the credential under
+  the commit lock. `TestOnlyTheCommitBoundaryReachesAMutation` fails the build
+  when any mutation is reachable outside that boundary.
+- **An author is not a device.** Each token has an author row of its own
+  kind, named by its label: it appears in history and in conflict-copy names,
+  never in the device list, and no device waits on it as an offline peer.
+- **Search is derived and cannot refuse a write.** The index is maintained by
+  a worker outside the commit path, from a durable `indexed_through_uid`, and
+  literal search stays literal: the index only proposes candidates where it
+  cannot omit a match, and the matcher decides.
+
+### The headless client's own MCP server
+
+`trew mcp`, inherited from Basalt Sync, is an MCP server on a paired headless
+directory rather than on the server. Its design is recorded here because it
+still ships.
 
 The MCP process is a local author on each explicitly configured paired directory. Its writes
 run in the owning client's serial queue alongside sync, and its vault lock
@@ -361,8 +426,10 @@ vaults, and a server web interface. Obsidian configuration sync is also absent:
 settings and workspace files have different ownership and failure consequences
 from notes, and the configuration folder contains device credentials.
 
-The HTTP MCP endpoint is an agent transport on a paired device, outside the
-excluded server web interface scope.
+The server's `/mcp` endpoint is an agent API, not a web interface: it serves
+no pages and has no browser login. It has no OAuth, no per-note or per-folder
+read control (a token reads the whole vault), and no whole-file writer.
+Per-token path scoping for writes is deferred, and would not restrict reads.
 
 Notes and ordinary attachments are the target. Large media libraries, arbitrary
 filesystem layouts, and untrusted collaborators require a different product
@@ -386,14 +453,51 @@ Editing on separate devices is supported. Running the plugin and CLI against
 the same local directory is a different case and must be avoided. Filesystem
 support depends on the concrete mount and adapter, not just an OS label.
 
-## What the server can and cannot do
+## Threat model: the server is trusted
 
 **The server is trusted with everything.** It stores every note, every earlier
-version, every filename and every chunk in plaintext, with the device and
-invite credential hashes and all the readable metadata: sizes, timestamps,
-device labels and update activity. That is the decision the product rests on
-(PLAN.md section 3.6), and the [threat model](threat-model.md) lists what it
-costs and what each requirement is enforced by.
+version, every filename and every chunk in plaintext, with the device, invite
+and MCP credential hashes and all the readable metadata: sizes, timestamps,
+device labels, update activity and the agents' audit log. That is the decision
+the product rests on (PLAN.md section 3.6): it is what lets the agent endpoint
+read and write the store. The [threat model](threat-model.md) lists each
+requirement it creates and what enforces it.
+
+**The readable surface is larger than the notes.** Current notes, every
+deleted version still in history, chunks from abandoned uploads, filenames,
+search terms and tags in the index, and audit context. And not only the files
+meant: the SQLite write-ahead log, `search.db`, temporary files, backup
+staging, filesystem snapshots, crash dumps and any copied volume.
+
+**What that requires of the deployment**, stated as requirements rather than
+advice:
+
+- The data volume sits on encrypted storage, with its key's location and the
+  unattended-restart unlock written down.
+- Backups are encrypted, including those that stay on the same machine. A
+  backup is a complete readable copy of the vault and its history.
+  (`trewd backup` itself writes plaintext; encrypting its destination is the
+  operator's.)
+- TLS in front of the server. Device tokens, MCP tokens and note contents all
+  cross the network.
+- `/mcp` behind Tailscale or an identity-aware proxy. The bearer token is the
+  only thing between whoever can reach the port and the whole vault.
+
+**What encryption at rest does not buy.** Nothing against a compromised
+running host, nothing against an agent holding a valid token, nothing against
+a model provider receiving tool results, and nothing when a logical snapshot is
+taken from an already-unlocked filesystem. If protection from a live server
+compromise ever becomes a requirement, dropping end-to-end encryption has to be
+reopened; no amount of at-rest work substitutes for it.
+
+**The agent is a new reader and a new writer.** A token's read scope is the
+whole vault, by design, and everything it reads reaches the agent's model
+provider. A write token can change any note the path rules allow. What bounds
+the damage is not access control but recovery: every write is audited,
+displaced versions are pinned, and undo is a unit. Note content is treated as
+hostile input to the agent ([above](#the-agent-endpoint)), because an
+instruction-shaped sentence a write commits would reach every device and the
+next session.
 
 What plaintext buys: the server checks every chunk against its name and every
 entry's declared size against its chunks, can rebuild derived views from its
@@ -445,7 +549,8 @@ These are random keys, not user-chosen passwords.
 |---|---|---|
 | Device token, 32 bytes | That device, which made it when it redeemed its invite | Connect and sync; list, rename and revoke devices; issue and cancel invites. |
 | Invite token, 16 bytes | Whoever was handed the `trew1i_` string, until it is used or expires | Redeem once, adding one device. |
-| MCP bearer token | Owner and configured MCP client; serving device stores only its hash | Authenticate to one device's HTTP MCP endpoint in its launch mode. |
+| MCP token, 32 bytes | The operator who ran `trewd mcp-token`, and the MCP client given it | Read the whole vault at `/mcp`; with write scope, change notes as the token's label. Expires after 90 days by default. |
+| Headless MCP token | Owner and the MCP client of one `trew mcp --listen`; that directory stores only its hash | Authenticate to that directory's own HTTP MCP endpoint in its launch mode. |
 
 There is no vault key, root secret or recovery key. Administration beyond what
 a device can do is shell access to the server's data directory: `trewd invite`,
@@ -454,9 +559,13 @@ server's private control socket, so a revoke from the host takes effect in the
 server at once. Losing every device loses no synced note, because the notes and
 their history are on the server; `trewd invite` pairs a new device.
 
-The MCP token is independently random, not derived from the device's token.
-Its hash lives in unsynced `.trew` state. Rotating or revoking it does not
-change the device's pairing.
+A server MCP token is minted, listed and revoked through the control socket,
+like devices. Its row holds the hash, a generated id, the label, the scope,
+the expiry, and a use count beside the last-used time, so a stolen token used
+once between legitimate uses still shows. The headless client's MCP token is
+independently random, not derived from the device's token; its hash lives in
+unsynced `.trew` state, and rotating or revoking it does not change the
+device's pairing.
 
 ## What a device can do to another device
 
