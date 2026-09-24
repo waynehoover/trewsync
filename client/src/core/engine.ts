@@ -5031,11 +5031,19 @@ export class Engine {
    * That lost a note. A conflict copy is the only surviving record of one
    * side of a divergence, and quietly overwriting it is the failure the
    * conflict copy exists to prevent, one level up.
+   *
+   * Nor another device's. Devices name copies alike, after the author and to
+   * the minute, so a copy another device made and sent can hold the very name
+   * this one is about to take, and be in the remote index without being on
+   * this disk yet. Taking it made the two files collide when that copy
+   * arrived, kept as a copy of a copy (found by the soak, docs/development.md,
+   * "The soak"). A name the server holds a live file at is not free.
    */
   private freeConflictPath(path: string, author: string): Promise<string> {
-    return firstFreeName(conflictCopyPath(path, author, new Date(this.now())), (p) =>
-      this.opts.vault.exists(p),
-    );
+    return firstFreeName(conflictCopyPath(path, author, new Date(this.now())), async (p) => {
+      const remote = this.remote.get(p);
+      return (remote !== undefined && !remote.deleted) || (await this.opts.vault.exists(p));
+    });
   }
 
   /**
