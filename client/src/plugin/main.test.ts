@@ -24,6 +24,7 @@ import { TestServer, cleanupBinary, serverBinary } from "../core/test-server.ts"
 import { ConnectionError, PROTO, Transport } from "../core/transport.ts";
 import {
   App,
+  FakeSecretStorage,
   type FakeEl,
   Platform,
   Plugin as StubPlugin,
@@ -49,6 +50,7 @@ import {
 import { base64urlEncode, randomBytes } from "../core/digest.ts";
 import { formatInviteString } from "../core/invite-string.ts";
 import { INVITE_ACTION, inviteLink, inviteQrImage } from "./invite-qr.ts";
+import { secretIdFor } from "./keychain.ts";
 
 beforeAll(async () => {
   await serverBinary();
@@ -91,8 +93,49 @@ const anInvite = (on?: TestServer): Promise<string> => (on ?? server).invite();
 const aStrangersInvite = (on?: TestServer): string =>
   formatInviteString({ token: randomBytes(16), url: (on ?? server).wsUrl, vault: DEFAULT_VAULT });
 
-/** The keys a paired device's data.json holds, and only those (plan/reuse-map.md). */
-const DEVICE_CONFIG_KEYS = ["device", "deviceId", "deviceToken", "url", "vaultId"];
+/**
+ * The keys a paired device's data.json holds, and only those (plan/reuse-map.md).
+ *
+ * The token is in the keychain on the Obsidian the stub is by default, so the
+ * file names where it went instead (PLAN.md section 2.3). `tokenOf` finds it.
+ */
+const DEVICE_CONFIG_KEYS = ["device", "deviceId", "deviceTokenIn", "url", "vaultId"];
+
+/**
+ * The keychain of the device the tests run on.
+ *
+ * One per test, handed to every `App` that `load` makes, because a plugin
+ * loaded again with the same data.json is the same device restarting, and a
+ * restart keeps the keychain. Two plugins in one test are two vaults on that
+ * device, which is also what a phone is: one keychain every vault shares. The
+ * tests that are about another device, or a keychain that went, make their
+ * own.
+ */
+let keychain: FakeSecretStorage;
+
+/** A saved pairing's token, from data.json or from the keychain it names. */
+function tokenOf(saved: unknown, from: FakeSecretStorage = keychain): string | undefined {
+  const record = saved as Record<string, string>;
+  if (record["deviceToken"] !== undefined) return record["deviceToken"];
+  if (record["deviceTokenIn"] !== "keychain") return undefined;
+  return from.getSecret(secretIdFor("Test vault", record["deviceId"]!)) ?? undefined;
+}
+
+/**
+ * A saved config as it reads, wherever its token is: the keychain marker
+ * replaced by the token it points at. For comparing a config saved before the
+ * migration with the same config after it.
+ */
+function resolved(saved: unknown, from: FakeSecretStorage = keychain): Record<string, string> {
+  const { deviceTokenIn: _in, ...rest } = saved as Record<string, string>;
+  const token = tokenOf(saved, from);
+  return token === undefined ? rest : { ...rest, deviceToken: token };
+}
+
+/** The secrets this plugin keeps in a keychain, by id. */
+function trewSecrets(from: FakeSecretStorage = keychain): string[] {
+  return from.listSecrets().filter((id) => id.startsWith("trew-"));
+}
 
 function makePlugin(
   app: App,
@@ -109,6 +152,7 @@ const loaded: Testable[] = [];
 
 beforeEach(() => {
   resetStub();
+  keychain = new FakeSecretStorage();
 });
 
 afterEach(async () => {
@@ -134,8 +178,10 @@ async function load(
   configDir?: string,
   /** A chance to make the host look like an older Obsidian before onload. */
   beforeLoad?: (plugin: Testable) => void,
+  /** The app to load into, for a test that sets up another device or an older Obsidian. */
+  host?: App,
 ): Promise<{ plugin: Testable; app: App }> {
-  const app = new App();
+  const app = host ?? new App({ secretStorage: keychain });
   if (configDir !== undefined) app.vault.configDir = configDir;
   const plugin = makePlugin(app, manifest);
   // These lifecycle tests accept sync previews; preview controls have their own tests.
@@ -2641,9 +2687,10 @@ describe("a pairing saved before it is sent", () => {
     await synced(first.plugin);
 
     const second = await load();
-    const seen: { saved: unknown; sent: string }[] = [];
+    const seen: { saved: unknown; token: string | undefined; sent: string }[] = [];
     const spy = redeemAs(async function (this: Transport, args) {
-      seen.push({ saved: structuredClone(second.plugin.savedData), sent: args.deviceId });
+      const saved = structuredClone(second.plugin.savedData);
+      seen.push({ saved, token: tokenOf(saved), sent: args.deviceId });
       return realRedeem.call(this, args);
     });
     try {
@@ -2661,7 +2708,8 @@ describe("a pairing saved before it is sent", () => {
     const finished = second.plugin.savedData as Record<string, string>;
     expect(Object.keys(finished).sort()).toEqual(DEVICE_CONFIG_KEYS);
     expect(finished["deviceId"]).toBe(pending["deviceId"]);
-    expect(finished["deviceToken"]).toBe(pending["deviceToken"]);
+    expect(seen[0]!.token, "the pending token was not saved").toBeDefined();
+    expect(tokenOf(finished)).toBe(seen[0]!.token);
     await synced(second.plugin);
   }, 300_000);
 
@@ -2760,8 +2808,10 @@ describe("a pairing saved before it is sent", () => {
     expect(second.plugin.paired).toBe(false);
     expect((second.plugin as unknown as { client?: unknown }).client).toBeUndefined();
     const kept = second.plugin.savedData as Record<string, string>;
+    const keptToken = tokenOf(kept);
     expect(kept["invite"]).toBeDefined();
     expect(kept["deviceId"]).toBe(sent);
+    expect(keptToken).toBeDefined();
 
     // The next load finishes it: the same id and token, answered `redeemed`
     // again although the invite is spent.
@@ -2770,7 +2820,7 @@ describe("a pairing saved before it is sent", () => {
     const finished = again.plugin.savedData as Record<string, string>;
     expect(Object.keys(finished).sort()).toEqual(DEVICE_CONFIG_KEYS);
     expect(finished["deviceId"]).toBe(sent);
-    expect(finished["deviceToken"]).toBe(kept["deviceToken"]);
+    expect(tokenOf(finished)).toBe(keptToken);
     expect((await first.plugin.devices()).devices).toHaveLength(2);
     await until("the note to arrive", () => again.app.vault.adapter.text("note.md") !== undefined);
     expect(again.app.vault.adapter.text("note.md")).toBe("# From the first device\n");
@@ -2826,13 +2876,15 @@ describe("a pairing saved before it is sent", () => {
       "an attempt that could not reach the server",
       () => plugin.currentState.kind === "pairing" && plugin.currentState.retryAt !== undefined,
     );
-    expect(plugin.savedData, "an unreachable server made it forget the pairing").toEqual(saved);
+    expect(resolved(plugin.savedData), "an unreachable server made it forget the pairing").toEqual(
+      resolved(saved),
+    );
     expect(plugin.paired).toBe(false);
     expect(status(plugin)).toMatch(/Finishing the pairing: could not connect/);
     expect(statusIcon(plugin)).toBe("cloud-off");
     // Not a pairable vault either: pairing over it would strand the row.
     await expect(plugin.pair(aStrangersInvite(), "other")).rejects.toThrow(/still being finished/);
-    expect(plugin.savedData).toEqual(saved);
+    expect(resolved(plugin.savedData)).toEqual(resolved(saved));
 
     // The server comes back, Try now does not wait out the backoff, and the
     // pairing finishes with the credential it was saved with.
@@ -2846,7 +2898,7 @@ describe("a pairing saved before it is sent", () => {
     const finished = plugin.savedData as Record<string, string>;
     expect(Object.keys(finished).sort()).toEqual(DEVICE_CONFIG_KEYS);
     expect(finished["deviceId"]).toBe(pending.deviceId);
-    expect(finished["deviceToken"]).toBe(pending.deviceToken);
+    expect(tokenOf(finished)).toBe(pending.deviceToken);
   }, 300_000);
 
   it("gives up a pending pairing when unlinked, and says what may be left", async () => {
@@ -4593,7 +4645,9 @@ describe("adding a device from the panel", () => {
     expect(Object.keys(a).sort()).toEqual(DEVICE_CONFIG_KEYS);
     expect(Object.keys(b).sort()).toEqual(DEVICE_CONFIG_KEYS);
     expect(b["deviceId"]).not.toBe(a["deviceId"]);
-    expect(b["deviceToken"]).not.toBe(a["deviceToken"]);
+    expect(tokenOf(a)).toBeDefined();
+    expect(tokenOf(b)).toBeDefined();
+    expect(tokenOf(b)).not.toBe(tokenOf(a));
 
     // And each is a row the other can see and cut off.
     const listed = await first.plugin.devices();
@@ -4868,6 +4922,8 @@ describe("a device the server has revoked", () => {
     const before = notes();
     expect([...before.keys()].sort()).toEqual(["From the laptop.md", "Written while revoked.md"]);
     const old = structuredClone(phone.plugin.savedData) as Record<string, string>;
+    const oldToken = tokenOf(old);
+    expect(oldToken).toBeDefined();
     expect(adapter.filePaths()).toContain(INDEX);
 
     // What touches the disk, in order.
@@ -4919,7 +4975,14 @@ describe("a device the server has revoked", () => {
     const now = phone.plugin.savedData as Record<string, string>;
     expect(Object.keys(now).sort()).toEqual([...DEVICE_CONFIG_KEYS, "ignore"].sort());
     expect(now["deviceId"]).not.toBe(old["deviceId"]);
-    expect(now["deviceToken"]).not.toBe(old["deviceToken"]);
+    expect(tokenOf(now)).toBeDefined();
+    expect(tokenOf(now)).not.toBe(oldToken);
+    // And the revoked pairing's token is gone from the keychain, now that
+    // nothing names it. The laptop's is still there: in these tests both
+    // vaults are on one device, sharing its keychain as a phone's vaults do.
+    expect(trewSecrets()).toContain(secretIdFor("Test vault", now["deviceId"]!));
+    expect(trewSecrets()).not.toContain(secretIdFor("Test vault", old["deviceId"]!));
+    expect(trewSecrets()).toHaveLength(2);
 
     // Every note this device held is still here, byte for byte, and it syncs
     // both ways as the new device it now is.
@@ -5995,4 +6058,311 @@ it("unload waits for a pause that is still draining writes", async () => {
   await pause;
   await plugin.closing;
   expect(drained).toBe(true);
+});
+
+/**
+ * Where the device token is kept (PLAN.md section 2.3, M2 task 5).
+ *
+ * In Obsidian's keychain when the app has one, so the token stops travelling
+ * with copies of `.obsidian`; in `data.json` on an older app. The keychain is
+ * written and read back before the file loses the token, and a keychain that
+ * does not read back leaves the file as it was. A vault that cannot find its
+ * token asks to be paired again, never connects as the device it was copied
+ * from, and loses no note.
+ */
+describe("where the device token is kept", () => {
+  /** A vault on another device, or under another name, with its own keychain or a shared one. */
+  const host = (options: { vaultName?: string; secretStorage?: FakeSecretStorage | null } = {}) =>
+    new App({ secretStorage: keychain, ...options });
+
+  /** The secret id a vault's device goes by. */
+  const idOf = (saved: unknown, vault = "Test vault") =>
+    secretIdFor(vault, (saved as Record<string, string>)["deviceId"]!);
+
+  /** Every file of a vault, `.obsidian` included: what a backup or iCloud copies. */
+  function copyFiles(from: App, to: App): void {
+    for (const path of from.vault.adapter.filePaths()) {
+      const text = from.vault.adapter.text(path);
+      if (text !== undefined) to.vault.adapter.seed(path, text);
+    }
+  }
+
+  const told = () => notices.map((n) => n.message).join("\n");
+
+  it("keeps the token in the keychain and out of data.json, and syncs with it after a restart", async () => {
+    await fresh();
+    const { plugin, app } = await load();
+    app.vault.adapter.seed("note.md", "kept in the keychain\n");
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+
+    const saved = plugin.savedData as Record<string, string>;
+    expect(Object.keys(saved).sort()).toEqual(DEVICE_CONFIG_KEYS);
+    expect(saved["deviceTokenIn"]).toBe("keychain");
+    const token = keychain.getSecret(idOf(saved));
+    expect(token, "the keychain does not hold the token").toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(JSON.stringify(saved), "the token is still in data.json").not.toContain(token!);
+    expect(idOf(saved)).toMatch(/^trew-test-vault-[a-z0-9-]+$/);
+    expect(idOf(saved).length).toBeLessThanOrEqual(64);
+
+    // A restart on the same device finds it and connects as the same row.
+    plugin.onunload();
+    const again = await load(saved);
+    await synced(again.plugin);
+    expect(again.plugin.deviceId).toBe(saved["deviceId"]);
+    expect(again.plugin.savedData).toEqual(saved);
+  }, 300_000);
+
+  it("keeps the token in data.json on an Obsidian without a keychain", async () => {
+    await fresh();
+    // Older than 1.11.4, which has no `app.secretStorage` at all.
+    setApiVersion("1.10.0");
+    const old = await load(null, undefined, undefined, undefined, host({ secretStorage: null }));
+    await startVault(old.plugin, "old phone");
+    await synced(old.plugin);
+    const saved = old.plugin.savedData as Record<string, string>;
+    expect(Object.keys(saved).sort()).toEqual(
+      ["device", "deviceId", "deviceToken", "url", "vaultId"].sort(),
+    );
+
+    // Reporting an old version is enough on its own: the object is not asked.
+    const reports = await load(null, undefined, undefined, undefined, host());
+    await reports.plugin.pair(await anInvite(), "reports old", true);
+    await synced(reports.plugin);
+    expect(Object.keys(reports.plugin.savedData as object)).toContain("deviceToken");
+    expect(trewSecrets()).toEqual([]);
+
+    // And a current version with no keychain object is asked, and found wanting.
+    setApiVersion("1.13.1");
+    const missing = await load(
+      null,
+      undefined,
+      undefined,
+      undefined,
+      host({ secretStorage: null }),
+    );
+    await missing.plugin.pair(await anInvite(), "no keychain", true);
+    await synced(missing.plugin);
+    expect(Object.keys(missing.plugin.savedData as object)).toContain("deviceToken");
+  }, 300_000);
+
+  it("moves a token data.json already holds into the keychain, and only after reading it back", async () => {
+    await fresh();
+    setApiVersion("1.10.0");
+    const before = await load(null, undefined, undefined, undefined, host({ secretStorage: null }));
+    before.app.vault.adapter.seed("note.md", "from before the upgrade\n");
+    await startVault(before.plugin, "laptop");
+    await synced(before.plugin);
+    const saved = structuredClone(before.plugin.savedData) as Record<string, string>;
+    const token = saved["deviceToken"]!;
+    expect(token).toBeDefined();
+    before.plugin.onunload();
+
+    // Obsidian updated to one with a keychain: the same data.json loads.
+    setApiVersion("1.13.1");
+    const writes: { record: unknown; inKeychain: string | null }[] = [];
+    const after = await load(saved, undefined, undefined, (plugin) => {
+      const save = plugin.saveData.bind(plugin);
+      plugin.saveData = async (data: unknown) => {
+        writes.push({ record: structuredClone(data), inKeychain: keychain.getSecret(idOf(saved)) });
+        await save(data);
+      };
+    });
+    copyFiles(before.app, after.app);
+    await synced(after.plugin);
+
+    // One write, and the keychain held the token before it went out.
+    expect(writes).toHaveLength(1);
+    expect(writes[0]!.inKeychain, "data.json lost the token before the keychain had it").toBe(
+      token,
+    );
+    const now = after.plugin.savedData as Record<string, string>;
+    expect(Object.keys(now).sort()).toEqual(DEVICE_CONFIG_KEYS);
+    expect(now["deviceId"]).toBe(saved["deviceId"]);
+    expect(keychain.getSecret(idOf(saved))).toBe(token);
+    expect(after.plugin.deviceId).toBe(saved["deviceId"]);
+    expect(after.app.vault.adapter.text("note.md")).toBe("from before the upgrade\n");
+  }, 300_000);
+
+  it("leaves the token in data.json when the keychain fails its read-back, and says so", async () => {
+    await fresh();
+    setApiVersion("1.10.0");
+    const before = await load(null, undefined, undefined, undefined, host({ secretStorage: null }));
+    await startVault(before.plugin, "laptop");
+    await synced(before.plugin);
+    const saved = structuredClone(before.plugin.savedData) as Record<string, string>;
+    before.plugin.onunload();
+
+    // A keychain that accepts the write and keeps nothing.
+    setApiVersion("1.13.1");
+    keychain.dropWrites = true;
+    const after = await load(saved);
+    await synced(after.plugin);
+    expect(after.plugin.savedData, "the token left data.json for a keychain that lost it").toEqual(
+      saved,
+    );
+    expect(told()).toMatch(
+      /token stays in .*data\.json, because Obsidian's keychain did not read back/,
+    );
+
+    // A new pairing on a keychain that refuses outright keeps its token in
+    // data.json the same way, and still pairs.
+    keychain.dropWrites = false;
+    keychain.unavailable = true;
+    const next = await load();
+    await next.plugin.pair(await anInvite(), "phone", true);
+    await synced(next.plugin);
+    expect(Object.keys(next.plugin.savedData as object)).toContain("deviceToken");
+    expect(trewSecrets()).toEqual([]);
+  }, 300_000);
+
+  it("keeps two tokens for two vaults on one device, and unlinking one leaves the other", async () => {
+    await fresh();
+    // One keychain for both, which is a phone.
+    const work = await load(null, undefined, undefined, undefined, host({ vaultName: "Work" }));
+    work.app.vault.adapter.seed("work.md", "work\n");
+    await startVault(work.plugin, "phone");
+    await synced(work.plugin);
+    const home = await load(null, undefined, undefined, undefined, host({ vaultName: "Home" }));
+    await home.plugin.pair(await anInvite(), "phone", true);
+    await synced(home.plugin);
+
+    const workId = idOf(work.plugin.savedData, "Work");
+    const homeId = idOf(home.plugin.savedData, "Home");
+    expect(workId).toMatch(/^trew-work-/);
+    expect(homeId).toMatch(/^trew-home-/);
+    expect(trewSecrets().sort()).toEqual([homeId, workId].sort());
+    expect(keychain.getSecret(workId)).toBeTruthy();
+    expect(keychain.getSecret(homeId)).toBeTruthy();
+    expect(keychain.getSecret(workId)).not.toBe(keychain.getSecret(homeId));
+
+    await work.plugin.unlink();
+    expect(work.plugin.savedData).toBe(null);
+    expect(trewSecrets(), "unlinking left its token in the keychain").toEqual([homeId]);
+    expect(work.app.vault.adapter.text("work.md")).toBe("work\n");
+
+    // The other vault is untouched, and still syncs as itself.
+    home.app.vault.adapter.seed("home.md", "home\n");
+    await home.plugin.syncNow();
+    await synced(home.plugin);
+    expect(home.plugin.currentState.kind).toBe("synced");
+    expect(home.plugin.paired).toBe(true);
+  }, 300_000);
+
+  it("unlinks on a keychain with no delete by emptying the secret", async () => {
+    await fresh();
+    const { plugin } = await load();
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    const id = idOf(plugin.savedData);
+    // The declarations have no delete; an app without the undeclared one.
+    (keychain as unknown as { deleteSecret: undefined }).deleteSecret = undefined;
+    await plugin.unlink();
+    expect(plugin.savedData).toBe(null);
+    expect(keychain.getSecret(id), "the token can still be read").toBe("");
+  }, 300_000);
+
+  it("keeps a pending pairing's token in the keychain, and asks to pair again when it is gone", async () => {
+    await fresh();
+    const pending = startPairing(parseInvite(await anInvite()), "phone");
+    const { deviceToken: _token, ...rest } = encodeConfig(pending);
+    const saved = { ...rest, deviceTokenIn: "keychain" };
+
+    // The keychain here does not have it: a copy, or a keychain that went.
+    const { plugin, app } = await load(saved);
+    app.vault.adapter.seed("mine.md", "written here\n");
+    await until("the stop", () => plugin.currentState.kind === "stopped");
+    expect(plugin.currentState).toMatchObject({ recovery: "pair-again" });
+    expect(told()).toMatch(/not in Obsidian's keychain on this device/);
+    expect(plugin.savedData, "the saved pairing was changed").toEqual(saved);
+
+    // And it pairs again from the panel's form.
+    choosePairing(plugin);
+    expect(built.some((s) => s.name === "Invite")).toBe(true);
+    await plugin.pair(await anInvite(), "phone", true);
+    await synced(plugin);
+    expect(tokenOf(plugin.savedData)).toBeDefined();
+    expect(app.vault.adapter.text("mine.md")).toBe("written here\n");
+  }, 300_000);
+
+  it("never connects a copy of the vault on another device as the device", async () => {
+    await fresh();
+    const laptop = await load();
+    laptop.app.vault.adapter.seed("note.md", "the original\n");
+    await startVault(laptop.plugin, "laptop");
+    await synced(laptop.plugin);
+
+    // A backup of the whole folder, .obsidian included, opened on another
+    // machine: its own keychain, which has never seen this token.
+    const elsewhere = new FakeSecretStorage();
+    const copyApp = host({ secretStorage: elsewhere });
+    copyFiles(laptop.app, copyApp);
+    const copied = structuredClone(laptop.plugin.savedData);
+    expect(JSON.stringify(copied)).not.toContain(tokenOf(copied)!);
+    const { sockets, restore } = recordSockets();
+    let copy: Awaited<ReturnType<typeof load>>;
+    try {
+      copy = await load(copied, undefined, undefined, undefined, copyApp);
+      await until("the stop", () => copy.plugin.currentState.kind === "stopped");
+      expect(sockets, "the copy connected with a credential it should not have").toEqual([]);
+    } finally {
+      restore();
+    }
+    expect(copy.plugin.currentState).toMatchObject({ recovery: "pair-again" });
+    expect(told()).toMatch(/not in Obsidian's keychain on this device/);
+    expect(copy.plugin.savedData).toEqual(copied);
+    expect(elsewhere.listSecrets()).toEqual([]);
+
+    // Pairing it makes it a device of its own and leaves the laptop alone.
+    await copy.plugin.pair(await anInvite(), "desktop", true);
+    await synced(copy.plugin);
+    expect(copy.plugin.deviceId).not.toBe(laptop.plugin.deviceId);
+    expect(copy.app.vault.adapter.text("note.md")).toBe("the original\n");
+    const rows = (await laptop.plugin.devices()).devices.map((d) => d.name).sort();
+    expect(rows).toEqual(["desktop", "laptop"]);
+    await laptop.plugin.syncNow();
+    await synced(laptop.plugin);
+  }, 300_000);
+
+  it("asks to pair again when a keychain entry went or the vault was renamed, and loses no note", async () => {
+    await fresh();
+    const first = await load();
+    first.app.vault.adapter.seed("a.md", "first note\n");
+    first.app.vault.adapter.seed("b.md", "second note\n");
+    await startVault(first.plugin, "laptop");
+    await synced(first.plugin);
+    const saved = structuredClone(first.plugin.savedData) as Record<string, string>;
+    first.plugin.onunload();
+    await first.plugin.closing;
+
+    // Renamed: the same keychain, and a name that points at no secret.
+    const renamedApp = host({ vaultName: "Renamed" });
+    copyFiles(first.app, renamedApp);
+    const renamed = await load(saved, undefined, undefined, undefined, renamedApp);
+    await until("the stop", () => renamed.plugin.currentState.kind === "stopped");
+    expect(renamed.plugin.currentState).toMatchObject({ recovery: "pair-again" });
+    renamed.plugin.onunload();
+
+    // Lost: the keychain cleared under the same vault.
+    keychain.clear();
+    const lostApp = host();
+    copyFiles(first.app, lostApp);
+    const lost = await load(saved, undefined, undefined, undefined, lostApp);
+    await until("the stop", () => lost.plugin.currentState.kind === "stopped");
+    expect(lost.plugin.currentState).toMatchObject({ recovery: "pair-again" });
+    expect(lost.plugin.savedData, "the saved pairing was changed").toEqual(saved);
+
+    await lost.plugin.pair(await anInvite(), "laptop", true);
+    await synced(lost.plugin);
+    expect(lost.app.vault.adapter.text("a.md")).toBe("first note\n");
+    expect(lost.app.vault.adapter.text("b.md")).toBe("second note\n");
+    expect(trewSecrets()).toEqual([idOf(lost.plugin.savedData)]);
+    // And the server still holds both, as a new device finds.
+    const check = await load(null, undefined, undefined, undefined, host({ vaultName: "Check" }));
+    await check.plugin.pair(await anInvite(), "check");
+    await synced(check.plugin);
+    await until("the notes to arrive", () => check.app.vault.adapter.text("b.md") !== undefined);
+    expect(check.app.vault.adapter.text("a.md")).toBe("first note\n");
+    expect(check.app.vault.adapter.text("b.md")).toBe("second note\n");
+  }, 300_000);
 });

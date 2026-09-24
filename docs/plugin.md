@@ -97,6 +97,31 @@ field says so.
 
 </details>
 
+### Where this device's token is kept
+
+A paired device connects with its own random token. On Obsidian 1.11.4 and
+later, TrewSync keeps that token in Obsidian's keychain (**Settings → Keychain**
+lists it as `trew-<vault>-<device>`), and the plugin's `data.json` keeps only
+the rest of the pairing. On an older Obsidian the token stays in `data.json`,
+as it always did; TrewSync still installs there.
+
+The keychain belongs to Obsidian on this device, not to the vault folder, so a
+backup, an iCloud or git copy, or a copy of `.obsidian` does not carry the
+token. A copy opened elsewhere cannot sync as this device: its panel says the
+token is not in this device's keychain and shows **Pair this device again**.
+Pairing it with a new invite adds it as a device of its own.
+
+A vault paired on an older Obsidian moves its token into the keychain the first
+time a newer one loads it. TrewSync writes the keychain, reads the token back,
+and only then removes it from `data.json`. If the keychain does not read it
+back, the token stays in `data.json`, sync carries on, and a notice says so.
+
+If the token cannot be found (the keychain was reset, or the vault folder was
+renamed, which changes the name the token is kept under), TrewSync stops and
+offers **Pair this device again**. No note is lost: pair with a new invite,
+confirm combining the notes, and it syncs as a new device. Revoke the old row
+under **Devices** once you no longer need it.
+
 ## What it does
 
 TrewSync syncs shortly after edits and checks periodically while Obsidian is open.
@@ -410,7 +435,8 @@ The [technical design](design.md#file-replacement) explains these paths.
 ## Unlink
 
 **Manage this vault → Unlink this vault** stops syncing here and removes the
-local pairing and sync index. Your notes remain on this device and the server.
+local pairing, its token in Obsidian's keychain and the sync index. Your notes
+remain on this device and the server.
 Pair again to resume. Unlinking locally does not revoke the server's device
 record; use **Devices** when you want to remove access.
 

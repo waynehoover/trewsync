@@ -26,6 +26,11 @@ does not work with a TrewSync server, and moving a vault is a new pairing.
   `trew1i_` invite that carries the server's address and the vault's name. An
   invite expires after one hour by default. A server with no devices writes
   the first one to `first-invite` in its data directory, never to its log.
+- **The device token is kept in Obsidian's keychain** on Obsidian 1.11.4 and
+  later, not in the plugin's `data.json`, so a backup or synced copy of the
+  vault cannot connect as the device. Older Obsidian keeps it in `data.json`.
+  A copy, a renamed vault or a cleared keychain asks to pair again and loses
+  no note.
 - **Names.** The product is TrewSync; the server's command is `trewd`, the
   headless client's is `trew`, the plugin id and npm package are `trew-sync`.
 - **Paths.** The server refuses a path Obsidian could not hold everywhere

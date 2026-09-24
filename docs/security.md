@@ -57,9 +57,21 @@ losing every device loses no synced note: run `trewd invite` on the server to
 pair a new one. That also means shell access to the server host is access to
 the vault.
 
-A paired device keeps its credential locally. Protect device accounts, disks,
-and copies of the plugin's or the command-line client's state: a copy of that
-state can connect as the device until you revoke it.
+A paired device keeps its credential locally. In Obsidian 1.11.4 and later the
+plugin keeps it in Obsidian's keychain, which the operating system protects
+(the macOS Keychain, Windows DPAPI, libsecret on Linux, the iOS Keychain or the
+Android Keystore), and not in the vault folder, so a backup or synced copy of
+the vault or its `.obsidian` folder does not carry it and cannot connect as the
+device. On an older Obsidian, or when the keychain fails to read the token
+back, it stays in the plugin's `data.json` inside `.obsidian`. The
+command-line client keeps it in its `0600` config file. Protect device
+accounts, disks and copies of that state: a copy of a credential can connect
+as the device until you revoke it.
+
+On a desktop where Obsidian cannot encrypt the keychain (some Linux setups
+without a secret service), Obsidian keeps it unencrypted in its own storage and
+warns once. The token is then still out of the vault folder, but only as safe
+as your user account.
 
 ## If a device is lost or stolen
 
