@@ -84,6 +84,15 @@ import { timedVault } from "../core/vault.ts";
 import type { JournalSaveCost, JournalStoreOptions } from "../core/index-journal-store.ts";
 import { INVITE_ACTION, inviteQrImage } from "./invite-qr.ts";
 import { checkFirstSync, MergeConfirmationRequired } from "./first-sync.ts";
+import {
+  IN_KEYCHAIN,
+  TOKEN_IN,
+  keepInKeychain,
+  keychainOf,
+  removeFromKeychain,
+  secretIdFor,
+  tokenInKeychain,
+} from "./keychain.ts";
 
 /**
  * Where the plugin's running commentary goes: the developer console, at the
@@ -263,6 +272,16 @@ export default class TrewPlugin extends Plugin {
    * hold the only copy of that row's token.
    */
   private unreadable: string | undefined;
+  /**
+   * The keychain id `data.json` points at, while it points at one.
+   *
+   * Set when a config is read or written with its token in the keychain, and
+   * cleared when the token goes back to `data.json` or the pairing goes. It is
+   * how a new pairing, an unlink or a refused redemption finds the secret the
+   * old one left, so a credential that opens nothing any more does not stay in
+   * the keychain after the file that named it has moved on.
+   */
+  private secretInUse: string | undefined;
   /** Whether this pairing has ever completed a handshake since the plugin loaded. */
   private everConnected = false;
   /** The pairing in progress, so a second press cannot start another. */
@@ -485,7 +504,8 @@ export default class TrewPlugin extends Plugin {
         `${this.pluginDir()}/activity.json`,
       );
       await this.activityLog.load();
-      this.config = await this.readConfig();
+      const config = await this.readConfig();
+      this.config = config === undefined ? undefined : await this.moveTokenToKeychain(config);
     } catch (err) {
       // Rule 2: an unreadable config is not an unpaired vault. Starting
       // over would write a new credential over one that may be the only
@@ -862,7 +882,11 @@ export default class TrewPlugin extends Plugin {
     try {
       deviceCredential(config);
     } catch (err) {
-      if (current()) this.stop(err as Error);
+      // A token that went to a keychain this vault cannot reach is not a
+      // config nothing wrote: it is a copy, a rename or a lost entry, and the
+      // way on is a new pairing, which the stop offers.
+      const lost = tokenNotHere.get(config);
+      if (current()) this.stop(lost !== undefined ? new TokenNotHere(lost) : (err as Error));
       return;
     }
     const refusal = await this.runOnce(config, mine);
@@ -1074,7 +1098,7 @@ export default class TrewPlugin extends Plugin {
       recovery === "rejoin"
         ? `TrewSync has stopped: ${cause.message}. ${REJOIN_ADVICE}`
         : recovery === "pair-again"
-          ? this.everConnected
+          ? this.everConnected || cause instanceof TokenNotHere
             ? `TrewSync has stopped: ${cause.message}. ${PAIR_AGAIN_ADVICE}`
             : `TrewSync could not join this vault: ${cause.message}. If the invite was for another ` +
               `vault, or this device was revoked, open the TrewSync panel and pair it again with a ` +
@@ -1783,7 +1807,57 @@ export default class TrewPlugin extends Plugin {
     // failed read or JSON parse. The latter must not permit a new pairing.
     if (raw === undefined) throw new Error(`Obsidian could not read ${this.dataPath}`);
     if (raw === null) return undefined;
-    return decodeConfig(raw, "the TrewSync plugin's saved settings");
+    const where = "the TrewSync plugin's saved settings";
+    if (typeof raw !== "object" || (raw as Record<string, unknown>)[TOKEN_IN] !== IN_KEYCHAIN) {
+      return decodeConfig(raw, where);
+    }
+    return this.withKeychainToken(raw as Record<string, unknown>, where);
+  }
+
+  /**
+   * A saved config whose token is in the keychain, with the token put back.
+   *
+   * The id is worked out from this vault's name and the saved device id, not
+   * read from the file, so a copy of the vault names the secret its own name
+   * gives it and finds nothing (PLAN.md section 2.3). On a desktop the keychain
+   * is the vault's own, and a copy finds nothing whatever it is called.
+   *
+   * Nothing found is not an unreadable file and not an unpaired vault (rule
+   * 2). The config is kept without its token, and without the invite of a
+   * pairing still being finished, since that cannot be finished with a
+   * credential that is not here. `runLoop` stops on it and the panel offers a
+   * new pairing, which writes over this one only once it is saved and read
+   * back. Every note stays where it is.
+   */
+  private withKeychainToken(raw: Record<string, unknown>, where: string): DeviceConfig {
+    const record: Record<string, unknown> = { ...raw };
+    delete record[TOKEN_IN];
+    const deviceId = record["deviceId"];
+    const keychain = keychainOf(this.app);
+    const id = typeof deviceId === "string" ? secretIdFor(this.vaultName(), deviceId) : undefined;
+    const token =
+      keychain !== undefined && id !== undefined ? tokenInKeychain(keychain, id) : undefined;
+    if (record["deviceToken"] === undefined && token !== undefined) record["deviceToken"] = token;
+    if (record["deviceToken"] !== undefined) {
+      const config = decodeConfig(record, where);
+      if (token !== undefined) this.secretInUse = id;
+      return config;
+    }
+    delete record["invite"];
+    const config = decodeConfig(record, where);
+    tokenNotHere.set(
+      config,
+      keychain === undefined
+        ? "this device's token was kept in Obsidian's keychain, and this Obsidian has none"
+        : "this device's token is not in Obsidian's keychain on this device. That is what a " +
+            "copy of the vault, a vault that was renamed or a keychain that was cleared looks like",
+    );
+    return config;
+  }
+
+  /** The vault's name, which scopes its secret in a keychain every vault may share. */
+  private vaultName(): string {
+    return this.app.vault.getName();
   }
 
   /**
@@ -2700,7 +2774,9 @@ export default class TrewPlugin extends Plugin {
    * `invite` only while the pairing is pending.
    */
   private async saveVerified(config: DeviceConfig): Promise<void> {
-    const record = encodeConfig(config);
+    const wanted = JSON.stringify(encodeConfig(config));
+    const { record, secret } = this.recordFor(config);
+    const previous = this.secretInUse;
     await this.saveData(record);
     let back: DeviceConfig | undefined;
     try {
@@ -2708,8 +2784,79 @@ export default class TrewPlugin extends Plugin {
     } catch (err) {
       throw new Error(`${this.dataPath} could not be read back: ${(err as Error).message}`);
     }
-    if (back === undefined || JSON.stringify(encodeConfig(back)) !== JSON.stringify(record)) {
+    // The token read back from wherever the record says it is, so this one
+    // comparison covers both halves: the file, and the keychain it points at.
+    if (back === undefined || JSON.stringify(encodeConfig(back)) !== wanted) {
       throw new Error(`${this.dataPath} did not read back as it was written`);
+    }
+    this.secretInUse = secret;
+    // Only now, with what replaces it saved and read back (rule 3): the
+    // secret of the pairing this one replaced, a device the server refused or
+    // a copy's lost entry, opens nothing this vault still uses.
+    if (previous !== undefined && previous !== secret) this.dropSecret(previous);
+  }
+
+  /**
+   * What `data.json` holds for a config, and the keychain id its token went
+   * to, if it went to one.
+   *
+   * The keychain is written and read back first (rule 4), and only a token
+   * that read back is left out of the file; one that did not stays in
+   * `data.json`, as it does on an Obsidian with no keychain, and the plugin
+   * says so once. The order is the migration's too: a token already in the
+   * file comes out of it only after the keychain holds it (rule 3).
+   */
+  private recordFor(config: DeviceConfig): {
+    record: Record<string, string>;
+    secret: string | undefined;
+  } {
+    const record = encodeConfig(config);
+    const keychain = keychainOf(this.app);
+    if (keychain === undefined || !config.deviceId || !config.deviceToken) {
+      return { record, secret: undefined };
+    }
+    const id = secretIdFor(this.vaultName(), config.deviceId);
+    const refused = keepInKeychain(keychain, id, config.deviceToken);
+    if (refused !== undefined) {
+      this.keychainRefused(refused);
+      return { record, secret: undefined };
+    }
+    const { deviceToken: _token, ...rest } = record;
+    return { record: { ...rest, [TOKEN_IN]: IN_KEYCHAIN }, secret: id };
+  }
+
+  /** Said once per load: the token stays in `data.json`, and why. */
+  private toldKeychainRefused = false;
+  private keychainRefused(why: string): void {
+    console.warn("TrewSync: keeping this device's token in data.json:", why);
+    if (this.toldKeychainRefused) return;
+    this.toldKeychainRefused = true;
+    new Notice(
+      `TrewSync: this device's token stays in ${this.dataPath}, because ${why}. It syncs as ` +
+        "before; a copy of this vault's .obsidian folder carries the token with it until the " +
+        "keychain works.",
+      15_000,
+    );
+  }
+
+  /**
+   * Removes a secret this vault no longer points at.
+   *
+   * After the file that named it has moved on, so a failure here strands a
+   * credential in the keychain and loses nothing: it is said, with the id to
+   * remove by hand in Settings, Keychain.
+   */
+  private dropSecret(id: string): void {
+    const keychain = keychainOf(this.app);
+    if (keychain === undefined) return;
+    try {
+      removeFromKeychain(keychain, id);
+    } catch (err) {
+      new Notice(
+        `TrewSync could not remove ${id} from Obsidian's keychain (${(err as Error).message}). ` +
+          "It opens nothing this vault uses now; remove it in Settings, Keychain.",
+        15_000,
+      );
     }
   }
 
@@ -2723,6 +2870,40 @@ export default class TrewPlugin extends Plugin {
       throw new Error(`${this.dataPath} could not be read back: ${(err as Error).message}`);
     }
     if (back !== undefined) throw new Error(`${this.dataPath} still holds a pairing`);
+    this.forgetSecret();
+  }
+
+  /** The keychain half of forgetting a pairing, after the file half is proven. */
+  private forgetSecret(): void {
+    const id = this.secretInUse;
+    this.secretInUse = undefined;
+    if (id !== undefined) this.dropSecret(id);
+  }
+
+  /**
+   * Moves a token that `data.json` still holds into the keychain, once, at load.
+   *
+   * `saveVerified` does the work in the order the rules want it: keychain
+   * written and read back, then the file rewritten without the token and read
+   * back. A keychain that fails its read-back leaves the file as it was, token
+   * included, and says so. A save that fails part way leaves either the old
+   * file or the new one with the token in a keychain that read it back, and
+   * the config is read again to find out which (rule 4).
+   */
+  private async moveTokenToKeychain(config: DeviceConfig): Promise<DeviceConfig | undefined> {
+    if (config.deviceToken === undefined || this.secretInUse !== undefined) return config;
+    if (keychainOf(this.app) === undefined) return config;
+    try {
+      await this.trackStateWrite(this.saveVerified(config));
+      return config;
+    } catch (err) {
+      new Notice(
+        `TrewSync could not move this device's token into Obsidian's keychain: ` +
+          `${(err as Error).message}.`,
+        15_000,
+      );
+      return this.readConfig();
+    }
   }
 
   /**
@@ -2814,6 +2995,8 @@ export default class TrewPlugin extends Plugin {
         `the pairing could not be removed from ${this.dataPath}: ${(err as Error).message}`,
       );
     }
+    // Last, once nothing names it: the token goes from the keychain too.
+    this.forgetSecret();
     this.config = undefined;
     this.paused = false;
     this.failedPairing = undefined;
@@ -3058,6 +3241,25 @@ function literalInput(field: TextComponent, address = false): void {
   if (address) field.inputEl.inputMode = "url";
 }
 
+/**
+ * Configs read without their token because the keychain did not have it, and
+ * why, for the stop that follows (`withKeychainToken`).
+ *
+ * Keyed by the object rather than kept on the plugin, because the config that
+ * reaches `runLoop` is the one that was read: a later read, or a new pairing,
+ * is a different object and carries nothing from this one.
+ */
+const tokenNotHere = new WeakMap<DeviceConfig, string>();
+
+/**
+ * The stop for a vault whose token belongs to a keychain it cannot reach.
+ *
+ * Its own class so `recoveryFor` can offer a new pairing for it: the panel
+ * draws the pairing form in place of the paired panel, whose every row needs
+ * the token that is not here.
+ */
+class TokenNotHere extends Error {}
+
 function offersRejoin(state: State): boolean {
   return state.kind === "stopped" && state.recovery === "rejoin";
 }
@@ -3079,6 +3281,7 @@ function offersPairAgain(state: State): boolean {
  * a new pairing is the only thing that changes that.
  */
 function recoveryFor(cause: Error): "rejoin" | "pair-again" | undefined {
+  if (cause instanceof TokenNotHere) return "pair-again";
   if (!(cause instanceof ProtocolError)) return undefined;
   if (cause.code === "cursor") return "rejoin";
   if (cause.fatal && (cause.code === "auth" || cause.code === "nodevice")) return "pair-again";

@@ -263,6 +263,11 @@ type VaultEvent = "create" | "modify" | "delete" | "rename";
 
 export class FakeVault {
   readonly adapter = new FakeAdapter();
+  /** The vault's folder name, which is what Obsidian's `getName` answers. */
+  name = "Test vault";
+  getName(): string {
+    return this.name;
+  }
 
   /** What the plugin reads instead of asking the adapter about every file. */
   getAllLoadedFiles() {
@@ -371,9 +376,74 @@ export class FakeWorkspace {
   }
 }
 
+/**
+ * Obsidian's keychain, `app.secretStorage`, as the shipped 1.13.7 behaves.
+ *
+ * Read out of `obsidian.asar` rather than assumed (see keychain.ts):
+ *
+ *  - `setSecret` throws for an id that is not `/^[a-z0-9-]+$/` or is longer
+ *    than 64 characters, and throws "Secure storage is not available." on a
+ *    platform with none. It stores in memory at once; the write to disk
+ *    behind it is not awaited.
+ *  - `getSecret` answers from memory, and null for an id it does not hold.
+ *  - `listSecrets` is the ids held, an emptied one included.
+ *  - `deleteSecret` exists at runtime, answers whether there was one, and is
+ *    not in the declarations.
+ *
+ * One instance may be handed to several `App`s, which is a phone: every vault
+ * there shares one keychain. A desktop gives each vault its own, which is a
+ * fresh instance per `App`, the default.
+ *
+ * Two faults, for the tests that need a keychain to misbehave:
+ * `unavailable` makes every write throw as the app does with no secure
+ * storage, and `dropWrites` accepts a write and keeps nothing, which is what a
+ * read-back is there to catch.
+ */
+export class FakeSecretStorage {
+  private readonly secrets = new Map<string, string>();
+  unavailable = false;
+  dropWrites = false;
+
+  setSecret(id: string, secret: string): void {
+    if (this.unavailable) throw new Error("Secure storage is not available.");
+    if (!/^[a-z0-9-]+$/.test(id) || id.length > 64) {
+      throw new Error("Secret ID must be lowercase alphanumeric with optional dashes.");
+    }
+    if (this.dropWrites) return;
+    this.secrets.set(id, secret);
+  }
+
+  getSecret(id: string): string | null {
+    return this.secrets.get(id) ?? null;
+  }
+
+  listSecrets(): string[] {
+    return [...this.secrets.keys()];
+  }
+
+  deleteSecret(id: string): boolean {
+    return this.secrets.delete(id);
+  }
+
+  /** Everything, gone: a keychain that was reset, or one that failed to load. */
+  clear(): void {
+    this.secrets.clear();
+  }
+}
+
 export class App {
   readonly vault = new FakeVault();
   readonly workspace = new FakeWorkspace();
+  /** Undefined is an Obsidian older than 1.11.4, which has no keychain. */
+  secretStorage: FakeSecretStorage | undefined;
+
+  constructor(options: { vaultName?: string; secretStorage?: FakeSecretStorage | null } = {}) {
+    if (options.vaultName !== undefined) this.vault.name = options.vaultName;
+    this.secretStorage =
+      options.secretStorage === null
+        ? undefined
+        : (options.secretStorage ?? new FakeSecretStorage());
+  }
 }
 
 /* ---------------------------------------------------------------- *

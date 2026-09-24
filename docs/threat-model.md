@@ -80,7 +80,7 @@ owner decided, with the date and what it costs).
 | C4 | A revoke means no later mutation from that credential commits, no queued one completes, and no live subscription keeps delivering | control socket and commit boundary (M1) | planned |
 | C5 | Invites expire by default (one hour); the invite `serve` mints for the first device goes to a 0600 file, never a log | `serve` (M1) | planned |
 | C6 | No credential in a URL query string, including any future event stream | review rule; test on the MCP endpoint (M4) | planned |
-| C7 | The plugin keeps its device token in Obsidian's keychain when the app has one, scoped to vault and device, so a copied `.obsidian` does not carry a working credential | plugin (M2) | planned |
+| C7 | The plugin keeps its device token in Obsidian's keychain when the app has one, scoped to vault and device, so a copied `.obsidian` does not carry a working credential | `client/src/plugin/keychain.ts` (M2) | enforced; tested with a copied vault and a lost keychain entry |
 | C8 | Secret files (the first invite, `mcp-token --key-out`) are written atomically at mode 0600 | M1, M4 | planned |
 
 ### The agent endpoint
