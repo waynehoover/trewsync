@@ -68,11 +68,19 @@ case "$1" in
   *) exit 2 ;;
 esac
 SH
-chmod +x "$scratch/bin/gh" "$scratch/bin/docker" "$scratch/bin/npm"
+# packslip, which says yes unless told to refuse, and records the pin it was
+# given so the test can see it was the release workflow's.
+cat > "$scratch/bin/packslip" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$TREW_VERIFY_FIXTURE/../packslip.args"
+[ -z "${TREW_VERIFY_PACKSLIP_REFUSE:-}" ] || { echo "signature does not verify" >&2; exit 1; }
+SH
+chmod +x "$scratch/bin/gh" "$scratch/bin/docker" "$scratch/bin/npm" "$scratch/bin/packslip"
 export PATH="$scratch/bin:$PATH"
 
 plugin_assets=(main.js manifest.json styles.css)
-server_assets=(trewd-linux-amd64 trewd-linux-arm64 trewd-darwin-amd64 trewd-darwin-arm64)
+server_assets=(trewd-linux-amd64 trewd-linux-arm64 trewd-linux-riscv64 trewd-darwin-amd64
+  trewd-darwin-arm64 trewd-freebsd-amd64 trewd-freebsd-arm64)
 fixture() {
   local asset
   rm -f "$scratch/assets/"*
@@ -84,6 +92,8 @@ fixture() {
     for asset in "${server_assets[@]}"; do
       printf 'binary fixture for %s\n' "$asset" > "$scratch/assets/$asset"
     done
+    # Not in SHA256SUMS: packslip uploads it after the sums are written.
+    printf '{"mediaType":"fixture"}\n' > "$scratch/assets/packslip.server.sigstore.json"
   fi
 }
 sums() { ( cd "$scratch/assets" && shasum -a 256 "$@" > SHA256SUMS ); }
@@ -121,6 +131,23 @@ done
 fixture server
 sums "${server_assets[@]}"
 TREW_VERIFY_SERVER_VERSION=1.2.30 check 1 server 'a different version containing the requested version'
+
+# The signed manifest: present, verified against the release workflow's pin,
+# and the release refused when it is missing or does not verify.
+fixture server
+sums "${server_assets[@]}"
+check 0 server 'a server release with its manifest'
+pin=$(tr '\n' ' ' < "$scratch/packslip.args")
+case "$pin" in
+  *"--identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@ --issuer https://token.actions.githubusercontent.com"*"--artifact"*)
+    echo "ok: the manifest is checked against the release workflow, with the binaries" ;;
+  *)
+    echo "FAIL: packslip was not given the release pin and the binaries: $pin"
+    failures=$((failures + 1)) ;;
+esac
+TREW_VERIFY_PACKSLIP_REFUSE=1 check 1 server 'a manifest packslip refuses'
+rm "$scratch/assets/packslip.server.sigstore.json"
+check 1 server 'a server release without its manifest'
 check 0 cli 'the CLI reports the requested version'
 TREW_VERIFY_CLI_VERSION=1.2.30 check 1 cli 'the CLI reports a different version containing the requested version'
 

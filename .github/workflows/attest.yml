@@ -1,6 +1,7 @@
 # Signs what a release hands people, so anyone can check the bytes were built
 # from this repository at that commit and not pasted in by hand. The plugin's
-# three files, and the server's four binaries.
+# three files, and the server's binaries, one per platform in .goreleaser.yml,
+# with the signed packslip manifest `trewd update` and mise install from.
 #
 # It rebuilds them here rather than attesting whatever was uploaded, because an
 # attestation over a file of unknown origin says only that this workflow saw it.
@@ -246,52 +247,58 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The same four targets and the same flags as scripts/release.sh, because
-      # the point is to rebuild what was uploaded rather than to build something
-      # near it. Go stamps the commit into the binary itself, so this is
-      # reproducible per commit: rebuilding server/v0.1.4 from a clean worktree
-      # gave the published bytes exactly, which is what makes --clobber safe.
+      # Every platform in .goreleaser.yml, through scripts/build-server.sh,
+      # which is also what scripts/release.sh built the draft's copies with,
+      # because the point is to rebuild what was uploaded rather than to build
+      # something near it. Go stamps the commit into the binary itself and the
+      # flags are the release flags, so this is reproducible per commit:
+      # rebuilding server/v0.1.4 from a clean worktree gave the published bytes
+      # exactly, which is what makes --clobber safe. goreleaser works under
+      # release/, which git ignores, so no binary it writes can mark a later
+      # target's build as modified.
       - name: build
         env:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           version="${TAG#server/v}"
-          # Keep every build output outside the checkout until all targets
-          # finish, so earlier binaries do not mark later builds as modified.
-          build_dir=$(mktemp -d "$RUNNER_TEMP/trew-attest.XXXXXX")
-          trap 'rm -rf "$build_dir"' EXIT
-          for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
-            goos="${target%/*}"
-            goarch="${target#*/}"
-            ( CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-                go build -trimpath -ldflags "-s -w -X main.version=$version" \
-                -o "$build_dir/trewd-$goos-$goarch" ./cmd/trewd )
-          done
-          mkdir -p attested
-          cp "$build_dir"/trewd-* attested/
+          scripts/build-server.sh "$version" attested
           ls -l attested
 
-      # Generated here rather than uploaded from a laptop, so it says something
-      # about the binaries beside it instead of about itself.
+      # Written by goreleaser over the binaries it just built rather than
+      # uploaded from a laptop, so it says something about the binaries beside
+      # it instead of about itself. Checked here as well as written.
       - name: checksums
         working-directory: attested
         run: |
-          shasum -a 256 trewd-* > SHA256SUMS
           cat SHA256SUMS
+          shasum -a 256 -c SHA256SUMS
+
+      # For the check below. The arm64 and riscv64 binaries are the ones no
+      # runner here can start without an emulator, which is exactly why they
+      # would otherwise be the ones never started.
+      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+        with:
+          platforms: arm64,riscv64
 
       # A binary that reports a version other than the tag it ships under is
-      # the same lie the plugin's manifest check refuses.
+      # the same lie the plugin's manifest check refuses. Every Linux binary,
+      # not only the runner's: a build for another architecture is its own
+      # compilation, and the way it would fail is not starting at all.
       - name: the tag and the binary agree
         env:
           TAG: ${{ inputs.tag }}
         run: |
+          set -euo pipefail
           want="${TAG#server/v}"
-          got=$(./attested/trewd-linux-amd64 version | awk '{print $2}')
-          if [ "$want" != "$got" ]; then
-            echo "release $TAG carries a binary calling itself $got" >&2
-            exit 1
-          fi
+          for arch in amd64 arm64 riscv64; do
+            got=$(./attested/trewd-linux-$arch version | awk '{print $2}')
+            echo "linux/$arch: $got"
+            if [ "$want" != "$got" ]; then
+              echo "release $TAG carries a linux/$arch binary calling itself $got" >&2
+              exit 1
+            fi
+          done
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -304,6 +311,43 @@ jobs:
         run: |
           gh release upload "$TAG" attested/trewd-* attested/SHA256SUMS \
             --clobber --repo "$GITHUB_REPOSITORY"
+
+      # What the manifest below says it was built from. This workflow is
+      # started by hand from a branch, so its own commit is that branch's head
+      # and not the release's (packslip's "Publish a different source commit").
+      - name: the release commit
+        id: source
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#server/v}" >> "$GITHUB_OUTPUT"
+
+      # The signed release manifest, packslip.server.sigstore.json, uploaded to
+      # the draft beside the binaries (docs/development.md, "Releases").
+      #
+      # Keyless: signed with this workflow's own GitHub identity, which is what
+      # `trewd update` pins and what mise checks, so there is no signing key to
+      # keep. The project is the repository plus `server`, because the plugin
+      # releases from the same repository on bare tags, and `server/` is also
+      # the prefix of this line's tags, which is how a consumer reads 0.2.0 out
+      # of `server/v0.2.0`. The version is passed rather than left to the
+      # action, which would take the tag minus a leading `v` and cannot read
+      # this one.
+      #
+      # `attest: link`, because the step above has already attested these exact
+      # files; the manifest links that provenance by digest instead of making a
+      # second statement about the same bytes. The plugin and the npm package
+      # are not in it: nothing that installs either reads packslip.
+      - uses: jdx/packslip@4920350c39c234c7a969f9775040bd02829f1923 # v1.3.0
+        with:
+          project: github.com/${{ github.repository }}/server
+          tag: ${{ inputs.tag }}
+          version: ${{ steps.source.outputs.version }}
+          commit: ${{ steps.source.outputs.commit }}
+          artifacts: attested/trewd-*
+          bin: trewd
+          attest: link
 
       # Last, and only now (R16). See the plugin job.
       - name: publish
