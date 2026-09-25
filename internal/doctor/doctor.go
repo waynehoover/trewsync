@@ -349,13 +349,15 @@ func (r *run) storage() {
 			"Check /proc/self/mounts is readable, or run doctor on the host.")
 		return
 	}
-	where := s.FSType
-	if where == "" {
-		where = "a filesystem this platform has no mount table for"
-	} else {
-		where = fmt.Sprintf("%s mounted at %s", s.FSType, s.MountPoint)
-	}
-	if s.Ephemeral {
+	where := fmt.Sprintf("%s mounted at %s", s.FSType, s.MountPoint)
+	switch {
+	case s.FSType == "":
+		// macOS and Windows have no mount table to read, and "survives a
+		// restart" would be a claim nothing here checked.
+		r.note(CheckStorage, fmt.Sprintf("%s is on storage doctor cannot inspect on this platform, so it cannot "+
+			"tell whether a restart erases it", s.Dir), "A RAM disk or a container's own layer would lose every note; "+
+			"check the data directory is on a persistent disk or volume.")
+	case s.Ephemeral:
 		why := "a RAM-backed filesystem, erased at the next restart"
 		if !ramBacked[s.FSType] {
 			why = "the container's own writable layer, erased when the container is replaced, which every upgrade does"
@@ -363,7 +365,7 @@ func (r *run) storage() {
 		r.bad(Fail, CheckStorage, fmt.Sprintf("%s is on %s: %s", s.Dir, where, why),
 			"Mount a persistent volume at the data directory (compose.yaml mounts ./trew/data at /data) and move the "+
 				"store onto it with the server stopped. Until then every note here is one restart from gone.")
-	} else {
+	default:
 		r.ok(CheckStorage, fmt.Sprintf("%s is on %s, which survives a restart", s.Dir, where))
 	}
 	if enc := s.Encryption(); enc != "" {
@@ -948,12 +950,12 @@ func (r *run) backup() {
 	found, err := ReadRecord(r.opt.DataDir, BackupRecordFile, &rec)
 	switch {
 	case err != nil:
-		r.bad(Warn, CheckBackup, err.Error(), "Take a backup: `trewd backup -to DIR` writes the record again.")
+		r.bad(Warn, CheckBackup, err.Error(), "Take a backup: `trewd backup` writes the record again.")
 		return
 	case !found:
 		r.bad(Warn, CheckBackup, "no backup of this data directory is recorded",
-			"Take one: `trewd backup -to DIR`, then `trewd verify -deep -data DIR`, on encrypted storage. "+
-				"docs/operations.md has the nightly schedule.")
+			"Take one: `trewd backup -to FILE -recipients-file KEY.pub`, encrypted to a key `trewd backup-key` "+
+				"makes. docs/operations.md, \"Backups\", has the key and the nightly schedule.")
 		return
 	case !rec.OK:
 		good := "no backup has succeeded"

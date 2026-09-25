@@ -24,8 +24,8 @@ import (
 // stagingDirName is where an encrypted backup is staged: an ordinary backup
 // directory inside the data directory, where the plaintext already is, kept
 // between runs so the next one copies only new bodies. Only ciphertext
-// leaves the data directory. It can be removed at any time with the server
-// running or not; the next encrypted backup makes it again.
+// leaves the data directory. It can be removed whenever no backup is running,
+// with the server running or not; the next encrypted backup makes it again.
 const stagingDirName = "backup-staging"
 
 // backupEncrypted stages a verified backup inside the data directory and packs
