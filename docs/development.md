@@ -1271,6 +1271,116 @@ note's head and then its entry, and a commit between the two reads made a
 note that had moved on answer `not_found`. They read it once now, and
 `TestEditsRacingACommitAreStaleNeverNotFound` holds every loser `stale`.
 
+### The soak (M5 done-when)
+
+The done-when's last clause, "a day of real use on a scratch vault has
+produced no unexplained conflict copy", as a machine can run it:
+`client/src/stress/soak.ts`, with the vault and the people in
+`soak-vault.ts`.
+
+**What runs.** A real `trewd serve -mcp` on a temporary data directory. The
+headless client, bundled from the tree exactly as `dist/trew.mjs` is and run
+under node, in two directories: a laptop in `trew sync --watch`, and a phone
+that is offline for minutes at a time and runs `trew sync` between. The seed
+vault is shaped like one kept for a while: daily notes, projects, people,
+meetings that link one attendee and only name the other, reading notes, an
+inbox with empty placeholders, attachments, frontmatter with the
+inconsistencies real frontmatter has (`Status:` beside `status:`, `Project`
+beside `project`), inline tags, wiki links, Markdown links and embeds. A person
+at each device makes the edits people make on a schedule: appends to the
+day's note, bullets, words added to a line, tags, frontmatter lines, new
+notes, renames, deletions, pasted images. Each edit carries a marker of its
+own and none removes text an earlier one wrote. The agent is a write token
+(`trewd mcp-token -scope write`) driven either by `claude -p --mcp-config
+FILE --strict-mcp-config --tools "" --allowedTools mcp__trew` with twelve
+realistic tasks (tidy a tag with `rename_tag`, add backlinks, triage the inbox
+with `move_note`, fix frontmatter, append to the daily note, delete
+placeholders, tag and then `undo_operation`, build a reading index and
+prepend to Home, rename a project, remove a tag, restore a deleted note,
+review the week), or by a scripted agent making the same kinds of call.
+
+**What it checks,** after the phone has synced and the watcher settled:
+
+- Every conflict copy anywhere in the server's history, live or not, is
+  explained: a version of the note by another author that the copy's device
+  had not seen when its person edited (the person's file was an older
+  version, found by hash, following the device's own unsent edits back), an
+  edit by that person the other version does not hold, and the copy's bytes
+  one of the two; for an agent's side, the operation from `trewd audit` and
+  the uid it was based on. Anything else fails the run.
+- A freshly paired witness matches the server's live state byte for byte
+  (bytes through `trewd cat`, not the tools, which normalise text for a
+  model), and both devices match the witness.
+- `trewd verify -deep` reports 0 faults.
+- No note lost: every version a person wrote is in the server's history
+  exactly, or its marker is (the engine merged it); no device upload of a
+  person's bytes sits on a version that person had not seen, unless the
+  device kept that version in a conflict copy; and every marker missing from
+  the live vault was taken by a deletion.
+
+An agent's move leaves no deletion at the path it moved from, only a version
+at the new path naming the old one, so `list_notes` with `includeDeleted` does
+not list the old path; the soak also asks `note_history` about every path the
+audit and the ledger mention.
+
+**Running it.** `cd client && bun run soak` runs the scripted agent for three
+minutes. `bun run soak --claude --minutes 80 --sessions 12` is the real run
+(`--model`, default `sonnet`; `--budget`, per session, default 0.75 USD;
+`--first-task N` to go on from task N; `--seed`; `--out DIR` for the report,
+the ledger, the audit and each session's transcript; `TREW_SOAK_KEEP=1`
+keeps the directories). `soak.stress.ts` is the short mode in `bun run
+stress`, and so in `scripts/check.sh` and CI: 60 notes, 75 seconds of edits
+and eight scripted sessions, about two minutes, no model and no credentials.
+
+**The run, 2026-09-24.** Two runs with `claude -p` on Sonnet, one of 80
+minutes and twelve sessions and one of 35 minutes and five, on vaults of 320
+notes and 8 attachments. Session 8 of the first did not run: `claude` exited
+at a usage limit, so its task (the reading index) was the first of the second
+run, which took tasks 8 to 12.
+
+| | First run | Second run | Total |
+|---|---|---|---|
+| Sessions that ran | 11 | 5 | 16 |
+| Tool calls | 91 | 22 | 113 |
+| Operations committed | 22 | 7 | 29 |
+| Refusals, nothing written | 4 `plan_changed`, 1 `same_destination` | 1 `same_destination` | 6 |
+| Device edits (laptop, phone) | 203 (144, 59) | 85 (55, 30) | 288 |
+| Phone syncs | 18 | 11 | 29 |
+| Server versions | 583 | 432 | 1,015 |
+| Person versions found exactly, merged | 506, 9 | 399, 4 | 905, 13 |
+| Lost, over unseen, missing from live | 0, 0, 0 | 0, 0, 0 | 0 |
+| Conflict copies | 1, explained | 0 | 1 |
+| Witness, devices, `verify -deep` | match, match, 0 faults | match, match, 0 faults | |
+| Claude spend | 1.46 USD | 0.53 USD | 1.99 USD |
+
+The operations were `edit_note` 7, `append_note` 6, `move_note` 4,
+`create_note` 4, `delete_note` 2, `rename_tag`, `add_tags`,
+`prepend_note`, `remove_tags` twice, and one undo (`undo_operation` of the `add_tags`). The refused
+restores were `restore_note` onto the note's own path, which the tool
+refuses by design; the agent read the version and recreated it with
+`create_note`, as the refusal says to.
+
+The one copy, `Daily/2026-09-24 (Conflicted copy Claude soak 202609241409).md`,
+made by the phone: the phone's person, offline, appended its edit 21 to the day's
+note at uid 415; meanwhile the laptop appended at uid 425 and the agent's
+`append_note` (operation `oDj7kpSdBPc6Sn5jIt0-7Q`) appended to that at uid
+431. All three added lines at the end of the same text, so there was no
+order a line merge could choose: the phone kept its own at the path and the
+agent's version, holding the laptop's line too, in the copy named after the
+agent. Both are live; nothing was lost.
+
+**What it found.** The short runs that built the harness produced a copy of
+a copy: `Daily/2026-09-24 (Conflicted copy laptop T) (Conflicted copy laptop
+T).md`. The laptop had kept its own text of the day's note in `Daily
+(Conflicted copy laptop T).md` and sent it; the phone had kept the laptop's
+text in a copy of the same name in the same minute, because the engine asked
+only its own disk whether the name was free. When the laptop's copy arrived,
+the phone kept it as a copy of the copy: nothing lost, and a conflict copy no
+two edits of one text explain. The engine now counts a name the remote index
+holds a live file at as taken (`freeConflictPath`); the engine test "numbers
+past a copy's name the server holds that has not reached this disk" failed
+without that and passes with it. Both long runs are after the fix.
+
 ### Latent issues in the chunker
 
 Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,
