@@ -2532,7 +2532,7 @@ export class Engine {
         // never a moment where neither name holds the note.
         this.pendingDeletes.push({ path, why: action.why, based: local });
         if (local !== undefined && !local.folder) {
-          const digest = await this.digestOf(path);
+          const digest = await this.syncedDigestOf(path, local);
           if (digest !== undefined) this.deleteBaseline.set(path, digest);
         }
         return;
@@ -3409,7 +3409,7 @@ export class Engine {
     const baseDigest =
       baseline === undefined || baseline.folder
         ? undefined
-        : await this.digestOf(respelled?.from ?? path);
+        : await this.syncedDigestOf(respelled?.from ?? path, baseline);
     this.inbox.push({ path, entry, remote, chunks, kind, why, based: baseline, baseDigest });
     this.inboxBytes += remote.size;
     if (this.inbox.length >= MAX_BATCH_ENTRIES || this.inboxBytes >= INBOX_BYTES) {
@@ -4428,29 +4428,82 @@ export class Engine {
    * microsecond". docs/design.md, "What is not claimed", says so.
    */
   /**
-   * The plaintext digest of what is at a path now, or undefined if it cannot
-   * be read (R01).
+   * The plaintext digest of what is at a path now, but only once those bytes
+   * are proven to be the version the decision was taken on, and undefined
+   * otherwise (R01, rule 3).
    *
-   * Streamed where the vault can, so digesting a large attachment costs one
-   * pass over it and not a copy of it in memory. A vault that cannot stream
-   * reads it whole, which is what the pass was about to do anyway.
+   * This used to digest whatever was there and call that the baseline. The
+   * decision behind a download or a deletion reads "unchanged here" from the
+   * index, and the index says so from a length and a timestamp whenever the
+   * vault gives no change id, which the plugin's listing never does. An edit
+   * by another program that keeps both (`rsync -t`, a restore from a backup)
+   * was then digested as the version the pass had decided about, and the
+   * preserving write found what it displaced "expected" and deleted it: the
+   * one copy of an edit no device had, removed outside any trash, and a
+   * deletion trashed it and reported an ordinary deletion.
+   *
+   * So the bytes are cut and named again, and compared with the content id
+   * the decision saw, which for a download or a deletion is the synced one.
+   * Only a match makes their digest an expectation. Anything else, including
+   * a file that cannot be read or a decision with no content id, is no
+   * baseline, and every caller treats that as a reason to keep whatever it
+   * finds rather than to overwrite or remove it.
+   *
+   * Streamed where the vault can, so a large attachment costs passes over it
+   * and not a copy of it in memory (R31). Its digest is then taken on either
+   * side of the naming and must agree, so bytes changed in between are not
+   * vouched for by names cut from the ones before.
    */
-  private async digestOf(path: string): Promise<string | undefined> {
-    // The vault's own, where it has one (R31).
-    //
-    // This used to collect every block the vault streamed and then allocate a
-    // second buffer of the whole file to join them into, which holds a large
-    // attachment twice over and does it on the path that queues a download.
-    // The comment called it streaming; it was not. A vault that can hash as it
-    // reads keeps nothing, and the headless one can.
-    const streamed = this.opts.vault.contentDigest;
-    if (streamed !== undefined) return await streamed(path);
+  private async syncedDigestOf(path: string, known: LocalState): Promise<string | undefined> {
+    if (known.folder || known.hash === "") return undefined;
+    const vault = this.opts.vault;
+    const isText = this.mergeable(path);
+    let names: string[] | undefined;
+    let digest: string | undefined;
+    const digestNow = vault.contentDigest;
+    if (
+      vault.readBlocks !== undefined &&
+      digestNow !== undefined &&
+      !this.cannotStream &&
+      known.size > KEEP_BODIES_BELOW
+    ) {
+      try {
+        digest = await digestNow(path);
+        const streamed: string[] = [];
+        for await (const piece of chunkStream(
+          vault.readBlocks(path),
+          this.sizesFor(known.size, isText),
+          isText,
+        )) {
+          streamed.push(await chunkName(piece.bytes));
+        }
+        if (digest === undefined || (await digestNow(path)) !== digest) return undefined;
+        names = streamed;
+      } catch (err) {
+        // "Not on this platform", as `streamScan` reads it, and remembered the
+        // same way. The whole read below is then the answer.
+        this.cannotStream = true;
+        this.log("streaming is not available here, reading whole files instead", path, {
+          why: (err as Error).message,
+        });
+      }
+    }
     try {
-      return await plainDigest(await this.opts.vault.read(path));
+      if (names === undefined) {
+        const bytes = await vault.read(path);
+        const parts = [...chunkBytes(bytes, this.sizesFor(bytes.length, isText), isText)];
+        names = await chunkNames(parts.map((c) => c.bytes));
+        digest = await plainDigest(bytes);
+      }
+      if (contentId(names) !== known.hash) {
+        this.log("not the synced version", path, {
+          why: "it changed without its length or timestamp moving, so what is displaced is kept",
+        });
+        return undefined;
+      }
+      return digest;
     } catch {
       // A file that cannot be read is one this cannot make a promise about.
-      // Undefined means "no baseline", and every caller treats that as a
-      // reason to keep whatever it finds rather than to overwrite it.
       return undefined;
     }
   }
