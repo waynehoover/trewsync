@@ -4,7 +4,7 @@ Not commitments. Things that were impossible or awkward while the server could n
 
 ## Nearly free once M4 and M5 exist
 
-- **Web history viewer.** Read-only pages for a note's versions and diffs, served by the same binary. Basalt refused a web UI partly because the server could not render anything.
+- **Web history viewer.** (Started 2026-09-25 and parked at the owner's request before it was finished; the partial work is on branch `worktree-agent-a5d8366d51b6bfab3`, unmerged.) Read-only pages for a note's versions and diffs, served by the same binary. Basalt refused a web UI partly because the server could not render anything.
 - **`changes_since {afterUid, folder?}`.** A read tool beside the vault-health tools (`backlinks`, `outgoing_links`, `broken_links` and `orphans` shipped 2026-09-25, with the daily-note and template tools; plan/mcp-tools.md): cheap and exact on a version log, and what an agent needs to catch up without re-listing.
 - **MCP resources.** `trew://note/<path>` so hosts attach a note as context without a tool call. Prompts once tools are stable.
 - **Webhooks or an event stream.** The hub already broadcasts every commit. `--webhook URL` or SSE at `/events`: rebuild a site, notify, run an agent on "note changed". Two rules from the research: a subscriber that falls behind gets the missed events replayed or an explicit `lagged` with the UID to resume from, never a silent gap (PKV Sync's notifications could drop); and for agents, prefer standard MCP `notifications/resources/updated` over a custom method. No credential in the URL (NoX Sync put its key in the status stream's query string); use a header or a short-lived single-use ticket.
