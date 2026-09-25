@@ -1,7 +1,7 @@
 # Open work
 
-Two things are known, deliberate, and not done. Both are recorded here rather
-than in a comment because both are decisions somebody could reasonably make
+These are known, deliberate, and not done. Each is recorded here rather than
+in a comment because it is a decision somebody could reasonably make
 differently, and each says what would change the answer.
 
 ## Downloads hold a whole copy of the file
@@ -33,6 +33,56 @@ never hold a file.
 single-buffer assembly and the windowed sealing (now windowed naming) landed,
 so the number the 64 MiB default rests on is no longer true. Measure peak
 resident on a phone for one large attachment first.
+
+## A first sync on a Mac waits on fsync
+
+At ten thousand notes on an M4 Pro, a fresh headless device's first download
+took about two minutes and the first upload about a minute and a half
+([research.md](research.md#ten-thousand-notes-on-a-mac-september-24-2026)).
+Both are linear in the number of files, so this is a constant, not a curve,
+and almost all of it is the disk being made to promise.
+
+The download writes each file through `NodeVault.replace`, which costs two
+`F_FULLFSYNC`s: the staged file's own, and the staging folder's, so that the
+staged name is durable before whatever is at the note's path is moved aside.
+Each costs about 8 ms on this machine's SSD. Counted over a 2,000-file
+download, 4,112 of them took 17.5 s of a 23.6 s run: three quarters of the
+wall clock, with the client's JavaScript and the server both idle.
+
+The staging folder's flush protects nothing on a first download, because
+there is nothing at the path to move aside, and dropping it there would save
+close to half. It is not done because it is a change to the preserving write,
+where nearly every step carries a review finding (R18, R33, R37, R43, R46
+among them), and the argument that it is safe (a note that appears in the
+instant between the check and the move is still moved aside rather than
+written over, and the server's bytes can be fetched again after a crash) is
+one to prove at a new seam in `faults.stress.ts` before anybody relies on it.
+Landing a batch's files concurrently is the other saving, about 2.6 times on
+this disk for eight at once, and carries more risk than the first.
+
+**What would change the answer:** a first sync that matters more than it
+does now, which is a phone. Android's fsync is not macOS's `F_FULLFSYNC`, so
+measure there (`bun run bench:phone`) before spending anything on this Mac's
+number.
+
+## search_notes reads every note at the head
+
+A search the index answers with one candidate took 50 to 64 ms at ten
+thousand notes and 3.5 ms at five hundred. The index proposes candidates, but
+`searchNotes` in `internal/mcp/tools.go` still walks every live entry at the
+head through `EachAsOf`, two correlated subqueries per row, and asks the
+proposal about each one. So the cost of a search is the vault's size whatever
+it finds, about 6 µs a note.
+
+The fix is to read only the proposed candidates when the index is usable and
+has indexed the head being searched, and walk as now otherwise, keeping the
+rule that the index only ever narrows. It is not done here because the search
+code was being changed at the same time for the `trew search` wire operation,
+and at this size it does not matter: the endpoint lets one token make five
+requests a second, so 64 ms is under a third of the gap it enforces.
+
+**What would change the answer:** fifty thousand notes, where the same walk
+is about 300 ms and the rate limit no longer hides it.
 
 ## The index snapshot may be the wrong shape at 50,000 notes
 
@@ -130,3 +180,14 @@ along with why it cannot be read as a result. Fifty thousand has not been tried.
 
 So this stays declined, and the reason is unchanged rather than strengthened:
 there is still no phone number at the size the threshold names.
+
+**What the Mac run at ten thousand notes adds, and what it does not.** On the
+realistic corpus a quiet pass of the headless client took 58 ms and a saved
+edit reached a second watching device in about 100 ms
+([research.md](research.md#ten-thousand-notes-on-a-mac-september-24-2026)).
+Neither clause is about this machine, so neither is resolved, and the Mac
+number is not evidence for the phone's: the desktop's biggest term is a
+directory walk the plugin does not do. What changed is the harness. The phone
+run the threshold waits on is now `bun run bench:phone`, which holds the
+phone awake and in front for the whole run and records any moment it was
+not, the confound that voided the last attempt.

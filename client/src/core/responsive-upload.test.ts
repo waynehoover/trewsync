@@ -218,3 +218,49 @@ it("preserves both concurrent note edits while an attachment is in flight", asyn
     "note.md",
   ]);
 });
+
+it("decides a note deleted mid-way through its interactive send as deleted, at once", async () => {
+  // The interactive path stats the note, then reads it. A deletion between
+  // the two used to be recorded as a failure with a backoff, which held the
+  // ordinary pass off the path too: the deletion went nowhere for ten
+  // seconds and more (vanished-upload.test.ts has the ordinary pass's half).
+  const rig = await pair();
+  const read = rig.vault.read.bind(rig.vault);
+  let vanished = false;
+  rig.vault.read = async (path: string) => {
+    if (path === "note.md" && !vanished) {
+      vanished = true;
+      await rig.vault.remove("note.md");
+      throw Object.assign(new Error("ENOENT: no such file or directory, open 'note.md'"), {
+        code: "ENOENT",
+      });
+    }
+    return read(path);
+  };
+  const busy = rig.writer.engine.sync();
+  let report;
+  try {
+    await rig.waitForBody();
+    await rig.vault.edit("note.md", "# Shared note\n\nSaved, then deleted.\n");
+    rig.writer.noteChanged("note.md");
+    await within(
+      (async () => {
+        while (!vanished) await new Promise((r) => setTimeout(r, 20));
+      })(),
+      "the interactive read of the deleted note",
+    );
+  } finally {
+    rig.release();
+    report = await busy;
+  }
+  const next = await rig.writer.engine.sync();
+  expect(await rig.vault.stat("note.md")).toBeUndefined();
+  expect((await rig.writer.history("note.md"))[0]?.deleted, "the deletion reached the server").toBe(
+    true,
+  );
+  expect(report.retryingPaths.concat(next.retryingPaths)).not.toContain("note.md");
+  await receiveCommitted(rig.peer.transport);
+  await rig.peer.engine.sync();
+  expect(await rig.peerVault.stat("note.md")).toBeUndefined();
+  expect(Buffer.from(await rig.peerVault.read("attachment.bin")).equals(rig.attachment)).toBe(true);
+});

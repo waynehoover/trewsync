@@ -28,6 +28,9 @@
     "bench-sync.ts",
     "bench-pass.ts",
     "bench-corpus.ts",
-    "bench-android.ts"
+    "bench-android.ts",
+    "bench-10k.ts",
+    "bench-support.ts",
+    "bench-phone-10k.ts"
   ]
 }

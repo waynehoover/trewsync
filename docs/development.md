@@ -372,7 +372,13 @@ requires. Until that job exists, the Markdown on GitHub is the documentation.
 ## Performance work
 
 From `client/`, use `bun run bench`, `bun run bench:sync`, `bun run scale`, and
-`bun run dedup`. Run CPU-sensitive measurements under both Bun and stock Node
+`bun run dedup`. `bun run bench:10k` is the end-to-end run at ten thousand
+realistic notes (`src/stress/corpus.ts`) against a real `trewd serve -mcp`,
+with `BENCH_OBSIDIAN=1` adding the plugin in a new scratch vault, and
+`bun run bench:phone` is the same on the Android phone over adb, `--dry-run`
+for everything but the phone. Both check exact bytes on every device and fail
+on a lost edit; [research.md](research.md#ten-thousand-notes-on-a-mac-september-24-2026)
+has the results. Run CPU-sensitive measurements under both Bun and stock Node
 where practical. Report the commit, hardware, runtime, network conditions, and
 correctness checks with every timing. [Historical results](research.md) are
 context, not measurements of the current checkout.

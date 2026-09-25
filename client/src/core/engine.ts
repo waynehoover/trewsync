@@ -2239,9 +2239,25 @@ export class Engine {
       if (!stat.folder && needsRehash(entry, Math.ceil(stat.mtime), stat.size, stat.changeId)) {
         // The only place a file is read for its content, and only when
         // the stat says it moved.
-        scanned = await this.rehash(entry, path, stat.size);
+        try {
+          scanned = await this.rehash(entry, path, stat.size);
+        } catch (err) {
+          // Deleted between the listing and this read: somebody saved a
+          // note and then removed it inside one pass. That is a deletion,
+          // and it is decided as one now, exactly as the next listing
+          // would decide it. Recorded as a failure instead, it sat out a
+          // backoff of ten seconds and more with the deletion unsent, and
+          // every device that caught up meanwhile kept the note (found at
+          // ten thousand notes, docs/research.md). Only a file the vault
+          // now says is not there: a read that fails on a file that is
+          // still there is a failure, and backs off as one.
+          if (!(await this.goneSinceListed(path))) throw err;
+          this.log("gone before it could be read, so deciding it as deleted", path);
+          stat = undefined;
+        }
       }
-      local = { folder: stat.folder, mtime: entry.mtime, size: entry.size, hash: entry.hash };
+      if (stat)
+        local = { folder: stat.folder, mtime: entry.mtime, size: entry.size, hash: entry.hash };
     }
 
     let action = decide({ local, remote, index: entry, mergeable: this.mergeable(path) });
@@ -3094,7 +3110,18 @@ export class Engine {
       entry.hash = "";
       entry.chunks = [];
       observe(entry, stat);
-      const scanned = await this.rehash(entry, path, stat.size);
+      let scanned: Scanned;
+      try {
+        scanned = await this.rehash(entry, path, stat.size);
+      } catch (err) {
+        // Deleted since the stat above. Not this path's to decide: the
+        // ordinary pass does, as a deletion, and at once. A recorded failure
+        // would hold that pass off this path for the whole backoff.
+        if (!(await this.goneSinceListed(path))) throw err;
+        this.dirty.add(path);
+        this.again = true;
+        return;
+      }
       // A save can grow the file after the stat. Keep bulk content off the
       // interactive wire even when its original size fitted this path.
       if (entry.size > Math.min(512 * 1024, this.limitOn("perFileMax"))) {
@@ -4685,6 +4712,21 @@ export class Engine {
     const keepAt = await this.freeConflictPath(path, this.opts.device);
     const out = await vault.removeExpecting(path, this.expecting(digest), keepAt);
     return out.keptAt;
+  }
+
+  /**
+   * Whether the vault now says nothing is at `path`, which the listing showed.
+   *
+   * Only a definite absence counts. A stat that fails cannot promise the file
+   * is gone, and reading that as a deletion is the one mistake here that
+   * would lose a note, so it answers no and the read's failure stands.
+   */
+  private async goneSinceListed(path: string): Promise<boolean> {
+    try {
+      return (await this.opts.vault.stat(path)) === undefined;
+    } catch {
+      return false;
+    }
   }
 
   private async unchangedSince(path: string, based: LocalState | undefined): Promise<boolean> {
