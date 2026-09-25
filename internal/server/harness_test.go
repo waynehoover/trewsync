@@ -302,11 +302,25 @@ func (r *rig) dial(name string) *client { return r.dialWith(name, nil) }
 // to see a ping arrive or to act before the pong goes back.
 func (r *rig) dialWith(name string, opts *websocket.DialOptions) *client {
 	r.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	conn, _, err := websocket.Dial(ctx, r.url, opts)
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	conn, _, err := websocket.Dial(dialCtx, r.url, opts)
+	dialCancel()
 	if err != nil {
-		cancel()
 		r.t.Fatalf("dial: %v", err)
+	}
+	// The connection's own context bounds no single operation: each read and
+	// write takes its own deadline below (opTimeout), which is what catches a
+	// server that stopped answering. It used to be the dial's 20 seconds,
+	// kept for the whole connection, so every test's total work had to fit
+	// in them however steadily it progressed. TestHistoryPaginatesBackwards
+	// makes 503 durable puts, three fsyncs each, in 6 to 8 s on an idle
+	// disk; six copies at once, as overlapping suites load it, all failed at
+	// 21 s while still committing. It ends when the test does, or at the
+	// test binary's own deadline, for the few tests that use it directly.
+	ctx, cancel := context.WithCancel(context.Background())
+	if deadline, ok := r.t.Deadline(); ok {
+		cancel()
+		ctx, cancel = context.WithDeadline(context.Background(), deadline)
 	}
 	conn.SetReadLimit(ReadLimit)
 	c := &client{t: r.t, rig: r, conn: conn, ctx: ctx, cancel: cancel, name: name}
@@ -342,7 +356,7 @@ func (c *client) sendRaw(v any) {
 	if err != nil {
 		c.t.Fatalf("%s: marshal: %v", c.name, err)
 	}
-	if err := c.conn.Write(c.ctx, websocket.MessageText, b); err != nil {
+	if err := c.write(websocket.MessageText, b); err != nil {
 		c.t.Fatalf("%s: write: %v", c.name, err)
 	}
 }
@@ -411,15 +425,26 @@ func (c *client) sendBinary(b []byte) {
 // tests that are about what a frame may be.
 func (c *client) sendFrame(b []byte) {
 	c.t.Helper()
-	if err := c.conn.Write(c.ctx, websocket.MessageBinary, b); err != nil {
+	if err := c.write(websocket.MessageBinary, b); err != nil {
 		c.t.Fatalf("%s: write body: %v", c.name, err)
 	}
 }
 
+// opTimeout bounds one read or one write of the harness's client, so a server
+// that stops answering fails the test at the operation it stopped at, however
+// long the test has already run.
+const opTimeout = 10 * time.Second
+
 func (c *client) read() (websocket.MessageType, []byte, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(c.ctx, opTimeout)
 	defer cancel()
 	return c.conn.Read(ctx)
+}
+
+func (c *client) write(typ websocket.MessageType, b []byte) error {
+	ctx, cancel := context.WithTimeout(c.ctx, opTimeout)
+	defer cancel()
+	return c.conn.Write(ctx, typ, b)
 }
 
 // pump reads exactly one text frame. A batch is queued and nil is returned;
