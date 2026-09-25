@@ -431,6 +431,31 @@ func (s *Store) ExecForTest(statement string, args ...any) error {
 	return err
 }
 
+// FailOperationCommitForTest makes every later CommitOperation roll back at
+// its COMMIT and fail with err, as a COMMIT that fails does: an outcome
+// nobody can state. Nil restores the real COMMIT. A seam for the packages
+// above the store, which have to show what they answer for a failure only a
+// full disk or a dying filesystem produces; set it before the call it is
+// for, never while one is running.
+func (s *Store) FailOperationCommitForTest(err error) { s.failOperationCommit = err }
+
+// FailOperationStepForTest makes every later CommitOperation fail with err at
+// the named step of its transaction (see operationFault), as a statement
+// failing there does, and roll back. An empty step restores it. Set it
+// before the call it is for, as FailOperationCommitForTest.
+func (s *Store) FailOperationStepForTest(step string, err error) {
+	if step == "" {
+		s.duringOperation = nil
+		return
+	}
+	s.duringOperation = func(at string) error {
+		if at == step {
+			return err
+		}
+		return nil
+	}
+}
+
 // Chunks exposes the chunk store for the put/get paths, which upload and serve
 // bodies without touching an entry.
 func (s *Store) Chunks() *chunks.Store { return s.chunks }

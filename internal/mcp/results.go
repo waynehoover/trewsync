@@ -9,7 +9,8 @@ import (
 
 // ToolError is a tool's failure, reported under trusted.error with isError
 // set: a code from plan/mcp-tools.md's vocabulary, a message for a person,
-// and, for a stale base, the path it was about and the version it now has.
+// and, for a stale base, the path it was about and the version it now has;
+// an outcome_unknown may also say its cause.
 // Every field is the server's own or the caller's own validated input, never
 // text from a note, which is what lets it sit under trusted.
 type ToolError struct {
@@ -17,6 +18,9 @@ type ToolError struct {
 	Message    string `json:"message"`
 	Path       string `json:"path,omitempty"`
 	CurrentUID *int64 `json:"currentUid,omitempty"`
+	// Cause is what lies under an outcome_unknown, when the server knows it:
+	// `nospace` for a full disk, which is its operator's to clear.
+	Cause string `json:"cause,omitempty"`
 }
 
 func (e *ToolError) Error() string { return e.Code + ": " + e.Message }
