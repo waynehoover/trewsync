@@ -57,7 +57,7 @@
             subPackages = [ "cmd/trewd" ];
             # The hash of the module dependencies go.sum names. It changes when
             # go.sum does; scripts/flake-check.sh says what the new one is.
-            vendorHash = "sha256-TIpox9Cx1rmT/TyzISf4/2MV9zODUcD8D4mDDsHo/Jw=";
+            vendorHash = "sha256-lo75ngKpnZTdJCTQqRC4Vec9YX4PNXygRXo95ksvg80=";
             env.CGO_ENABLED = 0;
             flags = [ "-trimpath" ];
             ldflags = [
