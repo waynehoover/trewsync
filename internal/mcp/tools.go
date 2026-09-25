@@ -751,78 +751,18 @@ func searchNotes(c *call, a *args) outcome {
 	}
 	q := notes.Query{Text: query, Mode: notes.SearchMode(mode), CaseSensitive: caseSensitive,
 		ContextLines: contextLines, IncludeChildren: includeChildren}
-	// The query's own refusals first, before anything is read.
-	if _, err := notes.SearchPage(nil, q, nil, limit); err != nil {
-		return c.failErr(err)
+	// The one search both doors share (internal/search); what is left here
+	// is the envelope.
+	res, err := c.h.search.Search(c.ctx, search.Request{Tool: "search_notes", Query: q, Folder: folder,
+		Cursor: cursor, Resuming: resuming, Limit: limit})
+	if errors.Is(err, search.ErrExpired) {
+		return c.fail(expired())
 	}
-	obs, err := c.observe()
 	if err != nil {
 		return c.failErr(err)
 	}
-	purges, err := c.h.st.PurgeGeneration(c.h.vault)
-	if err != nil {
-		return c.failErr(err)
-	}
-	// The cursor binds the world the matches depend on: the store's epoch,
-	// its purge generation and the head. Not the index generation: the index
-	// only proposes, and a page's matches are the same whichever generation
-	// proposed its candidates, so a rebuild between pages changes nothing a
-	// continuation returns.
-	options := []notes.Option{{Key: "tool", Value: "search_notes"}, {Key: "epoch", Value: obs.Epoch},
-		{Key: "purges", Value: purges}, {Key: "query", Value: query}, {Key: "mode", Value: mode},
-		{Key: "includeChildren", Value: includeChildren}, {Key: "folder", Value: folder},
-		{Key: "caseSensitive", Value: caseSensitive}, {Key: "contextLines", Value: contextLines}}
-	head := obs.Head
-	var after *notes.Position
-	if resuming {
-		h, pos, err := notes.DecodeSearchCursor(cursor, options)
-		if err != nil || h > obs.Head {
-			return c.fail(expired())
-		}
-		head, after = h, &pos
-	}
-	from := ""
-	if after != nil {
-		from = after.Path
-	}
-
-	var proposal search.Proposal
-	proposal.Why = "this server keeps no search index"
-	if c.h.index != nil {
-		p, err := c.h.index.Propose(c.ctx, q, folder, from)
-		if err != nil {
-			// The index failing costs this page its speed and nothing
-			// else: every note is scanned.
-			c.h.log.Warn("the search index could not propose candidates; scanning", "err", err)
-			p = search.Proposal{Why: "the search index could not be read"}
-		}
-		proposal = p
-	}
-	uids := map[string]int64{}
-	var candidates []notes.Candidate
-	err = c.h.st.EachAsOf(c.h.vault, head, store.AsOfRange{From: from, Folder: folder}, func(e store.Entry) (bool, error) {
-		if e.Deleted || e.Folder || !paths.Searchable(e.Path) {
-			return true, nil
-		}
-		if !proposal.Candidate(e.Path, e.UID, notes.NameMatches(e.Path, q)) {
-			return true, nil
-		}
-		version := e
-		uids[e.Path] = e.UID
-		candidates = append(candidates, notes.Candidate{Path: e.Path, Load: func() ([]byte, error) {
-			return c.searchBytes(version)
-		}})
-		// One page scans at most SearchFiles notes; two more than that is
-		// enough for it to know whether another page follows.
-		return len(candidates) < notes.SearchFiles+2 && c.ctx.Err() == nil, nil
-	})
-	if err != nil {
-		return c.failErr(err)
-	}
-	res, err := notes.SearchPage(candidates, q, after, limit)
-	if err != nil {
-		return c.failErr(err)
-	}
+	obs := Observed{Head: res.Head, Epoch: res.Epoch, ObservedAt: c.now.UnixMilli()}
+	proposal := res.Proposal
 
 	type match struct {
 		Path    Text   `json:"path"`
@@ -835,9 +775,9 @@ func searchNotes(c *call, a *args) outcome {
 		Clipped bool   `json:"clipped"`
 		Kind    *Text  `json:"kind,omitempty"`
 	}
-	matches := make([]match, len(res.Matches))
-	for i, m := range res.Matches {
-		row := match{Path: text(m.Path), UID: uids[m.Path], Line: m.Line, Column: m.Column, Text: text(m.Text),
+	matches := make([]match, len(res.Hits))
+	for i, m := range res.Hits {
+		row := match{Path: text(m.Path), UID: m.UID, Line: m.Line, Column: m.Column, Text: text(m.Text),
 			Before: texts(m.Before), After: texts(m.After), Clipped: m.Clipped}
 		if m.Kind != "" {
 			k := text(m.Kind)
@@ -853,17 +793,11 @@ func searchNotes(c *call, a *args) outcome {
 	for i, s := range res.Skipped {
 		skipped[i] = skip{text(s.Path), text(s.Why)}
 	}
-	var next *string
-	if res.Next != nil {
-		s := notes.EncodeSearchCursor(options, head, *res.Next)
-		next = &s
-	}
 	type index struct {
 		Generation int64  `json:"generation"`
 		Usable     bool   `json:"usable"`
 		Why        string `json:"why,omitempty"`
 	}
-	obs.Head = head
 	return c.ok(struct {
 		NextCursor   *string `json:"nextCursor"`
 		Complete     bool    `json:"complete"`
@@ -873,33 +807,12 @@ func searchNotes(c *call, a *args) outcome {
 		ScannedBytes int     `json:"scannedBytes"`
 		SkippedCount int     `json:"skippedCount"`
 		Observed
-	}{next, res.Complete, proposal.IndexedHead, index{proposal.Generation, proposal.Usable, proposal.Why},
+	}{res.NextCursor, res.Complete, proposal.IndexedHead, index{proposal.Generation, proposal.Usable, proposal.Why},
 		res.Scanned, res.ScannedBytes, len(res.Skipped), obs},
 		struct {
 			Matches []match `json:"matches"`
 			Skipped []skip  `json:"skipped"`
 		}{matches, skipped})
-}
-
-// searchBytes is a candidate's bytes for the matcher: the version searched,
-// or the refusal that stands for it, which the page reports as skipped.
-func (c *call) searchBytes(e store.Entry) ([]byte, error) {
-	if e.Size > notes.NoteBytes {
-		return nil, &notes.Refusal{Code: "note_too_large", Message: "notes must be at most 1 MiB"}
-	}
-	full, ok, err := c.h.st.EntryByUID(c.h.vault, e.UID)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, &notes.Refusal{Code: "version_not_found", Message: "the version is gone"}
-	}
-	b, err := c.versionBytes(full)
-	var te *ToolError
-	if errors.As(err, &te) {
-		return nil, &notes.Refusal{Code: "unreadable", Message: te.Message}
-	}
-	return b, err
 }
 
 // The search index is a SearchIndex.
