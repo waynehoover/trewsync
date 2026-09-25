@@ -42,6 +42,14 @@ does not work with a TrewSync server, and moving a vault is a new pairing.
   devices once it is empty there; a folder that still holds something stays.
 - **Conflict copies** are named after the author of the bytes they hold:
   another device's name, or an agent token's label.
+- **One MCP, on the server.** The headless client's own MCP server and its
+  credential, inherited from Basalt Sync as `trew mcp` and `trew mcp-token`,
+  are removed, with their flags
+  (`--listen`, `--writable`, `--allow-origin`, `--vault`, `--key-out`,
+  `--revoke`). Both commands exit 2 and point at the server's `/mcp`. Start
+  the server with `-mcp`, mint a token with `trewd mcp-token`, and point the
+  agent at `/mcp` ([Moving from `trew mcp`](docs/agent.md#moving-from-trew-mcp)).
+  The client's `trew.mjs` is about a quarter of its former size.
 
 ### Added
 

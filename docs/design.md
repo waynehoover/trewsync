@@ -247,59 +247,18 @@ guide is [Connect an agent](agent.md); the tool contract is
   literal search stays literal: the index only proposes candidates where it
   cannot omit a match, and the matcher decides.
 
-### The headless client's own MCP server
+### No MCP in the headless client
 
-`trew mcp`, inherited from Basalt Sync, is an MCP server on a paired headless
-directory rather than on the server. Its design is recorded here because it
-still ships.
-
-The MCP process is a local author on each explicitly configured paired directory. Its writes
-run in the owning client's serial queue alongside sync, and its vault lock
-remains held until admitted work drains. Offline inspection is allowed; a new
-mutation requires a settled live writable client. Read-only launch omits mutation
-tools while still allowing incoming synchronization.
-
-A matching content base proves which bytes an edit starts from, not whether a
-model's replacement preserves their meaning. MCP therefore exposes exact unique
-old-to-new edits, exact append and prepend, with no whole-file writer. Prepend
-retains an existing UTF-8 BOM at the start. Before changing an
-existing note it creates an independent visible before-image, reads and compares
-its bytes, and flushes it. Failure stops before touching the original. Backups
-remain ordinary synced files, immutable through MCP. Creation and restore publish
-only to absent destinations; restore requires a version the server's history
-lists for the requested path and an explicit different destination.
-
-Tag and namespace tools first return a bounded preview. Applying requires every
-affected base and exact source edit as input; recomputing a different plan refuses
-the request. A batch validates all inputs and verifies and flushes all required
-before-images before publishing its first change. It then rechecks each source
-and reports per-file results. A later failure retains completed work and all
-recovery copies, without rollback over another author's save.
-
-Moves publish a verified destination, update approved links, then recoverably
-delete the source last. This deliberately uses ordinary sync create/delete
-semantics. It does not promise atomic remote visibility or move history across
-paths. Permanent deletion and mutation of recovery copies remain unavailable.
-
-Success distinguishes a verified, flushed local result from server delivery.
-Cancellation or connection loss cannot roll back an admitted write; unknown
-outcomes require inspection before retry. Checked access refuses existing child
-symlinks and ambiguous names. This is not isolation from a hostile local OS user
-continually swapping directories or editing open descriptors. The supported
-storage and cooperating-owner assumptions still apply, and a host receiving
-notes has access to their plaintext.
-
-A multi-vault endpoint exposes only its explicit, non-overlapping root set.
-Every call selects a vault when more than one is configured. Session closures
-keep clients, credentials, bases, queues and history separate. All root locks remain
-held until every session drains. The HTTP credential belongs to the first
-configured directory and authorizes the whole configured endpoint, not a
-per-vault subset. Separate access scopes require separate endpoints.
-
-Version comparisons check both historical selections against the chosen
-vault and path's history. Local comparison pagination pins full content bases. Device
-receipt reports require settled local state before and after reading server
-checkpoints; they cannot establish delivery of a particular tool call.
+Basalt Sync's headless client had an MCP server of its own, because its server
+could not read notes: it wrote through a paired directory, kept before-image
+files beside each note, and held the vault's lock while a write drained. On a
+server that holds the notes, that design is a second writer with weaker
+guarantees than the one above: no commit boundary, no audit, no undo, and a
+before-image a device could edit. It is removed (PLAN.md M2 task 10), once the
+server's tools passed the fixtures its note functions were ported against.
+Those functions stay in `client/src/node/mcp-*.ts` as the oracle
+(`mcp-oracle.run.ts` regenerates `mcp-fixtures.json`), reachable from neither
+bundle.
 
 ## Fast, because it sends less
 
@@ -560,7 +519,6 @@ These are random keys, not user-chosen passwords.
 | Device token, 32 bytes | That device, which made it when it redeemed its invite | Connect and sync; list, rename and revoke devices; issue and cancel invites. |
 | Invite token, 16 bytes | Whoever was handed the `trew1i_` string, until it is used or expires | Redeem once, adding one device. |
 | MCP token, 32 bytes | The operator who ran `trewd mcp-token`, and the MCP client given it | Read the whole vault at `/mcp`; with write scope, change notes as the token's label. Expires after 90 days by default. |
-| Headless MCP token | Owner and the MCP client of one `trew mcp --listen`; that directory stores only its hash | Authenticate to that directory's own HTTP MCP endpoint in its launch mode. |
 
 There is no vault key, root secret or recovery key. Administration beyond what
 a device can do is shell access to the server's data directory: `trewd invite`,
@@ -572,10 +530,7 @@ their history are on the server; `trewd invite` pairs a new device.
 A server MCP token is minted, listed and revoked through the control socket,
 like devices. Its row holds the hash, a generated id, the label, the scope,
 the expiry, and a use count beside the last-used time, so a stolen token used
-once between legitimate uses still shows. The headless client's MCP token is
-independently random, not derived from the device's token; its hash lives in
-unsynced `.trew` state, and rotating or revoking it does not change the
-device's pairing.
+once between legitimate uses still shows.
 
 ## What a device can do to another device
 

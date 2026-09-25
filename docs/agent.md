@@ -332,11 +332,18 @@ passes through the endpoint, so a busy agent cannot slow it.
 | `stale` | The note changed since it was read. Read it again. |
 | `plan_changed` | The vault changed between preview and apply. Preview again. |
 
-## A local agent on a paired copy
+## Moving from `trew mcp`
 
-The headless client, `trew`, also has an MCP server of its own, `trew mcp`,
-which serves a separately paired local directory over stdio or HTTP. It came
-from Basalt Sync, where the server could not read notes, and it keeps
-before-image files beside each note instead of server history. Prefer the
-server's endpoint; the [command-line client guide](client.md#a-local-agent)
-describes the other.
+The headless client, `trew`, used to have an MCP server of its own, `trew mcp`,
+over a separately paired local directory, with its own credential from
+`trew mcp-token`. It came from Basalt Sync, where the server could not read
+notes, and it is gone: the server's `/mcp` is the only MCP TrewSync has. `trew
+mcp` and `trew mcp-token` now exit 2 and say where MCP went.
+
+To move an agent over: start the server with `-mcp`, mint a token with `trewd
+mcp-token` (add `-scope write` if the agent edited notes), and point the agent
+at the server's `/mcp` with that token, as above. Remove the old `trew mcp`
+service, and delete the directory's `.trew/mcp-token.json`, which nothing reads
+any more. The before-image files the old server wrote beside notes are ordinary
+notes; the server keeps each displaced version in its history instead, where
+`read_note` with the `previousUid` of a write reads it back.

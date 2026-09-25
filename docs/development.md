@@ -87,151 +87,47 @@ server. Its in-memory adapters do not measure a phone's filesystem or network.
 
 ## MCP verification
 
-This section is the headless client's own MCP server, `trew mcp`. The server's
-endpoint is covered under [The MCP endpoint (M4)](#the-mcp-endpoint-m4) and
-the sections after it.
-
-The stdio and HTTP implementations use the pinned official MCP SDK 2.0.0. Protocol tests
-exercise its legacy `2025-11-25` and modern `2026-07-28` modes, cancellation and
-framing. The usable workflow is also tested through an official client talking
-to a freshly built CLI child and the real Go server:
+The server's `/mcp` is the only MCP. Its tests are Go, in `internal/mcp`,
+`internal/notes` and `cmd/trewd`, and the stress suites drive it through the
+built binary; [The MCP endpoint (M4)](#the-mcp-endpoint-m4) and the sections
+after it describe them.
 
 ```bash
-cd client
-bun run test src/node/mcp.test.ts src/node/mcp-bin.test.ts src/node/mcp-protocol.test.ts src/node/mcp-artifact.test.ts
-bun run test src/node/mcp-token.test.ts src/node/mcp-token-auth.test.ts src/node/mcp-http.test.ts src/node/mcp-http-process.test.ts src/node/mcp-http-concurrency.test.ts
+go test ./internal/notes/ ./internal/mcp/
+go test -run 'TestAProductionBuildHasNoTestSeam|TestAKillAround|TestAWriteThatLoses|TestAStorageError|TestSIGTERMLetsAnAdmittedMCPWriteFinish' ./cmd/trewd/
+cd client && bunx vitest run --config vitest.stress.config.ts src/stress/mcp-crash.stress.ts src/stress/mcp-races.stress.ts
 ```
 
-The TypeScript MCP's stress file, `mcp.stress.ts`, was retired in M2 rather than
-moved to protocol 1: its phone races (disjoint, overlapping, append, delete and
-rename edits against a phone, and an offline phone catching up) are the cases M5
-task 12 ports to the server's MCP, from Basalt's identical copy, and its crash
-and before-image cases belong to the MCP write path M5 replaces (tasks 3 and 9).
-The classification of its 43 cases is in plan/strip-ledger.md, "M2 outcome".
-Both are ported now, as `client/src/stress/mcp-races.stress.ts` and
-`mcp-crash.stress.ts` ("The crash matrix and the phone races (M5)", below).
+**The oracle.** The headless client's own MCP server, `trew mcp` and `trew
+mcp-token`, is retired ([Retiring `trew mcp`](#retiring-trew-mcp-m2-task-10)).
+What stays of it in TypeScript is the oracle the Go port was held to (PLAN.md
+section 2.1): the pure note functions in `client/src/node/mcp-read.ts`,
+`mcp-inspect.ts`, `mcp-history.ts`, `mcp-markdown.ts`, `mcp-links.ts`,
+`mcp-notes.ts`, `mcp-operations.ts` and `mcp-batch.ts`, their unit tests, and
+`mcp-oracle.run.ts`, which feeds a corpus through them and writes
+`mcp-fixtures.json` and `internal/notes/emoji_table.go`. They are test-only:
+neither `bin.ts` nor the plugin's `main.ts` reaches them, so neither bundle
+carries them, and `client/package.json` ships only `dist/trew.mjs`.
+`client/src/node/artifact.test.ts` requires the refusal codes only they hold
+to be absent from both production bundles, and present in the same sources
+bundled alone, so the check cannot pass by matching nothing. A change to one
+of them, or to the runtime, must leave the fixtures byte for byte:
 
-The workflow finds a daily note, changes two exact task lines, compares unrelated
-BOM/CRLF/frontmatter/link bytes, reads the before-image, and checks both copies
-on a separately paired device. History tests inspect and restore an older version
-to a free destination and read it again after restart and from a fresh device.
-All files live in temporary directories. Tests never require a real user's vault.
-The daily-note workflow runs through both legacy and modern official HTTP clients
-talking to a CLI child, including exact before-image and second-device checks.
+```bash
+cd client && bun run src/node/mcp-oracle.run.ts && cd .. && git diff --exit-code mcp-fixtures.json internal/notes/emoji_table.go
+```
 
-HTTP concurrency tests use one actual sync Client and writing NodeVault shared
-by all clients. They cover same-base contention, disjoint edits, retries behind
-a held append, 17 competing mutations, disconnect, DELETE and idle expiry during
-an admitted write. Rotation and revocation tests hold one admitted write and
-four queued writes, then prove that observing an old-token 401 cancels queued
-work without losing the admitted edit. One thousand real CLI rotations under
-an authentication loop must never expose a missing or torn credential record.
-
-The SDK's `2026-07-28` HTTP path is sessionless; legacy `2025-11-25` uses sessions.
-Twenty legacy initialization attempts yield 16 usable sessions and four prompt
-refusals. Twenty modern readers compete with a phone-equivalent publishing 200
-notes. Reads may honestly return `busy` or `changed_during_read`, and searches
-report skipped changing files. Successful stable-folder results match sequential
-queries; a fresh observer matches the final converged 231-file inventory.
-The tests keep those bounded refusals instead of widening the existing queues.
-
-Legacy cancellation ends its session because SDK 2.0 retains cancelled routing
-state until the transport is collected. Tests check reconnection and actual
-callback drain, including cancellation of old-key work in both protocol modes.
-Authorization, origin, body, request, session and response limits run on real
-ports. An unreadable credential returns 503 with no tool dispatch; its real
-permission test explicitly skips when root bypasses that filesystem refusal.
-Named-interface binding is exercised when a non-loopback IPv4 interface exists;
-otherwise only that environment-dependent probe skips. Loopback remains required.
-Both probes ran on the development Mac.
-
-Process tests cover EOF, SIGTERM and broken stdout during admitted writes,
-incoming sync, stalled handshake and reconnect sleep. They hold a filesystem
-seam while another process tries the same canonical vault root and require it
-to remain locked until the first process drains. Output backpressure is tested
-with a paused real pipe. Malformed envelope shutdown has a regression for a
-paused stdin descriptor that previously kept the process alive after draining.
-
-`mcp-artifact.test.ts` builds the actual production configuration, copies only
-`trew.mjs` into an empty installation and removes its build inputs before
-launch. On macOS, sandbox-exec also denies the child access to the repository.
-The test initializes, lists, reads and edits over both transports with the official
-client, verifies the backup, and checks the plugin bundle for MCP SDK leakage.
-The npm tarball gate repeats both read/edit/backup workflows against the installed package.
-Dependencies missing from setup fail these tests rather than skipping them.
-
-The MCP stress suite submits writes through tool handlers and uses independent
-phone-equivalent clients plus a freshly paired reader. It checks actual retained
-content after disjoint/overlapping edits, append versus replace, deletion,
-rename, offline catch-up, stale put/putmany and a lost accepted upload reply.
-The remote author exits after uploading so its disk cannot rescue a lost branch.
-Tests also interrupt restore before its reply and disconnect the server during
-an already admitted edit.
-
-The HTTP stress driver repeats the phone races through real ports. Three official
-clients share one writer; all three submit distinct create requests after the
-intercepted phone race, and a fresh device must retain their markers as well as
-the original and independent remote branches. Simultaneous competing HTTP edits
-are covered separately by the concurrency tests above.
-
-The explicit crash matrix reaches each boundary before SIGKILL on both stdio and HTTP:
-
-| Seam | Boundary |
-|---|---|
-| `cli/mcp:backupVerified` | Backup bytes verified, before the transaction's directory flush. |
-| `cli/mcp:backupDurable` | Before-image flushed, before rechecking and replacing the source. |
-| `cli/vault:replace.staged` | Replacement staged, before parking the original. |
-| `cli/vault:replace.nameFree` | Original parked, before publishing the replacement. |
-| `cli/mcp:published` | Replacement published, before final verification and flush. |
-| `cli/mcp:durable` | Local result flushed, before sending the tool response. |
-
-After each kill, fresh observing objects read retained content before the first
-network pass; a new process then acquires the lock and a fresh device downloads
-the preserved branches. Removing before-image creation makes the post-publication
-kill test lose the preexisting branch. Removing shutdown drains makes the
-held-write lock test admit a competing process too early. These are preservation
-assertions, not just convergence or successful exit checks.
-HTTP restart also requires the unchanged credential to authenticate. All six
-HTTP seams additionally exercise dropped TCP plus SIGTERM: the lock remains held
-until the admitted edit finishes, and the exact before-image remains readable.
-
-Production artifacts have been exercised on macOS with Node 22.23.2 and 24.21.0.
-Recorded on 2026-09-15 on an Apple M4 Pro with 48 GiB RAM and local storage:
-the HTTP CLI is 1,088,247 bytes, 49,471 bytes above the step 5 artifact
-(1,038,776), or 49,171 bytes above the final stdio artifact (1,039,076).
-The plugin remains 298,846 bytes, unchanged by HTTP and free of SDK imports.
-
-| Runtime | Step 5 stdio initialization | Current HTTP initialization | Difference |
-|---|---:|---:|---:|
-| Node 22.23.2 | 93.0 ms | 120.7 ms | +27.7 ms |
-| Node 24.21.0 | 101.4 ms | 109.8 ms | +8.4 ms |
-
-Current stdio samples were 96.0 ms and 268.5 ms respectively. These are individual
-observations from separate runs with different concurrent load and probe setup,
-not controlled performance comparisons or latency guarantees. Each current
-artifact workflow also verified an exact edit and before-image while denied
-access to repository sources and dependencies.
-
-Node 20.20.2 could initialize and read locally but lacked the global WebSocket
-needed for sync; it is not supported. Process kills do not simulate power loss.
-Flush-failure injection complements them, and native Linux filesystem/systemd
-checks still require CI. The HTTP reverse-proxy stand-in rewrites Host and adds
-forwarded headers while preserving mandatory bearer authentication. It exercises
-forwarding, not external TLS, tailnet reachability or proxy identity enforcement.
-
-Real Tailscale Serve acceptance passed on 2026-09-15 with a Linux headless client
-and official SDK clients on macOS. Both protocol families negotiated through
-HTTPS; exact edits, verified before-images, stale retries, token rotation,
-revocation and restart were exercised. Mac and Android Obsidian devices received
-the expected edited bytes and original before-image through ordinary Trew sync.
-Temporary vaults also exercised native/container exclusion and SIGKILL recovery
-on that Linux host. This does not replace CI's mounted-filesystem or systemd checks.
-
-Cloudflare Tunnel, Collie and a specific phone MCP client remain untested. Manual
-acceptance for that client must reach the actual proxy, ask the intended note
-questions, then rotate the credential and prove access fails until the new token
-is entered. If the chosen client requires OAuth instead of a static bearer,
-scope that separately.
+**The shipped client.** `artifact.test.ts` runs the release's own build
+configuration in a staging copy, copies `trew.mjs` alone into an empty
+directory with its build inputs deleted, and runs it under `sandbox-exec` with
+the repository denied on macOS: it pairs from the first invite, uploads a note
+with a byte-order mark, frontmatter, CRLF and LF, mints an invite for a second
+device that receives exactly those bytes, and downloads that device's edit.
+`scripts/pack-check.sh` runs the same on the file the npm tarball installs,
+under plain `node`, and refuses a packed CLI that still answers `trew mcp`.
+Recorded 2026-09-24 on an Apple M4 Pro: `trew.mjs` is 263,627 bytes and the
+plugin 328,355; with the MCP server and its SDK in it, `trew.mjs` was 1,088,247
+bytes when last measured, on 2026-09-15.
 
 ## Plugin testing
 
@@ -1516,6 +1412,287 @@ Settled in M2:
   `CHUNKING_TEXT_EXTENSIONS`, so the list `protocol-fixtures.json` pins is the
   one the chunker uses.
 
+### Retiring `trew mcp` (M2 task 10)
+
+PLAN.md M2 task 10 deletes the headless client's MCP server "only once the Go
+tools pass against their fixtures", and section 2.1 keeps its semantic vectors
+until M5 proves the port. M4 and M5 did: `internal/notes` holds every vector of
+`mcp-fixtures.json` (`oracle_test.go`, `oracle_write_test.go`), and the tools'
+own suites and the crash and race stress files pass. Decided 2026-09-24:
+`trew mcp` and `trew mcp-token` are removed from the published CLI with their
+flags, and exit 2 saying where MCP went (`cli.test.ts`, "says where MCP went";
+`scripts/pack-check.sh` against the packed file).
+
+**Deleted**, because only the retired host used them: `mcp.ts` (the command),
+`mcp-session.ts`, `mcp-tools.ts` (the SDK tool registry), `mcp-protocol.ts`
+(the stdio transport), `mcp-http.ts`, `mcp-token.ts` (the directory's
+credential), `mcp-vaults.ts` (named roots), their test helpers
+`mcp-test.ts`, `mcp-http-test.ts`, `mcp-process-test.ts`, `mcp-fault-child.ts`,
+`mcp-artifact-test.ts` and `mcp-artifact.run.ts`, fourteen test files, and the
+`@modelcontextprotocol/client`, `@modelcontextprotocol/server` and `zod`
+development dependencies. **Kept** as the oracle, test-only, because
+`mcp-oracle.run.ts` imports them and must still write `mcp-fixtures.json` byte
+for byte: `mcp-read.ts`, `mcp-inspect.ts`, `mcp-history.ts`, `mcp-markdown.ts`,
+`mcp-links.ts`, `mcp-notes.ts`, `mcp-operations.ts`, `mcp-batch.ts` and their
+unit tests, with `mcp-history.test.ts` cut to its seven cases that need no
+host. `bin.test.ts` builds its bundle itself now, which `mcp-test.ts` did for
+it, and `artifact-test.ts` replaces `mcp-artifact-test.ts` for the shipped
+file (above, "MCP verification").
+
+**The ledger.** Every case of every deleted file, and the six cut from
+`mcp-history.test.ts`, was read and classified before the file went: COVERED
+by a named Go test that asserts the same property of `/mcp` (each was read to
+confirm it does), OBSOLETE with the host (stdio, sessions, the SDK's queues,
+the directory's credential file, named local roots, the vault lock and the
+before-image files), KEPT in a kept file, or a guarantee with no home, which
+was PORTED before the deletion. 109 cases in 15 files; SPLIT rows say which
+part is which.
+
+| File | Cases | Where the guarantees went |
+|---|---|---|
+| `mcp.test.ts` | 8 | 4 covered, 3 obsolete (case aliases and NFC twins on a local disk), 1 ported; one row of a covered case ported |
+| `mcp-bin.test.ts` | 7 | 2 covered, 5 obsolete (stdio lifecycle, lock drains) |
+| `mcp-protocol.test.ts` | 9 | 4 covered, 5 obsolete (stdio framing, SDK admission); the cancellation halves ported |
+| `mcp-artifact.test.ts` | 1 | the shipped-file half ported to `artifact.test.ts`, the tool workflow covered |
+| `mcp-tools-process.test.ts` | 2 | covered; one row (a prepend with no base) ported |
+| `mcp-token.test.ts` | 6 | 3 covered, 2 obsolete, 1 split whose overwrite refusal is open |
+| `mcp-token-auth.test.ts` | 12 | 2 covered, 10 obsolete as written (the credential file); the store-failure half of two ported, the key-out half of two open |
+| `mcp-http.test.ts` | 18 | 8 covered, 3 obsolete (sessions, the GET stream), 4 split, 3 ported; one split's route half ported too |
+| `mcp-http-cli.test.ts` | 4 | obsolete (the flags) |
+| `mcp-http-process.test.ts` | 11 | 2 covered, 6 obsolete, 3 split; the dropped connection ported |
+| `mcp-http-concurrency.test.ts` | 7 | 4 covered, 1 obsolete (the credential file's torn reads), 2 split; the dropped connection ported |
+| `mcp-vault-process.test.ts`, `mcp-vault-routing.test.ts`, `mcp-vaults.test.ts` | 11 | obsolete (one vault per endpoint); the scope halves covered |
+| `mcp-history.test.ts` | 13 | 7 kept, 4 covered, 1 split (covered and obsolete), 1 ported |
+
+**Ported**, each shown to fail with the check it holds taken out where that
+could be done by one line:
+
+| Test | Holds |
+|---|---|
+| `internal/mcp/retired_host_test.go` `TestAStoreThatCannotBeReadAnswers503BeforeAnyTool` | a store that cannot be read at the door is 503 `unavailable`, nothing dispatched, nothing secret in the reply or the log, and the token works again after |
+| `TestOnlyExactlySlashMCPIsServed` | only exactly `/mcp`, no query string at all, even with a valid token (fails with the query check removed from `ServeHTTP`) |
+| `TestAClientThatHangsUpMidReadGivesItsSlotBack` | a client that hangs up mid-call gives its in-flight slot back |
+| `TestAClientThatHangsUpMidWriteCommitsAtMostOnce` | a client that hangs up at `bodies`, `committed` or `broadcast` leaves the write committed once or not at all, and the keyed retry is one result |
+| `TestRestoreNoteRefusesWhatIsNotANoteAndWritesNothing` | `restore_note` refuses a folder, a deletion, another path's uid, a version over 1 MiB, invalid UTF-8 and an occupied destination, writing nothing |
+| `TestAppendAndPrependNeedABase` | `append_note` and `prepend_note` without a base are `invalid_arguments` |
+| `cmd/trewd/mcp_shutdown_test.go` `TestSIGTERMLetsAnAdmittedMCPWriteFinish` | SIGTERM lets a write held at `bodies` or `committed` finish and answer before serve exits 0 (fails with the shutdown allowance cut to a millisecond) |
+| `TestServeCutsOffUnfinishedHeaders` | unfinished request headers are cut off at about ten seconds, naming nothing |
+| `cmd/trewd/mcptoken_test.go` `TestAKeyOutThatCannotBeWrittenNamesTheTokenItMinted` | a `-key-out` that cannot be written names the token it left live, and how to revoke it |
+| `client/src/node/artifact.test.ts`, `scripts/pack-check.sh` | the shipped `trew.mjs`, alone and with the repository denied, pairs and syncs both ways, and neither bundle carries MCP code |
+
+**Fixed, and one decision open.** `trew mcp-token --key-out` refused an
+existing file, and never printed or left a credential it could not make
+durable. `trewd mcp-token -key-out` mints the token through the control
+socket first and then writes the file, so a file that could not be written
+left a live token nobody held, behind an error that named only the path. It
+now names the token and the command that revokes it
+(`cmd/trewd/mcptoken_test.go` `TestAKeyOutThatCannotBeWrittenNamesTheTokenItMinted`,
+which failed before the change). Open for the owner: whether `-key-out` should
+also refuse an existing file, and revoke the token itself when the write
+fails. `writeSecretFile` replaces an existing file on purpose, for the
+first-run invite (`TestS11OverwritingA0644FileTightensItTo0600`), so refusing
+one for tokens is a choice about the command, not a fix. Rows
+`mcp-token.test.ts` 50 and `mcp-token-auth.test.ts` 135 and 158.
+
+The per-case tables follow. Line numbers are those of the deleted files at
+`cfb7961`.
+
+#### `client/src/node/mcp.test.ts` (8)
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 62 | edits two daily tasks over stdio while keeping unrelated bytes and the backup on a second device | Two exact edits in one call change only those lines of a BOM/CRLF/frontmatter note; the before-image reads back as the original; a retry on the old base is `stale`; a second device receives the edited bytes (and the before-image file) | COVERED | The bytes: `internal/notes/port_notes_test.go` `TestPortedTwoExactEditsTogether`, `TestPortedPrependKeepsTheBOM`, and the `edits` vectors in `oracle_write_test.go`. The before-image as the displaced version read by `previousUid`: `internal/mcp/write_test.go` `TestEveryWriteToolCommitsAndKeepsItsBeforeImage`. Stale with the path's uid: `TestAStaleBaseIsRefusedWithThePathsOwnUID`. The device has it: `TestADeviceReceivesTheWriteBeforeTheReply`, and a fresh device holding exact bytes in `client/src/stress/mcp-races.stress.ts`. The before-image as a file in the vault and `connection.localGeneration` are the host's and go |
+| 119 | resolves case aliases over stdio only when the filesystem does | On a case-folding disk `Work/note.md` reads `work/note.md` and a create lands in the existing folder spelling; on a case-sensitive disk it is `not_found_local` | OBSOLETE | A property of the local disk under `trew mcp`. The server has exact paths and one collision rule: a case variant of a live path is `collision` (`internal/mcp/write_test.go` `TestWriteArgumentsAreStrictAndThePathPoliciesHold`, `internal/store/collision_test.go` `TestTheFixtureCollisionsThroughTheAppendPath`) |
+| 150 | reads and edits both case-distinct notes over stdio without touching the other | `Foo.md` and `foo.md` side by side are both listed, read and edited, each edit leaving the other untouched | OBSOLETE | The server cannot hold the pair: the second spelling is refused `collision` (same two tests as line 119). Nothing inherits a vault with both |
+| 183 | initializes and reads 5000 notes while the sync handshake is stalled, with bounded pages and eight concurrent calls | Initialize and reads work while sync is stalled; no mutation tools in read-only mode; 5000 notes list in bounded pages with no duplicates; a 1 MiB note pages at 65,536 bytes, next line 65, pages summing to the note; eight concurrent reads equal sequential ones; a writable host refuses `not_ready` before its first sync and creates nothing | COVERED | Paging and bounds: `internal/mcp/tools_test.go` `TestListingFiltersKindsAndBounds` (limit 1 to 500), `TestListingPagesAcrossConcurrentCommitsWithoutGhosts` (paged equals whole, no ghost or duplicate). Pages by bytes, the same 1024 x 1024 note and next line 65: `internal/notes/port_read_test.go` `TestPortedPagesByBytes`; pages joined are the bytes: `TestReadNotePagesVersionsAndRefusals`. Read tools hidden from a read token: `internal/mcp/auth_test.go` `TestAReadTokenCannotCallAWriteTool`. The stalled handshake, `not_ready` and the host's admission queue under eight calls are the host's: the server serves from its store, with no sync to wait for |
+| 290 | omits every mutation in persisted read-only mode and refuses invalid schemas without creating files | A read-only config lists exactly the nine read tools, a write call fails and writes nothing; `maxLines: 0`, an unknown key, a malformed base and a lone surrogate are tool errors | COVERED | Scope at discovery and dispatch, nothing written: `internal/mcp/auth_test.go` `TestAReadTokenCannotCallAWriteTool`, `TestTheAuthorizationMatrixCoversEveryTool`. Argument strictness: `internal/mcp/tools_test.go` `TestReadNotePagesVersionsAndRefusals` (`invalid_limit`, `invalid_arguments`, lone surrogate `invalid_text`), `internal/mcp/transport_test.go` `TestToolFailuresAreResultsAndUnknownToolsAreErrors` (unknown argument). The read-only device config as the switch is gone; scope is the token's |
+| 324 | serves a cancelled search without losing the next request | A search cancelled mid-flight is abandoned, and the next call on the same host succeeds | PORTED | The server has no session to wedge, but it has admission caps (32 in flight, 8 per token). No Go test has a client abandon a request and then shows the slot came back. `TestBudgetsAnswer429WithoutStarvingAnotherToken` "in flight" only shows release after a normal completion. See PORTED 1; ported as `internal/mcp/retired_host_test.go` `TestAClientThatHangsUpMidReadGivesItsSlotBack` |
+| 338 | reads old versions and restores deleted notes to explicit destinations across restart and another device | `note_history` pages with `before`/`nextBefore` to a null end; `read_note` with `uid` returns the historical bytes (source `history`); `restore_note` to a free path commits and names its source; the same restore again is `exists`; the head is untouched; `deleted_notes` lists a deletion and its old uid still reads and restores; a fresh device receives both restored notes | COVERED, except one row | History paging and deletions: `internal/mcp/tools_test.go` `TestHistoryDeletionsAndComparisons`; historical reads: `TestReadNotePagesVersionsAndRefusals`; restore to a new path with `restoredFrom`: `internal/mcp/write_test.go` `TestEveryWriteToolCommitsAndKeepsItsBeforeImage`; devices receive it: `TestADeviceReceivesTheWriteBeforeTheReply`. The restart is the server's store, with nothing held in a process. Not asserted in Go: `restore_note` onto an occupied destination is `exists` and replaces nothing. `restoreNote` goes through `mutation.create`, whose `exists` is tested only for `create_note`. See PORTED 2; ported as `internal/mcp/retired_host_test.go` `TestRestoreNoteRefusesWhatIsNotANoteAndWritesNothing` (the `exists` row) |
+| 415 | reports real Unicode spelling collisions as an incomplete stdio search | NFC and NFD spellings of one name side by side on disk: `ambiguousCount` 1, the search skips it as `ambiguous_path` and is incomplete, both files untouched | OBSOLETE | The server refuses a path that is not NFC (`badpath`, reason `nfc`: `internal/paths/paths_test.go` `TestEveryPathGetsTheReferenceVerdictAndReason`), so it never holds two spellings; the ambiguity was the local disk's |
+
+#### `client/src/node/mcp-bin.test.ts` (7)
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 62 | %s drains an admitted edit before another process can take the vault (EOF, SIGTERM, EPIPE) | Ending the `trew mcp` process mid-write keeps the vault lock until the admitted append finishes, a competing `trew sync` is refused meanwhile, the append lands, the next host lists its before-image, a retry on the old base is `stale` | OBSOLETE | The stdio process, its vault lock and its on-disk before-image all go. The server's version is the commit boundary and SIGKILL around it: `cmd/trewd/crash_test.go` `TestAKillAroundAnAppendResolvesOnRetryToOneResult` and `client/src/stress/mcp-crash.stress.ts` (retry with the key is one result, keyless retry `stale`, line in the note once) |
+| 121 | %s closes a stalled handshake and wakes reconnect sleep (EOF, SIGTERM) | `trew mcp` exits 0 promptly while its sync handshake is stalled or it is sleeping before reconnecting | OBSOLETE | The host's own sync lifecycle; the server has no upstream to wait on |
+| 165 | MCP and sync watch exclude each other through root aliases and release after a kernel kill | `trew mcp` and `trew sync --watch` on the same vault through a symlinked alias exclude each other; a SIGKILLed holder releases the lock at once | COVERED (the lock half) | MCP half is gone with the host. The lock half, for the commands that stay: `scripts/kernel-lock.test.ts` ("after SIGKILL the next trew takes it", and the symlink and trailing-slash aliases), run by `scripts/check.sh` and CI job `kernel-lock`; `client/src/node/lock.test.ts` "refuses while a holder on this host is alive" |
+| 200 | rejects %s without putting human diagnostics on stdout (--json, --watch, --verify) | `trew mcp` with those flags exits 2 with nothing on stdout | OBSOLETE | The command goes; stdout no longer belongs to a protocol in any remaining command |
+| 211 | rejects malformed input without dispatch or non-protocol stdout: %j | Broken JSON, an array, and a non-string method are refused with no dispatch and nothing but protocol on stdout | COVERED | `internal/mcp/transport_test.go` `TestMalformedFramesAreJSONRPCErrors` ("not JSON", "an array", "a method that is not a string", and a refusal before any method runs). The stdio shutdown semantics (exit 0 or 1) are the host's |
+| 230 | %s drains an incoming sync replacement before releasing the lock (EOF, SIGTERM) | Ending `trew mcp` while it holds an incoming replacement at `cli/vault:replace.staged` keeps the lock until the replacement lands; the note then holds the remote bytes | OBSOLETE (the drain) | The drain was the host's shutdown path. What must not happen, a note lost by a process that dies inside a replacement, is `client/src/stress/faults.stress.ts` "survives it" and "leaves both versions findable" at `cli/vault:replace.staged` and `replace.nameFree` |
+| 256 | a real backpressured stdout resumes bounded read replies without losing protocol framing | Four large reads with stdout paused all arrive whole and framed once it resumes | OBSOLETE | Stdio framing. The server answers each request on its own connection; replies are bounded by `internal/mcp/auth_test.go` `TestARepliesOver1MiBAreRefusedBeforeTheyAreSent` and the reply-byte budget in `TestBudgetsAnswer429WithoutStarvingAnotherToken` |
+
+#### `client/src/node/mcp-protocol.test.ts` (9)
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 54 | reclaims admission after cancelled handlers actually finish | Sixteen cancelled calls release their admission once each handler returns, so a seventeenth request is served | OBSOLETE | The SDK stdio session's admission queue. The server has no queue: a request holds an in-flight slot only while its handler runs. The part that survives, a slot coming back after an abandoned request, is PORTED 1; ported as `internal/mcp/retired_host_test.go` `TestAClientThatHangsUpMidReadGivesItsSlotBack` |
+| 88 | keeps admission for cancelled transactions until filesystem work finishes | A cancelled write keeps its slot until its filesystem work finishes; the queue is full meanwhile, free after | OBSOLETE | As 54, with the local write. On the server a write is one `CommitOperation`, all or nothing whatever the client does; the abandoned-write case is in PORTED 1; ported as `internal/mcp/retired_host_test.go` `TestAClientThatHangsUpMidWriteCommitsAtMostOnce` |
+| 134 | does not treat a version claim on a legacy connection as initialized | A handshake-era request carrying a 2026-07-28 `_meta` claim before `initialized` does not dispatch a tool | COVERED | Mixing eras is refused before dispatch: `internal/mcp/transport_test.go` `TestStatelessRequestsMustMirrorTheirBody` ("another version in the header") and `TestHandshakeRequestsNameTheirVersion`. The server is stateless, so "initialized" has no meaning to confuse |
+| 172 | cancels legal request id %j without confusing numeric and string ids (0, "", "0") | Cancelling id 0, "" or "0" cancels that request only and it gets no reply | COVERED (the id half) | `internal/mcp/transport_test.go` `TestIDsAreRepeatedAsSent` (0, "", "0" repeated exactly) and `TestDuplicateIDsAreAnsweredEachOnItsOwn`: nothing routes a reply by id. `notifications/cancelled` is accepted and changes nothing (`TestNotificationsAreAcceptedWithNoBody`); cancellation is the client closing its connection, PORTED 1; ported as `internal/mcp/retired_host_test.go` `TestAClientThatHangsUpMidReadGivesItsSlotBack` |
+| 206 | reclaims cancelled invalid-schema calls even when no tool handler ran | Cancelled calls stuck in schema validation release admission, and no handler runs | OBSOLETE | The SDK's async zod validation. The server's argument reader is synchronous and strict (`internal/mcp/write_test.go` `TestWriteArgumentsAreStrictAndThePathPoliciesHold`, refused before anything is written) |
+| 255 | preserves original response ids and refuses duplicate active ids | Ids 0 and "0" are answered distinctly; a duplicate in-flight id shuts the session | COVERED | `internal/mcp/transport_test.go` `TestIDsAreRepeatedAsSent`; duplicates are decided differently and tested: `TestDuplicateIDsAreAnsweredEachOnItsOwn` (each answered with its own result, PLAN M4 task 1) |
+| 284 | validates fragmented UTF-8 and rejects oversized unterminated input before dispatch | A UTF-8 sequence split across writes decodes; input over 8 MiB is refused before dispatch | COVERED | Invalid UTF-8 is a parse error: `internal/mcp/transport_test.go` `TestMalformedFramesAreJSONRPCErrors`; over 8 MiB, declared or streamed, is 413: `internal/mcp/auth_test.go` `TestBodiesOver8MiBAre413`. Fragmentation across writes is a stdio line-reader concern |
+| 302 | reports EPIPE and drains queued output without admitting another request | A broken stdout pipe ends the session after draining, with no new request admitted | OBSOLETE | Stdio only |
+| 326 | holds its bounded input queue while stdout is backpressured | A notification is not processed while stdout is backpressured, then is | OBSOLETE | Stdio only |
+
+#### `client/src/node/mcp-artifact.test.ts` (1), with `mcp-artifact-test.ts`
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 12 | the actual production configuration builds an isolated single-file MCP and keeps the SDK out of the plugin | A fresh `esbuild.config.mjs production` build succeeds; the plugin bundle has no `modelcontextprotocol`/`McpServer`/`StdioServerTransport`; `trew.mjs` copied alone into an empty directory, build inputs removed and (macOS) the repository denied by `sandbox-exec`, pairs from a real server's first invite and runs the full stdio and HTTP tool workflow (read, exact edit, before-image, create_directory, tags, move with backlink, history, compare, delivery, delete); `pack-check.sh` repeats the workflow against the npm-installed package | PORTED (the artifact half); OBSOLETE (the MCP workflow and the SDK leak) | The tool workflow is the server's now: `internal/mcp/write_test.go` `TestEveryWriteToolCommitsAndKeepsItsBeforeImage`, `internal/mcp/tools_test.go`. The SDK-in-the-plugin check has nothing to catch once `@modelcontextprotocol/*` leaves `client/package.json`. What has no home: nothing else runs a real pair and sync from the production `trew.mjs` isolated from the repository, or from the npm-installed package. `client/src/build.test.ts` runs only `--help`, `--version` and checks imports in place; `scripts/pack-check.sh` runs only `--version` and `--help`. See PORTED 3; ported as `client/src/node/artifact.test.ts` and `artifact-test.ts`, run again by `scripts/pack-check.sh` on the npm-installed file |
+
+#### `client/src/node/mcp-tools-process.test.ts` (2)
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 60 | searches tags and filenames, then prepends recoverably through the built CLI, HTTP=%s | Tag search finds a real tag and not one in a code span; filename search finds the note; prepend after a BOM keeps it and CRLF; the before-image reads back; a retry on the old base is `stale`; a prepend without `base` is a tool error; a second device receives the bytes and the before-image | COVERED, except one row | Tag and filename modes through the tool, over Basalt's corpus: `internal/mcp/search_oracle_test.go` `TestSearchMatchesBasaltsLiteralScanOverTheCorpus`; code spans are not tags: `internal/notes/port_read_test.go` `TestPortedSearchesParsedTags`; filename mode: `TestPortedFilenamePagesBindTheMode`; BOM prepend: `internal/notes/port_notes_test.go` `TestPortedPrependKeepsTheBOM` and `write_test.go` `TestEveryWriteToolCommitsAndKeepsItsBeforeImage` (the `bom.md` step, with its former bytes); stale: `TestAStaleBaseIsRefusedWithThePathsOwnUID`; devices: `TestADeviceReceivesTheWriteBeforeTheReply`. Not asserted in Go: a `prepend_note` (or `append_note`) with no `base`; the strictness table has only `edit_note` without a base. See PORTED 2. The before-image as a vault file is the host's; ported as `internal/mcp/retired_host_test.go` `TestAppendAndPrependNeedABase` |
+| 116 | previews and applies tag, move, directory and delete workflows through the built transport, HTTP=%s | `create_directory`, `create_note`; `add_tags`, `rename_tag`, `remove_tags`, `manage_tags`, `move_note` each previewed then applied with the preview's changes; the backlink is rewritten; `delete_note` keeps a before-image with the moved note's bytes; a second device holds the backlink and the before-image, and not the deleted note | COVERED | `internal/mcp/write_test.go` `TestEveryWriteToolCommitsAndKeepsItsBeforeImage` (every one of those tools previewed and applied, backlink rewritten, each displaced version read back exactly by `previousUid`), `TestAnApplyIsBoundToItsPreviewsHead`, `TestADeviceReceivesTheWriteBeforeTheReply`; a fresh device after a move with backlinks and a tag batch: `client/src/stress/mcp-crash.stress.ts`. The before-image file on the second device is the host's: on the server it is the pinned version |
+
+#### `client/src/node/mcp-token.test.ts` (6)
+
+The headless client's `trew mcp-token` issued one bearer per vault directory and kept its SHA-256 in `.trew/mcp-token.json`. On the server a token is a row in `mcp_tokens`, minted by `trewd mcp-token` through the control socket, so the file, the vault directory and the owner lock go; what a token must be and where it may be written stays.
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 27 | issues an independent bearer once and stores only its verified hash at 0600 | 43 characters of base64url printed once; only its SHA-256 stored; the fingerprint (8 hex) shown, never the hash or token | COVERED (the 0600 JSON file is OBSOLETE: the hash is a SQLite row) | `internal/store/mcptokens_test.go` `TestAnMCPTokenIsStoredAsAHashUnderARandomID` (hash stored, never the clear token, listing carries neither, fingerprint is hash[:8]); `cmd/trewd/mcptoken_test.go` `TestMCPTokensAreMintedListedAndRevokedThroughTheServer` (printed token decodes to 32 bytes, listing carries no credential) |
+| 42 | refuses an unpaired directory without creating state | No pairing, no token, no files | OBSOLETE | A server token needs no device pairing; `trewd mcp-token` on a data dir is the store's, and a refused command mints nothing (`TestMCPTokenRefusesWhatItCannotDo`) |
+| 50 | writes --key-out privately without echoing the key and refuses to overwrite it | Key file 0600, token not in output, path in output; a second `--key-out` to the same path fails, leaves the file and the stored hash unchanged | SPLIT: COVERED except the overwrite refusal, which is OPEN (owner decision, above; the unheld-token half fixed) | 0600 and not printed: `TestMCPTokensAreMintedListedAndRevokedThroughTheServer`, `cmd/trewd/secretfile_s11_test.go` `TestS11WriteSecretFileIsExactAndPrivate`. `trewd -key-out` goes through `writeSecretFile`, which replaces an existing file (by design for the first-run invite, `TestS11OverwritingA0644FileTightensItTo0600`), so an existing key file is silently overwritten |
+| 65 | keeps key output outside the vault, including a root alias (it.each false, true) | `--key-out` inside the vault, directly or through a symlinked alias of its root, is refused before any write | OBSOLETE | The risk was a credential landing in a synced folder next to the notes; trewd writes to an operator path on the server and has no vault directory to be inside |
+| 82 | rotates and revokes without taking the running vault owner lock | Issue twice while `trew mcp` holds the lock, the second differs; `--revoke` removes the file | COVERED | `TestMCPTokensAreMintedListedAndRevokedThroughTheServer` (mint, list, revoke while serve runs, through the control socket) and `TestMCPTokenCommandsWorkWithNoServerRunning`; several tokens coexist, so "rotation" is mint plus revoke |
+| 100 | refuses issuance flags during revocation without changing the credential | `--revoke --key-out` is a usage error (exit 2) and the stored credential is untouched | COVERED | `cmd/trewd/mcptoken_test.go` `TestMCPTokenRefusesWhatItCannotDo`: the `-list -label` row goes through the same minting-flags guard that `-revoke -key-out` does (`mcptoken.go:47`), and the test ends by checking nothing was minted. Only the `-list` spelling is exercised |
+
+#### `client/src/node/mcp-token-auth.test.ts` (12)
+
+`authenticateMcp` and `readMcpToken` read the credential file on every request. The server reads `mcp_tokens` (`Store.MatchMCPToken`, `CheckMCPToken`), so every case about the file (its shape, symlinks, staging, flushes) goes with it; the bearer parsing and the refusal shapes stay.
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 54 | refuses malformed authorization before reading credential state (it.each: none, empty, Basic, 42, 44, 43 of `!`) | 401 `unauthorized`, and no file opened | COVERED | `internal/mcp/auth_test.go` `TestUnauthenticatedRequestsGetAFixedRefusal` (the same shapes and more, fixed 401 body and `WWW-Authenticate`, nothing dispatched); `internal/store/invites_test.go` `TestDecodeTokenTakesOneSpellingOnly`. "Before the store is read" holds by construction (`bearer()` returns before `MatchMCPToken`, `internal/mcp/auth.go:40`) and is not itself asserted |
+| 69 | rejects a well-formed wrong token and rechecks the hash after rotation and revocation | Wrong 43-character token 401; after re-issue the old token 401 and the new one works; after revoke the new one 401 | COVERED | `internal/store/mcptokens_test.go` `TestAnMCPTokenAuthenticatesOnlyAsItself` (a one-bit change, short, long and empty tokens never match), `TestCheckMCPTokenIsTheCredentialAsItStandsNow` (revoked token no longer matches or checks); `internal/mcp/auth_test.go` `TestUnauthenticatedRequestsGetAFixedRefusal` (a revoked and an expired token get the fixed 401) |
+| 84 | refuses malformed or oversized credential state (it.each: not JSON, null, [], short hash, 1025 spaces) | 503 `unavailable` | OBSOLETE | No credential file; the rows are SQLite with a schema. What survives, a store failure answered 503, is PORTED below (row mcp-http.test.ts 210); ported as `internal/mcp/retired_host_test.go` `TestAStoreThatCannotBeReadAnswers503BeforeAnyTool` |
+| 94 | refuses EACCES and EIO without exposing file details (it.each) | 503 `unavailable`, no path or token in the reply | OBSOLETE as written; the store-failure half is PORTED | Same as 84: `handler.go:255` answers 503 when `authenticate` returns an error, with no Go test; ported as `internal/mcp/retired_host_test.go` `TestAStoreThatCannotBeReadAnswers503BeforeAnyTool` |
+| 101 | keeps the credential outside note reads by name, leaf alias and ancestor alias | `.trew/mcp-token.json` unreadable through `read_note` by name or any symlink, and absent from listings | OBSOLETE | The server's tokens are never files in the vault, so no vault path can reach them; `internal/mcp/auth_test.go` `TestTheLogCarriesNoTokenNoteTextOrPath` covers the remaining leak (the log) |
+| 110 | does not read a credential through a leaf or state symlink (it.each) | `readMcpToken` refuses a symlinked file or `.trew` with 503 | OBSOLETE | No credential file to follow |
+| 120 | does not issue or rotate through staging outside the vault | A symlinked `.trew/tmp` refuses issuance, nothing printed, nothing written outside | OBSOLETE | Minting is one SQLite transaction; no staging directory |
+| 135 | prints no credential after a durable-write failure | A failed durable write exits nonzero, prints nothing, keeps the old credential | SPLIT: the file half OBSOLETE; the "never a live token nobody holds" half OPEN (owner decision, above; the unheld-token half fixed) | `trewd mcp-token -key-out` mints through the control socket first and then calls `writeSecretFile` (`cmd/trewd/mcptoken.go:108`); if the write fails the token is already live and the error does not name its id. Nothing tests that path |
+| 143 | keeps the old credential when flushing the staged hash fails | A failed fsync of the staged hash leaves the old file and prints nothing | OBSOLETE | The store's own durability (SQLite commit) replaces the staged file |
+| 158 | prints no credential if flushing its published directory fails | A failed directory fsync prints nothing | OBSOLETE for the hash file; the key-out half is the OPEN (owner decision, above; the unheld-token half fixed) item under 135 | `writeSecretFile` does `fsync.Dir` and returns its error (`pairing.go:246`), but the token is minted by then |
+| 172 | reads the published credential back before printing it | A corrupted published file is caught, nothing printed, corrupt text not echoed | OBSOLETE | No published hash file. `writeSecretFile` reads the key file back (`pairing.go:258`), untested for a mismatch, and again after minting |
+| 183 | does not print or accept a credential path that became a directory | A directory at the credential path refuses issue and authentication (503) | OBSOLETE | No credential path |
+
+
+#### `client/src/node/mcp-http.test.ts` (18)
+
+The SDK-backed HTTP host of `trew mcp --listen`, with sessions, a GET stream and a per-process reader queue. The server's `/mcp` is stateless and hand-rolled (`internal/mcp`, "The MCP transport" in docs/development.md), so every case about sessions, the SDK's routing and the client's reader queue goes; the authorization, body, origin and budget cases carry over.
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 26 | cancels queued old-key reads when rotation is observed (legacy, modern) | A read queued behind a held one is aborted when an old-token request sees a rotation, and never reads a snapshot | COVERED in its surviving form | The server has no reader queue; the guarantee that a revoked token's in-flight work never reaches it is `internal/mcp/auth_test.go` `TestATokenRevokedMidRequestLosesBeforeItsReply` (the computed reply is withheld, the next request 401) and, for writes, `TestAWriteLosesAtTheCommitBoundaryToARevoke`, `internal/mcp/write_test.go` `TestATokenRevokedMidFlightLosesAtTheCommitBoundary` |
+| 74 | reads notes through the official HTTP client (legacy, modern) | `read_note` returns exact bytes; read-only listing lacks `edit_note`; `create_note` refused and writes nothing; logs carry neither note text nor token | COVERED | `internal/mcp/transport_test.go` `TestTheSDKClientSpeaksEveryVersionItSupports` (every version, exact tool list, exact bytes); `internal/mcp/auth_test.go` `TestAReadTokenCannotCallAWriteTool` (read token never shown a write tool, a hand-built call is `read_only`, nothing written), `TestTheLogCarriesNoTokenNoteTextOrPath` |
+| 94 | requires current authorization on POST, GET and DELETE, even for an existing session | Missing auth 401 with realm on every method; the rotated-out token 401; an old session id 404; a fresh initialize 200; after revoke 401 | SPLIT: auth COVERED; session and GET/DELETE halves OBSOLETE | `TestUnauthenticatedRequestsGetAFixedRefusal`, `TestATokenRevokedMidRequestLosesBeforeItsReply`; GET and DELETE are 405 with no session ever minted (`internal/mcp/transport_test.go` `TestGETAndDELETEAre405`) |
+| 129 | retires old sessions when an old-token request observes rotate or revoke (it.each) | An open GET stream of the old token ends | OBSOLETE | No sessions and no GET stream (`TestGETAndDELETEAre405`) |
+| 159 | refuses malformed and missing bearer headers before any tool runs, with fixed pre-authentication replies | Six bad headers: 401, realm, body `unauthorized`, no token, hash, path, vault id or tool names anywhere in body or headers, no dispatch | COVERED | `internal/mcp/auth_test.go` `TestUnauthenticatedRequestsGetAFixedRefusal` (eleven shapes plus two headers, the same absent-secret check over body and headers, `dispatched == 0`) |
+| 210 | an unreadable credential refuses HTTP with 503 before any tool runs | Credential unreadable: 503 `unavailable`, no dispatch, no path or token in the log | PORTED | `internal/mcp/handler.go:255` answers a store error in `authenticate` with 503 and logs `err`; no Go test drives it, and none checks that the logged error carries no token or path; ported as `internal/mcp/retired_host_test.go` `TestAStoreThatCannotBeReadAnswers503BeforeAnyTool` |
+| 233 | logs bounded proxy diagnostics without trusting forwarded identity or recording secrets | Forwarded headers logged, bounded, never trusted; a token in a forwarded header never logged | SPLIT: "never trusted" COVERED; the diagnostics OBSOLETE | `internal/mcp/auth_test.go` `TestFailuresAreCountedAgainstTheConnectionNotAHeader` (failure budget keyed on `RemoteAddr`, not `X-Forwarded-For`); the server logs no forwarded headers at all, and `TestTheLogCarriesNoTokenNoteTextOrPath` holds the log to no token |
+| 263 | does not expose the credential or administrative tools over authenticated HTTP | Tool list is exactly the nine read tools; reading `.trew/mcp-token.json` is an error; `sync_status` carries no token, hash, vault id or server URL | SPLIT: tool list COVERED; the credential file OBSOLETE | `TestTheSDKClientSpeaksEveryVersionItSupports` (exact `readToolNames`), `internal/mcp/auth_test.go` `TestTheAuthorizationMatrixCoversEveryTool` (generated from the registry, no admin tool exists to list); tokens are not vault files |
+| 285 | checks exact origins before auth and refuses every other route without exposing state | Four near-miss origins 403 `refused` even with broken credential state; the allowed origin reaches auth; `/`, `/health`, `/mcp?key=secret`, `/.trew/mcp-token.json` 404 empty; PUT 405 | SPLIT: origin and PUT COVERED; `/mcp?query` PORTED; `/` and `/health` OBSOLETE | `internal/mcp/auth_test.go` `TestOriginsMustBeAllowedExactly` (the same near misses plus a case change, 403 `refused`, checked with and without a credential); `TestGETAndDELETEAre405` (PUT, PATCH). On trewd `/` is the device WebSocket and `/health` is health. The exact-route and no-query-string refusal (`handler.go:229`) has no test; ported as `internal/mcp/retired_host_test.go` `TestOnlyExactlySlashMCPIsServed` |
+| 313 | keeps eight requests reserved after refusing overflow and routes every result to its original id | Eight held calls admitted, the ninth and tenth 429 `Retry-After: 1`, each result under its own id | COVERED | `internal/mcp/auth_test.go` `TestBudgetsAnswer429WithoutStarvingAnotherToken` "in flight" (the per-token cap answers 429 with `Retry-After`, another token still admitted; run with a cap of 1, the default 8 set in `limits.go:49`); `internal/mcp/transport_test.go` `TestIDsAreRepeatedAsSent`, `TestDuplicateIDsAreAnsweredEachOnItsOwn` |
+| 358 | refuses duplicate ids before the SDK can reroute the first response | A second request with a live id is 400 and never dispatched; the first still answered | COVERED in the server's form | `TestDuplicateIDsAreAnsweredEachOnItsOwn`: the server answers both, each on its own connection with its own result, so the rerouting this refused cannot happen (docs/development.md, "Frames") |
+| 387 | caps sessions, expires idle sessions, and keeps existing clients usable after overflow | 16 sessions, 4 refused 429, idle expiry 404 | OBSOLETE | No sessions: `TestTheSDKClientSpeaksEveryVersionItSupports` checks no session id is minted and no DELETE sent |
+| 407 | opens one GET stream promptly, refuses a second, and drains shutdown without waiting for its peer | One GET stream 200, a second 429, close does not hang on it | OBSOLETE | GET is 405 (`TestGETAndDELETEAre405`) |
+| 430 | keeps the process bound at 32 modern requests and releases slots only after work finishes | 32 held calls admitted, the 33rd 429, all 32 finish | COVERED | `TestBudgetsAnswer429WithoutStarvingAnotherToken` "endpoint" (the endpoint cap answers 429 `Retry-After: 1` even without a credential, and the admitted call finishes 200; run with a cap of 1, default 32 in `limits.go:46`) |
+| 458 | holds shutdown until disconnected work actually finishes (legacy, modern) | A call whose client aborted is still running; `close()` does not resolve until it ends | PORTED | `internal/mcp/rig_test.go` shuts down with `Shutdown` but asserts nothing about waiting; `cmd/trewd/shutdown_test.go` `TestS16ATerminatedServerEndsAnUploadAsAnAckOrACleanRetry` is the WebSocket upload. No test holds an MCP call across SIGTERM; ported as `cmd/trewd/mcp_shutdown_test.go` `TestSIGTERMLetsAnAdmittedMCPWriteFinish`, `internal/mcp/retired_host_test.go` `TestAClientThatHangsUpMidWriteCommitsAtMostOnce` |
+| 528 | caps declared and chunked bytes before parsing and rejects malformed UTF-8 | Declared and streamed 8 MiB + 1 both 413 `refused`; invalid UTF-8 400; bad token with bad JSON 401; the endpoint still reads afterwards | COVERED | `internal/mcp/auth_test.go` `TestBodiesOver8MiBAre413` (declared, chunked, and just under the limit read); `internal/mcp/transport_test.go` `TestMalformedFramesAreJSONRPCErrors` (invalid UTF-8, parse error); the credential is checked before the body (`handler.go` order), shown by `TestUnauthenticatedRequestsGetAFixedRefusal` |
+| 566 | bounds replies even when the peer supplies a multi-megabyte request id | A 2 MiB id yields a reply of at most about 1 MiB, and the endpoint keeps working | COVERED | `TestMalformedFramesAreJSONRPCErrors` "an id of megabytes" (refused, id not echoed, reply under 4096 bytes); `TestARepliesOver1MiBAreRefusedBeforeTheyAreSent` |
+| 577 | times out unfinished headers near ten seconds without exposing diagnostics | A socket that never finishes its headers is closed after about 10 s with a bare 400/408 naming nothing | PORTED | `cmd/trewd/main.go:438` sets `ReadHeaderTimeout: 10 * time.Second` on the one listener `/mcp` shares with devices; no test holds it; ported as `cmd/trewd/mcp_shutdown_test.go` `TestServeCutsOffUnfinishedHeaders` |
+
+#### `client/src/node/mcp-http-cli.test.ts` (4)
+
+Command-line parsing for `trew mcp --listen`, `--writable` and `--allow-origin`. The flags go with the command. The server's own flags are `trewd serve -mcp -allow-origin`.
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 29 | parses an optional listener and repeated exact origins without consuming the next flag | `--listen` with no value defaults to 127.0.0.1:3010 and does not eat `--allow-origin`; origins repeat | OBSOLETE | `--listen` goes; trewd listens on `serve -addr` and its origins are exercised by `TestOriginsMustBeAllowedExactly` |
+| 46 | refuses invalid HTTP usage before touching vault state (it.each, 13 command lines) | Flag combinations and wildcard, port-0 and out-of-range listeners, an origin with a path, all exit 2 | OBSOLETE | The flags go. trewd warns rather than refusing a wildcard address with no token: `cmd/trewd/mcp_test.go` `TestServeWarnsWhenMCPListensEverywhereAndHasNoToken` |
+| 63 | requires a credential before starting HTTP | `trew mcp --listen` with no token exits 1 and names `mcp-token` | OBSOLETE (the server's form is COVERED) | trewd serves `/mcp` with no token and refuses every request 401: `cmd/trewd/mcp_test.go` `TestServeRegistersMCPOnlyWithTheFlag`, and `TestServeWarnsWhenMCPListensEverywhereAndHasNoToken` logs that it will |
+| 69 | cannot make a persisted read-only device writable | `--writable` on a read-only paired device exits 2 | OBSOLETE | Writes on the server are a token's scope, not a device's config; `TestAReadTokenCannotCallAWriteTool` is the scope check |
+
+
+#### `client/src/node/mcp-http-process.test.ts` (11)
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 100 | edits two tasks through a freshly built HTTP child and preserves both versions on another device, modern=%s | `list_notes` and `read_note` return the exact BOM/CRLF/frontmatter bytes; two exact edits apply; the before-image reads as the original; a retry with the old base is `stale`; a second paired device receives the edited bytes and the before-image; stderr carries no MCP token, device token, invite or note text; both protocol eras | COVERED | `internal/mcp/write_test.go` `TestEveryWriteToolCommitsAndKeepsItsBeforeImage` (the displaced version reads back by `previousUid` as its exact former bytes), `TestAStaleBaseIsRefusedWithThePathsOwnUID`, `TestADeviceReceivesTheWriteBeforeTheReply`; `internal/mcp/auth_test.go` `TestTheLogCarriesNoTokenNoteTextOrPath`; `internal/mcp/transport_test.go` `TestTheSDKClientSpeaksEveryVersionItSupports`; byte preservation of the edit in `internal/notes/port_notes_test.go` and the `edits` oracle vectors; a second device holding the exact bytes in `client/src/stress/mcp-races.stress.ts`. The before-image as a file on the phone is obsolete: on the server it is the pinned previous version |
+| 151 | defaults HTTP to read-only, keeps stdin EOF harmless, and denies mutation calls | Without `--writable` the tool list omits mutations, a mutation call is refused, the note is unchanged; stdin EOF does not end the child | COVERED (read-only half); OBSOLETE (stdin) | `cmd/trewd/mcptoken_test.go` `TestMCPTokensAreMintedListedAndRevokedThroughTheServer` (a token is read scope by default); `internal/mcp/auth_test.go` `TestAReadTokenCannotCallAWriteTool` (a read token is not shown the write tool, a call is `read_only`, nothing written). trewd has no stdin transport |
+| 173 | reaps its HTTP child even when the SDK client fails to close | The test harness reaps the `trew mcp` child | OBSOLETE | the child process is gone |
+| 189 | cleanup waits for an already signalled HTTP child without sending SIGTERM again | An admitted append held at `cli/mcp:durable` finishes after one SIGTERM; the harness sends no second signal | OBSOLETE | SIGTERM drain of the host and its local seam; the durable outcome of a write interrupted by the server's death is `cmd/trewd/crash_test.go` `TestAKillAroundAnAppendResolvesOnRetryToOneResult` |
+| 230 | accepts a bare loopback port without a plaintext warning | `--listen PORT` binds loopback and prints no warning | OBSOLETE | `--listen` goes; trewd's own listen warning is `cmd/trewd/mcp_test.go` `TestServeWarnsWhenMCPListensEverywhereAndHasNoToken` (a different rule: wildcard and no token) |
+| 240 | warns when bound to an available named non-loopback IPv4 interface | A named non-loopback bind prints the plaintext warning | OBSOLETE | same; trewd's rule is `TestServeWarnsWhenMCPListensEverywhereAndHasNoToken` |
+| 255 | the proxy may rewrite Host and forwarded headers but cannot grant note access | Through a proxy that rewrites Host and adds forwarded headers, a request with no bearer is 401 `unauthorized`; with the bearer, read and append work and the before-image reads back; the token is not logged; `forwardedFor` is logged | COVERED (bearer and headers); OBSOLETE (`forwardedFor` log line) | `internal/mcp/auth_test.go` `TestUnauthenticatedRequestsGetAFixedRefusal` (401, `unauthorized`, `WWW-Authenticate`), `TestFailuresAreCountedAgainstTheConnectionNotAHeader` (`X-Forwarded-For` is not trusted); the Go handler never reads `Host` or forwarded headers; `TestTheLogCarriesNoTokenNoteTextOrPath` |
+| 316 | HTTP and sync watch exclude each other through root aliases, with kernel release after a kill | The host and `trew sync --watch` hold one vault lock through a symlinked root; SIGKILL releases it | OBSOLETE | the host no longer writes the device's vault directory; trewd's own single-instance rule is `cmd/trewd/main_test.go` `TestASecondServerRefusesTheSameDirectory` |
+| 349 | SIGTERM wakes HTTP reconnect sleep while local reads remain available | With the sync server unreachable, local reads work, a create is `not_ready`, SIGTERM exits 0 | OBSOLETE | the server's tools read its own store; there is no sync client to be offline |
+| 373 | serializes edits from separate HTTP sessions against the same base | Two sessions append on one base: one applies, one is `stale` with no base, the note holds only the winner, one before-image with the original bytes | COVERED | `internal/mcp/write_test.go` `TestSeventeenCompetingEditsOneSucceedsSixteenAreStale` (one commits, sixteen `stale`, two versions, one operation), `TestEveryWriteToolCommitsAndKeepsItsBeforeImage` |
+| 401 | a dropped connection and SIGTERM at %s retain the lock and both versions until the write drains (six seams) | At each local write seam, a dropped TCP connection plus SIGTERM: the vault lock stays held, the admitted append finishes, exactly one before-image with the original bytes, and a retry on the old base is `stale` | OBSOLETE (lock, drain, filesystem seams); COVERED (outcome); PORTED (dropped client connection) | the six seams are the host's filesystem transaction. The outcome after the server dies at every write seam: `cmd/trewd/crash_test.go` `TestAKillAroundAnAppendResolvesOnRetryToOneResult` (absent or committed, one operation for the key, keyless retry `stale`, line in the note once) and `client/src/stress/mcp-crash.stress.ts`. A client that drops its connection while the server keeps running has no test: see PORTED 1; ported as `internal/mcp/retired_host_test.go` `TestAClientThatHangsUpMidWriteCommitsAtMostOnce`, `cmd/trewd/mcp_shutdown_test.go` `TestSIGTERMLetsAnAdmittedMCPWriteFinish` |
+
+#### `client/src/node/mcp-http-concurrency.test.ts` (7)
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 120 | serializes disjoint HTTP mutations and sends both notes and before-images to a phone | Two sessions append to two notes at once: both apply, two before-images; a fresh phone receives both edited notes and both before-images | COVERED | `internal/mcp/write_test.go` `TestAStaleBaseIsRefusedWithThePathsOwnUID` (a commit to another note never makes a write stale), `TestEditsRacingACommitAreStaleNeverNotFound`, `TestADeviceReceivesTheWriteBeforeTheReply`; `client/src/stress/mcp-races.stress.ts` (a freshly paired third device holds exactly the expected bytes). Before-image files on the phone: obsolete, as above |
+| 153 | a retry on the same session and another session queues behind a held append without applying twice | A retry of a held append, on the same and another session, is `stale` once the first applies; the text appears once; one before-image | COVERED | `internal/mcp/write_test.go` `TestSeventeenCompetingEditsOneSucceedsSixteenAreStale`, `TestAnIdempotencyKeyReplaysTheRecordedResult`; `cmd/trewd/crash_test.go` `TestAKillAroundAnAppendResolvesOnRetryToOneResult` (a keyless retry is `stale`, the line is in the note once) |
+| 175 | the seventeenth HTTP mutation gets busy while sixteen retain their notes and before-images | With sixteen mutations admitted, the seventeenth is `busy`; the sixteen apply with their before-images; the refused note is unchanged | COVERED | bounded admission: `internal/mcp/auth_test.go` `TestBudgetsAnswer429WithoutStarvingAnotherToken` (a request past the token's in-flight budget is 429 with `Retry-After`, the admitted ones end 200); admitted writes keep their displaced versions: `TestEveryWriteToolCommitsAndKeepsItsBeforeImage`. The local queue of sixteen is the host's |
+| 225 | observed $action cancels queued mutations but preserves the admitted one across five clients, modern=$modern | Rotating or revoking the credential mid-flight: the old token gets 401, the admitted write completes, the four queued ones write nothing, one before-image, the new token reads | COVERED (revoke); OBSOLETE (rotate, file credential) | `internal/mcp/write_test.go` `TestATokenRevokedMidFlightLosesAtTheCommitBoundary`; `internal/mcp/auth_test.go` `TestAWriteLosesAtTheCommitBoundaryToARevoke`, `TestATokenRevokedMidRequestLosesBeforeItsReply`, `TestTheAuthorizationMatrixCoversEveryTool` (a revoked token reaches no tool). trewd replaces a token by minting another and revoking the old (`cmd/trewd/mcptoken_test.go`) |
+| 297 | one thousand credential replacements never produce a torn authentication read | Reading `.trew/mcp-token.json` while it is replaced 1,000 times never sees a torn record | OBSOLETE | the credential file is gone; `mcp_tokens` are rows written in transactions |
+| 333 | twenty modern readers report bounded admission and agree with sequential reads while a phone publishes two hundred notes | Twenty readers list, search and read a stable folder while a phone publishes 200 notes; results equal a sequential read; some see `busy`; the final listing matches the 231 files on disk | COVERED | `cmd/trewd/mcp_test.go` `TestMCPAcceptanceAgainstServe` (a device writes hundreds of versions while the agent lists, reads byte for byte, searches and compares); `internal/mcp/tools_test.go` `TestListingPagesAcrossConcurrentCommitsWithoutGhosts`; `internal/mcp/search_test.go` `TestSearchPagesAsOfThePinnedHead`; `internal/mcp/auth_test.go` `TestBudgetsAnswer429WithoutStarvingAnotherToken`. `changed_during_read` is obsolete: reads are pinned to a head |
+| 413 | ending a session by %s lets its admitted transaction finish | A legacy session ended by DELETE or idle expiry while an append is held: the append still lands, one before-image | OBSOLETE (sessions); PORTED (the connection half) | trewd mints no session (`internal/mcp/transport_test.go` `TestGETAndDELETEAre405`). What remains, a client going away mid-write, is PORTED 1; ported as `internal/mcp/retired_host_test.go` `TestAClientThatHangsUpMidWriteCommitsAtMostOnce` |
+
+#### `client/src/node/mcp-vault-process.test.ts` (3)
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 54 | isolates configured vaults through the built process and holds both locks, HTTP=%s | Two `--vault` roots: `list_vaults` names aliases not directories, both locks held, a call without `vault` is an error, each vault gets its own note, history, comparison and delivery, a base from one vault is `stale` in the other, locks released at exit; delivery has no `deviceId` | OBSOLETE | trewd's endpoint serves one vault (`mcp.Config.Vault`) with no vault argument, and a token belongs to one vault. The delivery half: `internal/mcp/tools_test.go` `TestDeliveryStatusIsTheDevicesAndNeverAnAgent`, which lists device ids by design (a device id is not a credential in protocol 1) |
+| 121 | holds every root until an admitted HTTP write finishes during shutdown | SIGTERM with a write held at `cli/mcp:durable`: both roots stay locked, the write finishes, exit 0 | OBSOLETE | local locks and drain; the outcome of a write the server dies inside is `cmd/trewd/crash_test.go` `TestAKillAroundAnAppendResolvesOnRetryToOneResult` |
+| 170 | uses only the first configured vault's HTTP credential and rotates access to the whole explicit set | Only the first vault's token authenticates; after replacement the old token is 401; the new one lists both vaults read-only | OBSOLETE (multi-vault); COVERED (a replaced token is refused) | `internal/mcp/auth_test.go` `TestTheAuthorizationMatrixCoversEveryTool` (a revoked token reaches no tool); `cmd/trewd/mcptoken_test.go` `TestMCPTokensAreMintedListedAndRevokedThroughTheServer` |
+
+#### `client/src/node/mcp-vault-routing.test.ts` (3)
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 57 | lists only configured aliases and requires a vault choice before reading | `list_vaults` shows aliases only; `read_note` without `vault` is an error with two vaults; each vault reads its own bytes | OBSOLETE | one vault per endpoint, no `vault` argument |
+| 76 | routes writes only to the selected vault and cannot upgrade another vault's read-only policy | A write to a writable vault applies; the same call to a read-only vault is `read_only`; bytes unchanged there | OBSOLETE (routing); COVERED (scope) | `internal/mcp/auth_test.go` `TestAReadTokenCannotCallAWriteTool` |
+| 100 | rejects unknown aliases and keeps the single-vault argument optional | An unknown alias is an error; with one vault the argument is optional | OBSOLETE | no `vault` argument; an unknown argument is `invalid_arguments` (`internal/mcp/write_test.go` `TestWriteArgumentsAreStrictAndThePathPoliciesHold`) |
+
+#### `client/src/node/mcp-vaults.test.ts` (5)
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 18 | parses repeatable named vaults without changing single-vault defaults | `--vault` parses and repeats | OBSOLETE | the flag goes |
+| 23 | canonicalizes explicitly configured roots before acquiring any vault lock | A symlinked root resolves to its real path | OBSOLETE | local roots go |
+| 31 | refuses %s vault roots before starting sessions (six kinds) | Duplicate, aliased, nested, badly named, relative and more than ten roots are refused | OBSOLETE | same |
+| 52 | rejects ambiguous or irrelevant vault flags: %j | `--vault` on `sync`, and `--dir` with `--vault`, are usage errors | OBSOLETE | the flag goes; a removed flag is `no such option` |
+| 59 | releases already acquired locks if a later vault is busy | Taking several locks releases the earlier ones when a later is held | OBSOLETE | multi-root locking goes |
+
+#### `client/src/node/mcp-history.test.ts` (13, seven kept)
+
+Seven cases use only `McpHistory`, `McpReader`, `NodeVault` and the core client; they stay, with the file's `createTools`, `InMemoryTransport` and `tool` scaffolding removed. Six go through the tool host.
+
+| Line | Test | Asserts | Class | Where |
+|---|---|---|---|---|
+| 115 | pages history including an exact-full final page and reads an authenticated old body without changing disk | Three pages of one, the last ending the cursor; the oldest version reads back as its BOM/CRLF bytes; disk unchanged | KEPT | `mcp-history.test.ts`, host-free. Server side also `internal/mcp/tools_test.go` `TestHistoryDeletionsAndComparisons`, `TestReadNotePagesVersionsAndRefusals` |
+| 144 | does not fetch a UID belonging to another path and bounds an incomplete version lookup | Another path's uid is `version_not_found` with no body fetched; an unbounded lookup is `lookup_incomplete` after a fixed number of pages | KEPT | host-free. Server side: `path_mismatch` in `TestReadNotePagesVersionsAndRefusals` |
+| 166 | refuses excluded and symlinked history sources before asking the server | Excluded, symlinked, `.trew` and `..` paths refused before any history request; disk unchanged | KEPT | host-free |
+| 179 | advances deleted pages across filtered rows and retains restorable zero | Deleted pages advance past an excluded row, count it as omitted, keep `restorable: 0` | KEPT | host-free |
+| 213 | rejects non-content, oversized, corrupt and invalid UTF-8 historical bodies before publication | `restore_note` refuses a folder, a deletion, a version over 1 MiB, invalid UTF-8, an oversized body and a failed fetch; nothing is written | COVERED (the shared checks); PORTED (through `restore_note`) | `restoreNote` (`internal/mcp/mutations.go`) uses `call.version` and `versionBytes`, the helpers `read_note` uses, and `notes.DecodeNote`; those refusals are asserted through `read_note` in `internal/mcp/tools_test.go` `TestReadNotePagesVersionsAndRefusals` (`not_note_content`, `note_too_large`, `invalid_utf8`, `path_mismatch`). No Go test sends them to `restore_note` and checks nothing is written: PORTED 2; ported as `internal/mcp/retired_host_test.go` `TestRestoreNoteRefusesWhatIsNotANoteAndWritesNothing` |
+| 255 | keeps a competing restore destination and does not continue onto a replacement client | A destination created while the restore fetched is `exists` and keeps the other editor's bytes; a restore that meets a replaced sync client is `not_ready` | COVERED (destination); OBSOLETE (client swap) | a create meeting a destination taken during the write: `cmd/trewd/crash_test.go` `TestAWriteThatLosesAtItsCommitCommitsNothingEndToEnd` ("the second of two slots has moved", `exists`), through `create_note`, whose `mutation.create` `restore_note` shares. The server has no sync client to replace |
+| 292 | rechecks read-only mode before any restore filesystem or history work | A read-only session's `restore_note` is `read_only` before any path check, lookup or create | COVERED | `internal/mcp/auth_test.go` `TestAReadTokenCannotCallAWriteTool` (the write never runs for a read token), `TestTheAuthorizationMatrixCoversEveryTool` |
+| 309 | refuses an unpageable history entry instead of declaring a false end of history | A history row too large to page is `entry_too_large`, not an empty last page | KEPT | host-free |
+| 320 | advances past oversized excluded deletion metadata instead of repeating the same cursor | An oversized deletion row is omitted and the page ends with `nextBefore: null` | KEPT | host-free |
+| 336 | reuses checked inventory for preview pages while checking remote-only paths and exclusions | Preview pages reuse the checked listing, check only remote-only paths, omit excluded, page with `nextAfter`; disk unchanged | KEPT | host-free |
+| 357 | compares authenticated history with local bytes without changing either version | `compare_versions` of an old uid against local CRLF bytes gives one exact line change; disk unchanged | COVERED | `internal/mcp/tools_test.go` `TestHistoryDeletionsAndComparisons` (line changes, against the head); `internal/notes/port_inspect_test.go` `TestPortedCompareReconstructsTheLaterText` and the `compare` oracle vectors in `TestOracle`. "Local bytes" is obsolete: the server compares versions it holds |
+| 378 | pins comparison pages to both complete bases and refuses another path's version | A later comparison page needs both bases, is `stale` after an edit, and another path's uid is `version_not_found` | COVERED | `TestHistoryDeletionsAndComparisons`: a later page without `toUid` is `invalid_cursor` (server versions are immutable, so a page names uids, not bases), another path's uid is `path_mismatch` |
+| 410 | reports device checkpoints without claiming an offline or unconfirmed device received changes | Delivery states `received`, `unconfirmed`, `unconfirmed`; no device id or invite in the result; all `unconfirmed` when local delivery is not ready | COVERED (states); decision changed (ids) | `internal/mcp/tools_test.go` `TestDeliveryStatusIsTheDevicesAndNeverAnAgent` (`received`, `waiting`, `unconfirmed` for an offline device, no agent listed); the Go tool reads no invites. Device ids are listed on purpose: in protocol 1 an id is not a credential. `deliveryReady` is the host's |
+
 ### The strip ledger
 
 Before M1 or M2 deletes a test file, each of its assertions is classified as
@@ -1527,3 +1704,7 @@ are the ones no other test would catch, and its
 [M1 outcome](../plan/strip-ledger.md#m1-outcome-the-go-side) records where each
 Go test went.
 
+
+The headless client's MCP host, deleted in M2 task 10 after the crypto was
+gone, has its own ledger above:
+[Retiring `trew mcp`](#retiring-trew-mcp-m2-task-10).

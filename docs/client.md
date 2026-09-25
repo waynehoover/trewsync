@@ -78,8 +78,6 @@ Commands use the current directory unless you pass `--dir DIR`.
 | `trew pair INVITE` | Join a vault with an invite; run it again to finish an interrupted pairing. |
 | `trew sync` | Sync once and exit. |
 | `trew sync --watch` | Keep syncing and reconnect after temporary outages. |
-| `trew mcp` | Expose this paired directory over stdio, or HTTP with `--listen`. |
-| `trew mcp-token` | Issue or rotate the HTTP MCP credential; `--revoke` revokes it. |
 | `trew status` | Check connection, local changes, refused paths, and recovery issues. |
 | `trew invite` | Add another device with a single-use invite. |
 | `trew devices` | List devices and outstanding invites. |
@@ -94,196 +92,16 @@ Commands use the current directory unless you pass `--dir DIR`.
 The [command reference](cli-reference.md)
 covers all flags, device access, repair, and recovery.
 
-## A local agent
+## An agent
 
-For an agent, use the [server's MCP endpoint](agent.md): it reads the store
-directly, keeps what an agent replaced in server history, and needs no second
-copy of the vault.
-
-`trew mcp` is the other way, inherited from Basalt Sync: an MCP server over a
-**separately paired directory** on this machine, over stdio for a local host
-or over HTTP with `--listen`. It keeps a verified before-image file beside
-each note it changes, and its results describe the local write, not delivery
-to the server. The [command reference](cli-reference.md#mcp-over-stdio) covers
-its tools, limits and recovery.
-
-### Configure a local host
-
-`trew mcp` lets a local MCP host read notes and make exact edits while TrewSync
-syncs its own headless copy. The host and any model service it uses can receive
-plaintext note content. Choose a host you trust with those notes.
-
-First create an invite on an existing device and pair a **separate directory**:
-
-```bash
-mkdir -p /absolute/path/to/agent-vault
-trew pair --dir /absolute/path/to/agent-vault --key-file /private/path/invite.txt
-```
-
-For an inspection-only host, add `--read-only` at pairing or launch. A saved
-read-only pairing cannot be made writable by omitting the flag. Never point the
-CLI at the local vault already being synced by the Obsidian plugin.
-
-Configure the host to launch Node with an absolute executable path, the absolute
-installed `trew.mjs` path, and `--dir`. For a host using `mcpServers` JSON:
-
-```json
-{
-  "mcpServers": {
-    "trew": {
-      "command": "/absolute/path/to/node",
-      "args": [
-        "/absolute/path/to/trew-sync/dist/trew.mjs",
-        "mcp",
-        "--dir",
-        "/absolute/path/to/agent-vault"
-      ]
-    }
-  }
-}
-```
-
-Replace all paths with your installation's paths. `command -v node` locates Node;
-for a global npm installation, `npm root -g` locates the directory containing
-`trew-sync/dist/trew.mjs`. Use Node 22 or newer. Node 22 and 24 have been
-exercised with the production MCP artifact. Hosts may use a different outer
-configuration format; the executable and argument array stay the same.
-
-The host owns this long-running process. Stop `sync --watch` first, and configure
-one host process per directory. MCP holds the vault lock and handles ongoing
-sync itself. Stdout is reserved for protocol messages; do not add `--json` or
-`--watch`. EOF, SIGINT and SIGTERM drain admitted writes before releasing the
-lock. A host that force-kills its child can interrupt that drain; inspect any
-unknown outcome.
-
-Start with `sync_status`, `list_notes` and `read_note`. Initialization and local
-reads work during connection setup or outages. They can be stale; a missing local
-file may simply be waiting to download. Edits require `writeReady:true` after
-initial sync. History and restore need a server connection.
-
-Search by content, filename or tag with `search_notes`. Tag changes, moves and
-recoverable deletion use a preview first, then require the returned exact
-changes and bases to apply. `compare_versions` shows differences from retained
-history; `delivery_status` reports device checkpoints without promising that a
-particular edit reached every device.
-
-To expose several separately paired directories, replace `--dir` with repeated
-`--vault name=/absolute/path` arguments. `list_vaults` discovers those aliases;
-every other tool requires `vault` when several are configured. For HTTP, the
-first configured directory's credential grants access to the whole explicit set.
-See [multiple vaults](cli-reference.md#several-vaults)
-for credential scope and per-vault permissions.
-
-To change a note, read it and supply its returned `base` with exact `{old,new}`
-spans to `edit_note`. Each old span must be unique; all spans are validated
-against the same original and published as one replacement. `append_note` and `prepend_note` also
-require a base and add exactly the supplied text, including only the newlines
-you supply. `create_note` and `restore_note` require free destination paths.
-UTF-8 Markdown and plain text are supported up to 1 MiB; drawings and attachments
-cannot be mutated. There is no whole-file writer.
-
-Every mutation of an existing note preserves a verified, flushed
-before-image. Read the returned `beforeImage` to inspect it, or list with
-`includeBackups:true` to find older copies. Backups sync as ordinary notes and
-MCP cannot alter or delete them.
-`applied:true` and `durable:true` describe the local commit, not delivery to the
-server or another device. Errors may report an applied change or preserved paths.
-After `stale`, a timeout or a lost response, reread and reconsider before retrying.
-
-Follow continuation fields to read later pages. `--read-only` omits every mutation
-tool but still downloads remote edits. The
-[MCP reference and recovery example](cli-reference.md#mcp-over-stdio)
-cover exact limits, partial results and restoring an inspected version to a new
-path.
-
-### Connect over HTTP
-
-For an agent running on the same machine, stdio can use the configuration above.
-HTTP lets multiple clients share one running process. Use the same separately
-paired headless directory and stop its existing watcher first. Issue the HTTP
-credential, exporting it outside the vault to a new private file:
-
-```bash
-trew mcp-token --dir /srv/vault --key-out /private/path/trew-mcp.key
-trew mcp --dir /srv/vault --listen 127.0.0.1:3010
-```
-
-The output directory must already exist. Without `--key-out`, the command prints
-the token once. With it, only the credential id and file path are printed.
-Every HTTP request needs `Authorization: Bearer TOKEN`, including requests on
-loopback. The token is separate from this device's own credential.
-HTTP has read-only tools by default; add `--writable` only when the agent should
-edit notes. A saved read-only pairing cannot be overridden. This default limits
-MCP tools, while ordinary sync still uploads on a writable device.
-
-On Linux, a service can own this directory. For example, save the following as
-`/etc/systemd/system/trew-mcp.service`, adjusting the account, Node executable,
-installed artifact and vault paths:
-
-```ini
-[Unit]
-Description=TrewSync MCP
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=trew
-ExecStart=/usr/local/bin/node /usr/local/lib/node_modules/trew-sync/dist/trew.mjs mcp --dir /srv/vault --listen 127.0.0.1:3010
-Restart=on-failure
-TimeoutStopSec=30
-
-[Install]
-WantedBy=multi-user.target
-```
-
-The service account must own the paired directory and its credential state.
-Use `command -v node` and `npm root -g` to locate your installation. Then enable
-the service:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now trew-mcp
-```
-
-SIGTERM drains admitted edits before releasing the vault lock. If the service
-manager force-kills the process after its shutdown allowance, inspect uncertain
-outcomes and recovery copies. HTTP ignores stdin EOF and writes diagnostics only
-to stderr. Systemd acceptance of this example remains untested locally on macOS.
-
-On the same machine, publish the loopback listener through Tailscale Serve:
-
-```bash
-tailscale serve --bg --https=8443 3010
-```
-
-Replace `host.ts.net` with the machine's full Tailscale DNS name. Enter
-`https://host.ts.net:8443/mcp` in the MCP client and put the token in its bearer
-token/API-key field, or configure the exact `Authorization` header above. The
-client must support that header and have a network path into your tailnet.
-This static-key service does not provide OAuth discovery or a browser login.
-If your phone only sends prompts to an agent on your Mac, the Mac is the MCP
-client and can use local stdio instead.
-
-Rotate without restarting the service, then update each client:
-
-```bash
-trew mcp-token --dir /srv/vault --key-out /private/path/trew-mcp-next.key
-```
-
-Use a new export filename; existing files are never overwritten. Old keys fail
-their next request, and old sessions end when the new credential is observed.
-Queued old-key operations are cancelled; admitted edits finish. Revoking uses
-`trew mcp-token --dir /srv/vault --revoke`. Issuing another credential restores
-access. The stored hash cannot recover a lost token.
-
-The [HTTP reference](cli-reference.md#mcp-over-http)
-covers origins, limits and reconnect behavior. TLS terminators receive plaintext
-notes; read the [Cloudflare and proxy warning](security.md#http-access-for-an-agent-on-a-headless-copy)
-before choosing another proxy. Real Tailscale HTTPS was tested with official SDK
-clients, including edits, before-images, credential rotation and restart.
-**Cloudflare Tunnel, Collie and a specific phone MCP client remain unverified**,
-including phone lockout and re-entry after token rotation.
+An agent reads and edits notes through the [server's MCP endpoint](agent.md),
+`/mcp` under `trewd serve -mcp`, with a token from `trewd mcp-token`. It reads
+the store directly, keeps what an agent replaced in the server's history, and
+needs no copy of the vault on the agent's machine. The command-line client has
+no MCP server of its own: `trew mcp` and `trew mcp-token`, inherited from
+Basalt Sync, are gone, and say so if run.
+[Moving from `trew mcp`](agent.md#moving-from-trew-mcp) covers an agent that
+used one.
 
 ## A mirror, and turning merging off
 
@@ -343,9 +161,7 @@ attention even when other transfers succeed.
 
 ## Automation and output
 
-Use `--json` for structured command output. `mcp` and `mcp-token` refuse this flag.
-MCP stdout is protocol-only for stdio and empty for HTTP; `mcp-token` prints
-the token once, or the id and path when exporting.
+Use `--json` for structured command output.
 Exit **0** means the command succeeded,
 **1** means a failure or unresolved issue, and **2** means invalid arguments.
 For sync, `outcome` explains the result and the counters describe the work.
@@ -367,9 +183,7 @@ trew pair --key-file /private/path/invite.txt --read-only
 trew pair - --read-only < /private/path/invite.txt
 ```
 
-`trew invite` prints the new invite, so protect its output and logs. For
-`mcp-token`, `--key-out` creates a new private file, refuses to overwrite one,
-and suppresses the token on stdout.
+`trew invite` prints the new invite, so protect its output and logs.
 
 ## Files and local state
 
