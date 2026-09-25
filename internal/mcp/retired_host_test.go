@@ -111,9 +111,11 @@ func TestOnlyExactlySlashMCPIsServed(t *testing.T) {
 
 // hangUp posts body to handler at /mcp with token and hangs up once reached
 // is closed, returning when the handler has finished with the request.
-// release is closed after the client is gone, so what the handler does next
-// it does for a client that is no longer there.
-func hangUp(t *testing.T, handler http.Handler, token, body string, reached, release chan struct{}) {
+// whileHeld, if not nil, runs on the test's goroutine after reached and
+// before the hang-up, while the handler is still held. release is closed
+// after the client is gone, so what the handler does next it does for a
+// client that is no longer there.
+func hangUp(t *testing.T, handler http.Handler, token, body string, reached, release chan struct{}, whileHeld func()) {
 	t.Helper()
 	done := make(chan struct{})
 	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -145,6 +147,9 @@ func hangUp(t *testing.T, handler http.Handler, token, body string, reached, rel
 		t.Fatalf("the request was answered before it was held: %v", err)
 	case <-time.After(30 * time.Second):
 		t.Fatal("the request never reached its hold")
+	}
+	if whileHeld != nil {
+		whileHeld()
 	}
 	cancel()
 	if err := <-answered; err == nil {
@@ -181,28 +186,23 @@ func TestAClientThatHangsUpMidReadGivesItsSlotBack(t *testing.T) {
 		})
 	}
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_note","arguments":{"path":"n.md"}}}`
-	go func() {
-		<-reached
-		// While the read is held its token's one slot is taken: the cap is
-		// real, so the slot coming back below is the held call's.
-		if status, _, _ := r.post(legacy(token, toolCall("vault_status"))); status != http.StatusTooManyRequests {
-			t.Errorf("a second call while the first is held: %d, want 429", status)
+	// While the read is held its token's one slot is taken: the cap is real,
+	// so the slot coming back below is the held call's. The probe runs
+	// inside hangUp's hold, before the hang-up, not beside it: a probe that
+	// lands after the release sees the slot already given back.
+	hangUp(t, r.h, token, body, reached, release, func() {
+		if status, _, reply := r.post(legacy(token, toolCall("vault_status"))); status != http.StatusTooManyRequests {
+			t.Fatalf("a second call while the first is held: %d %s, want 429", status, reply)
 		}
-	}()
-	hangUp(t, r.h, token, body, reached, release)
+	})
 	if !held.Load() {
 		t.Fatal("the read was never held")
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		status, _, reply := r.post(legacy(token, toolCall("vault_status")))
-		if status == http.StatusOK {
-			break
-		}
-		if status != http.StatusTooManyRequests || time.Now().After(deadline) {
-			t.Fatalf("the token's next call after a hang-up: %d %s", status, reply)
-		}
-		time.Sleep(10 * time.Millisecond)
+	// hangUp returns only after the handler's ServeHTTP has, and its deferred
+	// release gives the slot back before that, so the very next call is
+	// served: no retrying, no waiting.
+	if status, _, reply := r.post(legacy(token, toolCall("vault_status"))); status != http.StatusOK {
+		t.Fatalf("the token's next call after a hang-up: %d %s", status, reply)
 	}
 }
 
@@ -238,7 +238,7 @@ func TestAClientThatHangsUpMidWriteCommitsAtMostOnce(t *testing.T) {
 					})
 				}
 			}
-			hangUp(t, r.h, a.token, body, reached, release)
+			hangUp(t, r.h, a.token, body, reached, release, nil)
 			switch got, ops := r.bytesAt(r.head("log.md")), r.operations(); {
 			case got == "start\n" && ops == 0:
 			case got == "start\none line\n" && ops == 1:
