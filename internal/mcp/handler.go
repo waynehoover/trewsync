@@ -246,6 +246,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	release, ok := h.budgets.admit()
 	if !ok {
+		h.srv.Metrics().RateLimited()
 		tooMany(w, time.Second)
 		return
 	}
@@ -259,7 +260,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if cred == nil {
 		host := remoteHost(r)
+		h.srv.Metrics().AuthFailed()
 		if within, wait := h.budgets.failed(host, start); !within {
+			h.srv.Metrics().RateLimited()
 			tooMany(w, wait)
 			return
 		}
@@ -270,6 +273,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.usage.note(cred.token.ID, start)
 	releaseToken, wait, ok := h.budgets.admitToken(cred.token.ID, start)
 	if !ok {
+		h.srv.Metrics().RateLimited()
 		tooMany(w, wait)
 		return
 	}

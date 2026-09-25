@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/waynehoover/trew/internal/metrics"
 	"github.com/waynehoover/trew/internal/store"
 	"github.com/waynehoover/trew/internal/wire"
 )
@@ -309,7 +310,14 @@ type Server struct {
 	// a revoke takes the device's sessions out of the fan-out before it lets
 	// go, so no commit after it can reach them (PLAN.md section 2.3.1). Socket
 	// replies and eviction are kept outside this section.
-	commitMu sync.Mutex
+	//
+	// Timed (commitLock): how long it is waited for and held is what the
+	// metrics call commit latency and lock wait.
+	commitMu commitLock
+
+	// metrics is what this server counts about itself, which `trewd doctor`
+	// reads through the control socket (PLAN.md M5.5).
+	metrics *metrics.Registry
 
 	// sessions is every connection Handle is running, joined to a vault or not,
 	// and closing is set once Shutdown has begun. http.Server.Shutdown stops
@@ -487,7 +495,8 @@ func New(st *store.Store, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{
+	m := metrics.New()
+	srv := &Server{
 		st: st, hub: NewHub(), log: log,
 		perFileMax: store.DefaultPerFileMax,
 		version:    "dev",
@@ -495,7 +504,10 @@ func New(st *store.Store, log *slog.Logger) *Server {
 		maxPreAuth: MaxPreAuth, helloTimeout: HelloTimeout,
 		maxBatchBytes: wire.MaxBatchBytes, maxFetchBytes: wire.MaxFetchBytes,
 		now: time.Now, batchSize: BatchSize,
+		metrics: m,
 	}
+	srv.commitMu.metrics = m
+	return srv
 }
 
 // Serves names the one vault this server answers for, so every hello route

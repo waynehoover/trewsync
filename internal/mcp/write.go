@@ -403,6 +403,7 @@ func (m *mutation) submit(op store.Operation, render func(store.OpResult) (trust
 	}
 	c.h.at(SeamBroadcast)
 	if !res.Replayed {
+		c.h.srv.Metrics().Committed()
 		c.h.log.Info("MCP operation committed", "tool", c.tool.Name, "op", res.OpID, "entries", len(res.Entries),
 			"noop", res.Noop, "token", c.cred.token.ID)
 	}
@@ -526,6 +527,7 @@ func (m *mutation) failed(err error) outcome {
 	switch {
 	case errors.As(err, &oe) && oe.Outcome == store.OpUnknown:
 		c.h.log.Error("an MCP operation's outcome is unknown", "tool", c.tool.Name, "op", oe.OpID, "err", oe.Err)
+		c.h.srv.Metrics().CommitFailed()
 		out.Committed, out.OpID, out.Key = "unknown", oe.OpID, m.key
 		message := "the store could not confirm the commit, and it may have happened. Do not repeat the request blindly: " +
 			"lookup_operation with this opId says whether it committed and what it changed"
@@ -538,9 +540,13 @@ func (m *mutation) failed(err error) outcome {
 		out.Error = &ToolError{Code: "outcome_unknown", Message: message}
 	case errors.As(err, &oe) && oe.Outcome == store.OpFailed:
 		c.h.log.Error("an MCP operation failed before it committed", "tool", c.tool.Name, "err", oe.Err)
+		c.h.srv.Metrics().CommitFailed()
 		out.Error = &ToolError{Code: "internal", Message: "the store failed before committing, and nothing was written; " +
 			"the same request may succeed later, and the server's log says why"}
 	case errors.As(err, &oe):
+		if oe.Code == store.OpCodeStale {
+			c.h.srv.Metrics().Stale()
+		}
 		out.Error = &ToolError{Code: oe.Code, Message: opMessage(oe)}
 		if oe.CurrentUID != 0 {
 			uid := oe.CurrentUID

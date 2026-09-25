@@ -1829,6 +1829,10 @@ type OplogCounts struct {
 	Keys       int64
 }
 
+// OplogCounts is how many operations, pins and idempotency keys the store
+// holds, which a restore rehearsal compares with what the backup carried.
+func (s *Store) OplogCounts() (OplogCounts, error) { return s.oplogCounts() }
+
 func (s *Store) oplogCounts() (OplogCounts, error) {
 	var c OplogCounts
 	err := s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM operations), (SELECT COUNT(*) FROM op_pins),

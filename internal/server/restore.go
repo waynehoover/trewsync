@@ -55,6 +55,7 @@ func (s *Server) OperatorRestore(vaultID string, toUID, head int64, apply bool) 
 	s.commitMu.Lock()
 	defer s.commitMu.Unlock()
 	res, err := s.st.CommitOperation(op)
+	s.countOperation(err)
 	if err != nil {
 		return Restored{Plan: plan}, err
 	}
