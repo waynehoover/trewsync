@@ -131,5 +131,10 @@ func (o *operator) status() control.Reply {
 			return control.Refused(control.CodeInternal, err.Error())
 		}
 	}
+	if o.export != nil {
+		if s.GitExport, err = json.Marshal(o.export.Status()); err != nil {
+			return control.Refused(control.CodeInternal, err.Error())
+		}
+	}
 	return control.Reply{Status: s}
 }

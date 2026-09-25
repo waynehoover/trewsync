@@ -14,7 +14,10 @@
 // the running server is writing, the undo of an operation in it (`undo`) and
 // the restore of the vault to a uid (`restore`), each committed and broadcast
 // to the devices by the server that holds the commit lock, as every other
-// write is, and what `trewd doctor` asks of a running server (`status`).
+// write is, and what `trewd doctor` asks of a running server (`status`). It
+// carries the configuration file's changes too (`config-show`, `config-set`,
+// `config-unset` and `git-export`), so the server that uses a setting is the
+// one that checks it, writes it and takes it up.
 //
 // The socket is a unix socket in the data directory, mode 0600, so whoever can
 // reach it can already read the database beside it: the socket is not a new
@@ -51,7 +54,8 @@ const requestTimeout = 30 * time.Second
 // Request is one operation the operator asks of the running server.
 type Request struct {
 	// Op is "invite", "devices", "revoke", "uninvite", "mcp-token",
-	// "mcp-tokens", "mcp-revoke", "audit", "undo", "restore" or "status".
+	// "mcp-tokens", "mcp-revoke", "audit", "undo", "restore", "status",
+	// "config-show", "config-set", "config-unset" or "git-export".
 	Op string `json:"op"`
 
 	// invite and mcp-token. TTLMs is the lifetime, and Never says the
@@ -92,6 +96,15 @@ type Request struct {
 	ToUID int64 `json:"toUid,omitempty"`
 	Head  int64 `json:"head,omitempty"`
 	Apply bool  `json:"apply,omitempty"`
+
+	// config-set and config-unset: the key, as section.name, and the value.
+	Key   string `json:"key,omitempty"`
+	Value string `json:"value,omitempty"`
+
+	// git-export: "set", "status" or "disable", and for set the change, in
+	// internal/gitexport's shape.
+	Action    string          `json:"action,omitempty"`
+	GitExport json.RawMessage `json:"gitExport,omitempty"`
 }
 
 // Reply is the answer to one Request: exactly one of its parts is set, and
@@ -112,6 +125,12 @@ type Reply struct {
 	Undo    *Undo    `json:"undo,omitempty"`
 	Restore *Restore `json:"restore,omitempty"`
 	Status  *Status  `json:"status,omitempty"`
+
+	// Config is the configuration as the server uses it, after a
+	// config-show, config-set or config-unset; GitExport is the export's
+	// status after a git-export. Each in its producer's shape.
+	Config    json.RawMessage `json:"config,omitempty"`
+	GitExport json.RawMessage `json:"gitExport,omitempty"`
 }
 
 // Restore is a restore to a uid the server planned, committed or refused. A
@@ -152,6 +171,7 @@ type Status struct {
 	Index     json.RawMessage `json:"index,omitempty"`
 	Devices   json.RawMessage `json:"devices"`
 	Metrics   json.RawMessage `json:"metrics"`
+	GitExport json.RawMessage `json:"gitExport,omitempty"`
 }
 
 // Undo is an undo the server did or refused. Refused is an answer, not an

@@ -68,6 +68,7 @@ const (
 	CheckChunks     = "chunks"
 	CheckSpace      = "space"
 	CheckIndex      = "index"
+	CheckGitExport  = "git-export"
 	CheckTokens     = "tokens"
 	CheckDevices    = "devices"
 	CheckCommits    = "commits"
@@ -79,7 +80,7 @@ const (
 // Checks is every check, in the order doctor runs and prints them.
 var Checks = []string{
 	CheckDataDir, CheckStorage, CheckEncryption, CheckServer, CheckRestarts, CheckIdentity, CheckStore,
-	CheckChunks, CheckSpace, CheckIndex, CheckTokens, CheckDevices, CheckCommits, CheckBackup,
+	CheckChunks, CheckSpace, CheckIndex, CheckGitExport, CheckTokens, CheckDevices, CheckCommits, CheckBackup,
 	CheckRehearsal, CheckOrigin,
 }
 
@@ -251,6 +252,7 @@ func Run(ctx context.Context, opt Options) Report {
 		r.chunks()
 		r.space()
 		r.index()
+		r.gitExport()
 		r.tokens()
 		r.devices()
 		_ = r.st.Close()

@@ -88,14 +88,15 @@ jobs:
           ./scripts/release-tags.sh "$GITHUB_REF_NAME" | sed 's/^/  /'
 
       # The docker driver cannot build for several platforms at once; this one
-      # can. The build needs no QEMU, because the Dockerfile cross-compiles
-      # rather than emulating: Go needs two environment variables and the final
-      # stage is scratch plus a binary, so nothing runs on the target arch until
-      # the check below deliberately does.
+      # can. The Go build needs no QEMU, because the Dockerfile cross-compiles
+      # rather than emulating: Go needs two environment variables. The final
+      # stage runs one `apk add` (git, git-lfs and ssh for the Git export),
+      # which for arm64 runs under the QEMU set up below.
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
-      # For that check, and only for it. The arm64 image is the one nobody here
-      # can run without this, which is exactly why it was the one never run.
+      # For the final stage's `apk add`, and for that check. The arm64 image is
+      # the one nobody here can run without this, which is exactly why it was
+      # the one never run.
       - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
         with:
           platforms: arm64

@@ -13,6 +13,8 @@ import (
 
 	"github.com/waynehoover/trew/internal/control"
 	"github.com/waynehoover/trew/internal/dirlock"
+	"github.com/waynehoover/trew/internal/gitexport"
+	"github.com/waynehoover/trew/internal/mcp"
 	"github.com/waynehoover/trew/internal/search"
 	"github.com/waynehoover/trew/internal/server"
 	"github.com/waynehoover/trew/internal/store"
@@ -35,6 +37,11 @@ type operator struct {
 	// `serve` started: what `status` reports beside the server's own.
 	index   *search.Index
 	started time.Time
+	// dataDir is where the configuration file is, flags what serve was
+	// given over it, and export the running git export, nil with no server.
+	dataDir string
+	flags   *overlay
+	export  *gitexport.Exporter
 }
 
 // mcpHooks is what the token commands tell a running MCP endpoint.
@@ -45,6 +52,9 @@ type mcpHooks interface {
 	// Revoked ends the requests a revoked token has in flight. Each would
 	// lose at its own recheck anyway; this makes it lose now.
 	Revoked(tokenID string)
+	// SetConventions gives the daily-note tools the settings `trewd config
+	// set daily.*` wrote.
+	SetConventions(mcp.Conventions)
 }
 
 // Handle does one request.
@@ -148,6 +158,8 @@ func (o *operator) Handle(_ context.Context, req control.Request) control.Reply 
 		return o.restore(req)
 	case "status":
 		return o.status()
+	case "config-show", "config-set", "config-unset", "git-export":
+		return o.configure(req)
 	}
 	return control.Refused(control.CodeBadRequest, fmt.Sprintf("unknown request %q", req.Op))
 }
