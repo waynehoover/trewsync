@@ -105,7 +105,7 @@ is the guide to setting a client up. A client authenticates with
 
 ```bash
 trewd mcp-token -label "Claude on Mac"                   # prints the token once
-trewd mcp-token -label "Claude on Mac" -key-out FILE     # or writes it, mode 0600
+trewd mcp-token -label "Claude on Mac" -key-out FILE     # or writes it to a new file, mode 0600
 trewd mcp-token -list                                    # ids, scopes, expiry, use counts
 trewd mcp-token -revoke ID
 ```
@@ -115,6 +115,13 @@ provider. It has read scope unless minted with `-scope write`, and expires
 after 90 days unless `-ttl` says otherwise (`-ttl 0` never expires). Every
 note-derived string in a result arrives under `untrusted_content`, apart from
 what the server vouches for under `trusted`.
+
+`-key-out` never writes over a file. A name that is already taken is refused
+before a token is minted, and a file that appears there in the meantime is
+refused by the write itself. If the file cannot be written once the token
+exists, the token is revoked at once and the command says nothing usable was
+left; mint another. If that revoke fails too, the command says so, names the
+token's id, and prints the `trewd mcp-token -revoke` command that ends it.
 
 With `-addr 0.0.0.0` or the default `:3003` the endpoint listens on every
 interface, and the server logs a warning saying so: keep `/mcp` behind

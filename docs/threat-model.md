@@ -83,7 +83,7 @@ holds it.
 | C5 | Invites expire by default (one hour); the invite `serve` mints for the first device goes to a 0600 file, never a log | `serve` (M1); `TestI23TheTTLDefaultsAndIsCapped`, `TestS11WriteSecretFileIsExactAndPrivate` | **enforced** |
 | C6 | No credential in a URL query string, including any future event stream | `/mcp` refuses any query string before looking at a credential (M4); `TestAQueryStringIsNeverTheEndpoint` | **enforced** |
 | C7 | The plugin keeps its device token in Obsidian's keychain when the app has one, scoped to vault and device, so a copied `.obsidian` does not carry a working credential once a restart of Obsidian has found the token in the keychain (until then `data.json` keeps it too, so a kill cannot lose it) | `client/src/plugin/keychain.ts` (M2) | enforced; tested with a copied vault, a lost keychain entry, a kill before the keychain saved and a renamed vault |
-| C8 | Secret files (the first invite, `mcp-token --key-out`, `backup-key`'s identity) are written atomically at mode 0600 | M1, M4, M5.5; `TestS11WriteSecretFileIsExactAndPrivate`, `TestS11OverwritingA0644FileTightensItTo0600`, `TestAnEncryptedBackupUnpacksToTheNotesItHeld` | **enforced** |
+| C8 | Secret files (the first invite, `mcp-token --key-out`, `backup-key`'s identity) are written atomically at mode 0600, and a key file (`-key-out`, the identity) never over an existing file | M1, M4, M5.5; `TestS11WriteSecretFileIsExactAndPrivate`, `TestS11OverwritingA0644FileTightensItTo0600`, `TestWriteNewSecretFileRefusesAFileAlreadyThere`, `TestAKeyOutThatExistsIsRefusedBeforeATokenIsMinted`, `TestAnEncryptedBackupUnpacksToTheNotesItHeld` | **enforced** |
 
 ### The agent endpoint
 

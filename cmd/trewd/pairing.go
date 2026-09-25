@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -214,40 +215,95 @@ func printPairing(out io.Writer, addr, vault string, first firstInvite) {
 //     outcome, not the exit code.
 func writeSecretFile(path, content string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	tmpName, err := stageSecretFile(dir, filepath.Base(path), content)
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
 	// Removed if anything below fails; a no-op once the rename has consumed it.
 	defer os.Remove(tmpName)
-
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.WriteString(content); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}
 	if err := fsync.Dir(dir); err != nil {
 		return err
 	}
+	return verifySecretFile(path, content)
+}
 
-	// Prove it: the bytes, and the mode, are what was intended.
+// writeNewSecretFile writes a credential as writeSecretFile does, atomically,
+// durably, at 0600 and read back, and never over a file that is already
+// there. The staged temp file is hard-linked to the name rather than renamed
+// over it: a link fails when the name exists, and the check is the kernel's,
+// made at the moment the name is taken, so a file that appears between a
+// caller's own check and this write is refused, not clobbered.
+//
+// A failure after the name was taken removes the file this call made, when it
+// is still the one this call made, so an error leaves no copy of the secret
+// behind.
+func writeNewSecretFile(path, content string) error {
+	dir := filepath.Dir(path)
+	tmpName, err := stageSecretFile(dir, filepath.Base(path), content)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpName)
+	if err := os.Link(tmpName, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%s exists, and is not written over: choose another name, or remove it first", path)
+		}
+		return err
+	}
+	err = fsync.Dir(dir)
+	if err == nil {
+		err = verifySecretFile(path, content)
+	}
+	if err != nil {
+		staged, serr := os.Stat(tmpName)
+		landed, lerr := os.Stat(path)
+		if serr == nil && lerr == nil && os.SameFile(staged, landed) {
+			_ = os.Remove(path)
+		}
+		return err
+	}
+	return nil
+}
+
+// stageSecretFile writes content to a new temp file in dir at mode 0600 and
+// fsyncs it, for writeSecretFile and writeNewSecretFile to put in place. It
+// makes dir, at 0700, when it is missing. The caller removes the temp file.
+func stageSecretFile(dir, base, content string) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(dir, "."+base+".*")
+	if err != nil {
+		return "", err
+	}
+	tmpName := tmp.Name()
+	fail := func(err error) (string, error) {
+		tmp.Close()
+		os.Remove(tmpName)
+		return "", err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		return fail(err)
+	}
+	if _, err := tmp.WriteString(content); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return "", err
+	}
+	return tmpName, nil
+}
+
+// verifySecretFile proves a written credential: the bytes, and the mode, are
+// what was intended. Rule 4: verify the outcome, not the exit code.
+func verifySecretFile(path, content string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("verifying %s: %w", path, err)

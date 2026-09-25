@@ -61,6 +61,8 @@ does not work with a TrewSync server, and moving a vault is a new pairing.
   under `untrusted_content`. See [Connect an agent](docs/agent.md).
 - **Tokens for agents** (`trewd mcp-token`): read scope by default, 90-day
   expiry by default, listed with use counts, revocable while the server runs.
+  `-key-out` writes a token only to a new file and refuses one that exists;
+  a token whose file could not be written is revoked at once.
 - **Audit and undo.** `trewd audit` lists every agent write and every undo;
   `trewd undo OPID` reverses one, or writes what it replaced as copies. The
   plugin's version history offers **Undo this change** on an agent's version,
