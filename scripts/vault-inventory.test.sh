@@ -191,6 +191,85 @@ else
   bad "and it still holds the old system's edit"
 fi
 
+# ---- a case-only rename after the cut ----------------------------------------
+# The export records Note.md -> note.md as an add and a delete. On a disk that
+# folds case (APFS, the Mac's) the add used to find the old file and call it
+# already current, and the delete then removed the only copy; a folder lost
+# every file inside it. Both kinds, with and without a content change.
+cfrozen="$tmp/case-frozen"
+mkdir -p "$cfrozen/Folder" "$cfrozen/Other"
+printf 'same words\n' > "$cfrozen/Note.md"
+printf 'before\n' > "$cfrozen/Changed.md"
+printf 'x in the folder\n' > "$cfrozen/Folder/x.md"
+printf 'y before\n' > "$cfrozen/Folder/y.md"
+printf 'z in the other folder\n' > "$cfrozen/Other/z.md"
+inv inventory "$cfrozen" -o "$tmp/case-frozen.inv" 2>/dev/null
+ccur="$tmp/case-current"
+mkdir -p "$ccur/folder" "$ccur/other"
+printf 'same words\n' > "$ccur/note.md"
+printf 'after the rename\n' > "$ccur/changed.md"
+printf 'x in the folder\n' > "$ccur/folder/x.md"
+printf 'y after\n' > "$ccur/folder/y.md"
+printf 'z in the other folder\n' > "$ccur/other/z.md"
+inv inventory "$ccur" -o "$tmp/case-current.inv" 2>/dev/null
+inv changes "$tmp/case-frozen.inv" "$tmp/case-current.inv" --from "$ccur" --to "$tmp/case-export" > /dev/null
+case_apply() { # case_apply NAME: a fresh frozen copy, the export applied to it
+  cp -Rp "$cfrozen" "$tmp/$1"
+  inv apply "$tmp/case-export" "$tmp/$1" --apply > "$tmp/$1.out" 2>&1
+}
+rc=0; case_apply case-applied || rc=$?
+inv inventory "$tmp/case-applied" -o "$tmp/case-applied.inv" 2>/dev/null
+if [ "$rc" = 0 ] && inv compare "$tmp/case-applied.inv" "$tmp/case-current.inv" > "$tmp/case-compare.out" 2>&1; then
+  ok "a case-only rename, file and folder, changed and unchanged, applies as the rename it is"
+else
+  bad "a case-only rename, file and folder, changed and unchanged, applies as the rename it is (apply exit $rc)"
+  cat "$tmp/case-applied.out" "$tmp/case-compare.out" 2>/dev/null | tail -20 | sed 's/^/      /' || true
+fi
+listing=$(cd "$tmp/case-applied" && find . -type f | LC_ALL=C sort | tr '\n' ' ')
+if [ "$listing" = "./changed.md ./folder/x.md ./folder/y.md ./note.md ./other/z.md " ] \
+  && [ "$(cat "$tmp/case-applied/note.md")" = "same words" ] \
+  && [ "$(cat "$tmp/case-applied/changed.md")" = "after the rename" ] \
+  && [ "$(cat "$tmp/case-applied/folder/y.md")" = "y after" ]; then
+  ok "and every renamed file is there, spelled as the server spells it, with the server's bytes"
+else
+  bad "and every renamed file is there, spelled as the server spells it, with the server's bytes"
+  printf '      %s\n' "$listing"
+fi
+# The dry run says the same, and removes nothing.
+cp -Rp "$cfrozen" "$tmp/case-dry"
+dry=$(inv apply "$tmp/case-export" "$tmp/case-dry" 2>&1 || true)
+if ! grep -q REFUSED <<<"$dry" && grep -Eq 'would +2  renamed folder' <<<"$dry" && grep -Eq 'would +5  renamed$' <<<"$dry" \
+  && [ -f "$tmp/case-dry/Note.md" ] && [ -f "$tmp/case-dry/Folder/x.md" ]; then
+  ok "the dry run counts the renames and writes nothing"
+else
+  bad "the dry run counts the renames and writes nothing"; printf '%s\n' "$dry" | sed 's/^/      /'
+fi
+# A renamed file edited on the old side during the window is refused, and kept.
+cp -Rp "$cfrozen" "$tmp/case-both"
+printf 'edited on the old system\n' > "$tmp/case-both/Note.md"
+rc=0; out=$(inv apply "$tmp/case-export" "$tmp/case-both" --apply 2>&1) || rc=$?
+if [ "$rc" = 1 ] && grep -q 'REFUSED .*changed here since the freeze, not renamed' <<<"$out" \
+  && [ "$(cat "$tmp/case-both/"[Nn]ote.md)" = "edited on the old system" ]; then
+  ok "a renamed file changed on both sides is refused and keeps the old side's words"
+else
+  bad "a renamed file changed on both sides is refused and keeps the old side's words (exit $rc)"
+  printf '%s\n' "$out" | sed 's/^/      /'
+fi
+
+# ---- apply never writes through a link ---------------------------------------
+outside="$tmp/outside"
+mkdir -p "$outside"
+frozen3="$tmp/frozen3"
+cp -Rp "$src" "$frozen3"
+ln -s "$outside" "$frozen3/new"   # the export adds new/deeper/n.md and new/pic.bin
+rc=0; out=$(inv apply "$tmp/export" "$frozen3" --apply 2>&1) || rc=$?
+if [ "$rc" = 1 ] && grep -q 'REFUSED .*a link on the way' <<<"$out" && [ -z "$(ls -A "$outside")" ]; then
+  ok "a folder that is a link is refused, and nothing lands outside the vault"
+else
+  bad "a folder that is a link is refused, and nothing lands outside the vault (exit $rc)"
+  printf '%s\n' "$out" | sed 's/^/      /'; ls -AR "$outside" | sed 's/^/      /'
+fi
+
 echo
 if [ "$fails" -gt 0 ]; then
   echo "vault-inventory: $fails failed"
