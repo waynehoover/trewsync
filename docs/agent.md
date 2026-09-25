@@ -154,6 +154,10 @@ thing between the internet and your vault.
 | `compare_versions` | Two versions of a note, line by line. |
 | `delivery_status` | Which devices have applied the newest version. |
 | `lookup_operation` | What one of this token's own writes did, by its operation id. |
+| `backlinks` | Every link to a note or attachment from other notes, with the line, column and the link as written. |
+| `outgoing_links` | Every link a note makes, and whether each resolves to one file, none, or several. |
+| `broken_links` | Links to nothing in the vault, and links whose name several files share. |
+| `orphans` | Notes (and, if asked, attachments) that nothing links to. |
 
 **With a write token**, also:
 
@@ -167,6 +171,9 @@ thing between the internet and your vault.
 | `restore_note` | Write an earlier version to a new, free path. |
 | `add_tags`, `remove_tags`, `manage_tags`, `rename_tag` | Change tags in frontmatter, in the text, or both. Previewed first. |
 | `undo_operation` | Undo one of this token's own writes. |
+| `today_note` | Find a day's daily note, and with `create`, make it from the daily template. |
+| `append_to_daily` | Add text to a day's daily note, optionally under a heading, creating the note first. |
+| `create_from_template` | Create a note from a template, with `{{title}}`, `{{date}}`, `{{time}}` and your own `{{name}}` filled in. |
 
 Only Markdown (`.md`) and plain text (`.txt`) can be read and changed.
 Excalidraw drawings (`.excalidraw.md`) can be read, not changed. Attachments
@@ -255,6 +262,95 @@ trewd undo OPID -to-copy     # or write what it replaced beside each note
 The [server reference](server-reference.md#audit) describes `audit` and `undo`
 in full, and the [plugin guide](plugin.md#conflicts) says how a device keeps
 both versions when it had changed the same text meanwhile.
+
+## Links and vault health
+
+`backlinks`, `outgoing_links`, `broken_links` and `orphans` find links the way
+`move_note` does when it rewrites them, so what they report is what a move
+would change:
+
+- A wiki link or embed matches by name, by path, or by path relative to the
+  linking note's folder, with or without `.md`; the text after `|` is display
+  text, and `#heading` is ignored. A Markdown link or image matches by its
+  path relative to the linking note, or from the vault's root with a leading
+  `/`, percent escapes decoded. Letter case is compared as the server compares
+  paths.
+- Links in code, inline code, HTML and `%%` comments are not links. Links to
+  URLs and to headings of the same note are not reported.
+- A name that several files share, `[[Note]]` with `Note.md` in two folders,
+  is **ambiguous**: `backlinks` lists it apart from the links that resolve,
+  `outgoing_links` gives its candidates, and `broken_links` reports it with
+  reason `ambiguous` unless `includeAmbiguous` is false. For `orphans` it
+  counts as a link to every note it may mean.
+- A note linking to itself does not make it any less of an orphan, and is
+  not its own backlink.
+
+Each result gives the linking note's path and version, the line and column
+(1-based, the column in UTF-16 code units, as `search_notes` counts them) and
+the link as written. Every page is read at the vault's head when the first
+page was asked for; follow `nextCursor` to the end, and `complete` is true on
+the last page when nothing was skipped. A note whose links cannot be read
+(frontmatter with no closing `---`, over 1 MiB, not UTF-8) is listed under
+`skipped` with the reason, and the pages are not complete.
+
+The server's link index lets these tools read only the notes that may hold a
+matching link. It is used only when it has caught up with exactly the head the
+page reads (`scan.method` is `index`); otherwise every note is read, 512 notes
+or 8 MiB a page (`scan.method` is `vault`, with `scan.why`). `orphans` has to
+know every note's links at once, so on a vault of more than 512 notes it
+answers `scan_incomplete` while the index is behind, and works once
+`vault_status` reports the index fresh.
+
+## Daily notes and templates
+
+`today_note`, `append_to_daily` and `create_from_template` follow Obsidian's
+Daily notes and Templates settings. Obsidian keeps those in `.obsidian/`,
+which never syncs, so the server is told them when it starts (the
+[server reference](server-reference.md#serve) lists the flags):
+
+```bash
+trewd serve -mcp -daily-folder Journal -daily-format YYYY-MM-DD \
+  -daily-template Templates/Daily -templates-folder Templates -timezone Europe/London
+```
+
+Without them: daily notes are `YYYY-MM-DD.md` in the vault's root with no
+template, templates are in `Templates`, `{{date}}` writes `YYYY-MM-DD` and
+`{{time}}` writes `HH:mm`, and "today" is the server's local date. An agent may
+pass `folder`, `format` and `template` to `today_note` or `append_to_daily` to
+use other settings for one call, and `date` (`YYYY-MM-DD`, `today`,
+`yesterday` or `tomorrow`) for another day.
+
+- **`today_note`** says where the day's note is, whether it exists, and its
+  `uid` to read or pass as `base`. It writes nothing unless `create` is true,
+  and then only when the note does not exist: it is made from the daily
+  template, with any folders it needs.
+- **`append_to_daily`** adds `text` to the day's note on lines of its own,
+  creating the note from the template first unless `create` is false. With
+  `heading`, one ATX heading line exactly as the note has it (`## Log`), the
+  text goes at the end of that heading's section: after its last line that
+  is not blank, before the next heading of the same or a higher level, or at
+  the end of the note. A heading the note does not have is `no_match`, one it
+  has twice is `ambiguous_edit`, and nothing is written. No `base` is needed:
+  the text is added to the version the server reads, and committed only if
+  that is still the note's head (`stale` otherwise). Pass `base` and `epoch`
+  to insist on the version you read.
+- **`create_from_template`** makes a note at a free `path` from a note in the
+  templates folder, named with or without `.md`, as `create_note` would.
+
+Templates are ordinary notes. The placeholders filled in are Obsidian's:
+`{{title}}` (the new note's name without `.md`), `{{date}}` and `{{time}}` in
+the configured formats, `{{date:FORMAT}}` and `{{time:FORMAT}}` in their own,
+and `{{name}}` for each entry of `create_from_template`'s `variables`. In a
+daily note, `{{date}}` is the note's day. Anything else in braces, and other
+plugins' syntax such as Templater's `<% %>`, is left as it is.
+
+Date formats are moment.js's, in English: `YYYY` `YY` `Q` `MMMM` `MMM` `MM`
+`M` `DDDD` `DDD` `DD` `D` `Do` `dddd` `ddd` `dd` `d` `E` `GGGG` `WW` `W` `HH`
+`H` `hh` `h` `kk` `k` `mm` `m` `ss` `s` `A` `a`, with `[text]` written as it
+is. A format with a `/` files daily notes in folders (`YYYY/MM/YYYY-MM-DD`).
+Locale formats (`L`, `LL`), locale weeks (`gggg`, `ww`), offsets and
+timestamps are refused as `invalid_format`, or in a template as
+`invalid_template`, rather than written differently from Obsidian.
 
 ## Note text is untrusted
 
