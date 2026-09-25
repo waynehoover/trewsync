@@ -128,6 +128,38 @@ func TestMCPTokenCommandsWorkWithNoServerRunning(t *testing.T) {
 	}
 }
 
+// A token is minted before -key-out writes it, so a file that cannot be
+// written leaves a live token nobody holds. The error says which, and how to
+// revoke it, and that works: the operator is never left with a credential
+// they cannot name. `trew mcp-token --key-out`, retired with the headless
+// client's MCP server, never printed or kept a credential it could not make
+// durable (docs/development.md, "Retiring trew mcp").
+func TestAKeyOutThatCannotBeWrittenNamesTheTokenItMinted(t *testing.T) {
+	dir, _, _ := serving(t)
+	// Under a regular file, which no directory can be made at.
+	notADirectory := filepath.Join(t.TempDir(), "a file")
+	if err := os.WriteFile(notADirectory, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := trew(t, "mcp-token", "-data", dir, "-label", "unheld", "-key-out",
+		filepath.Join(notADirectory, "agent.key"))
+	if err == nil {
+		t.Fatal("writing a key under a regular file succeeded")
+	}
+	tokens := mcpTokensJSON(t, dir)
+	if len(tokens) != 1 || tokens[0].Label != "unheld" {
+		t.Fatalf("listed %+v", tokens)
+	}
+	id := tokens[0].ID
+	if !strings.Contains(err.Error(), id) || !strings.Contains(err.Error(), "trewd mcp-token -revoke "+id) {
+		t.Fatalf("the error does not name the token it left live, %s:\n%v", id, err)
+	}
+	mustRun(t, "mcp-token", "-data", dir, "-revoke", id)
+	if left := mcpTokensJSON(t, dir); len(left) != 0 {
+		t.Fatalf("after the revoke the error named: %+v", left)
+	}
+}
+
 func TestMCPTokenRefusesWhatItCannotDo(t *testing.T) {
 	dir := t.TempDir()
 	stop := serveInBackground(t, dir)
