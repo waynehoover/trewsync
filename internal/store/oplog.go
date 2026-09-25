@@ -1298,13 +1298,21 @@ func clientInfo(s string) string {
 	return s
 }
 
-// newOperationID mints an operation id: 16 random bytes, base64url.
+// newOperationID mints an operation id: 16 random bytes, base64url, never
+// beginning with "-". A person types it as `trewd undo ID`, and Go's flag
+// package reads an argument beginning with a dash as a flag, so one operation
+// in 64 could not be undone from the command line; newInviteID keeps the same
+// rule for invite ids (TestNoOperationIDBeginsWithADash).
 func newOperationID() (string, error) {
-	b := make([]byte, OperationIDBytes)
-	if _, err := io.ReadFull(rand.Reader, b); err != nil {
-		return "", fmt.Errorf("minting an operation id: %w", err)
+	for {
+		b := make([]byte, OperationIDBytes)
+		if _, err := io.ReadFull(rand.Reader, b); err != nil {
+			return "", fmt.Errorf("minting an operation id: %w", err)
+		}
+		if id := EncodeToken(b); id[0] != '-' {
+			return id, nil
+		}
 	}
-	return EncodeToken(b), nil
 }
 
 // ValidOperationID reports whether s is an operation id's shape.

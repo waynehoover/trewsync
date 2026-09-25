@@ -177,11 +177,14 @@ func (s *Store) CreateMCPToken(vaultID, label string, scope MCPScope, expiresAt 
 			return fmt.Errorf("%w: %q", ErrUnknownVault, vaultID)
 		}
 		for attempt := 0; attempt < 3; attempt++ {
-			id := make([]byte, MCPTokenIDBytes)
-			token := make([]byte, MCPTokenBytes)
-			if _, err := io.ReadFull(rand.Reader, id); err != nil {
+			// Never beginning with "-", which `trewd mcp-token -revoke ID` would
+			// read as a flag, as newInviteID explains for invite ids
+			// (TestNoMCPTokenIDBeginsWithADash).
+			id, err := newMCPTokenID()
+			if err != nil {
 				return err
 			}
+			token := make([]byte, MCPTokenBytes)
 			if _, err := io.ReadFull(rand.Reader, token); err != nil {
 				return err
 			}
@@ -390,4 +393,17 @@ func (s *Store) Authors(vaultID string) ([]Author, error) {
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// newMCPTokenID draws a token id whose encoding does not begin with "-".
+func newMCPTokenID() ([]byte, error) {
+	for {
+		id := make([]byte, MCPTokenIDBytes)
+		if _, err := io.ReadFull(rand.Reader, id); err != nil {
+			return nil, err
+		}
+		if EncodeToken(id)[0] != '-' {
+			return id, nil
+		}
+	}
 }
