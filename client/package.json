@@ -47,7 +47,9 @@
     "dedup": "bun run src/stress/dedup.ts",
     "bench:pass": "bun run bench-pass.ts",
     "bench:merge": "bun run bench-merge.ts",
-    "bench:android": "bun run bench-android.ts"
+    "bench:android": "bun run bench-android.ts",
+    "bench:10k": "bun run bench-10k.ts",
+    "bench:phone": "bun run bench-phone-10k.ts"
   },
   "devDependencies": {
     "@types/diff-match-patch": "^1.0.36",
