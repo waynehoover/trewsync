@@ -922,7 +922,7 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 		}
 
 		base := oe.Base
-		uid, err := writeEntry(q, op.Vault, e, &base, oe.PrevBase)
+		uid, err := writeEntry(q, op.Vault, e, &base, oe.PrevBase, now)
 		switch {
 		case errors.Is(err, ErrCollision):
 			return OpResult{}, refused(opID, OpCodeCollision, e.Path, 0, err)
