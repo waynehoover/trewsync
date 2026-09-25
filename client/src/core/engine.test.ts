@@ -29,6 +29,7 @@ import { decodeFrame } from "./frame.ts";
 import { ConnectionError, LOCAL_MAX_CHUNK_BYTES, ProtocolError, Transport } from "./transport.ts";
 import { engineOnFakeSocket, settleUntil } from "./fake-socket.ts";
 import { MemoryIndexStore, MemoryVault, type FileStat, type Times } from "./vault.ts";
+import { conflictCopyPath } from "./merge.ts";
 import { firstFreeName, ignoredHereError, neverSync } from "./paths.ts";
 import type { IndexEntry } from "./index-state.ts";
 import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
@@ -1273,6 +1274,45 @@ describe("naming a copy beside a note", () => {
   it("refuses rather than inventing a name when a thousand are taken", async () => {
     await expect(firstFreeName("note.md", async () => true)).rejects.toThrow(/unused name/);
   });
+
+  /**
+   * Found by the soak (docs/development.md, "The soak"). Two devices name
+   * copies alike: after the author of the bytes, to the minute. The laptop
+   * had kept its own text of the day's note in `Daily (Conflicted copy laptop
+   * T).md` and sent it; the phone, offline, had written the day's note too,
+   * and in the same minute kept the laptop's text in a copy of exactly that
+   * name, because only its own disk was asked whether the name was free.
+   * The laptop's copy then arrived at a path the phone was using, and was
+   * kept as a copy of a copy, `Daily (Conflicted copy laptop T) (Conflicted
+   * copy laptop T).md`: nothing lost, and a conflict copy that no two edits of
+   * one text explain. A name the server already holds for another file is
+   * taken, whether or not it has reached this disk yet.
+   */
+  it("numbers past a copy's name the server holds that has not reached this disk", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    // The phone's clock stands still, so the name its copy takes is known.
+    b.step = 0;
+    const taken = conflictCopyPath("note.md", "a", new Date(b.clock));
+
+    await b.vault.edit("note.md", "the phone's own note\n");
+    await a.vault.edit("note.md", "the laptop's note\n");
+    await a.vault.edit(taken, "the laptop's copy, from a conflict of its own\n");
+    await a.settle();
+    // Both of the laptop's files are in the phone's remote index before its
+    // pass decides anything, as they are after any reconnection.
+    await receiveCommitted(b.transport);
+    await convergeBoth(a, b);
+
+    const second = taken.replace(/\.md$/, " 2.md");
+    for (const d of [a, b]) {
+      expect(d.vault.paths().sort(), d.name).toEqual([second, taken, "note.md"].sort());
+      expect(d.vault.text("note.md"), d.name).toBe("the phone's own note\n");
+      expect(d.vault.text(taken), d.name).toBe("the laptop's copy, from a conflict of its own\n");
+      expect(d.vault.text(second), d.name).toBe("the laptop's note\n");
+    }
+  }, 120_000);
 });
 
 /**

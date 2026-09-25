@@ -43,6 +43,7 @@
     "lint": "cd .. && eslint --config client/eslint.config.mjs client/src/plugin client/src/core",
     "stress": "vitest run --config vitest.stress.config.ts",
     "scale": "bun run src/stress/scale.ts",
+    "soak": "bun run src/stress/soak.ts",
     "dedup": "bun run src/stress/dedup.ts",
     "bench:pass": "bun run bench-pass.ts",
     "bench:merge": "bun run bench-merge.ts",
