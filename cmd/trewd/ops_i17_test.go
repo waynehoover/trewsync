@@ -195,7 +195,7 @@ func TestI18PurgeRefusesWithoutConfirmationAndABackup(t *testing.T) {
 func TestI18PurgeRefusesABackupThatIsMissingHistory(t *testing.T) {
 	dir := seeded(t)
 	backup := filepath.Join(t.TempDir(), "backup")
-	mustRun(t, "backup", "-data", dir, "-to", backup)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", backup)
 
 	// A new version lands after the backup.
 	st, err := openExisting(dir, "append")
@@ -224,7 +224,7 @@ func TestI18PurgeRefusesABackupThatIsMissingHistory(t *testing.T) {
 func TestI18PurgeRunsWithAFreshBackupAndNamesIt(t *testing.T) {
 	dir := seeded(t)
 	backup := filepath.Join(t.TempDir(), "backup")
-	mustRun(t, "backup", "-data", dir, "-to", backup)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", backup)
 
 	out := mustRun(t, "purge", "-data", dir, "-confirm", "default", "-backup", backup)
 	if !strings.Contains(out, "The backup at "+backup+" holds them, up to uid 6") {

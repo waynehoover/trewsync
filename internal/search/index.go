@@ -243,7 +243,7 @@ func (x *Index) load() error {
 	if err := x.upgradeMeta(); err != nil {
 		return err
 	}
-	belongs := x.st.Epoch() + "\x00" + x.vault
+	belongs := x.st.Epoch() + ownerSeparator + x.vault
 	var owner string
 	err := x.db.QueryRow(`SELECT value FROM meta WHERE key = 'owner'`).Scan(&owner)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {

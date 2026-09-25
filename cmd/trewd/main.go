@@ -22,9 +22,13 @@ import (
 	"syscall"
 	"time"
 
+	"filippo.io/age"
+
+	"github.com/waynehoover/trew/internal/archive"
 	"github.com/waynehoover/trew/internal/chunks"
 	"github.com/waynehoover/trew/internal/control"
 	"github.com/waynehoover/trew/internal/dirlock"
+	"github.com/waynehoover/trew/internal/doctor"
 	"github.com/waynehoover/trew/internal/server"
 	"github.com/waynehoover/trew/internal/store"
 	"github.com/waynehoover/trew/internal/wire"
@@ -116,6 +120,18 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return cmdUndo(rest, out)
 		case "restore":
 			return cmdRestore(rest, out)
+		case "doctor":
+			return cmdDoctor(ctx, rest, out)
+		case "history":
+			return cmdHistory(rest, out)
+		case "deleted":
+			return cmdDeleted(rest, out)
+		case "backup-key":
+			return cmdBackupKey(rest, out)
+		case "unpack":
+			return cmdUnpack(rest, out)
+		case "rehearse":
+			return cmdRehearse(ctx, rest, out)
 		case "cat":
 			return cmdCat(rest, out)
 		case "export":
@@ -125,7 +141,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return nil
 		default:
 			return fmt.Errorf("unknown command %q (try serve, invite, devices, revoke, uninvite, mcp-token, audit, "+
-				"undo, restore, cat, export, backup, verify, purge, stats, doctor, service, health, version)", cmd)
+				"undo, restore, cat, history, deleted, export, backup, backup-key, unpack, rehearse, verify, purge, stats, "+
+				"doctor, "+
+				"service, health, version)", cmd)
 		}
 	}
 	return cmdServe(ctx, args, out)
@@ -302,6 +320,10 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	serveMCP := fs.Bool("mcp", false,
 		"also serve the MCP endpoint at /mcp, for agents holding a token from `trewd mcp-token`")
 	verbose := fs.Bool("v", false, "verbose logging")
+	allowEphemeral := fs.Bool("allow-ephemeral", false,
+		"start an empty store on storage a restart or a container replacement erases (tmpfs, a container's own layer)")
+	alertEvery := fs.Duration("alert-every", defaultAlertEvery,
+		"how often the server checks itself and logs an alert, with its remedy, when something needs attention; 0 turns it off")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -333,6 +355,26 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 
+	// Storage a restart or a container replacement erases (the check adapted
+	// from Syncidian, docs/research.md). A server started on an empty store
+	// there works perfectly, pairs every device, takes every note, and loses
+	// the lot at the next upgrade, when the container is replaced and its
+	// writable layer with it: nothing says so until the notes are gone. So an
+	// empty store is refused there unless -allow-ephemeral says the loss is
+	// intended, and a store that already holds notes there is served, since
+	// refusing would not save it, and said loudly on every start.
+	storage, err := doctorStorage(*dataDir)
+	if err != nil {
+		log.Warn("could not read the mount table to tell whether the data directory survives a restart", "err", err)
+	}
+	ephemeral := err == nil && storage.Ephemeral
+	dbFile, _ := store.DataDir(*dataDir)
+	_, statErr := os.Stat(dbFile)
+	fresh := errors.Is(statErr, os.ErrNotExist)
+	if ephemeral && fresh && !*allowEphemeral {
+		return ephemeralRefusal(*dataDir, storage)
+	}
+
 	// One server per data directory. Two would each have their own fan-out and
 	// their own commit ordering, so neither would see the other's live changes
 	// and a client could be handed uids out of order.
@@ -353,11 +395,51 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	}
 	defer dataLock.Release()
 
+	// A clean stop is recorded after the store has closed, by the order of the
+	// defers, on every way out of here: a run that returns, having been asked
+	// to stop or having refused to start, closed its store. Only a run that is
+	// killed or crashes leaves the record saying otherwise, which is the case
+	// `trewd doctor` exists to report.
+	started := false
+	defer func() {
+		if !started {
+			return
+		}
+		if err := doctor.NoteCleanStop(*dataDir, time.Now().UnixMilli()); err != nil {
+			log.Warn("could not record the clean stop", "err", err)
+		}
+	}()
+
 	st, err := openStore(*dataDir)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
+
+	if ephemeral {
+		empty, err := storeIsEmpty(st)
+		if err != nil {
+			return err
+		}
+		if empty && !*allowEphemeral {
+			return ephemeralRefusal(*dataDir, storage)
+		}
+		log.Error("the data directory is on storage a restart or a container replacement erases; "+
+			"every note here is lost with it", "dir", storage.Dir, "fs", storage.FSType, "mount", storage.MountPoint,
+			"hint", "mount a persistent volume at the data directory and move the store onto it")
+	}
+	// How this server has been starting and stopping, for `trewd doctor`: a
+	// restart loop, or a run that did not stop cleanly.
+	previous, err := doctor.NoteStart(*dataDir, resolveVersion(version, moduleVersion()), os.Getpid(),
+		time.Now().UnixMilli())
+	started = err == nil
+	if err != nil {
+		log.Warn("could not record this start", "err", err)
+	} else if len(previous.Starts) > 0 && !previous.CleanStop {
+		log.Warn("the last run did not stop cleanly: it was killed or crashed",
+			"started", time.UnixMilli(previous.Starts[len(previous.Starts)-1]).UTC().Format(time.RFC3339),
+			"version", previous.Version, "hint", "nothing acknowledged is lost; `trewd doctor` checks the store")
+	}
 
 	// The live set the collision rule reads is derived from the entries, and
 	// is rebuilt here if it has drifted from them, which is the remedy for a
@@ -481,9 +563,10 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	// The operator's socket, before "listening on" is printed, so `trewd
 	// invite` and the rest work from the moment anybody is told the server is
 	// up. Closed before the store is, by the order of the defers.
-	op := &operator{srv: srv, vault: *vault, urls: urls}
+	op := &operator{srv: srv, vault: *vault, urls: urls, started: time.Now()}
 	if agents != nil {
 		op.mcp = agents.handler
+		op.index = agents.index
 	}
 	ctl, err := control.Listen(*dataDir, op, log)
 	if err != nil {
@@ -491,6 +574,12 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	defer ctl.Close()
+	// The server's own alerts (PLAN.md M5.5), stopped before the socket they
+	// ask through closes, by the order of the defers.
+	if *alertEvery > 0 {
+		stopAlerts := watchAlerts(*dataDir, *vault, *alertEvery, log)
+		defer stopAlerts()
+	}
 	// The path and the expiry, never the string: a container log is not a
 	// private place, and the string adds a device to the vault.
 	switch {
@@ -1293,17 +1382,46 @@ func sameVersion(want, got store.Entry) string {
  * backup
  * ---------------------------------------------------------------- */
 
+// cmdBackup copies the store somewhere else (PLAN.md section 3.6): encrypted
+// to age recipients as one archive file, or, with -plaintext-ok, as a
+// plaintext data directory. One of the two has to be said. Every note and its
+// history are in a backup in the clear unless it is encrypted, including a
+// backup that stays on this machine, and a plaintext copy made by default is
+// how a vault ends up readable from a backup disk nobody thought of as
+// sensitive.
 func cmdBackup(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	dataDir := dataFlags(fs)
-	to := fs.String("to", "", "directory to back up into (required)")
+	to := fs.String("to", "", "the archive file to write with -encrypt-to, or the directory to back up into (required)")
 	deep := fs.Bool("deep", false,
 		"re-read every body already in the backup, to catch bit rot in an old one")
+	var encryptTo, recipientsFiles stringList
+	fs.Var(&encryptTo, "encrypt-to", "an age recipient to encrypt the backup to, repeatable (`trewd backup-key` makes one)")
+	fs.Var(&recipientsFiles, "recipients-file", "a file of age recipients, one per line, repeatable")
+	plaintextOK := fs.Bool("plaintext-ok", false,
+		"write a plaintext data directory: every note readable by whoever can read -to")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *to == "" {
 		return errors.New("backup needs -to <directory>")
+	}
+	encrypted := len(encryptTo)+len(recipientsFiles) > 0
+	switch {
+	case encrypted && *plaintextOK:
+		return errors.New("-plaintext-ok and -encrypt-to contradict each other; nothing was backed up")
+	case !encrypted && !*plaintextOK:
+		return fmt.Errorf("a backup outside the data directory holds every note in the clear unless it is encrypted, "+
+			"so say which: -encrypt-to AGE_RECIPIENT (or -recipients-file FILE) writes one encrypted archive, and "+
+			"`trewd backup-key -out FILE` makes the key; -plaintext-ok writes a plaintext copy into %s, for storage "+
+			"that is itself encrypted. Nothing was backed up", *to)
+	}
+	var recipients []age.Recipient
+	if encrypted {
+		var err error
+		if recipients, err = archive.ParseRecipients(encryptTo, recipientsFiles); err != nil {
+			return err
+		}
 	}
 
 	// Shared: a backup only reads, so it does not need the server stopped. It
@@ -1325,6 +1443,20 @@ func cmdBackup(args []string, out io.Writer) error {
 	}
 	defer st.Close()
 
+	if encrypted {
+		rec, err := backupEncrypted(st, *dataDir, *to, *deep, recipients, out)
+		recordBackup(*dataDir, rec, err, out)
+		return err
+	}
+	rec := doctor.BackupRecord{To: *to, Deep: *deep}
+	err = backupPlaintext(st, *dataDir, *to, *deep, out, &rec)
+	recordBackup(*dataDir, rec, err, out)
+	return err
+}
+
+// backupPlaintext is the plaintext backup: a data directory at to, updated in
+// place, verified before its database is published. What it did goes in rec.
+func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writer, rec *doctor.BackupRecord) error {
 	// The destination is locked too (F06).
 	//
 	// Only the source was, so a backup would happily replace the database of a
@@ -1341,11 +1473,11 @@ func cmdBackup(args []string, out io.Writer) error {
 	// the message that explains it, and taken on the resolved path so a
 	// symlinked destination cannot be locked under one name and written under
 	// another.
-	destDir, err := store.ResolveForLock(*to)
+	destDir, err := store.ResolveForLock(to)
 	if err != nil {
 		return err
 	}
-	if err := store.RefuseSamePlace(destDir, *dataDir); err != nil {
+	if err := store.RefuseSamePlace(destDir, dataDir); err != nil {
 		return err
 	}
 	// A destination holding another product's database is refused before it
@@ -1366,7 +1498,7 @@ func cmdBackup(args []string, out io.Writer) error {
 	}
 	defer destLock.Release()
 
-	rep, err := st.Backup(*to, *deep)
+	rep, err := st.Backup(to, deep)
 	if err != nil {
 		// The numbers so far are still worth printing: they say how far it got.
 		fmt.Fprintln(out, rep)
@@ -1385,7 +1517,7 @@ func cmdBackup(args []string, out io.Writer) error {
 	// sending somebody to inspect the disk that is fine.
 	if len(rep.Inherited) > 0 {
 		fmt.Fprintf(out, "  %d fault(s) copied faithfully from %s, which is where they are:\n",
-			len(rep.Inherited), *dataDir)
+			len(rep.Inherited), dataDir)
 		for _, f := range rep.Inherited {
 			fmt.Fprintln(out, "   ", f)
 		}
@@ -1435,9 +1567,13 @@ func cmdBackup(args []string, out io.Writer) error {
 
 	// What the backup covers, read back from the file just written rather than
 	// from the report (rule 4), so what is printed is what a script will find.
-	meta, err := store.ReadBackupMeta(*to)
+	meta, err := store.ReadBackupMeta(to)
 	if err != nil {
 		return fmt.Errorf("reading back %s: %w", store.BackupMetaFile, err)
+	}
+	rec.Verified, rec.Operations, rec.Pins = rep.Verified, rep.Oplog.Operations, rep.Oplog.Pins
+	for _, v := range meta.Vaults {
+		rec.LatestUID = max(rec.LatestUID, v.LatestUID)
 	}
 	for _, v := range meta.Vaults {
 		fmt.Fprintf(out, "  %s: vault %q holds uids %d to %d (%d versions), purge generation %d\n",

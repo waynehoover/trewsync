@@ -24,7 +24,7 @@ func TestTheLongestCoveringMountWins(t *testing.T) {
 		{"/srv/trew", "/", "overlay"},
 		{"/dev/shm", "/dev", "tmpfs"},
 	} {
-		point, fsType := mountOf(c.path, mounts)
+		point, fsType, _ := mountOf(c.path, mounts)
 		if point != c.point || fsType != c.fsType {
 			t.Errorf("%s: on %s (%s), want %s (%s)", c.path, point, fsType, c.point, c.fsType)
 		}
@@ -33,7 +33,7 @@ func TestTheLongestCoveringMountWins(t *testing.T) {
 
 func TestALaterMountAtTheSamePointIsTheOneOnTop(t *testing.T) {
 	mounts, _ := parseMounts(strings.NewReader("/dev/sda1 /data ext4 rw 0 0\ntmpfs /data tmpfs rw 0 0\n"))
-	if _, fsType := mountOf("/data/x", mounts); fsType != "tmpfs" {
+	if _, fsType, _ := mountOf("/data/x", mounts); fsType != "tmpfs" {
 		t.Fatalf("the stacked mount was not the one found: %s", fsType)
 	}
 }
@@ -53,7 +53,7 @@ func TestEveryOctalEscapeInAMountPointIsDecoded(t *testing.T) {
 		}
 	}
 	mounts, _ := parseMounts(strings.NewReader(`/dev/sdb1 /mnt/my\040vault ext4 rw 0 0` + "\n"))
-	if point, _ := mountOf("/mnt/my vault/data", mounts); point != "/mnt/my vault" {
+	if point, _, _ := mountOf("/mnt/my vault/data", mounts); point != "/mnt/my vault" {
 		t.Fatalf("a mount point with a space was not matched: %q", point)
 	}
 }

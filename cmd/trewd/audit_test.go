@@ -159,7 +159,7 @@ func TestPinsAreReportedByStatsPurgeVerifyAndBackup(t *testing.T) {
 		t.Fatalf("verify:\n%s", out)
 	}
 	backup := filepath.Join(t.TempDir(), "backup")
-	if out := mustRun(t, "backup", "-data", dir, "-to", backup); !strings.Contains(out, "2 agent operations carried, with 1 before-image pins and 2 idempotency keys") {
+	if out := mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", backup); !strings.Contains(out, "2 agent operations carried, with 1 before-image pins and 2 idempotency keys") {
 		t.Fatalf("backup:\n%s", out)
 	}
 	out := mustRun(t, "purge", "-data", dir, "-confirm", "default", "-backup", backup, "-grace", "0")

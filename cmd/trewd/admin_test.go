@@ -212,7 +212,11 @@ func TestTheAdminCommandsWorkWithNoServerRunning(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out := &safeBuffer{}
-	go func() { _ = run(ctx, []string{"serve", "-data", dir, "-addr", addr}, out) }()
+	done := make(chan struct{})
+	go func() { defer close(done); _ = run(ctx, []string{"serve", "-data", dir, "-addr", addr}, out) }()
+	// Stopped and waited for before the directory is removed: a server
+	// still closing writes into it.
+	defer func() { cancel(); <-done }()
 	waitForServer(t, addr, out)
 	if strings.Contains(out.String(), "wrote an invite") {
 		t.Fatalf("serve minted a first invite over the operator's outstanding one:\n%s", out.String())

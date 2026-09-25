@@ -75,7 +75,7 @@ type served struct {
 func serveBinary(t *testing.T, binary, dir, addr string, env ...string) *served {
 	t.Helper()
 	s := &served{t: t, binary: binary, dir: dir, addr: addr, out: &safeBuffer{}, done: make(chan struct{})}
-	s.cmd = exec.Command(binary, "serve", "-data", dir, "-addr", addr, "-url", "ws://"+addr, "-mcp")
+	s.cmd = exec.Command(binary, "serve", "-data", dir, "-addr", addr, "-url", "ws://"+addr, "-mcp", "-allow-ephemeral")
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "TREW_TEST_SEAM=") {
 			s.cmd.Env = append(s.cmd.Env, kv)

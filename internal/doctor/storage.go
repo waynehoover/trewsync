@@ -17,10 +17,12 @@ import (
 type Storage struct {
 	// Dir is the data directory, absolute and with symlinks resolved.
 	Dir string
-	// MountPoint and FSType are the mount the directory lives on. Both are
+	// MountPoint and FSType are the mount the directory lives on, and Source
+	// what is mounted there (a device, or a pool's dataset). All three are
 	// empty when the platform has no mount table to read (macOS, Windows).
 	MountPoint string
 	FSType     string
+	Source     string
 	// Container reports whether this process looks like it runs in one.
 	Container bool
 	// Ephemeral reports whether the data is lost when the container is
@@ -71,12 +73,12 @@ func StorageOf(dir string) (Storage, error) {
 	if err != nil {
 		return s, err
 	}
-	s.MountPoint, s.FSType = mountOf(abs, mounts)
+	s.MountPoint, s.FSType, s.Source = mountOf(abs, mounts)
 	s.Ephemeral = ephemeral(s.FSType, s.Container)
 	return s, nil
 }
 
-type mount struct{ point, fsType string }
+type mount struct{ source, point, fsType string }
 
 // parseMounts reads a /proc/self/mounts table: device, mount point, type,
 // options, dump, pass, with the mount point's special bytes octal-escaped.
@@ -89,7 +91,7 @@ func parseMounts(r io.Reader) ([]mount, error) {
 		if len(fields) < 3 {
 			continue
 		}
-		out = append(out, mount{point: unescapeOctal(fields[1]), fsType: fields[2]})
+		out = append(out, mount{source: unescapeOctal(fields[0]), point: unescapeOctal(fields[1]), fsType: fields[2]})
 	}
 	return out, sc.Err()
 }
@@ -97,16 +99,29 @@ func parseMounts(r io.Reader) ([]mount, error) {
 // mountOf is the mount a path lives on: the longest mount point that is the
 // path or one of its ancestors, component by component. Of two mounts at the
 // same point the later one wins, because it is the one stacked on top.
-func mountOf(path string, mounts []mount) (point, fsType string) {
+func mountOf(path string, mounts []mount) (point, fsType, source string) {
 	best := -1
 	for _, m := range mounts {
 		p := m.point
 		covers := p == "/" || path == p || strings.HasPrefix(path, strings.TrimRight(p, "/")+"/")
 		if covers && len(p) >= best {
-			best, point, fsType = len(p), p, m.fsType
+			best, point, fsType, source = len(p), p, m.fsType, m.source
 		}
 	}
-	return point, fsType
+	return point, fsType, source
+}
+
+// Encryption is what the mount table suggests about encryption at rest,
+// which is all doctor can see without asking the kernel's crypto layer: a
+// device-mapper source is how LUKS (dm-crypt) volumes are mounted, and
+// nothing in the table distinguishes an encrypted ZFS dataset or a FileVault
+// disk from a plain one. Empty means it cannot tell, which is not "no".
+func (s Storage) Encryption() string {
+	mapped := strings.HasPrefix(s.Source, "/dev/mapper/")
+	if mapped && (strings.HasPrefix(s.Source, "/dev/mapper/luks-") || strings.Contains(strings.ToLower(s.Source), "crypt")) {
+		return "dm-crypt (LUKS), by its device name"
+	}
+	return ""
 }
 
 // unescapeOctal decodes the \NNN escapes the kernel writes for any byte in a

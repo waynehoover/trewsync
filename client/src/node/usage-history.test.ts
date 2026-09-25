@@ -78,9 +78,11 @@ it("the documented nested backup is refused and a separate destination works", a
   server = new TestServer();
   await server.start();
   await server.stop();
-  await expect(server.cli("backup", "-to", join(server.dataDir, "before-purge"))).rejects.toThrow(
-    /contain one another/,
-  );
+  await expect(
+    server.cli("backup", "-plaintext-ok", "-to", join(server.dataDir, "before-purge")),
+  ).rejects.toThrow(/contain one another/);
   dir = await mkdtemp(join(tmpdir(), "trew-review-backup-"));
-  await expect(server.cli("backup", "-to", join(dir, "snapshot"))).resolves.toBeTypeOf("string");
+  await expect(
+    server.cli("backup", "-plaintext-ok", "-to", join(dir, "snapshot")),
+  ).resolves.toBeTypeOf("string");
 });

@@ -105,7 +105,7 @@ describe("losing the server and getting the vault back", () => {
     // ---- the backup ---------------------------------------------------
     const dest = await mkdtemp(join(tmpdir(), "trew-restore-"));
     cleanups.push(() => rm(dest, { recursive: true, force: true }));
-    await live.cli("backup", "-to", dest, "-deep");
+    await live.cli("backup", "-plaintext-ok", "-to", dest, "-deep");
 
     // ---- the disaster -------------------------------------------------
     // The live directory is gone. Not emptied: gone, the way a disk is.
@@ -197,7 +197,7 @@ describe("losing the server and getting the vault back", () => {
 
     const dest = await mkdtemp(join(tmpdir(), "trew-prepurge-"));
     cleanups.push(() => rm(dest, { recursive: true, force: true }));
-    await live.cli("backup", "-to", dest, "-deep");
+    await live.cli("backup", "-plaintext-ok", "-to", dest, "-deep");
     await live.cleanup();
     cleanups.pop();
 

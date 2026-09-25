@@ -204,7 +204,7 @@ it("purge preserves a moved note and permits reusing its old name after restart"
   const backup = await mkdtemp(join(tmpdir(), "trew-purge-preservation-"));
   dirs.push(backup);
   await server.whileStopped(async () => {
-    await server.cli("backup", "-to", join(backup, "snapshot"));
+    await server.cli("backup", "-plaintext-ok", "-to", join(backup, "snapshot"));
     await server.cli("purge", "-confirm", "default", "-backup", join(backup, "snapshot"));
   });
   const resumed = await reopen(server, "a", a!.dir, open);

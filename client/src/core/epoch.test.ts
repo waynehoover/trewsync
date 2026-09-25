@@ -156,7 +156,7 @@ describe("a server restored from a backup this device has moved past", () => {
     dirs.push(offsite);
     a.close();
     await server.whileStopped(async () => {
-      await server!.cli("backup", "-to", offsite);
+      await server!.cli("backup", "-plaintext-ok", "-to", offsite);
     });
     // The same store, so the same epoch: nothing about this is a restore yet.
     expect((await a.connect(server)).epoch).toBe(epochBefore);

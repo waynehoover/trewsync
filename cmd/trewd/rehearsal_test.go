@@ -73,8 +73,52 @@ func TestRestoreRehearsal(t *testing.T) {
 	// the whole reason a restore can be checked without a key.
 	live, want := seedLiveVault(t)
 
-	backup := filepath.Join(t.TempDir(), "offsite")
-	runBinary(t, binary, "backup", "-data", live, "-to", backup)
+	// The backup as PLAN.md section 3.6 has it taken: encrypted, to a key made
+	// for it, so what leaves the data directory is ciphertext. The rehearsal
+	// exercises this path, not a plaintext shortcut.
+	key := filepath.Join(t.TempDir(), "backup-key")
+	runBinary(t, binary, "backup-key", "-out", key)
+	offsite := filepath.Join(t.TempDir(), "offsite")
+	if err := os.MkdirAll(offsite, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(offsite, "trew.tar.age")
+	runBinary(t, binary, "backup", "-data", live, "-to", archive, "-recipients-file", key+".pub")
+	raw, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range want.bodies {
+		if strings.Contains(string(raw), string(body)) {
+			t.Fatalf("the encrypted backup holds %q in the clear", body)
+		}
+	}
+
+	// The operator's own rehearsal, before anything is lost: `trewd
+	// rehearse` restores the archive where nothing can reach it, pairs a new
+	// device to it, compares every note and every version with the live
+	// store, rebuilds the index, and records the result for doctor.
+	out := runBinary(t, binary, "rehearse", "-data", live, "-backup", archive, "-identity", key)
+	for _, step := range []string{
+		"decrypted and unpacked", "verified deeply", "1 deleted notes, 1 of them recoverable",
+		"1 agent operations and 1 before-image pins carried",
+		fmt.Sprintf("every one of the live store's %d versions", len(want.entries)),
+		"a freshly paired device downloaded all", "rebuilt the search index", "Recovery time:",
+	} {
+		if !strings.Contains(out, step) {
+			t.Fatalf("the rehearsal does not say %q:\n%s", step, out)
+		}
+	}
+	t.Logf("trewd rehearse said:\n%s", out)
+	var report struct {
+		Findings []struct{ Check, Status, Summary string }
+	}
+	mustJSON(t, runBinaryAllowingFailure(binary, "doctor", "-json", "-data", live), &report)
+	for _, f := range report.Findings {
+		if (f.Check == "backup" || f.Check == "rehearsal") && f.Status != "ok" {
+			t.Fatalf("doctor says of the %s: %s: %s", f.Check, f.Status, f.Summary)
+		}
+	}
 
 	// Step 1: the disaster. The live directory is gone, and all that is left is
 	// the copy. Renamed rather than deleted, so that a step below reaching for
@@ -82,15 +126,14 @@ func TestRestoreRehearsal(t *testing.T) {
 	if err := os.Rename(live, live+".gone"); err != nil {
 		t.Fatalf("simulating the loss of the live directory: %v", err)
 	}
-	// `rsync -a` in the runbook: the thing being started must not be the
-	// thing that was backed up.
+	// Decrypted into a fresh directory: the thing being started must not be
+	// the thing that was backed up, and the archive stays as it was.
 	restore := filepath.Join(t.TempDir(), "restore")
-	copyTree(t, backup, restore)
 
 	// Step 2: check it against itself. Deep, because the shallow check only
 	// asks whether the bodies are there and the question after a copy is
-	// whether they are the bodies.
-	out := runBinary(t, binary, "verify", "-deep", "-data", restore)
+	// whether they are the bodies. Unpack runs it.
+	out = runBinary(t, binary, "unpack", "-from", archive, "-identity", key, "-to", restore)
 	if !strings.Contains(out, "0 faults") {
 		t.Fatalf("the restored backup does not verify:\n%s", out)
 	}
@@ -215,8 +258,52 @@ func seedLiveVault(t *testing.T) (string, seededVault) {
 	put("archive/old.md", false, "a note nothing has touched in a year")
 	// A deletion, because rule 6 says a deleted file leaves a record and a
 	// restore that dropped the record would report the vault as smaller and
-	// call it success.
+	// call it success. With words before it, so the restore has a deleted note
+	// to give back.
+	put("archive/removed.md", false, "a note deleted before the backup")
 	put("archive/removed.md", true)
+	// A rename, whose record is what retires the old name.
+	moved := "a note that moved"
+	put("inbox/draft.md", false, moved)
+	renamed := store.Entry{Path: "notes/draft.md", Prev: "inbox/draft.md", Size: int64(len(moved)), MTime: 11,
+		Device: "seed", Chunks: []string{chunks.Name([]byte(moved))}}
+	uid, err := st.AppendEntry(rehearsalVault, renamed)
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	renamed.UID = uid
+	seeded.entries = append(seeded.entries, renamed)
+
+	// And an agent's edit, whose operation, audit row and pinned before-image
+	// a restore has to carry.
+	tok, err := st.CreateMCPToken(rehearsalVault, "Claude", store.ScopeWrite, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := "a note nothing has touched in a year, edited by an agent"
+	n := chunks.Name([]byte(edited))
+	if err := st.Chunks().Put(rehearsalVault, n, []byte(edited)); err != nil {
+		t.Fatal(err)
+	}
+	seeded.bodies[n] = []byte(edited)
+	base, err := st.CurrentUID(rehearsalVault, "archive/old.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("the rehearsal's agent edit"))
+	res, err := st.CommitOperation(store.Operation{
+		Vault: rehearsalVault, ActorID: tok.ID, ActorHash: store.MCPTokenHash(tok.Token), ActorLabel: "Claude",
+		Tool: "edit_note", RequestDigest: fmt.Sprintf("%x", digest), Epoch: st.Epoch(),
+		Entries: []store.OpEntry{{Entry: store.Entry{Path: "archive/old.md", Size: int64(len(edited)), MTime: 12,
+			Device: "Claude", Chunks: []string{n}}, Base: base}},
+		Render:    func(store.OpResult) ([]byte, error) { return []byte(`{"committed":true}`), nil },
+		MaxResult: 1 << 10,
+	})
+	if err != nil {
+		t.Fatalf("the agent's edit: %v", err)
+	}
+	seeded.entries = append(seeded.entries, res.Entries[0].Entry)
+	seeded.latestUID = res.Entries[0].Entry.UID
 
 	if err := st.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -283,6 +370,14 @@ func repoServerDir(t *testing.T) string {
 	return filepath.Dir(filepath.Dir(wd))
 }
 
+// runBinaryAllowingFailure runs the binary and returns what it printed to its
+// standard output whatever its exit code, for doctor, which exits non-zero on
+// a finding a test is not about.
+func runBinaryAllowingFailure(binary string, args ...string) string {
+	out, _ := exec.Command(binary, args...).Output()
+	return string(out)
+}
+
 func runBinary(t *testing.T, binary string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(binary, args...)
@@ -305,7 +400,7 @@ func mustJSON(t *testing.T, s string, v any) {
 func serveRestore(t *testing.T, binary, dir string) string {
 	t.Helper()
 	addr := freePort(t)
-	cmd := exec.Command(binary, "serve", "-data", dir, "-addr", addr, "-localhost")
+	cmd := exec.Command(binary, "serve", "-data", dir, "-addr", addr, "-localhost", "-allow-ephemeral")
 	var log strings.Builder
 	cmd.Stdout, cmd.Stderr = &log, &log
 	if err := cmd.Start(); err != nil {
