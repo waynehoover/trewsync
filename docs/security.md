@@ -24,8 +24,9 @@ your vault. So:
 - Keep the data directory on encrypted storage, such as LUKS, FileVault or ZFS
   native encryption, and write down where its key lives and how the machine
   unlocks it after a restart.
-- Keep backups on encrypted storage too, including backups that stay on the
-  same machine.
+- Backups are encrypted to a key you keep off the server: `trewd backup`
+  writes a plaintext copy only when told `-plaintext-ok`, and that one belongs
+  on encrypted storage too, even when it stays on the same machine.
 - Treat anyone who can log in to the server host as someone who can read your
   notes.
 
@@ -136,8 +137,9 @@ have not been exercised for this release.
 
 Sync propagates changes, including deletions; it is not an independent backup.
 Keep a backup of your readable local notes as well as server backups, and
-remember that a server backup is a complete readable copy of your vault and
-its history.
+remember that a server backup is a complete copy of your vault and its
+history: readable by whoever holds the key it was encrypted to, and by anyone
+at all if it was taken with `-plaintext-ok`.
 
 See [backup and restore](server-operations.md#backup) for the server procedure.
 For the threat model and the filesystem assumptions, see the

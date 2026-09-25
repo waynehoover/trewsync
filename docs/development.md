@@ -1271,6 +1271,148 @@ note's head and then its entry, and a commit between the two reads made a
 note that had moved on answer `not_found`. They read it once now, and
 `TestEditsRacingACommitAreStaleNeverNotFound` holds every loser `stale`.
 
+### Operational acceptance (M5.5)
+
+PLAN.md M5.5: the maintainer can tell a healthy vault from a quiet failure,
+recover from a failed server, and explain every agent mutation. The operator's
+guide is [Operating TrewSync](operations.md); this is how it is built and
+where each claim is tested.
+
+**Restore to a uid** (`internal/store/restore.go`, `internal/server/restore.go`,
+`cmd/trewd/restore.go`). `PlanRestore` merges two as-of listings, the vault
+at N and now, by path, and plans one `CommitOperation` recorded as the
+operator's `restore_to_uid`: file deletions for paths created since, folder
+deletions deepest first (a folder something restored lands in is kept and
+checked), folders put back shallowest first, then files put back, each entry
+based on the head it replaces, the operation bound to the head it was planned
+at. Paths holding the same bytes by another version are left alone. The dry
+run prints the head; `-head H -apply` refuses a vault that has moved. Only the
+operator may commit one (`validate` and `verify` both know the tool). A
+purge takes history, so what a path held at N is exact only at or after the
+vault's purge mark, or where no uid between the version it held then and N is
+missing (uids are allocated inside the transaction that uses them, so a gap is
+a purge); anything else refuses as `gone`, naming the path. The mark is
+`purge_marks`, moved by every purge that removes history, and is why the
+schema is 4: a schema 3 purge would not move it, and schema 3 would read the
+operator's restore as a malformed undo. The migration marks a vault already
+purged at its newest uid, the one mark that cannot be too low. Tests:
+`internal/store/restore_test.go` (every kind of change undone, restore then
+undo byte-identical, a moved head refused, only the operator, the purge gap
+refused and the mark exact, the schema 4 migration),
+`cmd/trewd/restore_test.go` (dry run, apply through the socket, the audit, the
+undo), `client/src/core/restore-to-uid.test.ts` (a phone offline across the
+restore converges with no conflict copy and keeps its own edit).
+
+**Metrics** (`internal/metrics`, `internal/server/observe.go`). The commit
+lock is a timed mutex, so lock wait and hold time are measured for every
+taker. Session error frames count refused credentials, stale refusals and
+`busy`; commit sites count commits and failures, with the run of consecutive
+failures; the send queue and catch-up buffer count evictions; the MCP handler
+counts 401s, 429s, its commits and its failures. No metric has a label
+(`TestASnapshotCarriesNothingFromTheVault`). `Server.Delivery` adds when each
+connection's applied checkpoint last moved, which is how "stopped advancing"
+is told from "busy". The control socket's `status` carries these, the health
+answer, the index status and the server's addresses to `doctor`.
+
+**Doctor** (`internal/doctor`, `cmd/trewd/doctor.go`). Sixteen checks, in
+`doctor.Checks` order, each a `Finding` with a status and, when not ok, a
+remedy. It opens the store with `OpenForInspection` under the shared data
+lock, reads `search.db` with `search.Inspect` (`mode=ro`), tells a hung server
+from none by the server lock's holder and whether that pid is alive, and never
+writes: `TestDoctorFindsNothingInASoundDirectoryAndChangesNothing` compares
+every file byte for byte before and after, apart from lock files, SQLite's
+shared-memory index and an empty write-ahead log. Seams: `Options.Storage`
+(the mount table), `Options.Space` (free bytes), `Options.Now`, and a stand-in
+control socket for what only a running server knows. The fault matrix,
+`TestDoctorReportsEveryInjectedFault` and `TestDoctorReadsWhatARunningServerKnows`,
+injects each fault into a sound directory and holds the check, the status, the
+words, the remedy and the non-zero exit; `TestDoctorReportsARunningServerThatCannotTakeANote`
+makes a real server's chunk tree read-only.
+
+The records doctor reads are three files beside the database
+(`doctor.WriteRecord`), written whole and renamed into place: `last-backup.json`
+by every backup, good or failed, keeping when the last good one finished;
+`last-rehearsal.json` by `trewd rehearse`; `runtime.json` by `serve`, the last
+twenty starts and whether the last run returned (a killed or crashed run leaves
+it saying otherwise). Advisory: a missing record is "nothing recorded", never a
+fault in the notes.
+
+**Ephemeral storage** (`internal/doctor/storage.go`, adapted from Syncidian,
+MIT, credited in [research](research.md)). `serve` refuses an empty store, a
+missing database or one with no version and no device, on a tmpfs or ramfs
+anywhere or on a container's own overlay layer, unless `-allow-ephemeral`;
+serves a store that already holds notes there and logs an error on every
+start. Test servers pass `-allow-ephemeral` (the client's `TestServer`, the
+crash matrix, the rehearsal), and `cmd/trewd`'s `TestMain` stands the mount
+table in with a persistent one, because a developer's `/tmp` can be a tmpfs.
+
+**Alerts** (`cmd/trewd/alerts.go`). Every `-alert-every` (5 minutes) the
+server runs `doctor` on itself in `Quick` mode (no walk of every entry, 32
+sampled bodies) and logs findings of nine checks as `msg=alert`, `alert
+changed`, `alert still standing` (daily) and `alert cleared`. The checks about
+set-up, the origin and the rehearsal are left to `doctor`. `TestAnAlertIsLoggedOnceUntilItChangesOrClears`,
+`TestAServerLogsAnAlertWithItsRemedy`.
+
+**Encrypted backups** (`internal/archive`, `cmd/trewd/encrypted.go`).
+`filippo.io/age` v1.3.2 (BSD-3-Clause), the one new dependency, with
+`filippo.io/hpke` and `golang.org/x/crypto` beneath it; tidy adds nothing
+else. `trewd backup -encrypt-to` runs the ordinary verified `Store.Backup`
+into `<data>/backup-staging` (the store allows a child of the data directory;
+the command refuses it for plaintext backups) and packs it: a tar of
+`MANIFEST.json`, every body the snapshot references (read through `Get`, so a
+rotted body stops the pack), `backup.json` and the database last, streamed
+through age to a temporary file beside the destination, synced and renamed.
+`Unpack` refuses a non-empty destination, any entry that is not a regular file
+at a body's own place (`chunks/<64 hex>/<2>/<name>`) hashing to its name, a
+body count or database digest that is not the manifest's, and writes the
+database under a temporary name renamed only once it is the manifest's, so an
+unpack that stops has made no data directory. Tests:
+`internal/archive/archive_test.go` (the round trip and no plaintext in the
+archive, the wrong key, a flipped byte, a truncation, escaping and misnamed
+entries, a failed pack leaving the last archive), `cmd/trewd/encrypted_test.go`.
+The default key is post-quantum (`age.GenerateHybridIdentity`).
+
+**The rehearsal** (`cmd/trewd/rehearse.go`). Its own work directory inside the
+data directory, refused if it exists, removed afterwards; unpack or copy;
+`Verify(true)`; `backup.json` against the store; every live version up to the
+backup's newest compared with `sameVersion`; an in-process server on
+`127.0.0.1:0` serving the restore; a device that redeems a fresh invite over
+the wire, follows the backlog from 0, fetches every live note's bodies and
+checks each chunk and each note's SHA-256 against the store; the search index
+built in the work directory and awaited to the head. `TestRestoreRehearsal`
+(`-tags rehearsal`, its own CI job) now takes the encrypted path with a rename,
+a recoverable deletion and an agent's pinned edit in the vault, runs `trewd
+rehearse`, reads doctor's verdict on it, and then does the restore by hand.
+
+**Faults beyond SIGKILL.** Each is injected deterministically; each has its
+recovery run and the bytes read back; `doctor` reports each one it can see.
+
+| Fault | How it is injected | What happens, and the recovery | Tests | What doctor says |
+|---|---|---|---|---|
+| Disk full while a body is stored | `chunks.Store.FaultForTest`, `Write` returning ENOSPC | `nospace`, retryable, the session ends, nothing committed; the reconnecting device's retry commits the same bytes | `TestADiskFullWhileStoringABodyIsNospaceAndCommitsNothing` | `space` fail below 64 MiB, warn below 1 GiB; a running server's `disk-full` under `server` |
+| The database cannot grow | SQLite at its page limit (store); SQLITE_FULL through `beforeAppend` (server) | `nospace` (`store.IsDiskFull`), a counted commit failure, nothing committed, not even an operation's row; the retry commits | `TestADatabaseThatCannotGrowCommitsNothing`, `TestADatabaseThatCannotGrowIsNospaceAndCounted` | `commits` warn, fail at three in a row |
+| A directory fsync that fails | `FaultForTest`, `Sync` returning EIO | never acknowledged, the body reads as absent, the retry sends it again, earlier notes unchanged | `TestAFailedDirectoryFsyncIsNeverAcknowledged`, and the S17 tests | the log; a volume the kernel remounts read-only shows as `chunks-read-only` under `server` |
+| A missing body | the file removed | verify's `missing`; `trew repair` on a device resends it | `TestVerifyFindsAMissingBody`, `client/src/node/inspection.test.ts` | `store` fail, `chunks` fail when sampled |
+| A corrupt body | a byte flipped | `Get` refuses it; it is quarantined, never deleted, and replaced by a repair | `TestDeepVerifyFindsACorruptChunk`, `TestDelayedQuarantinePreservesAcknowledgedRepair` | `chunks` fail (sampled), `store` fail with `-deep`, `chunks` warn for quarantined bodies |
+| A slow peer | frames past `SendQueueBytes` to a peer that never reads | dropped and counted; the others served; its reconnect catches up with every version | `TestASlowPeerIsDroppedCountedAndCatchesUp`, `TestS8TheCatchUpBufferIsBoundedInBytesAsWellAsEntries` | the count in `commits` |
+| A reply lost after its commit | the ack never read | one version; the blind retry is `stale`, and the catch-up carries the write. MCP: the idempotency key; invites: the lost-reply retry | `TestAReplyLostAfterItsCommitIsOneVersionAndAStaleRetry`, `TestAKillAroundAnAppendResolvesOnRetryToOneResult`, `TestALostReplyRetryIsRedeemedAgainEvenAfterExpiry` | nothing to report: nothing is wrong |
+| A restart loop, a killed run | the runtime record | the log's startup refusal says why | `TestServeRecordsItsStartsAndACleanStop` | `restarts` fail (five in ten minutes), warn (killed) |
+| A parser failure | a note whose tags or links do not parse; malformed JSON-RPC | indexed with the failure counted, never refusing the note; a JSON-RPC error | `TestATagParseFailureIsReportedAndNeverRejectsTheNote`, `TestMalformedFramesAreJSONRPCErrors` | `index` note with the counts |
+| A hung server | the server lock held, no socket | restart after reading its log | `TestDoctorReportsEveryInjectedFault` | `server` fail |
+| Storage a restart erases | the mount table | `serve` refuses an empty store | `TestServeRefusesAnEmptyStoreOnStorageARestartErases` | `storage` fail |
+
+A SIGKILL is still not a power cut, and nothing here cuts power: the ordering
+of bodies, directory fsyncs, commit and reply is what the S17 tests, the crash
+matrix and these hold, on a disk that did not lose its cache.
+
+**Soak.** PLAN.md asks for a defined period on disposable representative data,
+a phone offline while an agent edits, with no unexplained loss, divergence or
+unbounded retries as the exit criterion. The M5 day-of-use soak, running on a
+scratch vault at the time of writing, is that period; `trewd doctor` at its
+end (no `commits` failures, no device stopped advancing, `store` clean) and
+`trewd audit` are how it is read. Its result is recorded with M5's done-when,
+not claimed here.
+
 ### Latent issues in the chunker
 
 Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,

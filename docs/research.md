@@ -796,7 +796,8 @@ These projects informed TrewSync's design and regression cases:
 | [Fast Note Sync](https://github.com/haierkeys/obsidian-fast-note-sync) | A regression involving a file/folder collision at the same path. |
 | [obsidian-headless](https://github.com/obsidianmd/obsidian-headless) | Locking, read-only mirror, and conflict-policy evaluations. |
 | [goldmark](https://github.com/yuin/goldmark) (MIT) | The server's Markdown parser. Its link parser and link reference definition transformer (v1.8.6) are copied into `internal/notes/goldmark_link.go` with the licence, and patched to follow micromark. |
-| [asciimoo/hister](https://github.com/asciimoo/hister) | The untrusted-content envelope: structural separation, the warning beside each tool, one normalisation function. Design only; no code is used. |
+| [asciimoo/hister](https://github.com/asciimoo/hister) | The untrusted-content envelope: structural separation, the warning beside each tool, one normalisation function. `trewd doctor`, which diagnoses and never repairs, and metrics kept as a package of their own beside the diagnostics (`internal/metrics`, `internal/doctor`). Design only; no code is used. |
+| [age](https://github.com/FiloSottile/age) (`filippo.io/age`, BSD-3-Clause) | Encrypts backups (`internal/archive`): the format, the X25519 and post-quantum ML-KEM-768 recipients, and the identity files `trewd backup-key` writes. A dependency, v1.3.2, with `filippo.io/hpke` (BSD-3-Clause) and `golang.org/x/crypto` (BSD-3-Clause) beneath it. |
 
 ### Other self-hosted Obsidian sync projects
 
@@ -807,7 +808,7 @@ Copyleft or unlicensed code from these projects is never copied, in any form, te
 |---|---|---|
 | [NoX Sync](https://github.com/mapherez/nox-sync) (mapherez) | GPL-3.0 | No code. Two reproduced deletion bugs that shaped the headless client's safeguards ([report](../plan/research/nox-sync.md)). |
 | [Obsyncian](https://community.obsidian.md/plugins/obsyncian) (aabulkhairov) | MIT, plugin only | No code. The best account of the Obsidian community directory's review, which the lint gate follows, and the release rule that `manifest.json` and `versions.json` move together ([report](../plan/research/obsyncian.md)). |
-| [Syncidian](https://github.com/shangeethsivan/Syncidian) (shangeethsivan) | MIT | The ephemeral-storage check (planned for `trewd doctor`, M5.5), and the case against making Git the source of truth ([report](../plan/research/syncidian.md)). |
+| [Syncidian](https://github.com/shangeethsivan/Syncidian) (shangeethsivan) | MIT | The ephemeral-storage check, adapted with its notice into `internal/doctor/storage.go` (symlinks resolved, every octal escape decoded, a RAM-backed filesystem ephemeral outside a container too): `trewd doctor` reports it and `serve` refuses an empty store there without `-allow-ephemeral`. And the case against making Git the source of truth ([report](../plan/research/syncidian.md)). |
 | [Pumice](https://github.com/search5/pumice) (search5) | Client BSD-3, server unlicensed | No code. Its transport history, publishing and sharing as "serve pinned versions", and not raising `minAppVersion` ([report](../plan/research/pumice.md)). |
 | [PKV Sync](https://github.com/CyberKurry/pkv-sync) (CyberKurry) | AGPL-3.0-only | No code. The closest competitor, with a built-in MCP; ideas only, including the lost-update hole TrewSync's conditional writes avoid ([report](../plan/research/pkv-sync.md)). |
 | [LiteSync](https://github.com/KJoner/litesync) (KJoner) | Plugin MIT, server AGPL-3.0 | The plugin's platform probe, adapted with its notice into `client/src/plugin/platform-probe.ts`; evidence for pinned retention ([report](../plan/research/litesync.md)). |
@@ -819,7 +820,7 @@ for current user-facing guidance.
 
 The client uses `diff-match-patch` for merging and `fflate` for compression;
 the server uses `modernc.org/sqlite`, `github.com/coder/websocket`,
-`github.com/yuin/goldmark` and `gopkg.in/yaml.v3`. Exact
+`github.com/yuin/goldmark`, `gopkg.in/yaml.v3` and `filippo.io/age`. Exact
 versions live in the package manifests and lockfiles. Changes that affect chunk
 names or merge output need compatibility tests, even when the replacement API
 looks equivalent.

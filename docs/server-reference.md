@@ -18,8 +18,14 @@ for installed usage.
 | `revoke ID` | Stop a device syncing and cancel the invites it made. | Yes; it goes through the running server. |
 | `uninvite ID` | Cancel an outstanding invite. | Yes; it goes through the running server. |
 | `cat -path P [-uid N]` | Print a note, or one version of it, straight from the store. | Yes. |
+| `history -path P` | List a note's versions, newest first, with the uid `cat` takes. | Yes. |
+| `deleted` | List deleted notes and the version to restore each from. | Yes. |
 | `export -uid N -to FILE` | Write one version to a new file. | Yes. |
-| `backup -to DIR` | Copy and verify a snapshot. | Yes. |
+| `doctor [-json]` | Diagnose the data directory and a running server; changes nothing. | Yes. |
+| `backup -to FILE -encrypt-to KEY` | Take a verified backup, encrypted to an age recipient. `-plaintext-ok` writes a plaintext directory instead. | Yes. |
+| `backup-key -out FILE` | Make the age identity backups are encrypted to. | Independent of serving. |
+| `unpack -from FILE -identity KEY -to DIR` | Decrypt a backup into a new data directory and verify it. | Independent of serving. |
+| `rehearse -backup PATH` | Restore a backup where nothing can reach it and prove it, recording the result for `doctor`. | Yes. |
 | `verify [-deep]` | Check stored entries and content. | Yes. |
 | `stats [-json]` | Inspect storage and potential reclaimable space. | Yes. |
 | `purge -confirm VAULT -backup DIR` | Remove old versions and unused content. | No. |
@@ -28,6 +34,7 @@ for installed usage.
 | `mcp-token -label L` | Mint, list (`-list`) or revoke (`-revoke ID`) a token for the MCP endpoint. | Yes; it goes through the running server. |
 | `audit [-since WHEN] [-json]` | List what agents' write operations, and every undo, changed. | Yes; it goes through the running server. |
 | `undo OPID [-to-copy] [-json]` | Undo one operation from the audit, or copy what it replaced. | Yes; it goes through the running server. |
+| `restore -to-uid N [-head H -apply]` | Put the whole vault back as it was at a uid, as one undoable operation; a dry run without `-apply`. | Yes; it goes through the running server. |
 | `version` | Print version, platform, and toolchain. | Independent of serving. |
 
 ## serve
@@ -44,6 +51,8 @@ for installed usage.
 | `-max-fetch-bytes` | `67108864` | Download body budget: 64 MiB; maximum 256 MiB. |
 | `-allow-origin` | No extras | Additional exact browser origin; repeatable. |
 | `-mcp` | Off | Also serve the MCP endpoint at `/mcp` for agents; see below. |
+| `-allow-ephemeral` | Off | Start an empty store on storage a restart or a container replacement erases. |
+| `-alert-every` | `5m` | How often the server checks itself and logs an alert with its remedy; `0` turns it off. |
 | `-v` | Off | Verbose logging. |
 
 Batch and fetch budgets cannot be smaller than one maximum-sized chunk.
@@ -63,6 +72,20 @@ Larger files cost more client memory, especially on phones. The server refuses
 to start if its file limit is below a current live file already stored. Raise
 the limit to start it; to lower it later, first delete or shrink those files
 through a client and let the changes sync. Purge alone keeps current files.
+
+`serve` refuses to start an empty store on a RAM-backed filesystem, or on a
+container's own writable layer, which the next upgrade replaces: mount a
+persistent volume there, or pass `-allow-ephemeral` for a trial you mean to
+throw away. A store that already holds notes there is served, and every start
+logs that it is one restart from gone.
+
+Every few minutes (`-alert-every`) the server runs the cheap half of `trewd
+doctor` on itself and logs `msg=alert` with the check, what is wrong and its
+remedy when something needs attention: the disk filling, a backup failing or
+older than two days, a body missing or quarantined, commits failing, the search
+index behind, a device that has stopped advancing, a token expiring. An alert
+is logged when raised, when it changes, once a day while it stands, and once
+when it clears (`msg="alert cleared"`).
 
 On a vault with no devices, `serve` writes an invite for the first one to
 `-invite-out`, mode 0600, and logs that path and its expiry, never the invite.
@@ -218,6 +241,66 @@ server is running. `-json` prints what was done, or why not, as JSON.
 A device can also undo an operation from its history panel, and an agent can
 undo its own through `undo_operation`; see [the plugin guide](plugin.md#version-history).
 
+## restore
+
+`trewd restore -to-uid N` puts every path of the vault back as it stood at
+uid N: a new version for each path whose newest version differs from what it
+held then, a deletion for each path created since, and nothing for a path that
+already holds the same bytes. History is not rewritten; every device receives
+the restore as ordinary new versions, and every version it replaces is kept
+for 30 days, so `trewd undo OPID` of the restore puts everything back.
+
+Without `-apply` it is a dry run: it lists each step and the head it planned
+at. `-head H -apply` with that number applies exactly what was shown, and is
+refused if anything was written since. A uid older than the last purge may no
+longer be readable exactly, and the restore then refuses, naming the path,
+rather than guess; restore a backup taken before the purge instead. `trewd
+history -path P` and `trewd audit` name uids to restore to.
+
+## doctor
+
+`trewd doctor` checks the data directory, the store, the records the commands
+leave, and a running server over its control socket, and prints each finding
+with its status and what to do. It writes nothing. It exits non-zero when any
+finding is `warn` or `fail`, so a timer or a monitor can run it.
+
+| Flag | Meaning |
+|---|---|
+| `-url URL` | The address devices use, whose `/health` doctor asks; default the running server's own. |
+| `-sample N` | Chunk references to read and hash, chosen at random; default 256. |
+| `-deep` | Read and hash every body, as `verify -deep` does. |
+| `-accept CHECK` | A check whose warning you have decided to live with; printed as `accepted`, and it no longer fails the run. Repeatable. |
+| `-json` | The report, and the server's metrics, as JSON. |
+| `-vault NAME` | The vault the server serves; default `default`. |
+
+The checks, in order: `data-dir`, `storage`, `encryption`, `server`,
+`restarts`, `identity`, `store`, `chunks`, `space`, `index`, `tokens`,
+`devices`, `commits`, `backup`, `rehearsal`, `origin`. [Operating
+TrewSync](operations.md) says what each finding means and what to do.
+
+## backup-key, unpack, rehearse
+
+`trewd backup-key -out FILE` writes a new age identity to FILE, mode 0600,
+and its recipient to `FILE.pub`, and never writes over either. It is
+post-quantum (ML-KEM-768 with X25519) by default; `-x25519` makes the classic
+kind, whose recipient is short enough to type. Keep the identity off the
+server: it is the only thing that reads the backups.
+
+`trewd unpack -from FILE -identity KEY -to DIR` decrypts an encrypted backup
+into DIR, which must be new or empty, checks every body against its name and
+the database against the archive's manifest, writes the database last, and
+then runs `verify -deep` on the result. A damaged or truncated archive never
+becomes a data directory.
+
+`trewd rehearse -backup PATH [-identity KEY]` rehearses a restore of an
+encrypted archive or a plaintext backup directory: into a work directory of
+its own inside the data directory (`-work` for another, `-keep` to keep it),
+verified deeply, compared with every version the live store holds up to the
+backup's newest uid, served on a loopback port, downloaded whole by a newly
+paired device and compared byte for byte, and its search index rebuilt. It
+prints how long the restore took and how old the backup is, and records the
+result for `doctor`.
+
 ## invite, devices, revoke, uninvite
 
 These administer the vault's devices. While `serve` runs they go through its
@@ -243,7 +326,10 @@ created; the last device can be revoked too, and `trewd invite` pairs a new one.
 
 | Flag | Command | Meaning |
 |---|---|---|
-| `-to DIR` | backup | Required destination directory. |
+| `-to PATH` | backup | Required: the archive file with `-encrypt-to`, the destination directory with `-plaintext-ok`. |
+| `-encrypt-to KEY` | backup | An age recipient (`age1...` or `age1pq1...`) to encrypt to; repeatable. |
+| `-recipients-file FILE` | backup | A file of age recipients, one per line, such as `backup-key`'s `FILE.pub`; repeatable. |
+| `-plaintext-ok` | backup | Write a plaintext data directory: every note readable by whoever can read it. |
 | `-deep` | backup, verify | Re-read content hashes and validate device/invite records. |
 | `-vault NAME` | purge | Vault to purge; default `default`. |
 | `-confirm NAME` | purge | Exact vault name, required as confirmation. |
@@ -252,8 +338,17 @@ created; the last device can be revoked too, and `trewd invite` pairs a new one.
 | `-grace DURATION` | purge | Retain recent unreferenced content; default `1h`. Use `0` to collect it immediately. |
 | `-json` | stats | Structured output. |
 
+A backup has to say which it is: with neither `-encrypt-to` nor
+`-plaintext-ok` it is refused and nothing is written. An encrypted backup is
+staged as an ordinary verified backup in `backup-staging` inside the data
+directory, where the plaintext already is, and only the archive leaves it; the
+staging copy makes the next backup incremental and can be removed whenever no
+backup is running.
+Each backup, good or failed, is recorded in `last-backup.json` for `doctor`.
+
 Follow the [purge procedure](server-operations.md#purge), including a separate
-pre-purge backup. A deletion record can survive after its restorable content is
+pre-purge backup. Purge checks a plaintext backup directory, so that one is
+taken with `-plaintext-ok`, onto encrypted storage. A deletion record can survive after its restorable content is
 purged.
 
 Purge never removes a version an agent's edit, move or delete displaced until

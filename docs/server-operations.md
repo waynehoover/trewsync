@@ -4,63 +4,78 @@
 
 Keep independent backups, monitor available disk space, and test restoration
 before you need it. These examples use `/var/lib/trew` for server data and
-`/srv/trew-backup` for a backup. Substitute your actual paths and run
-`trew` as an account with access to them.
+`/srv/trew-backups` for backups. Substitute your actual paths and run
+`trewd` as an account with access to them. When something looks wrong, start
+with `trewd doctor`; [Operating TrewSync](operations.md) is the guide for the
+bad night.
 
 ## Backup
 
-Back up the server while it is running:
+A backup is encrypted to an age key you make once, and keep somewhere the
+server and its backups are not:
 
 ```bash
-trewd backup -data /var/lib/trew -to /srv/trew-backup
-trewd verify -deep -data /srv/trew-backup
+trewd backup-key -out ~/trew-backup-key     # on your own machine, not the server
+scp ~/trew-backup-key.pub server:/etc/trew/backup-key.pub
+```
+
+Then back up the server while it is running:
+
+```bash
+trewd backup -data /var/lib/trew -to /srv/trew-backups/trew.tar.age \
+  -recipients-file /etc/trew/backup-key.pub
 ```
 
 `backup` copies the database and the stored content it refers to, including
-history, and verifies the result. Reusing a destination copies content
-incrementally and replaces its database snapshot only after a successful copy.
-If copying fails, the previous completed snapshot stays in place.
+history, verifies the copy, and writes it as one encrypted archive. Only the
+archive leaves the data directory: the copy is staged in
+`/var/lib/trew/backup-staging`, beside the notes it copies, which also makes
+the next backup copy only new content. If the backup fails, the previous
+archive at the destination stays in place. `trewd backup` refuses to write a
+backup at all until it is told which kind: `-encrypt-to` or
+`-recipients-file`, or `-plaintext-ok` for a plaintext data directory, which
+anyone who can read it can read.
 
 A backup carries the devices and no outstanding invite: restoring an old copy
 must not bring back an invite that has since been used or cancelled, so
 `backup` says how many it left out.
 
-If a destination has unfinished SQLite recovery from an earlier server run,
-backup refuses to replace it. Keep that directory intact and choose a fresh
-backup directory; do not remove its journal files to bypass the refusal.
+If a plaintext destination has unfinished SQLite recovery from an earlier
+server run, backup refuses to replace it. Keep that directory intact and choose
+a fresh backup directory; do not remove its journal files to bypass the
+refusal.
 
 For Compose:
 
 ```bash
 sudo install -d -m 700 -o 65532 -g 65532 /srv/trew-backups
-docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
-  trewd backup -to /backup/snapshot
-docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
-  trewd verify -deep -data /backup/snapshot
+docker compose run --rm --no-deps -v /srv/trew-backups:/backup -v /etc/trew:/keys:ro \
+  trewd backup -to /backup/trew.tar.age -recipients-file /keys/backup-key.pub
 ```
 
 The destination must be outside the data directory; TrewSync refuses nested
 backups. These commands use the image's default user, 65532. Adjust ownership
-if your deployment uses another account. Copy the verified snapshot to another
-disk or backup host as well.
+if your deployment uses another account. Copy the archive to another disk or
+backup host as well: the `sha256` the backup prints lets you check the copy
+without the key.
 
-**A backup is a readable copy of every note.** The server holds notes and
-their history in plaintext, and so does every backup of it: anyone who can read
-the backup directory can read the vault. Keep backups on encrypted storage,
-including backups that stay on the same machine, and treat the backup host
-like the server. Also back up the ordinary Markdown files on a device for a
-copy independent of TrewSync.
+**Without encryption a backup is a readable copy of every note.** The server
+holds notes and their history in plaintext, and so would a plaintext backup:
+anyone who can read it can read the vault. That is why a backup is encrypted
+unless you pass `-plaintext-ok`, including one that stays on the same machine.
+Also back up the ordinary Markdown files on a device for a copy independent of
+TrewSync.
 
 ### Schedule backups
 
-A nightly job should run backup, verification, and transfer **in that order**,
-copying only after the earlier commands succeed. For example, a cron job or
-systemd oneshot can run:
+A nightly job should run the backup, which verifies its copy, and then the
+transfer, **in that order**, copying only after the backup succeeds. For
+example, a cron job or systemd oneshot can run:
 
 ```bash
-trewd backup -data /var/lib/trew -to /srv/trew-backup && \
-  trewd verify -data /srv/trew-backup && \
-  rsync -a /srv/trew-backup/ offsite:/backups/trew/
+trewd backup -data /var/lib/trew -to /srv/trew-backups/trew.tar.age \
+    -recipients-file /etc/trew/backup-key.pub && \
+  rsync -a /srv/trew-backups/trew.tar.age offsite:/backups/trew/
 ```
 
 Configure the remote path and credentials for the account running the job.
@@ -69,12 +84,17 @@ transferred. Use `-deep` periodically to check existing content for corruption.
 Do not copy the live database with ordinary file-copy tools.
 
 Keep dated or otherwise separate backup generations when you need older
-snapshots. Updating one destination is not a retention policy for old databases.
+snapshots, such as `trew-$(date +%F).tar.age`. Replacing one archive is not a
+retention policy for old ones. `trewd doctor` warns when the last good backup
+is more than two days old, and fails when the last one failed.
 
 ### Preserve history before a purge
 
-Before purging, make a **separate backup directory** and leave it untouched for
-as long as you want the old history.
+Before purging, make a **separate backup** and leave it untouched for as long
+as you want the old history. An encrypted archive taken before the purge keeps
+that history whole. Purge itself checks a plaintext backup directory, so the
+pre-purge copy it checks is taken with `-plaintext-ok`, onto encrypted
+storage, and kept as its own directory.
 
 Reusing a backup directory after a purge replaces its database with the
 post-purge snapshot. Old content files may remain there, but without the old
@@ -88,43 +108,44 @@ prove that an older note is recoverable.
 
 ## Restore rehearsal
 
-Use a fresh directory and a separate port, keeping production devices pointed
-at the live server:
+A backup nobody has restored is a rumour. `trewd rehearse` restores one where
+no production device can reach it and proves it:
 
 ```bash
-rsync -a offsite:/backups/trew/ /tmp/trew-restore-test/
-trewd verify -deep -data /tmp/trew-restore-test
-trewd stats -json -data /tmp/trew-restore-test
-trewd serve -data /tmp/trew-restore-test -addr 127.0.0.1:3004
+trewd rehearse -data /var/lib/trew -backup /srv/trew-backups/trew.tar.age -identity ~/trew-backup-key
 ```
 
-Proceed only if verification succeeds and the reported vault and version range
-match the backup you intended to restore. Confirm that the server starts, then
-stop the test server. Retain the backup; remove only the temporary rehearsal
-copy when finished.
+It decrypts the archive into a directory of its own inside the data
+directory, verifies it deeply, compares it with every version the live store
+holds up to the backup's newest version, serves it on a loopback port, pairs a
+new device to it that downloads every note and compares each byte for byte,
+rebuilds the search index, and prints how long it all took and how old the
+backup is. The work directory is removed afterwards; the backup is never
+touched. The result is recorded for `trewd doctor`, which warns when no
+rehearsal has passed in 90 days.
 
-These checks cover storage and startup. A full recovery check also pairs a
-throwaway client against the rehearsal server and reads restored notes: while
-it runs, `trewd invite -data /tmp/trew-restore-test -url ws://127.0.0.1:3004`
-prints an invite for it. Do not repoint a production device casually to a
-rehearsal copy. You can also read one note without any client:
-`trewd cat -data /tmp/trew-restore-test -path "Notes/Meeting.md"`. The project's
-CI runs an automated restore-and-readback test, but cannot validate your disk or
-offsite backup.
+[Operating TrewSync](operations.md#rehearse-a-restore) has the steps to do it
+by hand once, which is worth doing: a rehearsal you have watched is the one you
+will trust at 2am. The project's CI rehearses an encrypted backup on every
+change, but cannot validate your disk, your key or your offsite copy.
 
 ## Restore
 
 Stop the server and pause client sync before replacing server data. Preserve
-the failed directory, verify the restored copy, and check its ownership before
-starting it. For a systemd installation:
+the failed directory, unpack the backup into a fresh one (unpack verifies it
+deeply), and check its ownership before starting it. For a systemd
+installation:
 
 ```bash
 sudo systemctl stop trew
 sudo mv /var/lib/trew /var/lib/trew.before-restore
-sudo rsync -a offsite:/backups/trew/ /var/lib/trew/
+sudo trewd unpack -from /srv/trew-backups/trew.tar.age -identity ~/trew-backup-key -to /var/lib/trew
 sudo chown -R trew:trew /var/lib/trew
 sudo -u trew /usr/local/bin/trewd verify -deep -data /var/lib/trew
 ```
+
+From a plaintext backup directory, copy it into place instead of unpacking
+(`sudo rsync -a offsite:/backups/trew/ /var/lib/trew/`).
 
 Use a new preservation path if `trew.before-restore` already exists. Run the
 commands one at a time and stop on an error. **Only after verification succeeds:**
@@ -196,7 +217,7 @@ systemd installation, run each command in order and stop on any error:
 
 ```bash
 sudo systemctl stop trew
-trewd backup -data /var/lib/trew -to /srv/trew-before-purge
+trewd backup -plaintext-ok -data /var/lib/trew -to /srv/trew-before-purge
 trewd verify -deep -data /srv/trew-before-purge
 trewd purge -data /var/lib/trew -confirm default -backup /srv/trew-before-purge -grace 0
 sudo systemctl start trew
@@ -213,7 +234,7 @@ its image and volume:
 sudo install -d -m 700 -o 65532 -g 65532 /srv/trew-backups
 docker compose stop trew
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
-  trewd backup -to /backup/before-purge
+  trewd backup -plaintext-ok -to /backup/before-purge
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
   trewd verify -deep -data /backup/before-purge
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
@@ -233,8 +254,15 @@ just to make a refusal disappear.
 
 ## Monitor the server
 
+`trewd doctor` checks all of this at once and says what to do about each
+finding; it exits non-zero when anything needs attention, so a timer can run
+it. The running server checks itself too, and logs `msg=alert` with the
+remedy when something needs attention.
+
 | Signal | Action |
 |---|---|
+| `trewd doctor` exits non-zero | Read each `WARN` and `FAIL` line and its `->` remedy. |
+| `msg=alert` in the log | The same finding, from the server itself; `msg="alert cleared"` follows when it is fixed. |
 | `trewd health` fails | Read the reason and server logs. Check disk space, mounts, and permissions. |
 | `nospace` or growing disk usage | Add capacity, or plan a verified backup and purge. |
 | `verify` reports missing/corrupt content | Repair from devices or restore from backup. |
