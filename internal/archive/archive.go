@@ -245,6 +245,70 @@ func Pack(dir, out string, recipients []age.Recipient) (Report, error) {
 	return rep, nil
 }
 
+// Pruned is what Prune removed.
+type Pruned struct {
+	Bodies int
+	Bytes  int64
+}
+
+// Prune removes from the staged backup at dir every file in its chunk tree
+// that its database does not reference, so the staging copy holds exactly what
+// a Pack of it archives.
+//
+// An ordinary backup directory keeps such bodies on purpose (S14): they are
+// the history the source has purged, and that directory is the one copy of it.
+// A staging directory is not a copy of anything. Its archive holds only what
+// the database references, so a body left here is in no archive, and it is in
+// plaintext inside the data directory, beyond the reach of the purge that
+// removed it from the store: a purged note would survive there for good.
+// Called only after a Pack has succeeded, under the staging directory's lock.
+func Prune(dir string) (Pruned, error) {
+	var rep Pruned
+	dbPath, chunkDir := store.DataDir(dir)
+	bodies, err := referenced(dbPath, chunkDir)
+	if err != nil {
+		return rep, err
+	}
+	cs, err := chunks.OpenExisting(chunkDir, store.ChunkMax)
+	if err != nil {
+		return rep, err
+	}
+	keep := make(map[string]bool, len(bodies))
+	for _, b := range bodies {
+		p, err := cs.Path(b.vault, b.name)
+		if err != nil {
+			return rep, err
+		}
+		keep[p] = true
+	}
+	touched := map[string]bool{}
+	err = filepath.WalkDir(chunkDir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || keep[p] {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(p); err != nil {
+			return err
+		}
+		touched[filepath.Dir(p)] = true
+		rep.Bodies++
+		rep.Bytes += info.Size()
+		return nil
+	})
+	if err != nil {
+		return rep, fmt.Errorf("removing unreferenced bodies from the staged backup: %w", err)
+	}
+	for d := range touched {
+		if err := fsync.Dir(d); err != nil {
+			return rep, err
+		}
+	}
+	return rep, nil
+}
+
 // referenced is every body the database at dbPath names, once each, in a
 // stable order.
 func referenced(dbPath, chunkDir string) ([]body, error) {

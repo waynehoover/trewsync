@@ -24,8 +24,10 @@ import (
 // stagingDirName is where an encrypted backup is staged: an ordinary backup
 // directory inside the data directory, where the plaintext already is, kept
 // between runs so the next one copies only new bodies. Only ciphertext
-// leaves the data directory. It can be removed whenever no backup is running,
-// with the server running or not; the next encrypted backup makes it again.
+// leaves the data directory. After each pack it holds only what the archive
+// holds (archive.Prune), so a purge reaches it at the next backup. It can be
+// removed whenever no backup is running, with the server running or not; the
+// next encrypted backup makes it again.
 const stagingDirName = "backup-staging"
 
 // backupEncrypted stages a verified backup inside the data directory and packs
@@ -70,6 +72,16 @@ func backupEncrypted(st *store.Store, dataDir, to string, deep bool, recipients 
 	fmt.Fprintf(out, "encrypted backup written to %s\n", to)
 	fmt.Fprintf(out, "  %d bodies (%s) and the database, verified in the staging copy at %s\n",
 		packed.Manifest.Bodies, humanBytes(packed.Manifest.BodyBytes), staging)
+	// The archive is written; now the staging copy drops what it did not
+	// archive, which after a purge is the purged history in plaintext. A
+	// failure here does not undo a good archive, so it is said loudly rather
+	// than recorded as a failed backup.
+	if pruned, err := archive.Prune(staging); err != nil {
+		fmt.Fprintf(out, "  WARNING: %v\n  bodies the archive does not hold may be left in plaintext in %s: "+
+			"remove that directory while no backup runs (the next backup makes it again)\n", err, staging)
+	} else if pruned.Bodies > 0 {
+		fmt.Fprintf(out, "  %d purged bodies removed from the staging copy (%s)\n", pruned.Bodies, humanBytes(pruned.Bytes))
+	}
 	fmt.Fprintf(out, "  %s of ciphertext to %d recipients, sha256 %s\n", humanBytes(packed.Bytes), len(recipients), packed.SHA256)
 	for _, v := range rep.Meta.Vaults {
 		fmt.Fprintf(out, "  vault %q holds uids %d to %d (%d versions), purge generation %d\n",

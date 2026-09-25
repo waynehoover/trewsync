@@ -238,6 +238,18 @@ The server needs only the recipient (`backup-key.pub`). A plaintext backup
 directory is still available with `-plaintext-ok`, for encrypted storage, and
 it is what `purge -backup` checks.
 
+An encrypted backup is packed from a plaintext copy inside the data directory,
+`backup-staging/`, kept between runs so the next one copies only new bodies.
+After each archive is written, the copy drops every body its database no
+longer references, so it holds exactly what the archive holds: a note you
+purge leaves the staging copy at the next encrypted backup, not before. Until
+then it is still there, in the clear, beside the store; if a purge has to take
+effect at once, remove `backup-staging/` while no backup runs (the next backup
+makes it again, copying every body). A backup that cannot drop them says so
+with a `WARNING` line and still counts as taken, since its archive is good.
+A plaintext backup directory is different: it keeps purged history on purpose,
+because it is the one copy of it.
+
 The window a restore would lose is the time since the last backup: with one a
 night, up to a day, plus however long the backup takes. Devices shrink it in
 practice: each keeps its own copy, and after a restore every device sends back
@@ -340,7 +352,7 @@ token, or a model provider reading what the agent reads.
 | `trew.db` (and `-wal`, `-shm`) | Every version's record, devices, tokens, the agents' log. | Never. |
 | `chunks/` | Every note's bytes, named by their SHA-256. | Never. |
 | `search.db` | The search index, derived from the store. | With the server stopped; it is rebuilt. |
-| `backup-staging/` | The plaintext copy an encrypted backup is packed from. | Whenever no backup is running; the next one makes it again. |
+| `backup-staging/` | The plaintext copy an encrypted backup is packed from, pruned to what the last archive holds. | Whenever no backup is running; the next one makes it again. |
 | `last-backup.json`, `last-rehearsal.json`, `runtime.json` | What the last backup, rehearsal and starts did, for `doctor`. | Yes; `doctor` then says nothing is recorded. |
 | `first-invite` | The first device's invite, mode 0600. | Once the first device is paired. |
 | `control.sock`, `server.lock`, `data.lock` | The operator's socket and the locks. | Never while a server runs; a stale socket is replaced at start. |

@@ -186,3 +186,67 @@ func TestARehearsalOfAPlaintextBackupPasses(t *testing.T) {
 		t.Fatalf("the rehearsal is recorded as %+v (%v)", rec, err)
 	}
 }
+
+// A purge removes versions from the store, and the next encrypted backup's
+// staging copy has to lose them too. The staging directory is an ordinary
+// backup directory, and an ordinary backup keeps bodies its newest snapshot no
+// longer references (S14), so a purged note stayed in plaintext in
+// DATA/backup-staging for good: in no archive, and in no place a purge could
+// reach. After a pack, staging holds exactly what the archive holds.
+func TestAnEncryptedBackupDropsPurgedBodiesFromItsStaging(t *testing.T) {
+	dir := seeded(t)
+	keyFile := filepath.Join(t.TempDir(), "key")
+	mustRun(t, "backup-key", "-x25519", "-out", keyFile)
+	offsite := t.TempDir()
+	mustRun(t, "backup", "-data", dir, "-to", filepath.Join(offsite, "first.tar.age"), "-recipients-file", keyFile+".pub")
+	staging := filepath.Join(dir, stagingDirName)
+	if !stagingHolds(t, staging, "version one") {
+		t.Fatal("the first backup did not stage the old version, so this test proves nothing")
+	}
+
+	mustRun(t, "purge", "-data", dir, "-confirm", "default", "-no-backup-check")
+	archive := filepath.Join(offsite, "second.tar.age")
+	out := mustRun(t, "backup", "-data", dir, "-to", archive, "-recipients-file", keyFile+".pub")
+	for _, gone := range []string{"version one", "version two"} {
+		if stagingHolds(t, staging, gone) {
+			t.Errorf("the purged %q is still in plaintext in %s:\n%s", gone, staging, out)
+		}
+	}
+	if !strings.Contains(out, "purged bodies removed from the staging copy") {
+		t.Errorf("the backup does not say it removed them:\n%s", out)
+	}
+	// What is left is what the archive restores, and it is whole.
+	restored := filepath.Join(t.TempDir(), "restored")
+	mustRun(t, "unpack", "-from", archive, "-identity", keyFile, "-to", restored)
+	if got := mustRun(t, "cat", "-data", restored, "-path", "note.md"); got != "version three" {
+		t.Fatalf("the restore reads %q", got)
+	}
+	if !stagingHolds(t, staging, "version three") || !stagingHolds(t, staging, "part two ") {
+		t.Fatal("the staging copy lost a body its database references")
+	}
+	// And the staging copy still verifies, so the next run copies only what is new.
+	if out, err := trew(t, "verify", "-data", staging, "-deep"); err != nil || !strings.Contains(out, "0 faults") {
+		t.Fatalf("the pruned staging copy does not verify: %v\n%s", err, out)
+	}
+}
+
+// stagingHolds says whether any file under dir holds words.
+func stagingHolds(t *testing.T, dir, words string) bool {
+	t.Helper()
+	found := false
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(p) == ".db" || strings.Contains(d.Name(), ".db-") {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		found = found || bytes.Contains(b, []byte(words))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return found
+}
