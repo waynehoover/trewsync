@@ -1,5 +1,3 @@
-import { cmdMcp } from "./mcp.ts";
-import { cmdMcpToken } from "./mcp-token.ts";
 import { clientOptions } from "./client-options.ts";
 import { validateUsage } from "./usage.ts";
 import { previewCounts } from "../core/preview.ts";
@@ -26,9 +24,9 @@ import { previewCounts } from "../core/preview.ts";
  * never sync is not a successful run.
  */
 
-import { open as openFile, readFile, rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { hostname } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { base64urlEncode, randomBytes } from "../core/digest.ts";
 import {
@@ -56,13 +54,7 @@ import {
 } from "../core/pairing.ts";
 
 export { normaliseUrl };
-import {
-  DEFAULT_CONFIG_DIR,
-  JsonIndexStore,
-  NodeVault,
-  configFolderName,
-  syncDirectoryIfSupported,
-} from "./vault.ts";
+import { DEFAULT_CONFIG_DIR, JsonIndexStore, NodeVault, configFolderName } from "./vault.ts";
 import {
   attentionPath,
   configPath,
@@ -111,8 +103,6 @@ export const USAGE = `trew: the TrewSync command-line client, self-hosted sync f
   trew uninvite ID                        cancel an outstanding invite, from trew devices
   trew sync                               sync once and exit
   trew sync --watch                       sync, then keep syncing
-  trew mcp                                serve notes over stdio, or HTTP with --listen
-  trew mcp-token                          issue or replace the HTTP MCP credential
   trew status                             what this device thinks the state is
   trew preview                            show planned sync changes without writing notes
   trew devices                            every device and invite that may reach this vault
@@ -132,14 +122,9 @@ device, or from trewd invite on the server again.
 
 Options
   --dir DIR        the vault (default: the current directory)
-  --vault NAME=DIR mcp only: explicitly named absolute vault directory; repeatable, replaces --dir
   --device NAME    what this device calls itself (default: its hostname and four random characters)
   --json           machine-readable output
   --timeout MS     how long to wait on the server (default: 30000)
-  --listen [ADDR]  mcp over HTTP (default: 127.0.0.1:3010); requires an mcp-token credential
-  --writable       allow HTTP MCP mutations; requires --listen and a writable device
-  --allow-origin O allow this exact HTTP origin; repeatable, requires --listen
-  --revoke         mcp-token only: revoke HTTP access without restarting the service
   --no-merge       never combine two edits to one note; keep both versions instead. Merging is the
                    only thing that makes content neither device wrote, and this is how to say no
   --read-only      apply what the server has and send nothing: no uploads, no deletions, no
@@ -157,15 +142,41 @@ Options
   --before UID     for history or deleted: the page before this version
   --verify         for sync: read every file to verify the content cache
   --key-file PATH  pair: read the invite from a file, so it stays out of the shell's history
-  --key-out PATH   mcp-token: save the credential in a new private file outside the vault, and
-                   print only its id and path
   --config-dir DIR Obsidian's config folder, if it is not .obsidian
   --ignore NAME    a folder or file name never to sync, at any depth, repeatable; local to this
                    device. A path another device syncs and this one ignores is reported as
                    ignored rather than failed, and does not affect the exit code
 `;
 
+/**
+ * What `trew mcp` and `trew mcp-token` say now that they are gone.
+ *
+ * Both were the headless client's own MCP server, retired once the server's
+ * `/mcp` passed the fixtures it was ported against (PLAN.md M2 task 10). A
+ * service file or an agent config that still runs one is told where MCP went,
+ * rather than handed the usage text, and before its old flags are refused one
+ * at a time.
+ */
+const RETIRED = new Map<string, string>([
+  [
+    "mcp",
+    "trew mcp is gone: TrewSync serves MCP from the server now. Run trewd serve -mcp, " +
+      "and point the agent at the server's /mcp with a token from trewd mcp-token " +
+      "(see docs/agent.md).",
+  ],
+  [
+    "mcp-token",
+    "trew mcp-token is gone: MCP tokens are made on the server now, with trewd mcp-token " +
+      "(see docs/agent.md).",
+  ],
+]);
+
 export async function run(argv: readonly string[], io: Console): Promise<number> {
+  const retired = RETIRED.get(argv[0] ?? "");
+  if (retired !== undefined) {
+    io.err(`trew: ${retired}`);
+    return 2;
+  }
   let args: Args;
   try {
     args = parseArgs(argv);
@@ -173,9 +184,11 @@ export async function run(argv: readonly string[], io: Console): Promise<number>
     io.err(String((err as Error).message));
     return 2;
   }
-
-  // stdout belongs to MCP even when startup or usage fails.
-  if (args.command === "mcp") io = { out: io.err, err: io.err };
+  const retiredLater = RETIRED.get(args.command ?? "");
+  if (retiredLater !== undefined) {
+    io.err(`trew: ${retiredLater}`);
+    return 2;
+  }
 
   if (args.version) {
     io.out(args.json ? JSON.stringify({ ok: true, version: VERSION }) : VERSION);
@@ -214,10 +227,6 @@ export async function run(argv: readonly string[], io: Console): Promise<number>
         return await cmdInvite(args, io);
       case "uninvite":
         return await cmdUninvite(args, io);
-      case "mcp":
-        return await cmdMcp(args, io, VERSION);
-      case "mcp-token":
-        return await cmdMcpToken(args, io, writeKeyOut);
       case "sync":
         return await locked(args, () => cmdSync(args, io));
       case "status":
@@ -1005,42 +1014,6 @@ async function secretFrom(
     return trimmed;
   }
   return given;
-}
-
-/**
- * Writes a newly issued credential somewhere only its owner can read, for
- * `trew mcp-token --key-out`.
- *
- * The alternative to a credential on a terminal, for a script that has to
- * keep one. Created with `wx` so it cannot land on an existing file, and 0600
- * so it is not readable by anything else on the machine.
- */
-async function writeKeyOut(path: string, credential: string): Promise<void> {
-  const handle = await openFile(path, "wx", 0o600);
-  try {
-    await handle.writeFile(`${credential}\n`, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  // The directory too, or the file's bytes are durable and its name is not
-  // (R02). The server keeps only the credential's digest, so this file is its
-  // only copy, and a power cut that took its name would leave a credential
-  // that works and that nobody holds. The same rule every other durable write
-  // in this project follows; this one was written before the rule had a
-  // helper and did not get it.
-  //
-  // A filesystem with no directory fsync says so and is believed; a disk that
-  // failed is not, and it is reported, because the whole point of `--key-out`
-  // is that the file is there afterwards.
-  const flushed = await syncDirectoryIfSupported(dirname(path));
-  if (!flushed.synced) {
-    throw new Error(
-      `wrote the credential to ${path}, and could not make that durable: ${flushed.why}. ` +
-        `Copy it somewhere else before going on: a power cut now could lose the file, and ` +
-        `nothing keeps another copy of it.`,
-    );
-  }
 }
 
 export function exitCodeFor(
@@ -2165,13 +2138,6 @@ export interface Args {
   before: number;
   /** A file holding the invite `pair` redeems (I12). */
   keyFile: string | undefined;
-  /** Where `mcp-token` writes the credential it issues, at 0600 (I12). */
-  keyOut: string | undefined;
-  mcpRevoke?: boolean;
-  mcpListen?: string;
-  mcpWritable?: boolean;
-  mcpOrigins?: string[];
-  mcpVaults?: string[];
   verbose: boolean;
   help: boolean;
   version: boolean;
@@ -2220,7 +2186,6 @@ export function parseArgs(argv: readonly string[]): Args {
     limitGiven: false,
     before: 0,
     keyFile: undefined,
-    keyOut: undefined,
     verbose: false,
     help: false,
     version: false,
@@ -2234,7 +2199,6 @@ export function parseArgs(argv: readonly string[]): Args {
 
   const takes = new Set([
     "--dir",
-    "--vault",
     "--device",
     "--timeout",
     "--uid",
@@ -2242,11 +2206,9 @@ export function parseArgs(argv: readonly string[]): Args {
     "--limit",
     "--before",
     "--key-file",
-    "--key-out",
     "--config-dir",
     "--ignore",
     "--ttl",
-    "--allow-origin",
   ]);
   let onlyPositional = false;
   for (let i = 0; i < argv.length; i++) {
@@ -2274,19 +2236,6 @@ export function parseArgs(argv: readonly string[]): Args {
       if (value === undefined || value.startsWith("--")) throw new Error(`${arg} needs a value`);
     }
     switch (arg) {
-      case "--listen":
-        args.mcpListen =
-          argv[i + 1] && !argv[i + 1]!.startsWith("-") ? argv[++i]! : "127.0.0.1:3010";
-        break;
-      case "--writable":
-        args.mcpWritable = true;
-        break;
-      case "--allow-origin":
-        (args.mcpOrigins ??= []).push(value!);
-        break;
-      case "--vault":
-        (args.mcpVaults ??= []).push(value!);
-        break;
       case "--dir":
         args.dir = resolve(value!);
         break;
@@ -2347,12 +2296,6 @@ export function parseArgs(argv: readonly string[]): Args {
       }
       case "--key-file":
         args.keyFile = value!;
-        break;
-      case "--key-out":
-        args.keyOut = value!;
-        break;
-      case "--revoke":
-        args.mcpRevoke = true;
         break;
       case "--before": {
         const before = Number(value);

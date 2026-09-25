@@ -176,21 +176,21 @@ package_root="$scratch/package"
 mkdir -p "$package_root/scripts" "$package_root/client/dist" "$package_root/client/src/node"
 cp "$root/scripts/pack-check.sh" "$package_root/scripts/"
 # This fixture tests exact version comparison with a deliberately tiny CLI.
-# The real MCP workflow runs in pack-check and mcp-artifact.test.ts; record
-# delegation here so a metadata fixture need not imitate the protocol.
-cat > "$package_root/client/src/node/mcp-artifact.run.ts" <<'TREW_PACK_FIXTURE'
+# The real pair and sync workflow runs in pack-check and artifact.test.ts;
+# record delegation here so a metadata fixture need not imitate a server.
+cat > "$package_root/client/src/node/artifact.run.ts" <<'TREW_PACK_FIXTURE'
 import { access } from "node:fs/promises";
 if (process.argv.length !== 4) throw new Error("missing artifact or Node executable");
 await access(process.argv[2]);
 await access(process.argv[3]);
-console.info("packed MCP fixture invoked");
+console.info("packed artifact fixture invoked");
 TREW_PACK_FIXTURE
 printf '{"name":"trew-sync","version":"1.2.3","files":["dist/trew.mjs"],"bin":{"trew":"dist/trew.mjs"}}\n' > "$package_root/client/package.json"
 for actual in 1.2.3 1.2.30; do
-  printf '#!/usr/bin/env node\nconsole.log(process.argv.includes("--version") ? "%s" : "trew sync trew pair --version");\n' "$actual" > "$package_root/client/dist/trew.mjs"
+  printf '#!/usr/bin/env node\nif (process.argv[2] === "mcp") { console.error("trew mcp is gone: trewd mcp-token"); process.exit(2); }\nconsole.log(process.argv.includes("--version") ? "%s" : "trew sync trew pair --version");\n' "$actual" > "$package_root/client/dist/trew.mjs"
   result=0
   PATH="$package_path" bash "$package_root/scripts/pack-check.sh" > "$scratch/output" 2>&1 || result=$?
-  if { [ "$actual" = 1.2.3 ] && [ "$result" -eq 0 ] && grep -qF 'packed MCP fixture invoked' "$scratch/output"; } || { [ "$actual" != 1.2.3 ] && [ "$result" -eq 1 ]; }; then
+  if { [ "$actual" = 1.2.3 ] && [ "$result" -eq 0 ] && grep -qF 'packed artifact fixture invoked' "$scratch/output"; } || { [ "$actual" != 1.2.3 ] && [ "$result" -eq 1 ]; }; then
     echo "ok: packed CLI version check for $actual"
   else
     echo "FAIL: packed CLI check accepted/refused the wrong version $actual (exit $result)"
@@ -198,6 +198,17 @@ for actual in 1.2.3 1.2.30; do
     failures=$((failures + 1))
   fi
 done
+# A packed CLI that still answers `trew mcp` is refused.
+printf '#!/usr/bin/env node\nconsole.log(process.argv.includes("--version") ? "1.2.3" : "trew sync trew pair --version");\n' > "$package_root/client/dist/trew.mjs"
+result=0
+PATH="$package_path" bash "$package_root/scripts/pack-check.sh" > "$scratch/output" 2>&1 || result=$?
+if [ "$result" -eq 1 ] && grep -qF 'still runs trew mcp' "$scratch/output"; then
+  echo "ok: a packed CLI that still runs trew mcp is refused"
+else
+  echo "FAIL: pack-check accepted a CLI that still runs trew mcp (exit $result)"
+  cat "$scratch/output"
+  failures=$((failures + 1))
+fi
 
 if [ "$failures" -gt 0 ]; then
   printf '%s verification checks failed\n' "$failures"

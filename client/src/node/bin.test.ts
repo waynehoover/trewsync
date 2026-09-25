@@ -4,10 +4,29 @@ import { once } from "node:events";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildMcp } from "./mcp-test.ts";
+import { build } from "esbuild";
+import { fileURLToPath } from "node:url";
 import { run } from "./cli.ts";
 import { TestServer, removeTree } from "../core/test-server.ts";
 import { within } from "../core/test-async.ts";
+
+/** The CLI bundled from source the way the release builds it, into `dir`. */
+async function buildCli(dir: string): Promise<string> {
+  const bundle = join(dir, "trew.mjs");
+  await build({
+    entryPoints: [fileURLToPath(new URL("./bin.ts", import.meta.url))],
+    outfile: bundle,
+    platform: "node",
+    target: "node22",
+    format: "esm",
+    bundle: true,
+    logLevel: "silent",
+    banner: {
+      js: 'import { createRequire as __trewRequire } from "node:module"; const require = __trewRequire(import.meta.url);',
+    },
+  });
+  return bundle;
+}
 
 let server: TestServer | undefined;
 const dirs: string[] = [];
@@ -21,7 +40,7 @@ it("the packaged entrypoint flushes a large JSON preview before exiting through 
   vi.spyOn(console, "info").mockImplementation(() => undefined);
   const buildDir = await mkdtemp(join(tmpdir(), "trew-bin-output-"));
   dirs.push(buildDir);
-  const bundle = await buildMcp(buildDir);
+  const bundle = await buildCli(buildDir);
   server = new TestServer();
   await server.start();
   const vault = await mkdtemp(join(tmpdir(), "trew-bin-vault-"));

@@ -83,8 +83,18 @@ for listed in "trew sync" "trew pair" "--version"; do
   }
 done
 
-echo "==> using MCP from the packed artifact under node"
-bun run "$root/client/src/node/mcp-artifact.run.ts" \
+# The command has no MCP server any more: the server's /mcp is the only one.
+# A packed bundle that still answered `trew mcp` would be shipping code the
+# release says is gone.
+if "$bin" mcp > "$work/mcp" 2>&1; then
+  echo "the packed CLI still runs trew mcp:" >&2; cat "$work/mcp" >&2; exit 1
+fi
+grep -qF "trewd mcp-token" "$work/mcp" || {
+  echo "the packed CLI does not say where MCP went:" >&2; cat "$work/mcp" >&2; exit 1;
+}
+
+echo "==> pairing and syncing with the packed artifact under node"
+bun run "$root/client/src/node/artifact.run.ts" \
   "$work/elsewhere/node_modules/trew-sync/dist/trew.mjs" "$(command -v node)"
 
 echo "==> the packed CLI installs and runs"

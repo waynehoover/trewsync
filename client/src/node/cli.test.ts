@@ -2584,6 +2584,45 @@ describe("the commands", () => {
     // And it says where the first device's invite is.
     expect(USAGE).toMatch(/<data>\/first-invite/);
   });
+
+  /**
+   * The headless client's own MCP server is gone (PLAN.md M2 task 10): the
+   * server's `/mcp` is the only MCP. An agent config or a service file that
+   * still runs `trew mcp` is told where it went, with its old flags or
+   * without, and exits 2 without touching the vault or printing on stdout,
+   * which an MCP client would have read as protocol.
+   */
+  it("says where MCP went to anything that still runs trew mcp or trew mcp-token", async () => {
+    const dir = await vaultDir("retired-mcp");
+    for (const argv of [
+      ["mcp"],
+      ["mcp", "--dir", dir, "--listen", "127.0.0.1:3010", "--writable"],
+      ["mcp", "--vault", `work=${dir}`],
+      ["mcp-token"],
+      ["mcp-token", "--dir", dir, "--key-out", join(dir, "key")],
+      ["mcp-token", "--revoke"],
+      ["--dir", dir, "mcp"],
+    ]) {
+      const r = await cli(...argv);
+      expect(r.code, argv.join(" ")).toBe(2);
+      expect(r.stdout, argv.join(" ")).toBe("");
+      expect(r.stderr, argv.join(" ")).toMatch(/trewd mcp-token/);
+      expect(r.stderr, argv.join(" ")).toMatch(/docs\/agent\.md/);
+    }
+    expect(await readdir(dir)).toEqual([]);
+    expect(USAGE).not.toMatch(/\bmcp\b|--listen|--writable|--allow-origin|--key-out|--revoke/);
+    for (const flag of [
+      "--listen",
+      "--writable",
+      "--allow-origin",
+      "--vault",
+      "--key-out",
+      "--revoke",
+    ])
+      expect(() => parseArgs(["sync", flag, "x"]), flag).toThrow(
+        new RegExp(`no such option: ${flag}`),
+      );
+  });
 });
 
 /**

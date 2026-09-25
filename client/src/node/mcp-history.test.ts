@@ -12,15 +12,12 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Client as Host, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Client, type ClientOptions } from "../core/client.ts";
 import { MemoryIndexStore } from "../core/vault.ts";
 import { TestServer } from "../core/test-server.ts";
 import { NodeVault, STALE_TEMP_MS } from "./vault.ts";
 import { McpReader } from "./mcp-read.ts";
 import { McpHistory, HISTORY_LOOKUP_VERSIONS } from "./mcp-history.ts";
-import { createTools, type McpSession } from "./mcp-tools.ts";
-import { tool } from "./mcp-test.ts";
 
 let root: string,
   writer: NodeVault,
@@ -29,8 +26,6 @@ let root: string,
   server: TestServer,
   history: McpHistory,
   options: ClientOptions;
-const hosts: Host[] = [];
-const registries: ReturnType<typeof createTools>[] = [];
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "trew-mcp-history-"));
   writer = new NodeVault(root);
@@ -57,11 +52,6 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   await client?.close();
-  for (const registry of registries.splice(0)) {
-    await registry.drain();
-    await registry.server.close();
-  }
-  for (const host of hosts.splice(0)) await host.close();
   await reader?.drain();
   await server?.cleanup();
   if (root) await rm(root, { recursive: true, force: true });
@@ -89,27 +79,6 @@ async function snapshot(dir = root): Promise<Record<string, string>> {
     else out[name] = "link";
   }
   return out;
-}
-async function connectedTools() {
-  const session: McpSession = {
-    mode: "writable",
-    writer,
-    reader,
-    device: "laptop",
-    client: () => client,
-    stopping: () => false,
-    changed: () => {},
-    summary: () => ({}),
-    status: async () => ({}),
-  };
-  const registry = createTools(session, "test");
-  registries.push(registry);
-  const [hostWire, serverWire] = InMemoryTransport.createLinkedPair();
-  await registry.server.connect(serverWire);
-  const host = new Host({ name: "history-test", version: "1" });
-  hosts.push(host);
-  await host.connect(hostWire);
-  return { host, session };
 }
 
 it("pages history including an exact-full final page and reads an authenticated old body without changing disk", async () => {
@@ -210,102 +179,6 @@ it("advances deleted pages across filtered rows and retains restorable zero", as
   expect((await history.deleted({})).notes[0]!.restorable).toBe(0);
 });
 
-it("rejects non-content, oversized, corrupt and invalid UTF-8 historical bodies before publication", async () => {
-  await save("source.md", "valid source");
-  const version = (await client.history("source.md"))[0]!;
-  const { host } = await connectedTools();
-  const find = vi.spyOn(client, "findVersion");
-  const fetch = vi.spyOn(client, "contentAt");
-  for (const bad of [
-    { ...version, folder: true },
-    { ...version, deleted: true },
-    { ...version, size: 1024 * 1024 + 1 },
-  ]) {
-    find.mockResolvedValue(bad);
-    fetch.mockClear();
-    const result = await tool(host, "restore_note", {
-      path: "source.md",
-      uid: version.uid,
-      to: "recovered.md",
-    });
-    expect(result.applied).toBe(false);
-    expect(result.error).toBeDefined();
-    expect(fetch).not.toHaveBeenCalled();
-  }
-  find.mockResolvedValue(version);
-  for (const content of [Buffer.from([255]), Buffer.alloc(1024 * 1024 + 1)]) {
-    fetch.mockResolvedValue(content);
-    const result = await tool(host, "restore_note", {
-      path: "source.md",
-      uid: version.uid,
-      to: "recovered.md",
-    });
-    expect(result.applied).toBe(false);
-    expect(result.error).toBeDefined();
-  }
-  fetch.mockRejectedValue(new Error("authenticated chunk verification failed"));
-  expect(
-    (await tool(host, "restore_note", { path: "source.md", uid: version.uid, to: "recovered.md" }))
-      .applied,
-  ).toBe(false);
-  await expect(readFile(join(root, "recovered.md"))).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await readFile(join(root, "source.md"), "utf8")).toBe("valid source");
-});
-
-it("keeps a competing restore destination and does not continue onto a replacement client", async () => {
-  await save("source.md", "historical bytes");
-  const version = (await client.history("source.md"))[0]!;
-  const { host } = await connectedTools();
-  const original = client.contentAt.bind(client);
-  const fetch = vi.spyOn(client, "contentAt").mockImplementationOnce(async (version) => {
-    const bytes = await original(version);
-    await writeFile(join(root, "occupied.md"), "an independent editor");
-    return bytes;
-  });
-  const raced = await tool(host, "restore_note", {
-    path: "source.md",
-    uid: version.uid,
-    to: "occupied.md",
-  });
-  expect(raced).toMatchObject({ applied: false, error: { code: "exists" } });
-  expect(await readFile(join(root, "occupied.md"), "utf8")).toBe("an independent editor");
-  const previous = client;
-  fetch.mockImplementationOnce(async (version) => {
-    const bytes = await original(version);
-    await previous.close();
-    client = new Client(options);
-    await client.connect();
-    await client.settle();
-    return bytes;
-  });
-  const disconnected = await tool(host, "restore_note", {
-    path: "source.md",
-    uid: version.uid,
-    to: "after-reconnect.md",
-  });
-  expect(disconnected).toMatchObject({ applied: false, error: { code: "not_ready" } });
-  await expect(readFile(join(root, "after-reconnect.md"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-});
-
-it("rechecks read-only mode before any restore filesystem or history work", async () => {
-  const { host, session } = await connectedTools();
-  Object.defineProperty(session, "mode", { value: "read-only" });
-  const check = vi.spyOn(reader.vault, "checkPath"),
-    lookup = vi.spyOn(client, "findVersion"),
-    create = vi.spyOn(writer, "create");
-  const result = await tool(host, "restore_note", {
-    path: "source.md",
-    uid: 1,
-    to: "recovered.md",
-  });
-  expect(result).toMatchObject({ applied: false, error: { code: "read_only" } });
-  expect(check).not.toHaveBeenCalled();
-  expect(lookup).not.toHaveBeenCalled();
-  expect(create).not.toHaveBeenCalled();
-});
-
 it("refuses an unpageable history entry instead of declaring a false end of history", async () => {
   await save("source.md", "body");
   const version = (await client.history("source.md"))[0]!;
@@ -352,93 +225,4 @@ it("reuses checked inventory for preview pages while checking remote-only paths 
   expect(second.files.map((file) => file.path)).toEqual(["missing.md"]);
   expect(second.nextAfter).toBeNull();
   expect(await snapshot()).toEqual(before);
-});
-
-it("compares authenticated history with local bytes without changing either version", async () => {
-  await save("compare.md", "\ufeffkeep\r\nold task\r\nUNSENT original\r\n");
-  const uid = (await client.history("compare.md"))[0]!.uid;
-  await save("compare.md", "\ufeffkeep\r\nnew task\r\nUNSENT original\r\n");
-  const before = await snapshot();
-  const { host } = await connectedTools();
-  const result = await tool(host, "compare_versions", { path: "compare.md", fromUid: uid });
-  expect(result).toMatchObject({ complete: true, coarse: false, from: { uid }, to: { uid: null } });
-  expect(result.changes).toEqual([
-    {
-      fromLine: 2,
-      toLine: 2,
-      old: "old task\r\n",
-      new: "new task\r\n",
-      oldLines: 1,
-      newLines: 1,
-      clipped: false,
-    },
-  ]);
-  expect(await snapshot()).toEqual(before);
-});
-it("pins comparison pages to both complete bases and refuses another path's version", async () => {
-  await save("compare.md", "old A\nkeep\nold B\n");
-  const uid = (await client.history("compare.md"))[0]!.uid;
-  await save("compare.md", "new A\nkeep\nnew B\n");
-  await save("other.md", "private other");
-  const other = (await client.history("other.md"))[0]!.uid;
-  const { host } = await connectedTools();
-  const page = await tool(host, "compare_versions", { path: "compare.md", fromUid: uid, limit: 1 });
-  expect(page.nextAfter).toBe(1);
-  const next = await tool(host, "compare_versions", {
-    path: "compare.md",
-    fromUid: uid,
-    after: page.nextAfter,
-    fromBase: page.from.base,
-    toBase: page.to.base,
-    limit: 1,
-  });
-  expect(next.changes[0]).toMatchObject({ old: "old B\n", new: "new B\n" });
-  await save("compare.md", "changed between pages");
-  expect(
-    await tool(host, "compare_versions", {
-      path: "compare.md",
-      fromUid: uid,
-      after: page.nextAfter,
-      fromBase: page.from.base,
-      toBase: page.to.base,
-    }),
-  ).toMatchObject({ error: { code: "stale" } });
-  expect(
-    await tool(host, "compare_versions", { path: "compare.md", fromUid: other }),
-  ).toMatchObject({ error: { code: "version_not_found" } });
-});
-it("reports device checkpoints without claiming an offline or unconfirmed device received changes", async () => {
-  const { host } = await connectedTools();
-  const cursor = client.serverCursor;
-  const row = {
-    id: "private id",
-    name: "phone",
-    createdAt: 1,
-    lastSeen: 2,
-    online: true,
-    applied: cursor,
-  };
-  vi.spyOn(client, "devices").mockResolvedValue({
-    devices: [
-      row,
-      { ...row, name: "offline", online: false, applied: null },
-      { ...row, name: "unknown", applied: null },
-    ],
-    invites: [{ invite: "private invite", label: "private label", expiresAt: 100 }],
-  });
-  const ready = vi.spyOn(client, "deliveryReady", "get").mockReturnValue(true);
-  const result = await tool(host, "delivery_status");
-  expect(result.localReady).toBe(true);
-  expect(result.devices.map((row: { state: string }) => row.state)).toEqual([
-    "received",
-    "unconfirmed",
-    "unconfirmed",
-  ]);
-  expect(JSON.stringify(result)).not.toContain("private");
-  ready.mockReturnValue(false);
-  expect(
-    (await tool(host, "delivery_status")).devices.every(
-      (row: { state: string }) => row.state === "unconfirmed",
-    ),
-  ).toBe(true);
 });
