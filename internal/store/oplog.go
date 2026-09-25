@@ -773,9 +773,10 @@ func (s *Store) CommitOperation(op Operation) (OpResult, error) {
 	case errors.Is(err, errReplayed):
 		return res, nil
 	case err != nil && done:
-		// The transaction was complete and the COMMIT is what failed.
+		// The transaction was complete and the COMMIT is what failed. Both
+		// wrapped, so a full disk is still recognised as one (IsDiskFull).
 		return OpResult{}, &OpError{Outcome: OpUnknown, Code: OpCodeInternal, OpID: opID,
-			Err: fmt.Errorf("%w: %v", ErrOutcomeUnknown, err)}
+			Err: fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)}
 	case err != nil:
 		var oe *OpError
 		if errors.As(err, &oe) {
