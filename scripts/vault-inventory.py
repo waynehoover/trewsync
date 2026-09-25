@@ -52,7 +52,10 @@ Three more commands serve the freeze and the way back (plan/cutover.md):
 
 `apply` joins the normalised path onto the vault, which is right on a disk
 that ignores normalisation (APFS, the Mac's) and on any vault whose names are
-already NFC with plain spaces, which is every vault a client wrote.
+already NFC with plain spaces, which is every vault a client wrote. A delete
+and an add that fold alike (a case-only rename) are applied as one rename
+where the disk holds both spellings as one entry, and nothing is written or
+removed through a link or outside the vault.
 """
 
 from __future__ import annotations
@@ -399,6 +402,80 @@ def export_changes(frozen: str, current: str, from_dir: str | None, to_dir: str 
     return 0
 
 
+def _ident(full: str):
+    """The entry a path names on this disk, or None. Two spellings a folding
+    disk holds as one name name the same entry."""
+    try:
+        st = os.lstat(full)
+    except FileNotFoundError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _spelled(vault: str, rel: str) -> bool:
+    """Every component of rel is on the disk under exactly that name.
+
+    A disk that folds case (APFS, the Mac's) opens Note.md when asked for
+    note.md, so existing is not enough: only the parent's listing says which
+    spelling it holds. Normalisation alone is not a difference (the disk
+    ignores it, and every client sends the NFC name).
+    """
+    parent = vault
+    for part in rel.split("/"):
+        try:
+            names = os.listdir(parent)
+        except (FileNotFoundError, NotADirectoryError):
+            return False
+        if part not in names and not any(obsidian_name(n) == part for n in names):
+            return False
+        parent = os.path.join(parent, part)
+    return True
+
+
+def _outside(vault: str, rel: str) -> bool:
+    """rel would be reached through a link, or would land outside the vault.
+
+    A frozen vault may hold a link the clients never followed (the inventory
+    excludes it); writing or removing through one would change a file that is
+    not the vault's, so every component is checked, and the parent's real path
+    must be under the vault's.
+    """
+    parts = rel.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return True
+    full = vault
+    for p in parts:
+        full = os.path.join(full, p)
+        if os.path.islink(full):
+            return True
+    root = os.path.realpath(vault)
+    real = os.path.realpath(os.path.dirname(os.path.join(vault, rel)))
+    return real != root and not real.startswith(root + os.sep)
+
+
+def _respell(old: str, new: str) -> None:
+    """Rename an entry to another spelling of the same name, by way of a third
+    name: a case-only rename in one step is a no-op on some folding disks."""
+    tmp = os.path.join(os.path.dirname(new), f".rollback-respell-{os.getpid()}")
+    if os.path.lexists(tmp):
+        sys.exit(f"{tmp}: exists; remove it and apply again")
+    os.rename(old, tmp)
+    os.rename(tmp, new)
+
+
+def _put(export: str, c: dict, target: str) -> None:
+    """Write the export's copy of c over target, atomically, and verify it (rule 4)."""
+    tmp = target + ".rollback-tmp"
+    with open(os.path.join(export, "files", c["path"]), "rb") as src, open(tmp, "xb") as out:
+        for block in iter(lambda: src.read(1 << 20), b""):
+            out.write(block)
+        out.flush()
+        os.fsync(out.fileno())
+    os.replace(tmp, target)
+    if sha256_file(target) != c["sha256"]:
+        sys.exit(f"{c['path']!r}: the written file does not hold the exported bytes")
+
+
 def apply_changes(export: str, vault: str, write_it: bool, show: bool) -> int:
     """Put an export into a vault as it was at the freeze, or say why not.
 
@@ -407,20 +484,82 @@ def apply_changes(export: str, vault: str, write_it: bool, show: bool) -> int:
     where nothing is. Anything else is a conflict to reconcile by hand, and is
     left exactly as it is (rule 3: nothing is deleted without a verified copy
     elsewhere, and a file changed on this side has none).
+
+    A rename the export records as a delete of one path and an add of another
+    that folds alike (Note.md to note.md, Folder/ to folder/) is one entry on a
+    disk that folds case. Applied as an add and a delete, the add would find
+    the old file and the delete would then remove the only copy; so such a
+    pair is applied as the rename it is, and no path is removed while it is
+    the same entry on this disk as an added one. Nothing is written or
+    removed through a link, or outside the vault.
     """
     with open(os.path.join(export, "changes.jsonl"), encoding="utf-8") as f:
         lines = f.read().splitlines()
     if not lines or json.loads(lines[0]).get("format") != FORMAT + " changes":
         sys.exit(f"{export}: not an export")
     rows = [json.loads(line) for line in lines[1:]]
+    contract = _contract()
+    table = contract.fold_table()
+
+    def fold_key(c: dict) -> tuple[bool, str]:
+        return (c["kind"] == "folder", contract.fold(c["path"], table))
+
+    # The server keeps one name per fold, and so did the frozen inventory (a
+    # collision is excluded), so a fold names at most one add and one delete.
+    added_by_fold = {fold_key(c): c for c in rows if c["change"] == "added"}
+    renamed_from: dict[str, dict] = {}  # added path -> the deleted row it may rename
+    for c in rows:
+        a = added_by_fold.get(fold_key(c)) if c["change"] == "deleted" else None
+        if a is not None and a["path"] != c["path"]:
+            renamed_from[a["path"]] = c
+    handled: set[str] = set()  # deleted paths a rename took care of
+    added_ids = None  # the entries the added paths name, taken once the adds are done
+
     done: Counter = Counter()
     refused: dict[str, list[str]] = defaultdict(list)
     gone: set[str] = set()  # what a dry run would have removed, so its folders judge alike
     for c in rows:
+        if c["change"] == "deleted" and c["path"] in handled:
+            continue
+        if _outside(vault, c["path"]):
+            refused["a link on the way or outside the vault, not followed"].append(c["path"])
+            continue
         target = os.path.join(vault, c["path"])
         exists = os.path.lexists(target)
+        if c["change"] == "deleted" and exists:
+            if added_ids is None:
+                added_ids = {_ident(os.path.join(vault, a["path"])) for a in rows if a["change"] == "added"} - {None}
+            if _ident(target) in added_ids:
+                refused["the same entry here as an added path, not deleted"].append(c["path"])
+                continue
+        d = renamed_from.get(c["path"]) if c["change"] == "added" else None
+        if d is not None and exists and not _outside(vault, d["path"]):
+            old = os.path.join(vault, d["path"])
+            if _ident(old) == _ident(target):
+                # This disk holds the two spellings as one entry: a rename.
+                handled.add(d["path"])
+                if c["kind"] == "folder":
+                    if write_it:
+                        _respell(old, target)
+                    done["renamed folder"] += 1
+                    continue
+                current = sha256_file(old) if os.path.isfile(old) else None
+                if current != d["frozenSha256"]:
+                    refused["changed here since the freeze, not renamed"].append(d["path"])
+                    continue
+                if write_it:
+                    _respell(old, target)
+                    if current != c["sha256"]:
+                        _put(export, c, target)
+                    if not _spelled(vault, c["path"]):
+                        sys.exit(f"{c['path']!r}: renamed, but the disk does not hold that spelling")
+                done["renamed"] += 1
+                continue
         if c["kind"] == "folder":
             if c["change"] == "added":
+                if exists and not _spelled(vault, c["path"]):
+                    refused["here under another spelling, not changed"].append(c["path"])
+                    continue
                 if not exists and write_it:
                     os.makedirs(target, exist_ok=True)
                 if not exists:
@@ -435,7 +574,10 @@ def apply_changes(export: str, vault: str, write_it: bool, show: bool) -> int:
                     gone.add(c["path"])
                     done["folder deleted"] += 1
             continue
-        current = sha256_file(target) if exists and os.path.isfile(target) else None
+        if exists and not os.path.isfile(target):
+            refused["not a file here, kept"].append(c["path"])
+            continue
+        current = sha256_file(target) if exists else None
         if c["change"] == "deleted":
             if current is None:
                 done["already absent"] += 1
@@ -448,7 +590,10 @@ def apply_changes(export: str, vault: str, write_it: bool, show: bool) -> int:
                 refused["changed here since the freeze, not deleted"].append(c["path"])
             continue
         if current == c["sha256"]:
-            done["already current"] += 1
+            if _spelled(vault, c["path"]):
+                done["already current"] += 1
+            else:
+                refused["here under another spelling, not changed"].append(c["path"])
             continue
         expected = c.get("frozenSha256")  # None for an added path
         if current != expected:
@@ -457,15 +602,7 @@ def apply_changes(export: str, vault: str, write_it: bool, show: bool) -> int:
             continue
         if write_it:
             os.makedirs(os.path.dirname(target) or vault, exist_ok=True)
-            tmp = target + ".rollback-tmp"
-            with open(os.path.join(export, "files", c["path"]), "rb") as src, open(tmp, "xb") as out:
-                for block in iter(lambda: src.read(1 << 20), b""):
-                    out.write(block)
-                out.flush()
-                os.fsync(out.fileno())
-            os.replace(tmp, target)
-            if sha256_file(target) != c["sha256"]:
-                sys.exit(f"{c['path']!r}: the written file does not hold the exported bytes")
+            _put(export, c, target)
         done[c["change"]] += 1
     if not write_it:
         print("dry run: nothing written; --apply writes")

@@ -457,15 +457,28 @@ signed with that workflow's own GitHub identity, so there is no key to keep.
 non-prerelease `server/v` release (or the one `-version` names), downloads this
 platform's binary, `SHA256SUMS` and the manifest beside the installed binary,
 and installs nothing until: `packslip verify` accepts the manifest against the
-pin `--identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@`
+pin `--identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@refs/tags/server/v`
 and `--issuer https://token.actions.githubusercontent.com`, with the binary as
-`--artifact`; its report names that scheme and signer; the signed statement,
-read by trewd itself, is for this project and this version and signs this
-file's digest and size; `SHA256SUMS` agrees; and the new binary runs and says
-it is that version for this platform. Then one rename and a directory flush. It
-refuses a downgrade, a development build, a binary Homebrew, Nix or mise owns,
-and a container. The pin is the workflow, not only the repository: a bundle
-another workflow of the repository signed is not a release.
+`--artifact`; its report names that scheme, that issuer, and exactly the signer
+`...attest.yml@refs/tags/server/vX.Y.Z` for the version offered; the signed
+statement, read by trewd itself, is for this project and this version and signs
+this file's digest and size; `SHA256SUMS` agrees; and the new binary runs and
+says it is that version for this platform. Then one rename and a directory
+flush. It refuses a downgrade, a development build, a binary Homebrew, Nix or
+mise owns, and a container (Docker's `/.dockerenv`, Podman's
+`/run/.containerenv`, or Kubernetes' `KUBERNETES_SERVICE_HOST` or
+`/var/run/secrets/kubernetes.io`). The pin is the workflow and the tag it ran
+from, not only the repository: a bundle another workflow of the repository
+signed is not a release, and neither is one `attest.yml` signed when it was
+dispatched from a branch. `attest.yml` runs on `workflow_dispatch`, which runs
+the workflow file of whatever ref the dispatch names, so without the tag in the
+pin anyone able to push a branch could sign an installable bundle with an
+edited copy. The release is therefore dispatched from its own tag,
+`gh workflow run attest.yml --ref server/vX.Y.Z -f tag=server/vX.Y.Z`, as
+`release.sh` prints it; a run dispatched from `main` signs a manifest no
+`trewd update` installs, and is fixed by running it again with the `--ref`.
+What is left to trust is who can push a `server/v*` tag, so protect that
+pattern with a tag ruleset on the repository.
 
 It runs the packslip CLI rather than verifying Sigstore itself; the measured
 reason is in [research](research.md#evaluated-alternatives). The tests: the Go

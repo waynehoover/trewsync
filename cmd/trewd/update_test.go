@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -158,10 +159,30 @@ func (p fakePackslip) report(t *testing.T, project, ver, scheme, keyID string, c
 	}
 }
 
-// goodReport is what packslip says of a release attest.yml signed.
+// goodReport is what packslip says of a release attest.yml signed, run from
+// the release's own tag as release.sh dispatches it.
 func (p fakePackslip) goodReport(t *testing.T, ver string) {
 	p.report(t, updateProject, ver, "sigstore-oidc",
-		"https://github.com/"+updateRepo+"/.github/workflows/attest.yml@refs/heads/main", updateAsset)
+		"https://github.com/"+updateRepo+"/.github/workflows/attest.yml@refs/tags/server/v"+ver, updateAsset)
+}
+
+// issuer rewrites the issuer of the report the test wrote.
+func (p fakePackslip) issuer(t *testing.T, iss string) {
+	t.Helper()
+	path := filepath.Join(p.dir, "report.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r map[string]any
+	if err := json.Unmarshal(b, &r); err != nil {
+		t.Fatal(err)
+	}
+	r["issuer"] = iss
+	b, _ = json.Marshal(r)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (p fakePackslip) args(t *testing.T) []string {
@@ -259,7 +280,7 @@ func TestUpdateInstallsTheNewestVerifiedServerRelease(t *testing.T) {
 	args := strings.Join(p.args(t), " ")
 	for _, want := range []string{
 		"verify ",
-		"--identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@",
+		"--identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@refs/tags/server/v ",
 		"--issuer https://token.actions.githubusercontent.com",
 		"--artifact ",
 		"--json",
@@ -373,9 +394,27 @@ func TestUpdateRefusesAReleaseThatDoesNotVerify(t *testing.T) {
 			p.report(t, updateProject, "0.2.0", "sigstore-oidc",
 				"https://github.com/"+updateRepo+"/.github/workflows/ci.yml@refs/pull/7/merge", updateAsset)
 		}, "which is not"},
+		// attest.yml takes the tag as an input, so a dispatch from any branch
+		// used to sign an installable bundle: whoever could push a branch with
+		// an edited workflow could sign a release of their own.
+		{"it was signed by attest.yml dispatched from a branch", func(r *fakeRelease, p fakePackslip, t *testing.T) {
+			p.report(t, updateProject, "0.2.0", "sigstore-oidc",
+				"https://github.com/"+updateRepo+"/.github/workflows/attest.yml@refs/heads/main", updateAsset)
+		}, "which is not"},
+		{"it was signed by attest.yml run from another release's tag", func(r *fakeRelease, p fakePackslip, t *testing.T) {
+			p.report(t, updateProject, "0.2.0", "sigstore-oidc",
+				"https://github.com/"+updateRepo+"/.github/workflows/attest.yml@refs/tags/server/v0.1.9", updateAsset)
+		}, "which is not"},
+		{"it was signed by attest.yml run from a plugin tag", func(r *fakeRelease, p fakePackslip, t *testing.T) {
+			p.report(t, updateProject, "0.2.0", "sigstore-oidc",
+				"https://github.com/"+updateRepo+"/.github/workflows/attest.yml@refs/tags/0.2.0", updateAsset)
+		}, "which is not"},
+		{"the report names another issuer", func(r *fakeRelease, p fakePackslip, t *testing.T) {
+			p.issuer(t, "https://issuer.example")
+		}, "issued by"},
 		{"packslip did not check the file", func(r *fakeRelease, p fakePackslip, t *testing.T) {
 			p.report(t, updateProject, "0.2.0", "sigstore-oidc",
-				"https://github.com/"+updateRepo+"/.github/workflows/attest.yml@refs/heads/main")
+				"https://github.com/"+updateRepo+"/.github/workflows/attest.yml@refs/tags/server/v0.2.0")
 		}, "did not report checking"},
 		{"the new binary says it is another version", func(r *fakeRelease, p fakePackslip, t *testing.T) {
 			liar := fakeTrewd("0.2.1")
@@ -461,6 +500,49 @@ func TestUpdateTakesAReleaseCandidateOnlyByName(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(target); !bytes.Equal(got, fakeTrewd("0.3.0-rc.1")) {
 		t.Fatalf("installed %q, want the named release candidate", got)
+	}
+}
+
+// A container's binary is its image's: replacing it in place is undone by the
+// next recreate, and hides the version from whoever pulls. /.dockerenv is
+// Docker's alone, so Podman and Kubernetes used to pass as a plain host.
+func TestUpdateRecognisesEveryContainer(t *testing.T) {
+	for _, c := range []struct {
+		why   string
+		files []string
+		env   map[string]string
+		want  string
+	}{
+		{"a plain host", nil, nil, ""},
+		{"Docker", []string{"/.dockerenv"}, nil, "Docker"},
+		{"Podman", []string{"/run/.containerenv"}, nil, "Podman"},
+		{"Kubernetes, by its service variable", nil, map[string]string{"KUBERNETES_SERVICE_HOST": "10.0.0.1"}, "Kubernetes"},
+		{"Kubernetes, by its mounted secrets", []string{"/var/run/secrets/kubernetes.io"}, nil, "Kubernetes"},
+	} {
+		t.Run(c.why, func(t *testing.T) {
+			exists := func(p string) bool {
+				for _, f := range c.files {
+					if f == p {
+						return true
+					}
+				}
+				return false
+			}
+			getenv := func(k string) string { return c.env[k] }
+			if got := containerOf(exists, getenv); got != c.want {
+				t.Errorf("containerOf = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestUpdateRefusesToReplaceAContainersBinary(t *testing.T) {
+	for _, engine := range []string{"Docker", "Podman", "Kubernetes"} {
+		u := updater{out: io.Discard, container: func() string { return engine }}
+		_, _, err := u.current(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "running in a container ("+engine+")") {
+			t.Errorf("%s: got %v, want a refusal naming the container", engine, err)
+		}
 	}
 }
 

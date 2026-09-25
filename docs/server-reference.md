@@ -292,7 +292,12 @@ server: it is the only thing that reads the backups.
 into DIR, which must be new or empty, checks every body against its name and
 the database against the archive's manifest, writes the database last, and
 then runs `verify -deep` on the result. A damaged or truncated archive never
-becomes a data directory.
+becomes a data directory. `-record DIR` (a data directory, or a copy of its
+`last-backup.json`) compares the archive's SHA-256 with the last backup
+recorded there before decrypting, and refuses another archive unless
+`-not-last-backup` is given; without `-record` it prints the digest and says
+it was not compared. Anyone holding the recipient can make an archive the
+identity opens, so an archive that decrypts is not proof the server wrote it.
 
 `trewd rehearse -backup PATH [-identity KEY]` rehearses a restore of an
 encrypted archive or a plaintext backup directory: into a work directory of
@@ -301,7 +306,9 @@ verified deeply, compared with every version the live store holds up to the
 backup's newest uid, served on a loopback port, downloaded whole by a newly
 paired device and compared byte for byte, and its search index rebuilt. It
 prints how long the restore took and how old the backup is, and records the
-result for `doctor`.
+result for `doctor`. An encrypted archive must be the last backup the data
+directory recorded, compared by its SHA-256 before it is decrypted;
+`-not-last-backup` rehearses another one of your own, with a warning.
 
 ## invite, devices, revoke, uninvite
 
@@ -427,12 +434,15 @@ after checking who built it. It needs the
 | `-packslip PATH` | The packslip executable to verify with. |
 
 It installs a release only when its `packslip.server.sigstore.json` is signed
-by this repository's release workflow, the downloaded binary matches the
+by this repository's release workflow run from that release's own
+`server/vX.Y.Z` tag, through GitHub's issuer, the downloaded binary matches the
 digest and size signed for it and the release's `SHA256SUMS`, and the new
 binary runs here and reports the version it was released as. The replacement
 is one rename in the binary's directory, so an interrupted update leaves the
-old binary in place. It refuses an older release, a development build, and a
-binary Homebrew, Nix or mise installed, and it does not restart the server.
+old binary in place. It refuses an older release, a development build, a
+binary Homebrew, Nix or mise installed, and one inside a container (Docker,
+Podman or Kubernetes), whose image is what to update; and it does not restart
+the server.
 
 ## Ceilings
 

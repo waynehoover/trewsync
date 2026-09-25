@@ -120,8 +120,11 @@ directory, verifies it deeply, compares it with every version the live store
 holds up to the backup's newest version, serves it on a loopback port, pairs a
 new device to it that downloads every note and compares each byte for byte,
 rebuilds the search index, and prints how long it all took and how old the
-backup is. The work directory is removed afterwards; the backup is never
-touched. The result is recorded for `trewd doctor`, which warns when no
+backup is. Before it decrypts anything it compares the archive's SHA-256 with
+the last backup the data directory recorded, and refuses any other archive
+unless `-not-last-backup` says it is meant to be another (an older backup,
+say), which it then warns about. The work directory is removed afterwards; the
+backup is never touched. The result is recorded for `trewd doctor`, which warns when no
 rehearsal has passed in 90 days.
 
 [Operating TrewSync](operations.md#rehearse-a-restore) has the steps to do it
@@ -146,6 +149,16 @@ sudo -u trew /usr/local/bin/trewd verify -deep -data /var/lib/trew
 
 From a plaintext backup directory, copy it into place instead of unpacking
 (`sudo rsync -a offsite:/backups/trew/ /var/lib/trew/`).
+
+**An archive that decrypts is not proof that this server wrote it.** The
+recipient is public by design and sits on the server, so anyone who can read
+it can make an archive your identity opens, holding whatever notes they
+choose. Check the archive is the backup you took before restoring from it:
+pass `-record /var/lib/trew.before-restore` (the preserved directory, or a
+copy of its `last-backup.json`) and unpack refuses an archive whose digest is
+not the one recorded there, unless `-not-last-backup` is given. Without a
+record, unpack prints the archive's SHA-256: compare it with the one `trewd
+backup` printed, or with a copy of `last-backup.json` kept offsite.
 
 Use a new preservation path if `trew.before-restore` already exists. Run the
 commands one at a time and stop on an error. **Only after verification succeeds:**

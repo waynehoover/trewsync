@@ -49,6 +49,10 @@ type BackupRecord struct {
 	Encrypted bool   `json:"encrypted"`
 	Bytes     int64  `json:"bytes,omitempty"`
 	SHA256    string `json:"sha256,omitempty"`
+	// TakenAt is when the archive's snapshot was taken, as its manifest says
+	// it, so unpack and rehearse can tell this backup from another archive
+	// encrypted to the same recipient.
+	TakenAt string `json:"takenAt,omitempty"`
 	// LatestUID is the newest uid the backup holds of the vault, Verified how
 	// many chunk references it checked in the copy, and Operations and Pins
 	// the agents' log it carried.

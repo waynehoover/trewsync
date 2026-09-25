@@ -16,8 +16,9 @@
 #   2. a scratch trewd; the copy pairs from first-invite and uploads (timed)
 #   3. a freshly paired empty witness downloads everything (timed); compare
 #   4. edits after the cut: a Unicode, an NFD and a no-break-space name, a
-#      nested folder, an attachment, a large note, an append, a deletion and a
-#      nested folder rename on the "Mac", while the witness (the "phone") is
+#      nested folder, an attachment, a large note, an append, a deletion, a
+#      nested folder rename and case-only renames (a folder, a note, an edited
+#      note) on the "Mac", while the witness (the "phone") is
 #      offline with edits of its own, one to the same note; then both converge
 #   5. the edited words are all still there (merged or in a conflict copy),
 #      the two devices agree, and a second fresh witness agrees with both
@@ -169,6 +170,26 @@ if len(outside) < 3:
     sys.exit("the vault needs at least three notes to rehearse edits on")
 pick = {"A": outside[len(outside) // 4], "B": outside[len(outside) // 2], "C": outside[3 * len(outside) // 4], "F": F}
 pick["E"] = max((n for n in notes if F and n.startswith(F + "/")), key=lambda n: n.count("/"), default=None)
+# Case-only renames, which a disk that folds case holds as one entry: a folder
+# (K), a note left as it was (G) and a note edited as well (H), none of them
+# touched by anything else here. The rollback once applied these as an add and
+# a delete and removed the only copy.
+def respelled(path):
+    head, _, base = path.rpartition("/")
+    stem, dot, ext = base.rpartition(".") if base.lower().endswith(".md") else (base, "", "")
+    new = stem.swapcase() + dot + ext  # a note stays a .md note
+    return (f"{head}/{new}" if head else new) if new != base else None
+under = lambda n, f: f is not None and n.startswith(f + "/")
+busy = {pick["A"], pick["B"], pick["C"]}
+kc = [f for f in folders if f != F and not under(f, F) and not under(F or "", f) and respelled(f)
+      and not any(under(n, f) for n in busy) and 1 <= sum(1 for n in notes if under(n, f)) <= 40]
+pick["K"] = kc[len(kc) // 2] if kc else None
+gh = [n for n in outside if n not in busy and not under(n, pick["K"]) and respelled(n)]
+pick["G"] = gh[len(gh) // 3] if len(gh) >= 2 else None
+pick["H"] = gh[2 * len(gh) // 3] if len(gh) >= 2 else None
+for k in ("K", "G", "H"):
+    pick[k + "2"] = respelled(pick[k]) if pick[k] else None
+pick["K2notes"] = sorted(pick["K2"] + n[len(pick["K"]):] for n in notes if under(n, pick["K"])) if pick["K"] else []
 json.dump(pick, open(os.path.join(work, "picks.json"), "w"))
 
 mac, phone = os.path.join(work, "source"), os.path.join(work, "witness1")
@@ -193,13 +214,20 @@ open(os.path.join(d, "attachment.bin"), "wb").write(rnd.randbytes(5 << 20))
 os.remove(os.path.join(mac, pick["B"]))
 if F:
     os.rename(os.path.join(mac, F), os.path.join(mac, F + " renamed"))
+for k in ("K", "G", "H"):
+    if pick[k]:
+        os.rename(os.path.join(mac, pick[k]), os.path.join(mac, pick[k + "2"]))
+if pick["H"]:
+    append(mac, pick["H2"], "\n\nTREW-REHEARSAL-MAC edited with a case-only rename\n")
+cases = sum(1 for k in ("K", "G", "H") if pick[k])
 append(phone, pick["A"], "\n\nTREW-REHEARSAL-PHONE appended on the phone while offline\n")
 append(phone, pick["C"], "\n\nTREW-REHEARSAL-PHONE phone-only edit\n")
 if pick["E"]:
     append(phone, pick["E"], "\n\nTREW-REHEARSAL-PHONE edit inside a folder the Mac renamed\n")
 os.makedirs(os.path.join(phone, "TrewSync rehearsal offline"))
 open(os.path.join(phone, "TrewSync rehearsal offline", "phone note.md"), "w").write("TREW-REHEARSAL-PHONE new\n")
-print(f"   the Mac: 1 append, {len(files) + 1} new files, 1 deletion, {'1 nested folder rename' if F else 'no folder to rename'};"
+print(f"   the Mac: 1 append, {len(files) + 1} new files, 1 deletion, {'1 nested folder rename' if F else 'no folder to rename'},"
+      f" {cases} case-only renames;"
       f" the phone, offline: {3 if pick['E'] else 2} appends (one to the Mac's note), 1 new note")
 PY
 [ $? = 0 ] || exit 1
@@ -235,6 +263,15 @@ for dev in ("source", "witness1"):
     }
     if p["E"]:
         checks["the offline edit inside the renamed folder"] = bool(where("TREW-REHEARSAL-PHONE edit inside"))
+    # The walk's names are the disk's own spelling, so these hold only when the
+    # new spelling is the one on the disk and the old one is gone.
+    if p["G"]:
+        checks["the case-only rename of a note"] = p["G2"] in texts and p["G"] not in texts
+    if p["H"]:
+        checks["the case-only rename of an edited note"] = p["H2"] in where("TREW-REHEARSAL-MAC edited with a case") and p["H"] not in texts
+    if p["K"]:
+        checks["the case-only rename of a folder"] = all(n in texts for n in p["K2notes"]) and not any(
+            k.startswith(p["K"] + "/") for k in texts)
     for label, ok in checks.items():
         print(f"   {'ok  ' if ok else 'LOST'}  {dev}: {label}")
         bad += 0 if ok else 1

@@ -112,6 +112,11 @@ every device keeps its own copy. Look in this order.
    trewd cat -data /var/lib/trew/restore-2026-09-01 -path "Projects/Plan.md"
    ```
 
+   Unpack prints the archive's SHA-256 and says it was not compared with a
+   record: an older archive is not the last backup, and anyone holding the
+   recipient can make one your identity opens. Compare that digest with the
+   one the backup printed on the night it was taken.
+
 5. **If the server has the version but not its body** (`doctor` or `verify`
    says `missing`), run `trew repair`, or "Send back what the server has lost"
    in the plugin, on a device that still has the note.
@@ -238,6 +243,18 @@ The server needs only the recipient (`backup-key.pub`). A plaintext backup
 directory is still available with `-plaintext-ok`, for encrypted storage, and
 it is what `purge -backup` checks.
 
+An encrypted backup is packed from a plaintext copy inside the data directory,
+`backup-staging/`, kept between runs so the next one copies only new bodies.
+After each archive is written, the copy drops every body its database no
+longer references, so it holds exactly what the archive holds: a note you
+purge leaves the staging copy at the next encrypted backup, not before. Until
+then it is still there, in the clear, beside the store; if a purge has to take
+effect at once, remove `backup-staging/` while no backup runs (the next backup
+makes it again, copying every body). A backup that cannot drop them says so
+with a `WARNING` line and still counts as taken, since its archive is good.
+A plaintext backup directory is different: it keeps purged history on purpose,
+because it is the one copy of it.
+
 The window a restore would lose is the time since the last backup: with one a
 night, up to a day, plus however long the backup takes. Devices shrink it in
 practice: each keeps its own copy, and after a restore every device sends back
@@ -255,6 +272,14 @@ it, and records the result for `doctor`:
 ```bash
 trewd rehearse -data /var/lib/trew -backup /srv/trew-backups/trew.tar.age -identity ~/trew-backup-key
 ```
+
+The archive has to be the last backup this data directory recorded (in
+`last-backup.json`), compared by its SHA-256 before anything is decrypted:
+the recipient is public, so anyone who can read it can make an archive the
+identity opens, and a rehearsal that passes on such an archive proves nothing
+about your backups. To rehearse an older archive of your own, add
+`-not-last-backup`; it then goes ahead with a warning naming both snapshot
+times.
 
 It needs the identity on the machine for as long as it runs; bring it over for
 the rehearsal and remove it afterwards, or rehearse on a copy of the data
@@ -340,7 +365,7 @@ token, or a model provider reading what the agent reads.
 | `trew.db` (and `-wal`, `-shm`) | Every version's record, devices, tokens, the agents' log. | Never. |
 | `chunks/` | Every note's bytes, named by their SHA-256. | Never. |
 | `search.db` | The search index, derived from the store. | With the server stopped; it is rebuilt. |
-| `backup-staging/` | The plaintext copy an encrypted backup is packed from. | Whenever no backup is running; the next one makes it again. |
+| `backup-staging/` | The plaintext copy an encrypted backup is packed from, pruned to what the last archive holds. | Whenever no backup is running; the next one makes it again. |
 | `last-backup.json`, `last-rehearsal.json`, `runtime.json` | What the last backup, rehearsal and starts did, for `doctor`. | Yes; `doctor` then says nothing is recorded. |
 | `first-invite` | The first device's invite, mode 0600. | Once the first device is paired. |
 | `control.sock`, `server.lock`, `data.lock` | The operator's socket and the locks. | Never while a server runs; a stale socket is replaced at start. |
