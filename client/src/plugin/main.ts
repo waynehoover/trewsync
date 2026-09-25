@@ -1,4 +1,5 @@
 import { SyncPreviewModal } from "./preview.ts";
+import { focusMainWindow, isMainWindow, openInMainWindow } from "./main-window.ts";
 import type { SyncPreview } from "../core/preview.ts";
 import { ActivityLog, ActivityModal } from "./activity.ts";
 import { ConflictsModal } from "./conflicts.ts";
@@ -181,6 +182,16 @@ export type State =
   /** Preparation or transfer activity; saving still has to finish. */
   | { kind: "syncing"; path?: string; transfer?: TransferActivity; since: number }
   /**
+   * A pass is waiting for somebody to answer a review, and will not move
+   * until they do.
+   *
+   * Its own state, not "syncing": a Mac paired again from the Settings window
+   * sat at "Syncing notes." for good while the first-sync review it was
+   * waiting on was hidden behind the main window (2026-09-24). The status bar
+   * says what is being waited for, and clicking it opens the review again.
+   */
+  | { kind: "review"; heading: string }
+  /**
    * The last pass did not finish, and this is why.
    *
    * Not `synced`, whose glyph says the vault is as the server has it, and
@@ -211,6 +222,17 @@ export type State =
    */
   | { kind: "paused" }
   | { kind: "stopped"; why: string; recovery?: "rejoin" | "pair-again" };
+
+/** A review a pass is waiting on: what it asks, and where it was last drawn. */
+interface PendingReview {
+  readonly preview: SyncPreview;
+  readonly heading: string;
+  /** Resolves the pass's question, once; later calls change nothing. */
+  readonly answer: (proceed: boolean) => void;
+  modal: SyncPreviewModal | undefined;
+  /** The window `modal` was opened in, from `openInMainWindow`. */
+  shownIn: unknown;
+}
 
 export default class TrewPlugin extends Plugin {
   private config: DeviceConfig | undefined;
@@ -630,12 +652,35 @@ export default class TrewPlugin extends Plugin {
     current: () => boolean,
   ): Promise<boolean> {
     if (!current()) return false;
-    const modal = new SyncPreviewModal(this.app, preview, heading);
-    const close = () => modal.close();
+    // One review at a time: a pass asks one question and waits for it. One
+    // left over from a run that has ended is answered no, never yes.
+    this.review?.answer(false);
+    let answer!: (proceed: boolean) => void;
+    const answered = new Promise<boolean>((resolve) => (answer = resolve));
+    const review: PendingReview = {
+      preview,
+      heading,
+      modal: undefined,
+      shownIn: undefined,
+      answer: (proceed) => {
+        if (this.review === review) this.review = undefined;
+        answer(proceed);
+      },
+    };
+    this.review = review;
+    const close = () => {
+      review.modal?.close();
+      review.answer(false);
+    };
     this.syncPrompts.add(close);
     const detach = this.watchUnload(close);
     try {
-      const proceed = await modal.confirm();
+      // Before the review is drawn, so the status bar already says what the
+      // vault is waiting for if the review is somehow not in front.
+      this.setState({ kind: "review", heading });
+      this.showReview();
+      const proceed = await answered;
+      if (proceed && current()) this.setState({ kind: "syncing", since: Date.now() });
       if (!proceed && current()) {
         // Said out loud, because the two ways of getting here do not look
         // alike (R083-15, rule 7). One is a button labelled "Pause sync"; the
@@ -651,9 +696,52 @@ export default class TrewPlugin extends Plugin {
       }
       return proceed && current();
     } finally {
+      if (this.review === review) this.review = undefined;
       this.syncPrompts.delete(close);
       detach();
     }
+  }
+
+  /**
+   * The review a pass is waiting on, while one is.
+   *
+   * Held here rather than only by its modal, so that the review outlives
+   * wherever it was drawn: the status bar, the ribbon, Sync now and the panel
+   * all open it again, and a modal that is closed without Continue is the
+   * only thing that answers it, and answers no.
+   */
+  private review: PendingReview | undefined;
+
+  /**
+   * Puts the pending review in front of the person, in the main window.
+   *
+   * Drawn again when it is not open there, for instance because it was drawn
+   * in a window that has since gone behind or away. The copy it replaces is
+   * withdrawn without answering, so moving it is never read as a choice.
+   */
+  showReview(): void {
+    const review = this.review;
+    if (!review) return;
+    const shown = review.modal;
+    // Open, attached to a document, and in the main window. A modal whose
+    // window went without Obsidian closing it is none of those, and is the
+    // review that used to wait on nobody.
+    const onScreen =
+      shown !== undefined &&
+      !shown.isClosed &&
+      (shown.containerEl as { isConnected?: boolean } | undefined)?.isConnected !== false &&
+      isMainWindow(review.shownIn);
+    if (onScreen) {
+      focusMainWindow();
+      return;
+    }
+    shown?.withdraw();
+    const modal = new SyncPreviewModal(this.app, review.preview, review.heading);
+    review.modal = modal;
+    modal.ask((proceed) => {
+      if (review.modal === modal) review.answer(proceed);
+    });
+    review.shownIn = openInMainWindow(modal);
   }
 
   private openActivity(): void {
@@ -702,6 +790,12 @@ export default class TrewPlugin extends Plugin {
   }
 
   private showMenu(event?: MouseEvent): void {
+    // Straight to it: while a review is waiting it is the one thing that
+    // moves this vault on, and the status bar says so.
+    if (this.review) {
+      this.showReview();
+      return;
+    }
     const menu = new Menu();
     menu.addItem((item) =>
       item
@@ -1138,6 +1232,9 @@ export default class TrewPlugin extends Plugin {
     if (this.workingTimer !== undefined) return;
     this.workingTimer = setTimeout(() => {
       this.workingTimer = undefined;
+      // The pass that asked is waiting on the answer, so it is not syncing,
+      // whatever it said on its way to asking.
+      if (this.review) return;
       this.setState({
         kind: "syncing",
         ...(this.workingPath ? { path: this.workingPath } : {}),
@@ -1598,6 +1695,11 @@ export default class TrewPlugin extends Plugin {
   }
 
   private async syncOnDemand(verifyContents = false): Promise<void> {
+    // A pass is already waiting, on a question only a person can answer.
+    if (this.review) {
+      this.showReview();
+      return;
+    }
     if (!this.config) {
       new Notice("TrewSync: this vault is not paired yet.");
       new TrewModal(this).open();
@@ -3447,6 +3549,8 @@ function iconFor(state: State): string {
     case "loading":
     case "syncing":
       return "refresh-cw";
+    case "review":
+      return "list-checks";
     case "synced":
       if (state.refused > 0 || state.waiting > 0 || state.recoveryUnknown !== undefined) {
         return "alert-circle";
@@ -3484,6 +3588,9 @@ function toneFor(state: State): string {
     case "loading":
     case "syncing":
       return "trew-working";
+    // Somebody has to act, and nothing happens until they do.
+    case "review":
+      return "trew-attention";
     case "synced":
       return state.refused > 0 || state.waiting > 0 || state.recoveryUnknown !== undefined
         ? "trew-attention"
@@ -3733,11 +3840,12 @@ class TrewPanel {
       this.renderOutstanding(outstanding, state);
       const busy =
         state.kind === "connecting" || state.kind === "loading" || state.kind === "syncing";
-      syncButton
-        .setDisabled(busy)
-        .setButtonText(
-          state.kind === "paused"
-            ? "Resume sync"
+      syncButton.setDisabled(busy).setButtonText(
+        state.kind === "paused"
+          ? "Resume sync"
+          : // Sync now opens the review a pass is waiting on.
+            state.kind === "review"
+            ? "Review changes"
             : state.kind === "offline"
               ? "Reconnect"
               : state.kind === "connecting"
@@ -3747,7 +3855,7 @@ class TrewPanel {
                   : state.kind === "syncing"
                     ? "Syncing…"
                     : "Sync now",
-        );
+      );
       // Both cursors, so "behind and nothing arriving" is something a person
       // can see (I11).
       const at = this.plugin.cursors();
@@ -5384,6 +5492,13 @@ function longStatus(state: State): string {
     case "syncing":
       if (state.transfer) return describeTransfer(state.transfer);
       return state.path === undefined ? "Syncing notes." : `Working on ${state.path}.`;
+    case "review":
+      // "Review your first sync" and "Review folder deletions" both read as
+      // the thing being waited for once lowercased.
+      return (
+        `Waiting for you to ${state.heading.charAt(0).toLowerCase()}${state.heading.slice(1)}. ` +
+        "Nothing syncs until you choose Continue sync or Pause sync."
+      );
     case "synced": {
       // `summarise` returns a fragment because three of its four callers put
       // it after a colon. This is the fourth, and it opens a sentence: the
