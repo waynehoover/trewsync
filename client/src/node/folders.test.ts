@@ -117,7 +117,10 @@ class Device {
     this.vault = new NodeVault(dir);
   }
 
+  private credentials: { deviceId: string; token: string } | undefined;
+
   async connect(server: TestServer): Promise<void> {
+    this.credentials ??= await server.deviceCredentials(this.name);
     this.caughtUp = false;
     this.transport = new Transport(server.wsUrl, {
       onBatch: (b) => this.engine.acceptBatch(b),
@@ -132,7 +135,7 @@ class Device {
       transport: this.transport,
       device: this.name,
       vaultId: "default",
-      ...(await server.deviceCredentials(this.name)),
+      ...this.credentials,
       now: () => (this.clock += 60_000),
     });
     await this.transport.connect();
@@ -312,6 +315,67 @@ describe("a case-only folder rename, on a disk that folds case", () => {
           versions.filter((v) => v.deleted && !v.prev),
           `a folder deletion was sent for ${spelling}`,
         ).toEqual([]);
+      }
+    },
+    240_000,
+  );
+
+  /**
+   * The rename made while the other device was offline (plan/cutover.md,
+   * finding 9). It came back to versions of each note under the new folder
+   * spelling and the old ones retired, and wrote each into the folder it
+   * already had, which on this disk is the same folder: nothing was lost and
+   * the files stayed under `Inner` for good, while the server and every new
+   * device had `iNNER`.
+   */
+  it.skipIf(!diskFolds)(
+    "respells the folder on a device that was offline for the rename",
+    async () => {
+      server = new TestServer();
+      await server.start();
+      const [a, b] = await Promise.all(
+        ["a", "b"].map(async (name) => {
+          const dir = join(root, name);
+          await mkdir(dir);
+          return new Device(name, dir);
+        }),
+      );
+      for (const d of [a!, b!]) {
+        devices.push(d);
+        await d.connect(server);
+      }
+      await mkdir(join(a!.dir, "Inner", "Deeper"), { recursive: true });
+      await writeFile(join(a!.dir, "Inner", "note.md"), "in the folder\n");
+      await writeFile(join(a!.dir, "Inner", "Deeper", "deep.md"), "further in\n");
+      for (let i = 0; i < 4; i++) {
+        await a!.sync();
+        await b!.sync();
+      }
+      expect(await folders(b!.dir)).toEqual(["Inner", "Inner/Deeper"]);
+
+      b!.close();
+      await rename(join(a!.dir, "Inner"), join(a!.dir, "iNNER"));
+      for (let i = 0; i < 3; i++) await a!.sync();
+      await b!.connect(server);
+      for (let i = 0; i < 4; i++) {
+        await b!.sync();
+        await a!.sync();
+      }
+
+      // And a device paired now, which has only what the server holds.
+      const cDir = join(root, "c");
+      await mkdir(cDir);
+      const c = new Device("c", cDir);
+      devices.push(c);
+      await c.connect(server);
+      await c.sync();
+
+      const want = ["iNNER", "iNNER/Deeper"];
+      const notes = { "iNNER/note.md": "in the folder\n", "iNNER/Deeper/deep.md": "further in\n" };
+      for (const d of [a!, c, b!]) {
+        expect(await folders(d.dir), `${d.name}'s folders`).toEqual(want);
+        expect(await files(d.dir), `${d.name}'s notes`).toEqual(notes);
+        expect(await trashed(d.dir), `${d.name} trashed something`).toEqual([]);
       }
     },
     240_000,

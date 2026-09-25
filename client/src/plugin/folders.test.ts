@@ -42,8 +42,9 @@ class Device {
 
   async connect(server: TestServer): Promise<void> {
     this.credentials ??= await server.deviceCredentials(this.name);
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(this.adapter)), ".obsidian");
     this.client = new Client({
-      vault: new ObsidianVault(asVault(new FakeVaultIndex(this.adapter)), ".obsidian"),
+      vault,
       store: new ObsidianIndexStore(this.adapter, ".obsidian/plugins/trew/index.json"),
       url: server.wsUrl,
       ...this.credentials,
@@ -53,9 +54,11 @@ class Device {
       coalesceWrites: false,
     });
     await this.client.connect();
-    // The plugin forwards Obsidian's rename events; the fake's rename is the
-    // adapter's, so it is forwarded here for the one path that moved.
+    // The plugin forwards Obsidian's rename events, except the ones this
+    // client makes itself; the fake's rename is the adapter's, so it is
+    // forwarded here for the one path that moved.
     this.adapter.afterRename = (from, to) => {
+      if (vault.ownRename(from, to)) return;
       if (!from.includes(".trew-tmp-") && !to.includes(".trew-tmp-")) {
         void this.client.noteRename(from, to);
       }
@@ -275,6 +278,37 @@ describe.each([
         "Projects New/sub/b.md": "b\n",
       });
       expect(d.litter(), d.name).toEqual([]);
+    }
+  }, 300_000);
+
+  /**
+   * A case-only folder rename made while the other device was offline, on
+   * disks that fold case (plan/cutover.md, finding 9). The notes came back
+   * under the new spelling and landed in the folder the disk already had, so
+   * the phone kept `Inner` for good while the server had `iNNER`.
+   */
+  it("respells a folder renamed only in case while it was offline", async () => {
+    const [mac, phone] = await two(mobile);
+    for (const d of [mac, phone]) d.adapter.insensitive = true;
+    mac.adapter.seed("Inner/note.md", "in the folder\n");
+    mac.adapter.seed("Inner/Deeper/deep.md", "further in\n");
+    await converge(mac, phone);
+    expect(phone.folders()).toEqual(["Inner", "Inner/Deeper"]);
+
+    phone.close();
+    await mac.adapter.rename("Inner", "iNNER");
+    for (let i = 0; i < 3; i++) await mac.client.settle();
+    await phone.connect(server);
+    await converge(mac, phone);
+
+    for (const d of [mac, phone]) {
+      expect(d.folders(), `${d.name}'s folders`).toEqual(["iNNER", "iNNER/Deeper"]);
+      expect(d.notes(), d.name).toEqual({
+        "iNNER/note.md": "in the folder\n",
+        "iNNER/Deeper/deep.md": "further in\n",
+      });
+      expect(d.litter(), d.name).toEqual([]);
+      expect(d.adapter.trashedLocally, `${d.name} trashed something`).toEqual([]);
     }
   }, 300_000);
 });

@@ -1799,6 +1799,31 @@ export class ObsidianVault implements Vault {
   }
 
   /**
+   * Gives a folder another spelling of its own name (see `Vault.respellFolder`).
+   *
+   * The parent is listed for the folder as the disk spells it, as `matchCase`
+   * does for a file, and the rename is this client's own, so the event
+   * Obsidian reports for it is not sent on as a person's rename.
+   */
+  async respellFolder(from: string, to: string): Promise<boolean> {
+    if (from === to || foldPath(from) !== foldPath(to)) return false;
+    const want = this.resolve(to);
+    const cut = want.lastIndexOf("/");
+    const dir = cut === -1 ? "/" : want.slice(0, cut);
+    const listed = await this.adapter.list(dir);
+    const everything = [...listed.files, ...listed.folders];
+    const name = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+    const wanted = name(want);
+    if (everything.some((p) => name(p) === wanted)) return false;
+    const have = everything.filter((p) => foldPath(name(p)) === foldPath(wanted));
+    if (have.length !== 1 || !listed.folders.includes(have[0]!)) return false;
+    const target = `${have[0]!.slice(0, have[0]!.length - name(have[0]!).length)}${wanted}`;
+    await this.move(have[0]!, target);
+    this.entryChanged(target);
+    return true;
+  }
+
+  /**
    * Removes a removal folder that holds nothing but operating system
    * metadata, with the metadata, and says whether it did. Anything else in it
    * is somebody's, and then nothing is touched.

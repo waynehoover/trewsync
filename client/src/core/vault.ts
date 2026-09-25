@@ -278,6 +278,22 @@ export interface Vault {
    * everything in it, which is right for a file and wrong here.
    */
   removeFolder(path: string): Promise<boolean>;
+  /**
+   * Renames a folder to another spelling of the same name, on a disk that
+   * files the two as one folder, and says whether it did.
+   *
+   * For a case-only folder rename another device made (plan/cutover.md,
+   * finding 9). Its notes arrive under the new spelling and land in the
+   * folder this disk already has, which is the same folder, so every byte
+   * is right and the folder keeps the old spelling for good while the server
+   * and every new device have the new one. Nothing a write does fixes that:
+   * a write respells the file's own name, and the folder is above it.
+   *
+   * Only when `to` and `from` fold together and name one folder here; false,
+   * with nothing changed, otherwise. Optional: a vault that cannot rename
+   * keeps the spelling it has, which loses nothing.
+   */
+  respellFolder?(from: string, to: string): Promise<boolean>;
   mkdir(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   /**

@@ -1752,6 +1752,7 @@ export class Engine {
     // was sent or removed, and this pass decides it again.
     this.folderDeletes = [];
     this.folderRemovals = [];
+    this.folderRespellings = [];
     this.liveFolderSpellings = undefined;
 
     let stats = await this.opts.vault.list({
@@ -2273,6 +2274,14 @@ export class Engine {
           kind: "nothing",
           why: `folder is live on the server as ${live}, a spelling this disk folds together`,
         };
+        // And the disk takes the new spelling, at the end of the pass, where
+        // the server holds nothing live under the old one: that is the rename
+        // this device missed, and the folder kept the old spelling for good
+        // (plan/cutover.md, finding 9). Not where both are live, which is two
+        // folders on the server and one here, and respelling would only move
+        // the disagreement to the other one.
+        if (this.onlyLiveSpelling(path) === live)
+          this.folderRespellings.push({ from: path, to: live });
       }
     }
 
@@ -3840,6 +3849,52 @@ export class Engine {
   }
 
   /**
+   * The one spelling the server holds this folder under live, or undefined
+   * when it holds none or more than one. Asked after
+   * `liveFolderSpelledOtherwise`, which builds the table.
+   */
+  private onlyLiveSpelling(path: string): string | undefined {
+    const spellings = this.liveFolderSpellings?.get(this.identity(path));
+    return spellings?.size === 1 ? [...spellings][0] : undefined;
+  }
+
+  /** Folders this disk spells as the server no longer does, to respell at the end of the pass. */
+  private folderRespellings: { from: string; to: string }[] = [];
+
+  /**
+   * Gives each folder the spelling the server has now, where a case-only
+   * rename on another device retired the one this disk has (see `reconcile`).
+   *
+   * Deepest first, so a folder inside one being respelled is renamed while
+   * the path to it is still the one the listing gave. A failure is logged and
+   * asked again next pass: the folder and everything in it are where they
+   * were, under the old spelling.
+   */
+  private async respellFolders(): Promise<void> {
+    const respell = this.opts.vault.respellFolder?.bind(this.opts.vault);
+    const wanted = this.folderRespellings;
+    this.folderRespellings = [];
+    if (respell === undefined) return;
+    const to = new Map(wanted.map((w) => [w.from, w.to]));
+    for (const from of deepestFirst([...to.keys()])) {
+      // The parents of a deeper one are still spelled the old way here, so
+      // only its own name changes now, and theirs when their turn comes.
+      const wantedName = to.get(from)!;
+      const target =
+        from.slice(0, from.lastIndexOf("/") + 1) +
+        wantedName.slice(wantedName.lastIndexOf("/") + 1);
+      if (target === from) continue;
+      try {
+        if (await respell(from, target)) {
+          this.log("respelled", from, `the server has this folder as ${to.get(from)} now`);
+        }
+      } catch (err) {
+        this.log("could not respell", from, { to: target, why: (err as Error).message });
+      }
+    }
+  }
+
+  /**
    * The folder work this pass put off until everything else in it had moved
    * (docs/design.md, "Folders").
    *
@@ -3854,6 +3909,9 @@ export class Engine {
     const removals = this.folderRemovals;
     this.folderDeletes = [];
     this.folderRemovals = [];
+    // After everything this pass landed, which went into the folder under
+    // whichever spelling it had.
+    await this.respellFolders();
     if (deletes.length === 0 && removals.length === 0) return;
     await this.sendFolderDeletions(deletes, report);
     await this.removeEmptiedFolders(removals, report);

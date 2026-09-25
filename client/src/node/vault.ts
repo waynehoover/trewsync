@@ -2438,6 +2438,30 @@ export class NodeVault implements Vault {
   }
 
   /**
+   * Gives a folder another spelling of its own name (see `Vault.respellFolder`).
+   *
+   * The directory is read for the entry as the disk spells it, because a path
+   * resolves to that spelling whichever way it is asked. Refused where the
+   * two do not fold together, where the disk already has the wanted spelling,
+   * or where it holds both, which is two folders and not this.
+   */
+  async respellFolder(from: string, to: string): Promise<boolean> {
+    if (from === to || foldPath(from) !== foldPath(to)) return false;
+    this.invalidateListing();
+    const full = await this.absolute(from);
+    await this.insideForReal(full);
+    const dir = dirname(full);
+    const want = to.slice(to.lastIndexOf("/") + 1);
+    const entries = await readdir(dir, { withFileTypes: true });
+    if (entries.some((e) => e.name === want)) return false;
+    const have = entries.filter((e) => foldPath(e.name) === foldPath(want));
+    if (have.length !== 1 || !have[0]!.isDirectory()) return false;
+    await rename(join(dir, have[0]!.name), join(dir, want));
+    this.unflushed.add(dir);
+    return true;
+  }
+
+  /**
    * Moves `from` into the trash under the name the file at `full` had.
    *
    * The two are separate because `removeExpecting` disposes of a note that is

@@ -172,8 +172,12 @@ and its files one move at a time.
 A case-only folder rename still travels as a move (plan/protocol.md, "Paths",
 collision rule 1). On a disk that folds case the two spellings are one folder,
 so neither is read as a deletion there: nothing sends a deletion for either,
-and nothing removes the folder. On a disk that keeps case apart the old
-spelling is an empty folder of its own, and it goes.
+and nothing removes the folder. Its files arrive under the new spelling and
+land in the folder the disk already has, so at the end of the pass the folder
+itself is renamed to the new spelling, where the server holds nothing live
+under the old one; a device that was offline for the rename otherwise kept
+the old spelling for good. On a disk that keeps case apart the old spelling is
+an empty folder of its own, and it goes.
 
 A folder another device put back after this one removed it is created again
 here. A read-only device sends no folder deletions and reports each as held
