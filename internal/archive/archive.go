@@ -18,6 +18,13 @@
 // its digest matches the manifest, so an unpack that stops part way has
 // written no database, and a directory without one is not a data directory
 // any command will serve or report as whole.
+//
+// What an archive does not prove is who made it. age encrypts to a public
+// recipient, and the recipient is meant to sit on the server, so anyone who
+// can read it can make an archive the identity opens, holding whatever store
+// they like. An archive that decrypts is not one this server wrote: the
+// callers compare an archive with the backup its data directory recorded
+// (SHA256 here, TakenAt in the manifest) before trusting it as that backup.
 package archive
 
 import (
@@ -244,6 +251,11 @@ func Pack(dir, out string, recipients []age.Recipient) (Report, error) {
 	rep.Manifest, rep.Bytes, rep.SHA256 = man, counted.n, hex.EncodeToString(sum.Sum(nil))
 	return rep, nil
 }
+
+// FileSHA256 is the SHA-256 of the file at p, the digest a Report's SHA256
+// gives an archive, so an archive can be compared with a record of one
+// before it is decrypted.
+func FileSHA256(p string) (string, error) { return fileDigest(p) }
 
 // Pruned is what Prune removed.
 type Pruned struct {

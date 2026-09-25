@@ -52,6 +52,7 @@ func cmdRehearse(ctx context.Context, args []string, out io.Writer) error {
 	vault := fs.String("vault", defaultVault, "the vault to rehearse")
 	work := fs.String("work", "", "where to restore it (default: a new directory inside the data directory, removed after)")
 	keep := fs.Bool("keep", false, "leave the restored directory in place afterwards")
+	other := fs.Bool("not-last-backup", false, "rehearse an archive that is not the last backup the data directory recorded, with a warning")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -69,6 +70,17 @@ func cmdRehearse(ctx context.Context, args []string, out io.Writer) error {
 	live := *dataDir
 	if err := requireDataDir(live, "rehearse a restore of"); err != nil {
 		return err
+	}
+	// An archive is compared with the backup this data directory recorded
+	// before anything is decrypted: anyone holding the recipient can make one
+	// the identity opens, and a rehearsal that passes on it proves nothing
+	// about this server's backups. Refused before the rehearsal starts, so a
+	// wrong archive named by mistake does not record a failed rehearsal.
+	var origin archiveOrigin
+	if encrypted {
+		if origin, err = checkArchiveOrigin(*backup, live, *other, out); err != nil {
+			return err
+		}
 	}
 	dir := *work
 	if dir == "" {
@@ -89,7 +101,7 @@ func cmdRehearse(ctx context.Context, args []string, out io.Writer) error {
 		defer os.RemoveAll(dir)
 	}
 
-	r := rehearsal{out: out, live: live, vault: *vault, dir: filepath.Join(dir, "restore")}
+	r := rehearsal{out: out, live: live, vault: *vault, dir: filepath.Join(dir, "restore"), origin: origin}
 	rec, err := r.run(ctx, *backup, encrypted, *identity)
 	rec.Backup, rec.At, rec.OK = *backup, time.Now().UnixMilli(), err == nil
 	var prev doctor.RehearsalRecord
@@ -119,6 +131,9 @@ type rehearsal struct {
 	vault string
 	dir   string
 	start time.Time
+	// origin is what the archive's comparison with the backup record found,
+	// finished once the archive has been read.
+	origin archiveOrigin
 }
 
 func (r *rehearsal) step(format string, args ...any) {
@@ -138,6 +153,9 @@ func (r *rehearsal) run(ctx context.Context, backup string, encrypted bool, iden
 		}
 		r.step("decrypted and unpacked %d bodies (%s), each checked against its name and the manifest",
 			rep.Manifest.Bodies, humanBytes(rep.Manifest.BodyBytes))
+		if err := r.origin.after(rep, r.out); err != nil {
+			return rec, err
+		}
 	} else {
 		if err := store.CheckDataDir(backup); err != nil {
 			return rec, fmt.Errorf("the backup at %s: %w", backup, err)

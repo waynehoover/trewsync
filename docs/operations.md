@@ -112,6 +112,11 @@ every device keeps its own copy. Look in this order.
    trewd cat -data /var/lib/trew/restore-2026-09-01 -path "Projects/Plan.md"
    ```
 
+   Unpack prints the archive's SHA-256 and says it was not compared with a
+   record: an older archive is not the last backup, and anyone holding the
+   recipient can make one your identity opens. Compare that digest with the
+   one the backup printed on the night it was taken.
+
 5. **If the server has the version but not its body** (`doctor` or `verify`
    says `missing`), run `trew repair`, or "Send back what the server has lost"
    in the plugin, on a device that still has the note.
@@ -267,6 +272,14 @@ it, and records the result for `doctor`:
 ```bash
 trewd rehearse -data /var/lib/trew -backup /srv/trew-backups/trew.tar.age -identity ~/trew-backup-key
 ```
+
+The archive has to be the last backup this data directory recorded (in
+`last-backup.json`), compared by its SHA-256 before anything is decrypted:
+the recipient is public, so anyone who can read it can make an archive the
+identity opens, and a rehearsal that passes on such an archive proves nothing
+about your backups. To rehearse an older archive of your own, add
+`-not-last-backup`; it then goes ahead with a warning naming both snapshot
+times.
 
 It needs the identity on the machine for as long as it runs; bring it over for
 the rehearsal and remove it afterwards, or rehearse on a copy of the data

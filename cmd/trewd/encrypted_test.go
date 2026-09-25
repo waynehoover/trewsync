@@ -250,3 +250,65 @@ func stagingHolds(t *testing.T, dir, words string) bool {
 	}
 	return found
 }
+
+// Anyone holding the recipient, which is public by design, can make an archive
+// that decrypts with the identity: an archive is not proof that this server
+// wrote it. unpack and rehearse used to take any such archive without a word.
+// Now each compares the archive's digest, and the snapshot time in its
+// manifest, with the backup the data directory last recorded, and refuses
+// one that is not it unless told it is meant to be another.
+func TestUnpackAndRehearseCompareTheArchiveWithTheLastRecordedBackup(t *testing.T) {
+	live := seeded(t)
+	keyFile := filepath.Join(t.TempDir(), "key")
+	mustRun(t, "backup-key", "-x25519", "-out", keyFile)
+	offsite := t.TempDir()
+	older := filepath.Join(offsite, "older.tar.age")
+	mustRun(t, "backup", "-data", live, "-to", older, "-recipients-file", keyFile+".pub")
+	appendOne(t, live, "later.md", "written after the first backup")
+	newest := filepath.Join(offsite, "newest.tar.age")
+	mustRun(t, "backup", "-data", live, "-to", newest, "-recipients-file", keyFile+".pub")
+	var rec doctor.BackupRecord
+	if _, err := doctor.ReadRecord(live, doctor.BackupRecordFile, &rec); err != nil || rec.TakenAt == "" {
+		t.Fatalf("the backup record does not carry the snapshot time: %+v (%v)", rec, err)
+	}
+
+	// rehearse -data LIVE: the last backup is rehearsed as before, and says so.
+	out := mustRun(t, "rehearse", "-data", live, "-backup", newest, "-identity", keyFile)
+	if !strings.Contains(out, "is the backup this data directory last recorded") {
+		t.Fatalf("the rehearsal does not say the archive is the recorded one:\n%s", out)
+	}
+	// Any other archive is refused before anything is decrypted.
+	out, err := trew(t, "rehearse", "-data", live, "-backup", older, "-identity", keyFile)
+	if err == nil || !strings.Contains(err.Error(), "is not the backup this data directory last recorded") ||
+		!strings.Contains(err.Error(), "-not-last-backup") {
+		t.Fatalf("a rehearsal of an archive that is not the recorded one: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "decrypted and unpacked") {
+		t.Fatalf("the refused archive was decrypted:\n%s", out)
+	}
+	// Unless it is meant: then it goes ahead, warning, with both snapshot times.
+	out = mustRun(t, "rehearse", "-data", live, "-backup", older, "-identity", keyFile, "-not-last-backup")
+	if !strings.Contains(out, "WARNING") || !strings.Contains(out, rec.TakenAt) {
+		t.Fatalf("an accepted other archive is not warned about:\n%s", out)
+	}
+
+	// unpack -record DIR does the same.
+	to := filepath.Join(t.TempDir(), "restored")
+	out, err = trew(t, "unpack", "-from", older, "-identity", keyFile, "-to", to, "-record", live)
+	if err == nil || !strings.Contains(err.Error()+out, "is not the backup") {
+		t.Fatalf("unpack of an archive that is not the recorded one: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(to); !os.IsNotExist(err) {
+		t.Fatalf("the refused unpack wrote %s (%v)", to, err)
+	}
+	out = mustRun(t, "unpack", "-from", newest, "-identity", keyFile, "-to", to, "-record", live)
+	if !strings.Contains(out, "is the backup this data directory last recorded") {
+		t.Fatalf("unpack does not say the archive is the recorded one:\n%s", out)
+	}
+	// Without a record to compare with, unpack still restores (a disaster
+	// may have taken the data directory), and says what it could not check.
+	out = mustRun(t, "unpack", "-from", older, "-identity", keyFile, "-to", filepath.Join(t.TempDir(), "r2"))
+	if !strings.Contains(out, "Anyone holding its recipient") {
+		t.Fatalf("unpack without a record does not say the archive is unchecked:\n%s", out)
+	}
+}
