@@ -8,6 +8,119 @@ on Basalt, with its end-to-end encryption, and are its history. Results describe
 specific fixtures, not a speed ranking against another product. The original
 transfer tables remain in `git show 573617c:docs/compared.md`.
 
+## Ten thousand notes on a Mac, September 24, 2026
+
+`bun run bench:10k` from `client/`, with `BENCH_OBSIDIAN=1` for the plugin.
+Apple M4 Pro, 14 cores, 48 GB, macOS 27.0, the internal SSD; the harness on
+bun 1.4.2, the shipped `trew` on Node 24.21.0, `trewd serve -mcp -localhost`
+built with Go 1.27.1, Obsidian 1.13.7. Two runs: the first at `a3a8891` with
+the harness uncommitted, before the fix below, and the second at `162faf9`,
+after it, which is the one every check passed on. Where they differ both are
+given, first run first.
+
+The corpus is `src/stress/corpus.ts` at seed 1: 10,000 files, of which 9,646
+notes, 308 attachments and 46 canvases, in 105 folders, 174 MiB. Names in
+Japanese, Greek, Cyrillic and accented Latin, emoji, spaces and every kind of
+capitalisation; frontmatter, wikilinks, tags, a few CRLF and BOM files. Two
+headless devices and a witness are temporary directories; the plugin is a new
+scratch vault opened through Obsidian's IPC. Every phase is checked for exact
+bytes on every device, not only timed.
+
+| At 10,000 files | Result |
+|---|---:|
+| First upload, `trew pair` then `trew sync` | 82.0 s, 96.5 s |
+| Fresh headless device, first download | 113.5 s, 110.6 s |
+| Fresh Obsidian vault, first download: every file there / plugin says synced | 84.5 s / 95.8 s |
+| Steady pass, nothing changed: headless, in process | 58.2 ms, 60.2 ms |
+| Steady pass: `trew sync` as a command, wall clock | 284 ms, 296 ms |
+| Steady pass: the plugin's `syncNow` in Obsidian | 49.9 ms |
+| One saved edit to verified bytes on a second watching device, p50 / p95 (15) | 98 / 175 ms, 104 / 169 ms |
+| Headless to Obsidian / Obsidian to headless, p50 (5) | 151 ms / 225 ms |
+| 200 edits at once, 100 on each device, both watching, until all arrive | 1.35 s, 1.31 s |
+| 200 edits on two disconnected devices, 40 notes on both, reconnect to converged | 1.90 s, 1.91 s |
+| A device away for 500 edits (and 20 of its own) catching up | 1.8 s, 2.0 s |
+| Search index caught up after the upload finished | 5 ms, 17 ms |
+| Search index rebuilt from nothing | 7.2 s, 9.1 s |
+| `search_notes` p50, one match / common word, first page | 64 / 39 ms, 50 / 21 ms |
+| `search_notes` p50, file name / exact tag / tag with children | 63 / 57 / 47 ms, 56 / 54 / 35 ms |
+| Every page of a tag (1,047 notes, 6 pages) / of a name (347 notes, 2 pages) | 487 / 88 ms, 428 / 67 ms |
+| `trewd verify -deep`, 10,104 entries and 22,855 chunk references | 0.89 s, 0.98 s |
+| Server resident: idle / peak over the whole run | 23 MiB / 93 MiB, 23 MiB / 88 MiB |
+| Server CPU over the whole second run, both clients and the plugin | 47.5 s |
+| Server disk after the upload: chunks / search index / database, each with its log | 174 / 65 / 14 MiB |
+
+The 500-edit phase is 400 edits, 50 new notes, 40 deletions and 30 renames on
+one device while the other is closed, which makes 20 edits of its own: ten to
+notes the first also edited, three to notes the first deleted, two to notes it
+renamed and five others. In the second run every edit was where it should be
+on both devices, the three deleted-there-but-edited-here notes came back with
+the edit, every
+deletion stayed deleted, the 40 notes edited on both sides at once came out as
+20 clean merges and 20 notes kept beside a conflict copy holding the other
+side's exact bytes, no conflict copy belonged to anything else, and a witness
+paired from nothing afterwards held byte-for-byte what both devices did.
+
+The obvious comparison is with the same harness at 500 files, run the same
+day: upload 6.1 s, download 5.6 s, a steady pass 5.1 ms, an edit 41 ms, a
+one-match search 3.5 ms. Twenty times the files cost 13 to 16 times as much to
+upload, 20 times to download, 11 times for a steady pass, 2.5 times for an
+edit and 14 to 18 times for that search. Nothing here scales worse than
+linearly, and the server's resident memory stays under 100 MiB throughout.
+
+The Obsidian to headless figure includes one `obsidian` CLI eval, which the
+harness now times on its own beside it; the 225 ms predates that. The first
+run's catch-up time is of a wrong result, described next.
+
+### What the first run found
+
+**A deletion could wait ten seconds or more, and the device that came back
+kept the note.** In the first run, 15 of the 65 notes deleted or moved while
+the second device was away were still live on the server when it came back,
+and the witness downloaded them. The deleting device had edited notes and
+then removed them inside one pass; the read that would have sent the edit
+found the file gone, and the ENOENT was recorded as an ordinary failure with a
+backoff, during which the ordinary pass skips the path. Nothing was lost, but
+every device that caught up in the window kept a note the person had deleted,
+while the one that deleted it said only that it was retrying. At 500 files the
+passes were short enough that it never happened. Fixed in `ba71657`: a read
+that fails on a file the vault now says is not there is decided as a deletion
+at once, in both places a pass reads a file to send it
+(`vanished-upload.test.ts`, and the interactive send in
+`responsive-upload.test.ts`, both failing without the fix).
+
+The harness had a share in the confusion. Its first version stopped settling
+at a round that moved nothing, with a retry still owed, and blamed the device
+that caught up. `converge` in `bench-support.ts` now counts waiting and
+retrying as unsettled.
+
+**A first sync on a Mac is the disk.** The first download of 2,000 files made
+4,112 `F_FULLFSYNC` calls, 8 ms each, 17.5 s of a 23.6 s run, with the
+JavaScript and the server both idle; the upload is the server's fsync of each
+chunk and its directory. Both are linear, and both are what rule 1 costs on
+this filesystem. The saving available, and why it is not taken yet, is in
+[open work](open-work.md#a-first-sync-on-a-mac-waits-on-fsync).
+
+**A search reads every note at the head whatever it finds.** 3.5 ms at 500
+notes, 50 to 64 ms at 10,000, for a search the index answers with one
+candidate. It is under the endpoint's own rate limit at this size and is in
+[open work](open-work.md#search_notes-reads-every-note-at-the-head).
+
+### Running it
+
+```bash
+cd client
+bun run bench:10k                        # headless devices, server, search
+BENCH_OBSIDIAN=1 bun run bench:10k       # and the plugin, in a new scratch vault
+BENCH_FILES=500 bun run bench:10k        # the same at another size
+bunx vitest run --config vitest.stress.config.ts src/stress/scale10k.stress.ts
+```
+
+The last is the stress suite's short form, in memory and without timings: the
+first upload and download, the device away for 500 edits with a conflict, the
+witness and `verify -deep`, at 10,000 notes in about two minutes. It is part of
+`bun run stress`. The plugin run leaves its scratch vault (`~/trew-10k-*`)
+registered in Obsidian and on disk for inspection, as the acceptance runs do.
+
 ## The MCP read side in Go, September 22, 2026
 
 The server's MCP tools reuse the pure half of Basalt's TypeScript MCP, ported
@@ -238,6 +351,27 @@ linear is exactly what was not shown.
 So [open work](open-work.md) keeps its threshold unresolved. The decision it
 gates is still waiting on a phone number at fifty thousand notes, and the
 honest state is that this project has one Android data point, at five hundred.
+
+**The repeat is one command now** (September 24, 2026), and it has not been
+run: `bun run bench:phone` from `client/`, with the phone on adb. It turns
+Doze off and keeps the screen on for the whole run, brings Obsidian forward
+whenever it waits, and reads wakefulness and the focused window every thirty
+seconds into the report, so a run that dozed says so instead of producing a
+number. It seeds `/sdcard/Documents/TrewBench10k` with the 10,000-file
+realistic corpus by one tar while Obsidian is stopped, enables the plugin and
+pairs it through the WebView's DevTools socket, and times the first
+reconcile, steady passes, an edit each way, and a catch-up on 500 edits made
+while the plugin was paused, with a conflict made on the phone and the Mac at
+once; each is checked by SHA-256 on the phone. The one step a person does is
+opening that folder as a vault the first time. The plugin's own pass timings
+are switched on for the run, so the report carries the quiet-pass split the
+threshold is written in, as `bench:android` did at five hundred.
+
+`--dry-run` plays the phone with a folder and a headless client, through the
+same guards and the same evaluation strings, and passes at 10,000 files. It
+proves the harness, not the phone: its numbers are this Mac's, and the one
+worth keeping is that a headless client reconciled 10,000 seeded files it
+already held in 4 s, against the thirty unfinished minutes above.
 
 ### Listing is the biggest term, and half of it was avoidable
 
