@@ -115,16 +115,28 @@ token. A copy opened elsewhere cannot sync as this device: its panel says the
 token is not in this device's keychain and shows **Pair this device again**.
 Pairing it with a new invite adds it as a device of its own.
 
-A vault paired on an older Obsidian moves its token into the keychain the first
-time a newer one loads it. TrewSync writes the keychain, reads the token back,
-and only then removes it from `data.json`. If the keychain does not read it
-back, the token stays in `data.json`, sync carries on, and a notice says so.
+The token leaves `data.json` in two steps, because Obsidian saves its keychain
+in the background and cannot say when that has finished. When a device pairs,
+or a vault paired on an older Obsidian is first loaded by a newer one, TrewSync
+writes the keychain and reads the token back, and `data.json` keeps the token
+too. The next time Obsidian starts and the keychain still holds it, TrewSync
+removes it from `data.json`. So until that restart a copy of `.obsidian` still
+carries the token, and Obsidian closing or crashing before its keychain was
+saved costs nothing. If the keychain does not read the token back, the token
+stays in `data.json`, sync carries on, and a notice says so.
 
-If the token cannot be found (the keychain was reset, or the vault folder was
-renamed, which changes the name the token is kept under), TrewSync stops and
-offers **Pair this device again**. No note is lost: pair with a new invite,
-confirm combining the notes, and it syncs as a new device. Revoke the old row
-under **Devices** once you no longer need it.
+On a desktop each vault has a keychain of its own, so a vault renamed there
+finds its token under the old name, keeps it under the new one and removes the
+old entry. On a phone every vault shares one keychain, so a renamed vault
+cannot tell its own entry from a copy's: it stops, names the entry left under
+the old name and the device, and offers **Pair this device again**. After
+pairing, revoke that device under **Devices** and remove the entry in
+**Settings → Keychain**.
+
+If the token cannot be found (the keychain was reset, or a renamed vault on a
+phone), TrewSync stops and offers **Pair this device again**. No note is lost:
+pair with a new invite, confirm combining the notes, and it syncs as a new
+device. Revoke the old row under **Devices** once you no longer need it.
 
 ## What it does
 

@@ -87,11 +87,15 @@ import { INVITE_ACTION, inviteQrImage } from "./invite-qr.ts";
 import { checkFirstSync, MergeConfirmationRequired } from "./first-sync.ts";
 import {
   IN_KEYCHAIN,
+  IN_KEYCHAIN_PENDING,
   TOKEN_IN,
+  WRITTEN_AT,
+  appStartOf,
   keepInKeychain,
   keychainOf,
   removeFromKeychain,
   secretIdFor,
+  secretsForDevice,
   tokenInKeychain,
 } from "./keychain.ts";
 
@@ -304,6 +308,20 @@ export default class TrewPlugin extends Plugin {
    * the keychain after the file that named it has moved on.
    */
   private secretInUse: string | undefined;
+  /**
+   * The keychain id whose token is known to have reached the keychain's
+   * storage: `getSecret` gave it back at a start of the app other than the
+   * one that wrote it, answering from what that start loaded. Only then may
+   * `data.json` go without the token (rule 3).
+   */
+  private secretStored: string | undefined;
+  /** The pending marker `data.json` holds, while it holds one: the id, and the start that wrote it. */
+  private secretPending: { id: string; writtenAt: string } | undefined;
+  /**
+   * Secrets for this device under the vault's old name, adopted after a
+   * rename on a desktop, to remove once the token is saved under the new one.
+   */
+  private secretsAdopted: string[] = [];
   /** Whether this pairing has ever completed a handshake since the plugin loaded. */
   private everConnected = false;
   /** The pairing in progress, so a second press cannot start another. */
@@ -1910,9 +1928,29 @@ export default class TrewPlugin extends Plugin {
     if (raw === undefined) throw new Error(`Obsidian could not read ${this.dataPath}`);
     if (raw === null) return undefined;
     const where = "the TrewSync plugin's saved settings";
-    if (typeof raw !== "object" || (raw as Record<string, unknown>)[TOKEN_IN] !== IN_KEYCHAIN) {
-      return decodeConfig(raw, where);
+    this.secretPending = undefined;
+    this.secretsAdopted = [];
+    const marker = typeof raw === "object" ? (raw as Record<string, unknown>)[TOKEN_IN] : undefined;
+    if (marker === IN_KEYCHAIN_PENDING) {
+      // The token is in the file, and a copy in the keychain that no start
+      // has yet been seen to load. The file's is the one that counts.
+      const record = raw as Record<string, unknown>;
+      const config = decodeConfig(raw, where);
+      if (config.deviceId !== undefined && config.deviceToken !== undefined) {
+        const id = secretIdFor(this.vaultName(), config.deviceId);
+        const writtenAt = record[WRITTEN_AT];
+        this.secretInUse = id;
+        this.secretPending = { id, writtenAt: typeof writtenAt === "string" ? writtenAt : "" };
+        // Written under the vault's old name, if it has been renamed since;
+        // the same token, so the copy is this device's, and it goes once the
+        // token is saved under the new name.
+        this.secretsAdopted = this.renamedFrom(config.deviceId, id).filter(
+          (old) => this.keychainToken(old) === config.deviceToken,
+        );
+      }
+      return config;
     }
+    if (marker !== IN_KEYCHAIN) return decodeConfig(raw, where);
     return this.withKeychainToken(raw as Record<string, unknown>, where);
   }
 
@@ -1940,21 +1978,67 @@ export default class TrewPlugin extends Plugin {
     const token =
       keychain !== undefined && id !== undefined ? tokenInKeychain(keychain, id) : undefined;
     if (record["deviceToken"] === undefined && token !== undefined) record["deviceToken"] = token;
+    // Renamed, where the keychain is the vault's own: the token is under the
+    // old name, and nothing but this vault can have put it there (see
+    // `renamedFrom`). Taken only when every such secret agrees on it.
+    let stranded: string[] = [];
+    if (record["deviceToken"] === undefined && typeof deviceId === "string" && id !== undefined) {
+      stranded = keychain === undefined ? [] : secretsForDevice(keychain, deviceId, id);
+      const adoptable = this.renamedFrom(deviceId, id);
+      const tokens = new Set(adoptable.map((old) => this.keychainToken(old)));
+      if (adoptable.length > 0 && tokens.size === 1) {
+        record["deviceToken"] = [...tokens][0];
+        this.secretsAdopted = adoptable;
+      }
+    }
     if (record["deviceToken"] !== undefined) {
       const config = decodeConfig(record, where);
-      if (token !== undefined) this.secretInUse = id;
+      if (token !== undefined) {
+        this.secretInUse = id;
+        // Loaded by this start of the app, or put there by the start that
+        // made this record, which wrote it only once a start had loaded it.
+        this.secretStored = id;
+      }
       return config;
     }
     delete record["invite"];
     const config = decodeConfig(record, where);
+    const device = typeof record["device"] === "string" ? record["device"] : "this device";
     tokenNotHere.set(
       config,
       keychain === undefined
         ? "this device's token was kept in Obsidian's keychain, and this Obsidian has none"
-        : "this device's token is not in Obsidian's keychain on this device. That is what a " +
+        : stranded.length > 0
+          ? `this device's token is not in Obsidian's keychain under this vault's name. The ` +
+            `keychain holds ${stranded.join(", ")} for this device under another vault's ` +
+            "name, which is what renaming a vault leaves, and a copy of one on this device too. " +
+            "Pair this vault again; then, if it was renamed, revoke the device " +
+            `"${device}" from another device's list of devices and remove ` +
+            `${stranded.join(", ")} in Settings, Keychain`
+          : "this device's token is not in Obsidian's keychain on this device. That is what a " +
             "copy of the vault, a vault that was renamed or a keychain that was cleared looks like",
     );
     return config;
+  }
+
+  /**
+   * Secrets for this device under another vault name that may be taken as
+   * this vault's: on a desktop, where the keychain is the vault's own
+   * (keychain.ts), so the only way one got there is this vault under an
+   * earlier name. Never on a phone, where every vault shares the keychain and
+   * a copy of this vault would find the original's secret the same way and
+   * connect as it.
+   */
+  private renamedFrom(deviceId: string, id: string): string[] {
+    const keychain = keychainOf(this.app);
+    if (keychain === undefined || Platform.isMobileApp) return [];
+    return secretsForDevice(keychain, deviceId, id);
+  }
+
+  /** The token a keychain id holds here, or undefined. */
+  private keychainToken(id: string): string | undefined {
+    const keychain = keychainOf(this.app);
+    return keychain === undefined ? undefined : tokenInKeychain(keychain, id);
   }
 
   /** The vault's name, which scopes its secret in a keychain every vault may share. */
@@ -2879,6 +2963,7 @@ export default class TrewPlugin extends Plugin {
     const wanted = JSON.stringify(encodeConfig(config));
     const { record, secret } = this.recordFor(config);
     const previous = this.secretInUse;
+    const adopted = this.secretsAdopted;
     await this.saveData(record);
     let back: DeviceConfig | undefined;
     try {
@@ -2894,19 +2979,27 @@ export default class TrewPlugin extends Plugin {
     this.secretInUse = secret;
     // Only now, with what replaces it saved and read back (rule 3): the
     // secret of the pairing this one replaced, a device the server refused or
-    // a copy's lost entry, opens nothing this vault still uses.
+    // a copy's lost entry, opens nothing this vault still uses. Nor does the
+    // one a rename left under the old name, once the token is saved here: in
+    // `data.json`, since a secret this start wrote is only ever pending.
     if (previous !== undefined && previous !== secret) this.dropSecret(previous);
+    this.secretsAdopted = [];
+    for (const old of adopted) if (old !== secret && old !== previous) this.dropSecret(old);
   }
 
   /**
    * What `data.json` holds for a config, and the keychain id its token went
    * to, if it went to one.
    *
-   * The keychain is written and read back first (rule 4), and only a token
-   * that read back is left out of the file; one that did not stays in
-   * `data.json`, as it does on an Obsidian with no keychain, and the plugin
-   * says so once. The order is the migration's too: a token already in the
-   * file comes out of it only after the keychain holds it (rule 3).
+   * The token leaves the file only once the keychain's copy is known to be in
+   * its storage (`secretStored`), which no call in the start that wrote it can
+   * show: `getSecret` answers from memory, and the write behind `setSecret` is
+   * not awaited (keychain.ts). Until then the keychain is written and read
+   * back (rule 4) and the file keeps the token beside a pending marker naming
+   * this start, so a kill before the keychain's write lands leaves the token
+   * where it was (rule 3). `settleToken` finishes it on a later start. A
+   * keychain that refuses or does not read back leaves the token in the file,
+   * as on an Obsidian with no keychain, and the plugin says so once.
    */
   private recordFor(config: DeviceConfig): {
     record: Record<string, string>;
@@ -2918,13 +3011,19 @@ export default class TrewPlugin extends Plugin {
       return { record, secret: undefined };
     }
     const id = secretIdFor(this.vaultName(), config.deviceId);
+    if (this.secretStored === id && tokenInKeychain(keychain, id) === config.deviceToken) {
+      const { deviceToken: _token, ...rest } = record;
+      return { record: { ...rest, [TOKEN_IN]: IN_KEYCHAIN }, secret: id };
+    }
     const refused = keepInKeychain(keychain, id, config.deviceToken);
     if (refused !== undefined) {
       this.keychainRefused(refused);
       return { record, secret: undefined };
     }
-    const { deviceToken: _token, ...rest } = record;
-    return { record: { ...rest, [TOKEN_IN]: IN_KEYCHAIN }, secret: id };
+    return {
+      record: { ...record, [TOKEN_IN]: IN_KEYCHAIN_PENDING, [WRITTEN_AT]: appStartOf(this.app) },
+      secret: id,
+    };
   }
 
   /** Said once per load: the token stays in `data.json`, and why. */
@@ -2983,18 +3082,41 @@ export default class TrewPlugin extends Plugin {
   }
 
   /**
-   * Moves a token that `data.json` still holds into the keychain, once, at load.
+   * Moves a token that `data.json` still holds into the keychain, at load, in
+   * two steps across two starts of the app (rule 3).
    *
-   * `saveVerified` does the work in the order the rules want it: keychain
-   * written and read back, then the file rewritten without the token and read
-   * back. A keychain that fails its read-back leaves the file as it was, token
-   * included, and says so. A save that fails part way leaves either the old
-   * file or the new one with the token in a keychain that read it back, and
-   * the config is read again to find out which (rule 4).
+   * A token only in the file is written to the keychain and read back, and the
+   * file is rewritten with the token still in it and a pending marker naming
+   * this start. A pending marker from an earlier start is the second step:
+   * `getSecret` now answers from the storage this start loaded, so a match
+   * proves the keychain's copy survived a restart, and only then is the file
+   * rewritten without the token. A pending marker whose secret did not survive
+   * (the app was killed before its write landed) is written again. A pending
+   * marker from this same start, which a reload of the plugin meets, proves
+   * nothing yet and is left alone.
+   *
+   * `saveVerified` reads each write back (rule 4). A keychain that fails its
+   * read-back leaves the token in the file and says so. A save that fails part
+   * way leaves either the old file or the new one, and the config is read
+   * again to find out which.
    */
   private async moveTokenToKeychain(config: DeviceConfig): Promise<DeviceConfig | undefined> {
-    if (config.deviceToken === undefined || this.secretInUse !== undefined) return config;
-    if (keychainOf(this.app) === undefined) return config;
+    const keychain = keychainOf(this.app);
+    if (config.deviceToken === undefined || keychain === undefined || !config.deviceId) {
+      return config;
+    }
+    const pending = this.secretPending;
+    const id = secretIdFor(this.vaultName(), config.deviceId);
+    if (pending === undefined && this.secretStored === id && this.secretsAdopted.length === 0) {
+      // In the keychain, and loaded from its storage: nothing to do.
+      return config;
+    }
+    if (pending !== undefined && pending.id === id && pending.writtenAt === appStartOf(this.app)) {
+      return config;
+    }
+    if (pending !== undefined && tokenInKeychain(keychain, id) === config.deviceToken) {
+      this.secretStored = id;
+    }
     try {
       await this.trackStateWrite(this.saveVerified(config));
       return config;

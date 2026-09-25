@@ -400,9 +400,17 @@ export class FakeWorkspace {
  * read-back is there to catch.
  */
 export class FakeSecretStorage {
-  private readonly secrets = new Map<string, string>();
+  /** What `getSecret` answers from: the app's memory. */
+  private secrets = new Map<string, string>();
+  /** What has reached the platform's storage, and what a start loads. */
+  private stored = new Map<string, string>();
   unavailable = false;
   dropWrites = false;
+  /**
+   * Holds writes in memory, as the shipped app does until its unawaited write
+   * to storage lands. Off by default, where every write is stored at once.
+   */
+  holdWrites = false;
 
   setSecret(id: string, secret: string): void {
     if (this.unavailable) throw new Error("Secure storage is not available.");
@@ -411,6 +419,7 @@ export class FakeSecretStorage {
     }
     if (this.dropWrites) return;
     this.secrets.set(id, secret);
+    if (!this.holdWrites) this.stored.set(id, secret);
   }
 
   getSecret(id: string): string | null {
@@ -422,12 +431,19 @@ export class FakeSecretStorage {
   }
 
   deleteSecret(id: string): boolean {
+    if (!this.holdWrites) this.stored.delete(id);
     return this.secrets.delete(id);
   }
 
   /** Everything, gone: a keychain that was reset, or one that failed to load. */
   clear(): void {
     this.secrets.clear();
+    this.stored.clear();
+  }
+
+  /** The app killed, and started again: memory is whatever had been stored. */
+  kill(): void {
+    this.secrets = new Map(this.stored);
   }
 }
 

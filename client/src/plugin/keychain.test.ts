@@ -13,10 +13,12 @@ import type { App as ObsidianApp } from "obsidian";
 import { generateDeviceId } from "../core/pairing.ts";
 import {
   SECRET_ID_MAX,
+  appStartOf,
   keepInKeychain,
   keychainOf,
   removeFromKeychain,
   secretIdFor,
+  secretsForDevice,
   tokenInKeychain,
 } from "./keychain.ts";
 import { App, FakeSecretStorage, resetStub, setApiVersion } from "./stub.ts";
@@ -86,6 +88,29 @@ describe("the keychain", () => {
     store.unavailable = true;
     expect(keepInKeychain(store, "trew-a-c", "token")).toMatch(/refused it/);
     expect(keepInKeychain(new FakeSecretStorage(), "Not Valid", "token")).toMatch(/refused it/);
+  });
+
+  it("names one start of the app the same on every load, and another start differently", () => {
+    const one = app(new FakeSecretStorage());
+    expect(appStartOf(one)).toBe(appStartOf(one));
+    expect(appStartOf(app(new FakeSecretStorage()))).not.toBe(appStartOf(one));
+    // Not among what a copy of the app's state would carry.
+    expect(Object.keys(one)).not.toContain("trew.appStart");
+  });
+
+  it("finds this device's secrets under other vault names, and nobody else's", () => {
+    const store = new FakeSecretStorage();
+    const device = generateDeviceId();
+    const here = secretIdFor("Renamed", device);
+    const before = secretIdFor("Notes", device);
+    const long = secretIdFor("a very long vault name that goes on and on ".repeat(3), device);
+    store.setSecret(here, "current");
+    store.setSecret(before, "old");
+    store.setSecret(long, "older");
+    store.setSecret(secretIdFor("Notes", generateDeviceId()), "another device");
+    store.setSecret(secretIdFor("Emptied", device), "");
+    store.setSecret("other-plugin-secret", "not ours");
+    expect(secretsForDevice(store, device, here).sort()).toEqual([before, long].sort());
   });
 
   it("removes a secret, by emptying it where there is no delete", () => {
