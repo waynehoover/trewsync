@@ -727,6 +727,11 @@ func (s *Session) dispatch(m wire.In, frameLen int) error {
 		if s.proto >= wire.ProtoUndo {
 			return s.handleUndo(m)
 		}
+	case "search":
+		// Protocol 2's too, and unknown to a session of protocol 1.
+		if s.proto >= wire.ProtoSearch {
+			return s.handleSearch(m)
+		}
 	}
 	// Named, not ignored. A client blocked waiting on a reply it will never
 	// get looks exactly like a hung server. `register` and `rotate` land here

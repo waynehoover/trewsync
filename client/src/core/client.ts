@@ -43,6 +43,8 @@ import {
   type DeviceRow,
   type InviteRow,
   type OperationRef,
+  type SearchPage,
+  type SearchQuery,
   type ServerLimits,
   type SocketLike,
   type UndoResult,
@@ -1209,6 +1211,19 @@ export class Client {
     const done = await this.serial(() => this.transport.undo(opId, opts));
     await this.settle({ coalesceWrites: false });
     return done;
+  }
+
+  /**
+   * One page of a search of the vault on the server (plan/protocol.md,
+   * "Search (protocol 2)"): the server's literal search over the notes as
+   * it holds them, not this device's copies.
+   *
+   * Read only, like `history`: nothing is written and no pass is scheduled.
+   * Every string in the answer is note text, exactly as the note holds it;
+   * a caller that shows it to a person makes it safe to show.
+   */
+  async search(q: SearchQuery): Promise<SearchPage> {
+    return this.serial(() => this.transport.search(q));
   }
 
   /**

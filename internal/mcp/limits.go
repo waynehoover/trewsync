@@ -4,6 +4,8 @@ import (
 	"math"
 	"sync"
 	"time"
+
+	"github.com/waynehoover/trew/internal/budget"
 )
 
 // Limits are the endpoint's budgets (PLAN.md section 2.3). A global cap on
@@ -63,60 +65,6 @@ func (l Limits) withDefaults() Limits {
 	return l
 }
 
-// bucket is a token bucket: capacity burst, refilled at rate per second.
-type bucket struct {
-	level float64
-	last  time.Time
-	rate  float64
-	burst float64
-}
-
-func newBucket(rate, burst float64, now time.Time) *bucket {
-	return &bucket{level: burst, last: now, rate: rate, burst: burst}
-}
-
-func (b *bucket) refill(now time.Time) {
-	if now.After(b.last) {
-		b.level = math.Min(b.burst, b.level+now.Sub(b.last).Seconds()*b.rate)
-		b.last = now
-	}
-}
-
-// take spends n if the bucket holds it, and otherwise says how long until it
-// will.
-func (b *bucket) take(now time.Time, n float64) (bool, time.Duration) {
-	b.refill(now)
-	if b.level >= n {
-		b.level -= n
-		return true, 0
-	}
-	return false, b.wait(n)
-}
-
-// charge spends n whether or not the bucket holds it: the bytes of a reply
-// already sent. A bucket in debt admits nothing until it has refilled.
-func (b *bucket) charge(now time.Time, n float64) {
-	b.refill(now)
-	b.level -= n
-}
-
-// ready reports whether the bucket is out of debt, and how long until it is.
-func (b *bucket) ready(now time.Time) (bool, time.Duration) {
-	b.refill(now)
-	if b.level >= 0 {
-		return true, 0
-	}
-	return false, b.wait(0)
-}
-
-func (b *bucket) wait(n float64) time.Duration {
-	missing := n - b.level
-	if missing <= 0 {
-		return 0
-	}
-	return time.Duration(missing / b.rate * float64(time.Second))
-}
-
 // retryAfter is a wait as Retry-After says it: whole seconds, at least one.
 func retryAfter(d time.Duration) int {
 	s := int(math.Ceil(d.Seconds()))
@@ -129,8 +77,8 @@ func retryAfter(d time.Duration) int {
 // tokenBudget is one token's share: requests in flight, and its buckets.
 type tokenBudget struct {
 	inFlight int
-	requests *bucket
-	bytes    *bucket
+	requests *budget.Bucket
+	bytes    *budget.Bucket
 }
 
 // budgets are every token's, by id, and the failed-authentication buckets, by
@@ -140,7 +88,7 @@ type budgets struct {
 	limits   Limits
 	inFlight int
 	tokens   map[string]*tokenBudget
-	failures map[string]*bucket
+	failures map[string]*budget.Bucket
 }
 
 // maxFailureHosts bounds how many addresses the failure buckets remember, so
@@ -148,7 +96,7 @@ type budgets struct {
 const maxFailureHosts = 1024
 
 func newBudgets(l Limits) *budgets {
-	return &budgets{limits: l, tokens: map[string]*tokenBudget{}, failures: map[string]*bucket{}}
+	return &budgets{limits: l, tokens: map[string]*tokenBudget{}, failures: map[string]*budget.Bucket{}}
 }
 
 // admit takes one of the endpoint's slots. The release function gives it back.
@@ -177,18 +125,18 @@ func (b *budgets) admitToken(id string, now time.Time) (func(), time.Duration, b
 	t := b.tokens[id]
 	if t == nil {
 		t = &tokenBudget{
-			requests: newBucket(b.limits.TokenRate, b.limits.TokenBurst, now),
-			bytes:    newBucket(b.limits.TokenBytesRate, b.limits.TokenBytesBurst, now),
+			requests: budget.New(b.limits.TokenRate, b.limits.TokenBurst, now),
+			bytes:    budget.New(b.limits.TokenBytesRate, b.limits.TokenBytesBurst, now),
 		}
 		b.tokens[id] = t
 	}
 	if t.inFlight >= b.limits.TokenInFlight {
 		return nil, time.Second, false
 	}
-	if ok, wait := t.bytes.ready(now); !ok {
+	if ok, wait := t.bytes.Ready(now); !ok {
 		return nil, wait, false
 	}
-	if ok, wait := t.requests.take(now, 1); !ok {
+	if ok, wait := t.requests.Take(now, 1); !ok {
 		return nil, wait, false
 	}
 	t.inFlight++
@@ -207,7 +155,7 @@ func (b *budgets) sent(id string, n int, now time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if t := b.tokens[id]; t != nil {
-		t.bytes.charge(now, float64(n))
+		t.bytes.Charge(now, float64(n))
 	}
 }
 
@@ -231,8 +179,8 @@ func (b *budgets) failed(host string, now time.Time) (bool, time.Duration) {
 				break
 			}
 		}
-		f = newBucket(b.limits.FailRate, b.limits.FailBurst, now)
+		f = budget.New(b.limits.FailRate, b.limits.FailBurst, now)
 		b.failures[host] = f
 	}
-	return f.take(now, 1)
+	return f.Take(now, 1)
 }

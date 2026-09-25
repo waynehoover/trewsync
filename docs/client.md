@@ -85,12 +85,36 @@ Commands use the current directory unless you pass `--dir DIR`.
 | `trew uninvite ID` | Cancel an outstanding invite. |
 | `trew rename NAME` | Rename this device's label. |
 | `trew history "Note.md"` | View a note's versions, newest first. |
+| `trew search "text"` | Search the notes on the server for literal text, a tag or a file name. |
 | `trew deleted` | List deleted notes and whether they can be restored. |
 | `trew restore "Note.md"` | Restore the newest version with content. |
 | `trew unlink` | Remove local pairing and index while keeping notes. |
 
 The [command reference](cli-reference.md)
 covers all flags, device access, repair, and recovery.
+
+## Search your notes
+
+`trew search` asks the server, so it searches every note in the vault as the
+server holds it, whether or not this device has synced lately:
+
+```bash
+trew search "harbour"                 # text, ignoring case
+trew search harbour --case-sensitive
+trew search project --mode tag        # the tag and its nested tags
+trew search meeting --mode filename   # file names
+trew search harbour --folder Journal --context 2
+trew search harbour --all --json      # every page, for a script
+```
+
+Each match prints as `path:line:column: the line`, highlighted on a terminal.
+Anything a note holds that a terminal would act on, such as an escape
+sequence, is shown spelled out instead, so a note cannot change what your
+terminal displays. When more matches follow the first page the command says
+so; `--all` shows them all. If a note could not be searched it is named and
+the command exits 1, since a match may be missing. The
+[command reference](cli-reference.md#search) has every flag, the JSON shape and
+the exit codes.
 
 ## An agent
 

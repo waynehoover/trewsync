@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/waynehoover/trew/internal/search"
 	"github.com/waynehoover/trew/internal/server"
 	"github.com/waynehoover/trew/internal/store"
 )
@@ -73,6 +74,7 @@ type Handler struct {
 
 	budgets *budgets
 	usage   *usage
+	search  search.Source
 
 	// active is every request in flight, by token id, so a revoke can end
 	// them at once; each would lose at its reply check anyway.
@@ -116,6 +118,13 @@ func New(cfg Config) *Handler {
 	}
 	for _, o := range cfg.AllowOrigins {
 		h.origins[o] = true
+	}
+	// The search search_notes shares with a device's (internal/search),
+	// which reads the store only through search.Reader, an interface with
+	// no method that writes.
+	h.search = search.Source{Store: h.st, Bodies: h.st.Chunks(), Vault: h.vault, Log: log}
+	if cfg.Index != nil {
+		h.search.Index = cfg.Index
 	}
 	h.budgets = newBudgets(h.limits)
 	h.usage = newUsage(h.st, h.vault, log)

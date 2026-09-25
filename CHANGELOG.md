@@ -53,6 +53,16 @@ does not work with a TrewSync server, and moving a vault is a new pairing.
 
 ### Added
 
+- **`trew search QUERY`** in the command-line client: literal search of the
+  vault's notes on the server, by text, file name or tag, with `--folder`,
+  `--case-sensitive`, `--context`, `--limit`, `--all` and `--json`. It uses the
+  same search as the MCP tool `search_notes`. Matches are highlighted on a
+  terminal, and control characters and escape sequences in note text are
+  printed spelled out, never sent to the terminal. Protocol 2 gains the
+  `search` request, answered for a paired device with a search budget of its
+  own (`toomany` when over it) so searching cannot slow another device's sync.
+  It needs a server of this release; upgrade the server first.
+
 - **An MCP endpoint in the server** (`trewd serve -mcp`), at `/mcp` on the
   same port. Read tools for any token; exact edits, appends, creates, moves,
   deletions, restores and tag changes for a write token, each one

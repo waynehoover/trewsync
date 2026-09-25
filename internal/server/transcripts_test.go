@@ -512,7 +512,7 @@ func TestTheTranscriptsAreWhatTheServerDoes(t *testing.T) {
 	}
 	for _, want := range []string{"have", "want", "mixed-success putmany", "stale rename source",
 		"stale rename destination", "reconnect continuity", "resend repair", "applied receipts",
-		"undo", "undo of nothing", "protocol 1 is still answered"} {
+		"undo", "undo of nothing", "search", "protocol 1 is still answered"} {
 		if !names[want] {
 			t.Errorf("no transcript covers %q", want)
 		}

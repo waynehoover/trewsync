@@ -131,6 +131,20 @@ def with_op(e: dict, op: dict) -> dict:
     return {**e, "op": op}
 
 
+def match(path: str, uid: int, line: int, column: int, text: str) -> dict:
+    """A content match as a search reply carries it, with no context."""
+    return {"path": path, "uid": uid, "line": line, "column": column, "text": text, "before": [], "after": [],
+            "clipped": False}
+
+
+def searched(rid: int, matches: list[dict], next_after, complete: bool, head: int, scanned: int,
+             scanned_bytes: int) -> dict:
+    """A search page from a server that keeps no index: every note is read."""
+    return {"res": "searched", "id": rid, "matches": matches, "skipped": [], "nextAfter": next_after,
+            "complete": complete, "head": head, "indexedHead": 0, "index": {"usable": False, "why": "$msg"},
+            "scanned": scanned, "scannedBytes": scanned_bytes}
+
+
 def connect(conn: str, device: str, cursor: int, backlog: list[tuple[int, int, list[dict]]], at: int) -> list[dict]:
     """A device's hello, its ready, the batches the backlog replays, and caught-up."""
     steps = [c(conn, send=hello(device, 1, cursor)), c(conn, expect=ready(1, at))]
@@ -344,10 +358,40 @@ TRANSCRIPTS = [
         ],
     },
     {
+        "name": "search",
+        "covers": "Protocol 2: a device searches its vault and is answered from the server's literal search: "
+                  "each match with its version, line, column and line text, a page that says it is complete, "
+                  "and, on a server with no index, that no index narrowed it; a limit makes pages that "
+                  "nextAfter continues, the last one complete; a query or a continuation the search refuses "
+                  "is refused without ending the session.",
+        "steps": [
+            seed("a.md", [b"the harbour at dawn\n"], 1),
+            seed("b.md", [b"no match here\n"], 2),
+            seed("c.md", [b"Harbour lights\n"], 3),
+            *connect("laptop", "laptop", 3, [], 3),
+            c("laptop", send={"op": "search", "id": 2, "query": "harbour"}),
+            c("laptop", expect=searched(2, [
+                match("a.md", 1, 1, 5, "the harbour at dawn"),
+                match("c.md", 3, 1, 1, "Harbour lights"),
+            ], None, True, 3, 3, 49)),
+            c("laptop", send={"op": "search", "id": 3, "query": "harbour", "limit": 1}),
+            c("laptop", expect=searched(3, [match("a.md", 1, 1, 5, "the harbour at dawn")],
+                                        "$after", False, 3, 3, 49)),
+            c("laptop", send={"op": "search", "id": 4, "query": "harbour", "limit": 1, "after": "$after"}),
+            c("laptop", expect=searched(4, [match("c.md", 3, 1, 1, "Harbour lights")], None, True, 3, 1, 15)),
+            c("laptop", send={"op": "search", "id": 5, "query": ""}),
+            c("laptop", expect=err(5, "badentry", "$prefix:invalid_query: ")),
+            c("laptop", send={"op": "search", "id": 6, "query": "harbour", "after": "bm90IGEgY3Vyc29y"}),
+            c("laptop", expect=err(6, "stale", "$prefix:expired: ")),
+            c("laptop", send={"op": "ping"}),
+            c("laptop", expect={"res": "pong"}),
+        ],
+    },
+    {
         "name": "protocol 1 is still answered",
         "covers": "A device on protocol 1 is answered in protocol 1 by a server of protocol 2: its ready says "
-                  "1, a history entry an agent wrote carries no operation, and undo, which protocol 1 does "
-                  "not have, is an unknown op that rejects the request and keeps the session. The server's "
+                  "1, a history entry an agent wrote carries no operation, and undo and search, which protocol 1 "
+                  "does not have, are unknown ops that reject the request and keep the session. The server's "
                   "half only: the TypeScript client speaks protocol 2, so it does not play this one.",
         "steps": [
             seed("a.md", [A], 1),
@@ -361,6 +405,8 @@ TRANSCRIPTS = [
                 entry(2, "a.md", [B], 2, "agent"), entry(1, "a.md", [A], 1, "seed")]}),
             c("laptop", send={"op": "undo", "id": 3, "opId": "AAAAAAAAAAAAAAAAAAAAAA"}),
             c("laptop", expect=err(3, "protostate")),
+            c("laptop", send={"op": "search", "id": 4, "query": "alpha"}),
+            c("laptop", expect=err(4, "protostate")),
             c("laptop", send={"op": "ping"}),
             c("laptop", expect={"res": "pong"}),
         ],
@@ -371,7 +417,8 @@ TRANSCRIPTS = [
 def main() -> None:
     doc = {
         "note": [
-            "Protocol exchanges, message by message (plan/protocol.md; PLAN.md M1 task 12 and M5 task 7):",
+            "Protocol exchanges, message by message (plan/protocol.md; PLAN.md M1 task 12 and M5 task 7,",
+            "and the device search of 2026-09-24):",
             "protocol 2 unless a hello says otherwise, which one transcript does, to hold the server to",
             "answering protocol 1 as protocol 1.",
             "Written by scripts/protocol-transcripts.py and replayed against a real server on a fresh",
@@ -418,6 +465,8 @@ def main() -> None:
                       "about": "an operation's id, 16 random bytes in base64url"},
             "$undoId": {"kind": "string", "same": True, "example": "UndoUndoUndoUndoUndoUQ",
                         "about": "an undo's own operation id, 16 random bytes in base64url"},
+            "$after": {"kind": "string", "same": True, "example": "c2VhcmNoLWNvbnRpbnVhdGlvbg",
+                       "about": "a search's continuation, opaque: it binds the store's epoch"},
         },
         "devices": DEVICES,
         "transcripts": TRANSCRIPTS,

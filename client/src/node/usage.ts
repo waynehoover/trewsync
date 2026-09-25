@@ -4,6 +4,7 @@ import type { Args } from "./cli.ts";
 const POSITIONALS: Record<string, number> = {
   pair: 1,
   history: 1,
+  search: 1,
   rename: 1,
   restore: 1,
   revoke: 1,
@@ -34,7 +35,13 @@ export function validateUsage(args: Args): void {
   refuseExtras(args);
   const forCommands: Record<string, string[]> = {
     "--before": ["history", "deleted"],
-    "--limit": ["history", "deleted"],
+    "--limit": ["history", "deleted", "search"],
+    "--mode": ["search"],
+    "--folder": ["search"],
+    "--case-sensitive": ["search"],
+    "--context": ["search"],
+    "--all": ["search"],
+    "--after": ["search"],
     "--uid": ["restore"],
     "--to": ["restore"],
     "--ttl": ["invite"],
@@ -66,7 +73,12 @@ export function validateUsage(args: Args): void {
   }
   // `pair` is not among these: with no invite it finishes a pairing that was
   // interrupted, and whether there is one is on the disk, which `pair` reads.
+  // The server's own bound, said here rather than as a refusal from it.
+  if (args.command === "search" && args.limitGiven && args.limit > 200) {
+    throw new Error(`--limit for search is at most 200 matches a page, not ${args.limit}`);
+  }
   const required: Record<string, string> = {
+    search: "something to search for",
     history: "the path of a note",
     restore: "the path of a note",
     rename: "a name for this device",

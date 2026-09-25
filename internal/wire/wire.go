@@ -36,8 +36,10 @@ import (
 // speak rather than failing to authenticate.
 //
 // Version 2 is protocol 1 and undo (PLAN.md section 4.5): the `undo` request,
-// and the operation that wrote a version on each `history` entry. Nothing in
-// protocol 1 changed, so a session is answered in the version its hello asked
+// and the operation that wrote a version on each `history` entry; and search,
+// the `search` request, which answers from the same literal search as MCP's
+// search_notes. Protocol 2 had not been released when search joined it, so
+// it is part of 2 rather than a version 3. Nothing in protocol 1 changed, so a session is answered in the version its hello asked
 // for, and one that asked for 1 is answered exactly as protocol 1 was: no
 // `undo`, which is an unknown op there, and history entries as they were. The
 // upgrade order is the server first (docs/server.md, "Upgrade order"), so
@@ -45,8 +47,10 @@ import (
 const (
 	Proto    = 2
 	MinProto = 1
-	// ProtoUndo is the first version with undo.
-	ProtoUndo = 2
+	// ProtoUndo is the first version with undo, and ProtoSearch the first
+	// with search.
+	ProtoUndo   = 2
+	ProtoSearch = 2
 )
 
 // MaxRequestID bounds a client-chosen request id: an integer from 1 to 2^32-1.
@@ -115,6 +119,14 @@ const (
 	// refused because a note changed since is `stale` instead, since that
 	// one has an answer: the copy.
 	CodeNoUndo = "noundo"
+	// CodeTooMany is a device search (protocol 2) over its budget: more
+	// searches at once, or more requests or reply bytes in a moment, than the
+	// server gives one device, or than it runs for every device together. It
+	// carries retryAfterMs, and the session continues; asking again after
+	// the wait can succeed, which is why it is retryable. Searches have a
+	// budget of their own so that a person searching cannot slow another
+	// device's sync.
+	CodeTooMany = "toomany"
 	// CodeProtoState is a message that does not belong in the current state:
 	// a put before hello, a stray binary frame, a frame that is not text. The
 	// session closes.
@@ -237,6 +249,22 @@ type In struct {
 	// the operation replaced beside their notes and changes nothing else.
 	OpID   string `json:"opId,omitempty"`
 	ToCopy bool   `json:"toCopy,omitempty"`
+
+	// search (protocol 2): the server's literal search, the one MCP's
+	// search_notes answers from (plan/protocol.md, "Search"). Query is the
+	// literal, or the tag in tag mode; Mode is content (the default),
+	// filename, both or tag; Folder keeps only notes beneath it;
+	// IncludeChildren, true when absent, lets a tag match its nested tags;
+	// ContextLines is 0 to 3 lines each side; After is the previous reply's
+	// nextAfter. Limit, shared with the listings, is 1 to 200 matches, 50
+	// when absent.
+	Query           string `json:"query,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	Folder          string `json:"folder,omitempty"`
+	CaseSensitive   bool   `json:"caseSensitive,omitempty"`
+	IncludeChildren *bool  `json:"includeChildren,omitempty"`
+	ContextLines    int    `json:"contextLines,omitempty"`
+	After           string `json:"after,omitempty"`
 }
 
 // PutEntry is one file inside a batched put.
@@ -622,6 +650,64 @@ type Undone struct {
 	Entries     []UndoneEntry    `json:"entries"`
 }
 
+// Searched answers a search (protocol 2): one page of matches, at most the
+// limit asked for and 64 KiB of rows, read at Head, the vault's head when the
+// first page was asked for, which every continuation keeps.
+//
+// NextAfter continues the search, and is null on the last page. Complete is
+// true only on a last page that skipped no note; Skipped names each note that
+// could not be searched and why. Index says whether the server's search index
+// narrowed the candidates, and why not when it did not, and IndexedHead how
+// far it has indexed; the index only proposes, so a lagging or absent index
+// costs speed and never a match. Scanned and ScannedBytes are what the page
+// read. Note text is sent as the note holds it: a client that shows it to a
+// person makes it safe to show.
+type Searched struct {
+	Res          string          `json:"res"` // "searched"
+	ID           int64           `json:"id,omitempty"`
+	Matches      []SearchMatch   `json:"matches"`
+	Skipped      []SearchSkipped `json:"skipped"`
+	NextAfter    *string         `json:"nextAfter"`
+	Complete     bool            `json:"complete"`
+	Head         int64           `json:"head"`
+	IndexedHead  int64           `json:"indexedHead"`
+	Index        SearchIndex     `json:"index"`
+	Scanned      int             `json:"scanned"`
+	ScannedBytes int             `json:"scannedBytes"`
+}
+
+// SearchMatch is one match: the note and its version, the 1-based line and
+// column (in UTF-16 code units) of the match's first character, the line it
+// is on (from at most 256 units before the match, at most 1,024 long), up to
+// the context lines asked for each side (each at most 256), and whether any
+// of those was cut. A file-name match has line 0, column 1, the path as text
+// and kind "filename"; a tag match has kind "tag".
+type SearchMatch struct {
+	Path    string   `json:"path"`
+	UID     int64    `json:"uid"`
+	Line    int      `json:"line"`
+	Column  int      `json:"column"`
+	Text    string   `json:"text"`
+	Before  []string `json:"before"`
+	After   []string `json:"after"`
+	Clipped bool     `json:"clipped"`
+	Kind    string   `json:"kind,omitempty"`
+}
+
+// SearchSkipped is a note a search page could not search, and why: its code,
+// such as note_too_large, invalid_utf8 or unreadable.
+type SearchSkipped struct {
+	Path string `json:"path"`
+	Why  string `json:"why"`
+}
+
+// SearchIndex is what the index did for a page: Usable when it narrowed the
+// candidates, and Why when it did not.
+type SearchIndex struct {
+	Usable bool   `json:"usable"`
+	Why    string `json:"why,omitempty"`
+}
+
 // UndoneEntry is one version an undo wrote, and the version it displaced
 // there, zero for a path that held nothing.
 type UndoneEntry struct {
@@ -727,15 +813,16 @@ func Error(code, msg string) Err {
 // request cannot. It is the "retryable" column of the error table in
 // plan/protocol.md.
 //
-// Only three codes are transient. `busy` is admission pressure or a shutdown.
+// Only four codes are transient. `busy` is admission pressure or a shutdown.
 // `nospace` is a full disk, which an operator clears. `internal`
 // is a server fault the put did not survive, and the server is the thing that
-// can be fixed. Everything else names a fact about the request or the
+// can be fixed. `toomany` is a device search over its budget, which the wait
+// it names refills. Everything else names a fact about the request or the
 // credentials that a retry does not change, and a watching client that
 // reconnected on it would loop for ever.
 func Retryable(code string) bool {
 	switch code {
-	case CodeBusy, CodeNoSpace, CodeInternal:
+	case CodeBusy, CodeNoSpace, CodeInternal, CodeTooMany:
 		return true
 	}
 	return false

@@ -372,6 +372,13 @@ async function replay(file: TranscriptFile, tr: Transcript): Promise<Replayed> {
       case "undo":
         promise = t.undo(f["opId"] as string, f["toCopy"] === true ? { toCopy: true } : {});
         break;
+      case "search":
+        promise = t.search({
+          query: f["query"] as string,
+          ...(f["limit"] !== undefined ? { limit: f["limit"] as number } : {}),
+          ...(f["after"] !== undefined ? { after: f["after"] as string } : {}),
+        });
+        break;
       default:
         throw new Error(`${where}: no Transport call sends ${JSON.stringify(f["op"])}`);
     }
@@ -668,6 +675,52 @@ const RESULTS: Record<string, (c: Map<string, Conn>) => void> = {
     expect(again.message).toBe("already_undone: example");
     expect(laptop.openAtEnd, "a refused undo ended the session").toBe(true);
   },
+  search: (c) => {
+    const laptop = c.get("laptop")!;
+    expect(value(laptop, 0, "hello")).toEqual(limits(3));
+    const match = (path: string, uid: number, column: number, text: string) => ({
+      path,
+      uid,
+      line: 1,
+      column,
+      text,
+      before: [],
+      after: [],
+      clipped: false,
+    });
+    const page = (
+      matches: unknown[],
+      nextAfter: string | null,
+      scanned: number,
+      bytes: number,
+    ) => ({
+      matches,
+      skipped: [],
+      nextAfter,
+      complete: nextAfter === null,
+      head: 3,
+      indexedHead: 0,
+      index: { usable: false, why: "a message for the person" },
+      scanned,
+      scannedBytes: bytes,
+    });
+    const a = match("a.md", 1, 5, "the harbour at dawn");
+    const c3 = match("c.md", 3, 1, "Harbour lights");
+    expect(value(laptop, 1, "search")).toEqual(page([a, c3], null, 3, 49));
+    expect(value(laptop, 2, "search")).toEqual(page([a], "c2VhcmNoLWNvbnRpbnVhdGlvbg", 3, 49));
+    expect(value(laptop, 3, "search")).toEqual(page([c3], null, 1, 15));
+    // Refusals of the request, which leave the session as it was.
+    expect(refusal(laptop, 4, "search")).toMatchObject({
+      code: "badentry",
+      message: "invalid_query: example",
+    });
+    expect(refusal(laptop, 5, "search")).toMatchObject({
+      code: "stale",
+      message: "expired: example",
+    });
+    expect(value(laptop, 6, "ping")).toBeUndefined();
+    expect(laptop.openAtEnd, "a refused search ended the session").toBe(true);
+  },
   "undo of nothing": (c) => {
     const laptop = c.get("laptop")!;
     expect(value(laptop, 0, "hello")).toEqual(limits(0));
@@ -743,6 +796,7 @@ describe("the protocol transcripts, played to the real transport", () => {
         "applied receipts",
         "undo",
         "undo of nothing",
+        "search",
         "protocol 1 is still answered",
       ].sort(),
     );
@@ -750,7 +804,7 @@ describe("the protocol transcripts, played to the real transport", () => {
 
   it("sends exactly the client side of every transcript, and returns what it says", async () => {
     const all = await replayAll(load());
-    expect([...all.keys()]).toHaveLength(10);
+    expect([...all.keys()]).toHaveLength(11);
   });
 
   it("leaves the server alone with exactly the transcripts of another protocol", () => {
