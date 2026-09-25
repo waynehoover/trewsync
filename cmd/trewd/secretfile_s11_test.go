@@ -64,6 +64,33 @@ func TestS11OverwritingA0644FileTightensItTo0600(t *testing.T) {
 	assertNoSecretDebris(t, dir)
 }
 
+// writeNewSecretFile, for a key file (`mcp-token -key-out`, `keygen`), never
+// writes over a file, and the refusal is made by the write itself, so a file
+// that appears after a caller checked is not clobbered either. What was there
+// is untouched, and nothing is left beside it.
+func TestWriteNewSecretFileRefusesAFileAlreadyThere(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, firstInviteFile)
+	if err := writeNewSecretFile(path, "first\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writeNewSecretFile(path, "second\n"); err == nil || !strings.Contains(err.Error(), "exists") {
+		t.Fatalf("a second exclusive write: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "first\n" {
+		t.Fatalf("content is %q", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("mode is %o, want 600", perm)
+	}
+	assertNoSecretDebris(t, dir)
+}
+
 // assertNoSecretDebris fails if a temporary file was left in dir, which is what
 // an atomic write must not do once it has finished.
 func assertNoSecretDebris(t *testing.T, dir string) {

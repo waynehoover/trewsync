@@ -1804,8 +1804,8 @@ part is which.
 | `mcp-protocol.test.ts` | 9 | 4 covered, 5 obsolete (stdio framing, SDK admission); the cancellation halves ported |
 | `mcp-artifact.test.ts` | 1 | the shipped-file half ported to `artifact.test.ts`, the tool workflow covered |
 | `mcp-tools-process.test.ts` | 2 | covered; one row (a prepend with no base) ported |
-| `mcp-token.test.ts` | 6 | 3 covered, 2 obsolete, 1 split whose overwrite refusal is open |
-| `mcp-token-auth.test.ts` | 12 | 2 covered, 10 obsolete as written (the credential file); the store-failure half of two ported, the key-out half of two open |
+| `mcp-token.test.ts` | 6 | 4 covered, 2 obsolete |
+| `mcp-token-auth.test.ts` | 12 | 2 covered, 10 obsolete as written (the credential file); the store-failure half of two ported, the key-out half of two covered |
 | `mcp-http.test.ts` | 18 | 8 covered, 3 obsolete (sessions, the GET stream), 4 split, 3 ported; one split's route half ported too |
 | `mcp-http-cli.test.ts` | 4 | obsolete (the flags) |
 | `mcp-http-process.test.ts` | 11 | 2 covered, 6 obsolete, 3 split; the dropped connection ported |
@@ -1826,22 +1826,28 @@ could be done by one line:
 | `TestAppendAndPrependNeedABase` | `append_note` and `prepend_note` without a base are `invalid_arguments` |
 | `cmd/trewd/mcp_shutdown_test.go` `TestSIGTERMLetsAnAdmittedMCPWriteFinish` | SIGTERM lets a write held at `bodies` or `committed` finish and answer before serve exits 0 (fails with the shutdown allowance cut to a millisecond) |
 | `TestServeCutsOffUnfinishedHeaders` | unfinished request headers are cut off at about ten seconds, naming nothing |
-| `cmd/trewd/mcptoken_test.go` `TestAKeyOutThatCannotBeWrittenNamesTheTokenItMinted` | a `-key-out` that cannot be written names the token it left live, and how to revoke it |
+| `cmd/trewd/mcptoken_test.go` `TestAKeyOutThatExistsIsRefusedBeforeATokenIsMinted` | a `-key-out` naming an existing file, or a name no file can be made at, is refused before a token is minted, and the file is untouched |
+| `TestAKeyOutThatCannotBeWrittenRevokesTheTokenItMinted` | a `-key-out` that cannot be written once the token exists revokes that token, and says nothing usable was left |
+| `TestARevokeThatFailsAfterTheKeyOutFailedSaysSoLoudly` | when that revoke fails too, the error says the token is still live, names its id, and gives the exact command that revokes it |
+| `cmd/trewd/secretfile_s11_test.go` `TestWriteNewSecretFileRefusesAFileAlreadyThere` | the exclusive writer refuses a file already at the name, leaving it as it was |
 | `client/src/node/artifact.test.ts`, `scripts/pack-check.sh` | the shipped `trew.mjs`, alone and with the repository denied, pairs and syncs both ways, and neither bundle carries MCP code |
 
-**Fixed, and one decision open.** `trew mcp-token --key-out` refused an
-existing file, and never printed or left a credential it could not make
-durable. `trewd mcp-token -key-out` mints the token through the control
-socket first and then writes the file, so a file that could not be written
-left a live token nobody held, behind an error that named only the path. It
-now names the token and the command that revokes it
-(`cmd/trewd/mcptoken_test.go` `TestAKeyOutThatCannotBeWrittenNamesTheTokenItMinted`,
-which failed before the change). Open for the owner: whether `-key-out` should
-also refuse an existing file, and revoke the token itself when the write
-fails. `writeSecretFile` replaces an existing file on purpose, for the
-first-run invite (`TestS11OverwritingA0644FileTightensItTo0600`), so refusing
-one for tokens is a choice about the command, not a fix. Rows
-`mcp-token.test.ts` 50 and `mcp-token-auth.test.ts` 135 and 158.
+**Fixed.** `trew mcp-token --key-out` refused an existing file, and never
+printed or left a credential it could not make durable. `trewd mcp-token
+-key-out` mints the token through the control socket first and then writes
+the file, so a file that could not be written left a live token nobody held,
+and an existing file was silently replaced. By the owner's decision it now
+refuses an existing file before minting, and writes through
+`writeNewSecretFile`, which links the staged file to the name so the kernel
+refuses a file that appeared in between. A write that fails once the token
+exists revokes that token through `revokeMCPToken`, the path `-revoke` takes;
+when the revoke fails too, the error says the token is still live, names its
+id, and prints the exact revoke command. `writeSecretFile` still replaces an
+existing file on purpose, for the first-run invite
+(`TestS11OverwritingA0644FileTightensItTo0600`). The three
+`cmd/trewd/mcptoken_test.go` tests and
+`TestWriteNewSecretFileRefusesAFileAlreadyThere` failed before the change.
+Rows `mcp-token.test.ts` 50 and `mcp-token-auth.test.ts` 135 and 158.
 
 The per-case tables follow. Line numbers are those of the deleted files at
 `cfb7961`.
@@ -1906,7 +1912,7 @@ The headless client's `trew mcp-token` issued one bearer per vault directory and
 |---|---|---|---|---|
 | 27 | issues an independent bearer once and stores only its verified hash at 0600 | 43 characters of base64url printed once; only its SHA-256 stored; the fingerprint (8 hex) shown, never the hash or token | COVERED (the 0600 JSON file is OBSOLETE: the hash is a SQLite row) | `internal/store/mcptokens_test.go` `TestAnMCPTokenIsStoredAsAHashUnderARandomID` (hash stored, never the clear token, listing carries neither, fingerprint is hash[:8]); `cmd/trewd/mcptoken_test.go` `TestMCPTokensAreMintedListedAndRevokedThroughTheServer` (printed token decodes to 32 bytes, listing carries no credential) |
 | 42 | refuses an unpaired directory without creating state | No pairing, no token, no files | OBSOLETE | A server token needs no device pairing; `trewd mcp-token` on a data dir is the store's, and a refused command mints nothing (`TestMCPTokenRefusesWhatItCannotDo`) |
-| 50 | writes --key-out privately without echoing the key and refuses to overwrite it | Key file 0600, token not in output, path in output; a second `--key-out` to the same path fails, leaves the file and the stored hash unchanged | SPLIT: COVERED except the overwrite refusal, which is OPEN (owner decision, above; the unheld-token half fixed) | 0600 and not printed: `TestMCPTokensAreMintedListedAndRevokedThroughTheServer`, `cmd/trewd/secretfile_s11_test.go` `TestS11WriteSecretFileIsExactAndPrivate`. `trewd -key-out` goes through `writeSecretFile`, which replaces an existing file (by design for the first-run invite, `TestS11OverwritingA0644FileTightensItTo0600`), so an existing key file is silently overwritten |
+| 50 | writes --key-out privately without echoing the key and refuses to overwrite it | Key file 0600, token not in output, path in output; a second `--key-out` to the same path fails, leaves the file and the stored hash unchanged | COVERED | 0600 and not printed: `TestMCPTokensAreMintedListedAndRevokedThroughTheServer`, `cmd/trewd/secretfile_s11_test.go` `TestS11WriteSecretFileIsExactAndPrivate`. The overwrite refusal, with the file left as it was and nothing minted: `cmd/trewd/mcptoken_test.go` `TestAKeyOutThatExistsIsRefusedBeforeATokenIsMinted`, and for a file that appears after the check, `TestWriteNewSecretFileRefusesAFileAlreadyThere` |
 | 65 | keeps key output outside the vault, including a root alias (it.each false, true) | `--key-out` inside the vault, directly or through a symlinked alias of its root, is refused before any write | OBSOLETE | The risk was a credential landing in a synced folder next to the notes; trewd writes to an operator path on the server and has no vault directory to be inside |
 | 82 | rotates and revokes without taking the running vault owner lock | Issue twice while `trew mcp` holds the lock, the second differs; `--revoke` removes the file | COVERED | `TestMCPTokensAreMintedListedAndRevokedThroughTheServer` (mint, list, revoke while serve runs, through the control socket) and `TestMCPTokenCommandsWorkWithNoServerRunning`; several tokens coexist, so "rotation" is mint plus revoke |
 | 100 | refuses issuance flags during revocation without changing the credential | `--revoke --key-out` is a usage error (exit 2) and the stored credential is untouched | COVERED | `cmd/trewd/mcptoken_test.go` `TestMCPTokenRefusesWhatItCannotDo`: the `-list -label` row goes through the same minting-flags guard that `-revoke -key-out` does (`mcptoken.go:47`), and the test ends by checking nothing was minted. Only the `-list` spelling is exercised |
@@ -1924,9 +1930,9 @@ The headless client's `trew mcp-token` issued one bearer per vault directory and
 | 101 | keeps the credential outside note reads by name, leaf alias and ancestor alias | `.trew/mcp-token.json` unreadable through `read_note` by name or any symlink, and absent from listings | OBSOLETE | The server's tokens are never files in the vault, so no vault path can reach them; `internal/mcp/auth_test.go` `TestTheLogCarriesNoTokenNoteTextOrPath` covers the remaining leak (the log) |
 | 110 | does not read a credential through a leaf or state symlink (it.each) | `readMcpToken` refuses a symlinked file or `.trew` with 503 | OBSOLETE | No credential file to follow |
 | 120 | does not issue or rotate through staging outside the vault | A symlinked `.trew/tmp` refuses issuance, nothing printed, nothing written outside | OBSOLETE | Minting is one SQLite transaction; no staging directory |
-| 135 | prints no credential after a durable-write failure | A failed durable write exits nonzero, prints nothing, keeps the old credential | SPLIT: the file half OBSOLETE; the "never a live token nobody holds" half OPEN (owner decision, above; the unheld-token half fixed) | `trewd mcp-token -key-out` mints through the control socket first and then calls `writeSecretFile` (`cmd/trewd/mcptoken.go:108`); if the write fails the token is already live and the error does not name its id. Nothing tests that path |
+| 135 | prints no credential after a durable-write failure | A failed durable write exits nonzero, prints nothing, keeps the old credential | SPLIT: the file half OBSOLETE; the "never a live token nobody holds" half COVERED | `trewd mcp-token -key-out` mints through the control socket first and then writes the file; a write that fails revokes the token it minted: `cmd/trewd/mcptoken_test.go` `TestAKeyOutThatCannotBeWrittenRevokesTheTokenItMinted`, and a revoke that fails too is reported with the id and the revoke command: `TestARevokeThatFailsAfterTheKeyOutFailedSaysSoLoudly` |
 | 143 | keeps the old credential when flushing the staged hash fails | A failed fsync of the staged hash leaves the old file and prints nothing | OBSOLETE | The store's own durability (SQLite commit) replaces the staged file |
-| 158 | prints no credential if flushing its published directory fails | A failed directory fsync prints nothing | OBSOLETE for the hash file; the key-out half is the OPEN (owner decision, above; the unheld-token half fixed) item under 135 | `writeSecretFile` does `fsync.Dir` and returns its error (`pairing.go:246`), but the token is minted by then |
+| 158 | prints no credential if flushing its published directory fails | A failed directory fsync prints nothing | OBSOLETE for the hash file; the key-out half is COVERED under 135 | `writeNewSecretFile` does `fsync.Dir` and returns its error, and the token minted by then is revoked, as for any failed write |
 | 172 | reads the published credential back before printing it | A corrupted published file is caught, nothing printed, corrupt text not echoed | OBSOLETE | No published hash file. `writeSecretFile` reads the key file back (`pairing.go:258`), untested for a mismatch, and again after minting |
 | 183 | does not print or accept a credential path that became a directory | A directory at the credential path refuses issue and authentication (503) | OBSOLETE | No credential path |
 

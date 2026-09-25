@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -19,8 +20,8 @@ import (
 // against the store under the server lock, exactly as `invite` does (PLAN.md
 // section 2.3.1).
 //
-// A new token is printed once, or written to -key-out, mode 0600, and printed
-// nowhere. It reads the whole vault, and with -scope write it changes notes
+// A new token is printed once, or written to -key-out, a new file at mode
+// 0600, and printed nowhere. It reads the whole vault, and with -scope write it changes notes
 // too, so it goes to the operator who asked and to nothing else: not the log,
 // not the listing.
 func cmdMCPToken(args []string, out io.Writer) error {
@@ -29,7 +30,7 @@ func cmdMCPToken(args []string, out io.Writer) error {
 	label := fs.String("label", "", "a name for the token: shown in the list, and what its writes are recorded as")
 	scope := fs.String("scope", string(store.ScopeRead), "read, the default, or write")
 	ttl := fs.Duration("ttl", server.DefaultMCPTokenTTL, "how long the token works; 0 means it never expires")
-	keyOut := fs.String("key-out", "", "write the token to this file, mode 0600, instead of printing it")
+	keyOut := fs.String("key-out", "", "write the token to this new file, mode 0600, instead of printing it; an existing file is refused")
 	list := fs.Bool("list", false, "list the vault's tokens instead of minting one")
 	revoke := fs.String("revoke", "", "revoke the token with this id instead of minting one")
 	asJSON := fs.Bool("json", false, "with -list, print the list as JSON")
@@ -66,15 +67,11 @@ func cmdMCPToken(args []string, out io.Writer) error {
 		}
 		return printMCPTokens(out, reply.MCPTokens, *asJSON)
 	case *revoke != "":
-		reply, err := administer(*dataDir, *vault, "revoke an MCP token", control.Request{Op: "mcp-revoke", TokenID: *revoke})
+		id, err := revokeMCPToken(*dataDir, *vault, *revoke)
 		if err != nil {
 			return err
 		}
-		if err := refused(reply); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Revoked MCP token %s. A request it has in flight is refused before it is answered.\n",
-			reply.MCPRevoked.TokenID)
+		fmt.Fprintf(out, "Revoked MCP token %s. A request it has in flight is refused before it is answered.\n", id)
 		return nil
 	}
 
@@ -83,6 +80,17 @@ func cmdMCPToken(args []string, out io.Writer) error {
 	}
 	if *ttl < 0 {
 		return fmt.Errorf("-ttl %s: a token cannot expire before it is issued", *ttl)
+	}
+	if *keyOut != "" {
+		// Refused before a token exists, so a name already taken costs
+		// nothing. The write below is exclusive as well, for a file that
+		// appears in between.
+		if _, err := os.Lstat(*keyOut); err == nil {
+			return fmt.Errorf("-key-out %s: that file exists, and a key file is never written over. "+
+				"Choose another name, or remove it first; no token was minted", *keyOut)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("-key-out %s: %w. No token was minted", *keyOut, err)
+		}
 	}
 	reply, err := administer(*dataDir, *vault, "mint an MCP token", control.Request{
 		Op: "mcp-token", Label: *label, Scope: *scope, TTLMs: ttl.Milliseconds(), Never: *ttl == 0,
@@ -107,12 +115,18 @@ func cmdMCPToken(args []string, out io.Writer) error {
 	}
 	if *keyOut != "" {
 		// The token is live from the moment the server minted it, so a file
-		// that cannot be written leaves a credential nobody holds. Say which,
-		// and how to end it, rather than an error that names only the path.
-		if err := writeSecretFile(*keyOut, reply.MCPToken.Secret+"\n"); err != nil {
-			return fmt.Errorf("minted MCP token %s, and could not write it to %s: %w. Nothing holds "+
-				"that token now: revoke it with `trewd mcp-token -revoke %s`, and mint another",
-				tok.ID, *keyOut, err, tok.ID)
+		// that cannot be written would leave a credential nobody holds. It is
+		// revoked at once, the way -revoke does it; only when that fails too
+		// is it left live, and then the error says so and how to end it.
+		if err := writeNewSecretFile(*keyOut, reply.MCPToken.Secret+"\n"); err != nil {
+			if _, rerr := revokeUnheldMCPToken(*dataDir, *vault, tok.ID); rerr != nil {
+				return fmt.Errorf("could not write the new MCP token to %s: %v.\n"+
+					"REVOKING IT FAILED TOO: %v.\n"+
+					"MCP token %s IS STILL LIVE, AND NOTHING HOLDS IT. Revoke it now:\n\n  %s\n",
+					*keyOut, err, rerr, tok.ID, revokeCommand(*dataDir, *vault, tok.ID))
+			}
+			return fmt.Errorf("could not write the new MCP token to %s: %w. The token, %s, was revoked, "+
+				"so nothing usable was left; mint another", *keyOut, err, tok.ID)
 		}
 		fmt.Fprintf(out, "Wrote an MCP token for vault %q to %s. It %s, and %s.\n", reply.MCPToken.Vault, *keyOut, what, when)
 	} else {
@@ -123,6 +137,35 @@ func cmdMCPToken(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "Id %s, fingerprint %s, label %q, scope %s. `trewd mcp-token -revoke %s` revokes it.\n",
 		tok.ID, tok.Fingerprint, tok.Label, tok.Scope, tok.ID)
 	return nil
+}
+
+// revokeMCPToken revokes one MCP token through the control socket, or with no
+// server running against the store, and returns the id it revoked.
+func revokeMCPToken(dataDir, vault, id string) (string, error) {
+	reply, err := administer(dataDir, vault, "revoke an MCP token", control.Request{Op: "mcp-revoke", TokenID: id})
+	if err != nil {
+		return "", err
+	}
+	if err := refused(reply); err != nil {
+		return "", err
+	}
+	return reply.MCPRevoked.TokenID, nil
+}
+
+// revokeUnheldMCPToken is how a token minted for a key file that could not be
+// written is revoked: revokeMCPToken, the path -revoke takes. Tests replace it
+// to make the revoke fail.
+var revokeUnheldMCPToken = revokeMCPToken
+
+// revokeCommand is the command that revokes id, with the flags that name the
+// data directory and vault this one was run against, so it can be pasted as
+// it stands.
+func revokeCommand(dataDir, vault, id string) string {
+	cmd := "trewd mcp-token -data " + shellQuote(dataDir)
+	if vault != "" {
+		cmd += " -vault " + shellQuote(vault)
+	}
+	return cmd + " -revoke " + id
 }
 
 func printMCPTokens(out io.Writer, reply *control.MCPTokens, asJSON bool) error {

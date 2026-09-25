@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -128,31 +129,101 @@ func TestMCPTokenCommandsWorkWithNoServerRunning(t *testing.T) {
 	}
 }
 
-// A token is minted before -key-out writes it, so a file that cannot be
-// written leaves a live token nobody holds. The error says which, and how to
-// revoke it, and that works: the operator is never left with a credential
-// they cannot name. `trew mcp-token --key-out`, retired with the headless
-// client's MCP server, never printed or kept a credential it could not make
-// durable (docs/development.md, "Retiring trew mcp").
-func TestAKeyOutThatCannotBeWrittenNamesTheTokenItMinted(t *testing.T) {
+// -key-out never writes over a file: one already at the name, or a name no
+// file can be made at, is refused before a token exists, so the refusal costs
+// nothing and leaves nothing live. The file that was there is untouched.
+func TestAKeyOutThatExistsIsRefusedBeforeATokenIsMinted(t *testing.T) {
 	dir, _, _ := serving(t)
-	// Under a regular file, which no directory can be made at.
+	existing := filepath.Join(t.TempDir(), "agent.key")
+	if err := os.WriteFile(existing, []byte("a key somebody still uses\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := trew(t, "mcp-token", "-data", dir, "-label", "clobber", "-key-out", existing)
+	if err == nil || !strings.Contains(err.Error(), "exists") || !strings.Contains(err.Error(), "no token was minted") {
+		t.Fatalf("-key-out over an existing file: %v", err)
+	}
+	if got, _ := os.ReadFile(existing); string(got) != "a key somebody still uses\n" {
+		t.Fatalf("the existing file now holds %q", got)
+	}
+
+	// Under a regular file, which no file can be made at.
 	notADirectory := filepath.Join(t.TempDir(), "a file")
 	if err := os.WriteFile(notADirectory, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := trew(t, "mcp-token", "-data", dir, "-label", "unheld", "-key-out",
-		filepath.Join(notADirectory, "agent.key"))
+	_, err = trew(t, "mcp-token", "-data", dir, "-label", "unheld", "-key-out", filepath.Join(notADirectory, "agent.key"))
+	if err == nil || !strings.Contains(err.Error(), "No token was minted") {
+		t.Fatalf("-key-out under a regular file: %v", err)
+	}
+	if tokens := mcpTokensJSON(t, dir); len(tokens) != 0 {
+		t.Fatalf("a refused -key-out minted %+v", tokens)
+	}
+}
+
+// A token is minted before -key-out writes it, so a file that cannot be
+// written would leave a live token nobody holds. It is revoked at once, and
+// the error says nothing usable was left. `trew mcp-token --key-out`, retired
+// with the headless client's MCP server, never printed or kept a credential it
+// could not make durable (docs/development.md, "Retiring trew mcp").
+func TestAKeyOutThatCannotBeWrittenRevokesTheTokenItMinted(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, where a directory of mode 500 stops nothing")
+	}
+	dir, _, _ := serving(t)
+	readOnly := filepath.Join(t.TempDir(), "keys")
+	if err := os.Mkdir(readOnly, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) })
+
+	_, err := trew(t, "mcp-token", "-data", dir, "-label", "unheld", "-key-out", filepath.Join(readOnly, "agent.key"))
 	if err == nil {
-		t.Fatal("writing a key under a regular file succeeded")
+		t.Fatal("writing a key into a read-only directory succeeded")
+	}
+	if !strings.Contains(err.Error(), "was revoked") || !strings.Contains(err.Error(), "nothing usable was left") {
+		t.Fatalf("the error does not say the token was revoked:\n%v", err)
+	}
+	if tokens := mcpTokensJSON(t, dir); len(tokens) != 0 {
+		t.Fatalf("a token whose key file could not be written is still live: %+v", tokens)
+	}
+	if entries, _ := os.ReadDir(readOnly); len(entries) != 0 {
+		t.Fatalf("the failed write left %v", entries)
+	}
+}
+
+// When the key file cannot be written and the revoke fails too, the token is
+// live and nobody holds it. The error says so loudly, names the id, and gives
+// the exact command that revokes it, which works.
+func TestARevokeThatFailsAfterTheKeyOutFailedSaysSoLoudly(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, where a directory of mode 500 stops nothing")
+	}
+	dir, _, _ := serving(t)
+	readOnly := filepath.Join(t.TempDir(), "keys")
+	if err := os.Mkdir(readOnly, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) })
+	was := revokeUnheldMCPToken
+	revokeUnheldMCPToken = func(string, string, string) (string, error) {
+		return "", errors.New("the control socket went away")
+	}
+	t.Cleanup(func() { revokeUnheldMCPToken = was })
+
+	_, err := trew(t, "mcp-token", "-data", dir, "-label", "unheld", "-key-out", filepath.Join(readOnly, "agent.key"))
+	if err == nil {
+		t.Fatal("writing a key into a read-only directory succeeded")
 	}
 	tokens := mcpTokensJSON(t, dir)
 	if len(tokens) != 1 || tokens[0].Label != "unheld" {
 		t.Fatalf("listed %+v", tokens)
 	}
 	id := tokens[0].ID
-	if !strings.Contains(err.Error(), id) || !strings.Contains(err.Error(), "trewd mcp-token -revoke "+id) {
-		t.Fatalf("the error does not name the token it left live, %s:\n%v", id, err)
+	command := "trewd mcp-token -data " + shellQuote(dir) + " -revoke " + id
+	for _, want := range []string{"REVOKING IT FAILED TOO", "the control socket went away", "STILL LIVE", id, command} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the error does not say %q:\n%v", want, err)
+		}
 	}
 	mustRun(t, "mcp-token", "-data", dir, "-revoke", id)
 	if left := mcpTokensJSON(t, dir); len(left) != 0 {

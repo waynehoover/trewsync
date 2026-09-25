@@ -175,13 +175,15 @@ func cmdBackupKey(args []string, out io.Writer) error {
 // writeNewKeyFile writes content as writeSecretFile does, atomically at mode
 // 0600 and read back, and refuses a path that already holds a file:
 // overwriting an identity would make every backup encrypted to it unreadable.
+// The write itself is exclusive too (writeNewSecretFile), so a file that
+// appears after the check is refused rather than replaced.
 func writeNewKeyFile(path, content string) error {
 	if _, err := os.Lstat(path); err == nil {
 		return fmt.Errorf("%s exists, and a key is never written over: choose another name", path)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return writeSecretFile(path, content)
+	return writeNewSecretFile(path, content)
 }
 
 /* ---------------------------------------------------------------- *
