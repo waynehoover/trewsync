@@ -82,6 +82,10 @@ run "vet" "" go vet ./...
 # would pass both suites while no longer being the reference's answer.
 run "the protocol vectors are what the reference writes" "" \
   uv run --no-project --python 3.13 scripts/protocol-vectors.py --check
+# The cutover's witness comparison (plan/cutover.md) reads the path rules from
+# that reference, so it is checked beside it.
+run "the witness inventory explains every difference" "" \
+  bash "$root/scripts/vault-inventory.test.sh"
 # Tests also read repository docs outside the Go module; the Go result cache
 # does not track those inputs. Always execute the release gate's server tests.
 run "test" "" go test -race -count=1 ./...

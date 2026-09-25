@@ -42,7 +42,7 @@ import {
   type PairingStore,
 } from "../core/client.ts";
 import { REJOIN_ADVICE, type SyncReport } from "../core/engine.ts";
-import type { InviteString } from "../core/invite-string.ts";
+import { INVITE_PREFIX, type InviteString } from "../core/invite-string.ts";
 import {
   NoCredential,
   encodeConfig,
@@ -394,17 +394,24 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
   // The file serve writes holds one line per address it found, each the same
   // invite. Handed over whole it is several strings in one, and the codec
   // would call that damaged, which sends somebody looking for a copying
-  // mistake nobody made.
+  // mistake nobody made. Only lines holding an invite count: what `trewd
+  // invite` prints is a sentence and then the invite, and saved to a file or
+  // piped in whole it is one invite, not two (found in the M10 rehearsal,
+  // where it was refused as "2 invites, one per address").
   const lines = given?.split(/\r?\n/).filter((line) => line.trim() !== "") ?? [];
-  if (lines.length > 1) {
+  const invites = lines.filter((line) => line.trim().startsWith(INVITE_PREFIX));
+  if (invites.length > 1) {
     throw new Error(
-      `that holds ${lines.length} invites, one per address of the server, all the same invite. ` +
+      `that holds ${invites.length} invites, one per address of the server, all the same invite. ` +
         `Give trew pair the one line whose address this device can reach.`,
     );
   }
+  // Anything else is handed to the codec whole, so a string that is not an
+  // invite at all is named for what it is.
+  const handed = invites.length === 1 ? invites[0]!.trim() : given;
   // Parsed before anything on disk is looked at, so a string pasted wrong is
   // named as that whatever state the vault is in.
-  const invite = given === undefined ? undefined : parseInvite(given);
+  const invite = handed === undefined ? undefined : parseInvite(handed);
   const held = await loadConfig(args.dir);
   let pending: PendingPairing;
   // Whether this finishes a pairing an earlier run started. That run may have

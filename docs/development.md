@@ -1629,6 +1629,82 @@ holds a live file at as taken (`freeConflictPath`); the engine test "numbers
 past a copy's name the server holds that has not reached this disk" failed
 without that and passes with it. Both long runs are after the fix.
 
+### The cutover rehearsal (M10)
+
+PLAN.md M10 step 1, run on 2026-09-24 on read-only copies of the owner's
+vault. The runbook, the measured vault and the findings are
+[plan/cutover.md](../plan/cutover.md); this is how the checks are built and
+what the rehearsal established. Nothing from the vault is in the repository:
+the copies, inventories and backups were deleted, and only counts are
+recorded.
+
+**The inventory** (`scripts/vault-inventory.py`). One JSON line per entry,
+sorted by the path's UTF-8 bytes: the path as Obsidian names it (NFC, U+00A0
+and U+202F as spaces, the mapping both adapters apply), the kind (`note` for
+`.md`, `attachment`, `folder`), size, SHA-256, and the reason an entry is not
+expected on a witness. The reasons are the server's path rules, taken from
+`scripts/protocol-vectors.py`'s `path_reason` and `fold` rather than written a
+fourth time, plus `toolarge` (over `-max-file`), `collision` (a fold group,
+of which exactly one may arrive), `symlink` and `other`. It runs under the
+interpreter the fold is pinned to (`uv run --no-project --python 3.13`) and
+refuses any other. `compare` is go only when every synced source entry is on
+the witness with the same kind, size and hash, every excluded one is absent,
+and nothing is witness-only outside `.trew`, `.obsidian` and `.trash` (a
+client's own state; a leftover `.trew-tmp-` file is a failure). It prints
+classes and counts, and paths only with `--paths`. `snapshot` copies a vault
+and compares every entry, excluded ones too, listing the source again after
+to catch a writer still running. `changes` exports what differs between the
+freeze's inventory and a current witness's, verifying each exported file's
+hash; `apply` writes it into a vault as it was at the freeze, per path only
+where the vault still holds the frozen bytes (or nothing, for an addition), a
+dry run unless `--apply`.
+
+`scripts/vault-inventory.test.sh` (the gate step "the witness inventory
+explains every difference", in `scripts/check.sh` and CI's server job) builds
+a vault with dot folders, an NFD and a no-break-space name, an empty folder,
+a symlink, a file over the limit and a fold pair (tested where the disk keeps
+both; APFS makes them one file), and holds that a faithful witness is a go
+and that one changed byte, a missing note, a missing empty folder, an extra
+file, a staging file left behind, an excluded file that arrived, and both of
+a fold group arriving are each a no-go; then that an export applied to the
+freeze reproduces the current state and that a file changed on both sides is
+refused and left as it was. Its dry-run case failed before the fix to
+`apply`'s folder accounting.
+
+**The rehearsal** (`scripts/cutover-rehearsal.sh VAULT`). Builds `trewd` and
+`trew` from the checkout, snapshots the vault into a private temporary
+directory, runs a scratch server on loopback, uploads from the copy, downloads
+into a fresh witness and compares, makes edits after the cut on two devices
+with one offline (an append to the same note on both, a nested folder rename
+with an offline edit inside it, Unicode, NFD and no-break-space names, an
+attachment, a large note, a deletion), checks each edit's words survive,
+compares the devices and a second fresh witness, takes an encrypted backup and
+runs `trewd rehearse`, and exports the changes since the cut, checks them
+against `trewd restore -to-uid CUT -json` path for path, applies them to the
+frozen copy and compares with the server's state. It prints counts and times,
+and removes everything at the end. The first manual run added an agent's
+append through `/mcp` (a read token's refused), a file one byte over 64 MiB
+(refused with its size, explained as `toolarge`), a manual `unpack` and
+`serve` of the backup with a headless witness from it, and `trewd doctor`.
+
+**What it established, on this vault.** 3,853 synced entries (3,621 notes,
+136 attachments, 96 folders, 80.9 MiB) and 593 dot-named exclusions; nothing
+refused by length, characters, normalisation, case or size. Upload 40 to 52 s,
+a witness download 42 to 91 s, an encrypted backup 106 to 183 s (96.5 MiB of
+ciphertext), `trewd rehearse`'s recovery time 55 to 82 s, on the Mac over
+loopback. Every verdict go, in three runs. The shared note merged both
+appends in place; the offline edit inside the renamed folder stayed at its old
+path beside the renamed copy; 203 notes' frontmatter is refused for tags by
+the Go reader and, checked by running it over the witness, by Basalt's
+TypeScript reader alike.
+
+**Fixed.** `trew pair --key-file` on the saved output of `trewd invite` was
+refused as "2 invites, one per address": every non-empty line counted, and
+`trewd invite` prints a sentence before the invite. Only lines holding a
+`trew1i_` string count now; `client/src/node/cli.test.ts` "takes everything
+trewd invite printed as the one invite it is" fails without the change. The
+plugin's pairing field takes a pasted line and was not affected.
+
 ### Latent issues in the chunker
 
 Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,

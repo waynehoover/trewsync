@@ -380,6 +380,25 @@ describe("pairing a vault", () => {
     expect(r.all).toMatch(/one line/);
     await expect(read(a, ".trew/config.json")).rejects.toThrow();
   }, 240_000);
+
+  /**
+   * Found in the M10 rehearsal: `trewd invite > invite.txt` and then
+   * `trew pair --key-file invite.txt` was refused as "2 invites, one per
+   * address", because the sentence trewd prints before the invite was
+   * counted as a second one. Everything trewd invite printed is one invite.
+   */
+  it("takes everything trewd invite printed as the one invite it is", async () => {
+    await fresh();
+    await firstDevice();
+    const printed = await server.cli("invite");
+    expect(printed.split("\n").filter((l) => l.trim() !== "").length, printed).toBeGreaterThan(1);
+    const file = join(await vaultDir("saved"), "invite.txt");
+    await writeFile(file, printed);
+    const b = await vaultDir("b");
+    const r = await cli("pair", "--key-file", file, "--dir", b, "--json");
+    expect(r.code, r.all).toBe(0);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+  }, 240_000);
 });
 
 describe("syncing real files on a real disk", () => {
