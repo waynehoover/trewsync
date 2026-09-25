@@ -574,7 +574,10 @@ func (h *Handler) callTool(ctx context.Context, r *http.Request, cred *credentia
 			h.duringTool(tool.Name)
 		}
 		o = tool.Run(c, parseArgs(p.Arguments))
-		if cctx.Err() != nil && !o.isError {
+		// Never over a mutation's reply (raw), committed or replayed: the
+		// deadline cannot take a commit back, and busy would tell the agent
+		// nothing was written, with no opId to ask about.
+		if cctx.Err() != nil && !o.isError && o.raw == nil {
 			o = c.fail(&ToolError{Code: "busy", Message: "the call ran out of time or was cancelled; try a smaller page"})
 		}
 		cancel()

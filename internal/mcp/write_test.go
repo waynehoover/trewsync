@@ -752,3 +752,33 @@ func TestRestoreNoteReadsOnlyWhatReadNoteReads(t *testing.T) {
 		t.Fatalf("a refused restore of an attachment wrote leak.md at %d, %d operations", r.head("leak.md"), r.operations())
 	}
 }
+
+// A write that commits after the tool's deadline has passed is still
+// committed, and its reply says so, with the opId: the deadline bounds how
+// long a tool works, and it cannot take back a commit. Replaced by busy, the
+// agent would be told nothing was done with no id to ask about, and could
+// write the same thing twice. The commit lock is held past the deadline, so
+// the write waits for it and commits late.
+func TestAWriteCommittedPastTheDeadlineSaysCommitted(t *testing.T) {
+	const deadline = 100 * time.Millisecond
+	r := newRig(t, withLimits(Limits{ToolDeadline: deadline}))
+	a := r.writer("agent")
+	held, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = r.srv.UnderCommitLock(func() error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	go func() {
+		time.Sleep(3 * deadline)
+		close(release)
+	}()
+	e := invoke(t, a.cs, "create_note", map[string]any{"path": "late.md", "content": "written after the deadline\n"})
+	w := wrote(t, e)
+	if w.OpID == "" || r.head("late.md") == 0 || r.bytesAt(r.head("late.md")) != "written after the deadline\n" {
+		t.Fatalf("the late write's reply %s, and late.md is at uid %d", e.raw, r.head("late.md"))
+	}
+}
