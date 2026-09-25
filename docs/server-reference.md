@@ -54,6 +54,13 @@ for installed usage.
 | `-mcp` | Off | Also serve the MCP endpoint at `/mcp` for agents; see below. |
 | `-allow-ephemeral` | Off | Start an empty store on storage a restart or a container replacement erases. |
 | `-alert-every` | `5m` | How often the server checks itself and logs an alert with its remedy; `0` turns it off. |
+| `-daily-folder` | The vault's root | The folder daily notes are in, as Obsidian's Daily notes "New file location". |
+| `-daily-format` | `YYYY-MM-DD` | A daily note's name, as Obsidian's Daily notes "Date format"; may hold `/`. |
+| `-daily-template` | None | The vault path of the daily template, as Daily notes "Template file location". |
+| `-templates-folder` | `Templates` | Where `create_from_template` finds templates, as Templates "Template folder location". |
+| `-template-date-format` | `YYYY-MM-DD` | What a template's `{{date}}` writes, as Templates "Date format". |
+| `-template-time-format` | `HH:mm` | What a template's `{{time}}` writes, as Templates "Time format". |
+| `-timezone` | The server's local zone | IANA zone the daily-note tools read "today" and `{{time}}` in. |
 | `-v` | Off | Verbose logging. |
 
 Batch and fetch budgets cannot be smaller than one maximum-sized chunk.
@@ -101,6 +108,14 @@ store, 0.74 s for the same notes, after the port is bound, so a device
 reconnecting meanwhile waits rather than being refused. The index takes about
 twice the notes' size on disk (39 MB there). There is no flag to turn it off.
 
+The `-daily-*`, `-template*` and `-timezone` flags matter only with `-mcp`,
+for the [daily-note and template tools](agent.md#daily-notes-and-templates).
+Obsidian keeps these settings in `.obsidian/daily-notes.json` and
+`.obsidian/templates.json`, which never sync, so copy them from Obsidian's
+settings. `serve` refuses to start with a path the server would refuse or a
+date format it cannot write as Obsidian does, naming the flag. `trewd service
+install` does not carry them into the unit; add them to its `ExecStart` line.
+
 On a vault with no devices, `serve` writes an invite for the first one to
 `-invite-out`, mode 0600, and logs that path and its expiry, never the invite.
 The file has one line per address the invite names, all the same invite. A
@@ -111,7 +126,8 @@ restart while it is still outstanding leaves the file alone.
 `serve -mcp` answers MCP's streamable HTTP at `/mcp` on the same port, with
 read tools over the notes the server stores: `vault_status`, `list_notes`,
 `read_note`, `search_notes`, `note_history`, `deleted_notes`,
-`compare_versions`, `delivery_status` and `lookup_operation`. A token minted
+`compare_versions`, `delivery_status`, `lookup_operation`, and the vault-health
+tools `backlinks`, `outgoing_links`, `broken_links` and `orphans`. A token minted
 with `-scope write` also gets the write tools, below. [Connect an agent](agent.md)
 is the guide to setting a client up. A client authenticates with
 `Authorization: Bearer <token>`:
@@ -140,14 +156,18 @@ With `-addr 0.0.0.0` or the default `:3003` the endpoint listens on every
 interface, and the server logs a warning saying so: keep `/mcp` behind
 Tailscale or an identity-aware proxy. A request from a browser must carry an
 `Origin` given with `-allow-origin`. `search_notes` asks the server's
-[search index](#serve), the one every `serve` keeps.
+[search index](#serve), the one every `serve` keeps, and the vault-health tools
+read its link keys when it has caught up with the vault, and every note, 512 a
+page, when it has not.
 
 ### Writing through the endpoint
 
 A write token adds `create_note`, `create_directory`, `edit_note`,
 `append_note`, `prepend_note`, `delete_note`, `move_note`, `restore_note`,
-`add_tags`, `remove_tags`, `manage_tags`, `rename_tag` and `undo_operation`.
-Each is one operation: all of it commits or none of it, as a new version of
+`add_tags`, `remove_tags`, `manage_tags`, `rename_tag`, `undo_operation`, and
+the daily-note and template tools `today_note`, `append_to_daily` and
+`create_from_template`, which follow the `-daily-*` and `-template*` settings
+above. Each is one operation: all of it commits or none of it, as a new version of
 every path it changes, which every device receives like any other. What an agent writes is
 recorded with the token's label as its author, so `note_history` and
 `trewd audit` name it. A version an agent's write displaces is kept for at
@@ -167,6 +187,10 @@ also says:
 - **Exact edits only.** `edit_note` replaces text that occurs exactly once in
   the version read; there is no whole-note overwrite. Only Markdown and plain
   text notes can be changed, not Excalidraw drawings or attachments.
+- **Appends to a daily note need no base.** `append_to_daily` adds its text
+  to the version it reads and commits only if that is still the head, so a
+  change in between is `stale`, never lost; `today_note` and
+  `create_from_template` only ever create a note where none is.
 - **Moves, deletions and tag changes are previewed first.** Called without
   `changes`, these tools return a preview of every note they would change and
   write nothing. Called again with the preview's `changes`, `head` and

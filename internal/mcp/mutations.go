@@ -351,6 +351,11 @@ func createNote(c *call, a *args) outcome {
 // one operation with the folders it lacks. Its base is zero, which the store
 // reads as "nothing live here" at the commit: an exclusive create.
 func (m *mutation) create(path string, body []byte, from *restoredFrom) outcome {
+	return m.createWith(path, body, pathRender(path, "", from))
+}
+
+// createWith is create with the result render makes.
+func (m *mutation) createWith(path string, body []byte, render func(store.OpResult) (any, any)) outcome {
 	c := m.c
 	head, gone, err := c.h.st.Head(c.h.vault, path)
 	if err != nil {
@@ -369,7 +374,7 @@ func (m *mutation) create(path string, body []byte, from *restoredFrom) outcome 
 		return m.failed(err)
 	}
 	op := store.Operation{Entries: append(folders, store.OpEntry{Entry: e}), Checks: checks}
-	return m.submit(op, pathRender(path, "", from))
+	return m.submit(op, render)
 }
 
 func createDirectory(c *call, a *args) outcome {
@@ -461,6 +466,12 @@ func insertNote(c *call, a *args, insert func([]byte, string) (notes.Revision, e
 // which still revalidates the base at the commit boundary (PLAN.md section
 // 4.3).
 func (m *mutation) rewrite(path string, base int64, change func([]byte) (notes.Revision, error)) outcome {
+	return m.rewriteWith(path, base, change, pathRender(path, "", nil))
+}
+
+// rewriteWith is rewrite with the result render makes.
+func (m *mutation) rewriteWith(path string, base int64, change func([]byte) (notes.Revision, error),
+	render func(store.OpResult) (any, any)) outcome {
 	c := m.c
 	e, err := c.liveNote(path, base)
 	if err != nil {
@@ -475,14 +486,14 @@ func (m *mutation) rewrite(path string, base int64, change func([]byte) (notes.R
 		return m.failed(err)
 	}
 	if rev.Noop {
-		return m.submit(store.Operation{Checks: []store.OpCheck{{Path: path, Base: base}}}, pathRender(path, "", nil))
+		return m.submit(store.Operation{Checks: []store.OpCheck{{Path: path, Base: base}}}, render)
 	}
 	w := c.newEntry(path)
 	w.CTime = e.CTime
 	if err := c.storeBodies(c.content(&w, rev.Bytes)); err != nil {
 		return m.failed(err)
 	}
-	return m.submit(store.Operation{Entries: []store.OpEntry{{Entry: w, Base: base}}}, pathRender(path, "", nil))
+	return m.submit(store.Operation{Entries: []store.OpEntry{{Entry: w, Base: base}}}, render)
 }
 
 func restoreNote(c *call, a *args) outcome {

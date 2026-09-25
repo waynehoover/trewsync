@@ -69,6 +69,21 @@ does not work with a TrewSync server, and moving a vault is a new pairing.
   all-or-nothing, previewed where it touches more than one note, and
   retryable safely with an idempotency key. Every note-derived string arrives
   under `untrusted_content`. See [Connect an agent](docs/agent.md).
+- **Vault health tools for agents.** `backlinks`, `outgoing_links`,
+  `broken_links` and `orphans` find links as `move_note` rewrites them (wiki
+  names, paths, aliases, embeds, relative and percent-encoded Markdown links),
+  report a name several notes share as ambiguous, and page through large
+  vaults, reading only the notes that may link when the search index has
+  caught up ([Links and vault health](docs/agent.md#links-and-vault-health)).
+- **Daily-note and template tools for agents.** `today_note`,
+  `append_to_daily` (optionally under a heading) and `create_from_template`,
+  with Obsidian's `{{title}}`, `{{date}}` and `{{time}}` placeholders. The
+  daily-note folder, format and template, the templates folder and the time
+  zone are `trewd serve` flags (`-daily-folder`, `-daily-format`,
+  `-daily-template`, `-templates-folder`, `-template-date-format`,
+  `-template-time-format`, `-timezone`), because Obsidian's own settings live
+  in `.obsidian/`, which never syncs
+  ([Daily notes and templates](docs/agent.md#daily-notes-and-templates)).
 - **Tokens for agents** (`trewd mcp-token`): read scope by default, 90-day
   expiry by default, listed with use counts, revocable while the server runs.
   `-key-out` writes a token only to a new file and refuses one that exists;

@@ -2,13 +2,17 @@ package main
 
 import (
 	"errors"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/waynehoover/trew/internal/mcp"
+	"github.com/waynehoover/trew/internal/notes"
 	"github.com/waynehoover/trew/internal/search"
 	"github.com/waynehoover/trew/internal/server"
 	"github.com/waynehoover/trew/internal/store"
@@ -57,9 +61,38 @@ func startIndex(dataDir string, st *store.Store, vault string, log *slog.Logger)
 	return idx
 }
 
+// conventionFlags adds serve's daily-note and template flags to fs, and
+// returns what reads them once fs is parsed: the vault's conventions for
+// today_note, append_to_daily and create_from_template. Obsidian keeps these
+// in .obsidian/, which never syncs, so the server is told them here; each
+// flag's default is Obsidian's own.
+func conventionFlags(fs *flag.FlagSet) func() (mcp.Conventions, error) {
+	folder := fs.String("daily-folder", "", "the folder daily notes are in, as Obsidian's daily notes \"New file location\" (default: the vault's root)")
+	format := fs.String("daily-format", notes.DefaultDailyFormat, "a daily note's name, as a moment.js date format, as Obsidian's daily notes \"Date format\"")
+	template := fs.String("daily-template", "", "the vault path of the note a new daily note is made from, as Obsidian's daily notes \"Template file location\"")
+	templates := fs.String("templates-folder", mcp.DefaultTemplatesFolder, "the folder create_from_template finds templates in, as Obsidian's Templates \"Template folder location\"")
+	dateFormat := fs.String("template-date-format", notes.DefaultDateFormat, "what a template's {{date}} writes, as Obsidian's Templates \"Date format\"")
+	timeFormat := fs.String("template-time-format", notes.DefaultTimeFormat, "what a template's {{time}} writes, as Obsidian's Templates \"Time format\"")
+	zone := fs.String("timezone", "", "the IANA time zone the daily-note tools read \"today\" and {{time}} in (default: the server's local zone)")
+	return func() (mcp.Conventions, error) {
+		c := mcp.Conventions{DailyFolder: *folder, DailyFormat: *format, DailyTemplate: *template,
+			TemplatesFolder: *templates, DateFormat: *dateFormat, TimeFormat: *timeFormat}
+		if *zone != "" {
+			loc, err := time.LoadLocation(*zone)
+			if err != nil {
+				return c, fmt.Errorf("-timezone %q: %w", *zone, err)
+			}
+			c.Location = loc
+		}
+		return c, c.Check()
+	}
+}
+
 // startMCP builds the endpoint over idx, which may be nil.
-func startMCP(srv *server.Server, vault string, origins []string, idx *search.Index, log *slog.Logger) *mcpEndpoint {
-	cfg := mcp.Config{Server: srv, Vault: vault, AllowOrigins: origins, Log: log, Version: srv.Version(), Seam: testSeam}
+func startMCP(srv *server.Server, vault string, origins []string, idx *search.Index, conv mcp.Conventions,
+	log *slog.Logger) *mcpEndpoint {
+	cfg := mcp.Config{Server: srv, Vault: vault, AllowOrigins: origins, Log: log, Version: srv.Version(), Seam: testSeam,
+		Conventions: conv}
 	if idx != nil {
 		// Only a real index goes in the interface: a typed nil there would be
 		// an index that is not nil and panics.

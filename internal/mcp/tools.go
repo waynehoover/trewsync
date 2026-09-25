@@ -32,6 +32,7 @@ type SearchIndex interface {
 	Status() search.Status
 	Propose(ctx context.Context, q notes.Query, folder, from string) (search.Proposal, error)
 	Backlinks(ctx context.Context, head int64, keys []string) (search.Backlinks, error)
+	LinkGraph(ctx context.Context, head int64) (search.LinkGraph, error)
 	Await(ctx context.Context, head int64) bool
 }
 

@@ -15,8 +15,9 @@ import (
 	"github.com/waynehoover/trew/internal/store"
 )
 
-var readToolNames = []string{"compare_versions", "deleted_notes", "delivery_status", "list_notes",
-	"lookup_operation", "note_history", "read_note", "search_notes", "vault_status"}
+var readToolNames = []string{"backlinks", "broken_links", "compare_versions", "deleted_notes", "delivery_status",
+	"list_notes", "lookup_operation", "note_history", "orphans", "outgoing_links", "read_note", "search_notes",
+	"vault_status"}
 
 // The official Go SDK's client, at every protocol version it speaks, reaches
 // the endpoint, lists the tools and reads a note (PLAN.md M4 task 1): the
