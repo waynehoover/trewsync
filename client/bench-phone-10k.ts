@@ -31,7 +31,10 @@
  *     the same mechanism), then times the first reconcile until the server
  *     says the phone has applied everything and the plugin says synced, and
  *     checks every file's SHA-256 on the phone.
- *  6. Times steady passes inside the app, and one edit each way.
+ *  6. Times steady passes inside the app, reads the plugin's own pass
+ *     timings (switched on by the file `pass-timings.ndjson`, as
+ *     `bench-android.ts` does) for the quiet-pass phase split the threshold
+ *     in docs/open-work.md is written in, and times one edit each way.
  *  7. Pauses sync on the phone (the plugin's own command, which closes its
  *     connection), makes 500 edits on the Mac and five on the phone, one of
  *     them rewriting the same line of the same note the Mac rewrote, resumes,
@@ -73,6 +76,7 @@ import { configPath, indexPath, saveConfig } from "./src/node/config.ts";
 import { JsonIndexStore, NodeVault } from "./src/node/vault.ts";
 import { makeCorpus } from "./src/stress/corpus.ts";
 import {
+  buildClient,
   diff,
   editableNotes,
   inventory,
@@ -94,6 +98,8 @@ const DRY = process.argv.includes("--dry-run") || process.env["PHONE_DRY_RUN"] =
 const VAULT = process.env["PHONE_VAULT"] ?? "TrewBench10k";
 const VAULT_DIR = `/sdcard/Documents/${VAULT}`;
 const PLUGIN_DIR = `${VAULT_DIR}/.obsidian/plugins/trew-sync`;
+/** The plugin writes a line per pass here while the file exists (`timingLog` in main.ts). */
+const TIMING_LOG = `${PLUGIN_DIR}/pass-timings.ndjson`;
 const FILES = Number(process.env["PHONE_FILES"] ?? 10_000);
 const SEED = Number(process.env["PHONE_SEED"] ?? 1);
 const SETTLE_MS = Number(process.env["PHONE_SETTLE_MS"] ?? 60 * 60_000);
@@ -264,8 +270,12 @@ class FakePhone implements Phone {
         return "";
       case "svc":
       case "input":
-      case "touch":
         return "";
+      case "touch":
+        await writeFile(this.local(rest[rest.length - 1]!), "", { flag: "a" });
+        return "";
+      case "cat":
+        return readFile(this.local(rest[rest.length - 1]!), "utf8");
       case "pidof":
         return this.running ? "4242\n" : "";
       case "am":
@@ -441,6 +451,58 @@ export function expression(body: string, vault = VAULT): string {
 const probe = `(async()=>JSON.stringify(app.vault.getName()))()`;
 
 /* ------------------------------------------------------------------ *
+ * The plugin's own pass timings
+ * ------------------------------------------------------------------ */
+
+interface PassLine {
+  readonly listMs: number;
+  readonly decideMs: number;
+  readonly transferMs: number;
+  readonly saveMs: number;
+  readonly journal: { compareMs: number } | null;
+  readonly unchanged: number;
+  readonly uploaded: number;
+  readonly downloaded: number;
+}
+
+/**
+ * The phase split of the quiet passes, as `bench-android.ts` reads it: passes
+ * that moved nothing, the first dropped, the journal's own compare time.
+ * Decide plus compare as a share of the pass is the first clause of the
+ * threshold in docs/open-work.md.
+ */
+async function quietPasses(phone: Phone): Promise<Record<string, number>> {
+  const text = await phone.shell("cat", TIMING_LOG).catch(() => "");
+  const lines = text
+    .split("\n")
+    .filter((l) => l.trim().startsWith("{"))
+    .flatMap((l) => {
+      try {
+        return [JSON.parse(l) as PassLine];
+      } catch {
+        return [];
+      }
+    });
+  const quiet = lines
+    .filter((l) => l.unchanged > 0 && l.uploaded === 0 && l.downloaded === 0)
+    .slice(1);
+  if (quiet.length === 0) return { passes: lines.length, quiet: 0 };
+  const total = (l: PassLine) => l.listMs + l.decideMs + l.transferMs + l.saveMs;
+  const compare = (l: PassLine) => l.journal?.compareMs ?? 0;
+  return {
+    passes: lines.length,
+    quiet: quiet.length,
+    totalP50Ms: ms(median(quiet.map(total))),
+    listP50Ms: ms(median(quiet.map((l) => l.listMs))),
+    decideP50Ms: ms(median(quiet.map((l) => l.decideMs))),
+    saveP50Ms: ms(median(quiet.map((l) => l.saveMs))),
+    compareP50Ms: ms(median(quiet.map(compare))),
+    decidePlusCompareShare:
+      ms(100 * median(quiet.map((l) => (l.decideMs + compare(l)) / total(l)))) / 100,
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * The run
  * ------------------------------------------------------------------ */
 
@@ -460,6 +522,7 @@ async function main(): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "trew-phone-10k-"));
   const phone: Phone = DRY ? new FakePhone(join(root, "stand-in-vault")) : new RealPhone();
   if (DRY) await mkdir(join(root, "stand-in-vault"), { recursive: true });
+  buildClient();
   const binary = await serverBinary();
   const data = join(root, "server");
   const dirA = join(root, "mac");
@@ -556,7 +619,6 @@ async function main(): Promise<void> {
     await phone.shell("svc", "power", "stayon", "usb").catch(() => "");
     await phone.shell("dumpsys", "deviceidle", "disable").catch(() => "");
     await phone.shell("input", "keyevent", "KEYCODE_WAKEUP").catch(() => "");
-    watcher = setInterval(() => void readAwake(), 30_000);
 
     // 2. A disposable server, on the phone's loopback.
     await server.start(port);
@@ -594,6 +656,9 @@ async function main(): Promise<void> {
     }
     for (const stale of ["data.json", "index.json", "index.log", "pass-timings.ndjson"])
       await phone.shell("rm", "-f", `${PLUGIN_DIR}/${stale}`);
+    // Present before Obsidian starts, so every pass from the first reconcile
+    // on writes its phases: the split the open-work threshold is written in.
+    await phone.shell("touch", TIMING_LOG);
     // Every top-level name: the folders, and the files at the vault root.
     const tops = [...new Set(corpus.files.map((f) => f.path.split("/")[0]!))];
     const archive = join(root, "corpus.tar");
@@ -646,6 +711,10 @@ async function main(): Promise<void> {
       30 * 60_000,
       3000,
     );
+    // From here on Obsidian should be awake and in front for every measurement;
+    // before this it is stopped on purpose, for the seeding.
+    await readAwake();
+    watcher = setInterval(() => void readAwake(), 30_000);
     await inApp(`
       if (!app.plugins.isEnabled()) await app.plugins.setEnable(true);
       if (!app.plugins.plugins["trew-sync"]) await app.plugins.enablePluginAndSave("trew-sync");
@@ -711,6 +780,8 @@ async function main(): Promise<void> {
       samples: passes,
     };
     say(`  steady syncNow: ${JSON.stringify(report["steadySyncNow"])}`);
+    report["quietPasses"] = await quietPasses(phone);
+    say(`  quiet passes: ${JSON.stringify(report["quietPasses"])}`);
     const editable = editableNotes(corpus);
     let cursor = 0;
     const nextNote = () => editable[cursor++ % editable.length]!;

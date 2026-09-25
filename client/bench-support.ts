@@ -24,6 +24,17 @@ export const run = promisify(execFile);
 /** The shipped headless client, built by `node esbuild.config.mjs production`. */
 export const CLI = new URL("./dist/trew.mjs", import.meta.url).pathname;
 
+/**
+ * Builds the headless client and the plugin from this checkout, so a run
+ * measures the code beside it and not whatever `dist/` last held.
+ */
+export function buildClient(): void {
+  execFileSync("node", ["esbuild.config.mjs", "production"], {
+    cwd: new URL(".", import.meta.url).pathname,
+    stdio: "ignore",
+  });
+}
+
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export const median = (xs: number[]) => {
   const s = [...xs].sort((a, b) => a - b);

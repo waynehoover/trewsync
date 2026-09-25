@@ -50,6 +50,7 @@ import { conflictOriginal } from "./src/core/conflicts.ts";
 import { serverBinary } from "./src/core/test-server.ts";
 import { makeCorpus } from "./src/stress/corpus.ts";
 import {
+  buildClient,
   converge,
   diff,
   du,
@@ -246,6 +247,7 @@ async function main(): Promise<void> {
     execFileSync("git", ["-C", REPO, "status", "--short", "--untracked-files=no"], {
       encoding: "utf8",
     }).trim() !== "";
+  buildClient();
   const binary = await serverBinary();
   report["facts"] = {
     commit: commit + (dirty ? " (with uncommitted changes)" : ""),
@@ -960,10 +962,19 @@ async function obsidianRun(
       await sleep(500);
     }
     await l.close();
+    // What one eval through the obsidian CLI costs on its own, since the
+    // outbound figure starts before one and includes it.
+    const rtt: number[] = [];
+    for (let k = 0; k < 3; k++) {
+      const s = performance.now();
+      await inVault(name, "return 1;", markers);
+      rtt.push(performance.now() - s);
+    }
     Object.assign(report["obsidian"] as Record<string, unknown>, {
       headlessToObsidianP50Ms: ms(median(inbound)),
       obsidianToHeadlessP50Ms: ms(median(outbound)),
-      note: "Obsidian to headless includes the CLI eval's own round trip, about 0.3 to 0.5 s",
+      cliEvalRoundTripP50Ms: ms(median(rtt)),
+      note: "Obsidian to headless includes one obsidian CLI eval, whose own round trip is reported beside it",
     });
     say(
       `  edit latency: headless to Obsidian p50 ${ms(median(inbound))} ms, Obsidian to headless p50 ${ms(median(outbound))} ms`,
