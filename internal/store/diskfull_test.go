@@ -86,3 +86,33 @@ func TestADatabaseThatCannotGrowCommitsNothing(t *testing.T) {
 	}
 	h.verified(t)
 }
+
+// A COMMIT that fails for want of room is still an outcome nobody can state,
+// and it is still a full disk: the error keeps SQLite's own, so IsDiskFull
+// recognises it and the answer can say `nospace` as well as unknown. The
+// SQLITE_FULL is a real one, from a database at its page limit, standing in
+// for the COMMIT's.
+func TestAFullDiskAtCommitIsAnUnknownOutcomeThatSaysNoSpace(t *testing.T) {
+	h := newTestStore(t)
+	a := h.writer(t, "agent")
+	note := h.file(t, "note.md", "the note")
+	h.limitPages(t, 0)
+	var full error
+	for i := 0; i < 5000 && full == nil; i++ {
+		_, full = h.write(fmt.Sprintf("n%04d.md", i), fmt.Sprintf("a note that takes room %04d", i))
+	}
+	if !IsDiskFull(full) {
+		t.Fatalf("the database never filled, or filled with %v", full)
+	}
+	h.swapDB(t, "")
+
+	h.failOperationCommit = full
+	_, err := h.CommitOperation(h.op(a, "edit", h.change(t, a, "note.md", note.UID, "edited")))
+	var oe *OpError
+	if !errors.As(err, &oe) || oe.Outcome != OpUnknown || !errors.Is(err, ErrOutcomeUnknown) {
+		t.Fatalf("got %v, want an unknown outcome", err)
+	}
+	if !IsDiskFull(err) {
+		t.Fatalf("a full disk at COMMIT is not recognised as one: %v", err)
+	}
+}

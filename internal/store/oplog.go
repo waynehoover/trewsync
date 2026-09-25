@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/waynehoover/trew/internal/paths"
 )
 
 // An agent's write is a durable operation, not a put with a different caller
@@ -771,9 +773,10 @@ func (s *Store) CommitOperation(op Operation) (OpResult, error) {
 	case errors.Is(err, errReplayed):
 		return res, nil
 	case err != nil && done:
-		// The transaction was complete and the COMMIT is what failed.
+		// The transaction was complete and the COMMIT is what failed. Both
+		// wrapped, so a full disk is still recognised as one (IsDiskFull).
 		return OpResult{}, &OpError{Outcome: OpUnknown, Code: OpCodeInternal, OpID: opID,
-			Err: fmt.Errorf("%w: %v", ErrOutcomeUnknown, err)}
+			Err: fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)}
 	case err != nil:
 		var oe *OpError
 		if errors.As(err, &oe) {
@@ -903,10 +906,13 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 		if oe.EmptyFolder {
 			// A live folder counts itself once in live_dirs and once more for
 			// every live path beneath it (dirsOf), with the entries before
-			// this one already applied, so one is empty.
+			// this one already applied, so one is empty. Summed over every
+			// spelling that folds alike, which are the same folder: between
+			// the moves of a case-only folder rename the folder entry is
+			// `notes` and its files are still under `Notes`.
 			var refs int64
-			if err := q.QueryRow(`SELECT COALESCE((SELECT refs FROM live_dirs WHERE vault_id = ? AND path = ?), 0)`,
-				op.Vault, e.Path).Scan(&refs); err != nil {
+			if err := q.QueryRow(`SELECT COALESCE(SUM(refs), 0) FROM live_dirs WHERE vault_id = ? AND fold = ?`,
+				op.Vault, paths.Fold(e.Path)).Scan(&refs); err != nil {
 				return OpResult{}, err
 			}
 			if refs > 1 {

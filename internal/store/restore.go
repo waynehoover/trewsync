@@ -144,7 +144,7 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 
 	var fileRemovals, folderRemovals, folderRestores, fileRestores []restoreRow
 	for _, row := range rows {
-		if !row.changed() {
+		if !row.changed() && !row.unseenAt(r.ToUID, marked) {
 			continue
 		}
 		// Before anything is decided from the state at ToUID, including that
@@ -270,6 +270,15 @@ func (row restoreRow) changed() bool {
 		return false
 	}
 	return row.then.UID != row.now.UID
+}
+
+// unseenAt is a path with no version at toUID that has one now, below the
+// purge mark. Absent then and deleted now reads as unchanged, but the as-of
+// listing at toUID is missing any path whose versions there a purge took, so
+// below the mark it may have been live then: exactAt decides, and a path it
+// cannot read exactly refuses the restore instead of being left out of it.
+func (row restoreRow) unseenAt(toUID, marked int64) bool {
+	return toUID < marked && !row.hadThen && row.hasNow
 }
 
 // sameContent is whether what the path holds now is what it held at ToUID,

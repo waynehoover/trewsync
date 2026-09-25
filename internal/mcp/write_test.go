@@ -734,3 +734,51 @@ func TestTheRequestDigestIsCanonical(t *testing.T) {
 		t.Error("nested objects are not canonical")
 	}
 }
+
+// restore_note reads the version it puts back, so its source is held to what
+// read_note reads: an attachment is refused as unsupported_format, before any
+// version is read, and nothing is written. Without it a write token could
+// copy an attachment's bytes into a note and read them there.
+func TestRestoreNoteReadsOnlyWhatReadNoteReads(t *testing.T) {
+	r := newRig(t)
+	a := r.writer("agent")
+	secret := r.write("secrets/keys.json", `{"key": "not for agents"}`+"\n")
+	e := invoke(t, a.cs, "restore_note", map[string]any{"path": "secrets/keys.json", "uid": secret, "to": "leak.md",
+		"epoch": r.epoch()})
+	if got := refused(t, e); got != "unsupported_format" {
+		t.Fatalf("restore_note of an attachment: %s, want unsupported_format: %s", got, e.raw)
+	}
+	if r.head("leak.md") != 0 || r.operations() != 0 {
+		t.Fatalf("a refused restore of an attachment wrote leak.md at %d, %d operations", r.head("leak.md"), r.operations())
+	}
+}
+
+// A write that commits after the tool's deadline has passed is still
+// committed, and its reply says so, with the opId: the deadline bounds how
+// long a tool works, and it cannot take back a commit. Replaced by busy, the
+// agent would be told nothing was done with no id to ask about, and could
+// write the same thing twice. The commit lock is held past the deadline, so
+// the write waits for it and commits late.
+func TestAWriteCommittedPastTheDeadlineSaysCommitted(t *testing.T) {
+	const deadline = 100 * time.Millisecond
+	r := newRig(t, withLimits(Limits{ToolDeadline: deadline}))
+	a := r.writer("agent")
+	held, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = r.srv.UnderCommitLock(func() error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	go func() {
+		time.Sleep(3 * deadline)
+		close(release)
+	}()
+	e := invoke(t, a.cs, "create_note", map[string]any{"path": "late.md", "content": "written after the deadline\n"})
+	w := wrote(t, e)
+	if w.OpID == "" || r.head("late.md") == 0 || r.bytesAt(r.head("late.md")) != "written after the deadline\n" {
+		t.Fatalf("the late write's reply %s, and late.md is at uid %d", e.raw, r.head("late.md"))
+	}
+}

@@ -314,3 +314,45 @@ func TestASchemaThreeStoreGainsThePurgeMark(t *testing.T) {
 		t.Fatalf("the vault never purged has mark %d (%v)", mark, err)
 	}
 }
+
+// A path live at the restore point whose versions there a purge took and
+// whose head is now a deletion is in neither side of the plan's reading as a
+// live path: the as-of listing at the point no longer has it, and it is
+// deleted now. It is still a path whose state at the point cannot be read
+// exactly, and the restore is refused naming it rather than planned as if
+// the note had never been there (rule 2). The same holds for a folder.
+func TestARestoreRefusesAPathPurgedAtThePointAndDeletedSince(t *testing.T) {
+	for _, folder := range []bool{false, true} {
+		name := map[bool]string{false: "a file", true: "a folder"}[folder]
+		t.Run(name, func(t *testing.T) {
+			h := newTestStore(t)
+			h.file(t, "other.md", "another note") // uid 1
+			if folder {
+				if err := h.writeAt(t, "gone", "", true); err != nil { // uid 2, purged
+					t.Fatal(err)
+				}
+				h.remove(t, "gone") // uid 3
+			} else {
+				h.file(t, "gone.md", "a note at the point") // uid 2, purged
+				h.remove(t, "gone.md")                      // uid 3
+			}
+			if _, err := h.Purge("v1", 0); err != nil {
+				t.Fatal(err)
+			}
+			if mark, err := h.PurgedThrough("v1"); err != nil || mark != 3 {
+				t.Fatalf("the purge mark is %d (%v), and the purge reached uid 3", mark, err)
+			}
+
+			plan, err := h.PlanRestore(RestoreRequest{Vault: "v1", ToUID: 2, Now: 7000})
+			var oe *OpError
+			if !errors.As(err, &oe) || oe.Code != OpCodeGone {
+				t.Fatalf("a restore to a point a purge made unreadable planned %d entries, or refused otherwise: %v",
+					len(plan.Entries), err)
+			}
+			want := map[bool]string{false: "gone.md", true: "gone"}[folder]
+			if oe.Path != want || len(plan.Gone) != 1 || plan.Gone[0].Path != want {
+				t.Fatalf("the refusal names %q and %+v, want %q", oe.Path, plan.Gone, want)
+			}
+		})
+	}
+}
