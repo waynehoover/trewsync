@@ -440,7 +440,7 @@ tag to be exactly the manifest version:
 
 Then start the workflow that finishes it:
 
-  gh workflow run attest.yml -f tag=@PLUGIN@
+  gh workflow run attest.yml --ref @PLUGIN@ -f tag=@PLUGIN@
 
 A draft, and that is not a detail: it checks that CI passed on that commit,
 rebuilds these three files, signs them, writes the checksums for what it built,

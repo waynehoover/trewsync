@@ -208,6 +208,51 @@ else
   done
 fi
 
+# And that it runs from the tag it was given, or not at all.
+#
+# A dispatch runs the workflow file of the ref it names, and the tag is only an
+# input, so a run from a branch checks out and builds the tag with that
+# branch's copy of this file, edited however the branch likes, and signs as
+# attest.yml. trewd update refuses its manifest, since the signer must end in
+# the release's own tag, but the plugin's attestations and the publish step do
+# not ask. So the first step of `checked`, which every other job needs, refuses
+# any run whose ref is not refs/tags/ followed by the input, before anything is
+# checked out. Executed, against the ref a run can come from.
+echo "refusing a run from anything but its own tag:"
+run_block checked "refuse a run started from anything but its tag" > "$scratch/ref.sh"
+first=$(printf '%s\n' "$checked" | settings | grep -m1 -E '^      - ' || true)
+if [[ ! -s "$scratch/ref.sh" ]]; then
+  fail "the checked job does not compare the ref it runs from with the tag"
+elif [[ "$first" != "      - name: refuse a run started from anything but its tag" ]]; then
+  fail "the ref is checked after another step of checked ran: $first"
+else
+  ok "the checked job compares the ref with the tag first"
+  for c in \
+    "0 server/v0.6.2 refs/tags/server/v0.6.2" \
+    "0 0.6.2 refs/tags/0.6.2" \
+    "1 server/v0.6.2 refs/heads/main" \
+    "1 server/v0.6.2 refs/heads/server/v0.6.2" \
+    "1 server/v0.6.2 refs/tags/server/v0.6.20" \
+    "1 server/v0.6.2 refs/tags/server/v0.6.1" \
+    "1 0.6.2 refs/heads/main"; do
+    read -r want tag ref <<< "$c"
+    got=0
+    GITHUB_REF="$ref" TAG="$tag" bash -euo pipefail "$scratch/ref.sh" > "$scratch/ref.log" 2>&1 || got=$?
+    if [[ "$want" == 0 && "$got" == 0 ]] || [[ "$want" != 0 && "$got" != 0 ]]; then
+      ok "  tag $tag from $ref: exit $got"
+    else
+      fail "tag $tag from $ref exited $got, and should have $([[ $want == 0 ]] && echo run || echo refused)"
+      cat "$scratch/ref.log" >&2
+    fi
+  done
+fi
+if grep -qE 'gh workflow run attest\.yml --ref @PLUGIN@ -f tag=@PLUGIN@' "$release" \
+  && grep -qE 'gh workflow run attest\.yml --ref server/v@SERVER@ -f tag=server/v@SERVER@' "$release"; then
+  ok "and release.sh dispatches both from their tags"
+else
+  fail "release.sh prints a dispatch that does not name its tag as the ref, which the workflow refuses"
+fi
+
 # The signed manifest `trewd update` refuses to install without. What it pins
 # is in cmd/trewd/update.go, and each of these is a way for the two to stop
 # agreeing that no release would say out loud until somebody's update refused.
