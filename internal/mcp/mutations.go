@@ -506,6 +506,13 @@ func restoreNote(c *call, a *args) outcome {
 	if err != nil {
 		return m.failed(err)
 	}
+	// The version's bytes are read, so its path is held to what read_note
+	// reads, before they are: otherwise an attachment's bytes could be copied
+	// into a note and read there. After version, so a folder or a deletion is
+	// still told it is not note content.
+	if err := c.readable(path); err != nil {
+		return m.failed(err)
+	}
 	b, err := c.versionBytes(e)
 	if err != nil {
 		return m.failed(err)

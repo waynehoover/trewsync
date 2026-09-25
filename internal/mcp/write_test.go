@@ -734,3 +734,21 @@ func TestTheRequestDigestIsCanonical(t *testing.T) {
 		t.Error("nested objects are not canonical")
 	}
 }
+
+// restore_note reads the version it puts back, so its source is held to what
+// read_note reads: an attachment is refused as unsupported_format, before any
+// version is read, and nothing is written. Without it a write token could
+// copy an attachment's bytes into a note and read them there.
+func TestRestoreNoteReadsOnlyWhatReadNoteReads(t *testing.T) {
+	r := newRig(t)
+	a := r.writer("agent")
+	secret := r.write("secrets/keys.json", `{"key": "not for agents"}`+"\n")
+	e := invoke(t, a.cs, "restore_note", map[string]any{"path": "secrets/keys.json", "uid": secret, "to": "leak.md",
+		"epoch": r.epoch()})
+	if got := refused(t, e); got != "unsupported_format" {
+		t.Fatalf("restore_note of an attachment: %s, want unsupported_format: %s", got, e.raw)
+	}
+	if r.head("leak.md") != 0 || r.operations() != 0 {
+		t.Fatalf("a refused restore of an attachment wrote leak.md at %d, %d operations", r.head("leak.md"), r.operations())
+	}
+}
