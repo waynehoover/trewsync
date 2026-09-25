@@ -1,6 +1,6 @@
 # Wire protocol, version 1 (draft for M1 and M2), and version 2
 
-Version 2 is version 1 and undo, settled in M5; see [Undo (protocol 2)](#undo-protocol-2). Everything else in this document is both versions.
+Version 2 is version 1, undo and search: undo settled in M5, search added on 2026-09-24 before protocol 2 was released; see [Undo (protocol 2)](#undo-protocol-2) and [Search (protocol 2)](#search-protocol-2). Everything else in this document is both versions.
 
 Derived from Basalt's protocol 7 (`basalt:docs/protocol.md`) by removing encryption.
 
@@ -234,6 +234,35 @@ Undoing an operation twice is refused, because the first undo moved every head t
 - `auth`: the device was revoked; the session ends.
 - `internal`: the store failed, or could not confirm the commit. Asking again is safe: an undo that did commit is refused as already undone.
 
+## Search (protocol 2)
+
+**Settled 2026-09-24.** A device searches the vault it authenticated to, answered by the server's own literal search, the one MCP's `search_notes` answers from (plan/mcp-tools.md, `search_notes`). It is what `trew search` in the headless client asks.
+
+**Why protocol 2, and not a version 3.** No release of anything speaks protocol 2 yet: the server, the plugin and the headless client have never been tagged (`CHANGELOG.md`, "Unreleased"), so no device in anyone's hands speaks 2 without search. A version 3 would be a negotiation with nobody on the other side of it, and every client and fixture would carry a third number for no device. Search therefore joins protocol 2, as undo did, and a session of protocol 1 is still answered exactly as protocol 1 was: `search` is an unknown op there. Once protocol 2 is released, the next addition is a new version.
+
+```text
+-> {op:"search", id, query, mode?, folder?, caseSensitive?, includeChildren?, contextLines?, limit?, after?}
+<- {res:"searched", id, matches:[{path, uid, line, column, text, before:[], after:[], clipped, kind?}],
+    skipped:[{path, why}], nextAfter, complete, head, indexedHead, index:{usable, why?}, scanned, scannedBytes}
+```
+
+The request is `search_notes`'s schema under protocol names: `query` is the literal, or the tag in tag mode (1 to 1,024 bytes); `mode` is `content` (the default), `filename`, `both` or `tag`; `folder` keeps notes beneath it; `caseSensitive` is false by default; `includeChildren`, true by default, lets a tag match its nested tags; `contextLines` is 0 to 3; `limit` is 1 to 200 matches, 50 when absent; `after` is the previous reply's `nextAfter`. The field is `after` rather than `cursor` because `cursor` is already the hello's number.
+
+The answer is `search_notes`'s page, without the MCP envelope: note text arrives as the note holds it, and a client that shows it to a person makes it safe to show (the headless client escapes every control character, and so every escape sequence, before it prints). `line` and `column` are 1-based, the column in UTF-16 code units; `text` is the line from at most 256 units before the match, at most 1,024 long, and each context line at most 256; `clipped` says any of them was cut. A file-name match has `line` 0, `column` 1, the path as `text` and `kind` `filename`; a tag match has `kind` `tag`. `uid` is the version the match is in. The same page rules apply as for `search_notes`: at most `limit` matches and 64 KiB of rows, at most 512 notes or 8 MiB of text scanned per page. `nextAfter` continues from where the page stopped and is null on the last page, and every page of one search is read at the `head` the first one saw. `complete` is true only on a last page that skipped no note; `skipped` names each note that could not be searched and why (`note_too_large`, `invalid_utf8`, `unreadable`, and in tag mode `invalid_frontmatter`). `index.usable` says the server's search index narrowed the candidates, `index.why` why it did not, and `indexedHead` how far it has indexed. The index only proposes: a note it has not reached, or any note when it is absent or rebuilding, is read in full, so a lagging index costs speed and never a match. The server keeps an index when it serves MCP (`trewd serve -mcp`); without one every search scans.
+
+**One implementation.** The server answers both doors from one Go function (`internal/search`, `Source.Search`); the MCP tool and the protocol op only dress its page, and a test holds a device's search to `search_notes` and to Basalt's oracle over the whole corpus in `mcp-fixtures.json`. A continuation binds which door made it, so a `nextCursor` is not an `after` and the other way round.
+
+**The budget.** A search reads notes from the store, which every device's sync also reads, so device searches have a budget of their own, and nothing else a device sends passes through it: at most 4 searches at once across the server, 2 at once for one device over all its sessions, and per device a token bucket of 5 searches a second with a burst of 30 and one of 4 MiB of replies a second with a burst of 16 MiB (an MCP token's figures), and 30 seconds of work per search. A search over any of them is refused `toomany` with `retryAfterMs`, and the session continues. A search never takes the commit lock.
+
+Refusals, all of the request and none of the session unless it says so, with the reason first in the message and a colon:
+
+- `badentry`: the query's own refusals, `search_notes`'s codes as the reason: `invalid_query` (empty, or an unknown mode), `invalid_limit` (a limit or a context out of range), `input_too_large`, `invalid_tag`.
+- `badpath`: a `folder` the path rules refuse, the path reason first.
+- `stale`: `expired:`, an `after` this search did not make, or one made before a restore or a purge changed the vault's history. Search again without it.
+- `toomany`: over the budget, or `deadline:`, a search that worked past its 30 seconds.
+- `auth`: the device was revoked; the session ends.
+- `internal`: the store failed.
+
 ## Errors
 
 | code | meaning | retryable | session |
@@ -256,6 +285,7 @@ Undoing an operation twice is refused, because the first undo moved every head t
 | `nochunk` | a `fetch` or `resend` naming a body the server does not hold or no entry refers to | no | rejects |
 | `nodevice` | a `revoke` for a device id this vault does not have | no | rejects |
 | `noundo` | an `undo` (protocol 2) that cannot be done; the message begins with why | no | rejects |
+| `toomany` | a `search` (protocol 2) over the device searches' budget, with `retryAfterMs` | yes | rejects the request, keeps the session |
 | `internal` | server fault, not committed | yes | ends in handshake, else rejects |
 
 `rotated` is removed.

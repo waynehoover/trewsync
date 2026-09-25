@@ -46,8 +46,10 @@ import { FrameError, decodeFrame, encodeFrame } from "./frame.ts";
  * a `ready` in any other version is refused here.
  *
  * Version 2 of TrewSync's protocol (plan/protocol.md): version 1, which is
- * Basalt's protocol 7 with the encryption taken out, and undo (`undo`, and the
- * operation behind each `history` entry). A server of protocol 2 still answers
+ * Basalt's protocol 7 with the encryption taken out, undo (`undo`, and the
+ * operation behind each `history` entry), and search (`search`, the server's
+ * literal search, the one MCP's `search_notes` answers from). A server of
+ * protocol 2 still answers
  * a client of protocol 1, so the upgrade order is the server first; this
  * client meeting a server of protocol 1 is refused at hello, and says so.
  */
@@ -162,6 +164,67 @@ export interface UndoResult {
   readonly steps: UndoStep[];
   /** The versions it wrote, which also reach this device in a batch. */
   readonly entries: { path: string; uid: number; previousUid: number; prev?: string }[];
+}
+
+/** What a search matches against (plan/protocol.md, "Search (protocol 2)"). */
+export type SearchMode = "content" | "filename" | "both" | "tag";
+
+/** One page of a search, as the device asks for it. */
+export interface SearchQuery {
+  /** The literal, or the tag in tag mode: 1 to 1,024 bytes of UTF-8. */
+  readonly query: string;
+  /** `content` when absent. */
+  readonly mode?: SearchMode;
+  /** Only notes beneath this folder. */
+  readonly folder?: string;
+  readonly caseSensitive?: boolean;
+  /** In tag mode, whether nested tags match too; true when absent. */
+  readonly includeChildren?: boolean;
+  /** 0 to 3 lines of context each side. */
+  readonly contextLines?: number;
+  /** 1 to 200 matches on the page; the server's 50 when absent. */
+  readonly limit?: number;
+  /** The previous page's `nextAfter`. */
+  readonly after?: string;
+}
+
+/**
+ * One match. `line` and `column` are 1-based, the column in UTF-16 code
+ * units, and locate the match's first character; `text` is the line it is on,
+ * from at most 256 units before the match, and `before` and `after` the
+ * context lines. Everything here is note text, exactly as the note holds it:
+ * a caller that shows it to a person makes it safe to show first.
+ */
+export interface SearchMatch {
+  readonly path: string;
+  readonly uid: number;
+  readonly line: number;
+  readonly column: number;
+  readonly text: string;
+  readonly before: readonly string[];
+  readonly after: readonly string[];
+  readonly clipped: boolean;
+  /** `filename` for a file-name match (line 0), `tag` for a tag's. */
+  readonly kind?: "filename" | "tag";
+}
+
+/** One page of a search, and what it says about itself. */
+export interface SearchPage {
+  readonly matches: SearchMatch[];
+  /** Notes this page could not search, and why. */
+  readonly skipped: { path: string; why: string }[];
+  /** Continues the search; null on the last page. */
+  readonly nextAfter: string | null;
+  /** True only on a last page that skipped no note. */
+  readonly complete: boolean;
+  /** The version of the vault every page of this search is read at. */
+  readonly head: number;
+  /** How far the server's search index has indexed. */
+  readonly indexedHead: number;
+  /** Whether the index narrowed the candidates, and why not when it did not. */
+  readonly index: { usable: boolean; why?: string };
+  readonly scanned: number;
+  readonly scannedBytes: number;
 }
 
 /** A covered range of the uid sequence, with everything in it that exists. */
@@ -374,7 +437,7 @@ const ENDS_SESSION = new Set([
  * guessed "stop" at a `busy` would stop on every server restart.
  */
 function retryableByCode(code: string): boolean {
-  return code === "busy" || code === "nospace" || code === "internal";
+  return code === "busy" || code === "nospace" || code === "internal" || code === "toomany";
 }
 
 /**
@@ -2419,6 +2482,114 @@ export class Transport {
         const prev = text(row, "prev");
         return { path, uid, previousUid, ...(prev !== undefined ? { prev } : {}) };
       }),
+    };
+  }
+
+  /**
+   * One page of a search (protocol 2; plan/protocol.md, "Search (protocol
+   * 2)"), answered by the server's literal search.
+   *
+   * The reply is held to its shape, and each match to being a place in a
+   * note: a server that answered otherwise is not one this client can show
+   * results from. A search over the server's budget is `toomany`, with
+   * `retryAfterMs`, and leaves the session as it was.
+   */
+  async search(q: SearchQuery): Promise<SearchPage> {
+    const reply = await this.request(
+      {
+        op: "search",
+        query: q.query,
+        ...(q.mode !== undefined && q.mode !== "content" ? { mode: q.mode } : {}),
+        ...(q.folder !== undefined && q.folder !== "" ? { folder: q.folder } : {}),
+        ...(q.caseSensitive === true ? { caseSensitive: true } : {}),
+        ...(q.includeChildren === false ? { includeChildren: false } : {}),
+        ...(q.contextLines !== undefined && q.contextLines > 0
+          ? { contextLines: q.contextLines }
+          : {}),
+        ...(q.limit !== undefined ? { limit: q.limit } : {}),
+        ...(q.after !== undefined && q.after !== "" ? { after: q.after } : {}),
+      },
+      "searched",
+    );
+    if (reply["res"] !== "searched") {
+      throw new ProtocolError("protostate", `expected searched, got ${JSON.stringify(reply)}`);
+    }
+    const matches = reply["matches"];
+    const skipped = reply["skipped"];
+    const index = reply["index"];
+    const next = reply["nextAfter"];
+    if (!Array.isArray(matches) || !Array.isArray(skipped)) {
+      throw this.malformed("a searched with no list of matches or skipped notes");
+    }
+    if (next !== null && (typeof next !== "string" || next === "")) {
+      throw this.malformed("a searched whose nextAfter is neither a continuation nor null");
+    }
+    if (typeof reply["complete"] !== "boolean" || (reply["complete"] === true && next !== null)) {
+      throw this.malformed("a searched that says it is complete and continues");
+    }
+    if (
+      typeof index !== "object" ||
+      index === null ||
+      typeof (index as Reply)["usable"] !== "boolean"
+    ) {
+      throw this.malformed("a searched that does not say what its index did");
+    }
+    const strings = (v: unknown): v is string[] =>
+      Array.isArray(v) && v.every((s) => typeof s === "string");
+    const why = (index as Reply)["why"];
+    return {
+      matches: matches.map((raw, i): SearchMatch => {
+        const row = (raw ?? {}) as Record<string, unknown>;
+        const { path, uid, line, column, text, before, after, clipped, kind } = row;
+        if (
+          typeof path !== "string" ||
+          path === "" ||
+          typeof uid !== "number" ||
+          !Number.isSafeInteger(uid) ||
+          uid <= 0 ||
+          typeof line !== "number" ||
+          !Number.isSafeInteger(line) ||
+          line < 0 ||
+          typeof column !== "number" ||
+          !Number.isSafeInteger(column) ||
+          column < 1 ||
+          typeof text !== "string" ||
+          !strings(before) ||
+          !strings(after) ||
+          typeof clipped !== "boolean" ||
+          (kind !== undefined && kind !== "filename" && kind !== "tag")
+        ) {
+          throw this.malformed(`a searched whose match ${i} is not a place in a note`);
+        }
+        return {
+          path,
+          uid,
+          line,
+          column,
+          text,
+          before,
+          after,
+          clipped,
+          ...(kind !== undefined ? { kind } : {}),
+        };
+      }),
+      skipped: skipped.map((raw, i) => {
+        const row = (raw ?? {}) as Record<string, unknown>;
+        if (typeof row["path"] !== "string" || typeof row["why"] !== "string") {
+          throw this.malformed(`a searched whose skipped note ${i} has no path or reason`);
+        }
+        return { path: row["path"], why: row["why"] };
+      }),
+      nextAfter: next,
+      complete: reply["complete"],
+      head: this.count(reply, "head", "searched"),
+      indexedHead: this.count(reply, "indexedHead", "searched"),
+      index: {
+        usable: (index as Reply)["usable"] === true,
+        ...(typeof why === "string" && why !== "" ? { why } : {}),
+      },
+      scanned: this.count(reply, "scanned", "searched"),
+      scannedBytes: this.count(reply, "scannedBytes", "searched"),
     };
   }
 

@@ -513,6 +513,12 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		// counts it holds, and the index finishes the batch it is in.
 		agents = startMCP(*dataDir, srv, *vault, allowOrigin, log)
 		defer agents.close()
+		// Devices' searches ask the same index (`trew search`). Only a real
+		// one: a typed nil in the interface would be an index that panics.
+		// Without -mcp there is no index, and a device's search scans.
+		if agents.index != nil {
+			srv.SetSearchIndex(*vault, agents.index)
+		}
 		handler = withMCP(handler, agents)
 		logMCP(log, st, *vault, *addr)
 	}

@@ -1,6 +1,7 @@
 {
   "note": [
-    "Protocol exchanges, message by message (plan/protocol.md; PLAN.md M1 task 12 and M5 task 7):",
+    "Protocol exchanges, message by message (plan/protocol.md; PLAN.md M1 task 12 and M5 task 7,",
+    "and the device search of 2026-09-24):",
     "protocol 2 unless a hello says otherwise, which one transcript does, to hold the server to",
     "answering protocol 1 as protocol 1.",
     "Written by scripts/protocol-transcripts.py and replayed against a real server on a fresh",
@@ -70,6 +71,12 @@
       "same": true,
       "example": "UndoUndoUndoUndoUndoUQ",
       "about": "an undo's own operation id, 16 random bytes in base64url"
+    },
+    "$after": {
+      "kind": "string",
+      "same": true,
+      "example": "c2VhcmNoLWNvbnRpbnVhdGlvbg",
+      "about": "a search's continuation, opaque: it binds the store's epoch"
     }
   },
   "devices": {
@@ -1794,8 +1801,257 @@
       ]
     },
     {
+      "name": "search",
+      "covers": "Protocol 2: a device searches its vault and is answered from the server's literal search: each match with its version, line, column and line text, a page that says it is complete, and, on a server with no index, that no index narrowed it; a limit makes pages that nextAfter continues, the last one complete; a query or a continuation the search refuses is refused without ending the session.",
+      "steps": [
+        {
+          "store": {
+            "op": "put",
+            "path": "a.md",
+            "bodies": [
+              "74686520686172626f7572206174206461776e0a"
+            ],
+            "mtime": 1
+          }
+        },
+        {
+          "store": {
+            "op": "put",
+            "path": "b.md",
+            "bodies": [
+              "6e6f206d6174636820686572650a"
+            ],
+            "mtime": 2
+          }
+        },
+        {
+          "store": {
+            "op": "put",
+            "path": "c.md",
+            "bodies": [
+              "486172626f7572206c69676874730a"
+            ],
+            "mtime": 3
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 2,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
+            "device": "laptop",
+            "cursor": 3
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 2,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 3,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 3
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "search",
+            "id": 2,
+            "query": "harbour"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "searched",
+            "id": 2,
+            "matches": [
+              {
+                "path": "a.md",
+                "uid": 1,
+                "line": 1,
+                "column": 5,
+                "text": "the harbour at dawn",
+                "before": [],
+                "after": [],
+                "clipped": false
+              },
+              {
+                "path": "c.md",
+                "uid": 3,
+                "line": 1,
+                "column": 1,
+                "text": "Harbour lights",
+                "before": [],
+                "after": [],
+                "clipped": false
+              }
+            ],
+            "skipped": [],
+            "nextAfter": null,
+            "complete": true,
+            "head": 3,
+            "indexedHead": 0,
+            "index": {
+              "usable": false,
+              "why": "$msg"
+            },
+            "scanned": 3,
+            "scannedBytes": 49
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "search",
+            "id": 3,
+            "query": "harbour",
+            "limit": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "searched",
+            "id": 3,
+            "matches": [
+              {
+                "path": "a.md",
+                "uid": 1,
+                "line": 1,
+                "column": 5,
+                "text": "the harbour at dawn",
+                "before": [],
+                "after": [],
+                "clipped": false
+              }
+            ],
+            "skipped": [],
+            "nextAfter": "$after",
+            "complete": false,
+            "head": 3,
+            "indexedHead": 0,
+            "index": {
+              "usable": false,
+              "why": "$msg"
+            },
+            "scanned": 3,
+            "scannedBytes": 49
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "search",
+            "id": 4,
+            "query": "harbour",
+            "limit": 1,
+            "after": "$after"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "searched",
+            "id": 4,
+            "matches": [
+              {
+                "path": "c.md",
+                "uid": 3,
+                "line": 1,
+                "column": 1,
+                "text": "Harbour lights",
+                "before": [],
+                "after": [],
+                "clipped": false
+              }
+            ],
+            "skipped": [],
+            "nextAfter": null,
+            "complete": true,
+            "head": 3,
+            "indexedHead": 0,
+            "index": {
+              "usable": false,
+              "why": "$msg"
+            },
+            "scanned": 1,
+            "scannedBytes": 15
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "search",
+            "id": 5,
+            "query": ""
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 5,
+            "code": "badentry",
+            "msg": "$prefix:invalid_query: ",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "search",
+            "id": 6,
+            "query": "harbour",
+            "after": "bm90IGEgY3Vyc29y"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 6,
+            "code": "stale",
+            "msg": "$prefix:expired: ",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "ping"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "pong"
+          }
+        }
+      ]
+    },
+    {
       "name": "protocol 1 is still answered",
-      "covers": "A device on protocol 1 is answered in protocol 1 by a server of protocol 2: its ready says 1, a history entry an agent wrote carries no operation, and undo, which protocol 1 does not have, is an unknown op that rejects the request and keeps the session. The server's half only: the TypeScript client speaks protocol 2, so it does not play this one.",
+      "covers": "A device on protocol 1 is answered in protocol 1 by a server of protocol 2: its ready says 1, a history entry an agent wrote carries no operation, and undo and search, which protocol 1 does not have, are unknown ops that reject the request and keep the session. The server's half only: the TypeScript client speaks protocol 2, so it does not play this one.",
       "steps": [
         {
           "store": {
@@ -1947,6 +2203,24 @@
           "expect": {
             "res": "err",
             "id": 3,
+            "code": "protostate",
+            "msg": "$msg",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "search",
+            "id": 4,
+            "query": "alpha"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 4,
             "code": "protostate",
             "msg": "$msg",
             "retryable": false

@@ -107,6 +107,8 @@ Without `uid`, reads the head (`nocontent` for a folder or deletion → `not_fou
 
 `content` uses FTS5 with the query as a phrase (escape FTS syntax; this is literal search as in Basalt), then re-scans the matching note's text to compute line, column, and context so results are exact. `caseSensitive` filters after the FTS hit. `filename` is a basename substring match over heads. `tag` uses `note_tags` with `includeChildren` as prefix `tag/`. `complete` is false while the index is rebuilding, and `indexedHead` says how far it has got. Hit text starts ≤ 256 characters before the match and is clipped at 1024; context lines at 256.
 
+**Settled 2026-09-24: one search, two doors.** A paired device asks the same search over protocol 2's `search` (plan/protocol.md, "Search (protocol 2)"), which is what `trew search` sends. Both are answered by one Go function, `internal/search` `Source.Search`; this tool keeps its envelope, normalization and `nextCursor`, and the device's reply is a plain protocol frame with `nextAfter`. A continuation binds the door that made it. `internal/mcp` holds the device's search to this tool's over the oracle corpus.
+
 ### `note_history` `{path, before?: uid, limit?: limit(100) = 20}`
 
 → `{path, versions: [{uid, size, mtime, ctime, device, deleted, folder, previousPath?}], nextBefore: uid|null, observedAt}`. Newest first, 128 KiB page.

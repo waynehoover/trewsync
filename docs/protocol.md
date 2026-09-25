@@ -22,10 +22,12 @@ entry authenticator, registrar session, recovery key or rotation. The two do
 not interoperate, and each refuses the other at hello with `proto`, naming both
 numbers.
 
-Protocol 2 is protocol 1 and [undo](#undo): the `undo` request, and the
-operation behind each `history` entry. Nothing else changed. The server speaks
-both and answers each session in the version its hello asks for, so a device
-on protocol 1 is answered exactly as before.
+Protocol 2 is protocol 1, [undo](#undo) and [search](#search): the `undo`
+request, the operation behind each `history` entry, and the `search` request.
+Nothing else changed. Search joined protocol 2 before protocol 2 was released,
+so it is not a version of its own. The server speaks both and answers each
+session in the version its hello asks for, so a device on protocol 1 is
+answered exactly as before.
 
 The client normally uses one connection. Large uploads can use a temporary
 second connection with the same device credential, leaving the main connection
@@ -152,7 +154,7 @@ address and vault. The plugin shows it as a QR code of
 Requests expecting replies carry an integer `id` from **1 to 2^32-1**, unique
 among requests in flight. This applies to hello, put, putmany, get, fetch,
 resend, history, deleted, devices, rename, revoke, invite, uninvite, applied,
-and undo. Replies and request-specific errors echo the ID.
+undo and search. Replies and request-specific errors echo the ID.
 
 Missing or invalid IDs cause `protostate` and end the session. Clients also end
 a session on an unknown reply ID. Unsolicited batches, caught-up notices, pings,
@@ -403,6 +405,44 @@ that is not empty) is `noundo`, whose message begins with the reason. The
 reasons and the result's shape are in
 [plan/protocol.md](../plan/protocol.md#undo-protocol-2).
 
+## Search
+
+```text
+-> {op:"search", id, query, mode?, folder?, caseSensitive?, includeChildren?, contextLines?, limit?, after?}
+<- {res:"searched", id, matches, skipped, nextAfter, complete, head, indexedHead, index, scanned, scannedBytes}
+```
+
+Protocol 2 only. A device searches the vault it authenticated to with the
+server's literal search, the same one the MCP tool `search_notes` answers from
+([internal/search](../internal/search/run.go)), so a person and an agent asking
+the same question get the same matches. `query` is literal text, or a tag in
+`tag` mode; `mode` is `content` (the default), `filename`, `both` or `tag`;
+matching ignores case unless `caseSensitive`; `contextLines` is 0 to 3;
+`limit` is 1 to 200 matches a page, 50 by default.
+
+Each match is `{path, uid, line, column, text, before, after, clipped, kind?}`:
+the version it is in, the 1-based line and column (in UTF-16 code units), the
+line (from at most 256 characters before the match, at most 1,024 long), and
+the context lines. Note text arrives exactly as the note holds it, so a client
+that shows it to a person has to make it safe to show; `trew search` spells
+out every control character. A page holds at most 64 KiB of matches and reads
+at most 512 notes or 8 MiB; `nextAfter` continues it, and every page of one
+search is read at the `head` the first saw. `complete` is true only on a last
+page that skipped no note, and `skipped` names each note that could not be
+searched and why. `index` says whether the server's search index narrowed the
+candidates, and `indexedHead` how far it has got; the index only proposes, so
+an absent or lagging index costs speed, never a match. The server keeps one
+when started with `-mcp`.
+
+Searches have a budget of their own, so a person searching cannot slow another
+device's sync: a few at once across the server and per device, a request and a
+reply-bytes rate per device, and 30 seconds of work each. Over it is `toomany`
+with `retryAfterMs`, and the session continues. A query the search refuses is
+`badentry` with the reason first (`invalid_query:`, `invalid_limit:`,
+`invalid_tag:`, `input_too_large:`), a folder the path rules refuse is
+`badpath`, and an `after` that is not this search's is `stale` (`expired:`).
+The details are in [plan/protocol.md](../plan/protocol.md#search-protocol-2).
+
 ## Devices and invites
 
 ```text
@@ -498,6 +538,7 @@ not an automatic retry of the unchanged request.
 | `nochunk` | Content unavailable. | no | request rejected without partial fetch bodies. |
 | `nodevice` | Device ID does not exist. | no | request rejected. |
 | `noundo` | An undo that cannot be done; the message starts with the reason. | no | request rejected. |
+| `toomany` | A search over the device searches' budget, with a delay hint. | yes | request rejected; the session continues. |
 | `internal` | Server fault; nothing committed. | yes | ends during handshake/catch-up, otherwise rejects the request. |
 
 `busy` includes a retry delay for admission pressure or shutdown. Numeric limits

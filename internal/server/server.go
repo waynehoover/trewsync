@@ -319,6 +319,12 @@ type Server struct {
 	// reads through the control socket (PLAN.md M5.5).
 	metrics *metrics.Registry
 
+	// searches are the device searches' budgets, and searchIndex the index
+	// they ask for candidates, and the vault it indexes, or nil (search.go).
+	// Atomic so that a test may set either with a listener already open.
+	searches    atomic.Pointer[searchBudgets]
+	searchIndex atomic.Pointer[indexFor]
+
 	// sessions is every connection Handle is running, joined to a vault or not,
 	// and closing is set once Shutdown has begun. http.Server.Shutdown stops
 	// the listener and waits for ordinary requests, but a hijacked WebSocket is
@@ -506,6 +512,7 @@ func New(st *store.Store, log *slog.Logger) *Server {
 		now: time.Now, batchSize: BatchSize,
 		metrics: m,
 	}
+	srv.searches.Store(newSearchBudgets(SearchLimits{}))
 	srv.commitMu.metrics = m
 	return srv
 }
@@ -678,6 +685,7 @@ func (s *Server) revoke(vaultID, deviceID string, origin *Session) (Revocation, 
 		return Revocation{}, err
 	}
 	victims := s.hub.detach(vaultID, deviceID, origin)
+	s.searches.Load().forget(searchKey(vaultID, deviceID))
 	for _, peer := range victims {
 		peer.revoked.Store(true)
 	}
