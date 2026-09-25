@@ -36,6 +36,8 @@ for installed usage.
 | `audit [-since WHEN] [-json]` | List what agents' write operations, and every undo, changed. | Yes; it goes through the running server. |
 | `undo OPID [-to-copy] [-json]` | Undo one operation from the audit, or copy what it replaced. | Yes; it goes through the running server. |
 | `restore -to-uid N [-head H -apply]` | Put the whole vault back as it was at a uid, as one undoable operation; a dry run without `-apply`. | Yes; it goes through the running server. |
+| `config show`, `config set KEY VALUE`, `config unset KEY` | Read and change the [configuration file](#configuration-file). | Yes; it goes through the running server, which uses the change at once. |
+| `git-export set`, `status`, `disable` | Keep a [Git history](git-export.md) of the vault and push it to a remote. | Yes; it goes through the running server. |
 | `version` | Print version, platform, and toolchain. | Independent of serving. |
 
 ## serve
@@ -61,7 +63,13 @@ for installed usage.
 | `-template-date-format` | `YYYY-MM-DD` | What a template's `{{date}}` writes, as Templates "Date format". |
 | `-template-time-format` | `HH:mm` | What a template's `{{time}}` writes, as Templates "Time format". |
 | `-timezone` | The server's local zone | IANA zone the daily-note tools read "today" and `{{time}}` in. |
+| `-git-export` | Off | Keep a [Git history](git-export.md) of the vault; `-git-export=false` turns off one the file turns on. |
+| `-git-export-remote`, `-git-export-key`, `-git-export-token`, `-git-export-known-hosts`, `-git-export-branch`, `-git-export-lfs-threshold`, `-git-export-quiet` | See [git-export](#git-export) | The Git export's settings; any of them turns the export on. |
 | `-v` | Off | Verbose logging. |
+
+Every flag from `-daily-folder` down is also a key in the
+[configuration file](#configuration-file), and the flag wins over the file for
+as long as that server runs.
 
 Batch and fetch budgets cannot be smaller than one maximum-sized chunk.
 Built-in browser origins are `app://obsidian.md`, `capacitor://localhost`, and
@@ -108,18 +116,125 @@ store, 0.74 s for the same notes, after the port is bound, so a device
 reconnecting meanwhile waits rather than being refused. The index takes about
 twice the notes' size on disk (39 MB there). There is no flag to turn it off.
 
-The `-daily-*`, `-template*` and `-timezone` flags matter only with `-mcp`,
-for the [daily-note and template tools](agent.md#daily-notes-and-templates).
-Obsidian keeps these settings in `.obsidian/daily-notes.json` and
-`.obsidian/templates.json`, which never sync, so copy them from Obsidian's
-settings. `serve` refuses to start with a path the server would refuse or a
-date format it cannot write as Obsidian does, naming the flag. `trewd service
-install` does not carry them into the unit; add them to its `ExecStart` line.
+The daily-note and template settings matter only with `-mcp`, for the
+[daily-note and template tools](agent.md#daily-notes-and-templates). Obsidian
+keeps them in `.obsidian/daily-notes.json` and `.obsidian/templates.json`,
+which never sync, so copy them from Obsidian's settings into the configuration
+file (`trewd config set daily.folder Journal`) or give them as flags. `serve`
+refuses to start with a path the server would refuse or a date format it
+cannot write as Obsidian does, naming the key or the flag. A unit from `trewd
+service` needs none of these on its `ExecStart` line: `serve` reads the file in
+its data directory.
+
+Every `serve` runs the [Git export](git-export.md)'s worker, which does nothing
+while the export is off. It reads only what the store has committed and never
+takes the commit lock, so it cannot delay or refuse a write; its trouble, git
+missing or a push failing, is its status and doctor's `git-export` check, never
+a reason not to serve.
 
 On a vault with no devices, `serve` writes an invite for the first one to
 `-invite-out`, mode 0600, and logs that path and its expiry, never the invite.
 The file has one line per address the invite names, all the same invite. A
 restart while it is still outstanding leaves the file alone.
+
+## Configuration file
+
+`trewd.json` in the data directory holds the settings that are not about the
+store, so a unit file or a compose file can carry no flags for them. It is
+mode 0600 and holds no secret: the Git export's credential is named by its
+path. One object with a section per feature:
+
+```json
+{
+  "git_export": {
+    "enabled": true,
+    "remote": "git@github.com:you/vault-history.git",
+    "key": "/home/you/.trew-keys/vault-history",
+    "quiet": "5m"
+  },
+  "daily": {
+    "folder": "Journal",
+    "template": "Templates/Daily",
+    "timezone": "Europe/London"
+  }
+}
+```
+
+**Precedence, setting by setting: a `serve` flag, then the file, then the
+default.** A flag wins for as long as that server runs; the file wins over the
+built-in default. `trewd config show` prints each setting's value and where it
+came from (`flag`, `file` or `default`), as the running server uses it when
+one runs.
+
+`trewd config set KEY VALUE` and `trewd config unset KEY` change one key.
+With a server running they go through its control socket: the server checks
+the value as it would use it, writes the file, and takes the change up at once
+(a `daily.*` key reaches the MCP tools' next call, a `git_export.*` key the
+export's next step), saying so, or saying that a flag it was started with still
+wins. With no server they write the file under the server lock, and `serve`
+reads it when it starts. The data directory must exist; the file can be
+written before the first `serve`. A key this build does not know, a value its
+feature cannot use, and a file that is not valid JSON are refused, and `serve`
+refuses to start on a file it cannot read rather than ignore it. The file may
+be edited by hand while the server is stopped.
+
+| Key | `serve` flag | Default |
+|---|---|---|
+| `git_export.enabled` | `-git-export` | `false` |
+| `git_export.remote` | `-git-export-remote` | None: the repository stays local |
+| `git_export.key` | `-git-export-key` | None |
+| `git_export.token` | `-git-export-token` | None |
+| `git_export.known_hosts` | `-git-export-known-hosts` | GitHub's published keys, for github.com |
+| `git_export.branch` | `-git-export-branch` | `main` |
+| `git_export.lfs_threshold` | `-git-export-lfs-threshold` | `10485760` (10 MiB); `0` never uses LFS; `KiB`, `MiB` and `GiB` suffixes accepted |
+| `git_export.quiet` | `-git-export-quiet` | `5m` |
+| `daily.folder` | `-daily-folder` | The vault's root |
+| `daily.format` | `-daily-format` | `YYYY-MM-DD` |
+| `daily.template` | `-daily-template` | None |
+| `daily.templates_folder` | `-templates-folder` | `Templates` |
+| `daily.template_date_format` | `-template-date-format` | `YYYY-MM-DD` |
+| `daily.template_time_format` | `-template-time-format` | `HH:mm` |
+| `daily.timezone` | `-timezone` | The server's local zone |
+
+Paths given to `config set` are made absolute. `-json` prints `config show`
+as JSON.
+
+## git-export
+
+`trewd git-export set` writes the `git_export` section of the configuration
+file and turns the export on; `status` says what it is doing; `disable` turns
+it off and keeps the settings. [Keep a Git history of your vault](git-export.md)
+is the step-by-step guide, including the deploy key and the privacy it costs.
+
+```bash
+trewd git-export set -remote git@github.com:you/vault-history.git -key ~/.trew-keys/vault-history
+trewd git-export status [-json]
+trewd git-export disable
+```
+
+| `set` flag | Meaning |
+|---|---|
+| `-remote URL` | `git@host:owner/repo.git`, `ssh://`, `https://` or `file:///`. A URL carrying a password or token, `http://` and `git://` are refused. |
+| `-key FILE` | SSH remote: the deploy key's private half. Refused unless mode 0600 or stricter. |
+| `-token FILE` | HTTPS remote: a file holding an access token for that one repository. Refused unless mode 0600 or stricter. |
+| `-known-hosts FILE` | SSH remote: the known_hosts file the host key is checked against, strictly. Needed for any host but github.com. |
+| `-branch B` | The branch to write and push; default `main`. |
+| `-lfs-threshold N` | Files larger than N bytes go to Git LFS (`KiB`, `MiB`, `GiB` accepted); `0` never; default 10 MiB. |
+| `-quiet D` | How long a device must stop writing before its versions are one commit; default `5m`, at most `24h`. |
+| `-local` | Keep the repository on this machine only, clearing the remote and its credential. |
+
+The repository is `git-export/repo.git` in the data directory, beside its
+state (`git-export/state.db`). Both are derived from the store and not part of
+a backup. Commits are pushed with a lease: the remote's branch moves only from
+the commit the export last pushed, so a commit somebody else pushed there is
+never overwritten; the export refuses and says so until `trewd git-export set`
+is run again with the branch back at one of its commits, or with another
+`-branch`. `status` and doctor name a credential by its path only.
+
+The server runs `git` (2.36 or later) and `git-lfs` (3.0 or later) with an
+environment of its own: no user or system Git configuration, no hooks, no
+credential helper but its own, no prompt, and for SSH only the given key, no
+agent, and strict host key checking against the one known_hosts file.
 
 ## The MCP endpoint
 

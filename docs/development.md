@@ -1736,6 +1736,177 @@ refused as "2 invites, one per address": every non-empty line counted, and
 trewd invite printed as the one invite it is" fails without the change. The
 plugin's pairing field takes a pasted line and was not affected.
 
+### The Git export
+
+A one-way Git history of the vault ([the guide](git-export.md)), built to the
+specification in [plan/research/syncidian.md](../plan/research/syncidian.md)
+section 8 and the owner's decisions of 2026-09-25. It is derived state, like
+the search index (PLAN.md section 2.5), and never the source of truth:
+Syncidian's PR sequence #38 to #60 is the worked example of what happens
+otherwise, a store reconciled by hard reset against a remote with two writers.
+
+**Where it is.** `internal/gitexport` (the worker, the plan, the push, the
+status), `internal/config` (the configuration file, `trewd.json`),
+`cmd/trewd/settings.go` (the serve flags over the file, `trewd config` and
+`trewd git-export`, and the control socket's requests for both),
+`internal/doctor/gitexport.go` (the `git-export` check) and
+`internal/store/times.go` (the server time of every version).
+
+**System git, not go-git (owner decision, 2026-09-25).** Every object, ref,
+LFS upload and push is a `git` or `git lfs` child process: `fast-import` for
+the commits, `update-ref` with an old value for the branch, `git lfs push
+--object-id` and `git push --force-with-lease` for the remote. The weighing:
+
+- *Correctness.* Git writes its own objects, packs and refs, with `core.fsync`
+  covering all of them, and git-lfs is the LFS client every host tests
+  against, over HTTPS and over SSH's `git-lfs-authenticate`. The go-git
+  alternative left the LFS batch API, its SSH authentication and the upload
+  verification to code of this project's own, and go-git's push to a host
+  that nothing here can test in CI.
+- *Dependencies.* No Go module is added. A probe binary using go-git v5.19.2's
+  repository, SSH and HTTP packages (September 25) built to 6.5 MB against
+  about 1.5 MB for an empty program and brought a module graph of 51, among
+  them an SSH agent client this export must never use.
+- *Packaging, the cost.* The image was `scratch` and one binary (14.4 MB); it
+  is now Alpine 3.24 with git 2.54, git-lfs 3.7.1 and OpenSSH 10.3 (55.7 MB,
+  of which git-lfs is 13.2 MB). ssh refuses to run for a uid with no passwd
+  entry, so the image creates `trewd`, uid 65532. The flake wraps `trewd`
+  with the three on its PATH; the Homebrew formula depends on git-lfs; a
+  plain binary install needs them on the host, and doctor says when they are
+  missing. The release workflow's arm64 image now runs its `apk add` under the
+  QEMU it already set up.
+
+The minimum versions are git 2.36, the first with `core.fsync` (a ref update
+must be durable before the state row records it), and git-lfs 3.0 (`push
+--object-id`, and the file:// transfer the tests use). `FindTools` checks
+both at the export's start and every minute while they are missing.
+
+**The environment.** `runner.env` is the whole environment: PATH, a HOME and
+XDG_CONFIG_HOME of the export's own (`git-export/home`), GIT_DIR, no global
+or system config (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`), no
+prompt, no askpass, and for SSH a `GIT_SSH_COMMAND` of `ssh -F /dev/null -i
+KEY -o IdentitiesOnly=yes -o IdentityAgent=none -o ForwardAgent=no -o
+BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=FILE -o
+GlobalKnownHostsFile=/dev/null`, paths shell-quoted because git runs it
+through a shell. `SSH_AUTH_SOCK` is not passed. Every call carries `-c
+core.fsync=all -c core.hooksPath=/dev/null -c gc.auto=0 -c credential.helper=`
+and, for HTTPS, one helper of its own that reads the token file when git asks,
+so the token is in no argument, no variable and no file but its own. Calls are
+argument vectors with deadlines; stderr is kept to 16 KiB, with user
+information in a URL and the token's bytes redacted, and an error names only
+the git subcommand. `TestSSHIsRunWithOnlyTheKeyAndTheKnownHosts` runs a
+stand-in `ssh` and checks its argv and environment;
+`TestTheTokenIsReadFromItsFileAndNeverShown` runs `git credential fill`
+through the helper.
+
+**Deterministic commits.** Which versions make which commit is a function of
+the store and the settings (`plan.go`): an operation's versions are one commit
+(`store.OperationStamps`, from `op_entries`), dated by its `committed_at`; a
+device's are one commit per run of its consecutive versions, each within the
+quiet window of the one before it, dated by the server time of the last. The
+server time is `entry_times`, a table written by `writeEntry` in the entry's
+own transaction, because a device's version had no server time anywhere and
+the exporter's own memory of when it looked would make a rebuild differ from
+the incremental export. Effective times never go backwards, so a clock stepped
+back cannot reorder a history. A version with no recorded time (written before
+the table, or by a build without it) takes the time before it, or the store's
+creation, and a run of those is broken where a path repeats so no version is
+hidden. A run is closed when a later version breaks it or the quiet window has
+passed by the store's clock; a from-scratch export makes the same commits as
+the incremental one unless the clock went back across a window that had
+already closed, the store was purged in between (the rebuild has less
+history), or the settings changed. Blob, tree and commit bytes are all fixed
+by the tree and the message: identity lines use the device's name or the
+token's label with an `.invalid` address, the time in UTC, and a
+`.gitattributes` listing the LFS paths, sorted, each an anchored,
+glob-escaped, C-quoted pattern (`TestGitReadsTheAttributesAsTheExportMeantThem`
+asks `git check-attr`).
+
+**The step, and a crash anywhere in it.** A step plans up to 5,000 versions or
+256 MiB of closed commits and: (1) streams them to `git fast-import`, which
+leaves the last on the scratch ref `refs/trew/import`; (2) records it as
+pending in `git-export/state.db` (SQLite, `synchronous=FULL`); (3) moves the
+branch with `update-ref` from the commit the state row names; (4) records it
+as the branch's commit. Killed before (2), the next step writes the same
+objects again. Between (2) and (3), the branch is where the row said and the
+pending commit is dropped and made again, identically. Between (3) and (4),
+the branch is at the pending commit, recognised as the export's own. A branch
+anywhere else was moved by somebody else: the export refuses and says so, and
+never moves it back. After fast-import, the new commits are counted on top of
+the parent before anything is recorded (rule 4). A chunk that cannot be read
+fails the step (rule 2) rather than commit a note it could not read.
+
+**The push.** LFS objects the remote has not been sent go first (`lfs_objects`
+and `lfs_pushed`), so a remote never holds a pointer to an object it lacks.
+The branch is pushed with `--force-with-lease=refs/heads/B:EXPECTED`, where
+EXPECTED is where `ls-remote` found it: the commit last pushed, or a commit on
+the export's own branch (a push that worked and was not recorded), or nothing
+for a first push. A remote branch anywhere else, or deleted after a push, is
+refused and recorded in `remotes.refused` until `trewd git-export set` asks
+the export to look again, which never pushes over a commit it did not make. A
+failure sets the status and a retry from 30 seconds doubling to 30 minutes.
+
+**A restore.** A store restored from a backup has a new epoch and a different
+history, so the export does not continue the old one or rewrite it: one commit
+marked `Restore:` (trailers `Trew-Restore`, `Trew-Previous-Epoch`,
+`Trew-Epoch`) replaces the tree with the restored store's notes at its head,
+and the export goes on from there.
+
+**The tests** (`internal/gitexport`, with a local bare remote over file://,
+git-lfs's standalone file transfer, and no network):
+
+| Acceptance (owner, 2026-09-25) | Test |
+|---|---|
+| A rebuild from scratch equals the incremental export, byte for byte | `TestARebuildMakesTheSameCommits`: twelve rounds of two devices and an agent, the clock moving, a sync after every write; the same tip from a fresh export. |
+| SIGKILL during an export resumes with no duplicate or missing commit | `TestAKilledExportResumesWithTheSameCommits`: the test binary as a child, killed with SIGKILL at each of five points of the first and of a third step; the resumed tip and commit count equal an export never killed. Removing the recognition of a moved-then-unrecorded branch fails `moved/1` and `moved/3`. |
+| `git checkout` of the tip matches the store's heads | `TestTheTipMatchesTheStore` (every live file byte for byte, LFS pointers to the right oid and size, the objects in the LFS store, `git fsck --strict`) and `TestAPushSendsTheBranchAndItsLFSObjects` (a fresh clone of the remote with `git lfs pull`, byte for byte). |
+| An externally changed branch is refused and reported | `TestAMovedBranchIsRefused` (local) and `TestARemoteChangedOutsideIsRefused` (remote, still refused after `set` while foreign, pushed again once back). |
+| A push failure leaves sync unaffected and doctor reports it | `TestAFailingPushLeavesTheStoreAndTheExportAlone`, and in `cmd/trewd` `TestAFailingPushLeavesSyncAloneAndDoctorSaysSo`: an agent's write through `serve -mcp` commits at once, doctor warns on the push and exits non-zero, and the token's bytes are in neither doctor's output nor status. |
+| LFS pointers correct and objects uploaded | The two tip tests above. |
+
+Beside them: the quiet window and dating (`TestAQuietWindowCoalescesADevicesRun`),
+the plan's rules alone (`TestThePlan`), a restore
+(`TestARestoreIsOneMarkedCommit`), `git~1` left out and reported, a missing
+git reported, the remote URL, branch and credential file checks, flags over the
+file, and the configuration file's round trip and its refusal of an unknown
+key (`internal/config`, `TestTheConfigFileAndItsFlags`,
+`TestServeRefusesAConfigFileItCannotRead`).
+
+**The real runs, 2026-09-25**, against the owner's private
+`waynehoover/trewsync-git-export-test`, with generated notes only, by a script
+kept outside the repository. Each made a deploy key for itself
+(`ssh-keygen -t ed25519`, added with `gh repo deploy-key add --allow-write`),
+ran `trewd git-export set` with it and a 20 s quiet window, and `trewd serve
+-mcp -localhost`. A headless client uploaded 306 files (300 notes in twelve
+folders, three awkward names, attachments of 11 MiB and 12 MiB and one of
+3 MiB); a second device edited two notes, renamed one and an attachment, and
+deleted one; an agent created a note through `create_note`; the first device
+edited once more.
+
+The first run (from `22f0d02`, a work-in-progress commit of the same code)
+pushed branch `main`. The second, from `34cb4ab`, with a fresh data directory,
+found `main` there at `2c6bfe3`, a commit its own state did not make, and
+refused: "the remote already has a branch main, at 2c6bfe330537, and the
+export did not make it", in its status and its log, leaving
+`main` where it was. `trewd git-export set -branch final-run` through the
+running server moved it to a branch of its own, and it pushed four commits
+there: `mac-test: 306 files`, `phone-test: 7 files`, `create_note by test
+agent: Agent/written by the agent.md` and `mac-test: Notes/5/note 005.md`,
+each authored by its device or token, the two large files through LFS over
+the deploy key. The first commit and push took 12 s once the branch was set,
+the second 25 s after the last edit (the 20 s window, then the export and the
+push). A fresh `git clone -b final-run` with `git lfs pull`, compared with
+`scripts/vault-inventory.py` against a third device paired fresh from the
+server, held every synced path byte for byte (330 entries: 303 notes, 3
+attachments, 17 folders, 27,306,254 bytes; the clone's `.git` and
+`.gitattributes` excluded as dot paths, the witness's `.trew` as its own
+state), `diff -r` found nothing, and `git fsck --strict` passed; the first run
+checked the same of `main`. The server's log never held the key. Both deploy
+keys were removed (`gh repo deploy-key delete`; none is left on the
+repository) and both private keys deleted. The repository keeps both runs'
+branches, `main` and `final-run`, and their LFS objects, about 46 MiB of the
+free 1 GiB.
+
 ### Latent issues in the chunker
 
 Found while porting `client/src/core/chunk.ts` to Go (`internal/notes`,

@@ -8,6 +8,28 @@ on Basalt, with its end-to-end encryption, and are its history. Results describe
 specific fixtures, not a speed ranking against another product. The original
 transfer tables remain in `git show 573617c:docs/compared.md`.
 
+## The Git export: system git or go-git, September 25, 2026
+
+The Git export ([guide](git-export.md), [implementation](development.md#the-git-export))
+had two ways to write Git: the system's `git` and `git-lfs` as child
+processes, or go-git (Apache-2.0) linked in with an LFS batch-API client of
+this project's own. The owner chose system git on 2026-09-25; these are the
+numbers it was weighed on, measured that day on the M-series Mac.
+
+| | System git and git-lfs | go-git v5.19.2 and an own LFS client |
+|---|---|---|
+| Go modules added | None | 51 in a probe's graph (go-git, go-billy, gcfg, sha1cd, ssh-agent, knownhosts, circl, ProtonMail/go-crypto, ...) |
+| `trewd` binary | Unchanged | A probe using the repository, SSH and HTTP packages built to 6.5 MB, against 1.6 MB for an empty program |
+| Container image | Alpine 3.24 with git 2.54, git-lfs 3.7.1, OpenSSH 10.3: 55.7 MB, from 14.4 MB on `scratch` | Could stay `scratch`, with CA certificates added |
+| LFS | git-lfs, including SSH's `git-lfs-authenticate` and upload verification | Batch API, SSH authentication and verification written here, testable in CI only against a server also written here |
+| Durability | `core.fsync=all` over objects, packs and refs (git 2.36 and later) | Whatever go-git's filesystem storage does, to be established |
+| Credential handling | Environment built from nothing, an argument vector, `GIT_SSH_COMMAND` with the one key, a credential helper that reads the token file | In process, never in a child's environment |
+| A host install | Needs git, git-lfs and ssh on PATH; doctor says when they are missing | Nothing |
+
+The export commits with `fast-import`. In the real run against GitHub (306
+files and 27 MB, two attachments through LFS over a deploy key), the first
+commit and push took 12 s, the 23 MiB LFS upload included.
+
 ## Ten thousand notes on a Mac, September 24, 2026
 
 `bun run bench:10k` from `client/`, with `BENCH_OBSIDIAN=1` for the plugin.
@@ -894,6 +916,7 @@ requirements or measurements change, with compatibility and preservation tests.
 | Alternative codec (I25) | Encoded bytes affect chunk identities. Require a measured benefit and a migration plan; see the historical review evidence. |
 | Diff-match-patch fork (I26) | The evaluated fork produced different diffs and lacked equivalent line-mode/deadline behavior. A dependency swap would change merge results. |
 | `trewd update` verifying Sigstore itself (September 24, 2026) | Linking `sigstore-go` v1.3.0 would let the binary check the release manifest's certificate chain and log entry with nothing else installed. Measured: the module graph goes from 41 modules to 368, and a verifier alone builds to 18 MB beside trewd's 14 MB. Hand-writing the check with the standard library was rejected as security code nobody reviews, against trust roots that rotate. `trewd update` runs the packslip CLI instead, the format's reference verifier, and checks the statement's project, version, digest and size itself. Revisit if requiring the CLI proves a real obstacle. |
+| go-git for the Git export (September 25, 2026) | Would keep the image `scratch` and add no runtime program, at 51 modules, about 5 MB of binary, and an LFS client and its SSH authentication written here. The owner chose system `git` and `git-lfs` instead ([the evaluation](#the-git-export-system-git-or-go-git-september-25-2026)). |
 | A release key embedded in trewd | An Ed25519 signature over SHA256SUMS, checked with the standard library, needs a long-lived key in CI secrets and a custody story for it. The keyless manifest pins the release workflow instead, which is also what mise checks, so there is no key to lose. |
 
 Basalt evaluated data-key epochs, re-encryption, and device signatures for
@@ -938,6 +961,7 @@ These projects informed TrewSync's design and regression cases:
 | [asciimoo/hister](https://github.com/asciimoo/hister) | The untrusted-content envelope: structural separation, the warning beside each tool, one normalisation function. Also the case for a hand-rolled MCP handler without an SDK, the planned `doctor` command that diagnoses without repairing, keeping the docs site in the repository beside the code, the README's shape, with its standalone Privacy section, and the packaging shape: goreleaser binaries for every platform, a Homebrew tap, a Nix flake and a self-updating binary. Design only; no code is used. |
 | [GoReleaser](https://goreleaser.com) (MIT) | Builds and checksums the trewd release binaries (`.goreleaser.yml`); run as a tool, not linked. |
 | [packslip](https://github.com/jdx/packslip) (MIT) | The signed release manifest a server release carries, which `trewd update` verifies through its CLI and mise installs from. Run as a tool, not linked. |
+| [Git](https://git-scm.com) (GPL-2.0-only) and [Git LFS](https://git-lfs.com) (MIT) | The Git export writes its repository with `git fast-import` and `git update-ref`, and pushes with `git push` and `git lfs push`: run as programs, never linked. The container image ships them from Alpine's packages (Alpine 3.24, whose sources are its aports), with OpenSSH (BSD) for SSH remotes. GitHub's SSH host keys, from its published meta API, are embedded for github.com remotes. |
 | [age](https://github.com/FiloSottile/age) (`filippo.io/age`, BSD-3-Clause) | Encrypts backups (`internal/archive`): the format, the X25519 and post-quantum ML-KEM-768 recipients, and the identity files `trewd backup-key` writes. A dependency, v1.3.2, with `filippo.io/hpke` (BSD-3-Clause) and `golang.org/x/crypto` (BSD-3-Clause) beneath it. |
 
 ### Other self-hosted Obsidian sync projects

@@ -43,6 +43,8 @@ What that costs, stated once so nothing below understates it:
 | MCP tokens | Server (SHA-256 only); the agent's configuration | Anyone wanting whole-vault read, or write with a write token |
 | Invite tokens | Server (SHA-256 only); the one string handed over, for an hour by default | Anyone who sees it before it is redeemed |
 | Paths and chunk names | Server; logs if careless | Anyone profiling what the vault contains |
+| Exported Git history | The export's repository in the data directory; the Git remote and its LFS store, when the [Git export](git-export.md) is on | The remote's host, and anyone who can read the repository there |
+| The Git export's credential | A deploy key or token file named by path in `trewd.json`, mode 0600 | Anyone wanting to write to, or read, that one repository |
 
 Adversaries considered: a thief with a stolen device; someone who reads a
 backup or a copied volume; a network attacker; an agent, or a note, that tries
@@ -104,8 +106,18 @@ holds it.
 |---|---|---|---|
 | T1 | TLS in front of the server (Tailscale Serve, Caddy); device tokens and note contents cross the network | `docs/server.md` (M9); `trewd doctor`'s `origin` check asks the address devices use | documented |
 | T2 | `/mcp` behind Tailscale or an identity-aware proxy; a warning when `--mcp` listens on a wildcard address | `serve -mcp` logs it (`logMCP`); `wildcardAddr` tested in `cmd/trewd/mcp_test.go` | **enforced**, the warning; the proxy is the operator's (documented) |
-| T3 | The service runs as its own user with a private data directory; the container image is scratch, read-only, capabilities dropped | `trewd service`, `compose.yaml` (inherited from Basalt); `trewd doctor` warns on a data directory other accounts can read | enforced for the unit and image |
+| T3 | The service runs as its own user with a private data directory; the container image is Alpine with only git, git-lfs and ssh added for the Git export, run read-only with capabilities dropped | `trewd service`, `compose.yaml` (inherited from Basalt); `trewd doctor` warns on a data directory other accounts can read | enforced for the unit and image |
 | T4 | Chunk names, paths, credentials and note bodies stay out of logs and metric labels | `internal/metrics` has no labels at all; `TestASnapshotCarriesNothingFromTheVault`, `TestTheLogCarriesNoTokenNoteTextOrPath` | **enforced** for metrics and the MCP log; a review rule for the rest of the log |
+
+### The Git export
+
+| # | Requirement | Enforced by | Status |
+|---|---|---|---|
+| G1 | The export can never refuse or delay a write: it reads committed entries outside the commit lock, and a push failure changes only its status | `internal/gitexport` worker; `TestAFailingPushLeavesTheStoreAndTheExportAlone`, `TestAFailingPushLeavesSyncAloneAndDoctorSaysSo` | **enforced** |
+| G2 | Nothing is ever read back from Git into the store, and a branch changed outside the export, locally or on the remote, is refused and reported, never moved back or pushed over | no import path exists; push with a lease; `TestAMovedBranchIsRefused`, `TestARemoteChangedOutsideIsRefused` | **enforced** |
+| G3 | The credential reaches only its one repository, is named by path and refused unless mode 0600, and appears in no log, error, audit or doctor output | `CheckSecretFile`, the runner's environment and redaction; `TestACredentialReadableByOthersIsRefused`, `TestTheTokenIsReadFromItsFileAndNeverShown`, `TestSSHIsRunWithOnlyTheKeyAndTheKnownHosts` | **enforced**; scoping the key to one repository is the operator's (documented in [the guide](git-export.md)) |
+| G4 | An SSH remote's host key is checked strictly, with no agent and no other identity | `GIT_SSH_COMMAND` (`StrictHostKeyChecking=yes`, one known_hosts, `IdentitiesOnly`, `IdentityAgent=none`); `TestSSHIsRunWithOnlyTheKeyAndTheKnownHosts` | **enforced** |
+| G5 | The person turning it on is told that exported history is plaintext, that purge cannot remove it, that the remote's host reads every note and deleted version, and that LFS objects cannot be purged | [the guide](git-export.md), [Security and privacy](security.md#the-git-export), the README's Privacy section | documented |
 
 ### Clients
 

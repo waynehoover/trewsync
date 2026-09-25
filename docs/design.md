@@ -255,6 +255,15 @@ guide is [Connect an agent](agent.md); the tool contract is
   a worker outside the commit path, from a durable `indexed_through_uid`, and
   literal search stays literal: the index only proposes candidates where it
   cannot omit a match, and the matcher decides.
+- **Git is an export, never the source of truth.** The optional Git history
+  ([Keep a Git history](git-export.md)) is derived the same way: a worker
+  outside the commit path, a durable per-branch state row, commits that are a
+  function of the store so a rebuild makes the same ones, and nothing ever
+  read back. A branch moved outside it, locally or on the remote, stops the
+  export rather than being moved back. Syncidian's history (its PRs #38 to
+  #60) is the worked example of the alternative: Git made authoritative with
+  two writers, reconciled by hard resets and deletion by absence, which breaks
+  rules 1, 3 and 6 at once.
 
 ### No MCP in the headless client
 

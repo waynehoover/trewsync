@@ -87,9 +87,13 @@ Docker, is [server setup](docs/server.md).
   losing every device loses no synced note: the server pairs a new one.
 - **A mirror without Obsidian.** The [command-line client](docs/client.md)
   keeps a copy on a NAS or another machine, read-only or two-way.
-- **Small to run.** One static binary or a scratch container, SQLite inside,
-  no database service beside it. Edits upload only the changed pieces of a
-  file.
+- **A Git history, if you want one.** The server can keep the vault's history
+  in Git and push it to a private repository: one commit per agent change and
+  per quiet run of a device's edits, large attachments in Git LFS, never read
+  back ([Keep a Git history](docs/git-export.md)).
+- **Small to run.** One static binary, or a small container with Git beside
+  it for the export, SQLite inside, no database service beside it. Edits
+  upload only the changed pieces of a file.
 
 ## Before you choose TrewSync
 
@@ -136,6 +140,10 @@ edits the store directly. It also means:
   read-only one.
 - **Devices trust the server's word.** Nothing lets a device detect a note the
   server altered, or check which device wrote a version.
+- **A Git export is plaintext history, for good.** If you turn on the
+  [Git export](docs/git-export.md), whoever hosts the remote reads every note
+  and every deleted version, and `trewd purge` cannot remove any of it from
+  Git history.
 
 Keep the connection behind TLS (Tailscale Serve or an HTTPS proxy): it is all
 that protects your notes and device credentials in transit. Encrypting the disk

@@ -53,6 +53,7 @@ What each check means, and what to do:
 | `chunks` | A sampled body is missing or does not hash to its name, or some are quarantined. | `trew repair` on a device that still holds those notes; `trewd verify -deep` names them. |
 | `space` | Under 1 GiB or 5% free warns; under 64 MiB fails, and the store refuses every write. Or the write-ahead log is over 512 MiB. | Free space or grow the volume. `trewd stats` says whether a purge would help. A huge write-ahead log means a long read is holding checkpoints back: let it finish, or restart. |
 | `index` | The search index cannot be read, is not trusted with no rebuild running, its worker failed, or it is more than 500 versions behind. | Search stays correct meanwhile, only slower. See [When the index is behind](#when-the-index-is-behind). |
+| `git-export` | The [Git export](git-export.md)'s settings cannot be used, git or git-lfs is missing, its branch was moved in the repository or on the remote outside the export (fails), or a push failed, or versions have waited more than fifteen minutes past the quiet window (warns). Off is a note. | Sync is not affected. See [The Git export](#the-git-export). |
 | `tokens` | An MCP token has expired, or expires within two weeks. | `trewd mcp-token -label NAME` mints a new one; `trewd mcp-token -revoke ID` removes the old. |
 | `devices` | A device has not been seen for a month, or is connected and has applied nothing for fifteen minutes while behind. | A lost device: `trewd revoke ID`. A stuck one: open it; its panel or `trew status` says what it is stuck on. |
 | `commits` | Commits have failed since the server started; three in a row fails. | Read the log for `commit failed`; check free space and that the volume is writable. Devices keep what they could not send. |
@@ -187,6 +188,35 @@ scans whatever the index has not reached. So there is nothing urgent about it.
 - **Rebuild from scratch.** Stop the server, move `search.db` (and its `-wal`
   and `-shm`) aside, and start it again. It builds a new index from the store
   while search scans.
+
+## The Git export
+
+With a [Git history](git-export.md) configured, `trewd git-export status`
+says what the export has done and what it is waiting on, and doctor's
+`git-export` check reads the same. None of it can delay or lose a note: the
+export only reads what the store has committed.
+
+- **A push fails.** The status and doctor show the error with the credential
+  named only by its path. The export keeps committing locally and retries on
+  its own, every half minute at first and at most every half hour. Fix the
+  network, the deploy key or the token; nothing else is needed.
+- **The remote's branch was changed outside the export.** It will not push
+  over a commit it did not make. Find out who changed the branch. Put it back
+  at the commit status names and run `trewd git-export set` to look again, or
+  export to a new branch with `trewd git-export set -branch NAME`.
+- **The local repository's branch was moved.** The export stops where it is.
+  Put the branch back, or stop the server and move `git-export/` aside to
+  export again from the store; with the store unpurged and the settings
+  unchanged the rebuild makes the same commits, so the remote accepts it.
+- **The store was restored from a backup.** The export adds one commit marked
+  `Restore:` holding the restored notes and goes on; it never rewrites the
+  branch.
+- **git or git-lfs is missing or too old.** Install git 2.36 or later and
+  git-lfs 3.0 or later on the server's PATH; the container image and the Nix
+  package carry both.
+
+`trewd purge` does not reach the Git history. What was pushed stays readable
+by whoever hosts the remote until the repository itself is deleted.
 
 ## Something is wrong with the store
 
@@ -365,6 +395,8 @@ token, or a model provider reading what the agent reads.
 | `trew.db` (and `-wal`, `-shm`) | Every version's record, devices, tokens, the agents' log. | Never. |
 | `chunks/` | Every note's bytes, named by their SHA-256. | Never. |
 | `search.db` | The search index, derived from the store. | With the server stopped; it is rebuilt. |
+| `trewd.json` | The [configuration file](server-reference.md#configuration-file): the Git export's and the daily-note tools' settings. | Yes; every setting returns to its default. |
+| `git-export/` | The [Git export](git-export.md)'s bare repository (`repo.git`, with its LFS objects), its state, and the known_hosts it wrote. | With the server stopped; it is exported again from the store, and a remote it pushed to keeps its history. |
 | `backup-staging/` | The plaintext copy an encrypted backup is packed from, pruned to what the last archive holds. | Whenever no backup is running; the next one makes it again. |
 | `last-backup.json`, `last-rehearsal.json`, `runtime.json` | What the last backup, rehearsal and starts did, for `doctor`. | Yes; `doctor` then says nothing is recorded. |
 | `first-invite` | The first device's invite, mode 0600. | Once the first device is paired. |
