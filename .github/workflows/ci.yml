@@ -41,6 +41,11 @@ jobs:
       - name: the protocol vectors are what the reference writes
         run: uv run --no-project --python 3.13 scripts/protocol-vectors.py --check
 
+      # The M10 cutover is judged by this comparison (plan/cutover.md), and it
+      # takes its path rules from the reference above.
+      - name: the witness inventory explains every difference
+        run: bash scripts/vault-inventory.test.sh
+
       # The store and the chunk writer are concurrent, and a data race there is
       # the kind of fault that shows up as a lost note rather than a crash.
       - name: test
