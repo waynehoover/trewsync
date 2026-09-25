@@ -239,9 +239,19 @@ func checkEmptied(q querier, vaultID string, e Entry) error {
 	// 0x2F and "0" the byte after it, and the table compares bytes, so a
 	// sibling such as `path.md`, `path-old/a.md` or `path0/a.md` is outside
 	// the range and a descendant never is.
+	//
+	// The same range of folded keys as well, because the folder is the same
+	// folder under any spelling that folds alike: between the moves of a
+	// case-only folder rename, `notes` is live while `Notes/a.md` still is,
+	// and the note is in the folder on every disk that folds case.
+	fold := paths.Fold(e.Path)
 	var held string
-	err := q.QueryRow(`SELECT path FROM live_paths WHERE vault_id = ? AND path > ? AND path < ?
-	                    ORDER BY path LIMIT 1`, vaultID, e.Path+"/", e.Path+"0").Scan(&held)
+	err := q.QueryRow(`SELECT path FROM (
+	    SELECT path FROM live_paths WHERE vault_id = ? AND path > ? AND path < ?
+	    UNION ALL
+	    SELECT path FROM live_paths WHERE vault_id = ? AND fold > ? AND fold < ?)
+	  ORDER BY path LIMIT 1`,
+		vaultID, e.Path+"/", e.Path+"0", vaultID, fold+"/", fold+"0").Scan(&held)
 	if errNoRow(err) {
 		return nil
 	}

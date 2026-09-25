@@ -110,9 +110,9 @@ func TestAFolderDeletionInABatchIsJudgedAfterTheEntriesAheadOfIt(t *testing.T) {
 
 // What is and is not beneath a folder. A sibling whose name only begins like
 // the folder's is not in it, whatever byte follows; a path under a spelling
-// that differs in case is not in it either, because the live set is keyed by
-// spelling; and a folder that has no entry of its own, only files, is still a
-// folder those files are in.
+// that differs only in case is (TestAFolderMidCaseRenameIsNotEmptiedByItsOldSpelling);
+// and a folder that has no entry of its own, only files, is still a folder
+// those files are in.
 func TestOnlyWhatIsInTheFolderKeepsItsDeletionBack(t *testing.T) {
 	h := newTestStore(t)
 	if err := h.writeAt(t, "F", "", true); err != nil {
@@ -215,5 +215,62 @@ func TestTheDeletedListLeavesOutFolders(t *testing.T) {
 		if strings.Join(listed, ",") != "Was a folder,Old/note.md" {
 			t.Fatalf("suppressRenames=%v listed %v, want the two notes and no folder", suppress, listed)
 		}
+	}
+}
+
+// A case-only folder rename moves the folder entry and its files one move at
+// a time, so between the moves the folder's new spelling is live while its
+// files are still live under the old one. Those files are in the folder all
+// the same, on every disk that folds case, and its deletion is refused while
+// they are: as a device's deletion (ErrFolderNotEmpty) and as an undo's or a
+// restore's removal of an empty folder (not_empty), neither of which may take
+// a folder a note is still in.
+func TestAFolderMidCaseRenameIsNotEmptiedByItsOldSpelling(t *testing.T) {
+	h := newTestStore(t)
+	if err := h.writeAt(t, "Notes", "", true); err != nil {
+		t.Fatal(err)
+	}
+	h.file(t, "Notes/a.md", "a note in the folder")
+	if err := h.writeAt(t, "notes", "Notes", true); err != nil {
+		t.Fatalf("the case-only rename of the folder entry: %v", err)
+	}
+
+	if err := h.deleteAt(t, "notes"); !errors.Is(err, ErrFolderNotEmpty) || !strings.Contains(err.Error(), `"Notes/a.md"`) {
+		t.Fatalf("deleting notes while Notes/a.md is live was answered %v", err)
+	}
+	if _, gone, _ := h.Head("v1", "notes"); gone {
+		t.Fatal("the refused deletion committed")
+	}
+
+	head, err := h.CurrentUID("v1", "notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err := h.LatestUID("v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := Operation{Vault: "v1", ActorKind: ActorOperator, ActorID: OperatorActorID, ActorLabel: OperatorLabel,
+		Tool: RestoreTool, SnapshotHead: &latest, RequestDigest: digestOf("remove notes"), Epoch: h.Epoch(), Render: renderJSON, MaxResult: 1 << 20,
+		Entries: []OpEntry{{Entry: Entry{Path: "notes", Deleted: true, MTime: 9, Device: OperatorLabel, Chunks: []string{}},
+			Base: head, EmptyFolder: true}}}
+	before := h.footprint(t)
+	_, err = h.CommitOperation(op)
+	if oe := h.refusedWith(t, err, OpCodeNotEmpty, before); oe.Path != "notes" || !errors.Is(err, ErrFolderFilled) {
+		t.Fatalf("removing notes as an empty folder was refused %v", err)
+	}
+	if got, _ := h.headBytes(t, "Notes/a.md"); got != "a note in the folder" {
+		t.Fatalf("the note in the folder reads %q", got)
+	}
+
+	// Once the file has moved too, the folder is emptied as usual.
+	if err := h.writeAt(t, "notes/a.md", "Notes/a.md", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.deleteAt(t, "notes/a.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.deleteAt(t, "notes"); err != nil {
+		t.Fatalf("deleting the folder once nothing is in it: %v", err)
 	}
 }
