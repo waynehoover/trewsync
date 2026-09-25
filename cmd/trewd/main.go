@@ -326,7 +326,12 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		"start an empty store on storage a restart or a container replacement erases (tmpfs, a container's own layer)")
 	alertEvery := fs.Duration("alert-every", defaultAlertEvery,
 		"how often the server checks itself and logs an alert, with its remedy, when something needs attention; 0 turns it off")
+	readConventions := conventionFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	conventions, err := readConventions()
+	if err != nil {
 		return err
 	}
 	if *local {
@@ -555,7 +560,7 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	if *serveMCP {
 		// Stopped before the index, by the order of the defers: the endpoint
 		// writes the use counts it holds.
-		agents = startMCP(srv, *vault, allowOrigin, index, log)
+		agents = startMCP(srv, *vault, allowOrigin, index, conventions, log)
 		defer agents.close()
 		handler = withMCP(handler, agents)
 		logMCP(log, st, *vault, *addr)

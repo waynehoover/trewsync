@@ -57,6 +57,11 @@ type Config struct {
 	// kills the server. Nil in every production build: only a trewd built
 	// with the crashmatrix tag sets it (cmd/trewd/testseam.go).
 	Seam func(point string)
+	// Conventions are the vault's daily-note and template settings, for
+	// today_note, append_to_daily and create_from_template; the zero value
+	// is Obsidian's defaults. `trewd serve` checks them (Conventions.Check)
+	// before it starts.
+	Conventions Conventions
 }
 
 // Handler is the MCP endpoint, mounted at /mcp by `trewd serve --mcp`.
@@ -88,6 +93,9 @@ type Handler struct {
 	// seam is Config.Seam.
 	seam func(point string)
 
+	// conventions are Config.Conventions with their defaults filled in.
+	conventions Conventions
+
 	// Hooks for tests, nil otherwise: beforeReply runs after a tool has
 	// produced its result and before the credential is checked again, which
 	// is the window a revoke must still win; duringTool runs inside a tool
@@ -109,7 +117,7 @@ func New(cfg Config) *Handler {
 	h := &Handler{
 		srv: cfg.Server, st: cfg.Server.Store(), vault: cfg.Vault, index: cfg.Index,
 		origins: map[string]bool{}, limits: cfg.Limits.withDefaults(), log: log,
-		version: cfg.Version, now: now, seam: cfg.Seam,
+		version: cfg.Version, now: now, seam: cfg.Seam, conventions: cfg.Conventions.withDefaults(),
 		active: map[string]map[*context.CancelFunc]struct{}{},
 		stop:   make(chan struct{}),
 	}
@@ -128,7 +136,7 @@ func New(cfg Config) *Handler {
 	}
 	h.budgets = newBudgets(h.limits)
 	h.usage = newUsage(h.st, h.vault, log)
-	h.tools = append(readTools(), writeTools()...)
+	h.tools = append(append(append(readTools(), healthTools()...), writeTools()...), dailyTools()...)
 	h.flushed.Add(1)
 	go func() {
 		defer h.flushed.Done()
