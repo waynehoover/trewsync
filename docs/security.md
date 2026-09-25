@@ -120,6 +120,11 @@ A token from `trewd mcp-token` opens the server's MCP endpoint to an agent.
   or an identity-aware proxy, never on an open port. The server stores only
   the token's SHA-256, shows it once, and records how often and when each
   token was used (`trewd mcp-token -list`).
+- **Whoever terminates TLS sees the notes and the token.** Tailscale Serve
+  terminates it on your own machine. A **Cloudflare Tunnel terminates it at
+  Cloudflare**, which then sees every note an agent reads; if you choose one,
+  put an identity check such as Cloudflare Access in front of it as well.
+  Forwarded identity or address headers never authenticate to TrewSync.
 - **Tokens expire**, after 90 days by default. Revoke one with
   `trewd mcp-token -revoke ID`; a request it has in flight is refused before
   it is answered.
@@ -131,46 +136,6 @@ A token from `trewd mcp-token` opens the server's MCP endpoint to an agent.
   apart from the server's own facts and say it is untrusted, but whether the
   agent obeys text it reads is up to the agent. Give write access only to an
   agent you have watched work.
-
-## HTTP access for an agent on a headless copy
-
-`trew mcp --listen` exposes readable notes from a paired device. The MCP client
-and any model service it uses can receive plaintext note content. Whoever
-terminates the HTTPS connection can see that content and the bearer credential.
-The sync server already holds the same notes; the difference is who else sees
-them: the agent, its model provider, and whatever sits in front of the
-listener.
-
-Keep the listener on loopback and put a trusted TLS proxy in front of it.
-[Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) terminates
-TLS on the serving machine and restricts reachability to the tailnet and its
-network policy. The MCP bearer remains mandatory. A **Cloudflare Tunnel exposes
-plaintext notes to Cloudflare's TLS termination**. If you choose that arrangement,
-put an identity check such as Cloudflare Access in front of it and keep MCP's
-own bearer check. Forwarded identity or IP headers never authenticate to TrewSync.
-
-Generate the separate random credential with `trew mcp-token`. Keep it in the
-client's authentication configuration, outside the notes it can read. With
-`--key-out`, the CLI creates a new private file outside the vault and prints
-only its id and path. The serving directory stores only a SHA-256 hash, in
-unsynced `.trew` state. A missing credential refuses access, as does an
-unreadable or malformed record. There is no auth bypass, OAuth server,
-multi-user account system or per-tool token scope.
-
-HTTP exposes read-only tools by default; `--writable` explicitly enables the
-existing guarded mutations on a writable device. This launch policy applies
-to every client using its one credential. It does not restrict the serving
-device's own sync credential or prevent incoming sync from changing files.
-
-Rerun `mcp-token` to rotate, or use `mcp-token --revoke` to revoke without stopping
-the service. Once a request observes the change, old sessions end and queued
-old-key operations are cancelled. An admitted edit still finishes its preservation
-transaction. Rotation cannot retract notes already received by a client or model.
-Read any uncertain result before trying another edit.
-
-The [service example](client.md#connect-over-http) describes the intended
-Tailscale arrangement. Real Tailscale, Cloudflare and phone-client acceptance
-have not been exercised for this release.
 
 ## Backups still matter
 

@@ -66,8 +66,8 @@ Keep the process running for continuous sync. For a scheduled job, use
 - [Command reference](https://github.com/waynehoover/trew/blob/main/docs/cli-reference.md):
   every command, flag, exit status and JSON field.
 - [Connect an agent](https://github.com/waynehoover/trew/blob/main/docs/agent.md):
-  the server's MCP endpoint. `trew mcp`, this client's own MCP server over a
-  separately paired directory, is described in the guide.
+  the server's MCP endpoint, the only MCP TrewSync has. This client has no MCP
+  server of its own; Basalt Sync's did.
 - [Set up the server](https://github.com/waynehoover/trew/blob/main/docs/server.md)
   and [all documentation](https://github.com/waynehoover/trew/blob/main/docs/index.md).
 

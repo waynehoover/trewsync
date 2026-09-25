@@ -106,8 +106,13 @@ func cmdMCPToken(args []string, out io.Writer) error {
 		what = "reads the whole vault and can change notes"
 	}
 	if *keyOut != "" {
+		// The token is live from the moment the server minted it, so a file
+		// that cannot be written leaves a credential nobody holds. Say which,
+		// and how to end it, rather than an error that names only the path.
 		if err := writeSecretFile(*keyOut, reply.MCPToken.Secret+"\n"); err != nil {
-			return err
+			return fmt.Errorf("minted MCP token %s, and could not write it to %s: %w. Nothing holds "+
+				"that token now: revoke it with `trewd mcp-token -revoke %s`, and mint another",
+				tok.ID, *keyOut, err, tok.ID)
 		}
 		fmt.Fprintf(out, "Wrote an MCP token for vault %q to %s. It %s, and %s.\n", reply.MCPToken.Vault, *keyOut, what, when)
 	} else {

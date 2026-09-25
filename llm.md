@@ -354,10 +354,9 @@ Report the token's label, scope and expiry, never the token. `trewd mcp-token
 -list` shows its use; `trewd mcp-token -revoke ID` ends it. `trewd audit`
 lists what a write token changed and `trewd undo OPID` reverses one change.
 
-The headless client also has its own MCP server, `trew mcp`, over a separately
-paired directory; use it only when the user asks for that arrangement, and
-follow the [CLI guide](docs/client.md#a-local-agent). Never point it at the
-plugin's live vault or copy the plugin's credentials.
+The server's `/mcp` is the only MCP. The headless client's own MCP server,
+`trew mcp`, is gone; if the user still runs one, move them to the server's
+endpoint as [Moving from `trew mcp`](docs/agent.md#moving-from-trew-mcp) says.
 
 ## Working from development source
 

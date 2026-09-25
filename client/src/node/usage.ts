@@ -1,5 +1,4 @@
 import type { Args } from "./cli.ts";
-import { mcpOrigin, parseMcpListen } from "./mcp-http.ts";
 
 /** Accepted positional arguments. Vault paths always use --dir. */
 const POSITIONALS: Record<string, number> = {
@@ -33,8 +32,6 @@ function refuseExtras(args: Args): void {
 
 export function validateUsage(args: Args): void {
   refuseExtras(args);
-  if (args.command === "mcp" && args.json)
-    throw new Error("mcp uses the MCP protocol on stdout; --json is not supported");
   const forCommands: Record<string, string[]> = {
     "--before": ["history", "deleted"],
     "--limit": ["history", "deleted"],
@@ -45,14 +42,8 @@ export function validateUsage(args: Args): void {
     "--verify": ["sync"],
     "--device": ["pair"],
     "--key-file": ["pair"],
-    "--key-out": ["mcp-token"],
-    "--revoke": ["mcp-token"],
-    "--listen": ["mcp"],
-    "--vault": ["mcp"],
-    "--writable": ["mcp"],
-    "--allow-origin": ["mcp"],
-    "--no-merge": ["sync", "restore", "preview", "mcp"],
-    "--read-only": ["pair", "sync", "restore", "preview", "mcp"],
+    "--no-merge": ["sync", "restore", "preview"],
+    "--read-only": ["pair", "sync", "restore", "preview"],
   };
   for (const flag of args.provided ?? []) {
     const allowed = forCommands[flag];
@@ -61,16 +52,6 @@ export function validateUsage(args: Args): void {
         `${flag} is only for ${allowed.join(", ")}; it has no effect on ${args.command}`,
       );
   }
-  if (args.mcpVaults?.length && args.provided?.has("--dir"))
-    throw new Error("mcp takes --dir or named --vault roots, not both");
-  if (args.command === "mcp-token" && (args.json || (args.mcpRevoke && args.keyOut !== undefined)))
-    throw new Error("mcp-token does not accept --json or --key-out together with --revoke");
-  if ((args.mcpWritable || args.mcpOrigins?.length) && args.mcpListen === undefined)
-    throw new Error("--writable and --allow-origin require --listen");
-  if (args.mcpWritable && args.readOnly)
-    throw new Error("--writable cannot be combined with --read-only");
-  if (args.mcpListen !== undefined) parseMcpListen(args.mcpListen);
-  for (const origin of args.mcpOrigins ?? []) mcpOrigin(origin);
   // Refused here, before anything is read, rather than one of the two quietly
   // winning: an invite from a file and another on the command line are two
   // answers to one question (I12).

@@ -7,10 +7,19 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { removeTree } from "../core/test-server.ts";
 import { within } from "../core/test-async.ts";
-import { smokeMcpArtifact, smokeHttpArtifact } from "./mcp-artifact-test.ts";
+import { build } from "esbuild";
+import { smokeArtifact } from "./artifact-test.ts";
 
-it("the actual production configuration builds an isolated single-file MCP and keeps the SDK out of the plugin", async () => {
-  const root = await mkdtemp(join(tmpdir(), "trew-mcp-production-"));
+/**
+ * The release's own build configuration, run in a staging copy, and the file it
+ * makes copied alone into an empty directory with its build inputs deleted, then
+ * run: paired, synced both ways, under the repository denied on macOS. Neither
+ * bundle carries an MCP server: the server's `/mcp` is the only MCP (PLAN.md
+ * M2 task 10), and the oracle sources the Go port was checked against are not
+ * reachable from either entry point.
+ */
+it("the actual production configuration builds a single-file client that syncs on its own, with no MCP in either bundle", async () => {
+  const root = await mkdtemp(join(tmpdir(), "trew-production-"));
   const source = fileURLToPath(new URL("../..", import.meta.url));
   const staging = join(root, "staging", "client");
   const installation = join(root, "installation");
@@ -37,18 +46,33 @@ it("the actual production configuration builds an isolated single-file MCP and k
       await closed;
     }
     const plugin = await readFile(join(staging, "dist/plugin/main.js"), "utf8");
-    expect(plugin).not.toMatch(/modelcontextprotocol|McpServer|StdioServerTransport/);
+    const cli = await readFile(join(staging, "dist/trew.mjs"), "utf8");
+    // The SDK, the tool names the retired host registered, its credential
+    // file, and refusal codes only the oracle sources hold. The same pattern
+    // is required to match the oracle sources bundled on their own, so it
+    // cannot pass by matching nothing.
+    const mcp =
+      /modelcontextprotocol|McpServer|StdioServerTransport|"edit_note"|"search_notes"|mcp-token\.json|overlapping_edits|reserved_backup|scan_incomplete|same_destination/;
+    const oracle = await build({
+      entryPoints: [fileURLToPath(new URL("./mcp-operations.ts", import.meta.url))],
+      bundle: true,
+      minify: true,
+      platform: "node",
+      format: "esm",
+      write: false,
+      logLevel: "silent",
+    });
+    expect(oracle.outputFiles[0]!.text).toMatch(mcp);
+    for (const bundle of [plugin, cli]) expect(bundle).not.toMatch(mcp);
     const artifact = join(installation, "trew.mjs");
     await copyFile(join(staging, "dist/trew.mjs"), artifact);
     // Remove build inputs from the installation's entire ancestry before launch.
     await removeTree(join(root, "staging"));
     expect(await readdir(installation)).toEqual(["trew.mjs"]);
-    const measured = await smokeMcpArtifact(artifact, process.execPath, join(source, ".."));
-    const http = await smokeHttpArtifact(artifact, process.execPath, join(source, ".."));
+    const measured = await smokeArtifact(artifact, process.execPath, join(source, ".."));
     console.info({
       ...measured,
-      httpInitializationMs: http.initializationMs,
-      cliBytes: (await readFile(artifact)).length,
+      cliBytes: Buffer.byteLength(cli),
       pluginBytes: Buffer.byteLength(plugin),
     });
   } finally {

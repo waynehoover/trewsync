@@ -49,8 +49,6 @@
     "bench:android": "bun run bench-android.ts"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
-    "@modelcontextprotocol/server": "2.0.0",
     "@types/diff-match-patch": "^1.0.36",
     "@types/node": "^24.10.13",
     "diff-match-patch": "1.0.5",
@@ -66,8 +64,7 @@
     "qrcode-generator": "2.0.4",
     "typescript": "^5.9.3",
     "vitest": "^4.1.8",
-    "yaml": "2.9.1",
-    "zod": "4.6.5"
+    "yaml": "2.9.1"
   },
   "bin": {
     "trew": "./dist/trew.mjs"
