@@ -71,7 +71,15 @@ import {
 } from "./config.ts";
 import type { Displaced, Inventory } from "../core/displaced.ts";
 import { lockVault, unlockVault } from "./lock.ts";
-import { ConnectionError, MAX_NAME_BYTES, ProtocolError } from "../core/transport.ts";
+import {
+  ConnectionError,
+  MAX_NAME_BYTES,
+  ProtocolError,
+  type SearchMode,
+  type SearchPage,
+} from "../core/transport.ts";
+import { renderMatch } from "./search-output.ts";
+import { printable, safeJson } from "./terminal.ts";
 import { describeOutcome, exitCodeOf, outcomeOf } from "../core/outcome.ts";
 import { validateStoredState } from "../core/stored-state.ts";
 import type { StoredState } from "../core/vault.ts";
@@ -92,6 +100,12 @@ export const VERSION: string =
 export interface Console {
   out(line: string): void;
   err(line: string): void;
+  /**
+   * Whether standard output is a terminal that may be sent colour: what
+   * `trew search` highlights its matches with. False when absent, so a test,
+   * a pipe and a file get plain text.
+   */
+  color?: boolean;
 }
 
 export const USAGE = `trew: the TrewSync command-line client, self-hosted sync for Obsidian
@@ -110,6 +124,7 @@ export const USAGE = `trew: the TrewSync command-line client, self-hosted sync f
   trew revoke ID                          stop one device connecting, from trew devices
   trew deleted                            notes the server still has and you do not
   trew history PATH                       every version the server holds of one note
+  trew search QUERY                       search the vault's notes on the server for literal text
   trew restore PATH                       put a note back, newest version first
   trew repair                             resend bodies the server has lost, from this device
   trew unlink                             forget the pairing, keep the notes
@@ -138,8 +153,15 @@ Options
   --ttl DURATION   how long an invite lasts, like 10m or 1h (default: 1h, at most 1h)
   --uid N          restore one exact version, from trew history
   --to PATH        restore somewhere other than where it came from
-  --limit N        how many versions history or deleted shows (default: 20, or all deletions)
+  --limit N        how many versions history or deleted shows (default: 20, or all deletions),
+                   or matches on one page of search (default: 50, at most 200)
   --before UID     for history or deleted: the page before this version
+  --mode MODE      for search: content (the default), filename, both, or tag
+  --folder F       for search: only notes beneath this folder
+  --case-sensitive for search: match case exactly
+  --context N      for search: lines of context before and after each match, 0 to 3
+  --all            for search: every page of matches, not only the first
+  --after CURSOR   for search: the page after this one, from the cursor a page ends with
   --verify         for sync: read every file to verify the content cache
   --key-file PATH  pair: read the invite from a file, so it stays out of the shell's history
   --config-dir DIR Obsidian's config folder, if it is not .obsidian
@@ -239,6 +261,8 @@ export async function run(argv: readonly string[], io: Console): Promise<number>
         return await cmdDeleted(args, io);
       case "history":
         return await cmdHistory(args, io);
+      case "search":
+        return await cmdSearch(args, io);
       case "restore":
         return await locked(args, () => cmdRestore(args, io));
       case "unlink":
@@ -1697,6 +1721,174 @@ async function cmdHistory(args: Args, io: Console): Promise<number> {
   }
 }
 
+/** The most matches the server puts on one page of a search. */
+export const SEARCH_LIMIT_MAX = 200;
+
+/** The most lines of context a search match may carry each side. */
+export const SEARCH_CONTEXT_MAX = 3;
+
+/** How many times one page is asked for again after the server said to wait. */
+const SEARCH_RETRIES = 5;
+
+/**
+ * Searches the vault on the server (plan/protocol.md, "Search (protocol
+ * 2)"): the server's literal search, the one an agent's search_notes answers
+ * from, over the notes as the server holds them.
+ *
+ * Matches go to standard output, one per line as grep prints them, and
+ * everything said about them to standard error, so a pipe gets only matches.
+ * Note text is untrusted, and every character a terminal would act on is
+ * spelled out before it is printed (terminal.ts); the match is highlighted
+ * only when standard output is a terminal.
+ *
+ * Exit 0 when the search answered, matches or none, including a first page
+ * with more after it, which is said with the way to see them. Exit 1 when a
+ * note could not be searched, since then a match may be missing and "no
+ * match" would be a claim this cannot make, or when the search failed. Exit 2
+ * for arguments that are not a search.
+ */
+async function cmdSearch(args: Args, io: Console): Promise<number> {
+  const query = args.rest[0]!;
+  const mode = (args.mode ?? "content") as SearchMode;
+  const client = await open(await mustLoad(args.dir), args, io, { inspect: true });
+  const color = io.color === true && !args.json;
+  const pages: SearchPage[] = [];
+  let after = args.after;
+  let printed = false;
+  try {
+    for (;;) {
+      const page = await searchPage(client, args, query, mode, after);
+      pages.push(page);
+      if (!args.json) {
+        for (const m of page.matches) {
+          // grep's separator between groups of context.
+          if (args.context > 0 && printed) io.out("--");
+          for (const line of renderMatch(m, query, mode, color)) io.out(line);
+          printed = true;
+        }
+      }
+      if (!args.all || page.nextAfter === null) break;
+      after = page.nextAfter;
+    }
+  } finally {
+    await client.close();
+  }
+  const last = pages.at(-1)!;
+  const matches = pages.flatMap((p) => p.matches);
+  const skipped = pages.flatMap((p) => p.skipped);
+  const scanned = pages.reduce((n, p) => n + p.scanned, 0);
+  const ok = skipped.length === 0;
+  if (args.json) {
+    io.out(
+      safeJson({
+        ok,
+        query,
+        mode,
+        matches,
+        skipped,
+        complete: ok && last.nextAfter === null,
+        nextAfter: last.nextAfter,
+        head: last.head,
+        indexedHead: last.indexedHead,
+        index: last.index,
+        pages: pages.length,
+        scanned,
+        scannedBytes: pages.reduce((n, p) => n + p.scannedBytes, 0),
+      }),
+    );
+    return ok ? 0 : 1;
+  }
+  if (matches.length === 0) {
+    io.err(last.nextAfter === null ? "No matches." : "No matches on this page.");
+  }
+  // What the index did. It only proposes, so a missing or lagging one costs
+  // time and never a match, and saying so keeps a slow search from reading
+  // as a broken one.
+  if (mode !== "filename") {
+    if (!last.index.usable) {
+      io.err(
+        `The server's search index was not used (${last.index.why ?? "no reason given"}), so every ` +
+          "note was read: nothing is missed, it is only slower.",
+      );
+    } else if (last.indexedHead < last.head) {
+      io.err(
+        `The server's search index is still catching up (version ${last.indexedHead} of ` +
+          `${last.head}); notes it has not reached were read in full, so nothing is missed.`,
+      );
+    }
+  }
+  if (matches.some((m) => m.clipped)) {
+    io.err("Long lines are shortened; --json has each match's line as the server sent it.");
+  }
+  if (last.nextAfter !== null) {
+    io.err(
+      `More matches may follow: this is ${pages.length === 1 ? "the first page" : `${pages.length} pages`}` +
+        `. trew search --all shows every page, or --after ${last.nextAfter} the next one.`,
+    );
+  }
+  if (!ok) {
+    io.err(
+      `${skipped.length} ${skipped.length === 1 ? "note" : "notes"} could not be searched, so a ` +
+        "match may be missing:",
+    );
+    for (const s of skipped) io.err(`  ${printable(s.path)}: ${printable(s.why)}`);
+  }
+  return ok ? 0 : 1;
+}
+
+/**
+ * One page, asked for again after the wait the server names when it says a
+ * device has searched as much as it may for now (`toomany`), a few times.
+ */
+async function searchPage(
+  client: Client,
+  args: Args,
+  query: string,
+  mode: SearchMode,
+  after: string | undefined,
+): Promise<SearchPage> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await client.search({
+        query,
+        mode,
+        ...(args.folder !== undefined ? { folder: args.folder } : {}),
+        ...(args.caseSensitive ? { caseSensitive: true } : {}),
+        ...(args.context > 0 ? { contextLines: args.context } : {}),
+        ...(args.limitGiven ? { limit: args.limit } : {}),
+        ...(after !== undefined ? { after } : {}),
+      });
+    } catch (err) {
+      if (!(err instanceof ProtocolError) || err.code !== "toomany" || attempt >= SEARCH_RETRIES) {
+        throw searchRefusal(err);
+      }
+      const wait = Math.min(Math.max(err.retryAfterMs ?? 1000, 50), 30_000);
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+}
+
+/** A search's refusal in words, with what to do about the ones that have an answer. */
+function searchRefusal(err: unknown): unknown {
+  if (!(err instanceof ProtocolError)) return err;
+  if (err.code === "proto" || (err.code === "protostate" && err.message.includes('"search"'))) {
+    return new Error(
+      "this server does not search for devices: it is older than this client. Upgrade the " +
+        "server (docs/server.md, Upgrade order).",
+    );
+  }
+  if (err.code === "stale" && err.message.startsWith("expired:")) {
+    return new Error(
+      "that --after cursor belongs to another search, or to the vault's history before a " +
+        "restore or a purge changed it; search again without it.",
+    );
+  }
+  if (err.code === "toomany") {
+    return new Error(`the server is busy with searches: ${err.message}. Try again in a moment.`);
+  }
+  return err;
+}
+
 /**
  * Puts a note back.
  *
@@ -2177,6 +2369,18 @@ export interface Args {
   force: boolean;
   configDir: string;
   ignore: string[];
+  /** For search: what to match against, content when absent. */
+  mode?: string;
+  /** For search: only notes beneath this folder. */
+  folder?: string;
+  /** For search: match case exactly. */
+  caseSensitive: boolean;
+  /** For search: lines of context each side, 0 to 3. */
+  context: number;
+  /** For search: every page, not only the first. */
+  all: boolean;
+  /** For search: the cursor of the page before. */
+  after?: string;
 }
 
 export function parseArgs(argv: readonly string[]): Args {
@@ -2202,6 +2406,9 @@ export function parseArgs(argv: readonly string[]): Args {
     timeout: 30_000,
     configDir: DEFAULT_CONFIG_DIR,
     ignore: [],
+    caseSensitive: false,
+    context: 0,
+    all: false,
   };
 
   const takes = new Set([
@@ -2216,6 +2423,10 @@ export function parseArgs(argv: readonly string[]): Args {
     "--config-dir",
     "--ignore",
     "--ttl",
+    "--mode",
+    "--folder",
+    "--context",
+    "--after",
   ]);
   let onlyPositional = false;
   for (let i = 0; i < argv.length; i++) {
@@ -2311,6 +2522,31 @@ export function parseArgs(argv: readonly string[]): Args {
         args.before = before;
         break;
       }
+      case "--mode":
+        if (!["content", "filename", "both", "tag"].includes(value!)) {
+          throw new Error(`--mode is content, filename, both or tag, not ${value}`);
+        }
+        args.mode = value!;
+        break;
+      case "--folder":
+        args.folder = value!;
+        break;
+      case "--context": {
+        const n = Number(value);
+        if (!Number.isSafeInteger(n) || n < 0 || n > SEARCH_CONTEXT_MAX)
+          throw new Error(`--context wants 0 to ${SEARCH_CONTEXT_MAX} lines, not ${value}`);
+        args.context = n;
+        break;
+      }
+      case "--after":
+        args.after = value!;
+        break;
+      case "--case-sensitive":
+        args.caseSensitive = true;
+        break;
+      case "--all":
+        args.all = true;
+        break;
       case "--verify":
         args.verify = true;
         break;
