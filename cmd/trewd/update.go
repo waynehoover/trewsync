@@ -61,21 +61,34 @@ const (
 type updatePolicy struct {
 	args   []string // the trust pin, as packslip verify flags
 	scheme string   // the scheme the verified report must name
-	signer string   // a prefix the verified signer must start with; "" only for a pinned key
+	// signer is what the verified signer must be, followed by the version
+	// offered: the whole identity, not a prefix of it. "" only for a pinned key.
+	signer string
+	issuer string // the issuer the verified report must name; "" only for a pinned key
 }
 
+const (
+	updateWorkflow = "https://github.com/" + updateRepo + "/.github/workflows/attest.yml@"
+	updateIssuer   = "https://token.actions.githubusercontent.com"
+)
+
 var releasePolicy = updatePolicy{
-	// The workflow, not only the repository. attest.yml is the one workflow
+	// The workflow, and the ref it ran from. attest.yml is the one workflow
 	// that signs a server release, so a bundle signed by any other workflow of
-	// this repository (a pull request's CI, say) is not a release. The ref
-	// after the @ is left open: a dispatch from a new branch or tag is the same
-	// signer (packslip consumer rule 3).
+	// this repository (a pull request's CI, say) is not a release. It is started
+	// by a dispatch that names the tag as an input, so the ref it ran from is
+	// whatever branch the dispatcher chose, and that branch's attest.yml is the
+	// one that runs: pinned to the workflow alone, anyone who can push a branch
+	// could sign an installable bundle. So the release is dispatched from its
+	// own tag (release.sh prints it so), and the identity must end in exactly
+	// that tag: refs/tags/server/v followed by the version being installed.
 	args: []string{
-		"--identity-prefix", "https://github.com/" + updateRepo + "/.github/workflows/attest.yml@",
-		"--issuer", "https://token.actions.githubusercontent.com",
+		"--identity-prefix", updateWorkflow + "refs/tags/" + updateTagLine,
+		"--issuer", updateIssuer,
 	},
 	scheme: "sigstore-oidc",
-	signer: "https://github.com/" + updateRepo + "/.github/workflows/attest.yml@",
+	signer: updateWorkflow + "refs/tags/" + updateTagLine,
+	issuer: updateIssuer,
 }
 
 // cmdUpdate replaces this binary with the newest server release, verified.
@@ -149,6 +162,9 @@ type updater struct {
 	client   *http.Client
 	goos     string
 	goarch   string
+	// container names the container engine this runs under, or ""; nil is
+	// probeContainer, the tests' seam being the only other value.
+	container func() string
 }
 
 func (u *updater) run(ctx context.Context) error {
@@ -282,9 +298,13 @@ func (u *updater) current(ctx context.Context) (string, string, error) {
 		return "", "", fmt.Errorf("%s was installed by %s, which will replace it back on its next "+
 			"upgrade and keeps its own record of what is installed. Upgrade it there instead", target, who)
 	}
-	if _, err := os.Stat("/.dockerenv"); err == nil && u.binary == "" {
-		return "", "", errors.New("this is running in a container, whose image is the thing to update: " +
-			"pull the new image and recreate the container")
+	probe := u.container
+	if probe == nil {
+		probe = probeContainer
+	}
+	if engine := probe(); engine != "" && u.binary == "" {
+		return "", "", fmt.Errorf("this is running in a container (%s), whose image is the thing to update: "+
+			"pull the new image and recreate the container", engine)
 	}
 	info, err := os.Stat(target)
 	if err != nil {
@@ -301,6 +321,27 @@ func (u *updater) current(ctx context.Context) (string, string, error) {
 		return "", "", fmt.Errorf("asking %s what it is: %w", target, err)
 	}
 	return target, said.version, nil
+}
+
+// probeContainer names the container engine this process runs under, or "".
+func probeContainer() string {
+	return containerOf(func(p string) bool {
+		_, err := os.Stat(p)
+		return err == nil
+	}, os.Getenv)
+}
+
+// containerOf names the container engine the markers point to, or "".
+func containerOf(exists func(string) bool, getenv func(string) string) string {
+	switch {
+	case exists("/.dockerenv"):
+		return "Docker"
+	case exists("/run/.containerenv"):
+		return "Podman"
+	case getenv("KUBERNETES_SERVICE_HOST") != "" || exists("/var/run/secrets/kubernetes.io"):
+		return "Kubernetes"
+	}
+	return ""
 }
 
 // managedBy names the package manager that owns path, or "".
@@ -530,8 +571,15 @@ func (u *updater) verify(ctx context.Context, packslip, bundle, staged, asset, v
 	if report.Scheme != u.policy.scheme {
 		return "", fmt.Errorf("signed with %q, and a server release is signed with %q", report.Scheme, u.policy.scheme)
 	}
-	if !strings.HasPrefix(report.KeyID, u.policy.signer) {
-		return "", fmt.Errorf("signed by %q, which is not %s", report.KeyID, u.policy.signer)
+	// packslip was given the pin already; this is the same question asked of
+	// its answer, and asked more narrowly than a prefix can: the tag the
+	// workflow ran from is this release's own.
+	if u.policy.signer != "" && report.KeyID != u.policy.signer+version {
+		return "", fmt.Errorf("signed by %q, which is not %s", report.KeyID, u.policy.signer+version)
+	}
+	if u.policy.issuer != "" && report.Issuer != u.policy.issuer {
+		return "", fmt.Errorf("signed by %q issued by %q, and a server release is issued by %s",
+			report.KeyID, report.Issuer, u.policy.issuer)
 	}
 	checked := false
 	for _, c := range report.Checked {

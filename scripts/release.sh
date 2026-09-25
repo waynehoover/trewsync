@@ -327,7 +327,7 @@ if [ -n "$serverversion" ]; then
     echo "  gh attestation verify $(basename "$f") --repo waynehoover/trew"
   done
   echo "  packslip verify packslip.server.sigstore.json \\"
-  echo "    --identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@ \\"
+  echo "    --identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@refs/tags/server/v$serverversion \\"
   echo "    --issuer https://token.actions.githubusercontent.com --artifact trewd-linux-amd64"
   echo '  ```'
 fi
@@ -374,12 +374,15 @@ if [ -n "$serverversion" ]; then
 
 A draft here too, and finished the same way:
 
-  gh workflow run attest.yml -f tag=server/v@SERVER@
+  gh workflow run attest.yml --ref server/v@SERVER@ -f tag=server/v@SERVER@
 
 which rebuilds the binaries with goreleaser, attests and checksums them, signs
 packslip.server.sigstore.json (the manifest trewd update and mise install
 from, signed with the identity of that workflow) and then publishes it. A
-release without that manifest is one no trewd update will install.
+release without that manifest is one no trewd update will install. The
+--ref is not optional: trewd update accepts only a manifest signed by
+attest.yml run from the tag of that very release, so a dispatch from main signs
+a manifest nothing installs.
 
 Pushing that tag is also what builds and pushes the container image. Once it is
 published, pin it:
