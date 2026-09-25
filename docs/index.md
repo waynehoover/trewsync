@@ -18,6 +18,7 @@
 
 - [Server maintenance](server-operations.md): backups, restoration, monitoring, and purging history.
 - [Operating TrewSync](operations.md): `trewd doctor`, a note that seems lost, an agent's run to roll back, and a restore to rehearse.
+- [Keep a Git history of your vault](git-export.md): push the vault's history to a private repository, with a deploy key, and replace the Obsidian Git plugin.
 - [Server reference](server-reference.md): commands, flags, limits, and health responses.
 - [CLI reference](cli-reference.md): every command and flag of the headless client.
 

@@ -138,13 +138,17 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return cmdCat(rest, out)
 		case "export":
 			return cmdExport(rest, out)
+		case "config":
+			return cmdConfig(rest, out)
+		case "git-export":
+			return cmdGitExport(rest, out)
 		case "version":
 			fmt.Fprintf(out, "trewd %s %s/%s %s\n", resolveVersion(version, moduleVersion()), runtime.GOOS, runtime.GOARCH, runtime.Version())
 			return nil
 		default:
 			return fmt.Errorf("unknown command %q (try serve, invite, devices, revoke, uninvite, mcp-token, audit, "+
 				"undo, restore, cat, history, deleted, export, backup, backup-key, unpack, rehearse, verify, purge, stats, "+
-				"doctor, "+
+				"doctor, config, git-export, "+
 				"service, health, update, version)", cmd)
 		}
 	}
@@ -326,11 +330,14 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		"start an empty store on storage a restart or a container replacement erases (tmpfs, a container's own layer)")
 	alertEvery := fs.Duration("alert-every", defaultAlertEvery,
 		"how often the server checks itself and logs an alert, with its remedy, when something needs attention; 0 turns it off")
-	readConventions := conventionFlags(fs)
+	flags := settingsFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	conventions, err := readConventions()
+	// The configuration file, with the flags over it (settings.go). A daily
+	// setting the tools could never use stops serve here, naming the flag or
+	// the key; the git export's trouble is its own status, and serve goes on.
+	settings, err := readSettings(*dataDir, flags)
 	if err != nil {
 		return err
 	}
@@ -556,11 +563,17 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		defer index.Close()
 		srv.SetSearchIndex(*vault, index)
 	}
+	// The git export (internal/gitexport), for every serve: its worker idles
+	// while the export is off, reads only committed entries, and never holds
+	// the commit lock, so a device's write never waits on it. Stopped before
+	// the store, by the order of the defers, letting the git it runs finish.
+	export := startGitExport(*dataDir, st, *vault, settings, log)
+	defer export.Close()
 	var agents *mcpEndpoint
 	if *serveMCP {
 		// Stopped before the index, by the order of the defers: the endpoint
 		// writes the use counts it holds.
-		agents = startMCP(srv, *vault, allowOrigin, index, conventions, log)
+		agents = startMCP(srv, *vault, allowOrigin, index, settings.conventions, log)
 		defer agents.close()
 		handler = withMCP(handler, agents)
 		logMCP(log, st, *vault, *addr)
@@ -588,7 +601,8 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	// The operator's socket, before "listening on" is printed, so `trewd
 	// invite` and the rest work from the moment anybody is told the server is
 	// up. Closed before the store is, by the order of the defers.
-	op := &operator{srv: srv, vault: *vault, urls: urls, started: time.Now(), index: index}
+	op := &operator{srv: srv, vault: *vault, urls: urls, started: time.Now(), index: index, dataDir: *dataDir,
+		flags: flags, export: export}
 	if agents != nil {
 		op.mcp = agents.handler
 	}

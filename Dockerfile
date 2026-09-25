@@ -1,11 +1,17 @@
-# A single static binary on an empty filesystem.
+# A single static binary, and the three programs the Git export runs.
 #
-# Pure-Go SQLite is what makes CGO_ENABLED=0 work, and CGO_ENABLED=0 is what
-# makes `scratch` possible. There is no shell in the result, no package manager
-# and nothing to update, so the attack surface of the image is the binary.
+# Pure-Go SQLite is what makes CGO_ENABLED=0 work, and the server needs nothing
+# but itself: until the Git export, this image was `scratch` and the binary.
+# The export shells out to git, git-lfs and ssh (docs/development.md, "Git
+# export", says why rather than go-git), so the final stage is Alpine with
+# exactly those, their CA certificates, and a passwd entry for the user the
+# server runs as, which ssh refuses to run without. Nothing else is added: no
+# curl, no package manager cache, and the server itself never runs a shell.
+# An operator who does not want the export still gets a server that never
+# starts one of them.
 #
 # That is also why `trewd health` exists: a HEALTHCHECK needs something to run,
-# and adding curl would mean adding a base image and undoing all of the above.
+# and it should be the server's own answer rather than a curl.
 
 # Must match the go directive in go.mod, and a test in cmd/trewd asserts it
 # does. A builder older than the module needs is a build that fails only once
@@ -37,17 +43,23 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 # and the unprivileged server cannot write its lock file. Found by running it.
 RUN mkdir -p /data && chown 65532:65532 /data
 
-FROM scratch
+# Pinned by digest, so the image is rebuilt from the same base until someone
+# moves it: the versions the export relies on (git 2.36 or later for
+# core.fsync, git-lfs 3.0 or later) are this Alpine's git 2.54 and git-lfs 3.7.
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+RUN apk add --no-cache git git-lfs openssh-client-default ca-certificates \
+ && addgroup -S -g 65532 trewd \
+ && adduser -S -D -H -u 65532 -G trewd -h /data -s /sbin/nologin trewd
 COPY --from=build /trewd /trewd
 COPY --from=build --chown=65532:65532 /data /data
 
-# The data directory, and the reason it is named here rather than left to the
-# default: the default is under $HOME, and a scratch image has no home and no
-# passwd file to find one in.
+# The data directory, named here rather than left to the default under $HOME,
+# so a container and its volume agree on it whoever runs the image.
 ENV TREW_DATA=/data
 VOLUME /data
 
-# Unprivileged, by number, because there is no /etc/passwd to hold a name.
+# Unprivileged, by number, the passwd entry above giving it the name ssh asks
+# for.
 #
 # A named volume inherits /data's ownership from the image above, so it works
 # with nothing else done. A bind mount does not: the host directory's ownership

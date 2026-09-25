@@ -24,6 +24,11 @@ class Trewd < Formula
   version "0.0.0"
   license "MIT"
 
+  # The Git export (docs/git-export.md) runs git, git-lfs and ssh. macOS has
+  # git and ssh; git-lfs it does not.
+  depends_on "git-lfs"
+  uses_from_macos "git"
+
   on_macos do
     on_arm do
       url "https://github.com/waynehoover/trew/releases/download/server/v#{version}/trewd-darwin-arm64"

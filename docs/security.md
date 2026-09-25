@@ -139,6 +139,34 @@ A token from `trewd mcp-token` opens the server's MCP endpoint to an agent.
   agent obeys text it reads is up to the agent. Give write access only to an
   agent you have watched work.
 
+## The Git export
+
+The [Git export](git-export.md), off unless you turn it on, pushes the vault's
+history to a Git remote. Everything above about the server's disk applies to
+that remote, and more:
+
+- **Exported history is plaintext, and it is permanent.** Every note, every
+  earlier version and every deleted note goes into Git history, and `trewd
+  purge` cannot take any of it out. Attachments over the LFS threshold go to
+  the remote's LFS store, which cannot be purged short of deleting the whole
+  repository.
+- **Whoever hosts the remote reads every note and every deleted version.** A
+  private repository on GitHub is private from other people, not from GitHub.
+  Choose a host you would trust with the whole vault, as you would a backup
+  kept unencrypted.
+- **The credential reaches one repository.** Use a deploy key for that one
+  repository (recommended) or a fine-grained token limited to it with
+  Contents read and write. The configuration names its path, never its
+  contents; the server refuses a key or token file anyone but its owner can
+  read, and the credential appears in no log, error, audit entry or doctor
+  report.
+- **Nothing comes back.** The export never reads the repository or the remote
+  into the vault, so a commit someone pushes there cannot change a note. It
+  can only stop the export, which says so.
+- **The host key is checked.** An SSH remote is reached with only the given
+  key, no agent, and strict host key checking: against GitHub's published keys
+  for github.com, and against the known_hosts file you give for any other host.
+
 ## Backups still matter
 
 Sync propagates changes, including deletions; it is not an independent backup.

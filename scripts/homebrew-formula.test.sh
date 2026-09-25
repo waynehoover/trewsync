@@ -40,6 +40,8 @@ class Formula
     def desc(*) end
     def homepage(*) end
     def license(*) end
+    def depends_on(*) end
+    def uses_from_macos(*) end
     def version(v = nil)
       @version = v if v
       @version

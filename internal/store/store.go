@@ -304,7 +304,7 @@ CREATE INDEX IF NOT EXISTS entry_chunks_by_name ON entry_chunks(vault_id, name);
 -- 112 ms against 5.6 ms with this, and the write it costs is 5 us against a
 -- chunk fsync of 7.8 ms.
 CREATE INDEX IF NOT EXISTS entries_by_prev ON entries(vault_id, prev_path, uid);
-` + liveSchema + mcpTokensSchema + oplogSchema + purgeMarksSchema
+` + entryTimesSchema + liveSchema + mcpTokensSchema + oplogSchema + purgeMarksSchema
 
 // Store is the server's whole persistent state: entries in SQLite, bodies in a
 // chunk store.
@@ -757,12 +757,13 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 	defer tx.Rollback()
 
 	committed := 0
+	at := s.clock().UnixMilli()
 	for _, i := range pending {
 		name := fmt.Sprintf("%s_entry_%d", Product, i)
 		if _, err := tx.Exec("SAVEPOINT " + name); err != nil {
 			return nil, err
 		}
-		uid, err := writeEntry(tx, vaultID, entries[i], &bases[i], prevBases[i])
+		uid, err := writeEntry(tx, vaultID, entries[i], &bases[i], prevBases[i], at)
 		if err == nil {
 			if _, err := tx.Exec("RELEASE SAVEPOINT " + name); err != nil {
 				return nil, err
@@ -855,7 +856,10 @@ func (s *Store) sizeAccountedFor(vaultID string, e Entry) error {
 // transaction or savepoint the caller has opened: a device's put and batch,
 // and each entry of an agent's operation (CommitOperation), so the three
 // cannot come to different conclusions about one write.
-func writeEntry(tx execer, vaultID string, e Entry, base *int64, prevBase int64) (int64, error) {
+//
+// at is the server's clock at the commit, in milliseconds, recorded beside
+// the entry in entry_times (see entryTimesSchema).
+func writeEntry(tx execer, vaultID string, e Entry, base *int64, prevBase int64, at int64) (int64, error) {
 	if base != nil {
 		head, deleted, err := pathHead(tx, vaultID, e.Path)
 		if err != nil {
@@ -913,6 +917,11 @@ func writeEntry(tx execer, vaultID string, e Entry, base *int64, prevBase int64)
 			return 0, err
 		}
 	}
+	if _, err := tx.Exec(
+		`INSERT INTO entry_times (vault_id, uid, committed_at) VALUES (?,?,?)`,
+		vaultID, uid, at); err != nil {
+		return 0, err
+	}
 	// The live set moves with the entry, in the same transaction or savepoint,
 	// so the next entry of a batch is checked against the state this one left.
 	if err := moveLive(tx, vaultID, e); err != nil {
@@ -958,7 +967,7 @@ func (s *Store) appendEntry(vaultID string, e Entry, base *int64, prevBase int64
 	// The same function `AppendMany` runs inside a savepoint, so a single put
 	// and one entry of a batch cannot come to different conclusions about the
 	// same write.
-	uid, err := writeEntry(tx, vaultID, e, base, prevBase)
+	uid, err := writeEntry(tx, vaultID, e, base, prevBase, s.clock().UnixMilli())
 	if err != nil {
 		return 0, err
 	}

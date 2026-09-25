@@ -358,6 +358,24 @@ The server's `/mcp` is the only MCP. The headless client's own MCP server,
 `trew mcp`, is gone; if the user still runs one, move them to the server's
 endpoint as [Moving from `trew mcp`](docs/agent.md#moving-from-trew-mcp) says.
 
+## Optional: a Git history
+
+Only when the user wants the vault's history pushed to a Git remote. Tell them
+first, in plain words, that the exported history is plaintext and permanent:
+whoever hosts the remote reads every note and every deleted version, and
+`trewd purge` cannot remove any of it; attachments over 10 MiB go to Git LFS,
+which cannot be purged without deleting the repository and counts against the
+host's LFS quota. Record that they agreed. Follow
+[Keep a Git history of your vault](docs/git-export.md): an empty **private**
+repository, a deploy key made for it on the server host with write access,
+kept 0600 (inside the data volume under Compose, owned by 65532), then
+`trewd git-export set -remote git@github.com:OWNER/REPO.git -key PATH`, which
+works with the server running. Verify with `trewd git-export status` until it
+reports a push, and `trewd doctor`. Never put a token or key in the
+conversation or in the configuration file; the file names the key's path. If
+the user had the Obsidian Git plugin, have them uninstall it on every device
+once the first push is confirmed.
+
 ## Working from development source
 
 This source tree's server speaks protocols 1 and 2, and its plugin and CLI

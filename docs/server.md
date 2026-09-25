@@ -53,6 +53,13 @@ with a bind mount, create a dedicated empty directory and make it writable by
 UID/GID `65532:65532`, the container's user. Keep that directory when upgrading;
 removing it removes the server's notes and history.
 
+The image is Alpine with the server's binary and git, git-lfs and ssh beside
+it, for the optional [Git export](git-export.md); the server itself runs no
+shell and needs none of them unless the export is turned on. Settings such as
+the export's and the daily-note tools' live in `trewd.json` in the volume
+(`docker compose exec trew /trewd config show`), so the compose file needs no
+flags for them.
+
 ### A binary
 
 Download the matching binary from a

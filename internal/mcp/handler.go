@@ -93,7 +93,9 @@ type Handler struct {
 	// seam is Config.Seam.
 	seam func(point string)
 
-	// conventions are Config.Conventions with their defaults filled in.
+	// conventions are Config.Conventions with their defaults filled in, or
+	// what SetConventions last gave, under convMu.
+	convMu      sync.Mutex
 	conventions Conventions
 
 	// Hooks for tests, nil otherwise: beforeReply runs after a tool has

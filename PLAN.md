@@ -714,6 +714,8 @@ Collected in [plan/ideas.md](plan/ideas.md): what a plaintext server unlocks (we
 
 Promoted **out** of ideas and into M5, because they are what make unattended agent writes acceptable rather than nice additions: the agent audit log and undo.
 
+Shipped out of ideas without a milestone of its own (2026-09-25): the one-way Git history export, to the specification in `plan/research/syncidian.md` section 8 with the owner's decisions (push with a deploy key, attachments over 10 MiB in Git LFS, system `git` rather than go-git), and the server configuration file it and the daily-note settings share. See [docs/git-export.md](docs/git-export.md) and `docs/development.md`, "The Git export".
+
 Newly deferred, with the condition for reopening written down rather than left as a shrug:
 
 - **Go sync engine and `serve --vault-dir`** (§2.6). Reopen only for a measured runtime, packaging, or resource requirement, and only with shared golden merge decisions and differential fuzzing.

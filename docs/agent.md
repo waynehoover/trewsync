@@ -305,13 +305,22 @@ answers `scan_incomplete` while the index is behind, and works once
 
 `today_note`, `append_to_daily` and `create_from_template` follow Obsidian's
 Daily notes and Templates settings. Obsidian keeps those in `.obsidian/`,
-which never syncs, so the server is told them when it starts (the
-[server reference](server-reference.md#serve) lists the flags):
+which never syncs, so the server is told them, in its
+[configuration file](server-reference.md#configuration-file), which a running
+server takes up at once:
 
 ```bash
-trewd serve -mcp -daily-folder Journal -daily-format YYYY-MM-DD \
-  -daily-template Templates/Daily -templates-folder Templates -timezone Europe/London
+trewd config set daily.folder Journal
+trewd config set daily.format YYYY-MM-DD
+trewd config set daily.template Templates/Daily
+trewd config set daily.templates_folder Templates
+trewd config set daily.timezone Europe/London
 ```
+
+Each is also a `serve` flag (`-daily-folder`, `-daily-format`,
+`-daily-template`, `-templates-folder`, `-template-date-format`,
+`-template-time-format`, `-timezone`), which wins over the file for as long as
+that server runs.
 
 Without them: daily notes are `YYYY-MM-DD.md` in the vault's root with no
 template, templates are in `Templates`, `{{date}}` writes `YYYY-MM-DD` and

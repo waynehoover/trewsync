@@ -47,6 +47,22 @@ type Conventions struct {
 	Location *time.Location
 }
 
+// SetConventions replaces the daily-note and template settings the tools use,
+// from the next call on: what `trewd config set daily.*` does to a running
+// server. The caller has checked them (Conventions.Check).
+func (h *Handler) SetConventions(c Conventions) {
+	h.convMu.Lock()
+	h.conventions = c.withDefaults()
+	h.convMu.Unlock()
+}
+
+// Conventions are the settings the tools use now.
+func (h *Handler) Conventions() Conventions {
+	h.convMu.Lock()
+	defer h.convMu.Unlock()
+	return h.conventions
+}
+
 // DefaultTemplatesFolder is where templates are when nothing says otherwise.
 const DefaultTemplatesFolder = "Templates"
 
@@ -73,7 +89,11 @@ func (c Conventions) withDefaults() Conventions {
 // report before it starts: a folder or template path the path rules refuse,
 // or a date format notes.FormatDate cannot write, or one that names a daily
 // note the path rules refuse.
-func (c Conventions) Check() error {
+func (c Conventions) Check() error { return c.CheckNamed(func(flag string) string { return flag }) }
+
+// CheckNamed is Check with each setting named by name(flag): the flag, or
+// the configuration key it came from.
+func (c Conventions) CheckNamed(name func(flag string) string) error {
 	c = c.withDefaults()
 	for _, f := range []struct{ flag, value string }{{"-daily-folder", c.DailyFolder},
 		{"-templates-folder", c.TemplatesFolder}, {"-daily-template", c.DailyTemplate}} {
@@ -81,17 +101,17 @@ func (c Conventions) Check() error {
 			continue
 		}
 		if r := paths.Check(withNoteExtension(f.value)); r != "" {
-			return fmt.Errorf("%s %q: %s: the server refuses this path", f.flag, f.value, r)
+			return fmt.Errorf("%s %q: %s: the server refuses this path", name(f.flag), f.value, r)
 		}
 	}
 	for _, f := range []struct{ flag, value string }{{"-daily-format", c.DailyFormat},
 		{"-template-date-format", c.DateFormat}, {"-template-time-format", c.TimeFormat}} {
 		if err := notes.CheckDateFormat(f.value); err != nil {
-			return fmt.Errorf("%s %q: %s", f.flag, f.value, toolError(err).Message)
+			return fmt.Errorf("%s %q: %s", name(f.flag), f.value, toolError(err).Message)
 		}
 	}
 	if _, err := c.dailyPath(time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)); err != nil {
-		return fmt.Errorf("-daily-format %q: %s", c.DailyFormat, toolError(err).Message)
+		return fmt.Errorf("%s %q: %s", name("-daily-format"), c.DailyFormat, toolError(err).Message)
 	}
 	return nil
 }
@@ -153,7 +173,7 @@ type dailyArgs struct {
 }
 
 func (c *call) dailyArgs(a *args) (dailyArgs, *ToolError) {
-	d := dailyArgs{conv: c.h.conventions}
+	d := dailyArgs{conv: c.h.Conventions()}
 	date, _ := a.text("date", 32)
 	if folder, present := a.text("folder", paths.MaxPathBytes); present {
 		if folder != "" {
@@ -532,7 +552,7 @@ func createFromTemplate(c *call, a *args) outcome {
 	if !hasName || name == "" {
 		return c.failWrite(invalidArguments("template is required"))
 	}
-	conv := c.h.conventions
+	conv := c.h.Conventions()
 	tpl := joinVault(conv.TemplatesFolder, withNoteExtension(strings.TrimPrefix(name, conv.TemplatesFolder+"/")))
 	m, o, done := c.begin(a, key, epoch, path, tpl)
 	if done {

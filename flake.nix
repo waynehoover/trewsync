@@ -55,6 +55,18 @@
               ];
             };
             subPackages = [ "cmd/trewd" ];
+            # The Git export runs git, git-lfs and ssh (docs/git-export.md),
+            # so the installed trewd finds these on its PATH before any other.
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            postInstall = ''
+              wrapProgram $out/bin/trewd --prefix PATH : ${
+                pkgs.lib.makeBinPath [
+                  pkgs.git
+                  pkgs.git-lfs
+                  pkgs.openssh
+                ]
+              }
+            '';
             # The hash of the module dependencies go.sum names. It changes when
             # go.sum does; scripts/flake-check.sh says what the new one is.
             vendorHash = "sha256-lo75ngKpnZTdJCTQqRC4Vec9YX4PNXygRXo95ksvg80=";

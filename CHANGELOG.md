@@ -79,11 +79,28 @@ does not work with a TrewSync server, and moving a vault is a new pairing.
   `append_to_daily` (optionally under a heading) and `create_from_template`,
   with Obsidian's `{{title}}`, `{{date}}` and `{{time}}` placeholders. The
   daily-note folder, format and template, the templates folder and the time
-  zone are `trewd serve` flags (`-daily-folder`, `-daily-format`,
+  zone are keys of the configuration file (`trewd config set daily.folder
+  Journal`) and `trewd serve` flags (`-daily-folder`, `-daily-format`,
   `-daily-template`, `-templates-folder`, `-template-date-format`,
   `-template-time-format`, `-timezone`), because Obsidian's own settings live
   in `.obsidian/`, which never syncs
   ([Daily notes and templates](docs/agent.md#daily-notes-and-templates)).
+- **A configuration file**, `trewd.json` in the data directory, mode 0600,
+  written by `trewd config set KEY VALUE` through the running server, which
+  checks the value and uses it at once. A `serve` flag wins over the file, the
+  file over the default, so a unit or compose file needs none of these flags
+  ([Configuration file](docs/server-reference.md#configuration-file)).
+- **A Git history of the vault** (`trewd git-export set`), off by default: a
+  bare repository in the data directory, one commit per agent operation and
+  one per quiet run of a device's edits, dated by the server, attachments over
+  10 MiB in Git LFS, pushed with a lease to a remote reached with a deploy key
+  or a single-repository token. It is never read back, never delays a write,
+  and refuses rather than repairs a branch changed outside it. Exported
+  history is plaintext and `trewd purge` cannot remove it
+  ([Keep a Git history](docs/git-export.md)).
+- **The container image is Alpine with git, git-lfs and ssh**, for the Git
+  export, instead of `scratch`; the Nix package puts the same three on the
+  server's PATH, and the Homebrew formula depends on git-lfs.
 - **Tokens for agents** (`trewd mcp-token`): read scope by default, 90-day
   expiry by default, listed with use counts, revocable while the server runs.
   `-key-out` writes a token only to a new file and refuses one that exists;
