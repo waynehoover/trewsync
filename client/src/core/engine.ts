@@ -4158,13 +4158,16 @@ export class Engine {
     let made = 0;
     try {
       const sizes = this.sizesFor(entry?.size ?? d.remote.size, isText);
+      // Nothing to make from where the file can be neither streamed nor
+      // held: every chunk is fetched below. This used to return here, before
+      // the fetch, so the chunks the two versions share were asked for by
+      // nobody and the landing failed on every pass.
       const pieces =
         vault.readBlocks && !this.cannotStream
           ? chunkStream(vault.readBlocks(d.path), sizes, isText)
           : (entry?.size ?? Infinity) <= KEEP_BODIES_BELOW
             ? chunkBytes(await vault.read(d.path), sizes, isText)
-            : undefined;
-      if (pieces === undefined) return out;
+            : [];
       for await (const piece of pieces) {
         if (need.size === 0) break;
         const name = await chunkName(piece.bytes);
