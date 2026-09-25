@@ -761,13 +761,22 @@ describe("undoing an agent's change from the history panel", () => {
     });
     // The server broadcasts the agent's version before it answers the tool,
     // but the device's socket may not have read that frame when the answer
-    // arrives, and one settle then finds nothing to apply. Under the full
-    // gate's load that happened (M5.5): settle until the version lands, with
-    // a deadline, then hold the bytes.
+    // arrives, and one settle then finds nothing to apply. Settling again
+    // right away does not reliably fix that: a pass with nothing local to do
+    // resolves through nothing but already-settled promises, and a loop of
+    // those never actually gives the event loop a turn to run the socket's
+    // own read callback, so the frame that is sitting there unread stays
+    // that way for as long as the loop keeps spinning (confirmed under the
+    // full gate's load, M5.5: the connection never closed, `settle` just
+    // never got a turn to see what had arrived). A real timer between
+    // attempts is what hands control back, the same as the socket's own
+    // events do for the plugin's ordinary run loop.
     const deadline = Date.now() + 15_000;
     do {
       await client.settle({ coalesceWrites: false });
-    } while (adapter.text("note.md") !== "the words the agent wrote\n" && Date.now() < deadline);
+      if (adapter.text("note.md") === "the words the agent wrote\n") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } while (Date.now() < deadline);
     expect(adapter.text("note.md")).toBe("the words the agent wrote\n");
 
     const source: HistorySource = {
