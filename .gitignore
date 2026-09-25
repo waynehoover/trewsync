@@ -20,3 +20,4 @@ tmp/
 
 # Agent worktrees, created inside the repository by Claude Code. Never content.
 /.claude/worktrees/
+client/bench-phone-*.json
