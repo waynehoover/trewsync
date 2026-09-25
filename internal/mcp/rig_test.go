@@ -133,7 +133,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		if settings.wrap != nil {
 			cfg.Index = settings.wrap(idx)
 		}
-		// A device's search asks the same index, as serve -mcp arranges.
+		// A device's search asks the same index, as every serve arranges.
 		r.srv.SetSearchIndex(testVault, cfg.Index)
 	}
 	r.h = New(cfg)

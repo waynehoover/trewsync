@@ -64,10 +64,22 @@ afterEach(async () => {
   server = undefined;
 });
 
-/** A server, and a directory paired to it as its first device holding these notes, synced. */
-async function vaultWith(notes: Record<string, string>, extraArgs: string[] = []): Promise<string> {
+/**
+ * A server, and a directory paired to it as its first device holding these
+ * notes, synced. `prepare` is given the server's data directory before it
+ * starts.
+ */
+async function vaultWith(
+  notes: Record<string, string>,
+  extraArgs: string[] = [],
+  prepare?: (dataDir: string) => Promise<void>,
+): Promise<string> {
   server = new TestServer();
   server.extraArgs = extraArgs;
+  if (prepare) {
+    server.dataDir = await mkdtemp(join(tmpdir(), "trew-data-"));
+    await prepare(server.dataDir);
+  }
   await server.start();
   const dir = await mkdtemp(join(tmpdir(), "trew-search-"));
   dirs.push(dir);
@@ -81,6 +93,17 @@ async function vaultWith(notes: Record<string, string>, extraArgs: string[] = []
   const synced = await cli("sync", "--dir", dir);
   expect(synced.code, synced.all).toBe(0);
   return dir;
+}
+
+/**
+ * Leaves a server no way to make its search index, so it serves without one:
+ * `search.db` is a directory, which no database opens, and setting it aside
+ * as `search.db.broken` is refused because a non-empty directory holds that
+ * name already.
+ */
+async function noIndexCanBeMade(dataDir: string): Promise<void> {
+  await mkdir(join(dataDir, "search.db", "x"), { recursive: true });
+  await mkdir(join(dataDir, "search.db.broken", "x"), { recursive: true });
 }
 
 const ESC = "\x1b";
@@ -115,11 +138,15 @@ const TRAP =
 
 describe("trew search", () => {
   it("finds literal text in the server's notes, one line per match, grep's shape", async () => {
-    const dir = await vaultWith({
-      "Notes/a.md": "first line\nthe Harbour at dawn\n",
-      "Notes/b.md": "nothing to see\n",
-      "c.md": "harbour, harbour\n",
-    });
+    const dir = await vaultWith(
+      {
+        "Notes/a.md": "first line\nthe Harbour at dawn\n",
+        "Notes/b.md": "nothing to see\n",
+        "c.md": "harbour, harbour\n",
+      },
+      [],
+      noIndexCanBeMade,
+    );
     const r = await cli("search", "harbour", "--dir", dir);
     expect(r.code, r.all).toBe(0);
     expect(r.out).toEqual([
@@ -130,7 +157,7 @@ describe("trew search", () => {
     // Not a TTY: not one escape sequence, and nothing said about the search
     // on standard output.
     expect(r.out.flatMap(hostile)).toEqual([]);
-    // Without -mcp the server keeps no index, and says every note was read.
+    // A server that could make no search index says every note was read.
     expect(r.stderr).toMatch(/search index was not used \(this server keeps no search index\)/);
     expect(r.stderr).toMatch(/nothing is missed/);
 
@@ -298,11 +325,12 @@ describe("trew search", () => {
     expect(folder.stderr).toMatch(/dotprefix/);
   }, 60_000);
 
-  it("uses the server's index when it keeps one, and finds the same", async () => {
-    const dir = await vaultWith(
-      { "a.md": "the lighthouse\n", "b.md": "nothing\n", "c.md": "LIGHTHOUSE keeper\n" },
-      ["-mcp"],
-    );
+  it("uses the index every server keeps, without -mcp, and finds the same", async () => {
+    const dir = await vaultWith({
+      "a.md": "the lighthouse\n",
+      "b.md": "nothing\n",
+      "c.md": "LIGHTHOUSE keeper\n",
+    });
     let r = await cli("search", "lighthouse", "--dir", dir, "--json");
     for (let i = 0; i < 200 && !(r.json()["index"] as { usable: boolean }).usable; i++) {
       await new Promise((resolve) => setTimeout(resolve, 50));

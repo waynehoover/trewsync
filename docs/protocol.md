@@ -431,8 +431,8 @@ search is read at the `head` the first saw. `complete` is true only on a last
 page that skipped no note, and `skipped` names each note that could not be
 searched and why. `index` says whether the server's search index narrowed the
 candidates, and `indexedHead` how far it has got; the index only proposes, so
-an absent or lagging index costs speed, never a match. The server keeps one
-when started with `-mcp`.
+an absent or lagging index costs speed, never a match. Every `trewd serve`
+keeps one, with `-mcp` or without it.
 
 Searches have a budget of their own, so a person searching cannot slow another
 device's sync: a few at once across the server and per device, a request and a

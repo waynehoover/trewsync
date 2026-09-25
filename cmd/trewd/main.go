@@ -506,25 +506,8 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	// and not here is the list of browser origins allowed to connect, which
 	// nothing caught until the plugin was loaded into a real vault.
 	handler := server.HTTPHandler(srv, log, allowOrigin...)
-	var agents *mcpEndpoint
-	if *serveMCP {
-		// The index and the endpoint stop after the listener and before the
-		// store, by the order of the defers: the endpoint writes the use
-		// counts it holds, and the index finishes the batch it is in.
-		agents = startMCP(*dataDir, srv, *vault, allowOrigin, log)
-		defer agents.close()
-		// Devices' searches ask the same index (`trew search`). Only a real
-		// one: a typed nil in the interface would be an index that panics.
-		// Without -mcp there is no index, and a device's search scans.
-		if agents.index != nil {
-			srv.SetSearchIndex(*vault, agents.index)
-		}
-		handler = withMCP(handler, agents)
-		logMCP(log, st, *vault, *addr)
-	}
 	hs := &http.Server{
 		Addr:              *addr,
-		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		// No WriteTimeout: these are long-lived websockets. An MCP request
 		// bounds its own body and its tool's work.
@@ -550,6 +533,35 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		return fmt.Errorf("listening on %s: %w", hs.Addr, err)
 	}
 
+	// The search index, for every serve and not only under -mcp: a device's
+	// search (`trew search`) asks it as search_notes does, and scans only what
+	// it has not reached. It is derived and its worker runs outside the write
+	// path. It stops after the listener and before the store, by the order of
+	// the defers, finishing the batch it is in. Only a real one goes to the
+	// server: a typed nil in the interface would be an index that panics.
+	//
+	// After the bind, for the reason above: opening an index that is already
+	// there checks it against the store, measured at 0.74 s over ten thousand
+	// notes and proportional to them, and a device reconnecting meanwhile is
+	// queued rather than refused. A first build runs in the worker, 6.9 s over
+	// the same notes, and search scans until it is done. Neither is worth a
+	// flag to turn the index off (docs/server-reference.md).
+	index := startIndex(*dataDir, st, *vault, log)
+	if index != nil {
+		defer index.Close()
+		srv.SetSearchIndex(*vault, index)
+	}
+	var agents *mcpEndpoint
+	if *serveMCP {
+		// Stopped before the index, by the order of the defers: the endpoint
+		// writes the use counts it holds.
+		agents = startMCP(srv, *vault, allowOrigin, index, log)
+		defer agents.close()
+		handler = withMCP(handler, agents)
+		logMCP(log, st, *vault, *addr)
+	}
+	hs.Handler = handler
+
 	// After the bind, because it says "listening on" and may mint an invite.
 	//
 	// It used to come earlier. Under systemd both streams land in one
@@ -571,10 +583,9 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	// The operator's socket, before "listening on" is printed, so `trewd
 	// invite` and the rest work from the moment anybody is told the server is
 	// up. Closed before the store is, by the order of the defers.
-	op := &operator{srv: srv, vault: *vault, urls: urls, started: time.Now()}
+	op := &operator{srv: srv, vault: *vault, urls: urls, started: time.Now(), index: index}
 	if agents != nil {
 		op.mcp = agents.handler
-		op.index = agents.index
 	}
 	ctl, err := control.Listen(*dataDir, op, log)
 	if err != nil {

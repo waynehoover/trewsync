@@ -14,10 +14,11 @@ import (
 	"github.com/waynehoover/trew/internal/store"
 )
 
-// The MCP endpoint `serve --mcp` adds (PLAN.md section 3.2): /mcp on the same
+// The MCP endpoint `serve -mcp` adds (PLAN.md section 3.2): /mcp on the same
 // listener as the devices, answered by internal/mcp from the server's own
-// store, with the search index worker beside it. Without the flag nothing is
-// registered at /mcp, and it is answered as any other path is.
+// store. Without the flag nothing is registered at /mcp, and it is answered as
+// any other path is. The search index it asks is not the flag's: every serve
+// builds it (startIndex), because devices search too.
 
 // testSeam is the endpoint's Config.Seam: nil here, and set only by
 // testseam.go, which is compiled into a trewd built with the crashmatrix tag
@@ -30,35 +31,41 @@ var testSeam func(point string)
 // mcpEndpoint is what serving MCP needs to keep, to stop it in order.
 type mcpEndpoint struct {
 	handler *mcp.Handler
-	index   *search.Index
 }
 
-// startMCP opens the search index, starts its worker, and builds the
-// endpoint. It does not fail: the index is derived, so an index that cannot
-// be opened is set aside and made again, and if even that fails the endpoint
-// serves without one and search scans. A damaged derived file must never be
-// why the server that holds the notes does not start (PLAN.md section 2.5).
-func startMCP(dataDir string, srv *server.Server, vault string, origins []string, log *slog.Logger) *mcpEndpoint {
-	idx, err := search.Open(dataDir, srv.Store(), vault, log)
+// startIndex opens the search index and starts its worker, for every serve:
+// device searches (`trew search`) and search_notes ask the same one. It does
+// not fail: the index is derived, so an index that cannot be opened is set
+// aside and made again, and if even that fails the server runs without one
+// and search scans. A damaged derived file must never be why the server that
+// holds the notes does not start (PLAN.md section 2.5). Nil means no index;
+// the caller stops a non-nil one after the listener and before the store.
+func startIndex(dataDir string, st *store.Store, vault string, log *slog.Logger) *search.Index {
+	idx, err := search.Open(dataDir, st, vault, log)
 	if err != nil {
 		log.Warn("the search index could not be opened; setting it aside and building a new one", "err", err)
 		if err := setAsideIndex(dataDir); err != nil {
 			log.Warn("the search index could not be set aside", "err", err)
 		}
-		idx, err = search.Open(dataDir, srv.Store(), vault, log)
+		idx, err = search.Open(dataDir, st, vault, log)
 		if err != nil {
-			log.Error("the search index could not be made; search_notes scans every note", "err", err)
-			idx = nil
+			log.Error("the search index could not be made; search scans every note", "err", err)
+			return nil
 		}
 	}
+	idx.Start()
+	return idx
+}
+
+// startMCP builds the endpoint over idx, which may be nil.
+func startMCP(srv *server.Server, vault string, origins []string, idx *search.Index, log *slog.Logger) *mcpEndpoint {
 	cfg := mcp.Config{Server: srv, Vault: vault, AllowOrigins: origins, Log: log, Version: srv.Version(), Seam: testSeam}
 	if idx != nil {
 		// Only a real index goes in the interface: a typed nil there would be
 		// an index that is not nil and panics.
-		idx.Start()
 		cfg.Index = idx
 	}
-	return &mcpEndpoint{handler: mcp.New(cfg), index: idx}
+	return &mcpEndpoint{handler: mcp.New(cfg)}
 }
 
 // setAsideIndex renames the index's files to a .broken name, replacing an
@@ -78,13 +85,10 @@ func setAsideIndex(dataDir string) error {
 	return first
 }
 
-// close writes the held token counts and stops the index. Call it after the
-// listener has stopped and before the store closes.
+// close writes the held token counts. Call it after the listener has stopped
+// and before the index and the store close.
 func (m *mcpEndpoint) close() {
 	m.handler.Close()
-	if m.index != nil {
-		_ = m.index.Close()
-	}
 }
 
 // withMCP mounts the endpoint at /mcp in front of the devices' handler.

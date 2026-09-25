@@ -96,7 +96,8 @@ covers all flags, device access, repair, and recovery.
 ## Search your notes
 
 `trew search` asks the server, so it searches every note in the vault as the
-server holds it, whether or not this device has synced lately:
+server holds it, whether or not this device has synced lately. The server
+keeps a search index, so a search reads only the notes that may match:
 
 ```bash
 trew search "harbour"                 # text, ignoring case

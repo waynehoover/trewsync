@@ -739,28 +739,28 @@ func (r *run) index() {
 	switch {
 	case err != nil:
 		r.bad(Warn, CheckIndex, fmt.Sprintf("the search index cannot be read: %v", err),
-			"It is derived: stop the server, move "+search.FileName+" aside, and `trewd serve -mcp` builds a new one. "+
+			"It is derived: stop the server, move "+search.FileName+" aside, and `trewd serve` builds a new one. "+
 				"Search scans every note until then and misses nothing.")
 		return
 	case !found:
-		r.note(CheckIndex, "there is no search index; `trewd serve -mcp` builds one, and search scans until it has")
+		r.note(CheckIndex, "there is no search index; `trewd serve` builds one, and search scans until it has")
 		return
 	case in.OwnerEpoch != "" && (in.OwnerEpoch != r.st.Epoch() || in.OwnerVault != r.opt.Vault):
 		r.note(CheckIndex, "the search index was built for another store or vault (a restore, most likely); "+
-			"`trewd serve -mcp` drops it and builds another")
+			"`trewd serve` drops it and builds another")
 		return
 	case in.Generation == 0:
-		r.note(CheckIndex, "the search index has not finished its first build; `trewd serve -mcp` goes on with it")
+		r.note(CheckIndex, "the search index has not finished its first build; `trewd serve` goes on with it")
 		return
 	case in.Version != search.IndexVersion:
 		r.note(CheckIndex, fmt.Sprintf("the search index is version %d and this build reads %d; it is rebuilt when "+
-			"`trewd serve -mcp` starts", in.Version, search.IndexVersion))
+			"`trewd serve` starts", in.Version, search.IndexVersion))
 		return
 	}
 	lag := r.latest - in.IndexedHead
 	if lag > 0 {
 		r.note(CheckIndex, fmt.Sprintf("generation %d has indexed up to uid %d, %d behind the head; it catches up when "+
-			"`trewd serve -mcp` runs", in.Generation, in.IndexedHead, lag))
+			"`trewd serve` runs", in.Generation, in.IndexedHead, lag))
 		return
 	}
 	r.indexCounters(fmt.Sprintf("generation %d is current at uid %d", in.Generation, in.IndexedHead),
@@ -777,7 +777,7 @@ func (r *run) liveIndex(s search.Status) {
 				search.FileName+" aside, and start it again to rebuild.")
 	case !s.Usable && !s.Rebuilding:
 		r.bad(Warn, CheckIndex, "the search index is not trusted and no rebuild is running: "+s.Distrust,
-			"Restart `trewd serve -mcp`, which checks the index and rebuilds it.")
+			"Restart `trewd serve`, which checks the index and rebuilds it.")
 	case !s.Usable:
 		r.note(CheckIndex, "the search index is being rebuilt ("+s.Distrust+"); search scans until it is done")
 	case lag > IndexLagUIDs:

@@ -185,8 +185,8 @@ scans whatever the index has not reached. So there is nothing urgent about it.
 - **The worker failed, or the index is not trusted.** Read the server's log
   for the search index's error. A restart checks the index and rebuilds it.
 - **Rebuild from scratch.** Stop the server, move `search.db` (and its `-wal`
-  and `-shm`) aside, and start it with `-mcp`. It builds a new index from the
-  store while search scans.
+  and `-shm`) aside, and start it again. It builds a new index from the store
+  while search scans.
 
 ## Something is wrong with the store
 
