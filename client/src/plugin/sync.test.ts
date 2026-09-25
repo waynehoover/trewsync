@@ -779,3 +779,101 @@ describe("a synced file another program writes again while Obsidian's index is b
     expect(phone.adapter.trashedLocally).toEqual([]);
   }, 300_000);
 });
+
+/**
+ * An edit that keeps a synced file's length and timestamp, made by something
+ * that is not Obsidian (rule 3).
+ *
+ * The plugin's listing carries no change id, so a scan decides whether to read
+ * a file again from its length and timestamp alone, and `rsync -t`, a restore
+ * from a backup, or a tool that puts the stamp back leaves both as they were.
+ * The pass then believes the file is the version it last synced. The download
+ * that followed took its expectation from the bytes on the disk at that
+ * moment, which were the edit, so the preserving write found what it displaced
+ * "expected" and removed it with `adapter.remove`, outside the trash; a
+ * deletion trashed it and reported an ordinary deletion. The edit was then on
+ * no device and in no place anybody would look.
+ */
+describe("an edit its stat could not see, under an incoming version", () => {
+  async function invisiblyEdit(d: Device, path: string, bytes: Uint8Array): Promise<void> {
+    const was = await d.adapter.stat(path);
+    expect(was?.size, "the edit has to keep the length").toBe(bytes.length);
+    await d.adapter.writeBinary(path, bytes.slice().buffer as ArrayBuffer, {
+      mtime: was!.mtime,
+      ctime: was!.ctime,
+    });
+  }
+
+  /** Every path a person can see in this vault that holds exactly these bytes. */
+  async function visiblyHeld(d: Device, bytes: Uint8Array): Promise<string[]> {
+    const out: string[] = [];
+    for (const p of d.notes()) if (await holds(d, p, bytes)) out.push(p);
+    return out;
+  }
+
+  it("keeps a text edit a download would have written over", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    a.adapter.seed("note.md", "the synced line\n", 1000);
+    await converge(a, b);
+    expect(b.text("note.md")).toBe("the synced line\n");
+
+    const edit = new TextEncoder().encode("the SYNCED line\n");
+    await invisiblyEdit(b, "note.md", edit);
+    a.adapter.seed("note.md", "a newer version from a\n", 2_000_000);
+    await converge(a, b);
+
+    expect(b.text("note.md")).toBe("a newer version from a\n");
+    expect(
+      await visiblyHeld(b, edit),
+      `the edit is gone. b holds ${JSON.stringify(b.adapter.filePaths())}`,
+    ).not.toEqual([]);
+  }, 300_000);
+
+  it("keeps a binary edit a download would have written over", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    const synced = photoBytes(20_000, 3);
+    await a.adapter.writeBinary("photo.jpg", synced.slice().buffer as ArrayBuffer, {
+      mtime: 1000,
+    });
+    await converge(a, b);
+    expect(await holds(b, "photo.jpg", synced)).toBe(true);
+
+    const edit = photoBytes(20_000, 4);
+    await invisiblyEdit(b, "photo.jpg", edit);
+    const newer = photoBytes(21_000, 5);
+    await a.adapter.writeBinary("photo.jpg", newer.slice().buffer as ArrayBuffer, {
+      mtime: 2_000_000,
+    });
+    await converge(a, b);
+
+    expect(await holds(b, "photo.jpg", newer)).toBe(true);
+    expect(
+      await visiblyHeld(b, edit),
+      `the edit is gone. b holds ${JSON.stringify(b.adapter.filePaths())}`,
+    ).not.toEqual([]);
+  }, 300_000);
+
+  it("keeps an edit a deletion would have trashed as an ordinary deletion", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    a.adapter.seed("doomed.md", "the synced line\n", 1000);
+    await converge(a, b);
+    expect(b.text("doomed.md")).toBe("the synced line\n");
+
+    const edit = new TextEncoder().encode("the SYNCED line\n");
+    await invisiblyEdit(b, "doomed.md", edit);
+    await a.adapter.remove("doomed.md");
+    await converge(a, b);
+
+    expect(
+      await visiblyHeld(b, edit),
+      `the edit is only in the trash, or nowhere. b holds ${JSON.stringify(b.adapter.filePaths())}`,
+    ).not.toEqual([]);
+    expect(b.adapter.trashedLocally).toEqual([]);
+  }, 300_000);
+});

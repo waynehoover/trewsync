@@ -1752,6 +1752,7 @@ export class Engine {
     // was sent or removed, and this pass decides it again.
     this.folderDeletes = [];
     this.folderRemovals = [];
+    this.folderRespellings = [];
     this.liveFolderSpellings = undefined;
 
     let stats = await this.opts.vault.list({
@@ -2273,6 +2274,14 @@ export class Engine {
           kind: "nothing",
           why: `folder is live on the server as ${live}, a spelling this disk folds together`,
         };
+        // And the disk takes the new spelling, at the end of the pass, where
+        // the server holds nothing live under the old one: that is the rename
+        // this device missed, and the folder kept the old spelling for good
+        // (plan/cutover.md, finding 9). Not where both are live, which is two
+        // folders on the server and one here, and respelling would only move
+        // the disagreement to the other one.
+        if (this.onlyLiveSpelling(path) === live)
+          this.folderRespellings.push({ from: path, to: live });
       }
     }
 
@@ -2532,7 +2541,7 @@ export class Engine {
         // never a moment where neither name holds the note.
         this.pendingDeletes.push({ path, why: action.why, based: local });
         if (local !== undefined && !local.folder) {
-          const digest = await this.digestOf(path);
+          const digest = await this.syncedDigestOf(path, local);
           if (digest !== undefined) this.deleteBaseline.set(path, digest);
         }
         return;
@@ -3409,7 +3418,7 @@ export class Engine {
     const baseDigest =
       baseline === undefined || baseline.folder
         ? undefined
-        : await this.digestOf(respelled?.from ?? path);
+        : await this.syncedDigestOf(respelled?.from ?? path, baseline);
     this.inbox.push({ path, entry, remote, chunks, kind, why, based: baseline, baseDigest });
     this.inboxBytes += remote.size;
     if (this.inbox.length >= MAX_BATCH_ENTRIES || this.inboxBytes >= INBOX_BYTES) {
@@ -3840,6 +3849,52 @@ export class Engine {
   }
 
   /**
+   * The one spelling the server holds this folder under live, or undefined
+   * when it holds none or more than one. Asked after
+   * `liveFolderSpelledOtherwise`, which builds the table.
+   */
+  private onlyLiveSpelling(path: string): string | undefined {
+    const spellings = this.liveFolderSpellings?.get(this.identity(path));
+    return spellings?.size === 1 ? [...spellings][0] : undefined;
+  }
+
+  /** Folders this disk spells as the server no longer does, to respell at the end of the pass. */
+  private folderRespellings: { from: string; to: string }[] = [];
+
+  /**
+   * Gives each folder the spelling the server has now, where a case-only
+   * rename on another device retired the one this disk has (see `reconcile`).
+   *
+   * Deepest first, so a folder inside one being respelled is renamed while
+   * the path to it is still the one the listing gave. A failure is logged and
+   * asked again next pass: the folder and everything in it are where they
+   * were, under the old spelling.
+   */
+  private async respellFolders(): Promise<void> {
+    const respell = this.opts.vault.respellFolder?.bind(this.opts.vault);
+    const wanted = this.folderRespellings;
+    this.folderRespellings = [];
+    if (respell === undefined) return;
+    const to = new Map(wanted.map((w) => [w.from, w.to]));
+    for (const from of deepestFirst([...to.keys()])) {
+      // The parents of a deeper one are still spelled the old way here, so
+      // only its own name changes now, and theirs when their turn comes.
+      const wantedName = to.get(from)!;
+      const target =
+        from.slice(0, from.lastIndexOf("/") + 1) +
+        wantedName.slice(wantedName.lastIndexOf("/") + 1);
+      if (target === from) continue;
+      try {
+        if (await respell(from, target)) {
+          this.log("respelled", from, `the server has this folder as ${to.get(from)} now`);
+        }
+      } catch (err) {
+        this.log("could not respell", from, { to: target, why: (err as Error).message });
+      }
+    }
+  }
+
+  /**
    * The folder work this pass put off until everything else in it had moved
    * (docs/design.md, "Folders").
    *
@@ -3854,6 +3909,9 @@ export class Engine {
     const removals = this.folderRemovals;
     this.folderDeletes = [];
     this.folderRemovals = [];
+    // After everything this pass landed, which went into the folder under
+    // whichever spelling it had.
+    await this.respellFolders();
     if (deletes.length === 0 && removals.length === 0) return;
     await this.sendFolderDeletions(deletes, report);
     await this.removeEmptiedFolders(removals, report);
@@ -4158,13 +4216,16 @@ export class Engine {
     let made = 0;
     try {
       const sizes = this.sizesFor(entry?.size ?? d.remote.size, isText);
+      // Nothing to make from where the file can be neither streamed nor
+      // held: every chunk is fetched below. This used to return here, before
+      // the fetch, so the chunks the two versions share were asked for by
+      // nobody and the landing failed on every pass.
       const pieces =
         vault.readBlocks && !this.cannotStream
           ? chunkStream(vault.readBlocks(d.path), sizes, isText)
           : (entry?.size ?? Infinity) <= KEEP_BODIES_BELOW
             ? chunkBytes(await vault.read(d.path), sizes, isText)
-            : undefined;
-      if (pieces === undefined) return out;
+            : [];
       for await (const piece of pieces) {
         if (need.size === 0) break;
         const name = await chunkName(piece.bytes);
@@ -4425,29 +4486,82 @@ export class Engine {
    * microsecond". docs/design.md, "What is not claimed", says so.
    */
   /**
-   * The plaintext digest of what is at a path now, or undefined if it cannot
-   * be read (R01).
+   * The plaintext digest of what is at a path now, but only once those bytes
+   * are proven to be the version the decision was taken on, and undefined
+   * otherwise (R01, rule 3).
    *
-   * Streamed where the vault can, so digesting a large attachment costs one
-   * pass over it and not a copy of it in memory. A vault that cannot stream
-   * reads it whole, which is what the pass was about to do anyway.
+   * This used to digest whatever was there and call that the baseline. The
+   * decision behind a download or a deletion reads "unchanged here" from the
+   * index, and the index says so from a length and a timestamp whenever the
+   * vault gives no change id, which the plugin's listing never does. An edit
+   * by another program that keeps both (`rsync -t`, a restore from a backup)
+   * was then digested as the version the pass had decided about, and the
+   * preserving write found what it displaced "expected" and deleted it: the
+   * one copy of an edit no device had, removed outside any trash, and a
+   * deletion trashed it and reported an ordinary deletion.
+   *
+   * So the bytes are cut and named again, and compared with the content id
+   * the decision saw, which for a download or a deletion is the synced one.
+   * Only a match makes their digest an expectation. Anything else, including
+   * a file that cannot be read or a decision with no content id, is no
+   * baseline, and every caller treats that as a reason to keep whatever it
+   * finds rather than to overwrite or remove it.
+   *
+   * Streamed where the vault can, so a large attachment costs passes over it
+   * and not a copy of it in memory (R31). Its digest is then taken on either
+   * side of the naming and must agree, so bytes changed in between are not
+   * vouched for by names cut from the ones before.
    */
-  private async digestOf(path: string): Promise<string | undefined> {
-    // The vault's own, where it has one (R31).
-    //
-    // This used to collect every block the vault streamed and then allocate a
-    // second buffer of the whole file to join them into, which holds a large
-    // attachment twice over and does it on the path that queues a download.
-    // The comment called it streaming; it was not. A vault that can hash as it
-    // reads keeps nothing, and the headless one can.
-    const streamed = this.opts.vault.contentDigest;
-    if (streamed !== undefined) return await streamed(path);
+  private async syncedDigestOf(path: string, known: LocalState): Promise<string | undefined> {
+    if (known.folder || known.hash === "") return undefined;
+    const vault = this.opts.vault;
+    const isText = this.mergeable(path);
+    let names: string[] | undefined;
+    let digest: string | undefined;
+    const digestNow = vault.contentDigest;
+    if (
+      vault.readBlocks !== undefined &&
+      digestNow !== undefined &&
+      !this.cannotStream &&
+      known.size > KEEP_BODIES_BELOW
+    ) {
+      try {
+        digest = await digestNow(path);
+        const streamed: string[] = [];
+        for await (const piece of chunkStream(
+          vault.readBlocks(path),
+          this.sizesFor(known.size, isText),
+          isText,
+        )) {
+          streamed.push(await chunkName(piece.bytes));
+        }
+        if (digest === undefined || (await digestNow(path)) !== digest) return undefined;
+        names = streamed;
+      } catch (err) {
+        // "Not on this platform", as `streamScan` reads it, and remembered the
+        // same way. The whole read below is then the answer.
+        this.cannotStream = true;
+        this.log("streaming is not available here, reading whole files instead", path, {
+          why: (err as Error).message,
+        });
+      }
+    }
     try {
-      return await plainDigest(await this.opts.vault.read(path));
+      if (names === undefined) {
+        const bytes = await vault.read(path);
+        const parts = [...chunkBytes(bytes, this.sizesFor(bytes.length, isText), isText)];
+        names = await chunkNames(parts.map((c) => c.bytes));
+        digest = await plainDigest(bytes);
+      }
+      if (contentId(names) !== known.hash) {
+        this.log("not the synced version", path, {
+          why: "it changed without its length or timestamp moving, so what is displaced is kept",
+        });
+        return undefined;
+      }
+      return digest;
     } catch {
       // A file that cannot be read is one this cannot make a promise about.
-      // Undefined means "no baseline", and every caller treats that as a
-      // reason to keep whatever it finds rather than to overwrite it.
       return undefined;
     }
   }

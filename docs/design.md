@@ -129,15 +129,20 @@ adapter can remove only an empty folder (read out of 1.13.7: desktop `rmdir`
 refuses a directory unless told to recurse, and mobile `rmdir` always
 recurses), so the plugin moves the folder to a hidden name, looks again there,
 and removes only what it has just seen to be empty; anything saved into it
-before the move is still in it, and the folder goes back. Nothing in a folder
-is deleted or trashed for the folder's sake.
+before the move is still in it, and the folder goes back. The move is written
+in the displaced ledger first, so a kill between the move and the second look
+leaves a record, and the next scan puts back whatever the hidden folder holds.
+Nothing in a folder is deleted or trashed for the folder's sake, except
+operating system metadata this device never syncs (`.DS_Store`, and
+`Thumbs.db` or `desktop.ini` where they are ignored), which does not keep a
+folder and is removed with it when nothing else is inside.
 
 What is still in the folder decides what happens to it:
 
 - **Kept, and put back on the server**: a file this device has not sent or
   has edited, a note written after the deletion, a folder inside it that
-  stays, and anything the listing never shows, such as a dot-prefixed file
-  (Finder's `.DS_Store` is one), a file this device ignores, or one two names
+  stays, and anything else the listing never shows, such as a dot-prefixed
+  file other than that metadata, a file this device ignores, or one two names
   claim. The folder goes back as a live folder based on the deletion it
   answers, and the device that deleted it creates it again.
 - **Waiting**: a file whose deletion this device has received and not yet
@@ -167,8 +172,12 @@ and its files one move at a time.
 A case-only folder rename still travels as a move (plan/protocol.md, "Paths",
 collision rule 1). On a disk that folds case the two spellings are one folder,
 so neither is read as a deletion there: nothing sends a deletion for either,
-and nothing removes the folder. On a disk that keeps case apart the old
-spelling is an empty folder of its own, and it goes.
+and nothing removes the folder. Its files arrive under the new spelling and
+land in the folder the disk already has, so at the end of the pass the folder
+itself is renamed to the new spelling, where the server holds nothing live
+under the old one; a device that was offline for the rename otherwise kept
+the old spelling for good. On a disk that keeps case apart the old spelling is
+an empty folder of its own, and it goes.
 
 A folder another device put back after this one removed it is created again
 here. A read-only device sends no folder deletions and reports each as held

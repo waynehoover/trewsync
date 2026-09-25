@@ -192,6 +192,39 @@ async function holdsNothing(
 }
 
 /**
+ * Files an operating system leaves in a folder it has shown, by lowercased
+ * name: Finder's `.DS_Store`, Explorer's `Thumbs.db` and `desktop.ini`.
+ *
+ * They do not keep a folder another device deleted, where this device does
+ * not sync them. Finder writes a `.DS_Store` into every folder it opens, and it
+ * used to: a Mac put back every folder deleted elsewhere that it had once
+ * shown. One this device syncs (`Thumbs.db` and `desktop.ini` have no dot, so
+ * they do unless ignored) is a file like any other: its deletion travels on
+ * its own, and one still here is live and keeps the folder.
+ */
+const OS_METADATA = new Set([".ds_store", "thumbs.db", "desktop.ini"]);
+
+function isOsMetadata(normalized: string): boolean {
+  return OS_METADATA.has(normalized.slice(normalized.lastIndexOf("/") + 1).toLowerCase());
+}
+
+/**
+ * The metadata a folder holds, when that is all it holds, and undefined when
+ * anything else is in it: a note, a subfolder, any other hidden file.
+ * `unsynced` says whether a file, by the path it has there, is one this
+ * device never syncs.
+ */
+async function onlyMetadataIn(
+  adapter: Pick<DataAdapter, "list">,
+  normalized: string,
+  unsynced: (file: string) => boolean,
+): Promise<string[] | undefined> {
+  const listed = await adapter.list(normalized);
+  if (listed.folders.length > 0) return undefined;
+  return listed.files.every((f) => isOsMetadata(f) && unsynced(f)) ? listed.files : undefined;
+}
+
+/**
  * Removes one of this client's own hidden folders, if it is empty.
  *
  * Neither shipped adapter has a call that removes only an empty folder. Read
@@ -684,7 +717,17 @@ export class ObsidianVault implements Vault {
     // Kept to roughly what the vault holds. See `normalOf`.
     if (this.normalised.size > items.length * 2) this.normalised.clear();
 
-    const inventory = await this.ledger.inventory();
+    let inventory = await this.ledger.inventory();
+    // A folder removal that did not finish, put right before it is reported.
+    // What goes back is listed by the next scan, as a note renamed into place
+    // is; it was never synced, so its absence from this one deletes nothing.
+    const looked = await this.putBackRemovals(inventory.waiting);
+    if (looked.size > 0) {
+      inventory = await this.ledger.inventory();
+      // A removal folder still there is reported by the file records written
+      // for what could not go back, not as a folder nobody can open.
+      inventory = { ...inventory, waiting: inventory.waiting.filter((d) => !looked.has(d.at)) };
+    }
     this.displaced = inventory.waiting;
     this.recovery = inventory;
     this.stranded.length = 0;
@@ -1694,6 +1737,16 @@ export class ObsidianVault implements Vault {
    * nothing writes to, and looked at again there. Whatever was saved before
    * the move is in the hidden folder, which then goes back; nothing can be
    * saved into it after, because the name a save would land under has gone.
+   *
+   * The move is written down first, in the ledger, as `removeExpecting`'s is
+   * (RR2). A note saved in the window and a kill before the second look left
+   * the folder under its hidden name with nothing anywhere knowing it was
+   * there, and Obsidian lists no hidden folder: a note no device had, gone
+   * from view. The next scan now looks inside any recorded removal folder
+   * still on the disk and puts back what it finds (`putBackRemovals`).
+   *
+   * Operating system metadata (`OS_METADATA`) does not keep the folder, and
+   * goes with it only when nothing else is inside.
    */
   async removeFolder(path: string): Promise<boolean> {
     const normalized = this.resolve(path);
@@ -1703,8 +1756,23 @@ export class ObsidianVault implements Vault {
       return true;
     }
     if (stat.type !== "folder") return false;
-    if (!(await holdsNothing(this.adapter, normalized))) return false;
+    const unsynced = this.unsyncedIn(normalized, normalized);
+    if ((await onlyMetadataIn(this.adapter, normalized, unsynced)) === undefined) return false;
     const aside = await freeRemovalFolder(this.adapter, normalized);
+    if (
+      !(await this.ledger.record({
+        at: aside,
+        from: path,
+        why: `${path} is being moved aside to be removed, as a folder deleted on another device`,
+        when: Date.now(),
+      }))
+    ) {
+      this.log(
+        `not removing the folder ${path}, because moving it aside could not be written down ` +
+          `first and nothing would know where a note saved into it had gone`,
+      );
+      return false;
+    }
     try {
       await this.move(normalized, aside);
     } catch {
@@ -1712,8 +1780,7 @@ export class ObsidianVault implements Vault {
       return false;
     }
     this.entryChanged(normalized);
-    if (await holdsNothing(this.adapter, aside)) {
-      await removeOwnEmptyFolder(this.adapter, aside);
+    if (await this.disposeOfEmptied(aside, normalized)) {
       this.wentAway(normalized);
       return true;
     }
@@ -1729,6 +1796,129 @@ export class ObsidianVault implements Vault {
       await this.recordStrandedUnder(aside, path, err);
     }
     return false;
+  }
+
+  /**
+   * Gives a folder another spelling of its own name (see `Vault.respellFolder`).
+   *
+   * The parent is listed for the folder as the disk spells it, as `matchCase`
+   * does for a file, and the rename is this client's own, so the event
+   * Obsidian reports for it is not sent on as a person's rename.
+   */
+  async respellFolder(from: string, to: string): Promise<boolean> {
+    if (from === to || foldPath(from) !== foldPath(to)) return false;
+    const want = this.resolve(to);
+    const cut = want.lastIndexOf("/");
+    const dir = cut === -1 ? "/" : want.slice(0, cut);
+    const listed = await this.adapter.list(dir);
+    const everything = [...listed.files, ...listed.folders];
+    const name = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+    const wanted = name(want);
+    if (everything.some((p) => name(p) === wanted)) return false;
+    const have = everything.filter((p) => foldPath(name(p)) === foldPath(wanted));
+    if (have.length !== 1 || !listed.folders.includes(have[0]!)) return false;
+    const target = `${have[0]!.slice(0, have[0]!.length - name(have[0]!).length)}${wanted}`;
+    await this.move(have[0]!, target);
+    this.entryChanged(target);
+    return true;
+  }
+
+  /**
+   * Removes a removal folder that holds nothing but operating system
+   * metadata, with the metadata, and says whether it did. Anything else in it
+   * is somebody's, and then nothing is touched.
+   */
+  private async disposeOfEmptied(hidden: string, home: string): Promise<boolean> {
+    const metadata = await onlyMetadataIn(this.adapter, hidden, this.unsyncedIn(hidden, home));
+    if (metadata === undefined) return false;
+    for (const file of metadata) await this.adapter.remove(file);
+    await removeOwnEmptyFolder(this.adapter, hidden);
+    return true;
+  }
+
+  /**
+   * Whether a file listed under `listed` is one this device never syncs, by
+   * the path it has, or had, under the folder `home`: a removal folder's name
+   * is hidden, and what is in it is judged by where it came from.
+   */
+  private unsyncedIn(listed: string, home: string): (file: string) => boolean {
+    return (file) => this.ignored(`${home}${file.slice(listed.length)}`);
+  }
+
+  /**
+   * Puts back what a folder removal left under its hidden name, for every
+   * recorded removal folder still on the disk (RR2), and says which it
+   * looked at.
+   *
+   * A removal folder is still there only when the removal did not finish: a
+   * kill after the move, or a failure after it. One with nothing in it but
+   * metadata is removed, which is what the removal was doing. One with
+   * anything else in it holds something saved in the window, which no device
+   * has, so it goes back under the folder's name; where a folder of that name
+   * has been made since, each file goes into it at its own path if that is
+   * free, and anything left is recorded file by file and reported, as
+   * `removeFolder` does when it cannot put a folder back.
+   */
+  private async putBackRemovals(waiting: readonly Displaced[]): Promise<Set<string>> {
+    const looked = new Set<string>();
+    for (const d of waiting) {
+      const hidden = normalizePath(d.at);
+      if (!hidden.slice(hidden.lastIndexOf("/") + 1).startsWith(STAGING_MARK)) continue;
+      try {
+        if ((await this.adapter.stat(hidden))?.type !== "folder") continue;
+        looked.add(d.at);
+        let home: string;
+        try {
+          home = this.resolve(d.from);
+        } catch {
+          home = normalizePath(d.from);
+        }
+        if (await this.disposeOfEmptied(hidden, home)) continue;
+        if (!(await this.adapter.exists(home))) {
+          await this.ensureParents(home);
+          await this.move(hidden, home);
+          this.entryChanged(home);
+          this.log(`put back ${d.from}, which a folder removal had moved aside and not finished`);
+          continue;
+        }
+        await this.putBackInto(hidden, home, d.from);
+      } catch (err) {
+        this.log(`could not put back what ${d.at} holds: ${(err as Error).message}`);
+      }
+    }
+    return looked;
+  }
+
+  /** Each file under `hidden` into `home` at its own path, where that path is free. */
+  private async putBackInto(hidden: string, home: string, from: string): Promise<void> {
+    const folders: string[] = [];
+    const queue = [hidden];
+    let left = false;
+    while (queue.length > 0) {
+      const at = queue.pop()!;
+      folders.push(at);
+      const listed = await this.adapter.list(at);
+      queue.push(...listed.folders);
+      for (const file of listed.files) {
+        const to = `${home}${file.slice(hidden.length)}`;
+        if (await this.adapter.exists(to)) {
+          left = true;
+          continue;
+        }
+        await this.ensureParents(to);
+        await this.move(file, to);
+        this.entryChanged(to);
+      }
+    }
+    // Deepest first, and each only if the moves above emptied it.
+    for (const at of folders.reverse()) await removeOwnEmptyFolder(this.adapter, at);
+    if (left) {
+      await this.recordStrandedUnder(
+        hidden,
+        from,
+        new Error(`${from} holds a file of the same name`),
+      );
+    }
   }
 
   /** Every file under one of this client's hidden folders, written into the ledger. */

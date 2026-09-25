@@ -31,8 +31,12 @@
  *  - `getSecret` answers from memory, loaded before any plugin, and the write
  *    to storage behind `setSecret` is not awaited. Reading back therefore
  *    proves the app accepted the value, and cannot prove it reached the disk;
- *    no public call can. A secret that did not survive a restart is the lost
- *    keychain entry below, which costs a re-pairing and no note.
+ *    no public call can. So the token leaves `data.json` in two steps (rule
+ *    3): the keychain is written and read back, and the file keeps the token
+ *    beside a pending marker naming this app start; only on a later start,
+ *    when `getSecret` answers from storage loaded at that start and holds the
+ *    same token, is the file rewritten without it. A kill in between leaves
+ *    the token in the file, where it always was.
  *  - A load that fails is logged and treated as an empty keychain. So a
  *    missing secret is never taken as proof of anything (rule 2): the saved
  *    pairing stays as it is, and the plugin stops and asks for a new one.
@@ -44,6 +48,7 @@
 import { requireApiVersion, type App, type SecretStorage } from "obsidian";
 
 import { crc32 } from "../core/crc32.ts";
+import { hex, randomBytes } from "../core/digest.ts";
 
 /** The first Obsidian with `app.secretStorage`. */
 export const KEYCHAIN_SINCE = "1.11.4";
@@ -62,6 +67,34 @@ export const SECRET_ID_MAX = 64;
  */
 export const TOKEN_IN = "deviceTokenIn";
 export const IN_KEYCHAIN = "keychain";
+/**
+ * The value `TOKEN_IN` takes while the token is in the keychain and still in
+ * `data.json` too, because nothing yet shows the keychain's copy reached its
+ * storage. `WRITTEN_AT` names the app start that wrote it.
+ */
+export const IN_KEYCHAIN_PENDING = "keychain-pending";
+export const WRITTEN_AT = "deviceTokenWrittenAt";
+
+/** Where an app start's id is kept: on the app, which outlives a plugin reload. */
+const APP_START = Symbol.for("trew.appStart");
+
+/**
+ * An id for this start of the app, the same for every load of the plugin
+ * until the app itself starts again.
+ *
+ * Kept on the `App` object rather than in this module, because disabling and
+ * enabling the plugin evaluates this module again and leaves the app, and its
+ * keychain, as they were: a reload of the plugin is not a start of the app,
+ * and a secret written earlier in the same start is still only in memory.
+ */
+export function appStartOf(app: App): string {
+  const holder = app as unknown as Record<symbol, unknown>;
+  const known = holder[APP_START];
+  if (typeof known === "string") return known;
+  const id = hex(randomBytes(8));
+  Object.defineProperty(holder, APP_START, { value: id, enumerable: false });
+  return id;
+}
 
 /** The part of `SecretStorage` this plugin uses, plus the undeclared delete. */
 export interface Keychain {
@@ -123,13 +156,42 @@ function mark(text: string): string {
  * characters as this plugin makes them; a longer one is cut the same way.
  */
 export function secretIdFor(vaultName: string, deviceId: string): string {
-  let device = slug(deviceId) || "device";
-  if (device.length > 32) device = `${device.slice(0, 23).replace(/-+$/, "")}-${mark(deviceId)}`;
+  const device = devicePart(deviceId);
   const room = SECRET_ID_MAX - "trew-".length - 1 - device.length;
   let vault = slug(vaultName) || "vault";
   if (vault.length > room)
     vault = `${vault.slice(0, room - 9).replace(/-+$/, "")}-${mark(vaultName)}`;
   return `trew-${vault}-${device}`;
+}
+
+/** The device half of a secret id, as `secretIdFor` writes it. */
+function devicePart(deviceId: string): string {
+  const device = slug(deviceId) || "device";
+  return device.length > 32
+    ? `${device.slice(0, 23).replace(/-+$/, "")}-${mark(deviceId)}`
+    : device;
+}
+
+/**
+ * Every secret this keychain holds for this device under some vault name
+ * other than `except`: what renaming the vault leaves behind, since the id
+ * names the vault (`trew-*-<device>`).
+ *
+ * Only ids with a token in them, because an emptied secret is one that was
+ * removed where the app has no delete.
+ */
+export function secretsForDevice(keychain: Keychain, deviceId: string, except: string): string[] {
+  const suffix = `-${devicePart(deviceId)}`;
+  return keychain
+    .listSecrets()
+    .filter(
+      (id) =>
+        id !== except &&
+        id.startsWith("trew-") &&
+        id.endsWith(suffix) &&
+        id.length > "trew-".length + suffix.length &&
+        tokenInKeychain(keychain, id) !== undefined,
+    );
 }
 
 /**

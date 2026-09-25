@@ -674,6 +674,41 @@ describe("a big file edited on the other device", () => {
       report.reusedChunks,
     );
   }, 240_000);
+
+  /**
+   * Too large to hold, on a vault that cannot stream.
+   *
+   * The reuse is optional there: the file is neither streamed nor read whole,
+   * so every chunk has to come from the server. It used to return before
+   * fetching them, so the chunks the two versions share were asked for by
+   * nobody and the landing failed on every pass with "the server did not
+   * send" them. A phone whose streaming had failed once, or any vault with no
+   * `readBlocks`, could not take a new version of a large attachment again.
+   */
+  it("fetches what it cannot make, when the file is too large to read whole", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    expect("readBlocks" in b.vault, "this vault streams, so it proves nothing").toBe(false);
+
+    const size = 9 * 1024 * 1024;
+    const original = new Uint8Array(size);
+    let seed = 54321;
+    for (let i = 0; i < size; i++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      original[i] = seed & 0xff;
+    }
+    await a.vault.write("big.bin", original, { mtime: 1000, ctime: 1000 });
+    await convergeBoth(a, b, 6);
+    expect(await b.vault.read("big.bin")).toEqual(original);
+
+    const edited = new Uint8Array(original);
+    edited.set(new Uint8Array(4096).fill(7), size / 2);
+    await a.vault.write("big.bin", edited, { mtime: 2000, ctime: 1000 });
+    await convergeBoth(a, b, 6);
+
+    expect(await b.vault.read("big.bin"), "b did not end up with a's edit").toEqual(edited);
+  }, 240_000);
 });
 
 describe("concurrent edits, which is where notes get lost", () => {

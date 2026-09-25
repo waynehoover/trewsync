@@ -63,8 +63,10 @@ plugin keeps it in Obsidian's keychain, which the operating system protects
 (the macOS Keychain, Windows DPAPI, libsecret on Linux, the iOS Keychain or the
 Android Keystore), and not in the vault folder, so a backup or synced copy of
 the vault or its `.obsidian` folder does not carry it and cannot connect as the
-device. On an older Obsidian, or when the keychain fails to read the token
-back, it stays in the plugin's `data.json` inside `.obsidian`. The
+device. It leaves `data.json` only once a restart of Obsidian finds it in the
+keychain, so until the first restart after pairing a copy of `.obsidian`
+still carries it. On an older Obsidian, or when the keychain fails to read the
+token back, it stays in the plugin's `data.json` inside `.obsidian`. The
 command-line client keeps it in its `0600` config file. Protect device
 accounts, disks and copies of that state: a copy of a credential can connect
 as the device until you revoke it.
