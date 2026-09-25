@@ -68,12 +68,15 @@ case "$1" in
   *) exit 2 ;;
 esac
 SH
-# packslip, which says yes unless told to refuse, and records the pin it was
-# given so the test can see it was the release workflow's.
+# packslip, which says yes unless told to refuse, records the pin it was
+# given so the test can see it was the release workflow's, and reports the
+# signer it is told to (the real one, by default), as --json asks.
 cat > "$scratch/bin/packslip" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$TREW_VERIFY_FIXTURE/../packslip.args"
 [ -z "${TREW_VERIFY_PACKSLIP_REFUSE:-}" ] || { echo "signature does not verify" >&2; exit 1; }
+signer=${TREW_VERIFY_SIGNER:-https://github.com/waynehoover/trew/.github/workflows/attest.yml@refs/tags/server/v1.2.3}
+printf '{"scheme":"sigstore-oidc","key_id":"%s","issuer":"https://token.actions.githubusercontent.com","checked_artifacts":[]}\n' "$signer"
 SH
 chmod +x "$scratch/bin/gh" "$scratch/bin/docker" "$scratch/bin/npm" "$scratch/bin/packslip"
 export PATH="$scratch/bin:$PATH"
@@ -139,13 +142,20 @@ sums "${server_assets[@]}"
 check 0 server 'a server release with its manifest'
 pin=$(tr '\n' ' ' < "$scratch/packslip.args")
 case "$pin" in
-  *"--identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@ --issuer https://token.actions.githubusercontent.com"*"--artifact"*)
+  *"--identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@refs/tags/server/v1.2.3 --issuer https://token.actions.githubusercontent.com"*"--artifact"*)
     echo "ok: the manifest is checked against the release workflow, with the binaries" ;;
   *)
     echo "FAIL: packslip was not given the release pin and the binaries: $pin"
     failures=$((failures + 1)) ;;
 esac
 TREW_VERIFY_PACKSLIP_REFUSE=1 check 1 server 'a manifest packslip refuses'
+# The signer is the release workflow run from this release's own tag, the
+# whole identity, as trewd update requires: attest.yml dispatched from a
+# branch, or from a tag the prefix alone would accept, is not it.
+workflow=https://github.com/waynehoover/trew/.github/workflows/attest.yml@
+for signer in "${workflow}refs/heads/main" "${workflow}refs/tags/server/v1.2.30" "${workflow}refs/tags/server/v1.2.3-evil"; do
+  TREW_VERIFY_SIGNER=$signer check 1 server "a manifest signed by $signer"
+done
 rm "$scratch/assets/packslip.server.sigstore.json"
 check 1 server 'a server release without its manifest'
 check 0 cli 'the CLI reports the requested version'

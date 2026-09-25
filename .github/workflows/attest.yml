@@ -76,6 +76,29 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
+      # Before anything else, that this run is the tag's own. A dispatch runs
+      # the workflow file of the ref it names, and the tag is only an input, so
+      # a run started from a branch builds and signs the tag with that branch's
+      # copy of this file, edited however the branch likes, under this
+      # workflow's name. trewd update refuses a manifest whose signer is not
+      # attest.yml at refs/tags/server/vX.Y.Z, but the plugin's attestations
+      # and the publish step ask nothing, so this refuses the run. Read from
+      # the environment rather than an expression, so the input is never shell
+      # text. What is then left to trust is who can push a tag; see
+      # docs/development.md, "Releases".
+      - name: refuse a run started from anything but its tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then
+            echo "this run was started from $GITHUB_REF, and it was given the tag $TAG." >&2
+            echo "A release is attested only by the workflow at its own tag:" >&2
+            echo "  gh workflow run attest.yml --ref $TAG -f tag=$TAG" >&2
+            exit 1
+          fi
+          echo "started from $GITHUB_REF, the tag it was given"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: refuse to publish from an unchecked commit
         env:
@@ -312,9 +335,10 @@ jobs:
           gh release upload "$TAG" attested/trewd-* attested/SHA256SUMS \
             --clobber --repo "$GITHUB_REPOSITORY"
 
-      # What the manifest below says it was built from. This workflow is
-      # started by hand from a branch, so its own commit is that branch's head
-      # and not the release's (packslip's "Publish a different source commit").
+      # What the manifest below says it was built from: the commit checked
+      # out, which is the tag's. The run is refused unless it was started from
+      # that tag, so this is its own commit too, but it is named rather than
+      # left to the action (packslip's "Publish a different source commit").
       - name: the release commit
         id: source
         env:

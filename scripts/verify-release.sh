@@ -116,10 +116,17 @@ check_release() { # check_release <tag> <what>
 
   # The server's signed manifest, which `trewd update` will not install a
   # release without, checked the way it checks it: signed by the release
-  # workflow of this repository through GitHub's issuer, with every binary
-  # matching the digest and size it signs.
+  # workflow of this repository, run from this release's own tag, through
+  # GitHub's issuer, with every binary matching the digest and size it signs.
+  # The workflow alone is not enough: it is dispatched with the tag as an
+  # input, so a run from a branch someone pushed signs as attest.yml too. And
+  # the pin is a prefix, so the signer packslip reports is compared whole,
+  # as cmd/trewd/update.go does: server/v1.2.30 and server/v1.2.3-x both
+  # begin with server/v1.2.3.
   if [ "$what" = server ]; then
     local bundle="$dir/packslip.server.sigstore.json" args=() covered=0
+    local signer="https://github.com/$repo/.github/workflows/attest.yml@refs/tags/$tag"
+    local issuer=https://token.actions.githubusercontent.com
     if [ ! -s "$bundle" ]; then
       wrong "the $tag release has no packslip.server.sigstore.json, so trewd update refuses it"
     elif need packslip; then
@@ -129,13 +136,32 @@ check_release() { # check_release <tag> <what>
           covered=$((covered + 1))
         fi
       done
-      if packslip verify "$bundle" \
-           --identity-prefix "https://github.com/$repo/.github/workflows/attest.yml@" \
-           --issuer https://token.actions.githubusercontent.com \
-           ${args[@]+"${args[@]}"} > "$work/packslip.out" 2>&1; then
-        note "packslip.server.sigstore.json is signed by $repo's attest.yml, and $covered binaries match it"
-      else
+      if ! packslip verify "$bundle" \
+           --identity-prefix "$signer" \
+           --issuer "$issuer" \
+           ${args[@]+"${args[@]}"} --json > "$work/packslip.out" 2>&1; then
         wrong "packslip does not verify the $tag manifest: $(tr '\n' ' ' < "$work/packslip.out")"
+      else
+        local said
+        said=$(python3 - "$work/packslip.out" "$signer" "$issuer" <<'PY'
+import json, sys
+try:
+    r = json.load(open(sys.argv[1]))
+except Exception as e:
+    print("packslip said yes but its report is unreadable: %s" % e); raise SystemExit
+if r.get("scheme") != "sigstore-oidc":
+    print("signed with %r, and a server release is signed with sigstore-oidc" % r.get("scheme"))
+elif r.get("key_id") != sys.argv[2]:
+    print("signed by %r, which is not %s" % (r.get("key_id"), sys.argv[2]))
+elif r.get("issuer") != sys.argv[3]:
+    print("issued by %r, and a server release is issued by %s" % (r.get("issuer"), sys.argv[3]))
+PY
+)
+        if [ -z "$said" ]; then
+          note "packslip.server.sigstore.json is signed by $repo's attest.yml at $tag, and $covered binaries match it"
+        else
+          wrong "the $tag manifest: $said"
+        fi
       fi
     fi
   fi

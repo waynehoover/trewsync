@@ -475,10 +475,18 @@ the workflow file of whatever ref the dispatch names, so without the tag in the
 pin anyone able to push a branch could sign an installable bundle with an
 edited copy. The release is therefore dispatched from its own tag,
 `gh workflow run attest.yml --ref server/vX.Y.Z -f tag=server/vX.Y.Z`, as
-`release.sh` prints it; a run dispatched from `main` signs a manifest no
-`trewd update` installs, and is fixed by running it again with the `--ref`.
-What is left to trust is who can push a `server/v*` tag, so protect that
-pattern with a tag ruleset on the repository.
+`release.sh` prints it (the plugin's the same way, `--ref X.Y.Z -f tag=X.Y.Z`).
+The workflow's first step refuses any run whose `GITHUB_REF` is not
+`refs/tags/` followed by the tag it was given, before anything is checked out,
+so a dispatch from `main` fails at once rather than signing a manifest no
+`trewd update` installs; run it again with the `--ref`.
+
+What is left to trust is who can push a tag. Once the repository exists on
+GitHub, protect the `server/v*` pattern (and the plugin's bare `*.*.*` tags)
+with a tag ruleset: restrict creation, update and deletion to the maintainers,
+and block force pushes, so a tag cannot be moved to a commit CI never saw or
+created by anyone who can push a branch. Until the ruleset is in place, anyone
+with push access can make a tag and a release from it.
 
 It runs the packslip CLI rather than verifying Sigstore itself; the measured
 reason is in [research](research.md#evaluated-alternatives). The tests: the Go

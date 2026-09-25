@@ -531,13 +531,37 @@ func (m *mutation) failed(err error) outcome {
 		out.Committed, out.OpID, out.Key = "unknown", oe.OpID, m.key
 		message := "the store could not confirm the commit, and it may have happened. Do not repeat the request blindly: " +
 			"lookup_operation with this opId says whether it committed and what it changed"
+		var cause string
+		if store.IsDiskFull(oe.Err) {
+			// Still unknown: a full disk at the COMMIT does not say whether
+			// it landed. The cause rides beside the code, so that the agent
+			// and its operator see what a device is told (commitCode in
+			// internal/server), and not an unexplained failure.
+			cause = "nospace"
+			message = "the server's disk is full, and " + message
+		}
 		if m.key != "" {
 			message += "; or repeat it exactly, with the same idempotencyKey, which answers with the recorded result " +
 				"if it committed and commits it once if it did not"
 		} else {
 			message += "; this call carried no idempotencyKey, so repeating it could apply it twice"
 		}
-		out.Error = &ToolError{Code: "outcome_unknown", Message: message}
+		if cause != "" {
+			message += ". Until the server's operator frees space, a retry may be refused as nospace"
+		}
+		out.Error = &ToolError{Code: "outcome_unknown", Message: message, Cause: cause}
+	case store.IsDiskFull(err) && (!errors.As(err, &oe) || oe.Code == store.OpCodeInternal):
+		// Refused for want of room before anything committed: a body that
+		// could not be stored, or a statement that could not grow the
+		// database. A device is told `nospace` for the same (commitCode and
+		// putErrorCode in internal/server), and so is the agent: it is
+		// retryable, and what it names is the one thing an operator can fix.
+		c.h.log.Error("an MCP write found the disk full", "tool", c.tool.Name, "err", err)
+		if oe != nil {
+			c.h.srv.Metrics().CommitFailed()
+		}
+		out.Error = &ToolError{Code: "nospace", Message: "the server's disk is full, and nothing was written; " +
+			"the same request may succeed once its operator frees space"}
 	case errors.As(err, &oe) && oe.Outcome == store.OpFailed:
 		c.h.log.Error("an MCP operation failed before it committed", "tool", c.tool.Name, "err", oe.Err)
 		c.h.srv.Metrics().CommitFailed()
