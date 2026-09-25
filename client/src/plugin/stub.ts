@@ -643,6 +643,21 @@ export class Modal {
   readonly modalEl = new FakeEl("div", "modal");
   readonly titleEl = new FakeEl("div", "modal-title");
   isOpen = false;
+  /**
+   * The window it was drawn in, which is the one Obsidian calls `activeWindow`
+   * at the moment `open` runs.
+   *
+   * Desktop Obsidian 1.13 opens Settings in a window of its own by default,
+   * and while that window has focus it is `activeWindow`: a modal opened then
+   * is drawn inside Settings, behind the main window as soon as somebody
+   * clicks the main window. Undefined wherever a test has not said there are
+   * windows, which is every test that is not about them.
+   */
+  win: unknown;
+  /** Attached while open; a test detaches it to model a window that went. */
+  readonly containerEl = Object.assign(new FakeEl("div", "modal-container"), {
+    isConnected: false,
+  });
 
   setTitle(title: string): this {
     this.titleEl.setText(title);
@@ -655,11 +670,14 @@ export class Modal {
 
   open(): void {
     this.isOpen = true;
+    this.containerEl.isConnected = true;
+    this.win = (globalThis as { activeWindow?: unknown }).activeWindow;
     this.onOpen();
   }
 
   close(): void {
     this.isOpen = false;
+    this.containerEl.isConnected = false;
     this.onClose();
   }
 

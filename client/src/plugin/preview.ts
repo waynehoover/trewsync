@@ -21,11 +21,29 @@ export class SyncPreviewModal extends Modal {
   ) {
     super(app);
   }
-  confirm(): Promise<boolean> {
-    return new Promise((resolve) => {
-      this.answer = resolve;
-      this.open();
-    });
+  /**
+   * Asks, and hands the answer to `answer` rather than opening anything.
+   *
+   * The caller opens it, because where it opens is the caller's decision. This
+   * used to be `confirm`, which opened it wherever Obsidian's `activeWindow`
+   * was: a review drawn in the Settings window on desktop was hidden behind the
+   * main window the moment somebody clicked their notes (see `main-window.ts`).
+   * Closing it any way but Continue answers false.
+   */
+  ask(answer: (proceed: boolean) => void): this {
+    this.answer = answer;
+    return this;
+  }
+
+  /**
+   * Takes it off screen without answering, so it can be drawn again elsewhere.
+   *
+   * Only for a review that is being replaced by another copy of itself; every
+   * other way of closing it is an answer, and that answer is "not yet".
+   */
+  withdraw(): void {
+    this.answer = undefined;
+    if (!this.isClosed) this.close();
   }
   override onOpen(): void {
     this.isClosed = false;

@@ -72,7 +72,11 @@ the server to pair a new one.
    deleted elsewhere. **Cancel** leaves your files and invite untouched.
 5. If **Review your first sync** appears, review the counts and choose
    **Continue sync**. An empty vault starts downloading immediately.
-   Keep Obsidian open until it finishes.
+   Keep Obsidian open until it finishes. On desktop the review opens in the
+   main Obsidian window, even when you paired from a separate Settings window.
+   While it waits, the status bar says so; click it to bring the review back.
+   Closing the review pauses sync, and nothing syncs until you choose
+   **Continue sync**.
 
 To download a fresh copy, create a new empty Obsidian vault and keep the old
 vault as a backup. TrewSync does not clear or move existing files during pairing.
