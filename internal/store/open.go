@@ -46,7 +46,15 @@ import (
 // read an operator's undo as an agent's, fail to verify it, and let an undo be
 // undone as though it were the operation it compensated for, so it is fenced
 // off the same way.
-const SchemaVersion = 3
+//
+// Version 4 is the restore to a uid (PLAN.md M5.5): the operator's restore
+// operations, which the build at version 3 would report as malformed undos,
+// and the purge mark (purge_marks), which that build's purge would not move.
+// A restore trusts the mark to say which uids a purge cannot have taken
+// history below, so a purge that left it behind would make a restore read a
+// path's state from a history with a hole in it; the version fences that
+// build off before its purge can run.
+const SchemaVersion = 4
 
 // migrations are the steps from one schema version to the next, keyed by the
 // version they upgrade from. Each step runs inside the transaction that
@@ -62,6 +70,9 @@ var migrations = map[int]func(q execer) error{
 	},
 	// 2 to 3: operations and op_entries rebuilt for undo, every row kept.
 	2: rebuildOplog,
+	// 3 to 4: the purge mark, set for a vault already purged to its newest
+	// uid, since nothing recorded how far each earlier purge reached.
+	3: addPurgeMarks,
 }
 
 // withoutForeignKeys are the steps that rebuild a table other tables refer

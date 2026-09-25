@@ -136,7 +136,7 @@ describe("a server restored from a backup its devices have moved past", () => {
     a.c.close();
     b.c.close();
     await server.whileStopped(async () => {
-      await server.cli("backup", "-to", snapshot);
+      await server.cli("backup", "-plaintext-ok", "-to", snapshot);
     });
     const a1 = await reopen(server, "a", a.dir, open);
     const b1 = await reopen(server, "b", b.dir, open);

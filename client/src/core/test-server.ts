@@ -199,6 +199,11 @@ export class TestServer {
         `127.0.0.1:${this.port}`,
         "-url",
         `ws://127.0.0.1:${this.port}`,
+        // The data directory is a temporary one on purpose, and on a machine
+        // whose temporary directory is a tmpfs the server would otherwise
+        // refuse to start an empty store there, which is right for a person
+        // and wrong for a test.
+        "-allow-ephemeral",
         ...this.extraArgs,
       ],
       {

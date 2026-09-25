@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/waynehoover/trew/internal/fsync"
@@ -140,7 +141,27 @@ type Store struct {
 	// non-test build. A test replaces it with one that stops short, to prove
 	// the size check after it refuses the body (S25).
 	write func(f *os.File, body []byte) error
+
+	// fault is a disk that fails, for the tests of another package (PLAN.md
+	// M5.5), and nil in every non-test build: see FaultForTest.
+	fault atomic.Pointer[Fault]
 }
+
+// Fault is a disk that fails, as FaultForTest injects it: Write stands in for
+// putting a body into its file (a full disk, a short write), and Sync runs
+// before each directory flush and fails it when it returns an error. Either
+// may be nil.
+type Fault struct {
+	Write func(f *os.File, body []byte) error
+	Sync  func(dir string) error
+}
+
+// FaultForTest makes this store's disk fail as f says, or stops it failing
+// with nil. It is for the tests of the server and the commands, which cannot
+// fill a disk or fail an fsync on demand; nothing but a test calls it, and
+// its name says so, as store.ExecForTest's does. Safe to call while the store
+// is in use.
+func (s *Store) FaultForTest(f *Fault) { s.fault.Store(f) }
 
 // New opens (and creates) a chunk store rooted at dir.
 //
@@ -186,7 +207,21 @@ func openWithSync(dir string, max int64, create bool, syncDir func(string) error
 			return nil, fmt.Errorf("chunks: %s is not a directory", dir)
 		}
 	}
-	s := &Store{dir: dir, max: max, sync: syncDir, write: writeAll, publishedDirs: map[string]struct{}{}}
+	s := &Store{dir: dir, max: max, publishedDirs: map[string]struct{}{}}
+	s.sync = func(d string) error {
+		if f := s.fault.Load(); f != nil && f.Sync != nil {
+			if err := f.Sync(d); err != nil {
+				return err
+			}
+		}
+		return syncDir(d)
+	}
+	s.write = func(f *os.File, body []byte) error {
+		if ft := s.fault.Load(); ft != nil && ft.Write != nil {
+			return ft.Write(f, body)
+		}
+		return writeAll(f, body)
+	}
 	if create {
 		if err := s.establishDirectories(); err != nil {
 			return nil, fmt.Errorf("flushing chunk directories: %w", err)
@@ -1218,4 +1253,46 @@ func (s *Store) CountBodies() (int, error) {
 		return 0, nil
 	}
 	return n, err
+}
+
+// Footprint is what the chunk tree holds on disk, across every vault: bodies
+// and their bytes, bodies quarantined for failing their own hash, and
+// unfinished uploads. For `trewd doctor`, which reports the store's size and
+// every quarantined body, since each is a note some device has to send again.
+type Footprint struct {
+	Bodies, Quarantined, Temp          int
+	Bytes, QuarantinedBytes, TempBytes int64
+}
+
+// Measure walks the chunk tree and counts it. It changes nothing.
+func (s *Store) Measure() (Footprint, error) {
+	var f Footprint
+	err := filepath.WalkDir(s.dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		switch name := d.Name(); {
+		case strings.HasPrefix(name, tmpPrefix):
+			f.Temp++
+			f.TempBytes += info.Size()
+		case strings.HasSuffix(name, corruptSuffix):
+			f.Quarantined++
+			f.QuarantinedBytes += info.Size()
+		default:
+			f.Bodies++
+			f.Bytes += info.Size()
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return Footprint{}, nil
+	}
+	return f, err
 }

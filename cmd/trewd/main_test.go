@@ -303,7 +303,7 @@ func fmtInt(n int) string { return fmt.Sprintf("%d", n) }
 func TestABackupIsADataDirectoryYouCanRestoreByCopying(t *testing.T) {
 	source := seeded(t)
 	dest := filepath.Join(t.TempDir(), "backup")
-	out := mustRun(t, "backup", "-data", source, "-to", dest)
+	out := mustRun(t, "backup", "-plaintext-ok", "-data", source, "-to", dest)
 	if !strings.Contains(out, "backed up to") {
 		t.Fatalf("backup said:\n%s", out)
 	}
@@ -338,11 +338,11 @@ func TestASecondBackupCopiesNothingNew(t *testing.T) {
 	source := seeded(t)
 	dest := filepath.Join(t.TempDir(), "backup")
 
-	first := mustRun(t, "backup", "-data", source, "-to", dest)
+	first := mustRun(t, "backup", "-plaintext-ok", "-data", source, "-to", dest)
 	if strings.Contains(first, "0 bodies copied") {
 		t.Fatalf("the first backup copied nothing:\n%s", first)
 	}
-	second := mustRun(t, "backup", "-data", source, "-to", dest)
+	second := mustRun(t, "backup", "-plaintext-ok", "-data", source, "-to", dest)
 	if !strings.Contains(second, "0 bodies copied") {
 		t.Fatalf("a repeat backup copied bodies it already had:\n%s", second)
 	}
@@ -358,7 +358,7 @@ func TestBackupRefusesWhenTheSourceIsMissingABody(t *testing.T) {
 	removeOneBody(t, source)
 	dest := filepath.Join(t.TempDir(), "backup")
 
-	out, err := trew(t, "backup", "-data", source, "-to", dest)
+	out, err := trew(t, "backup", "-plaintext-ok", "-data", source, "-to", dest)
 	if err == nil {
 		t.Fatalf("backup reported success from a source with a body missing:\n%s", out)
 	}
@@ -366,7 +366,7 @@ func TestBackupRefusesWhenTheSourceIsMissingABody(t *testing.T) {
 
 func TestBackupNeedsSomewhereToPutIt(t *testing.T) {
 	source := seeded(t)
-	if _, err := trew(t, "backup", "-data", source); err == nil {
+	if _, err := trew(t, "backup", "-plaintext-ok", "-data", source); err == nil {
 		t.Fatal("backup with no -to should refuse")
 	}
 }
@@ -375,7 +375,7 @@ func TestBackupNeedsSomewhereToPutIt(t *testing.T) {
 func TestABackupTakenBeforeAPurgeStillHasTheHistory(t *testing.T) {
 	source := seeded(t)
 	dest := filepath.Join(t.TempDir(), "backup")
-	mustRun(t, "backup", "-data", source, "-to", dest)
+	mustRun(t, "backup", "-plaintext-ok", "-data", source, "-to", dest)
 
 	beforeVersions := len(readEverything(t, dest))
 	mustRun(t, "purge", "-data", source, "-confirm", "default", "-no-backup-check")
@@ -607,7 +607,7 @@ func TestBackupRunsWhileAServerIsRunning(t *testing.T) {
 	defer stop()
 
 	dest := filepath.Join(t.TempDir(), "backup")
-	out := mustRun(t, "backup", "-data", dir, "-to", dest)
+	out := mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", dest)
 	if !strings.Contains(out, "backed up to") {
 		t.Fatalf("backup said:\n%s", out)
 	}
@@ -815,7 +815,7 @@ func TestCommandsRefuseADataDirectoryThatIsNotThere(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "typo")
 
 	for _, args := range [][]string{
-		{"backup", "-data", missing, "-to", filepath.Join(t.TempDir(), "backup")},
+		{"backup", "-plaintext-ok", "-data", missing, "-to", filepath.Join(t.TempDir(), "backup")},
 		{"verify", "-data", missing},
 		{"verify", "-data", missing, "-deep"},
 		{"purge", "-data", missing, "-confirm", "default", "-no-backup-check"},
@@ -1257,7 +1257,11 @@ func TestTheFirstInviteWorksOnce(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out := &safeBuffer{}
-	go func() { _ = run(ctx, []string{"serve", "-data", dir, "-addr", addr}, out) }()
+	done := make(chan struct{})
+	go func() { defer close(done); _ = run(ctx, []string{"serve", "-data", dir, "-addr", addr}, out) }()
+	// Stopped and waited for before the directory is removed: a server
+	// still closing writes into it.
+	defer func() { cancel(); <-done }()
 	waitForServer(t, addr, out)
 
 	inv := readFirstInvite(t, dir)
@@ -1330,7 +1334,14 @@ func TestI25TheCapFlagsReachReady(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		out := &safeBuffer{}
-		go func() { _ = run(ctx, append([]string{"serve", "-data", dir, "-addr", addr}, flags...), out) }()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_ = run(ctx, append([]string{"serve", "-data", dir, "-addr", addr}, flags...), out)
+		}()
+		// Stopped and waited for before the directory is removed: a server
+		// still closing writes into it.
+		defer func() { cancel(); <-done }()
 		waitForServer(t, addr, out)
 
 		// The ceilings are in `ready`, which only a registered device is
@@ -1368,13 +1379,13 @@ func TestI25TheCapFlagsReachReady(t *testing.T) {
 func TestBackupNeverPrintsANegativeBodyCount(t *testing.T) {
 	source := seeded(t)
 	dest := filepath.Join(t.TempDir(), "backup")
-	mustRun(t, "backup", "-data", source, "-to", dest)
+	mustRun(t, "backup", "-plaintext-ok", "-data", source, "-to", dest)
 
 	// The source drops its history and the bodies only the old versions
 	// referenced; the backup keeps them.
 	mustRun(t, "purge", "-data", source, "-grace", "0", "-confirm", "default", "-no-backup-check")
 
-	out := mustRun(t, "backup", "-data", source, "-to", dest)
+	out := mustRun(t, "backup", "-plaintext-ok", "-data", source, "-to", dest)
 	if countBodies(t, dest) <= countBodies(t, source) {
 		t.Fatalf("the backup does not hold more bodies than the purged source, so this proves nothing:\n%s", out)
 	}
@@ -1470,7 +1481,7 @@ func TestPurgeRefusesAnUnrelatedVaultThatCountedHigher(t *testing.T) {
 func TestPurgeRefusesABackupWithNoChunkBodies(t *testing.T) {
 	dir := seeded(t)
 	backup := t.TempDir()
-	mustRun(t, "backup", "-data", dir, "-to", backup)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", backup)
 	// The database, and none of the contents. This is what a copy that got
 	// part way, or a retention policy that swept the bodies, leaves behind:
 	// every version recorded and nothing to restore.
@@ -1493,7 +1504,7 @@ func TestPurgeRefusesABackupWithNoChunkBodies(t *testing.T) {
 func TestPurgeAcceptsARealBackup(t *testing.T) {
 	dir := seeded(t)
 	backup := t.TempDir()
-	mustRun(t, "backup", "-data", dir, "-to", backup)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", backup)
 
 	out := mustRun(t, "purge", "-data", dir, "-confirm", "default", "-backup", backup)
 	if !strings.Contains(out, "gone for good") {
@@ -1525,7 +1536,7 @@ func TestBackupRefusesADestinationInUse(t *testing.T) {
 	}
 	defer held.Release()
 
-	out, err := trew(t, "backup", "-data", dir, "-to", dest)
+	out, err := trew(t, "backup", "-plaintext-ok", "-data", dir, "-to", dest)
 	if err == nil {
 		t.Fatalf("backup replaced a store that was in use:\n%s", out)
 	}
@@ -1548,7 +1559,7 @@ func TestBackupRefusesASecondBackupIntoTheSameDirectory(t *testing.T) {
 	}
 	defer held.Release()
 
-	out, err := trew(t, "backup", "-data", dir, "-to", dest)
+	out, err := trew(t, "backup", "-plaintext-ok", "-data", dir, "-to", dest)
 	if err == nil {
 		t.Fatalf("two backups wrote the same directory at once:\n%s", out)
 	}
@@ -1557,10 +1568,10 @@ func TestBackupRefusesASecondBackupIntoTheSameDirectory(t *testing.T) {
 func TestBackupStillWorksWhenTheDestinationIsFree(t *testing.T) {
 	dir := seeded(t)
 	dest := t.TempDir()
-	mustRun(t, "backup", "-data", dir, "-to", dest)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", dest)
 	// Twice, because the second run takes the lock the first one released and
 	// sweeps the staging file the first one used.
-	mustRun(t, "backup", "-data", dir, "-to", dest)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", dest)
 	if v := mustRun(t, "verify", "-data", dest); !strings.Contains(v, "0 faults") {
 		t.Fatalf("the backup does not verify:\n%s", v)
 	}
@@ -1730,7 +1741,7 @@ func TestHealthCommandSaysWhyNotJustThatItFailed(t *testing.T) {
 func TestPurgeRefusesABackupWhoseBodyIsCorrupt(t *testing.T) {
 	dir := seeded(t)
 	dest := filepath.Join(t.TempDir(), "backup")
-	if out := mustRun(t, "backup", "-data", dir, "-to", dest); !strings.Contains(out, "backed up to") {
+	if out := mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", dest); !strings.Contains(out, "backed up to") {
 		t.Fatalf("backup said:\n%s", out)
 	}
 
@@ -1780,7 +1791,7 @@ func TestPurgeRefusesABackupWhoseBodyIsCorrupt(t *testing.T) {
 func TestPurgeRefusesABackupWhoseRecordDiffers(t *testing.T) {
 	dir := seeded(t)
 	dest := filepath.Join(t.TempDir(), "backup")
-	mustRun(t, "backup", "-data", dir, "-to", dest)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", dest)
 
 	// Reach into the backup and move one row's path, leaving everything else
 	// including the MAC exactly as it was.
@@ -1811,7 +1822,7 @@ func TestPurgeRefusesABackupWhoseRecordDiffers(t *testing.T) {
 func TestPurgeStillAcceptsAGoodBackup(t *testing.T) {
 	dir := seeded(t)
 	dest := filepath.Join(t.TempDir(), "backup")
-	mustRun(t, "backup", "-data", dir, "-to", dest)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", dest)
 	out := mustRun(t, "purge", "-data", dir, "-vault", "default", "-confirm", "default", "-backup", dest)
 	if !strings.Contains(out, "versions") {
 		t.Fatalf("purge said:\n%s", out)
@@ -1829,7 +1840,7 @@ func TestPurgeStillAcceptsAGoodBackup(t *testing.T) {
 func TestThePurgeHoldsItsBackupUntilItIsDone(t *testing.T) {
 	dir := seeded(t)
 	dest := filepath.Join(t.TempDir(), "backup")
-	mustRun(t, "backup", "-data", dir, "-to", dest)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", dest)
 
 	// Between the successful check and the deletion, which is exactly where
 	// the protection has to still be there.
@@ -1856,7 +1867,7 @@ func TestThePurgeHoldsItsBackupUntilItIsDone(t *testing.T) {
 func TestThePurgeReleasesItsBackupAfterwards(t *testing.T) {
 	dir := seeded(t)
 	dest := filepath.Join(t.TempDir(), "backup")
-	mustRun(t, "backup", "-data", dir, "-to", dest)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", dest)
 	mustRun(t, "purge", "-data", dir, "-vault", "default", "-confirm", "default", "-backup", dest)
 
 	lock, err := dirlock.Exclusive(dest, dirlock.Data, "a later backup")
@@ -1892,7 +1903,7 @@ func TestARefusedBackupCheckDoesNotKeepTheLock(t *testing.T) {
 func TestABackupRefusedAfterItIsLockedIsStillReleased(t *testing.T) {
 	dir := seeded(t)
 	dest := filepath.Join(t.TempDir(), "backup")
-	mustRun(t, "backup", "-data", dir, "-to", dest)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", dest)
 
 	// One more version in the source than the backup holds, which `purge`
 	// refuses only after opening and reading the backup under its lock.

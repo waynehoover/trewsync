@@ -759,7 +759,15 @@ describe("undoing an agent's change from the history panel", () => {
       epoch: read["epoch"],
       edits: [{ old: "before the agent", new: "the agent wrote" }],
     });
-    await client.settle({ coalesceWrites: false });
+    // The server broadcasts the agent's version before it answers the tool,
+    // but the device's socket may not have read that frame when the answer
+    // arrives, and one settle then finds nothing to apply. Under the full
+    // gate's load that happened (M5.5): settle until the version lands, with
+    // a deadline, then hold the bytes.
+    const deadline = Date.now() + 15_000;
+    do {
+      await client.settle({ coalesceWrites: false });
+    } while (adapter.text("note.md") !== "the words the agent wrote\n" && Date.now() < deadline);
     expect(adapter.text("note.md")).toBe("the words the agent wrote\n");
 
     const source: HistorySource = {

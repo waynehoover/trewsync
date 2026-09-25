@@ -13,6 +13,7 @@ import (
 
 	"github.com/waynehoover/trew/internal/control"
 	"github.com/waynehoover/trew/internal/dirlock"
+	"github.com/waynehoover/trew/internal/search"
 	"github.com/waynehoover/trew/internal/server"
 	"github.com/waynehoover/trew/internal/store"
 	"github.com/waynehoover/trew/internal/wire"
@@ -30,6 +31,10 @@ type operator struct {
 	// mcp is the running MCP endpoint, or nil when `serve` runs without
 	// --mcp or no server is running at all.
 	mcp mcpHooks
+	// index is the search index the endpoint keeps, or nil, and started when
+	// `serve` started: what `status` reports beside the server's own.
+	index   *search.Index
+	started time.Time
 }
 
 // mcpHooks is what the token commands tell a running MCP endpoint.
@@ -139,6 +144,10 @@ func (o *operator) Handle(_ context.Context, req control.Request) control.Reply 
 		return control.Reply{Audit: &control.Audit{Operations: b, More: more, Vault: o.vault, Epoch: epoch}}
 	case "undo":
 		return o.undo(req)
+	case "restore":
+		return o.restore(req)
+	case "status":
+		return o.status()
 	}
 	return control.Refused(control.CodeBadRequest, fmt.Sprintf("unknown request %q", req.Op))
 }

@@ -21,7 +21,9 @@ func (s *Session) handleApplied(m wire.In) error {
 	if *m.Applied > latest || *m.Applied+1 < s.applied.Load() {
 		return s.reject(wire.CodeBadEntry, errors.New("applied checkpoint is ahead of the server or moved backwards"))
 	}
-	s.applied.Store(*m.Applied + 1)
+	if s.applied.Swap(*m.Applied+1) != *m.Applied+1 {
+		s.appliedAt.Store(s.srv.now().UnixMilli())
+	}
 	return s.writeJSON(wire.Applied{Res: "applied", ID: s.reqID, Cursor: *m.Applied})
 }
 

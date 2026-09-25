@@ -61,6 +61,10 @@ var outsideTheBoundary = map[string]bool{
 	// The server: the store it holds (whose methods are checked by name), the
 	// devices' delivery, and its identity.
 	"Store": true, "DeliveryStatus": true, "Version": true, "Now": true,
+	// The server's own counters (internal/metrics): a refused credential, a
+	// request told to slow down, a commit's outcome, counted in memory. They
+	// write no note and no credential.
+	"Metrics": true,
 }
 
 func TestOnlyTheCommitBoundaryReachesAMutation(t *testing.T) {

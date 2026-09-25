@@ -1166,9 +1166,14 @@ func (op Operation) validate(opID string) *OpError {
 		return bad("the actor kind %q is not one an operation has", kind)
 	case kind != ActorOperator && !isHex64(op.ActorHash):
 		return bad("the actor's token hash is a 64 character hex digest")
-	case kind != AuthorKindMCP && op.Undoes == "":
-		// The operator and the devices make undos and nothing else: every
-		// other agent operation is an MCP tool's.
+	case op.Tool == RestoreTool && kind != ActorOperator:
+		return bad("a restore to a uid is the operator's, and this is the %s's", kind)
+	case op.Tool == RestoreTool && (op.Undoes != "" || op.SnapshotHead == nil):
+		return bad("a restore to a uid undoes no one operation, and commits only at the head it was planned at")
+	case kind != AuthorKindMCP && op.Undoes == "" && op.Tool != RestoreTool:
+		// The operator and the devices make undos and nothing else, beside
+		// the operator's restore: every other agent operation is an MCP
+		// tool's.
 		return bad("only an undo is recorded as the %s's", kind)
 	case op.Undoes != "" && !ValidOperationID(op.Undoes):
 		return bad("the operation undone, %q, is not an operation id", op.Undoes)
@@ -1689,7 +1694,9 @@ func (s *Store) verifyOplog() ([]Fault, int, error) {
 		case undoes.Valid != (tool == UndoTool || tool == UndoToCopyTool):
 			fault(vault, id, "badop", fmt.Sprintf("recorded as %q, undoing %q: an undo, and only an undo, names "+
 				"the operation it undoes", tool, undoes.String))
-		case kind != AuthorKindMCP && !undoes.Valid:
+		case tool == RestoreTool && kind != ActorOperator:
+			fault(vault, id, "badop", fmt.Sprintf("a restore to a uid recorded as the %s's, and it is the operator's", kind))
+		case kind != AuthorKindMCP && !undoes.Valid && !(kind == ActorOperator && tool == RestoreTool):
 			fault(vault, id, "badop", fmt.Sprintf("recorded as the %s's, which makes undos and nothing else", kind))
 		case undoes.Valid && undoneVault != vault:
 			fault(vault, id, "badop", fmt.Sprintf("undoes %q, which is not an operation on this vault", undoes.String))
@@ -1821,6 +1828,10 @@ type OplogCounts struct {
 	Pins       int64
 	Keys       int64
 }
+
+// OplogCounts is how many operations, pins and idempotency keys the store
+// holds, which a restore rehearsal compares with what the backup carried.
+func (s *Store) OplogCounts() (OplogCounts, error) { return s.oplogCounts() }
 
 func (s *Store) oplogCounts() (OplogCounts, error) {
 	var c OplogCounts

@@ -301,7 +301,7 @@ describe("a sync against a server restored from a backup (F26)", () => {
     expect((await cli("sync", "--dir", first)).code).toBe(0);
     expect((await cli("sync", "--dir", second)).code).toBe(0);
     const backup = await vaultDir("restorebackup");
-    await server.cli("backup", "-to", backup);
+    await server.cli("backup", "-plaintext-ok", "-to", backup);
     await writeFile(join(first, "two.md"), "second");
     expect((await cli("sync", "--dir", first)).code).toBe(0);
     expect((await cli("sync", "--dir", second)).code).toBe(0);

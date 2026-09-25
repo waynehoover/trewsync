@@ -138,7 +138,7 @@ func TestEveryCommandRefusesABasaltDirectoryAndChangesNothing(t *testing.T) {
 		{"verify", "-data", dir},
 		{"verify", "-deep", "-data", dir},
 		{"stats", "-data", dir},
-		{"backup", "-data", dir, "-to", filepath.Join(t.TempDir(), "backup")},
+		{"backup", "-plaintext-ok", "-data", dir, "-to", filepath.Join(t.TempDir(), "backup")},
 		{"purge", "-data", dir, "-vault", "default", "-confirm", "default", "-no-backup-check"},
 		{"service", "-data", dir},
 	} {
@@ -160,7 +160,7 @@ func TestABackupIsNotWrittenIntoABasaltDirectory(t *testing.T) {
 	source := seeded(t)
 	dest := basaltDataDir(t)
 	before := dirDigest(t, dest)
-	_, err := trew(t, "backup", "-data", source, "-to", dest)
+	_, err := trew(t, "backup", "-plaintext-ok", "-data", source, "-to", dest)
 	if !errors.Is(err, store.ErrForeignStore) {
 		t.Fatalf("a backup into a Basalt directory returned %v", err)
 	}

@@ -17,6 +17,7 @@
 ## Run your server
 
 - [Server maintenance](server-operations.md): backups, restoration, monitoring, and purging history.
+- [Operating TrewSync](operations.md): `trewd doctor`, a note that seems lost, an agent's run to roll back, and a restore to rehearse.
 - [Server reference](server-reference.md): commands, flags, limits, and health responses.
 - [CLI reference](cli-reference.md): every command and flag of the headless client.
 

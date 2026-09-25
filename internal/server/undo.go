@@ -87,6 +87,7 @@ func (s *Server) undo(vaultID, opID string, toCopy bool, origin *Session) (Undon
 		}
 	}
 	res, err := s.st.CommitOperation(op)
+	s.countOperation(err)
 	if err != nil {
 		return Undone{Plan: plan}, err
 	}

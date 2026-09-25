@@ -57,7 +57,7 @@ func TestBackupRecordsTheUIDRangeAndPurgeGenerationItCovers(t *testing.T) {
 	source := seeded(t)
 	dest := filepath.Join(t.TempDir(), "backup")
 
-	out := mustRun(t, "backup", "-data", source, "-to", dest)
+	out := mustRun(t, "backup", "-plaintext-ok", "-data", source, "-to", dest)
 	if !strings.Contains(out, "backup.json") {
 		t.Fatalf("backup does not mention the coverage file it wrote:\n%s", out)
 	}
@@ -96,7 +96,7 @@ func TestBackupRecordsTheUIDRangeAndPurgeGenerationItCovers(t *testing.T) {
 	// says it was taken after a purge, which is what tells a retention script
 	// that the previous directory is the one with the history in it.
 	mustRun(t, "purge", "-data", source, "-confirm", "default", "-backup", dest)
-	mustRun(t, "backup", "-data", source, "-to", dest)
+	mustRun(t, "backup", "-plaintext-ok", "-data", source, "-to", dest)
 	v = readBackupMeta(t, dest).Vaults[0]
 	if v.OldestUID != 3 || v.LatestUID != 6 || v.AllocatedTo != 6 || v.Versions != 4 || v.Purges != 1 {
 		t.Fatalf("coverage after the purge: %+v", v)
@@ -125,7 +125,7 @@ func TestAPurgeThatDropsNothingDoesNotMoveTheGeneration(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "backup")
 	mustRun(t, "purge", "-data", source, "-confirm", "default", "-no-backup-check")
 	mustRun(t, "purge", "-data", source, "-confirm", "default", "-no-backup-check")
-	mustRun(t, "backup", "-data", source, "-to", dest)
+	mustRun(t, "backup", "-plaintext-ok", "-data", source, "-to", dest)
 	if v := readBackupMeta(t, dest).Vaults[0]; v.Purges != 1 {
 		t.Fatalf("two purges, one of which dropped nothing, count as %d generations, want 1", v.Purges)
 	}

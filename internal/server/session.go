@@ -68,6 +68,11 @@ type Session struct {
 	deviceHash string
 	// Zero is unknown; otherwise the last applied cursor plus one.
 	applied atomic.Int64
+	// appliedAt is when applied last moved, and connectedAt when this
+	// session joined the fan-out, both in unix milliseconds, for the
+	// operator's view of a device that has stopped advancing (Delivery).
+	appliedAt   atomic.Int64
+	connectedAt atomic.Int64
 
 	// revoked is set by the revoke that deleted this session's device row,
 	// under commitMu and in the same critical section that takes the session
@@ -338,6 +343,7 @@ func (s *Session) trySendFrame(f outFrame) bool {
 	default:
 	}
 	if !s.enqueueFrame(f) {
+		s.srv.metrics.Evicted()
 		s.kill(errors.New("send queue overflow, peer too slow"))
 		return false
 	}
@@ -365,6 +371,16 @@ func (s *Session) writeBinary(b []byte) error {
 // so there is no moment in a connection's life when a client has to work out
 // which fields an error will have.
 func (s *Session) errFrame(id int64, code, msg string, retryAfter time.Duration) wire.Err {
+	// Counted here because every error leaves through here: a credential
+	// refused, a write refused as stale, a peer told to come back later.
+	switch code {
+	case wire.CodeAuth:
+		s.srv.metrics.AuthFailed()
+	case wire.CodeStale:
+		s.srv.metrics.Stale()
+	case wire.CodeBusy:
+		s.srv.metrics.RateLimited()
+	}
 	e := wire.Error(code, msg)
 	e.ID = id
 	if ms := retryAfter.Milliseconds(); ms > 0 {
@@ -927,6 +943,7 @@ func (s *Session) helloAsDevice(m wire.In) error {
 	if s.srv.beforeJoin != nil {
 		s.srv.beforeJoin()
 	}
+	s.connectedAt.Store(s.srv.now().UnixMilli())
 	s.srv.hub.join(m.Vault, s)
 	s.joined = true
 
@@ -1124,6 +1141,7 @@ func (s *Session) deliverFrame(uid int64, b []byte) {
 		// tens of thousands of chunks is megabytes.
 		if len(s.pending) >= CatchupBufferMax || s.pendingBytes+int64(len(b)) > CatchupBufferBytes {
 			s.mu.Unlock()
+			s.srv.metrics.Evicted()
 			s.kill(errors.New("catch-up buffer overflow, peer too slow"))
 			return
 		}
@@ -1494,6 +1512,7 @@ func (s *Session) commitMany(items []preparedEntry, sent []wire.PutEntry) ([]wir
 		// working vault; this is the difference.
 		s.srv.log.Warn("batch commit failed, committing one at a time",
 			"vault", s.vaultID, "entries", len(entries), "err", err)
+		s.srv.metrics.BatchFellBack()
 		out = make([]store.ManyResult, len(entries))
 		for k, e := range entries {
 			if e.Path == "" {
@@ -1514,16 +1533,24 @@ func (s *Session) commitMany(items []preparedEntry, sent []wire.PutEntry) ([]wir
 			code := commitCode(r.Err)
 			if code == "" {
 				s.srv.log.Error("commit failed", "vault", s.vaultID, "err", r.Err)
+				s.srv.metrics.CommitFailed()
 				code = wire.CodeInternal
 			} else {
 				s.srv.log.Warn("refused at commit", "vault", s.vaultID,
 					"path", len(entries[k].Path), "code", code, "err", r.Err)
+				switch code {
+				case wire.CodeStale:
+					s.srv.metrics.Stale()
+				case wire.CodeNoSpace:
+					s.srv.metrics.CommitFailed()
+				}
 			}
 			results[i] = wire.AckResult{Code: code, Msg: r.Err.Error()}
 			continue
 		}
 		e := entries[k]
 		e.UID = r.UID
+		s.srv.metrics.Committed()
 		if s.srv.afterAppend != nil {
 			s.srv.afterAppend(r.UID)
 		}
@@ -1792,6 +1819,11 @@ func commitCode(err error) string {
 		// told which entry and re-uploads; see chunks.DefaultGrace for why this
 		// is rare.
 		return wire.CodeNoChunk
+	case store.IsDiskFull(err):
+		// The database could not grow. Retryable, like internal, and it says
+		// what an operator has to fix, where internal said only that
+		// something failed (PLAN.md M5.5).
+		return wire.CodeNoSpace
 	}
 	return ""
 }
@@ -1855,13 +1887,18 @@ func (s *Session) commit(e store.Entry, base, prevBase int64) (int64, *wire.Err)
 		if code := commitCode(err); code != "" {
 			s.srv.log.Warn("refused at commit",
 				"vault", s.vaultID, "path", len(e.Path), "code", code, "err", err)
+			if code == wire.CodeNoSpace {
+				s.srv.metrics.CommitFailed()
+			}
 			refusal := wire.Error(code, err.Error())
 			return 0, &refusal
 		}
 		s.srv.log.Error("commit failed", "vault", s.vaultID, "err", err)
+		s.srv.metrics.CommitFailed()
 		refusal := wire.Error(wire.CodeInternal, "the entry could not be committed: "+err.Error())
 		return 0, &refusal
 	}
+	s.srv.metrics.Committed()
 	e.UID = uid
 	if s.srv.afterAppend != nil {
 		s.srv.afterAppend(uid)
