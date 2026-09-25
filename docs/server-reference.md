@@ -88,6 +88,19 @@ index behind, a device that has stopped advancing, a token expiring. An alert
 is logged when raised, when it changes, once a day while it stands, and once
 when it clears (`msg="alert cleared"`).
 
+Every `serve` keeps a search index in `search.db` in the data directory, with
+`-mcp` or without it: `trew search` on a device and the endpoint's
+`search_notes` ask the same one. It is derived, built and updated by a worker
+that never delays a write, rebuilt from the store when it is missing or
+damaged, and not part of a backup. A `search.db` that cannot be opened is kept
+as `search.db.broken` for inspection and may be deleted. Until the index has
+caught up a search reads every note, so nothing is missed, only slower. The
+first build of 10,000 notes (17 MB of Markdown) took 6.9 s, in the background
+after the port had opened; a restart checks the existing index against the
+store, 0.74 s for the same notes, after the port is bound, so a device
+reconnecting meanwhile waits rather than being refused. The index takes about
+twice the notes' size on disk (39 MB there). There is no flag to turn it off.
+
 On a vault with no devices, `serve` writes an invite for the first one to
 `-invite-out`, mode 0600, and logs that path and its expiry, never the invite.
 The file has one line per address the invite names, all the same invite. A
@@ -126,10 +139,8 @@ token's id, and prints the `trewd mcp-token -revoke` command that ends it.
 With `-addr 0.0.0.0` or the default `:3003` the endpoint listens on every
 interface, and the server logs a warning saying so: keep `/mcp` behind
 Tailscale or an identity-aware proxy. A request from a browser must carry an
-`Origin` given with `-allow-origin`. The endpoint keeps its search index in
-`search.db` in the data directory; it is derived, rebuilt from the store when
-it is missing or damaged, and not part of a backup. A `search.db` that cannot
-be opened is kept as `search.db.broken` for inspection and may be deleted.
+`Origin` given with `-allow-origin`. `search_notes` asks the server's
+[search index](#serve), the one every `serve` keeps.
 
 ### Writing through the endpoint
 

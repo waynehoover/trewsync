@@ -182,8 +182,8 @@ trew search TODO --case-sensitive --folder Work --all --json
 ```
 
 A server searching without an index reads every note, 512 notes or 8 MiB a
-page. `trewd serve -mcp` keeps a search index, which narrows the notes a search
-reads. Searches have a budget on the server so they cannot slow other devices'
+page. Every `trewd serve` keeps a search index, which narrows the notes a
+search reads once it has caught up. Searches have a budget on the server so they cannot slow other devices'
 sync; a search over it waits and asks again, a few times, before it fails.
 
 ## Files and locking

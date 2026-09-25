@@ -163,7 +163,7 @@ type indexFor struct {
 }
 
 // SetSearchIndex gives device searches of vault the search index, which
-// `serve -mcp` keeps. Without one, a search scans every note, which costs
+// every `trewd serve` keeps. Without one, a search scans every note, which costs
 // speed and never a match. A nil ix takes it away.
 func (s *Server) SetSearchIndex(vault string, ix search.Proposer) {
 	if ix == nil {
