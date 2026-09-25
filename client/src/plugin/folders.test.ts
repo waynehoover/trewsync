@@ -38,12 +38,15 @@ class Device {
     this.adapter.mobile = mobile;
   }
 
+  private credentials: { deviceId: string; token: string } | undefined;
+
   async connect(server: TestServer): Promise<void> {
+    this.credentials ??= await server.deviceCredentials(this.name);
     this.client = new Client({
       vault: new ObsidianVault(asVault(new FakeVaultIndex(this.adapter)), ".obsidian"),
       store: new ObsidianIndexStore(this.adapter, ".obsidian/plugins/trew/index.json"),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(this.name)),
+      ...this.credentials,
       vaultId: "default",
       device: this.name,
       timeoutMs: 20_000,
@@ -175,6 +178,77 @@ describe.each([
       expect(d.folders(), d.name).toEqual(["Inbox"]);
       expect(d.litter(), d.name).toEqual([]);
     }
+  }, 300_000);
+
+  /**
+   * The same save, and then the app killed after the folder was moved aside
+   * and before it was looked at again: modelled as the look failing, so
+   * nothing after the move runs. The folder had been moved under a hidden
+   * name with no record anywhere, so the note, which no device had, was out
+   * of every listing for good. The next scan puts it back.
+   */
+  it("puts back a note saved into the folder as it is removed, after a kill", async () => {
+    const [mac, phone] = await two(mobile);
+    await mac.adapter.mkdir("Inbox");
+    await converge(mac, phone);
+    expect(phone.folders()).toEqual(["Inbox"]);
+
+    let saved = false;
+    phone.adapter.beforeRename = (from) => {
+      if (from === "Inbox" && !saved) {
+        saved = true;
+        phone.adapter.seed("Inbox/just saved.md", "saved at the last moment\n");
+      }
+    };
+    phone.adapter.fault = (op, path) =>
+      saved && op === "list" && path.includes(".trew-tmp-") ? new Error("killed") : undefined;
+    await mac.adapter.rmdir("Inbox", true);
+    await converge(mac, phone, 2);
+    expect(saved, "the removal never moved the folder aside").toBe(true);
+
+    // Started again, on the disk the kill left.
+    phone.adapter.beforeRename = undefined;
+    phone.adapter.fault = undefined;
+    phone.close();
+    await phone.connect(server);
+    await converge(mac, phone);
+
+    for (const d of [mac, phone]) {
+      expect(d.notes(), `${d.name} lost the note`).toEqual({
+        "Inbox/just saved.md": "saved at the last moment\n",
+      });
+      expect(d.folders(), d.name).toEqual(["Inbox"]);
+      expect(d.litter(), d.name).toEqual([]);
+    }
+  }, 300_000);
+
+  /**
+   * Finder leaves a `.DS_Store` in every folder it shows, and it kept the
+   * folder: a Mac put back every folder deleted elsewhere that it had once
+   * shown. Operating system metadata this device does not sync does not keep
+   * a folder, and goes with it when nothing else is inside. (`Thumbs.db` and
+   * `desktop.ini` sync like any file unless ignored, so their own deletions
+   * travel.)
+   */
+  it("removes a folder that holds only operating system metadata, and keeps one that holds more", async () => {
+    const [mac, phone] = await two(mobile);
+    await mac.adapter.mkdir("Browsed");
+    await mac.adapter.mkdir("Kept");
+    await converge(mac, phone);
+    phone.adapter.seed("Browsed/.DS_Store", "metadata");
+    phone.adapter.seed("Kept/.DS_Store", "metadata");
+    phone.adapter.seed("Kept/.hidden note", "not synced, and not metadata");
+
+    await mac.adapter.rmdir("Browsed", true);
+    await mac.adapter.rmdir("Kept", true);
+    await converge(mac, phone);
+
+    expect(phone.folders(), "the metadata kept the folder").toEqual(["Kept"]);
+    expect(mac.folders(), "the folder deletion was undone").toEqual(["Kept"]);
+    expect(phone.adapter.everything().filter((p) => p.startsWith("Browsed"))).toEqual([]);
+    expect(phone.adapter.text("Kept/.DS_Store")).toBe("metadata");
+    expect(phone.adapter.text("Kept/.hidden note")).toBe("not synced, and not metadata");
+    expect(phone.litter()).toEqual([]);
   }, 300_000);
 
   /**

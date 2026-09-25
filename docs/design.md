@@ -129,15 +129,20 @@ adapter can remove only an empty folder (read out of 1.13.7: desktop `rmdir`
 refuses a directory unless told to recurse, and mobile `rmdir` always
 recurses), so the plugin moves the folder to a hidden name, looks again there,
 and removes only what it has just seen to be empty; anything saved into it
-before the move is still in it, and the folder goes back. Nothing in a folder
-is deleted or trashed for the folder's sake.
+before the move is still in it, and the folder goes back. The move is written
+in the displaced ledger first, so a kill between the move and the second look
+leaves a record, and the next scan puts back whatever the hidden folder holds.
+Nothing in a folder is deleted or trashed for the folder's sake, except
+operating system metadata this device never syncs (`.DS_Store`, and
+`Thumbs.db` or `desktop.ini` where they are ignored), which does not keep a
+folder and is removed with it when nothing else is inside.
 
 What is still in the folder decides what happens to it:
 
 - **Kept, and put back on the server**: a file this device has not sent or
   has edited, a note written after the deletion, a folder inside it that
-  stays, and anything the listing never shows, such as a dot-prefixed file
-  (Finder's `.DS_Store` is one), a file this device ignores, or one two names
+  stays, and anything else the listing never shows, such as a dot-prefixed
+  file other than that metadata, a file this device ignores, or one two names
   claim. The folder goes back as a live folder based on the deletion it
   answers, and the device that deleted it creates it again.
 - **Waiting**: a file whose deletion this device has received and not yet

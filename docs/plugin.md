@@ -270,8 +270,9 @@ other devices, as any deletion does; the emptied folder is removed, not
 trashed. A folder that still
 holds something on another device stays, and comes back on the device where
 you deleted it: a note written there while it was offline, a note edited
-there, or a file TrewSync never syncs, such as a name starting with a dot
-(`.DS_Store`, which the macOS Finder leaves in folders it has opened, is one).
+there, or a file TrewSync never syncs, such as a name starting with a dot. The
+`.DS_Store` the macOS Finder leaves in folders it has opened does not keep a
+folder: it is removed with the folder when nothing else is inside.
 Deleted folders are not listed under **Browse deleted**; the notes that were
 in them are.
 
