@@ -820,9 +820,11 @@ describe("undoing an agent's change from the history panel", () => {
       "the undo on disk",
       () => adapter.text("note.md") === "the words before the agent\n",
     );
-    expect(notices.map((n) => n.message)).toContain(
-      "TrewSync: Undid the change. The note is as it was before it.",
-    );
+    // The notice follows the undo's reply, which comes after the write the
+    // wait above saw, so it is waited for in its own right.
+    const undone = "TrewSync: Undid the change. The note is as it was before it.";
+    await until("the notice", () => notices.some((n) => n.message === undone));
+    expect(notices.map((n) => n.message)).toContain(undone);
     // No copy: an undo puts the note back where it is, replacing the agent's.
     expect(adapter.filePaths().filter((p) => p.endsWith(".md"))).toEqual(["note.md"]);
 
@@ -881,8 +883,8 @@ describe("undoing an agent's change from the history panel", () => {
     await until("the copy on disk", () => adapter.text(copy) !== undefined);
     expect(adapter.text(copy)).toBe("the words before the agent\n");
     expect(adapter.text("note.md")).toBe("the person's own words since\n");
-    expect(notices.map((n) => n.message)).toContain(
-      `TrewSync: Wrote the earlier version beside the note, as ${copy}. Nothing else was changed.`,
-    );
+    const wrote = `TrewSync: Wrote the earlier version beside the note, as ${copy}. Nothing else was changed.`;
+    await until("the notice", () => notices.some((n) => n.message === wrote));
+    expect(notices.map((n) => n.message)).toContain(wrote);
   });
 });

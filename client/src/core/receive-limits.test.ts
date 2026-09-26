@@ -100,10 +100,13 @@ describe("a chunk that expands past what a chunk may hold", () => {
 
   it("is refused by a fetch, which ends the session over it", async () => {
     const { t, socket } = await helloed();
+    // Made before the clock starts: deflating 256 MiB is seconds of its own
+    // on a slow runner, and it was being counted as the refusal's time.
+    const bomb = deflateBomb();
     const fetching = t.fetch(["a".repeat(64)]);
     socket.reply({ res: "bodies", count: 1 });
     const started = Date.now();
-    socket.body(deflateBomb());
+    socket.body(bomb);
     await expect(fetching).rejects.toMatchObject({ code: "toolarge" });
     expect(Date.now() - started).toBeLessThan(5000);
     expect(t.isClosed, "a body that could not be read left the session open").toBe(true);
