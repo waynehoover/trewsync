@@ -14,9 +14,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/waynehoover/trew/internal/search"
-	"github.com/waynehoover/trew/internal/server"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/search"
+	"github.com/waynehoover/trewsync/internal/server"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // MaxBodyBytes is the largest request body the endpoint reads: 8 MiB, the

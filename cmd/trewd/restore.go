@@ -8,8 +8,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/waynehoover/trew/internal/control"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/control"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // cmdRestore puts the vault back as it was at a uid (PLAN.md M5.5): one

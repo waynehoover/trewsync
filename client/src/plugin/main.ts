@@ -3742,7 +3742,7 @@ const PHONE_NOTICE_GAP_MS = 5 * 60_000;
  */
 const LISTED_IN_PANEL = 5;
 
-const DOCS = "https://github.com/waynehoover/trew/blob/main/docs/plugin.md";
+const DOCS = "https://github.com/waynehoover/trewsync/blob/main/docs/plugin.md";
 
 /**
  * Native settings groups on current Obsidian; flat rows on older releases.

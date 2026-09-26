@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // A device connects as itself, with its own token, and revoking one device

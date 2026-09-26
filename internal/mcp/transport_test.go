@@ -12,7 +12,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 var readToolNames = []string{"backlinks", "broken_links", "compare_versions", "deleted_notes", "delivery_status",

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/trew/internal/control"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/control"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // cmdAudit prints what agents have done to the vault: every operation the

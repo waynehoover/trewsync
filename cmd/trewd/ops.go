@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/dirlock"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/dirlock"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // cmdHealth asks a running server whether it is answering.

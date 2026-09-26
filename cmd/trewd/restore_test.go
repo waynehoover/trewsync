@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/control"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/control"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // restoreFixture is a data directory where the vault held two notes at uid 2,

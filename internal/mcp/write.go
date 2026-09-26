@@ -11,11 +11,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/notes"
-	"github.com/waynehoover/trew/internal/paths"
-	"github.com/waynehoover/trew/internal/search"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/notes"
+	"github.com/waynehoover/trewsync/internal/paths"
+	"github.com/waynehoover/trewsync/internal/search"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // An MCP write is a durable operation (PLAN.md section 4.3), and this file is

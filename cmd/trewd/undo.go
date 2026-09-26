@@ -8,9 +8,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/waynehoover/trew/internal/control"
-	"github.com/waynehoover/trew/internal/server"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/control"
+	"github.com/waynehoover/trewsync/internal/server"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // cmdUndo undoes one operation in the log `trewd audit` prints (PLAN.md

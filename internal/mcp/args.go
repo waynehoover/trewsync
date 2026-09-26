@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // A tool's arguments are checked by hand, strictly, rather than by a schema

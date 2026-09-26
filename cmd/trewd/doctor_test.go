@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/control"
-	"github.com/waynehoover/trew/internal/dirlock"
-	"github.com/waynehoover/trew/internal/doctor"
-	"github.com/waynehoover/trew/internal/metrics"
-	"github.com/waynehoover/trew/internal/search"
-	"github.com/waynehoover/trew/internal/server"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/control"
+	"github.com/waynehoover/trewsync/internal/dirlock"
+	"github.com/waynehoover/trewsync/internal/doctor"
+	"github.com/waynehoover/trewsync/internal/metrics"
+	"github.com/waynehoover/trewsync/internal/search"
+	"github.com/waynehoover/trewsync/internal/server"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // Every server these tests start keeps its data in a temporary directory,

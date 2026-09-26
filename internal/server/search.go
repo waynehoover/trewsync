@@ -10,11 +10,11 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/trew/internal/budget"
-	"github.com/waynehoover/trew/internal/notes"
-	"github.com/waynehoover/trew/internal/paths"
-	"github.com/waynehoover/trew/internal/search"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/budget"
+	"github.com/waynehoover/trewsync/internal/notes"
+	"github.com/waynehoover/trewsync/internal/paths"
+	"github.com/waynehoover/trewsync/internal/search"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // A device's search (protocol 2; plan/protocol.md, "Search"): `trew search`

@@ -9,7 +9,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // Window is the rolling hash window in bytes: how much of the preceding content

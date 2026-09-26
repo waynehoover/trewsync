@@ -50,8 +50,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waynehoover/trew/internal/fsync"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/fsync"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // How much one step reads before it writes what it has: the entries and the

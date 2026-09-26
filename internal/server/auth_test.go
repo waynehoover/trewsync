@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // The credentials: a device's 32-byte token and an invite's 16-byte token,

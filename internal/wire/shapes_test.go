@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The frames protocol 1 changed, as the client will read them (plan/protocol.md,

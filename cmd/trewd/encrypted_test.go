@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/doctor"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/doctor"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // A backup has to say whether it is encrypted (PLAN.md section 3.6): with

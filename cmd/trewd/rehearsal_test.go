@@ -40,10 +40,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	bodyframe "github.com/waynehoover/trew/internal/frame"
-	"github.com/waynehoover/trew/internal/store"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	bodyframe "github.com/waynehoover/trewsync/internal/frame"
+	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // TestRestoreRehearsal walks the runbook end to end.

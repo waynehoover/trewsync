@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/chunks"
 )
 
 func TestBackupRefusesDestinationWithPendingRecovery(t *testing.T) {

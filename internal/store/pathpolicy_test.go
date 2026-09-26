@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/chunks"
 )
 
 // Every path vector in protocol-fixtures.json, through Entry.Validate, as a

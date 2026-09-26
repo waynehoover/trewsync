@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // An agent's write is a durable operation, not a put with a different caller

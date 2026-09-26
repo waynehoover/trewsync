@@ -1,4 +1,4 @@
-module github.com/waynehoover/trew
+module github.com/waynehoover/trewsync
 
 go 1.27.0
 

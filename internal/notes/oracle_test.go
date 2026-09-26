@@ -17,7 +17,7 @@ import (
 	"unicode"
 	"unicode/utf16"
 
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/paths"
 	"golang.org/x/text/unicode/norm"
 )
 

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // No credential travels in a URL, where proxies and access logs keep it

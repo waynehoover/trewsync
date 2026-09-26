@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The guarantees of the headless client's retired MCP server (`trew mcp`,

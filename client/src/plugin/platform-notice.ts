@@ -16,7 +16,7 @@
  */
 
 /** The README's support table, which both notices link to. */
-export const SUPPORT_TABLE = "https://github.com/waynehoover/trew#platforms";
+export const SUPPORT_TABLE = "https://github.com/waynehoover/trewsync#platforms";
 
 export interface PlatformStanding {
   /** A word or two for the status bar and the ribbon: always on screen, so short. */

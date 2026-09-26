@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/chunks"
 )
 
 // treeDigest is every file and directory under dir with its contents' hash

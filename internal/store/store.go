@@ -22,8 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/paths"
 
 	_ "modernc.org/sqlite"
 )

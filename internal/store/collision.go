@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // ErrCollision is a create, or the destination of a move, that would leave two

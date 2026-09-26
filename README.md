@@ -6,11 +6,11 @@ TrewSync syncs your vault through a server you run, keeps every earlier
 version of every note, and lets an agent such as Claude Code read and edit the
 same notes your devices sync, with every agent edit recorded and undoable.
 
-[![CI](https://github.com/waynehoover/trew/actions/workflows/ci.yml/badge.svg)](https://github.com/waynehoover/trew/actions/workflows/ci.yml)
+[![CI](https://github.com/waynehoover/trewsync/actions/workflows/ci.yml/badge.svg)](https://github.com/waynehoover/trewsync/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/trew-sync?logo=npm&label=trew-sync)](https://www.npmjs.com/package/trew-sync)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**[Quickstart](#quickstart)** · [Download](https://github.com/waynehoover/trew/releases) · [Docs](docs/index.md) · [Connect an agent](docs/agent.md) · [How it compares](docs/compared.md)
+**[Quickstart](#quickstart)** · [Download](https://github.com/waynehoover/trewsync/releases) · [Docs](docs/index.md) · [Connect an agent](docs/agent.md) · [How it compares](docs/compared.md)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/panel-dark.png">
@@ -27,7 +27,7 @@ it.
 1. **Run the server.**
 
    ```bash
-   git clone https://github.com/waynehoover/trew.git && cd trew
+   git clone https://github.com/waynehoover/trewsync.git && cd trewsync
    docker compose up -d
    ```
 
@@ -47,7 +47,7 @@ it.
 
 4. **Install the plugin and pair.** Download `main.js`, `manifest.json` and
    `styles.css` from the newest plugin
-   [release](https://github.com/waynehoover/trew/releases) into
+   [release](https://github.com/waynehoover/trewsync/releases) into
    `<vault>/.obsidian/plugins/trew-sync/`, reload Obsidian and enable
    **TrewSync**. Paste the invite, check the server it names, and press
    **Pair**. Keep Obsidian open until the first sync finishes; on Android it
@@ -197,7 +197,7 @@ merged.
 ## Community
 
 Questions, bugs and ideas go to
-[GitHub issues](https://github.com/waynehoover/trew/issues). Report a
+[GitHub issues](https://github.com/waynehoover/trewsync/issues). Report a
 security problem privately, as [SECURITY.md](SECURITY.md) describes, not in an
 issue. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/chunks"
 )
 
 /* ---------------------------------------------------------------- *

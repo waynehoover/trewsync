@@ -26,7 +26,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/waynehoover/trew/internal/mcp"
+	"github.com/waynehoover/trewsync/internal/mcp"
 )
 
 // testSeamMark is the line a held write writes, followed by the seam's name.

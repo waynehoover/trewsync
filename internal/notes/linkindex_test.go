@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // The link keys (LinkKeys, TargetKeys) and a View that narrows by them

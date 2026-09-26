@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // Latency multiplies round trips. Two hundred paths were two hundred requests,

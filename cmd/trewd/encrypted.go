@@ -12,10 +12,10 @@ import (
 
 	"filippo.io/age"
 
-	"github.com/waynehoover/trew/internal/archive"
-	"github.com/waynehoover/trew/internal/dirlock"
-	"github.com/waynehoover/trew/internal/doctor"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/archive"
+	"github.com/waynehoover/trewsync/internal/dirlock"
+	"github.com/waynehoover/trewsync/internal/doctor"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The encrypted backup (PLAN.md section 3.6): `trewd backup -encrypt-to`,

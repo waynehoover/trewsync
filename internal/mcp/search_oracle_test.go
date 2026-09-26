@@ -13,7 +13,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The search oracle: mcp-fixtures.json records what Basalt's TypeScript

@@ -278,11 +278,11 @@ for want in \
     fail "the packslip step does not say $want"
   fi
 done
-if grep -qF 'updateProject  = "github.com/waynehoover/trew/server"' "$root/cmd/trewd/update.go" \
+if grep -qF 'updateProject  = "github.com/waynehoover/trewsync/server"' "$root/cmd/trewd/update.go" \
   && grep -qF '/.github/workflows/attest.yml@"' "$root/cmd/trewd/update.go"; then
   ok "and trewd update pins that project and this workflow"
 else
-  fail "trewd update no longer pins github.com/waynehoover/trew/server signed by attest.yml"
+  fail "trewd update no longer pins github.com/waynehoover/trewsync/server signed by attest.yml"
 fi
 # Before publish, so a failed signature leaves a draft.
 order=$(printf '%s\n' "$server_job" | grep -nE 'uses: jdx/packslip@|- name: publish' | cut -d: -f1 | tr '\n' ' ')

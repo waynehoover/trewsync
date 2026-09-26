@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/waynehoover/trew/internal/invite"
+	"github.com/waynehoover/trewsync/internal/invite"
 )
 
 // The sizes of the three random things a vault's access is made of.

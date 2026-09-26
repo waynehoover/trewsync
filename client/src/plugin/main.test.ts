@@ -1918,7 +1918,7 @@ describe("the panel, which is a modal and a settings tab", () => {
       .contentEl.children.flatMap((el) => el.children)
       .filter((el) => el.tag === "a");
     expect(links.map((el) => el.attributes.get("href"))).toContain(
-      "https://github.com/waynehoover/trew/blob/main/docs/plugin.md",
+      "https://github.com/waynehoover/trewsync/blob/main/docs/plugin.md",
     );
   }, 300_000);
 

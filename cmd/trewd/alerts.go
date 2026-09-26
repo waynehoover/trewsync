@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waynehoover/trew/internal/doctor"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/doctor"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The server's alerts (PLAN.md M5.5): a running server checks itself and logs

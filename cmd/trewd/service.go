@@ -11,9 +11,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/waynehoover/trew/internal/dirlock"
-	"github.com/waynehoover/trew/internal/server"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/dirlock"
+	"github.com/waynehoover/trewsync/internal/server"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // cmdService prints a systemd unit for running this server.
@@ -245,7 +245,7 @@ func unit(a unitArgs) string {
 	return strings.Join([]string{
 		"[Unit]",
 		"Description=TrewSync, self-hosted sync for Obsidian",
-		"Documentation=https://github.com/waynehoover/trew",
+		"Documentation=https://github.com/waynehoover/trewsync",
 		"After=network-online.target",
 		"Wants=network-online.target",
 		"",

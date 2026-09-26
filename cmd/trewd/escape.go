@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/waynehoover/trew/internal/dirlock"
-	"github.com/waynehoover/trew/internal/fsync"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/dirlock"
+	"github.com/waynehoover/trewsync/internal/fsync"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The escape hatch: a note's bytes straight out of the store, with no device

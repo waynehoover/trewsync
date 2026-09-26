@@ -15,7 +15,7 @@ services for that vault. Each device should have its own local copy.
 ## Install
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the newest stable
-   [plugin release](https://github.com/waynehoover/trew/releases).
+   [plugin release](https://github.com/waynehoover/trewsync/releases).
    Plugin releases use a plain `X.Y.Z` version; skip `server/v…` and `cli/v…`.
 2. Create `<vault>/.obsidian/plugins/trew-sync/` and put the three files there.
    If you use a custom Obsidian configuration folder, use that folder instead

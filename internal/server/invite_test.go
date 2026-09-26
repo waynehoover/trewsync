@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // I23: single-use invites (plan/protocol.md, "Invite redemption" and "Devices

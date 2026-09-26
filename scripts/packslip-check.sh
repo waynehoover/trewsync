@@ -38,7 +38,7 @@ fail() { printf '  FAIL %s\n' "$1" >&2; fails=$((fails + 1)); }
 ok() { printf '  ok   %s\n' "$1"; }
 
 packslip=$("$root/scripts/release-tools.sh" packslip)
-project=github.com/waynehoover/trew/server
+project=github.com/waynehoover/trewsync/server
 bundle_name=packslip.server.sigstore.json
 new=0.2.0
 goos=$(cd "$root" && go env GOOS)
@@ -62,7 +62,7 @@ while IFS= read -r name; do binaries+=("$work/dist/$name"); done < <(cd "$work/d
 "$packslip" create --project "$project" --version "$new" \
   --key "$work/release.key" --no-log --out "$work/dist" \
   --url-base "$base/good/dl/server/v$new" --bin trewd \
-  --tag "server/v$new" --source-repo https://github.com/waynehoover/trew \
+  --tag "server/v$new" --source-repo https://github.com/waynehoover/trewsync \
   --commit "$(git -C "$root" rev-parse HEAD)" \
   "${binaries[@]}" > "$work/create.log" 2>&1 || {
   cat "$work/create.log" >&2
@@ -143,10 +143,10 @@ echo "trewd update against a feed signed that way:"
 # SHA256SUMS line rewritten to match, so only the signature can catch it.
 feed() { # feed <name> <assets dir>
   local dir=$work/feed/$1
-  mkdir -p "$dir/repos/waynehoover/trew" "$dir/dl/server/v$new" "$dir/dl/0.10.0"
+  mkdir -p "$dir/repos/waynehoover/trewsync" "$dir/dl/server/v$new" "$dir/dl/0.10.0"
   cp "$2"/trewd-* "$2/SHA256SUMS" "$2/$bundle_name" "$dir/dl/server/v$new/"
   printf 'module.exports = {};\n' > "$dir/dl/0.10.0/main.js"
-  python3 - "$dir" "$base/$1" "$new" > "$dir/repos/waynehoover/trew/releases" <<'PY'
+  python3 - "$dir" "$base/$1" "$new" > "$dir/repos/waynehoover/trewsync/releases" <<'PY'
 import json, os, sys
 dir, base, new = sys.argv[1], sys.argv[2], sys.argv[3]
 def release(tag, **kw):
@@ -168,7 +168,7 @@ server_pid=$!
 # So bash does not report the kill in cleanup as though something had failed.
 disown "$server_pid" 2>/dev/null || true
 for _ in $(seq 1 50); do
-  curl -fsS "$base/good/repos/waynehoover/trew/releases" > /dev/null 2>&1 && break
+  curl -fsS "$base/good/repos/waynehoover/trewsync/releases" > /dev/null 2>&1 && break
   sleep 0.1
 done
 

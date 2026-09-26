@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"github.com/waynehoover/trew/internal/invite"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/invite"
+	"github.com/waynehoover/trewsync/internal/store"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,9 +17,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/frame"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/frame"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // S16: SIGTERM in the middle of an upload ends in one of two states, an ack

@@ -3,8 +3,8 @@ package server
 import (
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // What the MCP endpoint needs from the server that the store alone cannot

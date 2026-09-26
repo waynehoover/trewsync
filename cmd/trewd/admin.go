@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/trew/internal/control"
-	"github.com/waynehoover/trew/internal/dirlock"
-	"github.com/waynehoover/trew/internal/gitexport"
-	"github.com/waynehoover/trew/internal/mcp"
-	"github.com/waynehoover/trew/internal/search"
-	"github.com/waynehoover/trew/internal/server"
-	"github.com/waynehoover/trew/internal/store"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/control"
+	"github.com/waynehoover/trewsync/internal/dirlock"
+	"github.com/waynehoover/trewsync/internal/gitexport"
+	"github.com/waynehoover/trewsync/internal/mcp"
+	"github.com/waynehoover/trewsync/internal/search"
+	"github.com/waynehoover/trewsync/internal/server"
+	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // operator answers the control socket's requests for one served vault, and is

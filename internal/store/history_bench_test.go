@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/chunks"
 )
 
 // The four queries that grow with history, against a database shaped like a

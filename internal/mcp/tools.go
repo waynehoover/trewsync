@@ -6,11 +6,11 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/notes"
-	"github.com/waynehoover/trew/internal/paths"
-	"github.com/waynehoover/trew/internal/search"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/notes"
+	"github.com/waynehoover/trewsync/internal/paths"
+	"github.com/waynehoover/trewsync/internal/search"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The read tools of plan/mcp-tools.md, on the store.

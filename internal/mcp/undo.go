@@ -3,7 +3,7 @@ package mcp
 import (
 	"errors"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // undo_operation, an agent's undo of its own writes (PLAN.md section 4.5, M5

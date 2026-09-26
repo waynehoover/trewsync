@@ -22,7 +22,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/waynehoover/trew/internal/fsync"
+	"github.com/waynehoover/trewsync/internal/fsync"
 )
 
 // The release feed `trewd update` reads, and what it trusts in it.
@@ -34,10 +34,10 @@ import (
 // anywhere, a mirror included, without being a way in: a mirror can withhold a
 // release but cannot make this install one this repository did not sign.
 const (
-	updateRepo     = "waynehoover/trew"
+	updateRepo     = "waynehoover/trewsync"
 	updateFeed     = "https://api.github.com"
 	updateTagLine  = "server/v"
-	updateProject  = "github.com/waynehoover/trew/server"
+	updateProject  = "github.com/waynehoover/trewsync/server"
 	updateBundle   = "packslip.server.sigstore.json"
 	updateSums     = "SHA256SUMS"
 	updateStatType = "https://in-toto.io/Statement/v1"

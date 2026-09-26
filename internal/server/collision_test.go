@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // `collision` through a real session (M1 task 11, PLAN.md section 4.1): a

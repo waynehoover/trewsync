@@ -5,10 +5,10 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/notes"
-	"github.com/waynehoover/trew/internal/paths"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/notes"
+	"github.com/waynehoover/trewsync/internal/paths"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // One search, two doors. MCP's search_notes and a device's `search` (protocol

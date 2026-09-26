@@ -15,12 +15,12 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/waynehoover/trew/internal/config"
-	"github.com/waynehoover/trew/internal/control"
-	"github.com/waynehoover/trew/internal/dirlock"
-	"github.com/waynehoover/trew/internal/gitexport"
-	"github.com/waynehoover/trew/internal/mcp"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/config"
+	"github.com/waynehoover/trewsync/internal/control"
+	"github.com/waynehoover/trewsync/internal/dirlock"
+	"github.com/waynehoover/trewsync/internal/gitexport"
+	"github.com/waynehoover/trewsync/internal/mcp"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The configuration file (internal/config) and the serve flags over it.

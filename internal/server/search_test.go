@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/search"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/search"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // searchOf asks for one page of a search on this connection.

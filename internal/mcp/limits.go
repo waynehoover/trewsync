@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waynehoover/trew/internal/budget"
+	"github.com/waynehoover/trewsync/internal/budget"
 )
 
 // Limits are the endpoint's budgets (PLAN.md section 2.3). A global cap on

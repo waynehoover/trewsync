@@ -20,7 +20,7 @@
 # it. The server's prefix is Basalt's, whose Go module lived in server/ and
 # needed server/vX.Y.Z to resolve; this module is at the root, so `go install`
 # does not resolve these tags, and the prefix now only keeps the lines apart
-# (and names the packslip project, github.com/waynehoover/trew/server).
+# (and names the packslip project, github.com/waynehoover/trewsync/server).
 #
 # The plugin release holds exactly the three files Obsidian downloads and
 # nothing else. Anything extra is a file the installer will never fetch and one
@@ -312,7 +312,7 @@ echo
 echo '  ```bash'
 echo "  shasum -a 256 -c SHA256SUMS"
 for asset in main.js manifest.json styles.css; do
-  echo "  gh attestation verify $asset --repo waynehoover/trew"
+  echo "  gh attestation verify $asset --repo waynehoover/trewsync"
 done
 echo '  ```'
 echo
@@ -324,10 +324,10 @@ if [ -n "$serverversion" ]; then
   echo '  ```bash'
   echo "  shasum -a 256 -c SHA256SUMS"
   for f in "$out/server"/trewd-*; do
-    echo "  gh attestation verify $(basename "$f") --repo waynehoover/trew"
+    echo "  gh attestation verify $(basename "$f") --repo waynehoover/trewsync"
   done
   echo "  packslip verify packslip.server.sigstore.json \\"
-  echo "    --identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@refs/tags/server/v$serverversion \\"
+  echo "    --identity-prefix https://github.com/waynehoover/trewsync/.github/workflows/attest.yml@refs/tags/server/v$serverversion \\"
   echo "    --issuer https://token.actions.githubusercontent.com --artifact trewd-linux-amd64"
   echo '  ```'
 fi
@@ -398,7 +398,7 @@ excuses that one commit only: the next thing to land has to carry the pin.
 Then render the Homebrew formula from the sums that were published, not the
 ones built here, and copy it into the tap (docs/development.md says where):
 
-  gh release download server/v@SERVER@ --repo waynehoover/trew --pattern SHA256SUMS --dir /tmp/trewd-@SERVER@
+  gh release download server/v@SERVER@ --repo waynehoover/trewsync --pattern SHA256SUMS --dir /tmp/trewd-@SERVER@
   scripts/homebrew-formula.sh @SERVER@ /tmp/trewd-@SERVER@/SHA256SUMS > packaging/homebrew/trewd.rb
 BLOCK
   )

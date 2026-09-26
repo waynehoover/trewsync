@@ -3,7 +3,7 @@ package gitexport
 import (
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // Which versions become which commit. The rule is a function of the store

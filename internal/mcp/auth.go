@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // credential is a request's token as it was authenticated.

@@ -3,7 +3,7 @@ package server
 import (
 	"encoding/json"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // Test-only counters. Both were exported from the production build with no

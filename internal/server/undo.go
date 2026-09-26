@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/waynehoover/trew/internal/store"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // Undo for the two actors that are not agents (PLAN.md section 4.5, M5 task

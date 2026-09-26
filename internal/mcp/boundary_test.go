@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/server"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/server"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The commit boundary is a build check, not a convention (PLAN.md sections
@@ -148,7 +148,7 @@ func (c *call) f() { _, _, _ = c.h.st.Replay(c.h.vault, "id", "key", "digest") }
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			src := "package mcp\n\nimport \"github.com/waynehoover/trew/internal/store\"\n\nvar _ store.Entry\n" + tc.body
+			src := "package mcp\n\nimport \"github.com/waynehoover/trewsync/internal/store\"\n\nvar _ store.Entry\n" + tc.body
 			fset := token.NewFileSet()
 			f, err := parser.ParseFile(fset, "case.go", src, 0)
 			if err != nil {

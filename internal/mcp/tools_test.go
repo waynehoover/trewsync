@@ -16,9 +16,9 @@ import (
 	"github.com/coder/websocket"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/waynehoover/trew/internal/server"
-	"github.com/waynehoover/trew/internal/store"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/server"
+	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // listRow is a list_notes row as a test reads it.

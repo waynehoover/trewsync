@@ -25,7 +25,7 @@
 # for all of them at one number is how they get assumed to be in step.
 set -uo pipefail
 
-repo=${TREW_REPO:-waynehoover/trew}
+repo=${TREW_REPO:-waynehoover/trewsync}
 image=ghcr.io/$repo
 plugin= server= cli=
 

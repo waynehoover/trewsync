@@ -44,9 +44,9 @@ import (
 
 	"filippo.io/age"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/fsync"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/fsync"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // ManifestFile is the archive's first entry.

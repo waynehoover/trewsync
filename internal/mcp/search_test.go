@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/notes"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/notes"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 type searchPage struct {

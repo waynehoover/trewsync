@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // The bounds on one operation, as Basalt's mcp-operations.ts and mcp-batch.ts

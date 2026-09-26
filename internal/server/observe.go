@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waynehoover/trew/internal/metrics"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/metrics"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // What the server tells `trewd doctor` and its own alerts about itself

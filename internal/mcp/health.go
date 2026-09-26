@@ -6,10 +6,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/waynehoover/trew/internal/notes"
-	"github.com/waynehoover/trew/internal/paths"
-	"github.com/waynehoover/trew/internal/search"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/notes"
+	"github.com/waynehoover/trewsync/internal/paths"
+	"github.com/waynehoover/trewsync/internal/search"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The vault-health read tools (plan/ideas.md, "Backlinks and vault health"):

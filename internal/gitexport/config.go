@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/trew/internal/config"
+	"github.com/waynehoover/trewsync/internal/config"
 )
 
 // Dir is the export's own directory inside the data directory: the bare

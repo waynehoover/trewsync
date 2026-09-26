@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/trew/internal/fsync"
-	"github.com/waynehoover/trew/internal/invite"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/fsync"
+	"github.com/waynehoover/trewsync/internal/invite"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // firstInviteFile is where `serve` writes the first device's invite, inside the
