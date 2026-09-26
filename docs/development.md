@@ -1859,6 +1859,36 @@ refused and recorded in `remotes.refused` until `trewd git-export set` asks
 the export to look again, which never pushes over a commit it did not make. A
 failure sets the status and a retry from 30 seconds doubling to 30 minutes.
 
+**Adoption (owner decision, 2026-09-26).** The real vault's export pushes to
+`main` of the owner's existing repository, which holds years of obsidian-git
+history, so the refusal of a branch the export did not make gained one
+explicit, one-time exception (`internal/gitexport/adopt.go`). `trewd
+git-export adopt` fetches the remote's branch into `refs/trew/fetched` and
+prints its tip; `adopt SHA` requires that tip, all 40 digits, and records it in
+`git_export.adopted` (remote, branch, commit; `Resolve` applies it only while
+the effective remote and branch are those) and in `branches.adopted`, a column
+`openState` adds to a database made before it. `refs/trew/adopted` names the
+commit in the repository. Adopt runs under `Exporter.step`, the channel the
+worker holds for each cycle, and writes the configuration inside it, so no step
+runs between the state and the file; over the control socket it has 20 minutes
+(`control.Timeout`) rather than 30 seconds. A local branch the export made and
+never pushed is deleted with `update-ref -d` from the commit the row names and
+its row dropped, so it is made again on the adopted commit; one pushed
+anywhere is refused. The first commit on an adopted branch is written `from`
+the adopted commit with `deleteall` and every file of the export's tree, so
+nothing of the adopted tree (`.obsidian/`, a symlink, a plain large blob) is
+read or carried, and `loadTree` never parses a tree the export did not write;
+its message is `continuation()`, the group's message under a paragraph naming
+the adopted commit, with a `Trew-Continues` trailer. Because the parent and
+the message are functions of the recorded commit, a rebuild makes the same
+commits: `haveAdopted` fetches the branch (which holds the adopted commit
+under the export's own) or, failing that, the commit by name, and stops with an
+error rather than write a first commit without it. The push accepts the
+remote's branch at the adopted commit only while nothing has been pushed, and
+`ours` no longer counts the adopted commit or anything beneath it as the
+export's, so a branch reset into the old history after the first push is
+refused like any other change.
+
 **A restore.** A store restored from a backup has a new epoch and a different
 history, so the export does not continue the old one or rewrite it: one commit
 marked `Restore:` (trailers `Trew-Restore`, `Trew-Previous-Epoch`,
@@ -1876,6 +1906,9 @@ git-lfs's standalone file transfer, and no network):
 | An externally changed branch is refused and reported | `TestAMovedBranchIsRefused` (local) and `TestARemoteChangedOutsideIsRefused` (remote, still refused after `set` while foreign, pushed again once back). |
 | A push failure leaves sync unaffected and doctor reports it | `TestAFailingPushLeavesTheStoreAndTheExportAlone`, and in `cmd/trewd` `TestAFailingPushLeavesSyncAloneAndDoctorSaysSo`: an agent's write through `serve -mcp` commits at once, doctor warns on the push and exits non-zero, and the token's bytes are in neither doctor's output nor status. |
 | LFS pointers correct and objects uploaded | The two tip tests above. |
+| Adoption continues an existing branch with a fast-forward (owner, 2026-09-26) | `TestAnAdoptedBranchContinuesItsHistory`: a remote with three obsidian-git-style commits (`.obsidian/`, a `.gitattributes`, a symlink, an executable, a large plain blob) is refused without adoption; `adopt` with no commit changes nothing; the commit before the tip, an unknown commit, an abbreviation and a non-name are refused and record nothing; adopting the tip sets aside the unpushed local branch, and the first commit is a child of the tip, names it in its message and trailer, holds exactly the store's files, and is pushed as a fast-forward keeping the three old commits; the next push fast-forwards too; adopting the pushed branch again is refused. |
+| A remote moved after adoption is refused | `TestARemoteMovedAfterAdoptionIsRefused`: a commit pushed on top of the adopted one before the first push is refused, and still after `set`; put back at the adopted commit, the export pushes; reset to the adopted commit after that push, it is refused. Letting `ours` count the adopted commit as the export's fails it. |
+| A rebuild of an adopted branch makes the same commits | `TestARebuildOfAnAdoptedBranchMakesTheSameCommits`: a fresh data directory with only the settings fetches the adopted commit and reaches the pushed tip byte for byte, and the remote takes it as its own history; with the remote gone, the step fails naming the adopted commit and makes no branch. In `cmd/trewd`, `TestAdoptingABranchThroughTheCommand` runs `adopt` with no server and through a running one, and the first push's parent is the adopted commit. |
 
 Beside them: the quiet window and dating (`TestAQuietWindowCoalescesADevicesRun`),
 the plan's rules alone (`TestThePlan`), a restore

@@ -374,7 +374,12 @@ works with the server running. Verify with `trewd git-export status` until it
 reports a push, and `trewd doctor`. Never put a token or key in the
 conversation or in the configuration file; the file names the key's path. If
 the user had the Obsidian Git plugin, have them uninstall it on every device
-once the first push is confirmed.
+once the first push is confirmed. To keep that plugin's history instead, in
+the same repository and branch, have them turn the plugin off everywhere
+first, point the export at the branch, run `trewd git-export adopt`, check the
+tip it prints with them, and run `trewd git-export adopt SHA` with that commit
+([Continue an existing backup branch](docs/git-export.md#continue-an-existing-backup-branch));
+never adopt a commit they have not looked at.
 
 ## Working from development source
 

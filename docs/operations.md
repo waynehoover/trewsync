@@ -203,7 +203,9 @@ export only reads what the store has committed.
 - **The remote's branch was changed outside the export.** It will not push
   over a commit it did not make. Find out who changed the branch. Put it back
   at the commit status names and run `trewd git-export set` to look again, or
-  export to a new branch with `trewd git-export set -branch NAME`.
+  export to a new branch with `trewd git-export set -branch NAME`. A branch
+  that held backups before the export can be continued once with `trewd
+  git-export adopt` ([Continue an existing backup branch](git-export.md#continue-an-existing-backup-branch)).
 - **The local repository's branch was moved.** The export stops where it is.
   Put the branch back, or stop the server and move `git-export/` aside to
   export again from the store; with the store unpurged and the settings

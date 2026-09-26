@@ -75,7 +75,9 @@ as `docker compose exec trew /trewd ...` and keep the key inside the data
 volume, owned by the container's user (uid 65532).
 
 1. **Make an empty private repository**, with no README, licence or
-   `.gitignore` (the export refuses a branch it did not make):
+   `.gitignore` (the export refuses a branch it did not make; to continue a
+   branch that already has your backups, such as the Obsidian Git plugin's,
+   see [Continue an existing backup branch](#continue-an-existing-backup-branch)):
 
    ```bash
    gh repo create you/vault-history --private
@@ -201,7 +203,10 @@ name wins over the file for as long as that server runs.
 | `-local` | | | Clear the remote and its credential. |
 
 `trewd git-export disable` turns it off and keeps the settings;
-`trewd git-export set` with no flags turns it on again.
+`trewd git-export set` with no flags turns it on again. `trewd git-export
+adopt` continues a branch that already has history
+([below](#continue-an-existing-backup-branch)); it writes
+`git_export.adopted`, which `trewd config set` does not.
 
 The server needs `git` 2.36 or later and, for a remote with files over the
 threshold, `git-lfs` 3.0 or later, with `ssh` for an SSH remote. The container
@@ -216,18 +221,111 @@ The export does what the Obsidian Git plugin did for backups, from the server,
 for every device at once, without a merge in your vault and without the risk of
 committing `.obsidian/`. To move over:
 
-1. Set the export up as above, into a **new** repository, or a new branch of
-   the old one (`-branch trewsync`): the export will not take over a branch it
-   did not make. Wait for `trewd git-export status` to show the first push.
-2. On every device, in Obsidian: Settings, Community plugins, turn **Obsidian
+1. On every device, in Obsidian: Settings, Community plugins, turn **Obsidian
    Git** off and uninstall it. Leaving it on means two things committing the
    same notes, and it may pull a remote's changes into the vault.
+2. Set the export up as above, into a **new** repository or a new branch of
+   the old one (`-branch trewsync`), or continue the plugin's own branch with
+   its history beneath the export's
+   ([Continue an existing backup branch](#continue-an-existing-backup-branch)).
+   The export does not take over a branch it did not make unless you adopt it.
+   Wait for `trewd git-export status` to show the first push.
 3. The plugin's `.git` folder in the vault is not synced by TrewSync (nothing
    starting with a dot is) and is no longer needed. Its history stays on the
    old remote. Delete the folder with your file manager once you no longer
    want the local copy.
-4. From then on, read history in the new repository, and change notes only in
+4. From then on, read history in the export's branch, and change notes only in
    Obsidian or through an agent.
+
+## Continue an existing backup branch
+
+If the repository already has a branch whose history you want to keep, the
+export can continue it rather than start a history of its own. The usual case
+is the `main` branch the Obsidian Git plugin (obsidian-git) has been
+committing your vault to for years. This is **adoption**: an explicit step,
+done once, in which you name the exact commit the export continues from.
+Without it, the export refuses any branch it did not make, as before.
+
+What adoption does, and does not do:
+
+- The export's first commit on the branch is a **child of the adopted
+  commit**, so every old commit stays in the branch's history beneath it, and
+  the first push is a plain fast-forward. Nothing is force-pushed, and nothing
+  in the old history is rewritten.
+- That first commit's tree is the vault as TrewSync holds it, as every commit's
+  is. Anything the old commits held that TrewSync never syncs, such as
+  `.obsidian/` and the plugin's own `.gitattributes`, is absent from it and
+  stays in the old commits, so `git diff` across the boundary shows it removed.
+  Its message starts `TrewSync continues the history from obsidian-git at
+  SHA` and ends with a `Trew-Continues: SHA` trailer.
+- The old history is left as it is: large files it committed stay ordinary Git
+  objects and are not moved to LFS. Only what the export commits from then on
+  follows the LFS threshold.
+- The adopted commit is recorded in the configuration file
+  (`git_export.adopted`) with the remote and branch it belongs to. An export
+  rebuilt from scratch fetches that exact commit again and makes the same
+  commits, never "whatever the branch is at now".
+
+Continuing obsidian-git's `main`:
+
+1. **Turn obsidian-git off on every device first** (Settings, Community
+   plugins, Obsidian Git), and let its last push finish. A commit it pushes
+   after the adoption stops the export (below).
+2. **Give the server a deploy key** with write access to that repository, as in
+   [Set it up with GitHub and a deploy key](#set-it-up-with-github-and-a-deploy-key),
+   steps 2 and 3.
+3. **Point the export at the branch:**
+
+   ```bash
+   trewd git-export set -remote git@github.com:you/obsidian-vault.git \
+     -key ~/.trew-keys/obsidian-vault -branch main
+   ```
+
+   Until you adopt, `trewd git-export status` says the push is refused: "the
+   remote already has a branch main, ..., and the export did not make it".
+   That is expected, and the server's own repository keeps committing.
+4. **Look at what you would adopt:**
+
+   ```bash
+   trewd git-export adopt
+   ```
+
+   It fetches the branch (the whole history, once; a large repository can
+   take some minutes) and prints its tip: the full commit, its date and its
+   subject, such as `vault backup: 2026-09-20 21:15:00`. Nothing changes yet.
+   Check that it is the latest commit you see on GitHub.
+5. **Adopt it, giving that commit back:**
+
+   ```bash
+   trewd git-export adopt 0123456789abcdef0123456789abcdef01234567
+   ```
+
+   The commit must be all 40 characters and must still be the branch's tip;
+   anything else is refused and changes nothing. If the export had already
+   made commits in its own repository (step 3), never pushed, they are set
+   aside and made again on top of the adopted commit.
+6. **Watch the first push:** `trewd git-export status` shows `continues the
+   history adopted at ...`, then, once your devices have been quiet for the
+   window, the push. `git log` on GitHub shows the export's commits on top of
+   obsidian-git's.
+
+With Docker, run the two `adopt` commands as `docker compose exec trew /trewd
+git-export adopt ...`, like the others.
+
+After adopting:
+
+- **Anything else pushing to the branch stops the export**, as for any branch
+  changed outside it: status and doctor report it, and the export never
+  pushes over the other commit. Before the export's first push, turn off
+  whatever pushed, then either put the branch back at the adopted commit or
+  run `trewd git-export adopt` again to adopt the new tip. After the first
+  push, the export accepts only its own commits there; the branch put back
+  even at the adopted commit is refused.
+- **Adoption belongs to that remote and branch.** `trewd git-export set
+  -remote` or `-branch` naming another leaves it behind; setting them back
+  brings it back.
+- A branch the export has already pushed to cannot be adopted again: there is
+  nothing to adopt.
 
 ## When something goes wrong
 
@@ -242,7 +340,9 @@ the details. Sync is never affected by any of these.
   to, rewrote or deleted the branch. The export never pushes over a commit it
   did not make. If it was a mistake, put the branch back at the commit status
   names and run `trewd git-export set` to look again. Otherwise push to a new
-  branch with `trewd git-export set -branch NAME`.
+  branch with `trewd git-export set -branch NAME`. For a branch that already
+  held your backups before the export, see
+  [Continue an existing backup branch](#continue-an-existing-backup-branch).
 - **"The repository was changed outside the export."** The same for the
   server's own copy in `git-export/repo.git`. Put the branch back, or stop the
   server and move `git-export/` aside: the export starts again from the store.
