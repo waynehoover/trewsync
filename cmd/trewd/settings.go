@@ -274,7 +274,7 @@ func (o *operator) view(f config.File, note string) control.Reply {
 }
 
 // configure answers the configuration requests.
-func (o *operator) configure(req control.Request) control.Reply {
+func (o *operator) configure(ctx context.Context, req control.Request) control.Reply {
 	switch req.Op {
 	case "config-show":
 		f, _, err := config.Load(o.dataDir)
@@ -299,7 +299,7 @@ func (o *operator) configure(req control.Request) control.Reply {
 		}
 		return o.view(f, o.noteFor(k))
 	case "git-export":
-		return o.gitExport(req)
+		return o.gitExport(ctx, req)
 	}
 	return control.Refused(control.CodeBadRequest, fmt.Sprintf("unknown request %q", req.Op))
 }
@@ -319,7 +319,7 @@ func (o *operator) noteFor(k config.Key) string {
 }
 
 // gitExport is `trewd git-export set`, `status` and `disable`.
-func (o *operator) gitExport(req control.Request) control.Reply {
+func (o *operator) gitExport(ctx context.Context, req control.Request) control.Reply {
 	switch req.Action {
 	case "set":
 		var ch gitexport.Change
@@ -340,15 +340,69 @@ func (o *operator) gitExport(req control.Request) control.Reply {
 		}); err != nil {
 			return control.Refused(control.CodeBadRequest, err.Error())
 		}
+	case "adopt":
+		return o.adopt(ctx, req)
 	case "status":
 	default:
-		return control.Refused(control.CodeBadRequest, fmt.Sprintf("git-export does %q? It does set, status and disable", req.Action))
+		return control.Refused(control.CodeBadRequest, fmt.Sprintf("git-export does %q? It does set, status, disable and adopt", req.Action))
 	}
 	st, err := o.gitStatus()
 	if err != nil {
 		return control.Refused(control.CodeInternal, err.Error())
 	}
 	b, err := json.Marshal(st)
+	if err != nil {
+		return control.Refused(control.CodeInternal, err.Error())
+	}
+	return control.Reply{GitExport: b}
+}
+
+// adoptRequest is what `trewd git-export adopt` sends: the commit to adopt,
+// or "" to look at the remote's branch.
+type adoptRequest struct {
+	Commit string `json:"commit,omitempty"`
+}
+
+// adopt is `trewd git-export adopt [SHA]`, done by the running export or,
+// with no server, by one made for it here.
+func (o *operator) adopt(ctx context.Context, req control.Request) control.Reply {
+	var in adoptRequest
+	if len(req.GitExport) > 0 {
+		if err := json.Unmarshal(req.GitExport, &in); err != nil {
+			return control.Refused(control.CodeBadRequest, "the request is not JSON: "+err.Error())
+		}
+	}
+	f, _, err := config.Load(o.dataDir)
+	if err != nil {
+		return control.Refused(control.CodeBadRequest, err.Error())
+	}
+	ov, err := o.flags.gitOverrides()
+	if err != nil {
+		return control.Refused(control.CodeBadRequest, err.Error())
+	}
+	s, err := gitexport.Resolve(o.dataDir, f.GitExport, ov)
+	if err != nil {
+		return control.Refused(control.CodeBadRequest, "git_export: "+err.Error())
+	}
+	x := o.export
+	if x == nil {
+		x = gitexport.Open(o.dataDir, nil, "", s, nil, nil)
+		defer x.Close()
+	}
+	a, err := x.Adopt(ctx, s, in.Commit, func(commit string) error {
+		_, err := o.change(func(f *config.File) error {
+			f.GitExport.Adopted = &config.GitExportAdopted{Remote: s.Remote, Branch: s.Branch, Commit: commit}
+			return nil
+		})
+		return err
+	})
+	if err != nil {
+		return control.Refused(control.CodeBadRequest, err.Error())
+	}
+	if a.Status, err = o.gitStatus(); err != nil {
+		return control.Refused(control.CodeInternal, err.Error())
+	}
+	b, err := json.Marshal(a)
 	if err != nil {
 		return control.Refused(control.CodeInternal, err.Error())
 	}
@@ -385,7 +439,8 @@ func configure(dataDir string, req control.Request) (control.Reply, error) {
 	if err := store.CheckDataDir(dataDir); err != nil {
 		return control.Reply{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// The server's own deadline, and a little more to hear its answer.
+	ctx, cancel := context.WithTimeout(context.Background(), control.Timeout(req)+5*time.Second)
 	defer cancel()
 	reply, err := control.Call(ctx, dataDir, req)
 	if err == nil || !errors.Is(err, control.ErrNotServing) {
@@ -398,7 +453,7 @@ func configure(dataDir string, req control.Request) (control.Reply, error) {
 				"Check that it is running, and run this again.")
 	}
 	defer lock.Release()
-	return (&operator{dataDir: dataDir}).configure(req), nil
+	return (&operator{dataDir: dataDir}).configure(ctx, req), nil
 }
 
 /* ---------------------------------------------------------------- *
@@ -483,11 +538,11 @@ func cmdConfig(args []string, out io.Writer) error {
  * trewd git-export
  * ---------------------------------------------------------------- */
 
-// cmdGitExport is `trewd git-export set`, `status` and `disable`: the
+// cmdGitExport is `trewd git-export set`, `status`, `disable` and `adopt`: the
 // git_export section of the configuration file, and what the export is doing.
 func cmdGitExport(args []string, out io.Writer) error {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return errors.New("git-export takes set, status or disable (docs/git-export.md)")
+		return errors.New("git-export takes set, status, disable or adopt (docs/git-export.md)")
 	}
 	action, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("git-export "+action, flag.ContinueOnError)
@@ -505,11 +560,15 @@ func cmdGitExport(args []string, out io.Writer) error {
 		quiet = fs.String("quiet", "", "how long a device must stop writing before its versions are committed together (default 5m)")
 		fs.BoolVar(&ch.Local, "local", false, "keep the export in the local repository only, clearing the remote and its credential")
 	}
-	if err := fs.Parse(rest); err != nil {
+	words, err := parseInterspersed(fs, rest)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("git-export %s takes no arguments, and was given %q", action, fs.Args())
+	if action == "adopt" {
+		return adoptCommand(*dataDir, words, *asJSON, out)
+	}
+	if len(words) != 0 {
+		return fmt.Errorf("git-export %s takes no arguments, and was given %q", action, words)
 	}
 	req := control.Request{Op: "git-export", Action: action}
 	switch action {
@@ -559,7 +618,7 @@ func cmdGitExport(args []string, out io.Writer) error {
 		req.GitExport = b
 	case "status", "disable":
 	default:
-		return fmt.Errorf("git-export does %q? It does set, status and disable", action)
+		return fmt.Errorf("git-export does %q? It does set, status, disable and adopt", action)
 	}
 	reply, err := configure(*dataDir, req)
 	if err != nil {
@@ -581,6 +640,58 @@ func cmdGitExport(args []string, out io.Writer) error {
 		return nil
 	}
 	writeGitExport(out, st)
+	return nil
+}
+
+// adoptCommand is `trewd git-export adopt [SHA]`: with no commit, fetch the
+// remote's branch and show its tip; with the tip's commit given back, adopt
+// it, so the export continues that history rather than refuse the branch.
+func adoptCommand(dataDir string, words []string, asJSON bool, out io.Writer) error {
+	if len(words) > 1 {
+		return fmt.Errorf("git-export adopt takes at most one commit, and was given %q", words)
+	}
+	var in adoptRequest
+	if len(words) == 1 {
+		in.Commit = words[0]
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	reply, err := configure(dataDir, control.Request{Op: "git-export", Action: "adopt", GitExport: b})
+	if err != nil {
+		return err
+	}
+	if err := refused(reply); err != nil {
+		return err
+	}
+	var a gitexport.Adoption
+	if err := json.Unmarshal(reply.GitExport, &a); err != nil {
+		return err
+	}
+	if asJSON {
+		b, err := json.MarshalIndent(a, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "%s\n", b)
+		return nil
+	}
+	fmt.Fprintf(out, "the remote's branch %s (%s) is at\n  commit  %s\n  date    %s\n  subject %s\n",
+		a.Branch, a.Remote, a.Commit, a.Date, a.Subject)
+	if !a.Adopted {
+		fmt.Fprintf(out, "\nNothing was changed. To keep this history and continue it, check that this is the\n"+
+			"commit you expect, then run:\n\n  trewd git-export adopt %s\n", a.Commit)
+		return nil
+	}
+	fmt.Fprintf(out, "\nadopted: the export's first commit on %s will be a child of %s, and its push a\n"+
+		"fast-forward; the history under it is kept as it is.\n", a.Branch, a.Commit)
+	if a.Dropped != "" {
+		fmt.Fprintf(out, "The export's own branch here, at %s and never pushed, was set aside to be made\n"+
+			"again on top of the adopted commit.\n", a.Dropped)
+	}
+	fmt.Fprintln(out)
+	writeGitExport(out, a.Status)
 	return nil
 }
 
@@ -610,6 +721,9 @@ func writeGitExport(out io.Writer, st gitexport.Status) {
 		fmt.Fprintln(out, "  no remote: the repository stays on this machine")
 	}
 	fmt.Fprintf(out, "  LFS above %s%s, quiet window %s%s\n", lfsThreshold(st.LFSThreshold), src("lfs_threshold"), st.Quiet, src("quiet"))
+	if st.Adopted != "" {
+		fmt.Fprintf(out, "  continues the history adopted at %s\n", st.Adopted)
+	}
 	if st.SettingsError != "" {
 		fmt.Fprintln(out, "  the settings cannot be used:", st.SettingsError)
 	}

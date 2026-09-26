@@ -58,7 +58,7 @@ type mcpHooks interface {
 }
 
 // Handle does one request.
-func (o *operator) Handle(_ context.Context, req control.Request) control.Reply {
+func (o *operator) Handle(ctx context.Context, req control.Request) control.Reply {
 	if req.Vault != "" && req.Vault != o.vault {
 		return control.Refused(control.CodeBadRequest, fmt.Sprintf(
 			"this server serves vault %q, not %q", o.vault, req.Vault))
@@ -159,7 +159,7 @@ func (o *operator) Handle(_ context.Context, req control.Request) control.Reply 
 	case "status":
 		return o.status()
 	case "config-show", "config-set", "config-unset", "git-export":
-		return o.configure(req)
+		return o.configure(ctx, req)
 	}
 	return control.Refused(control.CodeBadRequest, fmt.Sprintf("unknown request %q", req.Op))
 }

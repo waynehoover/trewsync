@@ -51,6 +51,18 @@ const maxRequest = 64 << 10
 // goroutine for ever.
 const requestTimeout = 30 * time.Second
 
+// adoptTimeout bounds `trewd git-export adopt`, which fetches a branch's
+// whole history from the remote while the operator waits.
+const adoptTimeout = 20 * time.Minute
+
+// Timeout is how long req may take to be answered, once asked.
+func Timeout(req Request) time.Duration {
+	if req.Op == "git-export" && req.Action == "adopt" {
+		return adoptTimeout
+	}
+	return requestTimeout
+}
+
 // Request is one operation the operator asks of the running server.
 type Request struct {
 	// Op is "invite", "devices", "revoke", "uninvite", "mcp-token",
@@ -101,8 +113,8 @@ type Request struct {
 	Key   string `json:"key,omitempty"`
 	Value string `json:"value,omitempty"`
 
-	// git-export: "set", "status" or "disable", and for set the change, in
-	// internal/gitexport's shape.
+	// git-export: "set", "status", "disable" or "adopt", and for set the
+	// change, for adopt the commit, in internal/gitexport's shape.
 	Action    string          `json:"action,omitempty"`
 	GitExport json.RawMessage `json:"gitExport,omitempty"`
 }
@@ -398,7 +410,9 @@ func (s *Server) answer(conn net.Conn) {
 			reply = Refused(CodeBadRequest, "the request is not JSON: "+err.Error())
 			break
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		t := Timeout(req)
+		_ = conn.SetDeadline(time.Now().Add(t))
+		ctx, cancel := context.WithTimeout(context.Background(), t)
 		reply = s.h.Handle(ctx, req)
 		cancel()
 		s.log.Info("control request", "op", req.Op, "refused", reply.Error != nil)

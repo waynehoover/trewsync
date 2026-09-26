@@ -40,6 +40,13 @@ const RepoDir = "repo.git"
 // was and the last that worked, the last error, and, when the remote's branch
 // is somewhere the export did not put it, why the export will not push until
 // `trewd git-export set` is run again.
+//
+// # branches.adopted
+//
+// The commit the branch's first export commit has as its parent, when the
+// branch was adopted (adopt.go), and empty when the export made it from nothing.
+// Added after the first release of the table, so openState adds the column to
+// a database made before it.
 const stateSchema = `
 CREATE TABLE IF NOT EXISTS branches (
   branch          TEXT    PRIMARY KEY,
@@ -52,7 +59,8 @@ CREATE TABLE IF NOT EXISTS branches (
   pending_through INTEGER NOT NULL DEFAULT 0,
   pending_last_at INTEGER NOT NULL DEFAULT 0,
   pending_epoch   TEXT    NOT NULL DEFAULT '',
-  updated_at      INTEGER NOT NULL
+  updated_at      INTEGER NOT NULL,
+  adopted         TEXT    NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS lfs_objects (
   oid  TEXT    PRIMARY KEY,
@@ -85,6 +93,7 @@ type branchState struct {
 	pendingLastAt        int64
 	pendingEpoch         string
 	updatedAt            int64
+	adopted              string
 }
 
 // remoteState is a remotes row.
@@ -99,7 +108,34 @@ type remoteState struct {
 
 // openState opens, or creates, the state database. FULL, unlike the search
 // index's NORMAL: the pending row must be on disk before the branch moves.
+// Read-only, a database made before a column was added is first opened
+// writable once to add it, so the columns read are always there.
 func openState(dir string, readOnly bool) (*sql.DB, error) {
+	if readOnly {
+		db, err := openStateAs(dir, true)
+		if err != nil {
+			return nil, err
+		}
+		var n int
+		err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('branches') WHERE name = 'adopted'`).Scan(&n)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		if n > 0 {
+			return db, nil
+		}
+		db.Close()
+		rw, err := openStateAs(dir, false)
+		if err != nil {
+			return nil, err
+		}
+		rw.Close()
+	}
+	return openStateAs(dir, readOnly)
+}
+
+func openStateAs(dir string, readOnly bool) (*sql.DB, error) {
 	path, err := filepath.Abs(filepath.Join(dir, StateFile))
 	if err != nil {
 		return nil, err
@@ -121,18 +157,35 @@ func openState(dir string, readOnly bool) (*sql.DB, error) {
 			db.Close()
 			return nil, err
 		}
+		if err := addColumn(db, "branches", "adopted", `TEXT NOT NULL DEFAULT ''`); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	return db, nil
 }
 
+// addColumn adds a column to a table made before it, when it is not there.
+func addColumn(db *sql.DB, table, column, decl string) error {
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + decl)
+	return err
+}
+
 const branchCols = `branch, vault, epoch, through, last_at, commit_sha, pending_sha, pending_through,
-  pending_last_at, pending_epoch, updated_at`
+  pending_last_at, pending_epoch, updated_at, adopted`
 
 func loadBranch(q querier, branch string) (branchState, bool, error) {
 	var b branchState
 	err := q.QueryRow(`SELECT `+branchCols+` FROM branches WHERE branch = ?`, branch).Scan(&b.branch, &b.vault,
 		&b.epoch, &b.through, &b.lastAt, &b.commit, &b.pendingSHA, &b.pendingThrough, &b.pendingLastAt,
-		&b.pendingEpoch, &b.updatedAt)
+		&b.pendingEpoch, &b.updatedAt, &b.adopted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return branchState{branch: branch}, false, nil
 	}
@@ -140,13 +193,13 @@ func loadBranch(q querier, branch string) (branchState, bool, error) {
 }
 
 func saveBranch(q execer, b branchState) error {
-	_, err := q.Exec(`INSERT INTO branches (`+branchCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := q.Exec(`INSERT INTO branches (`+branchCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	  ON CONFLICT(branch) DO UPDATE SET vault = excluded.vault, epoch = excluded.epoch, through = excluded.through,
 	    last_at = excluded.last_at, commit_sha = excluded.commit_sha, pending_sha = excluded.pending_sha,
 	    pending_through = excluded.pending_through, pending_last_at = excluded.pending_last_at,
-	    pending_epoch = excluded.pending_epoch, updated_at = excluded.updated_at`,
+	    pending_epoch = excluded.pending_epoch, updated_at = excluded.updated_at, adopted = excluded.adopted`,
 		b.branch, b.vault, b.epoch, b.through, b.lastAt, b.commit, b.pendingSHA, b.pendingThrough,
-		b.pendingLastAt, b.pendingEpoch, b.updatedAt)
+		b.pendingLastAt, b.pendingEpoch, b.updatedAt, b.adopted)
 	return err
 }
 

@@ -98,6 +98,15 @@ does not work with a TrewSync server, and moving a vault is a new pairing.
   and refuses rather than repairs a branch changed outside it. Exported
   history is plaintext and `trewd purge` cannot remove it
   ([Keep a Git history](docs/git-export.md)).
+- **The Git export can continue an existing backup branch**, such as the
+  `main` the Obsidian Git plugin has been committing to: `trewd git-export
+  adopt` shows the branch's tip, and `trewd git-export adopt SHA`, given that
+  commit back, makes the export's first commit a child of it, so the old
+  history stays beneath and the first push is a fast-forward. Nothing is
+  force-pushed or rewritten, the old history is not moved to LFS, and a
+  rebuild makes the same commits. Without adoption the export still refuses a
+  branch it did not make
+  ([Continue an existing backup branch](docs/git-export.md#continue-an-existing-backup-branch)).
 - **The container image is Alpine with git, git-lfs and ssh**, for the Git
   export, instead of `scratch`; the Nix package puts the same three on the
   server's PATH, and the Homebrew formula depends on git-lfs.

@@ -37,7 +37,7 @@ for installed usage.
 | `undo OPID [-to-copy] [-json]` | Undo one operation from the audit, or copy what it replaced. | Yes; it goes through the running server. |
 | `restore -to-uid N [-head H -apply]` | Put the whole vault back as it was at a uid, as one undoable operation; a dry run without `-apply`. | Yes; it goes through the running server. |
 | `config show`, `config set KEY VALUE`, `config unset KEY` | Read and change the [configuration file](#configuration-file). | Yes; it goes through the running server, which uses the change at once. |
-| `git-export set`, `status`, `disable` | Keep a [Git history](git-export.md) of the vault and push it to a remote. | Yes; it goes through the running server. |
+| `git-export set`, `status`, `disable`, `adopt [SHA]` | Keep a [Git history](git-export.md) of the vault and push it to a remote, or continue a branch that already has history. | Yes; it goes through the running server. |
 | `version` | Print version, platform, and toolchain. | Independent of serving. |
 
 ## serve
@@ -210,6 +210,8 @@ is the step-by-step guide, including the deploy key and the privacy it costs.
 trewd git-export set -remote git@github.com:you/vault-history.git -key ~/.trew-keys/vault-history
 trewd git-export status [-json]
 trewd git-export disable
+trewd git-export adopt [-json]
+trewd git-export adopt SHA [-json]
 ```
 
 | `set` flag | Meaning |
@@ -230,6 +232,24 @@ the commit the export last pushed, so a commit somebody else pushed there is
 never overwritten; the export refuses and says so until `trewd git-export set`
 is run again with the branch back at one of its commits, or with another
 `-branch`. `status` and doctor name a credential by its path only.
+
+`adopt` is the one exception, made explicitly and once, for a branch that
+already holds history to keep, such as the Obsidian Git plugin's `main`
+([Continue an existing backup branch](git-export.md#continue-an-existing-backup-branch)).
+With no argument it fetches the configured remote's branch and prints its tip
+(commit, committer date, subject), changing nothing. Given that tip back, all
+40 hexadecimal digits, it records it as the adopted commit in
+`git_export.adopted` (`{"remote", "branch", "commit"}`, applied only while the
+export's remote and branch are those) and in the export's state: the export's
+first commit on the branch is then a child of it, with the store's notes as its
+tree and a message naming it (`Trew-Continues` trailer), and the first push is
+a fast-forward. A commit that is not the tip, a branch the export already
+pushed to, and a branch the remote does not have are refused. Commits the
+export made locally and never pushed are set aside and made again on the
+adopted commit. After adoption the remote's branch is accepted at the adopted
+commit only before the first push, and at the export's own commits after it.
+A rebuild from scratch fetches the adopted commit again and makes the same
+commits. The command waits up to 20 minutes for the fetch.
 
 The server runs `git` (2.36 or later) and `git-lfs` (3.0 or later) with an
 environment of its own: no user or system Git configuration, no hooks, no

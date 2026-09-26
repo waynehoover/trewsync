@@ -30,6 +30,9 @@ type Status struct {
 	Quiet         string            `json:"quiet"`
 	Source        map[string]string `json:"source,omitempty"`
 	Repository    string            `json:"repository"`
+	// Adopted is the commit the branch's history continues, when the export
+	// adopted a branch that already had one (`trewd git-export adopt`).
+	Adopted string `json:"adopted,omitempty"`
 
 	// Tools is what was found of git, git-lfs and ssh, by the server running
 	// the export, or by the command asking when no server runs.
@@ -71,7 +74,7 @@ type PushStatus struct {
 func describe(dataDir string, s Settings, settingsErr string) Status {
 	st := Status{Enabled: s.Enabled, SettingsError: settingsErr, Remote: s.Remote, Transport: s.Transport,
 		Key: s.Key, Token: s.Token, KnownHosts: s.KnownHosts, Branch: s.Branch, LFSThreshold: s.LFSThreshold,
-		Quiet: s.Quiet.String(), Source: s.Source, Repository: filepath.Join(dataDir, Dir, RepoDir)}
+		Quiet: s.Quiet.String(), Source: s.Source, Repository: filepath.Join(dataDir, Dir, RepoDir), Adopted: s.Adopted}
 	return st
 }
 

@@ -101,6 +101,10 @@ type Exporter struct {
 	nextPushAt  time.Time
 	pushBackoff time.Duration
 
+	// step is held by the worker for each cycle and by Adopt, which works on
+	// the same repository and state from another goroutine.
+	step chan struct{}
+
 	sub  store.Committed
 	wake chan struct{}
 	stop chan struct{}
@@ -129,7 +133,7 @@ func Open(dataDir string, st *store.Store, vault string, s Settings, settingsErr
 		log = slog.Default()
 	}
 	x := &Exporter{dataDir: dataDir, vault: vault, st: st, log: log,
-		wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+		step: make(chan struct{}, 1), wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
 	x.setSettings(s, settingsErr)
 	return x
 }
@@ -206,7 +210,13 @@ func (x *Exporter) run() {
 			return
 		default:
 		}
+		select {
+		case <-x.stop:
+			return
+		case x.step <- struct{}{}:
+		}
 		progressed, due, err := x.cycle(ctx)
+		<-x.step
 		x.mu.Lock()
 		if err != nil {
 			x.status.lastError = err.Error()
@@ -452,7 +462,24 @@ func (x *Exporter) exportStep(ctx context.Context, r *runner, s Settings) (bool,
 
 	epoch := x.st.Epoch()
 	if !found {
-		b = branchState{branch: s.Branch, vault: x.vault, epoch: epoch}
+		b = branchState{branch: s.Branch, vault: x.vault, epoch: epoch, adopted: s.Adopted}
+	}
+	switch {
+	case b.adopted == s.Adopted:
+	case b.commit == "":
+		b.adopted = s.Adopted
+	case s.Adopted != "":
+		// Only a hand edit of the file gets here: `trewd git-export adopt`
+		// sets aside a branch made on anything else.
+		return false, 0, x.refuse(fmt.Sprintf("the branch %s was exported on top of %s, and the settings adopt %s; "+
+			"`trewd git-export adopt` says what the remote holds", s.Branch, orNothing(b.adopted), short(s.Adopted)))
+	}
+	// Otherwise the settings adopt nothing for this remote, and the branch
+	// goes on from the commits it has.
+	if b.commit == "" && b.adopted != "" {
+		if err := x.haveAdopted(ctx, r, s, b.adopted); err != nil {
+			return false, 0, err
+		}
 	}
 	if b.epoch != epoch {
 		if b.commit == "" {
@@ -504,7 +531,11 @@ func (x *Exporter) exportStep(ctx context.Context, r *runner, s Settings) (bool,
 		return false, p.openUntil(), nil
 	}
 	last := p.closed[len(p.closed)-1]
-	tip, oids, err := x.write(ctx, r, s, b.commit, func(w *importer) error {
+	adopt := ""
+	if b.commit == "" {
+		adopt = b.adopted
+	}
+	tip, oids, err := x.write(ctx, r, s, b.commit, adopt, func(w *importer) error {
 		for _, g := range p.closed {
 			if err := w.group(g); err != nil {
 				return err
@@ -598,7 +629,7 @@ func (x *Exporter) restoreCommit(ctx context.Context, r *runner, s Settings, b b
 		return err
 	}
 	now := x.st.Now().UnixMilli()
-	tip, oids, err := x.write(ctx, r, s, b.commit, func(w *importer) error {
+	tip, oids, err := x.write(ctx, r, s, b.commit, "", func(w *importer) error {
 		return w.restore(head, b.epoch, epoch, now)
 	})
 	if err != nil {
@@ -633,11 +664,14 @@ type lfsObject struct {
 
 // importer writes one fast-import stream.
 type importer struct {
-	x       *Exporter
-	s       Settings
-	w       *bufio.Writer
-	mark    int
-	parent  string
+	x      *Exporter
+	s      Settings
+	w      *bufio.Writer
+	mark   int
+	parent string
+	// adopt, when parent is "", is the adopted commit the first commit is
+	// written on top of, with a tree of its own (adopt.go).
+	adopt   string
 	commits int
 	tree    map[string]blobRef
 	lfs     int // how many tree entries are LFS pointers
@@ -645,8 +679,9 @@ type importer struct {
 }
 
 // write runs fast-import over what fill writes, from parent, and returns the
-// last commit, parent itself when fill made none.
-func (x *Exporter) write(ctx context.Context, r *runner, s Settings, parent string,
+// last commit, parent itself when fill made none. With no parent and adopt
+// set, the first commit is a child of the adopted commit.
+func (x *Exporter) write(ctx context.Context, r *runner, s Settings, parent, adopt string,
 	fill func(*importer) error) (string, []lfsObject, error) {
 	tree, err := x.loadTree(ctx, r, parent)
 	if err != nil {
@@ -670,7 +705,10 @@ func (x *Exporter) write(ctx context.Context, r *runner, s Settings, parent stri
 	if err := cmd.Start(); err != nil {
 		return "", nil, err
 	}
-	w := &importer{x: x, s: s, w: bufio.NewWriterSize(stdin, 1<<20), parent: parent, tree: tree}
+	if parent != "" {
+		adopt = ""
+	}
+	w := &importer{x: x, s: s, w: bufio.NewWriterSize(stdin, 1<<20), parent: parent, adopt: adopt, tree: tree}
 	for _, ref := range tree {
 		if ref.lfs {
 			w.lfs++
@@ -707,8 +745,11 @@ func (x *Exporter) write(ctx context.Context, r *runner, s Settings, parent stri
 	// Rule 4: the outcome, not the exit status. The new commits are a line
 	// of exactly as many as were written, on top of the parent.
 	span := tip
-	if parent != "" {
+	switch {
+	case parent != "":
 		span = parent + ".." + tip
+	case adopt != "":
+		span = adopt + ".." + tip
 	}
 	out, err := r.run(ctx, localTimeout, nil, "rev-list", "--count", span)
 	if err != nil {
@@ -862,8 +903,18 @@ func (w *importer) group(g *group) error {
 		return nil
 	}
 	author, msg := message(g, changes)
-	return w.commit(author, g.at, msg, dels, mods, lfsChanged || (lfsBefore == 0) != (w.lfs == 0), false)
+	writeAttrs := lfsChanged || (lfsBefore == 0) != (w.lfs == 0)
+	if w.continues() {
+		// The adopted commit's tree is not the export's: this commit's tree
+		// is the files the export holds and nothing else of it.
+		return w.commit(author, g.at, continuation(w.adopt, msg), nil, mods, w.lfs > 0, true)
+	}
+	return w.commit(author, g.at, msg, dels, mods, writeAttrs, false)
 }
+
+// continues reports whether the next commit is the first on top of an
+// adopted commit.
+func (w *importer) continues() bool { return w.commits == 0 && w.parent == "" && w.adopt != "" }
 
 // blob writes e's bytes as a blob, or as an LFS pointer with the object
 // stored beside the repository, and returns its name and its mark.
@@ -903,8 +954,11 @@ func (w *importer) commit(author string, atMillis int64, msg string, dels []stri
 	when := atMillis / 1000
 	fmt.Fprintf(w.w, "commit %s\nauthor %s %d +0000\ncommitter %s %d +0000\ndata %d\n%s\n",
 		scratchRef, author, when, committerIdent, when, len(msg), msg)
-	if w.commits == 0 && w.parent != "" {
+	switch {
+	case w.commits == 0 && w.parent != "":
 		fmt.Fprintf(w.w, "from %s\n", w.parent)
+	case w.continues():
+		fmt.Fprintf(w.w, "from %s\n", w.adopt)
 	}
 	if deleteAll {
 		w.w.WriteString("deleteall\n")

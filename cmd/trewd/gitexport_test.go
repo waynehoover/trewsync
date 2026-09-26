@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -159,5 +160,94 @@ func TestServeRefusesAConfigFileItCannotRead(t *testing.T) {
 	err := run(t.Context(), []string{"serve", "-data", dir, "-addr", "127.0.0.1:0"}, &safeBuffer{})
 	if err == nil || !strings.Contains(err.Error(), config.FileName) || !strings.Contains(err.Error(), "folderr") {
 		t.Fatalf("serve with an unknown key: %v", err)
+	}
+}
+
+// runGit runs git in dir with no user or system configuration.
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "HOME="+dir,
+		"GIT_AUTHOR_NAME=obsidian-git", "GIT_AUTHOR_EMAIL=o@example.com",
+		"GIT_COMMITTER_NAME=obsidian-git", "GIT_COMMITTER_EMAIL=o@example.com")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestAdoptingABranchThroughTheCommand: `trewd git-export adopt` with no
+// server shows the remote's tip and changes nothing; a commit that is not the
+// tip is refused; through the running server, `adopt SHA` records it in the
+// file, and the export's first push is a fast-forward of it.
+func TestAdoptingABranchThroughTheCommand(t *testing.T) {
+	dir := t.TempDir()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	runGit(t, base, "init", "-q", "--bare", remote)
+	work := filepath.Join(base, "vault")
+	runGit(t, base, "init", "-q", "-b", "main", work)
+	if err := os.WriteFile(filepath.Join(work, "old.md"), []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-q", "-m", "vault backup: 2026-09-20 21:15:00")
+	runGit(t, work, "push", "-q", remote, "main")
+	sha := runGit(t, remote, "rev-parse", "main")
+
+	mustRun(t, "git-export", "set", "-data", dir, "-remote", "file://"+remote, "-quiet", "0s")
+	look := mustRun(t, "git-export", "adopt", "-data", dir)
+	if !strings.Contains(look, sha) || !strings.Contains(look, "vault backup: 2026-09-20 21:15:00") ||
+		!strings.Contains(look, "trewd git-export adopt "+sha) {
+		t.Fatalf("adopt does not show the tip:\n%s", look)
+	}
+	if f, _, _ := config.Load(dir); f.GitExport.Adopted != nil {
+		t.Fatalf("looking adopted %+v", f.GitExport.Adopted)
+	}
+	if out, err := trew(t, "git-export", "adopt", "-data", dir, strings.Repeat("1", 40)); err == nil ||
+		!strings.Contains(err.Error(), "nothing was adopted") {
+		t.Fatalf("adopting a commit that is not the tip: %v\n%s", err, out)
+	}
+
+	addr := serveMCPOn(t, dir)
+	out := mustRun(t, "git-export", "adopt", sha, "-data", dir)
+	if !strings.Contains(out, "adopted:") || !strings.Contains(out, "continues the history adopted at "+sha) {
+		t.Fatalf("adopt through the server:\n%s", out)
+	}
+	f, _, err := config.Load(dir)
+	if err != nil || f.GitExport.Adopted == nil || f.GitExport.Adopted.Commit != sha || f.GitExport.Adopted.Branch != "main" {
+		t.Fatalf("the file holds %+v (%v)", f.GitExport.Adopted, err)
+	}
+
+	key := filepath.Join(t.TempDir(), "key")
+	mustRun(t, "mcp-token", "-data", dir, "-label", "agent", "-scope", "write", "-key-out", key)
+	bearer, err := os.ReadFile(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _, body := postMCP(t, "http://"+addr+"/mcp", strings.TrimSpace(string(bearer)),
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_note","arguments":{"path":"new.md","content":"new\n"}}}`)
+	if status != http.StatusOK || !strings.Contains(string(body), `\"committed\":true`) {
+		t.Fatalf("create_note: %d %s", status, body)
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	var st gitexport.Status
+	for {
+		st = gitStatus(t, dir)
+		if st.Push != nil && st.Push.Pushed != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the adopted branch was not pushed: %+v", st)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if got := runGit(t, remote, "rev-parse", "main~1"); got != sha {
+		t.Fatalf("the first pushed commit's parent is %s, and the adopted commit %s", got, sha)
+	}
+	if files := runGit(t, remote, "ls-tree", "--name-only", "main"); files != "new.md" {
+		t.Fatalf("the first commit holds %q", files)
 	}
 }
