@@ -324,6 +324,30 @@ afterEach(async () => {
 });
 
 /** Syncs both devices repeatedly until each has seen the other's work. */
+/**
+ * Two files of megabytes are the same bytes, and where they differ if not.
+ *
+ * `toEqual` walks a typed array through its generic deep equality one element
+ * at a time, and on a 9 MiB file that takes more than the 2 GB heap Node gets
+ * on a CI runner: the worker died of it and took the rest of this file with
+ * it. A byte comparison says the same thing, and a failure still says where.
+ */
+function expectSameBytes(got: Uint8Array, want: Uint8Array, message?: string): void {
+  const prefix = message ? `${message}: ` : "";
+  expect(got.length, `${prefix}the length`).toBe(want.length);
+  if (
+    Buffer.from(got.buffer, got.byteOffset, got.byteLength).equals(
+      Buffer.from(want.buffer, want.byteOffset, want.byteLength),
+    )
+  )
+    return;
+  let at = 0;
+  while (got[at] === want[at]) at++;
+  expect.fail(
+    `${prefix}the bytes differ first at offset ${at}: ${got[at]} where ${want[at]} was expected`,
+  );
+}
+
 async function convergeBoth(a: Device, b: Device, rounds = 5): Promise<void> {
   for (let i = 0; i < rounds; i++) {
     await a.engine.sync();
@@ -646,7 +670,7 @@ describe("a big file edited on the other device", () => {
     }
     await a.vault.write("big.bin", original, { mtime: 1000, ctime: 1000 });
     await convergeBoth(a, b, 6);
-    expect(await b.vault.read("big.bin")).toEqual(original);
+    expectSameBytes(await b.vault.read("big.bin"), original);
 
     // One region changed on A, which renames the chunks covering it and
     // leaves every other chunk exactly as it was.
@@ -666,7 +690,7 @@ describe("a big file edited on the other device", () => {
     const report = await b.engine.sync();
     b.transport.fetch = fetch;
 
-    expect(await b.vault.read("big.bin"), "b did not end up with a's edit").toEqual(edited);
+    expectSameBytes(await b.vault.read("big.bin"), edited, "b did not end up with a's edit");
     expect(report.reusedChunks, "nothing was reused").toBeGreaterThan(0);
     // The property: the fetch is proportional to what changed, not to the
     // file. A whole-file download would ask for every chunk it has.
@@ -700,14 +724,14 @@ describe("a big file edited on the other device", () => {
     }
     await a.vault.write("big.bin", original, { mtime: 1000, ctime: 1000 });
     await convergeBoth(a, b, 6);
-    expect(await b.vault.read("big.bin")).toEqual(original);
+    expectSameBytes(await b.vault.read("big.bin"), original);
 
     const edited = new Uint8Array(original);
     edited.set(new Uint8Array(4096).fill(7), size / 2);
     await a.vault.write("big.bin", edited, { mtime: 2000, ctime: 1000 });
     await convergeBoth(a, b, 6);
 
-    expect(await b.vault.read("big.bin"), "b did not end up with a's edit").toEqual(edited);
+    expectSameBytes(await b.vault.read("big.bin"), edited, "b did not end up with a's edit");
   }, 240_000);
 });
 
