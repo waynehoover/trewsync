@@ -3,7 +3,7 @@
   #
   #   nix build            ./result/bin/trewd
   #   nix run . -- version
-  #   nix profile install github:waynehoover/trew
+  #   nix profile install github:waynehoover/trewsync
   #
   # From source, with the release's flags: static (CGO off, which pure-Go
   # SQLite is what makes possible), trimmed, and stamped with a version. The
@@ -80,7 +80,7 @@
             doCheck = false;
             meta = {
               description = "TrewSync server: self-hosted Obsidian vault sync with full version history";
-              homepage = "https://github.com/waynehoover/trew";
+              homepage = "https://github.com/waynehoover/trewsync";
               license = pkgs.lib.licenses.mit;
               mainProgram = "trewd";
               platforms = systems;

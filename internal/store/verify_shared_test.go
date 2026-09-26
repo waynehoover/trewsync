@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/chunks"
 )
 
 // A verifier must not allocate the same large body once per historical

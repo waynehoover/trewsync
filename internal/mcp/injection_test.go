@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // tagged writes ASCII in Unicode tag characters, the invisible form used to

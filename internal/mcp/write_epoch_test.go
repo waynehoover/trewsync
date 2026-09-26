@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/search"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/search"
 )
 
 // A uid names a version only within its store epoch (PLAN.md section 2.8), so

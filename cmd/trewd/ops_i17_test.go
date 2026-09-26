@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 /* ---------------------------------------------------------------- *

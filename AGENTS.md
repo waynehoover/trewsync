@@ -9,9 +9,11 @@ MCP endpoint built into it so agents read and edit the same notes devices sync.
 [plan/](plan/) it points to, before starting a task.
 
 **The name.** People read **TrewSync**, one word. The server's command is
-`trewd` and the headless client's is `trew`; every identifier (module path,
-`TREW_DATA`, `.trew`, `trew1i_`, `obsidian://trew`, the plugin id and npm
-package `trew-sync`) stays lowercase `trew` (PLAN §10).
+`trewd` and the headless client's is `trew`. The repository is
+`github.com/waynehoover/trewsync`, and so is the Go module path; every other
+identifier (`TREW_DATA`, `.trew`, `trew1i_`, `obsidian://trew`, the plugin id
+and npm package `trew-sync`, the image `ghcr.io/waynehoover/trew`) stays
+lowercase `trew` (PLAN §10).
 
 **Where the code is today.** The Go server speaks protocol 1: plaintext,
 device and invite tokens, framed chunk bodies, the path and collision rules of

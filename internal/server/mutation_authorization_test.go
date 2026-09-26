@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // A revoke landing while a device is minting an invite, after the request is

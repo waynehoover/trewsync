@@ -280,7 +280,7 @@ func TestUpdateInstallsTheNewestVerifiedServerRelease(t *testing.T) {
 	args := strings.Join(p.args(t), " ")
 	for _, want := range []string{
 		"verify ",
-		"--identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@refs/tags/server/v ",
+		"--identity-prefix https://github.com/waynehoover/trewsync/.github/workflows/attest.yml@refs/tags/server/v ",
 		"--issuer https://token.actions.githubusercontent.com",
 		"--artifact ",
 		"--json",
@@ -367,7 +367,7 @@ func TestUpdateRefusesAReleaseThatDoesNotVerify(t *testing.T) {
 			r.files[updateBundle] = bundleFor(updateProject, "0.2.0", updateAsset, sha(bin), int64(len(bin))+1)
 		}, "bytes, and the download is"},
 		{"the manifest is another project's", func(r *fakeRelease, p fakePackslip, t *testing.T) {
-			r.files[updateBundle] = bundleFor("github.com/waynehoover/trew", "0.2.0", updateAsset, sha(bin), int64(len(bin)))
+			r.files[updateBundle] = bundleFor("github.com/waynehoover/trewsync", "0.2.0", updateAsset, sha(bin), int64(len(bin)))
 		}, "the manifest is for"},
 		{"the manifest is another version's", func(r *fakeRelease, p fakePackslip, t *testing.T) {
 			r.files[updateBundle] = bundleFor(updateProject, "0.1.9", updateAsset, sha(bin), int64(len(bin)))

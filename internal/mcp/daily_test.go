@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The daily-note and template tools through the SDK client: the path the

@@ -6,10 +6,10 @@
 than an Obsidian vault. Keep a copy of your notes on a NAS or another machine
 without Obsidian, as a read-only mirror or a two-way peer, and read history and
 recover notes from the terminal. It runs the same sync engine as the
-[Obsidian plugin](https://github.com/waynehoover/trew/blob/main/docs/plugin.md).
+[Obsidian plugin](https://github.com/waynehoover/trewsync/blob/main/docs/plugin.md).
 
 The server it syncs through can read what it stores; see
-[Security and privacy](https://github.com/waynehoover/trew/blob/main/docs/security.md).
+[Security and privacy](https://github.com/waynehoover/trewsync/blob/main/docs/security.md).
 
 **Experimental.** Use macOS or Linux, Node **22 or newer**, and a local
 filesystem. Run one TrewSync process that writes to each directory, and keep
@@ -60,15 +60,15 @@ Keep the process running for continuous sync. For a scheduled job, use
 
 ## Read more
 
-- [The command-line client guide](https://github.com/waynehoover/trew/blob/main/docs/client.md):
+- [The command-line client guide](https://github.com/waynehoover/trewsync/blob/main/docs/client.md):
   the first device on a new server, mirrors and merging, recovery, automation,
   local state and locking.
-- [Command reference](https://github.com/waynehoover/trew/blob/main/docs/cli-reference.md):
+- [Command reference](https://github.com/waynehoover/trewsync/blob/main/docs/cli-reference.md):
   every command, flag, exit status and JSON field.
-- [Connect an agent](https://github.com/waynehoover/trew/blob/main/docs/agent.md):
+- [Connect an agent](https://github.com/waynehoover/trewsync/blob/main/docs/agent.md):
   the server's MCP endpoint, the only MCP TrewSync has. This client has no MCP
   server of its own; Basalt Sync's did.
-- [Set up the server](https://github.com/waynehoover/trew/blob/main/docs/server.md)
-  and [all documentation](https://github.com/waynehoover/trew/blob/main/docs/index.md).
+- [Set up the server](https://github.com/waynehoover/trewsync/blob/main/docs/server.md)
+  and [all documentation](https://github.com/waynehoover/trewsync/blob/main/docs/index.md).
 
-[MIT](https://github.com/waynehoover/trew/blob/main/LICENSE).
+[MIT](https://github.com/waynehoover/trewsync/blob/main/LICENSE).

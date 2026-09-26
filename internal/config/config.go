@@ -36,7 +36,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/trew/internal/fsync"
+	"github.com/waynehoover/trewsync/internal/fsync"
 )
 
 // FileName is the configuration file in the data directory.

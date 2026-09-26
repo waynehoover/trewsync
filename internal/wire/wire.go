@@ -21,7 +21,7 @@ import (
 	"errors"
 	"unicode/utf8"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // Proto is the newest protocol version this server implements, and MinProto the

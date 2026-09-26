@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 type harness struct {

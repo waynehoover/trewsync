@@ -79,7 +79,7 @@ bad = []
 bad << "it covers #{Trewd.seen.keys.sort}" unless Trewd.seen.keys.sort == want.sort
 want.each do |p|
   got = Trewd.seen[p] || {}
-  url = "https://github.com/waynehoover/trew/releases/download/server/v#{ARGV[2]}/trewd-#{p}"
+  url = "https://github.com/waynehoover/trewsync/releases/download/server/v#{ARGV[2]}/trewd-#{p}"
   bad << "#{p} fetches #{got[:url]}" unless got[:url] == url
   bad << "#{p} expects #{got[:sha256]}" unless got[:sha256] == sums["trewd-#{p}"]
 end

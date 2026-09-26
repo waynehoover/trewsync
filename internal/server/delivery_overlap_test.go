@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 func TestOverlappingSessionDelivery(t *testing.T) {

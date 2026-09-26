@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/config"
-	"github.com/waynehoover/trew/internal/doctor"
-	"github.com/waynehoover/trew/internal/gitexport"
+	"github.com/waynehoover/trewsync/internal/config"
+	"github.com/waynehoover/trewsync/internal/doctor"
+	"github.com/waynehoover/trewsync/internal/gitexport"
 )
 
 // gitStatus is `trewd git-export status -json`.

@@ -14,8 +14,8 @@ import (
 
 	"filippo.io/age"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // staged is a verified backup directory with a vault in it: two notes, one of

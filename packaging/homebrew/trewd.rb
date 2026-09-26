@@ -20,7 +20,7 @@
 # what it installed and would put the old binary back.
 class Trewd < Formula
   desc "TrewSync server: self-hosted Obsidian vault sync with full version history"
-  homepage "https://github.com/waynehoover/trew"
+  homepage "https://github.com/waynehoover/trewsync"
   version "0.0.0"
   license "MIT"
 
@@ -31,22 +31,22 @@ class Trewd < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/waynehoover/trew/releases/download/server/v#{version}/trewd-darwin-arm64"
+      url "https://github.com/waynehoover/trewsync/releases/download/server/v#{version}/trewd-darwin-arm64"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # trewd-darwin-arm64
     end
     on_intel do
-      url "https://github.com/waynehoover/trew/releases/download/server/v#{version}/trewd-darwin-amd64"
+      url "https://github.com/waynehoover/trewsync/releases/download/server/v#{version}/trewd-darwin-amd64"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # trewd-darwin-amd64
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/waynehoover/trew/releases/download/server/v#{version}/trewd-linux-arm64"
+      url "https://github.com/waynehoover/trewsync/releases/download/server/v#{version}/trewd-linux-arm64"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # trewd-linux-arm64
     end
     on_intel do
-      url "https://github.com/waynehoover/trew/releases/download/server/v#{version}/trewd-linux-amd64"
+      url "https://github.com/waynehoover/trewsync/releases/download/server/v#{version}/trewd-linux-amd64"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # trewd-linux-amd64
     end
   end

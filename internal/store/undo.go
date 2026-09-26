@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // Undo is a compensating operation, not a rollback (PLAN.md section 4.5, M5

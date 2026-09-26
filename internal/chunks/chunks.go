@@ -24,7 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/waynehoover/trew/internal/fsync"
+	"github.com/waynehoover/trewsync/internal/fsync"
 )
 
 // NameLen is the length of a chunk name in characters.

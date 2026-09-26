@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The write half of PLAN.md section 4.10 (M5 task 11): an agent that writes

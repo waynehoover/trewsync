@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/config"
-	"github.com/waynehoover/trew/internal/notes"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/config"
+	"github.com/waynehoover/trewsync/internal/notes"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 const vault = "v1"

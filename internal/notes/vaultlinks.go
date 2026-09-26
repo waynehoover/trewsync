@@ -3,7 +3,7 @@ package notes
 import (
 	"sort"
 
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // The vault-health reads (backlinks, outgoing_links, broken_links, orphans):

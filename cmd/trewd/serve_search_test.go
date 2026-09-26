@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // Every serve builds the search index, not only one under -mcp, so a device's

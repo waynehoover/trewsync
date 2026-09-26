@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // A token for a tool that writes, registered only here, so the scope checks

@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/mcp"
+	"github.com/waynehoover/trewsync/internal/mcp"
 )
 
 // seamMark is the line testseam.go writes when a write reaches its seam,

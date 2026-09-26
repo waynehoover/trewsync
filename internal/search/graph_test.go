@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/notes"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/notes"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The whole link graph, for the vault-health tools: it speaks only for the

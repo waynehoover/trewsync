@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/waynehoover/trew/internal/fsync"
+	"github.com/waynehoover/trewsync/internal/fsync"
 )
 
 // Three small records the commands leave in the data directory, so a doctor

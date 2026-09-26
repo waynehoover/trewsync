@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/config"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/config"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // TestQuotingRoundTrips: every path the store can hold survives cQuote and

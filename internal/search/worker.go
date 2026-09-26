@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/waynehoover/trew/internal/notes"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/notes"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The worker: one goroutine that owns every write to the index.

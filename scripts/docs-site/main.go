@@ -38,7 +38,7 @@ import (
 )
 
 // repoURL is where a link to an unpublished file goes.
-const repoURL = "https://github.com/waynehoover/trew"
+const repoURL = "https://github.com/waynehoover/trewsync"
 
 // topPages are the Markdown files at the repository root that the site
 // publishes. Everything under docs/ is published too.

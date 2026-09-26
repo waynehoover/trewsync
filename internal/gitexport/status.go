@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/waynehoover/trew/internal/config"
+	"github.com/waynehoover/trewsync/internal/config"
 )
 
 // Status is what the export says about itself: for `trewd git-export

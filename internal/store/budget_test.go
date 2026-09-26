@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/chunks"
 )
 
 // bigChunks uploads n distinct bodies of the given size and returns their names.

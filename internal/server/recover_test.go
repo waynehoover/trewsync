@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // The recovery ops are read-only, and that is the design rather than an

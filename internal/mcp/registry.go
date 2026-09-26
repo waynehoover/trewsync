@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The tool registry. Every tool declares the scope it needs, and the

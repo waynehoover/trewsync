@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The rest of the escape hatch (PLAN.md M5.5, docs/operations.md): a path's

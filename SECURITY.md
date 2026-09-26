@@ -3,7 +3,7 @@
 ## Reporting a problem
 
 Report a vulnerability privately, through GitHub's
-[private vulnerability reporting](https://github.com/waynehoover/trew/security/advisories/new)
+[private vulnerability reporting](https://github.com/waynehoover/trewsync/security/advisories/new)
 for this repository. Do not open a public issue for it. If private reporting is
 unavailable to you, open an issue that asks for a private contact and says
 nothing about the problem itself.

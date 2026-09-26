@@ -14,7 +14,7 @@ experimental and optional. The server can also serve an MCP endpoint for an
 agent; a token for it reads the whole vault and what the agent reads reaches
 its model provider, so set it up only when the user asks for it.
 
-Repository: <https://github.com/waynehoover/trew>.
+Repository: <https://github.com/waynehoover/trewsync>.
 Use the [server setup](docs/server.md), [plugin guide](docs/plugin.md), and
 [maintenance guide](docs/server-operations.md) for details. If reading a raw copy
 of this file, resolve those paths against the repository root at the same ref.
@@ -74,7 +74,7 @@ tag. Do not run this placeholder unchanged.
 ```bash
 TREW_PLUGIN_TAG='X.Y.Z'
 TREW_DOWNLOAD_DIR="$(mktemp -d)"
-gh release download "$TREW_PLUGIN_TAG" --repo waynehoover/trew \
+gh release download "$TREW_PLUGIN_TAG" --repo waynehoover/trewsync \
   --dir "$TREW_DOWNLOAD_DIR" \
   --pattern main.js --pattern manifest.json --pattern styles.css --pattern SHA256SUMS
 (cd "$TREW_DOWNLOAD_DIR" && shasum -a 256 -c SHA256SUMS)
@@ -83,7 +83,7 @@ gh release download "$TREW_PLUGIN_TAG" --repo waynehoover/trew \
 Stop on a failed download or checksum. Check that the manifest ID is
 `trew-sync` and its version matches the tag. Where GitHub attestation
 verification is available, verify all three assets with `gh attestation verify
-FILE --repo waynehoover/trew`. Report whether provenance was checked;
+FILE --repo waynehoover/trewsync`. Report whether provenance was checked;
 a matching checksum alone does not authenticate its publisher. Never silently
 substitute source archives for the built plugin.
 
@@ -97,8 +97,8 @@ and preserve its data and flags before any upgrade.
 Clone the official repository into a new dedicated deployment directory:
 
 ```bash
-git clone https://github.com/waynehoover/trew.git
-cd trew
+git clone https://github.com/waynehoover/trewsync.git
+cd trewsync
 docker compose config
 ```
 

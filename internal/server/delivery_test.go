@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 func TestDeliveryRequiresConfirmationAndExpiresWithTheConnection(t *testing.T) {

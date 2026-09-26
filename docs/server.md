@@ -24,8 +24,8 @@ route. Keep the data directory off NFS, SMB, and other network filesystems.
 From a copy of this repository:
 
 ```bash
-git clone https://github.com/waynehoover/trew.git
-cd trew
+git clone https://github.com/waynehoover/trewsync.git
+cd trewsync
 docker compose up -d --build
 docker compose logs trew
 ```
@@ -63,7 +63,7 @@ flags for them.
 ### A binary
 
 Download the matching binary from a
-[server release](https://github.com/waynehoover/trew/releases?q=server):
+[server release](https://github.com/waynehoover/trewsync/releases?q=server):
 Linux amd64/arm64/riscv64, macOS amd64/arm64 or FreeBSD amd64/arm64. Make it
 executable and run it with a writable data directory:
 
@@ -91,8 +91,8 @@ Once the first server release is published:
 
 ```bash
 brew install waynehoover/tap/trewd                   # macOS or Linux
-mise use -g packslip:github.com/waynehoover/trew/server   # verified from the signed manifest
-nix run github:waynehoover/trew -- version           # built from source by the flake
+mise use -g packslip:github.com/waynehoover/trewsync/server   # verified from the signed manifest
+nix run github:waynehoover/trewsync -- version           # built from source by the flake
 ```
 
 A binary downloaded by hand is upgraded with `trewd update`, which verifies the

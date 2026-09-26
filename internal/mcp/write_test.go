@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // The write tools through the official SDK client, as an agent calls them:

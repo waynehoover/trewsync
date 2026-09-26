@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // agentWrote commits two operations on the default vault of dir, straight

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/store"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 func TestFanoutSharesImmutableFramesAcrossLiveAndCatchingUpPeers(t *testing.T) {

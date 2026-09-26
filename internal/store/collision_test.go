@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/paths"
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // collisionScenario is one case of the `collisions` section of

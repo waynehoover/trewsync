@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // emptyDataDir is a real data directory the server would accept, with the

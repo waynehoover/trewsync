@@ -7,8 +7,8 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // sqliteFull stands in for the driver's SQLITE_FULL, by the interface

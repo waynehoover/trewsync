@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/trew/internal/control"
-	"github.com/waynehoover/trew/internal/server"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/control"
+	"github.com/waynehoover/trewsync/internal/server"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // cmdMCPToken mints, lists and revokes the bearer tokens agents use on /mcp,

@@ -11,10 +11,10 @@ import (
 	"github.com/coder/websocket"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/waynehoover/trew/internal/chunks"
-	wireframe "github.com/waynehoover/trew/internal/frame"
-	"github.com/waynehoover/trew/internal/store"
-	"github.com/waynehoover/trew/internal/wire"
+	"github.com/waynehoover/trewsync/internal/chunks"
+	wireframe "github.com/waynehoover/trewsync/internal/frame"
+	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // What the write tools' tests share: an agent with a write token, the facts a

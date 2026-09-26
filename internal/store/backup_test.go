@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"encoding/json"
-	"github.com/waynehoover/trew/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/chunks"
 )
 
 // openBackup opens a backup directory the way the server would, which is the

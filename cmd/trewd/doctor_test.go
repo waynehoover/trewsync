@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/control"
-	"github.com/waynehoover/trew/internal/dirlock"
-	"github.com/waynehoover/trew/internal/doctor"
-	"github.com/waynehoover/trew/internal/metrics"
-	"github.com/waynehoover/trew/internal/search"
-	"github.com/waynehoover/trew/internal/server"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/control"
+	"github.com/waynehoover/trewsync/internal/dirlock"
+	"github.com/waynehoover/trewsync/internal/doctor"
+	"github.com/waynehoover/trewsync/internal/metrics"
+	"github.com/waynehoover/trewsync/internal/search"
+	"github.com/waynehoover/trewsync/internal/server"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // Every server these tests start keeps its data in a temporary directory,
@@ -61,6 +61,11 @@ func healthy(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
+	// Room to spare, whatever the machine running the tests has left: a sound
+	// directory on a nearly full disk is rightly a warning, and that is not what
+	// the tests built on this one are about. The fault cases below that are
+	// about space set their own.
+	swap(t, &doctorSpace, func(string) (int64, int64) { return 50 << 30, 100 << 30 })
 	return dir
 }
 

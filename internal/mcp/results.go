@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/waynehoover/trew/internal/notes"
+	"github.com/waynehoover/trewsync/internal/notes"
 )
 
 // ToolError is a tool's failure, reported under trusted.error with isError

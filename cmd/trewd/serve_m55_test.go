@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waynehoover/trew/internal/doctor"
-	"github.com/waynehoover/trew/internal/store"
+	"github.com/waynehoover/trewsync/internal/doctor"
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // ephemeralStorage is a data directory on a container's own writable layer.

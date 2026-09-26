@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/trew/internal/control"
-	"github.com/waynehoover/trew/internal/doctor"
+	"github.com/waynehoover/trewsync/internal/control"
+	"github.com/waynehoover/trewsync/internal/doctor"
 )
 
 // doctorStorage is the mount-table reading doctor and serve use, a seam for

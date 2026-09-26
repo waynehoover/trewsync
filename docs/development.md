@@ -445,7 +445,7 @@ statement of every binary's name, digest, size, platform and executable path.
 published, so a release that cannot be signed stays a draft. It is keyless:
 signed with that workflow's own GitHub identity, so there is no key to keep.
 
-- **Project** `github.com/waynehoover/trew/server`. A subpath, because the
+- **Project** `github.com/waynehoover/trewsync/server`. A subpath, because the
   plugin releases from the same repository; `server`, because packslip reads a
   version out of a tag whose prefix is the tool's subpath followed by `/`, so
   `server/v0.2.0` names 0.2.0. The bundle's file name follows from it.
@@ -463,7 +463,7 @@ signed with that workflow's own GitHub identity, so there is no key to keep.
 non-prerelease `server/v` release (or the one `-version` names), downloads this
 platform's binary, `SHA256SUMS` and the manifest beside the installed binary,
 and installs nothing until: `packslip verify` accepts the manifest against the
-pin `--identity-prefix https://github.com/waynehoover/trew/.github/workflows/attest.yml@refs/tags/server/v`
+pin `--identity-prefix https://github.com/waynehoover/trewsync/.github/workflows/attest.yml@refs/tags/server/v`
 and `--issuer https://token.actions.githubusercontent.com`, with the binary as
 `--artifact`; its report names that scheme, that issuer, and exactly the signer
 `...attest.yml@refs/tags/server/vX.Y.Z` for the version offered; the signed
@@ -521,7 +521,7 @@ first checked by `scripts/verify-release.sh --server` on the first release.
   `scripts/homebrew-formula.test.sh` evaluates the result against a stand-in
   for Homebrew's DSL. The tap repository does not exist yet. `brew style`
   passes on the file; `brew audit`, which needs a tap, has not been run.
-- **mise.** `mise use -g packslip:github.com/waynehoover/trew/server` installs
+- **mise.** `mise use -g packslip:github.com/waynehoover/trewsync/server` installs
   trewd from the signed manifest, verified against the repository's identity.
 - **Nix.** [flake.nix](../flake.nix) builds trewd from source with the release
   flags, version `unstable-<rev>`, over only `go.mod`, `go.sum`, `cmd/` and
@@ -548,7 +548,7 @@ them as its notes.
 To check an asset's build provenance:
 
 ```bash
-gh attestation verify main.js --repo waynehoover/trew
+gh attestation verify main.js --repo waynehoover/trewsync
 ```
 
 An attestation identifies the build source. It is not a security audit or proof
@@ -619,6 +619,19 @@ account, the image and compose service names, the MCP server name and the
 release tag formats. Records written before the change, such as the
 acceptance runs below and the status lines in PLAN.md, keep the names they
 were written with.
+
+### The repository (2026-09-26)
+
+The owner chose the GitHub repository `waynehoover/trewsync`. The Go module
+moved with it, from `github.com/waynehoover/trew` to
+`github.com/waynehoover/trewsync`, and so did everything that names the
+repository: the release signer `trewd update` and `scripts/verify-release.sh`
+pin, the packslip project `github.com/waynehoover/trewsync/server`, the
+Homebrew formula's release URLs (the tap stays `waynehoover/homebrew-tap`),
+the flake, the package metadata, and the documentation links. Nothing else
+moved: `trewd`, `trew`, `trew-sync`, `TREW_DATA`, `.trew`, `trew1i_`, the MCP
+server name and the image `ghcr.io/waynehoover/trew` keep their names. The
+records above keep the module path they were written with.
 
 ### Inventory at the fork
 

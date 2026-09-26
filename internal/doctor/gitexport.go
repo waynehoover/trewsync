@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waynehoover/trew/internal/gitexport"
+	"github.com/waynehoover/trewsync/internal/gitexport"
 )
 
 // GitExportLagAfter is how long past its quiet window a version may wait to be

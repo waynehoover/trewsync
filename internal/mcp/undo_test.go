@@ -13,9 +13,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	wireframe "github.com/waynehoover/trew/internal/frame"
-	"github.com/waynehoover/trew/internal/store"
-	"github.com/waynehoover/trew/internal/wire"
+	wireframe "github.com/waynehoover/trewsync/internal/frame"
+	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // undo_operation (PLAN.md section 4.5, M5 task 7) through the official SDK

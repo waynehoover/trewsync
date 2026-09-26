@@ -191,7 +191,7 @@ So M10 becomes: rehearse the whole thing on a disposable copy, settle every devi
 
 ```
 trew/
-  go.mod                      module github.com/waynehoover/trew
+  go.mod                      module github.com/waynehoover/trewsync
   cmd/trewd/                  main.go and one file per subcommand
   internal/wire/              message shapes, codes, limits            (from basalt server/internal/wire)
   internal/store/             SQLite metadata, history, purge, backup  (from server/internal/store)
@@ -219,7 +219,7 @@ trew/
   PLAN.md  plan/              this plan; delete or move to docs/history once shipped
 ```
 
-The Go module lives at the repository root so `go install github.com/waynehoover/trew/cmd/trewd@latest` works and there is one binary to name.
+The Go module lives at the repository root so `go install github.com/waynehoover/trewsync/cmd/trewd@latest` works and there is one binary to name.
 
 ### 3.2 Process model of `trewd serve`
 
@@ -785,7 +785,8 @@ Settled now, before the invite format and on-disk identity freeze:
 
 | Thing | Value |
 |---|---|
-| Go module | `github.com/waynehoover/trew` |
+| Repository | `github.com/waynehoover/trewsync` (2026-09-26; before that, `waynehoover/trew`) |
+| Go module | `github.com/waynehoover/trewsync` (2026-09-26; before that, `github.com/waynehoover/trew`) |
 | Display name | TrewSync (2026-09-23; before that, Trew) |
 | Server command | `trewd` (2026-09-23; before that, `trew`) |
 | Headless client command | `trew`, the npm package's `bin` |

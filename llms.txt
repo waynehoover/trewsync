@@ -17,21 +17,21 @@ release documentation and release notes when installed behavior differs.
 
 ## Install and use
 
-- [Agent installation runbook](https://raw.githubusercontent.com/waynehoover/trew/main/llm.md): Set up the server, secure connection, plugin, pairing, verification, and optionally the agent endpoint.
-- [Server setup](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server.md): Docker, binaries, TLS, and upgrades.
-- [Obsidian plugin](https://raw.githubusercontent.com/waynehoover/trew/main/docs/plugin.md): Pairing, status, history, undo, and recovery.
-- [Connect an agent](https://raw.githubusercontent.com/waynehoover/trew/main/docs/agent.md): The MCP endpoint, tokens and scopes, the tools, writing safely, undo, and the untrusted-content envelope.
-- [Command-line client](https://raw.githubusercontent.com/waynehoover/trew/main/docs/client.md): Optional headless mirror and automation.
-- [Security and privacy](https://raw.githubusercontent.com/waynehoover/trew/main/docs/security.md): What the server reads, devices and invites, agent tokens, revocation, and backups.
-- [Server maintenance](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server-operations.md): Backup, restore, repair, and purge.
+- [Agent installation runbook](https://raw.githubusercontent.com/waynehoover/trewsync/main/llm.md): Set up the server, secure connection, plugin, pairing, verification, and optionally the agent endpoint.
+- [Server setup](https://raw.githubusercontent.com/waynehoover/trewsync/main/docs/server.md): Docker, binaries, TLS, and upgrades.
+- [Obsidian plugin](https://raw.githubusercontent.com/waynehoover/trewsync/main/docs/plugin.md): Pairing, status, history, undo, and recovery.
+- [Connect an agent](https://raw.githubusercontent.com/waynehoover/trewsync/main/docs/agent.md): The MCP endpoint, tokens and scopes, the tools, writing safely, undo, and the untrusted-content envelope.
+- [Command-line client](https://raw.githubusercontent.com/waynehoover/trewsync/main/docs/client.md): Optional headless mirror and automation.
+- [Security and privacy](https://raw.githubusercontent.com/waynehoover/trewsync/main/docs/security.md): What the server reads, devices and invites, agent tokens, revocation, and backups.
+- [Server maintenance](https://raw.githubusercontent.com/waynehoover/trewsync/main/docs/server-operations.md): Backup, restore, repair, and purge.
 
 ## Reference
 
-- [Server command reference](https://raw.githubusercontent.com/waynehoover/trew/main/docs/server-reference.md): Flags, limits, audit, undo, and health checks.
-- [CLI reference](https://raw.githubusercontent.com/waynehoover/trew/main/docs/cli-reference.md): Commands, flags, and outcomes.
+- [Server command reference](https://raw.githubusercontent.com/waynehoover/trewsync/main/docs/server-reference.md): Flags, limits, audit, undo, and health checks.
+- [CLI reference](https://raw.githubusercontent.com/waynehoover/trewsync/main/docs/cli-reference.md): Commands, flags, and outcomes.
 
 ## Optional
 
-- [Product comparison](https://raw.githubusercontent.com/waynehoover/trew/main/docs/compared.md): Which sync option fits the user's needs.
-- [Design and threat model](https://raw.githubusercontent.com/waynehoover/trew/main/docs/design.md): Durability rules, conflicts, folders, and the agent endpoint's principles.
-- [Developer documentation](https://raw.githubusercontent.com/waynehoover/trew/main/docs/development.md): Protocol, measurements, and review history.
+- [Product comparison](https://raw.githubusercontent.com/waynehoover/trewsync/main/docs/compared.md): Which sync option fits the user's needs.
+- [Design and threat model](https://raw.githubusercontent.com/waynehoover/trewsync/main/docs/design.md): Durability rules, conflicts, folders, and the agent endpoint's principles.
+- [Developer documentation](https://raw.githubusercontent.com/waynehoover/trewsync/main/docs/development.md): Protocol, measurements, and review history.
