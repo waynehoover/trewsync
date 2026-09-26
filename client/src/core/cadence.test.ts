@@ -299,14 +299,24 @@ describe("automatic sync cadence", () => {
       return fetch(...args);
     };
     const originals = [0, 1, 2].map(() => globalThis.crypto.getRandomValues(new Uint8Array(3000)));
+    // B's own passes are held until every batch is in. An arriving batch
+    // schedules one, and where it ran between two batches, as it did on a
+    // slow runner, each file was a download of its own: three transfers of
+    // one fetch each, with no boundary inside any of them to cross.
+    const sync = b.sync.bind(b);
+    b.sync = async () => undefined;
     for (let i = 0; i < originals.length; i++) {
       await av.write(`${i}.bin`, originals[i]!, { mtime: 1000, ctime: 1000 });
     }
     await a.sync({ coalesceWrites: false });
     await until("all batch metadata", () => b.engine.status().cursor === a.serverCursor);
+    b.sync = sync;
     await b.sync({ coalesceWrites: false });
 
     expect(requests, "the download was not split, so there is no boundary to cross").toBe(3);
+    // One transfer, from its first report to the undefined that ends it.
+    const ends = downloads.flatMap((p, i) => (p === undefined ? [i] : []));
+    expect(ends, "the download was not one transfer").toEqual([downloads.length - 1]);
     const down = downloads
       .filter((p): p is TransferActivity => p !== undefined)
       .map((p) => p.bytes);
