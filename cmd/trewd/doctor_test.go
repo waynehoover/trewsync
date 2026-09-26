@@ -61,6 +61,11 @@ func healthy(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
+	// Room to spare, whatever the machine running the tests has left: a sound
+	// directory on a nearly full disk is rightly a warning, and that is not what
+	// the tests built on this one are about. The fault cases below that are
+	// about space set their own.
+	swap(t, &doctorSpace, func(string) (int64, int64) { return 50 << 30, 100 << 30 })
 	return dir
 }
 
