@@ -268,7 +268,10 @@ def compare(source: list[dict], witness: list[dict], show_paths: bool, allow_emp
         if e["excluded"] == "collision":
             groups[contract.fold(e["path"], table)].append(e)
     for members in groups.values():
-        arrived = [m for m in members if m["path"] in wit and wit[m["path"]]["excluded"] is None]
+        # Present on the witness at all. A witness on a disk that keeps both
+        # spellings marks them a collision of its own, which is exactly the
+        # failure this is here to see, not an exclusion that explains it.
+        arrived = [m for m in members if m["path"] in wit and wit[m["path"]]["excluded"] in (None, "collision")]
         if len(arrived) > 1:
             problems["collision group arrived more than once"].extend(m["path"] for m in arrived)
         elif len(arrived) == 1 and not same(arrived[0], wit[arrived[0]["path"]]):
@@ -343,9 +346,15 @@ def changes(frozen: list[dict], current: list[dict]) -> list[dict]:
     old system needs to be told.
     """
     old, new = synced(frozen), synced(current)
+    # A collision at the freeze is on the old vault's disk under its own name
+    # even though the server kept only one of its group, so the survivor is
+    # unchanged when current holds it with the frozen bytes, and modified when
+    # the bytes differ. It is never a delete: the members that did not arrive
+    # were never on the server, and a rollback must not remove them.
+    on_disk = {**{e["path"]: e for e in frozen if e["excluded"] == "collision"}, **old}
     out = []
     for path, e in new.items():
-        f = old.get(path)
+        f = on_disk.get(path)
         if f is None:
             out.append({"change": "added", **_fields(e)})
         elif not same(f, e):

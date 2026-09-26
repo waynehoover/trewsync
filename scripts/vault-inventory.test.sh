@@ -160,6 +160,17 @@ expect_rc 0 "changes counts each kind of change" '1  modified note' \
   inv changes "$tmp/source.inv" "$tmp/current.inv"
 expect_rc 0 "changes exports the added and modified files" 'exported 3 files' \
   inv changes "$tmp/source.inv" "$tmp/current.inv" --from "$current" --to "$tmp/export"
+# The survivor of the collision group is on the frozen disk with the bytes the
+# server holds, so it is no change; and the member that never arrived is no
+# delete, or the rollback would remove a note the server never had.
+if [ "$collision_disk" = 1 ]; then
+  if ! grep -q 'Stra' "$tmp/export/changes.jsonl"; then
+    ok "a collision group is neither added nor deleted by the rollback"
+  else
+    bad "a collision group is neither added nor deleted by the rollback"
+    grep 'Stra' "$tmp/export/changes.jsonl" | sed 's/^/      /'
+  fi
+fi
 expect_rc 1 "an export never writes into an existing directory" 'exists' \
   inv changes "$tmp/source.inv" "$tmp/current.inv" --from "$current" --to "$tmp/export"
 
@@ -235,21 +246,46 @@ else
   bad "and every renamed file is there, spelled as the server spells it, with the server's bytes"
   printf '      %s\n' "$listing"
 fi
+# Where the disk folds case (APFS, the rollback's own disk) the two spellings
+# are one entry and apply renames it; where it keeps both (Linux, CI) they are
+# two entries and apply adds one and deletes the other. Both must end where
+# the server is, which the two checks above assert; these assert the way.
+folds_case=0
+[ -e "$cfrozen/note.md" ] && folds_case=1
+if [ "$folds_case" = 1 ]; then
+  want_dry='would +2  renamed folder|would +5  renamed$'
+  want_refused='changed here since the freeze, not renamed'
+else
+  want_dry='would +2  folder added|would +2  folder deleted|would +5  added$|would +5  deleted$'
+  want_refused='changed here since the freeze, not deleted'
+fi
 # The dry run says the same, and removes nothing.
 cp -Rp "$cfrozen" "$tmp/case-dry"
 dry=$(inv apply "$tmp/case-export" "$tmp/case-dry" 2>&1 || true)
-if ! grep -q REFUSED <<<"$dry" && grep -Eq 'would +2  renamed folder' <<<"$dry" && grep -Eq 'would +5  renamed$' <<<"$dry" \
-  && [ -f "$tmp/case-dry/Note.md" ] && [ -f "$tmp/case-dry/Folder/x.md" ]; then
+dry_counts=1
+IFS='|' read -ra wants <<<"$want_dry"
+for w in "${wants[@]}"; do grep -Eq "$w" <<<"$dry" || dry_counts=0; done
+if ! grep -q REFUSED <<<"$dry" && [ "$dry_counts" = 1 ] \
+  && [ -f "$tmp/case-dry/Note.md" ] && [ -f "$tmp/case-dry/Folder/x.md" ] \
+  && [ "$(cd "$tmp/case-dry" && find . | LC_ALL=C sort)" = "$(cd "$cfrozen" && find . | LC_ALL=C sort)" ]; then
   ok "the dry run counts the renames and writes nothing"
 else
   bad "the dry run counts the renames and writes nothing"; printf '%s\n' "$dry" | sed 's/^/      /'
 fi
-# A renamed file edited on the old side during the window is refused, and kept.
+# A renamed file edited on the old side during the window is refused, and
+# kept. On a disk that keeps both spellings the server's note.md lands beside
+# it, which loses nothing either.
 cp -Rp "$cfrozen" "$tmp/case-both"
 printf 'edited on the old system\n' > "$tmp/case-both/Note.md"
 rc=0; out=$(inv apply "$tmp/case-export" "$tmp/case-both" --apply 2>&1) || rc=$?
-if [ "$rc" = 1 ] && grep -q 'REFUSED .*changed here since the freeze, not renamed' <<<"$out" \
-  && [ "$(cat "$tmp/case-both/"[Nn]ote.md)" = "edited on the old system" ]; then
+both_kept=0
+if [ "$folds_case" = 1 ]; then
+  [ "$(cat "$tmp/case-both/"[Nn]ote.md)" = "edited on the old system" ] && both_kept=1
+else
+  [ "$(cat "$tmp/case-both/Note.md")" = "edited on the old system" ] \
+    && [ "$(cat "$tmp/case-both/note.md")" = "same words" ] && both_kept=1
+fi
+if [ "$rc" = 1 ] && grep -q "REFUSED .*$want_refused" <<<"$out" && [ "$both_kept" = 1 ]; then
   ok "a renamed file changed on both sides is refused and keeps the old side's words"
 else
   bad "a renamed file changed on both sides is refused and keeps the old side's words (exit $rc)"
