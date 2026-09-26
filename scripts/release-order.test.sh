@@ -60,7 +60,7 @@ promotion=$(job promote)
 settings() { grep -v '^ *#'; }
 
 # One promotion at a time.
-if printf '%s\n' "$promotion" | settings | grep -q "group: image-promotion"; then
+if grep -q "group: image-promotion" <<< "$(settings <<< "$promotion")"; then
   ok "promotion is serialised by a concurrency group"
 else
   fail "the promote job has no concurrency group, so two releases can promote at once"
@@ -69,14 +69,14 @@ fi
 # And the build is not in that group, because a queue that holds one pending
 # run drops the second, and a version tag nothing published is a release that
 # silently did not happen (R30).
-if printf '%s\n' "$build" | settings | grep -q "concurrency:"; then
+if grep -q "concurrency:" <<< "$(settings <<< "$build")"; then
   fail "the build shares the promotion group, so a third release discards a queued build and its version tag"
 else
   ok "the build is outside the promotion group, where a queue cannot discard it"
 fi
 
 # Which is only worth anything if the version tag is applied there.
-if printf '%s\n' "$build" | settings | grep -q 'imagetools create --tag "\$IMAGE:\$VERSION"'; then
+if grep -q 'imagetools create --tag "\$IMAGE:\$VERSION"' <<< "$(settings <<< "$build")"; then
   ok "the immutable version tag is applied by the build itself"
 else
   fail "nothing outside the promotion group applies the version tag, so a dropped promotion loses it"
@@ -84,7 +84,7 @@ fi
 
 # The decision is made inside the step that applies it.
 promote=$(printf '%s\n' "$promotion" | awk '/name: point every moving alias/,/^      - name: the published/')
-if printf '%s' "$promote" | grep -q "release-aliases.sh"; then
+if grep -q "release-aliases.sh" <<< "$promote"; then
   ok "the aliases are worked out inside the promotion step"
 else
   fail "the promotion step applies a decision made somewhere earlier, which can be stale"
@@ -94,12 +94,12 @@ fi
 # The queue keeps one pending run, so a dropped promotion must cost nothing
 # that another release will not set right; that is only true if every
 # promotion fixes every alias.
-if printf '%s' "$promote" | grep -q "release-tags.sh"; then
+if grep -q "release-tags.sh" <<< "$promote"; then
   fail "the promotion applies only this release's tags, so a dropped one strands its aliases"
 else
   ok "the promotion reconciles every alias rather than appending its own"
 fi
-if printf '%s' "$promote" | grep -q "git fetch --tags"; then
+if grep -q "git fetch --tags" <<< "$promote"; then
   ok "it refreshes the tags before deciding"
 else
   fail "it decides from whatever tags the checkout had, which predates any release that overtook it"

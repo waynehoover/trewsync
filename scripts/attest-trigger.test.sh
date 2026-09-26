@@ -31,14 +31,21 @@ echo "starting the attestation:"
 # Settings only. Every one of these is quoted in the paragraph above it, so a
 # plain grep would find the explanation with the setting itself deleted.
 settings() { grep -v '^ *#' "$@"; }
+#
+# Every match below reads a here-string rather than a pipe. Under pipefail,
+# `producer | grep -q` fails whenever grep finds its line and exits before the
+# producer has finished writing: the producer dies of SIGPIPE and the pipeline
+# reports that instead of the match. That turned a present setting into a FAIL
+# on Linux runners, and it would turn a forbidden one into an ok just as
+# quietly.
 
-if settings "$workflow" | grep -q "workflow_dispatch:"; then
+if grep -q "workflow_dispatch:" <<< "$(settings "$workflow")"; then
   ok "it can be started by hand"
 else
   fail "there is no workflow_dispatch, so a draft release starts nothing"
 fi
 
-if settings "$workflow" | grep -qE "^ *release:"; then
+if grep -qE "^ *release:" <<< "$(settings "$workflow")"; then
   fail "it listens for a release event, which a draft does not fire"
 else
   ok "it does not wait for an event a draft will never send"
@@ -47,7 +54,7 @@ fi
 # And nothing still reads the tag off an event that no longer arrives: those
 # expressions evaluate to empty, which checks out the default branch and
 # attests the wrong bytes rather than failing.
-if settings "$workflow" | grep -q "github.event.release"; then
+if grep -q "github.event.release" <<< "$(settings "$workflow")"; then
   fail "something still reads github.event.release, which is empty under a dispatch"
 else
   ok "the tag comes from the dispatch input everywhere"
@@ -73,7 +80,7 @@ fi
 checked=$(
   awk '/^  checked:/ { inside = 1; next } inside && /^  [^ #]/ { inside = 0 } inside' "$workflow"
 )
-if printf '%s\n' "$checked" | settings | grep -q "isDraft"; then
+if grep -q "isDraft" <<< "$(settings <<< "$checked")"; then
   ok "it establishes the release is a draft before anything is uploaded"
 else
   fail "nothing checks the draft state, so a rerun replaces a public release's files"
@@ -87,7 +94,7 @@ fi
 # "release not found" and the whole gate fails closed on every release. That
 # is a safe failure and a broken one, and it survived a review because the
 # step existed and read correctly.
-if printf '%s\n' "$checked" | grep -qE "^      contents: write"; then
+if grep -qE "^      contents: write" <<< "$checked"; then
   ok "and can read one, which needs write: a draft is hidden from a read-only token"
 else
   fail "the checked job cannot see a draft release, so every release fails at the gate"
@@ -95,7 +102,7 @@ fi
 
 # And two runs against one release do not interleave: one replacing assets
 # while the other publishes is the same exposure by another route.
-if settings "$workflow" | grep -q "group: attest-"; then
+if grep -q "group: attest-" <<< "$(settings "$workflow")"; then
   ok "one run per release at a time"
 else
   fail "two runs on one tag can clobber each other's assets while a third step publishes"
@@ -272,7 +279,7 @@ for want in \
   "artifacts: attested/trewd-*" \
   "bin: trewd" \
   "attest: link"; do
-  if printf '%s\n' "$packslip_step" | grep -qF "$want"; then
+  if grep -qF "$want" <<< "$packslip_step"; then
     ok "  with $want"
   else
     fail "the packslip step does not say $want"
@@ -293,7 +300,7 @@ else
   fail "the manifest is signed after the release is published, or not at all"
 fi
 for perm in "id-token: write" "attestations: write" "contents: write"; do
-  if settings "$workflow" | grep -qE "^  ${perm%%:*}: write"; then
+  if grep -qE "^  ${perm%%:*}: write" <<< "$(settings "$workflow")"; then
     ok "  and the workflow may: $perm"
   else
     fail "the workflow lacks $perm, which the packslip action needs"

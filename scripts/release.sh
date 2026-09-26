@@ -504,7 +504,7 @@ PY
 # Nothing may reach the terminal with a placeholder still in it. A name added to
 # the prose and not to the list above would otherwise print @THING@ in the
 # middle of a command that somebody pastes.
-if printf '%s' "$runbook" | grep -q '@[A-Z][A-Z]*@'; then
+if grep -q '@[A-Z][A-Z]*@' <<< "$runbook"; then
   echo "release: the runbook still has a placeholder in it:" >&2
   printf '%s' "$runbook" | grep -o '@[A-Z][A-Z]*@' | sort -u | sed 's/^/  /' >&2
   exit 1

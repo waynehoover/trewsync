@@ -179,7 +179,7 @@ mkdir -p "$work/install"
     -ldflags "-s -w -X main.version=0.1.0" -o "$work/install/trewd" ./cmd/trewd )
 ( cd "$root" && CGO_ENABLED=0 go build -tags updatetest -trimpath \
     -ldflags "-s -w -X main.version=0.3.0" -o "$work/newer" ./cmd/trewd )
-( cd "$root" && go version -m "$work/install/trewd" ) | grep -q $'\tbuild\t-tags=updatetest' \
+grep -q $'\tbuild\t-tags=updatetest' <<< "$(cd "$root" && go version -m "$work/install/trewd")" \
   || fail "the hooked binary does not record its build tag, so goreleaser-check could not see one either"
 installed=$(shasum -a 256 "$work/install/trewd" | awk '{print $1}')
 
