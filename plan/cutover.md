@@ -83,15 +83,15 @@ Times are the Mac (APFS, a full fsync per file) and loopback. Over Tailscale to 
 
 ## The tools
 
-On the Mac, in a TrewSync checkout at the approved commit (`~/code/gabbro`):
+On the Mac, in a TrewSync checkout at the approved commit (`~/code/trewsync`):
 
 ```bash
-cd ~/code/gabbro
+cd ~/code/trewsync
 alias inv='uv run --no-project --python 3.13 scripts/vault-inventory.py'
 mkdir -m 700 -p ~/trew-cutover        # private: inventories name every note
 go build -o ~/trew-cutover/trewd ./cmd/trewd
 (cd client && bun install --frozen-lockfile && node esbuild.config.mjs production)
-alias trew='node ~/code/gabbro/client/dist/trew.mjs'
+alias trew='node ~/code/trewsync/client/dist/trew.mjs'
 ```
 
 - `inv inventory DIR -o FILE`: every entry's normalised path, kind, size and SHA-256, and why each excluded one is excluded. Only reads.
@@ -253,7 +253,7 @@ mkdir -m 700 ~/trew-cutover/witness && cd ~/trew-cutover/witness
 ssh homelab 'cd ~ && docker compose exec -T trew /trewd invite -url wss://homelab.example.ts.net:3005' > ../witness.invite
 trew pair --key-file ../witness.invite --device witness
 time trew sync
-cd ~/code/gabbro
+cd ~/code/trewsync
 inv inventory ~/trew-cutover/witness -o ~/trew-cutover/witness.inv
 inv compare ~/trew-cutover/frozen.inv ~/trew-cutover/witness.inv
 ssh homelab 'cd ~ && docker compose exec -T trew /trewd stats'    # record the newest uid as CUT
