@@ -65,6 +65,19 @@ type GitExport struct {
 	LFSThreshold *int64 `json:"lfs_threshold,omitempty"`
 	// Quiet is a Go duration ("5m").
 	Quiet string `json:"quiet,omitempty"`
+	// Adopted is the existing branch the export continues, which only
+	// `trewd git-export adopt` writes: it is no key of `trewd config set`,
+	// because adopting names a commit a person has looked at.
+	Adopted *GitExportAdopted `json:"adopted,omitempty"`
+}
+
+// GitExportAdopted is a branch that held history before the export: the
+// export's first commit on Branch of Remote has Commit as its parent. It
+// applies only while the export's remote and branch are these.
+type GitExportAdopted struct {
+	Remote string `json:"remote"`
+	Branch string `json:"branch"`
+	Commit string `json:"commit"`
 }
 
 // Daily is the daily section: the vault's daily-note and template settings

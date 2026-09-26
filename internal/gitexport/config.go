@@ -85,7 +85,11 @@ type Settings struct {
 	Branch       string
 	LFSThreshold int64
 	Quiet        time.Duration
-	Source       map[string]string
+	// Adopted is the commit the export's first commit on the branch has as
+	// its parent, when `trewd git-export adopt` took over a branch that
+	// already had history (adopt.go), and "" otherwise.
+	Adopted string
+	Source  map[string]string
 }
 
 // Apply returns c changed by ch and enabled, with the paths made absolute. It
@@ -184,6 +188,9 @@ func Resolve(dataDir string, c config.GitExport, ov Overrides) (Settings, error)
 	default:
 		s.Quiet, s.Source["quiet"] = DefaultQuiet, "default"
 	}
+	if a := c.Adopted; a != nil && a.Remote == s.Remote && a.Branch == s.Branch {
+		s.Adopted, s.Source["adopted"] = a.Commit, "file"
+	}
 	if !s.Enabled {
 		return s, nil
 	}
@@ -194,6 +201,9 @@ func Resolve(dataDir string, c config.GitExport, ov Overrides) (Settings, error)
 func (s *Settings) check(dataDir string) error {
 	if err := CheckBranch(s.Branch); err != nil {
 		return err
+	}
+	if s.Adopted != "" && !IsCommitName(s.Adopted) {
+		return fmt.Errorf("git_export.adopted.commit %q is not a full commit name, 40 hexadecimal digits", s.Adopted)
 	}
 	if s.LFSThreshold < 0 {
 		return fmt.Errorf("the LFS threshold is %d bytes; it is a size, or 0 to keep every file out of LFS", s.LFSThreshold)

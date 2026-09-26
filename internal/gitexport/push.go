@@ -45,7 +45,13 @@ func (x *Exporter) pushStep(ctx context.Context, r *runner, s Settings) time.Tim
 	if time.Now().Before(next) {
 		return next
 	}
-	err = x.push(ctx, r, s, b.commit, &rs)
+	// The adoption is this remote's: another remote the branch is pushed to
+	// takes it, old history and all, as a new branch.
+	adopted := ""
+	if b.adopted == s.Adopted {
+		adopted = b.adopted
+	}
+	err = x.push(ctx, r, s, b.commit, adopted, &rs)
 	now := x.st.Now().UnixMilli()
 	rs.lastAttemptAt = now
 	x.mu.Lock()
@@ -72,8 +78,9 @@ func (x *Exporter) pushStep(ctx context.Context, r *runner, s Settings) time.Tim
 	return x.nextPushAt
 }
 
-// push sends tip, and every LFS object not yet sent, to the remote.
-func (x *Exporter) push(ctx context.Context, r *runner, s Settings, tip string, rs *remoteState) error {
+// push sends tip, and every LFS object not yet sent, to the remote. adopted
+// is the commit the branch's history continues (adopt.go), or "".
+func (x *Exporter) push(ctx context.Context, r *runner, s Settings, tip, adopted string, rs *remoteState) error {
 	switch s.Transport {
 	case TransportSSH:
 		if x.tools.SSH == "" {
@@ -93,15 +100,26 @@ func (x *Exporter) push(ctx context.Context, r *runner, s Settings, tip string, 
 	}
 	expected := there
 	switch {
+	case there == "" && rs.pushed == "" && adopted != "":
+		rs.refused = fmt.Sprintf("the branch %s was deleted from the remote after the export adopted it at %s",
+			s.Branch, short(adopted))
+		return errRefusedRemote
 	case there == rs.pushed:
 	case there == "":
 		rs.refused = fmt.Sprintf("the branch %s was deleted from the remote after the export pushed %s to it",
 			s.Branch, short(rs.pushed))
 		return errRefusedRemote
-	case x.ours(ctx, r, there, tip):
+	case there == adopted && rs.pushed == "":
+		// The adopted commit, where adoption found the branch: the first
+		// push is a fast-forward of it.
+	case x.ours(ctx, r, there, tip, adopted):
 		// A commit the export made, which a push it could not record put
 		// there, or one pushed under an earlier configuration: moving on from
 		// it overwrites nothing.
+	case rs.pushed == "" && adopted != "":
+		rs.refused = fmt.Sprintf("the remote's branch %s is at %s, and the export adopted it at %s",
+			s.Branch, short(there), short(adopted))
+		return errRefusedRemote
 	case rs.pushed == "":
 		rs.refused = fmt.Sprintf("the remote already has a branch %s, at %s, and the export did not make it",
 			s.Branch, short(there))
@@ -121,10 +139,18 @@ func (x *Exporter) push(ctx context.Context, r *runner, s Settings, tip string, 
 }
 
 // ours reports whether sha is a commit on the branch the export made, at or
-// before tip.
-func (x *Exporter) ours(ctx context.Context, r *runner, sha, tip string) bool {
-	_, err := r.run(ctx, localTimeout, nil, "merge-base", "--is-ancestor", sha, tip)
-	return err == nil
+// before tip. On an adopted branch the adopted commit and the history under
+// it are on the branch and are not the export's: a remote branch moved back
+// to one of them is somebody else's doing.
+func (x *Exporter) ours(ctx context.Context, r *runner, sha, tip, adopted string) bool {
+	if _, err := r.run(ctx, localTimeout, nil, "merge-base", "--is-ancestor", sha, tip); err != nil {
+		return false
+	}
+	if adopted == "" {
+		return true
+	}
+	_, err := r.run(ctx, localTimeout, nil, "merge-base", "--is-ancestor", sha, adopted)
+	return err != nil
 }
 
 // lsRemote is the commit the remote's branch is at, or "" when it has none.
