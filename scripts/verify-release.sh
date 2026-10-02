@@ -320,7 +320,7 @@ if [ -n "$cli" ]; then
 fi
 
 printf '\n'
-if [ "${#missing[@]:-0}" -gt 0 ]; then
+if [ "${#missing[@]}" -gt 0 ]; then
   printf 'Not checked, because these are not installed: %s\n' "$(IFS=', '; echo "${missing[*]:-}")"
   echo "That is not the same as a pass."
   exit 2
