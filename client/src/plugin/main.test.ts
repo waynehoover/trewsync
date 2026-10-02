@@ -919,7 +919,14 @@ describe("syncing while it runs", () => {
     expect(all).toContain("A's completely different sentence");
     expect(all).toContain("B's entirely other sentence");
     const said = notices.map((n) => n.message).join(" ");
-    expect(said, `notices were: ${said}`).toMatch(/Conflicted copy/);
+    expect(said, `notices were: ${said}`).toMatch(/Review conflicts/);
+
+    // The notice leads to the review rather than to a hunt through the files.
+    const notice = notices.find((n) => n.message.includes("kept both versions"))!;
+    notice.el.fire("click");
+    const review = modals.at(-1)!;
+    expect(review.isOpen).toBe(true);
+    expect(review.titleEl.allText()).toBe("Review conflicts");
   }, 300_000);
 });
 

@@ -473,7 +473,12 @@ export class App {
  * stays on screen until something hides it, so whether anything did is as
  * much a part of what was said as the words.
  */
-export const notices: { message: string; duration: number | undefined; hidden: boolean }[] = [];
+export const notices: {
+  message: string;
+  duration: number | undefined;
+  hidden: boolean;
+  el: FakeEl;
+}[] = [];
 
 /**
  * Obsidian's icon helper, which sets a glyph inside an element.
@@ -488,12 +493,13 @@ export function setIcon(el: FakeEl, name: string): void {
 
 export class Notice {
   private readonly shown: (typeof notices)[number];
+  readonly messageEl = new FakeEl("div", "notice-message");
 
   constructor(
     message: string,
     public duration?: number,
   ) {
-    this.shown = { message: String(message), duration, hidden: false };
+    this.shown = { message: String(message), duration, hidden: false, el: this.messageEl };
     notices.push(this.shown);
   }
 

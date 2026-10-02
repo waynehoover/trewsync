@@ -1879,11 +1879,18 @@ export default class TrewPlugin extends Plugin {
     }
     if (report.conflicted > 0) {
       const n = report.conflicted;
-      new Notice(
+      const notice = new Notice(
         `TrewSync kept both versions of ${n} ${n === 1 ? "file" : "files"}. ` +
-          `Look for "Conflicted copy" in the name.`,
+          `Tap here, or run "Review conflicts", to compare and choose.`,
         10_000,
       );
+      // The review already existed, and the notice used to send people
+      // hunting the file explorer for "Conflicted copy" instead. A tap on a
+      // notice also dismisses it, which is what should happen here.
+      // `messageEl` arrived in Obsidian 1.8.7; before it the text alone says
+      // where to go.
+      if (requireApiVersion("1.8.7"))
+        notice.messageEl.addEventListener("click", () => this.openConflicts());
     }
     // One notice where there were two, for the reason on the report's
     // `needsAttention`: "written off" and "blocked by a name" are two of our
