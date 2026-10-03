@@ -75,6 +75,7 @@ import { serverBinary } from "./src/core/test-server.ts";
 import { configPath, indexPath, saveConfig } from "./src/node/config.ts";
 import { JsonIndexStore, NodeVault } from "./src/node/vault.ts";
 import { makeCorpus } from "./src/stress/corpus.ts";
+import { LOCAL_REFUSALS } from "./bench-refuse.ts";
 import {
   buildClient,
   diff,
@@ -114,8 +115,8 @@ const REPO = new URL("..", import.meta.url).pathname;
  * words no adb argument may contain. A list rather than a convention, because
  * being wrong costs somebody's notes.
  */
-const FORBIDDEN_VAULTS = ["My Vault", "Test", "Trew M3"];
-const FORBIDDEN_WORDS = ["My Vault", "homelab", "example", "/Documents/Test"];
+const FORBIDDEN_VAULTS = ["My Vault", "Test", "Trew M3", ...LOCAL_REFUSALS];
+const FORBIDDEN_WORDS = ["My Vault", "homelab", "/Documents/Test", ...LOCAL_REFUSALS];
 
 export function refuseVault(name: string): void {
   if (FORBIDDEN_VAULTS.some((v) => v.toLowerCase() === name.toLowerCase()))

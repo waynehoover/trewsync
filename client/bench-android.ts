@@ -53,6 +53,7 @@ import { promisify } from "node:util";
 import { Client } from "./src/core/client.ts";
 import { TestServer, serverBinary } from "./src/core/test-server.ts";
 import { JsonIndexStore, NodeVault } from "./src/node/vault.ts";
+import { LOCAL_REFUSALS } from "./bench-refuse.ts";
 import { corpusPaths, noteBody, pathFor } from "./bench-corpus.ts";
 
 const run = promisify(execFile);
@@ -75,7 +76,7 @@ const COLLECT_MS = Number(process.env["BENCH_COLLECT_MS"] ?? 210_000);
  * A list rather than a convention, because the cost of being wrong is somebody
  * else's notes and somebody else's server.
  */
-const FORBIDDEN = ["My Vault", "homelab", "example"];
+const FORBIDDEN = ["My Vault", "homelab", ...LOCAL_REFUSALS];
 
 /** One adb call, refused before it runs if it names anything it must not. */
 async function adb(...args: string[]): Promise<string> {

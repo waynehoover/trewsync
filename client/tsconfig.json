@@ -31,6 +31,7 @@
     "bench-android.ts",
     "bench-10k.ts",
     "bench-support.ts",
-    "bench-phone-10k.ts"
+    "bench-phone-10k.ts",
+    "bench-refuse.ts"
   ]
 }

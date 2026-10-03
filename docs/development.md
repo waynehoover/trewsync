@@ -2290,3 +2290,16 @@ Go test went.
 The headless client's MCP host, deleted in M2 task 10 after the crypto was
 gone, has its own ledger above:
 [Retiring `trew mcp`](#retiring-trew-mcp-m2-task-10).
+
+## The history rewrite (2026-10-02)
+
+Before the repository went public, its history was rewritten to replace the
+owner's tailnet name, vault name, a tailnet address and a home directory with
+placeholders (`example`, `My Vault`, `100.64.0.99`, `/home/user/`). Nothing
+else changed, but every commit id did, so a commit cited in these documents
+before that date is one of the old ids. [history-map.txt](history-map.txt)
+maps each old id to its new one, both as 12 characters: `grep ^OLD
+docs/history-map.txt`.
+
+The benchmarks still refuse the real names, from `client/bench-refuse.local`,
+one per line, which is gitignored (`client/bench-refuse.ts`).

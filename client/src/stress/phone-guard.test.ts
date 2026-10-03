@@ -43,7 +43,7 @@ describe("the phone run's refusals", () => {
       ["ls", "/sdcard/Documents"],
       ["rm", "-rf", `${BENCH}/../My Vault`],
       ["rm", "-rf", `${BENCH}2/Journal`],
-      ["shell", "echo", "example"],
+      ["shell", "echo", "homelab"],
     ]) {
       expect(() => guard(parts, BENCH), parts.join(" ")).toThrow(/refusing/);
     }

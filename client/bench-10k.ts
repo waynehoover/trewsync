@@ -49,6 +49,7 @@ import { dirname, join } from "node:path";
 import { conflictOriginal } from "./src/core/conflicts.ts";
 import { serverBinary } from "./src/core/test-server.ts";
 import { makeCorpus } from "./src/stress/corpus.ts";
+import { LOCAL_REFUSALS } from "./bench-refuse.ts";
 import {
   buildClient,
   converge,
@@ -833,7 +834,7 @@ async function obsidianRun(
   const name = `trew-10k-${Date.now().toString(36)}`;
   const vault = join(homedir(), name);
   if (existsSync(vault)) throw new Error(`${vault} exists; refusing to reuse it`);
-  const FORBIDDEN = ["My Vault", "basalt-live-vault"];
+  const FORBIDDEN = ["My Vault", "basalt-live-vault", ...LOCAL_REFUSALS];
   if (FORBIDDEN.includes(name)) throw new Error("refusing a real vault");
   const markers = join(root, "obsidian-evals");
   await mkdir(markers, { recursive: true });
