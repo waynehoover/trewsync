@@ -487,12 +487,14 @@ The workflow's first step refuses any run whose `GITHUB_REF` is not
 so a dispatch from `main` fails at once rather than signing a manifest no
 `trewd update` installs; run it again with the `--ref`.
 
-What is left to trust is who can push a tag. Once the repository exists on
-GitHub, protect the `server/v*` pattern (and the plugin's bare `*.*.*` tags)
-with a tag ruleset: restrict creation, update and deletion to the maintainers,
-and block force pushes, so a tag cannot be moved to a commit CI never saw or
-created by anyone who can push a branch. Until the ruleset is in place, anyone
-with push access can make a tag and a release from it.
+What is left to trust is who can push a tag. The repository's "release tags"
+ruleset (since 2026-10-02) covers `*.*.*`, `server/v*` and `cli/v*`: it
+restricts creation, update and deletion and blocks force pushes, with only
+the repository admin role able to bypass it, so a tag cannot be moved to a
+commit CI never saw or created by anyone who can merely push a branch. A
+push that bypasses it says so ("Bypassed rule violations"). Recreating the
+repository loses the ruleset; `gh api repos/waynehoover/trewsync/rulesets`
+lists it.
 
 It runs the packslip CLI rather than verifying Sigstore itself; the measured
 reason is in [research](research.md#evaluated-alternatives). The tests: the Go

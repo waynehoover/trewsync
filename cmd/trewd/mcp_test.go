@@ -432,9 +432,20 @@ func acceptance(t *testing.T, dir, addr string) {
 			// version's, and uid says which.
 			tr, un := call("read_note", map[string]any{"path": "journal/2026-09-23.md", "maxLines": 1000})
 			uid := int64(tr["uid"].(float64))
-			mu.Lock()
-			want := wrote[uid]
-			mu.Unlock()
+			// The writer records a version once its put returns, and the
+			// commit is visible to the agent before that: a read can land in
+			// between. Wait for the record rather than reading the gap as a
+			// mismatch; a version the writer never records still fails.
+			var want string
+			for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+				mu.Lock()
+				text, ok := wrote[uid]
+				mu.Unlock()
+				if ok || time.Now().After(deadline) {
+					want = text
+					break
+				}
+			}
 			if un["content"] != want {
 				t.Fatalf("read uid %d: %q, the device wrote %q", uid, un["content"], want)
 			}
