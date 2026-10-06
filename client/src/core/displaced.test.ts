@@ -219,4 +219,131 @@ describe("the displaced-version ledger", () => {
     expect(files.rewrites, "the log was never tidied").toBeGreaterThan(0);
     expect(files.text!.trim().split("\n")).toHaveLength(1);
   });
+
+  it("keeps a line it cannot read through a tidy, so the next inventory is not whole either", async () => {
+    // T08. The tidy wrote back the live records only, so the torn line went
+    // with the dead ones and the next inventory called itself complete, the
+    // one before it having said it was not, with nothing resolved between.
+    const files = new Files();
+    for (let i = 0; i < 40; i++) {
+      files.text = `${files.text ?? ""}\n${JSON.stringify(record(`gone-${i}..keep`))}\n`;
+    }
+    files.onDisk.add("here..keep");
+    files.text += `\n${JSON.stringify(record("here..keep"))}\n`;
+    files.text += `\n{"at":"hidden..keep","fro`;
+    const ledger = new DisplacedLedger(files);
+
+    const first = await ledger.inventory();
+    expect(first.complete).toBe(false);
+    expect(files.rewrites, "the log was never tidied").toBeGreaterThan(0);
+    const second = await ledger.inventory();
+    expect(second.complete, "a tidy erased the line that cannot be read").toBe(false);
+    expect(second.waiting.map((d) => d.at)).toEqual(["here..keep"]);
+  });
+
+  /**
+   * T11. In the plugin every incoming deletion writes a record, and the log
+   * could not be tidied there at all, so a phone read it back and looked on
+   * the disk for every deletion it had ever applied, on every pass.
+   */
+  describe("for a shell that can only empty the log", () => {
+    function emptyOnly(files: Files): { files: DisplacedFiles; cleared: string[] } {
+      const cleared: string[] = [];
+      return {
+        cleared,
+        files: {
+          read: () => files.read(),
+          append: (line) => files.append(line),
+          stillThere: (at) => files.stillThere(at),
+          clear: async (was) => {
+            if (files.text !== was) return false;
+            cleared.push(was);
+            files.text = "";
+            return true;
+          },
+        },
+      };
+    }
+
+    it("empties it once every record in it is dead, and not before", async () => {
+      const files = new Files();
+      const shell = emptyOnly(files);
+      const ledger = new DisplacedLedger(shell.files);
+      await ledger.record(record("a..keep"));
+      files.onDisk.add("b..keep");
+      await ledger.record(record("b..keep"));
+
+      expect((await ledger.waiting()).map((d) => d.at)).toEqual(["b..keep"]);
+      expect(shell.cleared, "emptied while a record was live").toEqual([]);
+
+      files.onDisk.delete("b..keep");
+      expect(await ledger.waiting()).toEqual([]);
+      expect(shell.cleared).toHaveLength(1);
+      expect(files.text).toBe("");
+    });
+
+    it("does not empty a log with a line it cannot read", async () => {
+      const files = new Files();
+      const shell = emptyOnly(files);
+      files.text = `\n${JSON.stringify(record("gone..keep"))}\n\n{"at":"hid`;
+      const out = await new DisplacedLedger(shell.files).inventory();
+      expect(out.complete).toBe(false);
+      expect(shell.cleared).toEqual([]);
+    });
+
+    it("does not empty it of a record younger than a minute, whose note may be on its way", async () => {
+      // The record is written before the note is moved (RR2): for a moment
+      // it names a file that is not there yet, and emptying the log in that
+      // moment hid the note with nothing knowing where.
+      const files = new Files();
+      const shell = emptyOnly(files);
+      let now = 1_000_000;
+      const ledger = new DisplacedLedger(shell.files, undefined, () => now);
+      await ledger.record({ ...record("moving..keep"), when: now });
+
+      expect(await ledger.waiting()).toEqual([]);
+      expect(shell.cleared, "the record of a note on its way was emptied away").toEqual([]);
+      files.onDisk.add("moving..keep");
+      expect((await ledger.waiting()).map((d) => d.at)).toEqual(["moving..keep"]);
+
+      files.onDisk.delete("moving..keep");
+      now += 61_000;
+      expect(await ledger.waiting()).toEqual([]);
+      expect(shell.cleared).toHaveLength(1);
+    });
+  });
+
+  it("looks on the disk once for a record it has seen gone, and every time for the rest", async () => {
+    const files = new Files();
+    const looked: string[] = [];
+    const cannotTidy: DisplacedFiles = {
+      read: () => files.read(),
+      append: (line) => files.append(line),
+      stillThere: async (at) => {
+        looked.push(at);
+        if (at === "unsure..keep") throw new Error("EIO");
+        return files.stillThere(at);
+      },
+    };
+    const ledger = new DisplacedLedger(cannotTidy);
+    for (let i = 0; i < 10; i++) await ledger.record(record(`gone-${i}..keep`));
+    files.onDisk.add("here..keep");
+    await ledger.record(record("here..keep"));
+    await ledger.record(record("unsure..keep"));
+
+    const first = await ledger.waiting();
+    expect(looked).toHaveLength(12);
+    looked.length = 0;
+    const second = await ledger.waiting();
+    // The live one and the one that could not be checked, which counts as
+    // there and is asked about again.
+    expect(looked.sort()).toEqual(["here..keep", "unsure..keep"]);
+    expect(second.map((d) => d.at).sort()).toEqual(first.map((d) => d.at).sort());
+    expect(second.map((d) => d.at).sort()).toEqual(["here..keep", "unsure..keep"]);
+
+    // A record written again at a name seen gone is a new record, and looked for.
+    files.onDisk.add("gone-3..keep");
+    await ledger.record({ ...record("gone-3..keep"), when: 2 });
+    expect((await ledger.waiting()).map((d) => d.at)).toContain("gone-3..keep");
+  });
 });

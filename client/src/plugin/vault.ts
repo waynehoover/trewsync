@@ -2541,8 +2541,35 @@ class ObsidianDisplacedFiles implements DisplacedFiles {
   // still there and now unfindable. The ledger compacts only where a shell can
   // replace the whole file or none of it, and this adapter cannot: it has no
   // staged write, and remove-then-rename has a moment with no log at all,
-  // which reads as a clean vault. So this log grows instead. See
-  // `core/displaced.ts`.
+  // which reads as a clean vault. See `core/displaced.ts`.
+
+  /**
+   * Empties the log while it still holds exactly what was read (T11).
+   *
+   * What this shell can do instead of `rewrite`, and all the log needs here.
+   * Every incoming deletion writes a record before the note is moved aside,
+   * and the record is dead once the note is in the trash; a log that only
+   * grew had a phone reading back and looking on the disk for every deletion
+   * it had ever applied, on every pass. Writing nothing cannot be cut short
+   * into half a record, so the log is either as it was or empty, and the
+   * ledger asks for this only when every record in it is dead. Inside
+   * `process`, so a record appended since the log was read is not emptied
+   * with the dead ones; and the result is checked rather than trusted (rule
+   * 4).
+   */
+  async clear(was: string): Promise<boolean> {
+    let emptying = false;
+    await this.adapter.process(this.path, (current) => {
+      emptying = current === was;
+      return emptying ? "" : current;
+    });
+    if (!emptying) return false;
+    const stat = await this.adapter.stat(this.path);
+    if (stat === null || stat.type !== "file" || stat.size !== 0) {
+      throw new Error(`the displaced-version log at ${this.path} is not empty after emptying it`);
+    }
+    return true;
+  }
 
   async stillThere(at: string): Promise<boolean> {
     return (await this.adapter.stat(at)) !== null;
