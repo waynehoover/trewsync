@@ -352,7 +352,13 @@ the details. Sync is never affected by any of these.
 - **The store was restored from a backup.** The restored store is a different
   history. The export does not rewrite the branch: it adds one commit whose
   message starts `Restore:` and whose tree is the restored notes, and goes on
-  from there.
+  from there. That needs the export's repository, which a backup does not
+  hold: copy `git-export/` across from the directory you restored over, with
+  the server stopped, before its first start ([Restore](server-operations.md#restore)).
+  The backup does carry the settings. Without the repository the export
+  starts a new one, and its first push is refused because the remote's branch
+  holds commits it did not make; copy the old one across then, or export to a
+  new branch with `trewd git-export set -branch NAME`.
 - **A path Git cannot hold.** `git~1`, Windows' short name for `.git`, is
   refused by Git everywhere; such a path is left out and listed in status.
 - **git or git-lfs missing or too old.** Doctor names which; install it.

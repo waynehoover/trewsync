@@ -13,6 +13,7 @@ import (
 	"filippo.io/age"
 
 	"github.com/waynehoover/trewsync/internal/archive"
+	"github.com/waynehoover/trewsync/internal/config"
 	"github.com/waynehoover/trewsync/internal/dirlock"
 	"github.com/waynehoover/trewsync/internal/doctor"
 	"github.com/waynehoover/trewsync/internal/store"
@@ -59,6 +60,10 @@ func backupEncrypted(st *store.Store, dataDir, to string, deep bool, recipients 
 	if err != nil {
 		fmt.Fprintln(out, rep)
 		return rec, fmt.Errorf("staging the backup: %w", err)
+	}
+	// The settings go into the archive's manifest from the staging copy (T38).
+	if err := carrySettings(dataDir, staging); err != nil {
+		return rec, err
 	}
 	packed, err := archive.Pack(staging, to, recipients)
 	if err != nil {
@@ -230,10 +235,48 @@ func cmdUnpack(args []string, out io.Writer) error {
 	if err := origin.after(rep, out); err != nil {
 		return err
 	}
+	if err := restoreSettings(*to, rep.Manifest.Settings, origin.matched, out); err != nil {
+		return err
+	}
 	if err := upgradeCopy(*to); err != nil {
 		return err
 	}
 	return cmdVerify([]string{"-deep", "-data", *to}, out)
+}
+
+// settingsAside is where unpack puts the settings an archive carried when it
+// cannot say the archive is one this server wrote.
+const settingsAside = config.FileName + ".from-backup"
+
+// restoreSettings writes the settings an archive carried into the directory it
+// was unpacked into (T38): as the server's own when the archive is the backup
+// the record names, and otherwise beside them, unused, for a person to read.
+//
+// Settings choose where the Git export pushes the whole vault, and a forged
+// archive, which anyone holding the public recipient can make, could carry an
+// export to a remote of its maker's choosing: the devices would then send back
+// every note they hold to the restored server and it would push them there. An
+// archive's notes are taken on the operator's say-so after the digest check;
+// its settings are taken only on the check itself.
+func restoreSettings(dir string, settings []byte, verified bool, out io.Writer) error {
+	if len(settings) == 0 {
+		return nil
+	}
+	if verified {
+		if err := writeNewSecretFile(config.Path(dir), string(settings)); err != nil {
+			return fmt.Errorf("restoring the settings the backup carried: %w", err)
+		}
+		fmt.Fprintf(out, "  restored the server's settings (%s), as the recorded backup carried them\n", config.FileName)
+		return nil
+	}
+	aside := filepath.Join(dir, settingsAside)
+	if err := writeNewSecretFile(aside, string(settings)); err != nil {
+		return fmt.Errorf("writing the settings the backup carried: %w", err)
+	}
+	fmt.Fprintf(out, "  the backup carried its server's settings; they are in %s and not in use, because nothing "+
+		"compared this archive with a backup record. Read them, the Git export's remote above all, and rename "+
+		"the file to %s to use them\n", aside, config.FileName)
+	return nil
 }
 
 // upgradeCopy brings a store this command has just made, by unpacking or

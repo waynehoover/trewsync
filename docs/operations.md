@@ -210,9 +210,13 @@ export only reads what the store has committed.
   Put the branch back, or stop the server and move `git-export/` aside to
   export again from the store; with the store unpurged and the settings
   unchanged the rebuild makes the same commits, so the remote accepts it.
-- **The store was restored from a backup.** The export adds one commit marked
-  `Restore:` holding the restored notes and goes on; it never rewrites the
-  branch.
+- **The store was restored from a backup.** With `git-export/` copied across
+  from the preserved directory ([Restore](server-operations.md#restore)), the
+  export adds one commit marked `Restore:` holding the restored notes and goes
+  on; it never rewrites the branch. A backup does not hold `git-export/`, and
+  without it the export starts a new repository whose first push is refused:
+  copy it across with the server stopped, or export to a new branch with
+  `trewd git-export set -branch NAME`.
 - **git or git-lfs is missing or too old.** Install git 2.36 or later and
   git-lfs 3.0 or later on the server's PATH; the container image and the Nix
   package carry both.

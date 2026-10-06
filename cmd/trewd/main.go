@@ -26,6 +26,7 @@ import (
 
 	"github.com/waynehoover/trewsync/internal/archive"
 	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/config"
 	"github.com/waynehoover/trewsync/internal/control"
 	"github.com/waynehoover/trewsync/internal/dirlock"
 	"github.com/waynehoover/trewsync/internal/doctor"
@@ -1572,6 +1573,9 @@ func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writ
 		fmt.Fprintln(out, rep)
 		return err
 	}
+	if err := carrySettings(dataDir, destDir); err != nil {
+		return err
+	}
 
 	fmt.Fprintf(out, "backed up to %s\n", rep.Dir)
 	fmt.Fprintf(out, "  %d vaults, %d chunk references, %d bodies copied (%s)\n",
@@ -1661,6 +1665,34 @@ func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writ
 	fmt.Fprintf(out, "\nTo restore: stop the server and copy this directory into a new data directory\n"+
 		"(docs/server-operations.md, \"Restore\"); serve the copy, never the backup itself.\n")
 	fmt.Fprintf(out, "  trewd verify -deep -data %s\n", rep.Dir)
+	return nil
+}
+
+// carrySettings makes the configuration file in the backup at destDir the one
+// in dataDir, or removes it there when dataDir has none, so a restore comes
+// back with the settings the server ran with and not ones it has since
+// dropped (T38).
+//
+// A backup used to hold the database, the bodies and backup.json and nothing
+// of trewd.json, so the documented restore came up with the Git export off and
+// the daily-note settings at their defaults: the off-site history stopped
+// without a word, and today_note wrote to the vault's root. The file holds
+// paths and choices and never a secret (the export's credential is named by
+// its path), and is copied as it stands, written whole at 0600 and read back.
+func carrySettings(dataDir, destDir string) error {
+	b, err := os.ReadFile(config.Path(dataDir))
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(config.Path(destDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing settings the source no longer has from the backup: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading the settings to back up: %w", err)
+	}
+	if err := writeSecretFile(config.Path(destDir), string(b)); err != nil {
+		return fmt.Errorf("writing the settings into the backup: %w", err)
+	}
 	return nil
 }
 

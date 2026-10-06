@@ -533,7 +533,9 @@ A backup has to say which it is: with neither `-encrypt-to` nor
 staged as an ordinary verified backup in `backup-staging` inside the data
 directory, where the plaintext already is, and only the archive leaves it; the
 staging copy makes the next backup incremental and can be removed whenever no
-backup is running.
+backup is running. Both kinds carry the [configuration file](#configuration-file),
+`trewd.json`, and neither the Git export's repository; [Restore](server-operations.md#restore)
+says what a restore does with each.
 Each backup, good or failed, is recorded in `last-backup.json` for `doctor`.
 
 Follow the [purge procedure](server-operations.md#purge), including a separate

@@ -147,13 +147,32 @@ installation:
 ```bash
 sudo systemctl stop trew
 sudo mv /var/lib/trew /var/lib/trew.before-restore
-sudo trewd unpack -from /srv/trew-backups/trew.tar.age -identity ~/trew-backup-key -to /var/lib/trew
+sudo trewd unpack -from /srv/trew-backups/trew.tar.age -identity ~/trew-backup-key -to /var/lib/trew \
+  -record /var/lib/trew.before-restore
+sudo cp -a /var/lib/trew.before-restore/git-export /var/lib/trew/   # with the Git export on
 sudo chown -R trew:trew /var/lib/trew
 sudo -u trew /usr/local/bin/trewd verify -deep -data /var/lib/trew
 ```
 
 From a plaintext backup directory, copy it into place instead of unpacking
-(`sudo rsync -a offsite:/backups/trew/ /var/lib/trew/`).
+(`sudo rsync -a offsite:/backups/trew/ /var/lib/trew/`). Never start the server
+on the backup directory itself: it would be a live store, and the next backup
+into it is refused.
+
+A backup carries the server's settings (`trewd.json`): the Git export's and
+the daily notes'. A copied plaintext backup brings them back as they were, and
+so does unpack when `-record` shows the archive is the recorded backup.
+Without that check, unpack sets them aside as `trewd.json.from-backup`, unused,
+because settings name where the Git export pushes every note: read them,
+the remote above all, and rename the file to `trewd.json` to use them.
+
+The [Git export](git-export.md)'s own repository is not in a backup. Copy
+`git-export/` across from the preserved directory, as above, before the first
+start, and the export adds one commit marked `Restore:` and goes on. Without
+it the export starts a new repository, and its first push is refused, since the
+remote's branch holds commits it did not make: copy it across then (with the
+server stopped, replacing the new one), or export to a new branch with `trewd
+git-export set -branch NAME`.
 
 **An archive that decrypts is not proof that this server wrote it.** The
 recipient is public by design and sits on the server, so anyone who can read

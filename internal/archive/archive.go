@@ -45,6 +45,7 @@ import (
 	"filippo.io/age"
 
 	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/config"
 	"github.com/waynehoover/trewsync/internal/fsync"
 	"github.com/waynehoover/trewsync/internal/store"
 )
@@ -67,7 +68,19 @@ type Manifest struct {
 	BodyBytes int64 `json:"bodyBytes"`
 	// Database is the SHA-256 of the database the archive ends with.
 	Database string `json:"database"`
+	// Settings is the configuration file (trewd.json) the staged backup
+	// carried, byte for byte, when there was one: paths and choices, never a
+	// secret (T38). In the manifest rather than an entry of its own, because
+	// a build from before it reads every other entry as a body and would
+	// refuse the archive; this way it unpacks it all the same, without the
+	// settings. Unpack hands it back in the report and writes nothing of it:
+	// whether to use it is the caller's decision.
+	Settings []byte `json:"settings,omitempty"`
 }
+
+// maxSettings bounds the settings a manifest carries, well inside what an
+// unpack reads of a manifest. trewd.json is a few hundred bytes.
+const maxSettings = 256 << 10
 
 // Report is what a pack or an unpack did.
 type Report struct {
@@ -161,6 +174,16 @@ func Pack(dir, out string, recipients []age.Recipient) (Report, error) {
 		return rep, err
 	}
 	man := Manifest{Format: Format, Product: store.Product, TakenAt: meta.TakenAt, Bodies: len(bodies), Database: digest}
+	switch settings, err := os.ReadFile(config.Path(dir)); {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return rep, fmt.Errorf("reading the staged backup's settings: %w", err)
+	case len(settings) > maxSettings:
+		return rep, fmt.Errorf("the staged backup's %s is %d bytes, more than settings ever are", config.FileName,
+			len(settings))
+	default:
+		man.Settings = settings
+	}
 	for _, b := range bodies {
 		size, ok := cs.Size(b.vault, b.name)
 		if !ok {
