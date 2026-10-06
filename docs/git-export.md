@@ -73,7 +73,7 @@ and GitHub supports LFS over it.
 
 These steps run on the server's host. With Docker, run the `trewd` commands
 as `docker compose exec trew /trewd ...` and keep the key inside the data
-volume, owned by the container's user (uid 65532).
+volume, owned by the container's user (uid 65532), as step 2 shows.
 
 1. **Make an empty private repository**, with no README, licence or
    `.gitignore` (the export refuses a branch it did not make; to continue a
@@ -95,9 +95,29 @@ volume, owned by the container's user (uid 65532).
    ssh-keygen -t ed25519 -N '' -C 'trewsync git export' -f ~/.trew-keys/vault-history
    ```
 
-   For Docker, put it in the volume instead, for example
-   `./trew/data/keys/vault-history`, and `chown 65532:65532` it. The private
-   half must be mode 0600: the server refuses a key anyone else can read.
+   `~/.trew-keys` suits a server that runs as you, with its data in your home
+   (the default `~/.trew`). A server installed with `trewd service` whose data
+   is outside every home directory runs with `ProtectHome=true` and cannot
+   read anything under `/home`: keep the key in its data directory instead,
+   made and read as the server's account, and give that path to `-key` below:
+
+   ```bash
+   sudo install -d -m 700 -o trew -g trew /var/lib/trew/keys
+   sudo -u trew ssh-keygen -t ed25519 -N '' -C 'trewsync git export' -f /var/lib/trew/keys/vault-history
+   ```
+
+   For Docker, the data directory is the `trew-data` volume, and the server's
+   account is 65532. Make the key on the host as above, then copy its private
+   half into the volume as that account, and give `/data/keys/vault-history`
+   to `-key`:
+
+   ```bash
+   docker compose exec -T trew sh -c 'umask 077 && mkdir -p /data/keys && cat > /data/keys/vault-history' \
+     < ~/.trew-keys/vault-history
+   ```
+
+   The private half must be mode 0600: the server refuses a key anyone else
+   can read.
 
 3. **Add the public half as a deploy key with write access:**
 

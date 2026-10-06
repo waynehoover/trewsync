@@ -149,7 +149,7 @@ path. One object with a section per feature:
   "git_export": {
     "enabled": true,
     "remote": "git@github.com:you/vault-history.git",
-    "key": "/home/you/.trew-keys/vault-history",
+    "key": "/var/lib/trew/keys/vault-history",
     "quiet": "5m"
   },
   "daily": {

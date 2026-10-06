@@ -55,7 +55,7 @@ For Compose:
 ```bash
 sudo install -d -m 700 -o 65532 -g 65532 /srv/trew-backups
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup -v /etc/trew:/keys:ro \
-  trewd backup -to /backup/trew.tar.age -recipients-file /keys/backup-key.pub
+  trew backup -to /backup/trew.tar.age -recipients-file /keys/backup-key.pub
 ```
 
 The destination must be outside the data directory; TrewSync refuses nested
@@ -283,7 +283,7 @@ its image and volume:
 sudo install -d -m 700 -o 65532 -g 65532 /srv/trew-backups
 docker compose stop trew
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
-  trewd backup -plaintext-ok -to /backup/before-purge
+  trew backup -plaintext-ok -to /backup/before-purge
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
   trew verify -deep -data /backup/before-purge
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \

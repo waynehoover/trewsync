@@ -409,7 +409,7 @@ func (r *run) storage() {
 			why = "the container's own writable layer, erased when the container is replaced, which every upgrade does"
 		}
 		r.bad(Fail, CheckStorage, fmt.Sprintf("%s is on %s: %s", s.Dir, where, why),
-			"Mount a persistent volume at the data directory (compose.yaml mounts ./trew/data at /data) and move the "+
+			"Mount a persistent volume at the data directory (compose.yaml mounts the trew-data volume at /data) and move the "+
 				"store onto it with the server stopped. Until then every note here is one restart from gone.")
 	default:
 		r.ok(CheckStorage, fmt.Sprintf("%s is on %s, which survives a restart", s.Dir, where))

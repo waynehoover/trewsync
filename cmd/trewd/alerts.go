@@ -141,7 +141,7 @@ func ephemeralRefusal(dataDir string, s doctor.Storage) error {
 	}
 	return fmt.Errorf("the data directory %s is on %s (%s mounted at %s), and it holds no notes yet: a server "+
 		"started here would take every note and lose them all at once.\n"+
-		"Mount a persistent volume at it (compose.yaml mounts ./trew/data at /data), or pass -allow-ephemeral to "+
+		"Mount a persistent volume at it (compose.yaml mounts the trew-data volume at /data), or pass -allow-ephemeral to "+
 		"start anyway, for a trial whose notes you mean to throw away", dataDir, why, s.FSType, s.MountPoint)
 }
 

@@ -332,7 +332,13 @@ func mcpArg(on bool) string {
 // directive quietly missing is worse than one that says why.
 func protectHome(data, home string) string {
 	if !underHome(data, home) {
-		return "\nProtectHome=true\n"
+		// Said in the unit as well as the guide: the Git export's guide used
+		// to put its deploy key in ~/.trew-keys, which this hides, so the
+		// export's push failed on a key the server could not read (docs
+		// review).
+		return "\n# Every home directory is hidden from this unit, so the Git export's key and\n" +
+			"# token belong in the data directory (docs/git-export.md), not under /home.\n" +
+			"ProtectHome=true\n"
 	}
 	return "\n# ProtectHome is left off: the data directory is inside a home\n" +
 		"# directory, and turning it on would make that unreadable to this unit.\n" +
