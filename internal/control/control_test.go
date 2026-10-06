@@ -124,6 +124,35 @@ func TestAStaleSocketIsNotAServer(t *testing.T) {
 	}
 }
 
+// T45. The socket is bound and then made 0600, so with a permissive umask
+// and a data directory other accounts can traverse there was a moment when
+// another account could connect, and nothing afterwards asked who had: the
+// operator's powers, revoke and invite and the MCP tokens among them, went to
+// whoever got in. Each connection's peer is now asked who it is, and one that
+// is neither this server's account nor root is refused before its request is
+// read. Here the server is made to believe it runs as another account, since
+// a test cannot be one.
+func TestAPeerOfAnotherAccountIsRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, which every server lets in")
+	}
+	dir := t.TempDir()
+	srv, err := Listen(dir, echo{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	was := ownUID
+	ownUID = func() int { return os.Geteuid() + 1 }
+	defer func() { ownUID = was }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if reply, err := Call(ctx, dir, Request{Op: "devices"}); err == nil {
+		t.Fatalf("a peer of another account was answered: %+v", reply)
+	}
+}
+
 // A request that is not JSON, or longer than any request, is refused with a
 // reply rather than a dropped connection.
 func TestAMalformedRequestIsRefusedInWords(t *testing.T) {
