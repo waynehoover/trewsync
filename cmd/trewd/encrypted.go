@@ -222,7 +222,29 @@ func cmdUnpack(args []string, out io.Writer) error {
 	if err := origin.after(rep, out); err != nil {
 		return err
 	}
+	if err := upgradeCopy(*to); err != nil {
+		return err
+	}
 	return cmdVerify([]string{"-deep", "-data", *to}, out)
+}
+
+// upgradeCopy brings a store this command has just made, by unpacking or
+// copying a backup into a new directory, to this build's schema before it is
+// checked (T28).
+//
+// Inspection never migrates, and refuses a store older than this build rather
+// than read it wrongly, so an archive an older build made could not be
+// verified at all: unpack ended in `no such table: operations` on a store
+// that serve upgrades without a word. The copy is this command's own, nothing
+// serves it and nothing else has it open, so upgrading it is what serve would
+// do to it first anyway, done before rather than after the check.
+func upgradeCopy(dir string) error {
+	dbPath, chunkDir := store.DataDir(dir)
+	st, err := store.OpenMode(dbPath, chunkDir, store.Existing, store.SyncFull)
+	if err != nil {
+		return fmt.Errorf("upgrading the store unpacked into %s to this build's schema: %w", dir, err)
+	}
+	return st.Close()
 }
 
 // archiveOrigin is what checkArchiveOrigin found out about an archive before

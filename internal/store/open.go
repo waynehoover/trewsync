@@ -104,7 +104,8 @@ const (
 	// Existing opens a store that must already be there, and still migrates.
 	Existing
 	// ReadOnly opens without creating, without migrating and without writing
-	// the schema, and SQLite itself refuses writes through the handle.
+	// the schema, and SQLite itself refuses writes through the handle. A store
+	// older than this build is refused rather than read wrongly (T28).
 	ReadOnly
 	// Source opens a store a backup is taken from, beside a server that may
 	// be running on it: it must already be there and at this build's schema,
@@ -115,22 +116,39 @@ const (
 )
 
 // ErrOlderSchema is a store at a schema older than this build's, opened by a
-// command that may not upgrade it.
+// command that may not upgrade it. OlderSchemaError carries which.
 var ErrOlderSchema = errors.New("this store is at a schema older than this " + Program + "'s")
 
-// olderSchema is the refusal of a store older than this build, for a command
-// that may not upgrade it: what the store is, why this command leaves it
-// alone, and what does upgrade it.
+// OlderSchemaError is the refusal of a store older than this build, by a
+// command that may not upgrade it: what the store is, why this command leaves
+// it alone, and what does upgrade it. It is ErrOlderSchema.
 //
-// A backup's source (T37): the server running on it is the older build,
-// which `trewd update` leaves running until it restarts, so the backup is the
-// one command that would meet it, every night.
-func olderSchema(dbPath string, have int) error {
-	return fmt.Errorf("%w: %s is schema %d and this %s writes %d. A server running on it is the older "+
-		"build, and a backup that upgraded the store under it would leave that build refusing its own "+
-		"store, and the rollback to it too. Restart the server with this build (systemctl restart trew), "+
-		"which upgrades the store when it opens it, and run this again; nothing was changed",
-		ErrOlderSchema, dbPath, have, Program, SchemaVersion)
+// Two commands meet one. A backup's source (T37): the server running on it is
+// the older build, which `trewd update` leaves running until it restarts, so
+// the nightly backup is the first to meet it. And inspection (T28), which
+// never migrates and used to open such a store anyway: every check that reads
+// a table the older schema lacks then failed with an SQL error, `no such
+// table: operations`, in place of an answer.
+type OlderSchemaError struct {
+	Path   string
+	Schema int
+	mode   Mode
+}
+
+func (e *OlderSchemaError) Unwrap() error { return ErrOlderSchema }
+
+func (e *OlderSchemaError) Error() string {
+	why := "Opened only to be looked at it is not upgraded, and this build would read tables it does not have " +
+		"yet. A store a server runs on: restart the server with this build (systemctl restart trew), which " +
+		"upgrades it when it opens it. A backup directory: copy it to a new directory and start this build's " +
+		"`trewd serve` there once, or `trewd unpack` an archive, which upgrades what it unpacks"
+	if e.mode == Source {
+		why = "A server running on it is the older build, and a backup that upgraded the store under it would " +
+			"leave that build refusing its own store, and the rollback to it too. Restart the server with this " +
+			"build (systemctl restart trew), which upgrades the store when it opens it, and run this again"
+	}
+	return fmt.Sprintf("%v: %s is schema %d and this %s works with %d. %s; nothing was changed",
+		ErrOlderSchema, e.Path, e.Schema, Program, SchemaVersion, why)
 }
 
 // OpenMode opens a store with an explicit contract about what it may change.
@@ -193,9 +211,9 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 		db.Close()
 		return nil, fmt.Errorf("%s holds no store: it has no tables, so it was never initialised", dbPath)
 	}
-	if mode == Source && id.SchemaVersion < SchemaVersion {
+	if (mode == Source || mode == ReadOnly) && id.SchemaVersion < SchemaVersion {
 		db.Close()
-		return nil, olderSchema(dbPath, id.SchemaVersion)
+		return nil, &OlderSchemaError{Path: dbPath, Schema: id.SchemaVersion, mode: mode}
 	}
 
 	if mode != ReadOnly && mode != Source {

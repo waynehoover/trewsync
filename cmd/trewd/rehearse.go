@@ -167,6 +167,17 @@ func (r *rehearsal) run(ctx context.Context, backup string, encrypted bool, iden
 		r.step("copied %d files of the plaintext backup", n)
 	}
 
+	// What the backup says it holds, read before anything opens the copy's
+	// database: backup.json describes that file byte for byte, and bringing a
+	// copy an older build made up to this build's schema, next, changes it.
+	meta, err := store.ReadBackupMeta(r.dir)
+	if err != nil {
+		return rec, err
+	}
+	if err := upgradeCopy(r.dir); err != nil {
+		return rec, err
+	}
+
 	// 2. Checked against itself, deeply.
 	dbPath, chunkDir := store.DataDir(r.dir)
 	insp, err := store.OpenForInspection(dbPath, chunkDir)
@@ -193,10 +204,6 @@ func (r *rehearsal) run(ctx context.Context, backup string, encrypted bool, iden
 	}
 	defer st.Close()
 	stats, err := st.Stats(r.vault)
-	if err != nil {
-		return rec, err
-	}
-	meta, err := store.ReadBackupMeta(r.dir)
 	if err != nil {
 		return rec, err
 	}

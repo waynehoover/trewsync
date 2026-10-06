@@ -515,11 +515,25 @@ func (r *run) openStore() (func(), bool) {
 	}
 	dbPath, chunkDir := store.DataDir(r.opt.DataDir)
 	st, err := store.OpenForInspection(dbPath, chunkDir)
-	if err != nil {
+	var older *store.OlderSchemaError
+	switch {
+	case errors.As(err, &older):
+		// An older build's store is refused for inspection rather than read
+		// wrongly (T28), and this build's backup refuses it too rather than
+		// upgrade it under the older server (T37): what to do is restart.
+		lock.Release()
+		r.bad(Warn, CheckIdentity, fmt.Sprintf("the store is at schema %d and this build writes %d", older.Schema,
+			store.SchemaVersion),
+			"Restart the server with this build (or start this build's `trewd serve`), which upgrades the store when "+
+				"it opens it. Until then this build examines nothing in it, and its backup refuses the store rather "+
+				"than upgrade it under the older server.")
+		r.note(CheckStore, "not examined: the store is at an older schema than this build reads")
+		return nil, false
+	case err != nil:
 		lock.Release()
 		r.bad(Fail, CheckStore, fmt.Sprintf("the store cannot be opened: %v", err),
-			"If the schema is older, start `trewd serve` once to upgrade it. Otherwise keep the directory as it is, "+
-				"restore from a backup into a fresh directory (docs/operations.md), and read notes out with `trewd cat`.")
+			"Keep the directory as it is, restore from a backup into a fresh directory (docs/operations.md), and "+
+				"read notes out with `trewd cat`.")
 		return nil, false
 	}
 	r.st = st
@@ -547,16 +561,7 @@ func (r *run) identity() {
 			"Run doctor with -vault naming the vault the server serves.")
 		return
 	}
-	if id.SchemaVersion < store.SchemaVersion {
-		// Not "take a backup first" any more: this build's backup refuses a
-		// store older than itself rather than upgrade it under the older
-		// server still running on it (T37).
-		r.bad(Warn, CheckIdentity, fmt.Sprintf("the store is at schema %d and this build writes %d", id.SchemaVersion, store.SchemaVersion),
-			"Restart the server with this build (or start this build's `trewd serve`), which upgrades the store when "+
-				"it opens it. Until then this build's backup refuses the store rather than upgrade it under the older "+
-				"server.")
-		return
-	}
+	// A store at an older schema never gets here: openStore reports it.
 	r.ok(CheckIdentity, fmt.Sprintf("product %s, schema %d, epoch %s, vault %q at uid %d", id.Product, id.SchemaVersion,
 		id.Epoch, r.opt.Vault, r.latest))
 }

@@ -467,8 +467,9 @@ server: it is the only thing that reads the backups.
 
 `trewd unpack -from FILE -identity KEY -to DIR` decrypts an encrypted backup
 into DIR, which must be new or empty, checks every body against its name and
-the database against the archive's manifest, writes the database last, and
-then runs `verify -deep` on the result. A damaged or truncated archive never
+the database against the archive's manifest, writes the database last, brings
+a store an older `trewd` wrote up to this build's schema, and then runs
+`verify -deep` on the result. A damaged or truncated archive never
 becomes a data directory. `-record DIR` (a data directory, or a copy of its
 `last-backup.json`) compares the archive's SHA-256 with the last backup
 recorded there before decrypting, and refuses another archive unless
