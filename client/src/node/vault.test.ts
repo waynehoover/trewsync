@@ -15,7 +15,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { JsonIndexStore, NodeVault, TEMP_MARK, isTemporary, writeDurably } from "./vault.ts";
+import {
+  JsonIndexStore,
+  NodeVault,
+  TEMP_MARK,
+  isParkedOriginal,
+  isTemporary,
+  midReplace,
+  writeDurably,
+} from "./vault.ts";
 import { removeTree } from "../core/test-server.ts";
 import { deferred, within } from "../core/test-async.ts";
 import { plainDigest } from "../core/digest.ts";
@@ -703,6 +711,102 @@ describe("deleting, which must be recoverable", () => {
     expect(await readFile(join(root, ".trash", "Ideas"), "utf8")).toBe(
       "an earlier note called Ideas",
     );
+  });
+});
+
+/**
+ * T63. A file or folder name may be up to 255 bytes, and the server accepts
+ * one that long. The names this client makes from a note's name, to move it
+ * aside, to stage it, to keep a second version beside it or a second copy in
+ * the trash, added up to 23 bytes, so every one of them failed with
+ * ENAMETOOLONG for a note of 233 bytes or more: an update never landed, a
+ * deletion never happened, and the pass failed the same way for ever.
+ */
+describe("a note whose name is near the longest a name can be (T63)", () => {
+  const bytes = (s: string) => Buffer.byteLength(s);
+  const times = { mtime: 1_700_000_000_000, ctime: 1_700_000_000_000 };
+  const broken = String.fromCodePoint(0xfffd);
+  // 240 and 253 bytes, and one in two-byte characters, which must not be cut
+  // in half.
+  const names = [`${"n".repeat(237)}.md`, `${"m".repeat(250)}.md`, `${"é".repeat(118)}.md`];
+  // A conflict-copy name that is itself near the limit, for each of those.
+  const keeps = [`${"k".repeat(249)}.md`, `${"q".repeat(250)}.md`, `${"ké".repeat(83)}.md`];
+  const expecting = async (text: string) => ({
+    contentId: await plainDigest(enc.encode(text)),
+    idOf: plainDigest,
+  });
+
+  it("is replaced, and a version it displaces is kept beside it", async () => {
+    const v = new NodeVault(root);
+    for (const [i, name] of names.entries()) {
+      expect(bytes(name)).toBeGreaterThan(232);
+      await writeFile(join(root, name), "version one\n");
+      const one = await expecting("version one\n");
+      expect(await v.replace(name, one, enc.encode("two\n"), times, "k.md")).toEqual({
+        landed: true,
+      });
+      expect(await readFile(join(root, name), "utf8")).toBe("two\n");
+      // An edit nobody expected is kept, and beside its conflict name when
+      // that is taken, which makes a name longer still.
+      const keep = keeps[i]!;
+      await writeFile(join(root, keep), "already here");
+      const other = await expecting("not this");
+      const out = await v.replace(name, other, enc.encode("three\n"), times, keep);
+      expect(out.landed).toBe(true);
+      expect(out.keptAt).toBeDefined();
+      expect(out.keptAt).not.toBe(keep);
+      expect(await readFile(join(root, out.keptAt!), "utf8")).toBe("two\n");
+      expect(await readFile(join(root, keep), "utf8")).toBe("already here");
+      expect(await readFile(join(root, name), "utf8")).toBe("three\n");
+    }
+    for (const name of await readdir(root)) {
+      expect(bytes(name), name).toBeLessThanOrEqual(255);
+      expect(name).not.toContain(broken);
+    }
+  });
+
+  it("is parked under a shortened name that is still known for what it is", async () => {
+    // The name a crash would leave it at, which the scan has to report as a
+    // version waiting and never list as a note.
+    const v = new NodeVault(root);
+    const name = names[1]!;
+    await writeFile(join(root, name), "version one\n");
+    let parked: string[] = [];
+    midReplace.nameFree = async () => {
+      parked = (await readdir(root)).filter((n) => n !== name && !n.startsWith("."));
+    };
+    try {
+      await v.replace(name, await expecting("version one\n"), enc.encode("two\n"), times, "k.md");
+    } finally {
+      midReplace.nameFree = async () => {};
+    }
+    expect(parked).toHaveLength(1);
+    expect(bytes(parked[0]!)).toBeLessThanOrEqual(255);
+    expect(isParkedOriginal(parked[0]!)).toBe(true);
+    expect(isTemporary(parked[0]!)).toBe(true);
+  });
+
+  it("is created, removed and trashed a second time", async () => {
+    const v = new NodeVault(root);
+    for (const name of names) {
+      expect(await v.create(name, enc.encode("first\n"), times)).toBe(true);
+      await v.remove(name);
+      expect(await v.create(name, enc.encode("second\n"), times)).toBe(true);
+      const second = await expecting("second\n");
+      expect(await v.removeExpecting(name, second, "kept.md")).toEqual({ landed: true });
+      expect(await v.exists(name)).toBe(false);
+    }
+    const trashed = await readdir(join(root, ".trash"));
+    expect(trashed).toHaveLength(6);
+    const kept = await Promise.all(
+      trashed.map((name) => readFile(join(root, ".trash", name), "utf8")),
+    );
+    expect(kept.filter((k) => k === "first\n")).toHaveLength(3);
+    expect(kept.filter((k) => k === "second\n")).toHaveLength(3);
+    for (const name of trashed) {
+      expect(bytes(name), name).toBeLessThanOrEqual(255);
+      expect(name).not.toContain(broken);
+    }
   });
 });
 

@@ -39,6 +39,7 @@ import {
   obsidianSpaces,
   splitName,
 } from "../core/paths.ts";
+import { MAX_SEGMENT_BYTES } from "../core/path-policy.ts";
 import { composite, seam } from "../core/seam.ts";
 import {
   DISPLACED_LOG,
@@ -498,10 +499,47 @@ async function freeSiblingName(full: string, why: string): Promise<string> {
   const stem = dot <= 0 ? base : base.slice(0, dot);
   const ext = dot <= 0 ? "" : base.slice(dot);
   for (let n = 1; n < 1000; n++) {
-    const at = join(dir, `${stem} (${why} ${n})${ext}`);
-    if (!(await lstat(at).catch(() => undefined))) return at;
+    const at = join(dir, withSuffix(stem, ` (${why} ${n})${ext}`));
+    // `occupied`, so a name that cannot be looked at is not taken for free.
+    if (!(await occupied(at))) return at;
   }
   throw new Error(`no free name beside ${full}`);
+}
+
+/**
+ * `name` with `suffix` after it, the name cut short at a character so the two
+ * fit in one file name (T63).
+ *
+ * A file or folder name may be 255 bytes, and the server accepts one that
+ * long, so every name this client makes out of a note's name has to make
+ * room. They added up to 23 bytes: moving a note aside, staging it, keeping a
+ * version beside it and numbering a second copy in the trash all failed with
+ * ENAMETOOLONG for a note of 233 bytes or more, so its update never landed and
+ * its deletion never happened, on every pass.
+ *
+ * The suffix is what is kept whole, because it is what carries the meaning:
+ * the markers `isTemporary`, `isParkedOriginal` and the reaper go by, the
+ * random part that keeps the name unique, the number, the extension. What is
+ * cut is the end of the note's own name, which is there for a person to read
+ * and is never parsed back out: a displaced version's note is the one the
+ * ledger records. Cut at a code point, so never half a character.
+ */
+function withSuffix(name: string, suffix: string): string {
+  const room = MAX_SEGMENT_BYTES - Buffer.byteLength(suffix);
+  if (Buffer.byteLength(name) <= room) return name + suffix;
+  let kept = "";
+  let used = 0;
+  for (const ch of name) {
+    used += Buffer.byteLength(ch);
+    if (used > room) break;
+    kept += ch;
+  }
+  return kept + suffix;
+}
+
+/** A name beside `full`, made of its own name and `suffix` (T63). */
+function besideName(full: string, suffix: string): string {
+  return join(dirname(full), withSuffix(basename(full), suffix));
 }
 
 /**
@@ -2210,7 +2248,7 @@ export class NodeVault implements Vault {
     await this.insideForReal(kept);
     let staged = join(this.staging, `replace.${randomBytes(8).toString("hex")}`);
     // Named out here so the `finally` can say it is no longer this call's.
-    const parked = `${full}.${PARKED_MARK}${randomBytes(4).toString("hex")}`;
+    const parked = besideName(full, `.${PARKED_MARK}${randomBytes(4).toString("hex")}`);
     let retained: string | undefined;
     let failed = false;
     const failure = (error: unknown): unknown =>
@@ -2239,7 +2277,7 @@ export class NodeVault implements Vault {
       // second staging copy beside the destination, where a link always
       // reaches.
       if (!(await sameFilesystem(staged, dirname(full)))) {
-        const near = `${full}.${TEMP_MARK}near${randomBytes(4).toString("hex")}`;
+        const near = besideName(full, `.${TEMP_MARK}near${randomBytes(4).toString("hex")}`);
         await writeDurably(near, bytes, true, stage);
         await rm(staged, { force: true });
         staged = near;
@@ -2502,7 +2540,7 @@ export class NodeVault implements Vault {
     // trash. Parked at the conflict-copy path it reached the trash *called* a
     // conflict copy, which is a name nobody searches for and a claim that
     // something was in conflict when nothing was.
-    const aside = `${full}.${PARKED_MARK}${randomBytes(4).toString("hex")}`;
+    const aside = besideName(full, `.${PARKED_MARK}${randomBytes(4).toString("hex")}`);
     // Not a stranded version while this call is holding it; see `replace`.
     liveTemps.add(aside);
     try {
@@ -2742,13 +2780,14 @@ export class NodeVault implements Vault {
     for (const part of parts) {
       const parent = dir;
       dir = await firstFreeName(join(parent, part), heldByNonFolder, (n) =>
-        join(parent, `${part} (${n})`),
+        join(parent, withSuffix(part, ` (${n})`)),
       );
     }
-    const base = join(dir, leaf);
-    const { ext } = splitName(leaf);
-    const stem = ext === "" ? base : base.slice(0, base.length - ext.length);
-    return firstFreeName(base, occupied, (n) => `${stem} (${n})${ext}`);
+    // Numbered inside the extension, and cut to fit the longest name (T63).
+    const { stem, ext } = splitName(leaf);
+    return firstFreeName(join(dir, leaf), occupied, (n) =>
+      join(dir, withSuffix(stem, ` (${n})${ext}`)),
+    );
   }
 
   async mkdir(path: string): Promise<void> {
@@ -3316,7 +3355,10 @@ async function openTemp(
   if (stageIn !== undefined) await mkdir(stageIn, { recursive: true });
   const base = stageIn !== undefined ? join(stageIn, basename(full)) : full;
   for (let attempt = 0; attempt < 64; attempt++) {
-    const tmp = `${base}${TEMP_MARK}${(tempCounter++).toString(36)}${attempt ? `-${attempt}` : ""}`;
+    const tmp = besideName(
+      base,
+      `${TEMP_MARK}${(tempCounter++).toString(36)}${attempt ? `-${attempt}` : ""}`,
+    );
     try {
       const handle = await open(tmp, "wx", mode);
       liveTemps.add(tmp);
@@ -3337,7 +3379,7 @@ async function openTemp(
  */
 async function freeTempName(full: string): Promise<string> {
   for (let n = 0; n < 64; n++) {
-    const at = `${full}.${TEMP_MARK}${randomBytes(4).toString("hex")}`;
+    const at = besideName(full, `.${TEMP_MARK}${randomBytes(4).toString("hex")}`);
     if (!(await lstat(at).catch(() => undefined))) return at;
   }
   throw new Error(`no free temporary name beside ${full}`);
