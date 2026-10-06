@@ -753,6 +753,45 @@ func TestRestoreNoteReadsOnlyWhatReadNoteReads(t *testing.T) {
 	}
 }
 
+// A call that runs out of time is busy, whichever tool it is and however the
+// store or the index noticed: it was internal, logged as a failure, for the
+// tools that met the deadline inside a read rather than after it (T53). A
+// write that commits regardless is still committed, as below.
+func TestACallOutOfTimeIsBusyNeverInternal(t *testing.T) {
+	r := newRig(t, withLimits(Limits{TokenBurst: 1000, TokenRate: 1000, ToolDeadline: time.Nanosecond}))
+	a := r.writer("agent")
+	uid := r.write("a.md", "---\ntags: [x]\n---\n[[b]]\n")
+	r.write("b.md", "x\n")
+	r.indexed()
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"vault_status", nil},
+		{"list_notes", nil},
+		{"search_notes", map[string]any{"query": "xyz"}},
+		{"backlinks", map[string]any{"path": "b.md"}},
+		{"outgoing_links", map[string]any{"path": "a.md"}},
+		{"broken_links", nil},
+		{"orphans", nil},
+		{"move_note", map[string]any{"path": "a.md", "base": uid, "to": "c.md", "epoch": r.epoch()}},
+		{"delete_note", map[string]any{"path": "b.md", "base": r.head("b.md"), "epoch": r.epoch()}},
+		{"delete_note", map[string]any{"path": "b.md", "base": r.head("b.md"), "markBroken": true, "epoch": r.epoch()}},
+		{"rename_tag", map[string]any{"oldTag": "x", "newTag": "y"}},
+		{"add_tags", map[string]any{"paths": []string{"a.md"}, "tags": []string{"z"}}},
+	} {
+		if code := invoke(t, a.cs, c.tool, c.args).errorCode(); code != "busy" {
+			t.Errorf("%s %v out of time: %q, want busy", c.tool, c.args, code)
+		}
+	}
+	if logs := r.logs.String(); strings.Contains(logs, "level=ERROR") {
+		t.Errorf("a call that ran out of time was logged as a failure:\n%s", logs)
+	}
+	if w := wrote(t, invoke(t, a.cs, "create_note", map[string]any{"path": "new.md", "content": "x"})); w.OpID == "" {
+		t.Fatal("a write committed past the deadline")
+	}
+}
+
 // A write that commits after the tool's deadline has passed is still
 // committed, and its reply says so, with the opId: the deadline bounds how
 // long a tool works, and it cannot take back a commit. Replaced by busy, the

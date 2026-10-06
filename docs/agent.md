@@ -434,6 +434,7 @@ passes through the endpoint, so a busy agent cannot slow it.
 | 429 | A rate limit; the client should wait for `Retry-After`. |
 | The client cannot connect at all | It must reach the address: on the tailnet, over `https://`, with the `/mcp` path. |
 | `read_only` | A read token called a write tool, or the token was revoked or lost write scope during the call. |
+| `busy` | The call ran out of its 30 seconds, or the client cancelled it, and nothing was written. Try again, or ask for a smaller page. |
 | `stale` | The note changed since it was read. Read it again. |
 | `plan_changed` | The vault changed between preview and apply. Preview again. |
 

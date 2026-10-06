@@ -40,6 +40,31 @@ func toolError(err error) *ToolError {
 	return &ToolError{Code: "internal", Message: "the server could not complete this call; its log says why"}
 }
 
+// outOfTime is busy, for a call that ran out of time or was cancelled before
+// it could answer. Nothing was written, and the same request may succeed
+// later, or when it asks for less.
+func outOfTime() *ToolError {
+	return &ToolError{Code: "busy", Message: "the call ran out of time or was cancelled, and nothing was written; " +
+		"try again, or ask for a smaller page"}
+}
+
+// errorOf is toolError for an error this call met, with anything it met once
+// its own deadline or cancellation had come as busy. The store and the index
+// word a cancelled read in their own ways (the context's error, a transaction
+// rolled back under it, an interrupted statement), and none of them is the
+// server failing: reported as internal, and logged as a failure, they told
+// the agent the server was broken when it had only run out of time (T53). A
+// refusal keeps its code, and so does an operation's outcome, which
+// mutation.failed decides before it asks: an outcome the store cannot state
+// is never busy.
+func (c *call) errorOf(err error) *ToolError {
+	te := toolError(err)
+	if te.Code == "internal" && c.ctx != nil && c.ctx.Err() != nil {
+		return outOfTime()
+	}
+	return te
+}
+
 // Observed is what every read result says about when and where it was read
 // (plan/mcp-tools.md, "Result envelope"): the vault's head at the time, the
 // store's epoch, and the server's clock.
@@ -66,7 +91,7 @@ func failure(tool string, e *ToolError) outcome {
 // is not a refusal. The log line names the tool and the error, never an
 // argument: a path or a query is the vault's metadata (PLAN.md section 2.2).
 func (c *call) failErr(err error) outcome {
-	te := toolError(err)
+	te := c.errorOf(err)
 	if te.Code == "internal" {
 		c.h.log.Error("MCP tool failed", "tool", c.tool.Name, "err", err)
 	}

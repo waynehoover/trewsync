@@ -589,8 +589,11 @@ func (m *mutation) failed(err error) outcome {
 		out.Error = &cp
 		about, cp.Path = cp.Path, ""
 	default:
-		out.Error = toolError(err)
-		c.h.log.Error("MCP tool failed", "tool", c.tool.Name, "err", err)
+		// Before any commit: what the tool met preparing it, the call's own
+		// deadline included, which is busy (T53).
+		if out.Error = c.errorOf(err); out.Error.Code == "internal" {
+			c.h.log.Error("MCP tool failed", "tool", c.tool.Name, "err", err)
+		}
 	}
 	var untrusted any
 	switch {
