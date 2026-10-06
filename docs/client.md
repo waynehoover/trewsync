@@ -230,6 +230,9 @@ The CLI excludes dot-prefixed files and folders, `node_modules`, and the
 Obsidian configuration folder. Use `--config-dir NAME` if yours differs from
 `.obsidian`. Add `--ignore NAME` for a file or folder name to exclude at every
 depth; repeat the flag for more names. These choices apply to this device only.
+On a disk that ignores letter case, such as a Mac's, an ignored name matches in
+any case: with `--ignore Archive`, a note another device keeps in `archive/` is
+refused here as ignored, because on this disk it would land in `Archive`.
 
 A name that starts with a dot never syncs from any device, at any depth, so a
 folder such as `.attachments` stays on this machine. The server also refuses
@@ -245,6 +248,20 @@ would become the same name, TrewSync blocks those paths and identifies them;
 rename one yourself. Keep clients updated together to avoid older clients
 reintroducing obsolete spellings. Filesystem renames can appear as a deletion
 of the old path and a creation of the new one; both names retain their history.
+
+### Deleted notes go to `.trash`
+
+When a note is deleted on another device, this client does not delete its copy:
+it moves the file into `.trash/` at the top of the vault, under the path it
+had, so `Projects/plan.md` goes to `.trash/Projects/plan.md`. A name already
+taken there gets a number, as in `plan (1).md`, so an earlier deletion is never
+replaced. Like every dot-prefixed folder, `.trash` never syncs, so nothing in it
+comes back on other devices.
+
+TrewSync never empties it, and it grows with every deletion. Look through it
+and delete what you no longer want, with any file manager. To bring a note
+back, move it out of `.trash` into the vault and sync, or use `trew restore`,
+which takes the version from the server's history instead.
 
 ## A command says the vault is locked
 
