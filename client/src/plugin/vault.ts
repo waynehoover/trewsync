@@ -786,6 +786,11 @@ export class ObsidianVault implements Vault {
     }
 
     if (this.unlisted.size > 0) await this.addUnlisted(byPath, out);
+    // A landing the index now has has been reported, and one with nothing on
+    // the disk never will be: neither is waited for any longer (P-3).
+    for (const path of this.landing.keys()) {
+      if (!this.unlisted.has(path)) this.landing.delete(path);
+    }
 
     // What this client has taken off a name and could not put back. From the
     // ledger only, unlike the headless client: Obsidian's index does not list
@@ -886,6 +891,63 @@ export class ObsidianVault implements Vault {
    */
   ownRename(from: string, to: string): boolean {
     return this.renaming.get(from) === to;
+  }
+
+  /**
+   * Files this client renamed into place, with the size and the time it gave
+   * them, until Obsidian reports them (P-3).
+   *
+   * A file renamed into place from a staging copy is reported by Obsidian's
+   * watcher some time later, as `create`, and the plugin used to take that
+   * for news: it marked the file changed and asked for another round, and the
+   * round read and hashed again every file the pass had just written and read
+   * back. On a first sync that was 12 to 14 ms more for every file on a phone.
+   * Kept until the report comes, or until a listing finds the index has the
+   * name or the disk has nothing there.
+   */
+  private readonly landing = new Map<string, { size: number; mtime: number }>();
+
+  /**
+   * Paths this client is writing in place, removing or making right now,
+   * with how many such calls are in hand for each (P-3). Obsidian reports a
+   * `modify`, `delete` or folder `create` from inside the call that caused
+   * it (read out of 1.13.7), so a report while one is held is this client's.
+   */
+  private readonly touching = new Map<string, number>();
+
+  /** Runs one adapter call on `normalized` as this client's own (see `touching`). */
+  private async touch<T>(normalized: string, work: () => Promise<T>): Promise<T> {
+    this.touching.set(normalized, (this.touching.get(normalized) ?? 0) + 1);
+    try {
+      return await work();
+    } finally {
+      const left = (this.touching.get(normalized) ?? 1) - 1;
+      if (left > 0) this.touching.set(normalized, left);
+      else this.touching.delete(normalized);
+    }
+  }
+
+  /**
+   * Whether a `create` Obsidian reports is a file this client has just
+   * landed, as it landed it, or a folder it is making (P-3).
+   *
+   * A file's report is matched against the size and time this client gave it,
+   * once: a write by anything else in between carries a time of its own and
+   * is reported as news, as before. The engine has already recorded what it
+   * landed, so nothing from the report is needed, and no byte is trusted from
+   * it.
+   */
+  ownCreate(path: string, stat: { size: number; mtime: number } | undefined): boolean {
+    if (stat === undefined) return this.touching.has(path);
+    const landed = this.landing.get(path);
+    if (landed === undefined) return false;
+    this.landing.delete(path);
+    return stat.size === landed.size && Math.round(stat.mtime) === Math.round(landed.mtime);
+  }
+
+  /** Whether a `modify` or `delete` Obsidian reports is this client's own (P-3). */
+  ownChange(path: string): boolean {
+    return this.touching.has(path);
   }
 
   /** Paths the last `list` left out because two names in the index claim them. */
@@ -1223,7 +1285,7 @@ export class ObsidianVault implements Vault {
     ) {
       // The version this write was decided about: the copy is a duplicate of
       // something the server already holds.
-      await this.adapter.remove(kept).catch(() => undefined);
+      await this.dropDuplicate(kept);
       return { landed: true };
     }
     this.wrote(kept);
@@ -1269,15 +1331,17 @@ export class ObsidianVault implements Vault {
       if (this.vault.getAbstractFileByPath(normalized)?.path !== normalized) {
         await this.matchCase(normalized);
       }
-      await this.adapter.process(
-        normalized,
-        (current) => {
-          // No awaits between this comparison and the queued write. An editor
-          // save made while the backup was being written keeps the original.
-          if (current !== previous) throw changed;
-          return next;
-        },
-        writeOptions(times),
+      await this.touch(normalized, () =>
+        this.adapter.process(
+          normalized,
+          (current) => {
+            // No awaits between this comparison and the queued write. An editor
+            // save made while the backup was being written keeps the original.
+            if (current !== previous) throw changed;
+            return next;
+          },
+          writeOptions(times),
+        ),
       );
       this.wrote(normalized);
       await verify(this.adapter, normalized, new TextEncoder().encode(next));
@@ -1290,8 +1354,7 @@ export class ObsidianVault implements Vault {
         // and keeping it left a copy of what both devices already had, named
         // as if it held this device's words (T13).
         if (expect !== undefined && (await expect.idOf(before)) === expect.contentId) {
-          await this.adapter.remove(this.resolve(keepAt)).catch(() => undefined);
-          this.entryChanged(this.resolve(keepAt));
+          await this.dropDuplicate(this.resolve(keepAt));
           return { landed: false };
         }
         return { keptAt: keepAt, landed: false };
@@ -1316,19 +1379,27 @@ export class ObsidianVault implements Vault {
       if (expect !== undefined && (await expect.idOf(before)) === expect.contentId) {
         // The note holds the version this was decided about, which the server
         // has, so the backup is a duplicate, as it is after a write that lands.
-        await this.adapter.remove(this.resolve(keepAt)).catch(() => undefined);
-        this.entryChanged(this.resolve(keepAt));
+        await this.dropDuplicate(this.resolve(keepAt));
         throw new Error(`${why}. What the note held was put back`);
       }
       throw new Error(`${why}. What the note held was put back, and is also at ${keepAt}`);
     }
 
     if (expect !== undefined && (await expect.idOf(before)) === expect.contentId) {
-      await this.adapter.remove(this.resolve(keepAt)).catch(() => undefined);
-      this.entryChanged(this.resolve(keepAt));
+      await this.dropDuplicate(this.resolve(keepAt));
       return { landed: true };
     }
     return { keptAt: keepAt, landed: true };
+  }
+
+  /**
+   * Removes a copy that duplicates a version the server holds, as this
+   * client's own removal (see `touching`). A failure leaves a duplicate,
+   * which costs a conflict copy and loses nothing.
+   */
+  private async dropDuplicate(normalized: string): Promise<void> {
+    await this.touch(normalized, () => this.adapter.remove(normalized)).catch(() => undefined);
+    this.entryChanged(normalized);
   }
 
   /**
@@ -1364,13 +1435,15 @@ export class ObsidianVault implements Vault {
   private async putBack(normalized: string, held: CutShort): Promise<boolean> {
     let restoring = false;
     try {
-      await this.adapter.process(
-        normalized,
-        (current) => {
-          restoring = cutShortOf(current, held.next) || cutShortOf(current, held.previous);
-          return restoring ? held.previous : current;
-        },
-        writeOptions(held.was),
+      await this.touch(normalized, () =>
+        this.adapter.process(
+          normalized,
+          (current) => {
+            restoring = cutShortOf(current, held.next) || cutShortOf(current, held.previous);
+            return restoring ? held.previous : current;
+          },
+          writeOptions(held.was),
+        ),
       );
       if (restoring) {
         this.wrote(normalized);
@@ -1727,10 +1800,12 @@ export class ObsidianVault implements Vault {
     await stage(this.adapter, temp, bytes, options);
 
     if (!(await this.adapter.exists(normalized))) {
+      this.expectLanding(normalized, bytes.length, options.mtime);
       try {
         await this.move(temp, normalized);
         await verify(this.adapter, normalized, bytes);
       } catch (err) {
+        this.landing.delete(normalized);
         await this.adapter.remove(temp).catch(() => undefined);
         throw err;
       }
@@ -1738,7 +1813,9 @@ export class ObsidianVault implements Vault {
     }
 
     try {
-      await this.adapter.writeBinary(normalized, standalone(bytes), options);
+      await this.touch(normalized, () =>
+        this.adapter.writeBinary(normalized, standalone(bytes), options),
+      );
       await verify(this.adapter, normalized, bytes);
     } catch (err) {
       // The staged copy stays. It is the only complete copy of the new
@@ -1800,16 +1877,33 @@ export class ObsidianVault implements Vault {
       await this.discardStaging(temp);
       return false;
     }
+    this.expectLanding(normalized, bytes.length, writeOptions(times).mtime);
     try {
       await this.move(temp, normalized);
     } catch (err) {
+      this.landing.delete(normalized);
       await this.adapter.remove(temp).catch(() => undefined);
       if (await this.adapter.exists(normalized)) return false;
       throw err;
     }
-    await verify(this.adapter, normalized, bytes);
+    try {
+      await verify(this.adapter, normalized, bytes);
+    } catch (err) {
+      this.landing.delete(normalized);
+      throw err;
+    }
     this.wrote(normalized);
     return true;
+  }
+
+  /**
+   * Remembers a landing about to happen, for the report Obsidian makes of it
+   * later (see `landing`). Only with a time to match the report by: a file
+   * stamped with the moment it landed is not told apart from a write that
+   * came after, so its report is taken as news, as it always was.
+   */
+  private expectLanding(normalized: string, size: number, mtime: number | undefined): void {
+    if (mtime !== undefined) this.landing.set(normalized, { size, mtime });
   }
 
   /**
@@ -1914,6 +2008,10 @@ export class ObsidianVault implements Vault {
    * is sitting in a hidden folder at the time, and `resolve` refuses those.
    */
   private async intoTrash(normalized: string): Promise<void> {
+    await this.touch(normalized, () => this.trash(normalized));
+  }
+
+  private async trash(normalized: string): Promise<void> {
     if (this.systemTrash) {
       try {
         if (await this.adapter.trashSystem(normalized)) return;
@@ -2174,7 +2272,7 @@ export class ObsidianVault implements Vault {
     const normalized = this.resolve(path);
     if (await this.adapter.exists(normalized)) return;
     await this.ensureParents(normalized);
-    await this.adapter.mkdir(normalized);
+    await this.touch(normalized, () => this.adapter.mkdir(normalized));
     // A new directory is an entry in its parent, durable when the parent is.
     this.entryChanged(normalized);
   }
@@ -2210,7 +2308,8 @@ export class ObsidianVault implements Vault {
       if (part === "") continue;
       at = at === "" ? part : `${at}/${part}`;
       if (!(await this.adapter.exists(at))) {
-        await this.adapter.mkdir(at);
+        const folder = at;
+        await this.touch(folder, () => this.adapter.mkdir(folder));
         this.entryChanged(at);
       }
     }

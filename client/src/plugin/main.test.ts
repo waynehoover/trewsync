@@ -1659,6 +1659,58 @@ describe("a device that only receives, while Obsidian's index catches up", () =>
     expect(renames.mock.calls, "the engine was told of a rename").toEqual([]);
   }, 300_000);
 
+  /**
+   * P-3. Obsidian reports a file the plugin renamed into place when its
+   * watcher gets to it, as `create`. That was taken for news: the file was
+   * marked changed and the next round read and hashed again every file the
+   * pass had just written and read back, 12 to 14 ms a file on a phone.
+   */
+  it("takes Obsidian's report of a file it has just landed for its own, and anything else for news", async () => {
+    const { phone, mac } = await pair();
+    const changed = vi.spyOn(clientOf(mac.plugin), "noteChanged");
+    const told = () => changed.mock.calls.map((c) => c[0]);
+    const paths = Array.from({ length: 20 }, (_, i) => `Inbox/landed-${i}.md`);
+    const outside = "Inbox/replaced-outside.md";
+    mac.app.vault.adapter.holdWatcher();
+    for (const p of [...paths, outside]) {
+      phone.app.vault.adapter.seed(p, `${p} from the phone\n`, 1_700_000_000_000);
+    }
+    await phone.plugin.syncNow();
+    await until("the notes on the Mac", () =>
+      [...paths, outside].every((p) => mac.app.vault.adapter.text(p) !== undefined),
+    );
+    await mac.plugin.syncNow();
+    // Another program writes one of them again, the same length, before the
+    // watcher has reported the landing: a time of its own.
+    const again = new TextEncoder().encode(`${outside} from elsewhere\n`);
+    expect(again.length).toBe(new TextEncoder().encode(`${outside} from the phone\n`).length);
+    mac.app.vault.adapter.writeUnreported(outside, again, 1_800_000_000_000);
+
+    changed.mockClear();
+    const reads = () =>
+      mac.app.vault.adapter.calls.filter((c) => c.op === "readBinary" && paths.includes(c.path))
+        .length;
+    const before = reads();
+    mac.app.vault.adapter.releaseWatcher();
+    await nextTurn();
+    expect(
+      told().filter((p) => paths.includes(p)),
+      "its own landings were taken for news",
+    ).toEqual([]);
+    expect(told(), "a write from outside was taken for this client's own").toContain(outside);
+    await mac.plugin.syncNow();
+    expect(reads() - before, "a pass read again the files it had just landed").toBe(0);
+
+    // A save after the landing, with a time of its own, is news too.
+    await mac.app.vault.adapter.write(paths[0]!, "edited on the Mac\n", {
+      mtime: 1_800_000_000_000,
+    });
+    expect(told()).toContain(paths[0]);
+    await settleBoth(phone.plugin, mac.plugin);
+    expect(phone.app.vault.adapter.text(paths[0]!)).toBe("edited on the Mac\n");
+    expect(phone.app.vault.adapter.text(outside)).toBe(`${outside} from elsewhere\n`);
+  }, 300_000);
+
   it("does not delete a new note it received in the pass that updated another", async () => {
     const { phone, mac } = await pair();
     const edited = "From the Mac.md";

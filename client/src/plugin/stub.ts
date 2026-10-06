@@ -313,7 +313,10 @@ export class FakeVault {
    */
   relayAdapterEvents(): void {
     this.adapter.handler = (kind, path, oldPath) => {
-      const file = { path };
+      // The file as the index holds it once the adapter has reported it, with
+      // its size and times, which is the TFile Obsidian hands a plugin; one
+      // that has gone keeps only its path.
+      const file = this.getAbstractFileByPath(path) ?? { path };
       if (kind === "renamed") this.fire("rename", file, oldPath);
       else if (kind === "modified") this.fire("modify", file);
       else if (kind === "file-removed") this.fire("delete", file);

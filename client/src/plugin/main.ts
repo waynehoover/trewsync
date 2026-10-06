@@ -125,6 +125,17 @@ const log = (message: string, ...rest: unknown[]): void =>
  */
 const CLOSING = Symbol.for("trew.closing");
 
+/**
+ * The size and times a file event carries, or undefined for a folder.
+ * Structural, as `vault.ts` reads the index, rather than `instanceof TFile`.
+ */
+function statOfEvent(file: TAbstractFile): { size: number; mtime: number } | undefined {
+  const stat = (file as { stat?: { size?: unknown; mtime?: unknown } }).stat;
+  return stat && typeof stat.size === "number" && typeof stat.mtime === "number"
+    ? { size: stat.size, mtime: stat.mtime }
+    : undefined;
+}
+
 /** Every close an earlier instance of this plugin started on this app. */
 function closingOn(app: object): Promise<void> {
   const held = (app as Record<symbol, unknown>)[CLOSING];
@@ -565,9 +576,27 @@ export default class TrewPlugin extends Plugin {
     // thousands of pointless things rather than about correctness. The
     // callback runs immediately if the layout is already up.
     this.app.workspace.onLayoutReady(() => {
-      this.registerEvent(this.app.vault.on("create", (file) => this.nudge(file.path)));
-      this.registerEvent(this.app.vault.on("modify", (file) => this.nudge(file.path)));
-      this.registerEvent(this.app.vault.on("delete", (file) => this.nudge(file.path)));
+      // Except this client's own writes, which the engine accounts for itself
+      // (P-3). Obsidian reports a file renamed into place when its watcher
+      // gets to it, and a write in place, a removal or a new folder from
+      // inside the call; each was taken for news, marked the file changed and
+      // asked for another round, which read and hashed again every file the
+      // pass had just written and read back: 12 to 14 ms a file on a phone.
+      this.registerEvent(
+        this.app.vault.on("create", (file) => {
+          if (!this.liveVault?.ownCreate(file.path, statOfEvent(file))) this.nudge(file.path);
+        }),
+      );
+      this.registerEvent(
+        this.app.vault.on("modify", (file) => {
+          if (!this.liveVault?.ownChange(file.path)) this.nudge(file.path);
+        }),
+      );
+      this.registerEvent(
+        this.app.vault.on("delete", (file) => {
+          if (!this.liveVault?.ownChange(file.path)) this.nudge(file.path);
+        }),
+      );
       // The old path is the whole point of this event. A rename that
       // arrives as a delete plus an add still moves the file, but it
       // retires the old path as a deletion, and the list of deleted notes
