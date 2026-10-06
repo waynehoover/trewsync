@@ -101,6 +101,20 @@ async function occupied(file: string): Promise<boolean> {
 }
 
 /**
+ * Whether something other than a folder is at a path, for a caller about to
+ * use the path as a folder (T24). Absent and a folder are both usable; an
+ * error is not an answer, for the reason `occupied` gives.
+ */
+async function heldByNonFolder(path: string): Promise<boolean> {
+  try {
+    return !(await lstat(path)).isDirectory();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+}
+
+/**
  * Names this client leaves alone on top of the rule in core/paths.ts.
  *
  * Every dot-prefixed segment is already refused there: the config folder,
@@ -2715,10 +2729,24 @@ export class NodeVault implements Vault {
    * a note onto it would replace what is there, so an error is not a "no".
    */
   private async freeTrashPath(path: string): Promise<string> {
-    const base = join(this.root, TRASH_DIR, path);
-    // Split on the vault-relative path, which always uses forward slashes,
-    // and take the extension off the joined absolute one, which may not.
-    const { ext } = splitName(path);
+    const parts = path.split("/");
+    const leaf = parts.pop()!;
+    // Each folder of the path as well as its last name (T24).
+    //
+    // Only the last name used to be numbered, so a file already in the trash
+    // where one of the folders has to go stopped the deletion for good: a note
+    // called `Ideas`, deleted earlier, made every removal under `Ideas/` fail
+    // with ENOTDIR on every pass. A folder that is there is used as it is; a
+    // name held by anything else is passed over for the next numbered one.
+    let dir = join(this.root, TRASH_DIR);
+    for (const part of parts) {
+      const parent = dir;
+      dir = await firstFreeName(join(parent, part), heldByNonFolder, (n) =>
+        join(parent, `${part} (${n})`),
+      );
+    }
+    const base = join(dir, leaf);
+    const { ext } = splitName(leaf);
     const stem = ext === "" ? base : base.slice(0, base.length - ext.length);
     return firstFreeName(base, occupied, (n) => `${stem} (${n})${ext}`);
   }

@@ -672,6 +672,38 @@ describe("deleting, which must be recoverable", () => {
     const { readdir } = await import("node:fs/promises");
     await expect(readdir(join(root, ".trash"))).rejects.toThrow();
   });
+
+  /**
+   * T24. Only the last name was numbered, so a file already in the trash where
+   * a folder of the deleted note's path has to go stopped the deletion for
+   * good: an earlier deleted note called `Ideas`, with no extension, made every
+   * removal under `Ideas/` fail with ENOTDIR on every pass, and sync exit 1.
+   */
+  it("numbers a folder of the path when a file in the trash has its name (T24)", async () => {
+    const v = new NodeVault(root);
+    await mkdir(join(root, ".trash"));
+    await writeFile(join(root, ".trash", "Ideas"), "an earlier note called Ideas");
+    await v.write("Ideas/x.md", enc.encode("x"), { mtime: 1, ctime: 1 });
+    await v.write("Ideas/deep/y.md", enc.encode("y"), { mtime: 1, ctime: 1 });
+    await v.remove("Ideas/x.md");
+    const digest = await plainDigest(enc.encode("y"));
+    expect(
+      await v.removeExpecting(
+        "Ideas/deep/y.md",
+        { contentId: digest, idOf: plainDigest },
+        "Ideas/deep/y (kept).md",
+      ),
+    ).toEqual({ landed: true });
+
+    expect(await v.exists("Ideas/x.md")).toBe(false);
+    expect(await v.exists("Ideas/deep/y.md")).toBe(false);
+    expect(await readFile(join(root, ".trash", "Ideas (1)", "x.md"), "utf8")).toBe("x");
+    expect(await readFile(join(root, ".trash", "Ideas (1)", "deep", "y.md"), "utf8")).toBe("y");
+    // And what was in the trash already is untouched.
+    expect(await readFile(join(root, ".trash", "Ideas"), "utf8")).toBe(
+      "an earlier note called Ideas",
+    );
+  });
 });
 
 /**
