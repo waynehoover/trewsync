@@ -132,6 +132,14 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 	if err != nil {
 		return plan, failed("", err)
 	}
+	// Below the mark, the newest uid a purge took at or before ToUID, read
+	// once for every path exactAt asks about.
+	var gap int64
+	if r.ToUID < marked {
+		if gap, err = s.newestGap(r.Vault, r.ToUID); err != nil {
+			return plan, failed("", err)
+		}
+	}
 
 	// The paths that will be live once the restore is written, for whether a
 	// folder created since can go.
@@ -150,9 +158,7 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 		// Before anything is decided from the state at ToUID, including that
 		// the path already holds it: a guess that happens to match is still
 		// a guess.
-		if why, err := s.exactAt(r.Vault, row, r.ToUID, marked); err != nil {
-			return plan, err
-		} else if why != "" {
+		if why := exactAt(row, r.ToUID, marked, gap); why != "" {
 			g := GonePath{Path: row.path, Why: why}
 			if row.hadThen {
 				g.Before = row.then.UID
@@ -396,22 +402,44 @@ func (s *Store) sameBytes(vault string, a, b int64) (bool, error) {
 // the purge had already reached was either that head or came after it. Below
 // the mark, a uid missing from the range between the version the path held
 // then and toUID is a version a purge took, which may have been this path's.
-func (s *Store) exactAt(vault string, row restoreRow, toUID, marked int64) (string, error) {
+//
+// gap is the newest such uid at or below toUID (newestGap), so a missing uid
+// lies in that range exactly when gap is above the version held then. It used
+// to be found by counting the range's rows once per path, which made a
+// restore below the mark quadratic: 45 s for 40,000 paths.
+func exactAt(row restoreRow, toUID, marked, gap int64) string {
 	from := row.then.UID
-	if toUID >= marked || from >= toUID {
-		return "", nil
+	if toUID >= marked || from >= gap {
+		return ""
 	}
-	var present int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM entries WHERE vault_id = ? AND uid > ? AND uid <= ?`,
-		vault, from, toUID).Scan(&present); err != nil {
-		return "", failed("", err)
+	return fmt.Sprintf("a purge removed versions between uid %d and uid %d, the newest of them uid %d, so what "+
+		"this path held at uid %d cannot be read exactly; restore a backup taken before the purge, or choose a "+
+		"later uid", from, toUID, gap, toUID)
+}
+
+// newestGap is the newest uid from 1 to toUID the vault no longer holds, or
+// zero when it holds every one of them: one descending read, which stops at the
+// first uid missing. The uids are handed out without gaps (a transaction that
+// rolls back gives its uid back), so a missing one is a version a purge took.
+func (s *Store) newestGap(vault string, toUID int64) (int64, error) {
+	rows, err := s.db.Query(`SELECT uid FROM entries WHERE vault_id = ? AND uid <= ? ORDER BY uid DESC`,
+		vault, toUID)
+	if err != nil {
+		return 0, err
 	}
-	if present == toUID-from {
-		return "", nil
+	defer rows.Close()
+	want := toUID
+	for rows.Next() {
+		var uid int64
+		if err := rows.Scan(&uid); err != nil {
+			return 0, err
+		}
+		if uid != want {
+			return want, nil
+		}
+		want--
 	}
-	return fmt.Sprintf("a purge removed %d versions between uid %d and uid %d, so what this path held at uid %d "+
-		"cannot be read exactly; restore a backup taken before the purge, or choose a later uid",
-		toUID-from-present, from, toUID, toUID), nil
+	return want, rows.Err()
 }
 
 // liveUnder is how many of the paths in final are inside folder.
