@@ -10,7 +10,10 @@ the plugin. The server can read what it stores: see
 [Security and privacy](security.md).
 
 **Experimental.** Use macOS or Linux, Node **22 or newer**, and a local
-filesystem. Run one TrewSync process that writes to each directory, and keep
+filesystem that has hard links, such as APFS, ext4, btrfs or XFS. TrewSync
+replaces a note through a hard link so that nothing is lost if the note
+changes at that moment, and refuses to sync a folder on exFAT or FAT, which
+have none. Run one TrewSync process that writes to each directory, and keep
 other sync tools and the Obsidian plugin off that same directory. For everyday
 editing, use the [Obsidian plugin](plugin.md).
 
@@ -191,6 +194,12 @@ Exit **0** means the command succeeded,
 **1** means a failure or unresolved issue, and **2** means invalid arguments.
 For sync, `outcome` explains the result and the counters describe the work.
 
+A name can hold characters a terminal would act on, from a file on this disk,
+a note another device or an agent wrote, or a device's name. Every command
+prints those spelled out, as `\u{1b}` for an escape, so nothing it prints can
+change what your terminal displays. `--json` escapes them the way JSON does,
+and parses back to the exact names.
+
 A conflict exits 0 because both versions were preserved. Ignored files and
 changes held back by read-only mode also do not make a sync fail. Inspect those
 fields if your job needs a stricter condition. Hidden versions awaiting recovery
@@ -221,6 +230,9 @@ The CLI excludes dot-prefixed files and folders, `node_modules`, and the
 Obsidian configuration folder. Use `--config-dir NAME` if yours differs from
 `.obsidian`. Add `--ignore NAME` for a file or folder name to exclude at every
 depth; repeat the flag for more names. These choices apply to this device only.
+On a disk that ignores letter case, such as a Mac's, an ignored name matches in
+any case: with `--ignore Archive`, a note another device keeps in `archive/` is
+refused here as ignored, because on this disk it would land in `Archive`.
 
 A name that starts with a dot never syncs from any device, at any depth, so a
 folder such as `.attachments` stays on this machine. The server also refuses
@@ -237,16 +249,35 @@ rename one yourself. Keep clients updated together to avoid older clients
 reintroducing obsolete spellings. Filesystem renames can appear as a deletion
 of the old path and a creation of the new one; both names retain their history.
 
+### Deleted notes go to `.trash`
+
+When a note is deleted on another device, this client does not delete its copy:
+it moves the file into `.trash/` at the top of the vault, under the path it
+had, so `Projects/plan.md` goes to `.trash/Projects/plan.md`. A name already
+taken there gets a number, as in `plan (1).md`, so an earlier deletion is never
+replaced. Like every dot-prefixed folder, `.trash` never syncs, so nothing in it
+comes back on other devices.
+
+TrewSync never empties it, and it grows with every deletion. Look through it
+and delete what you no longer want, with any file manager. To bring a note
+back, move it out of `.trash` into the vault and sync, or use `trew restore`,
+which takes the version from the server's history instead.
+
 ## A command says the vault is locked
 
 Stop an existing watcher before starting another command that writes to the
-vault. On supported local macOS and Linux setups, process exit releases the
-lock automatically, including after a crash.
+vault. Ctrl-C or SIGTERM stops a command the way it would finish, closing its
+connection and releasing the lock; a second Ctrl-C stops it at once. On
+supported local macOS and Linux setups, process exit releases the lock
+automatically, including after a crash.
 
 If TrewSync reports that manual recovery is required, run `trew unlock` after
-confirming the previous process has stopped. It refuses a live local holder.
-`--force` is only for a holder recorded on another machine and requires you to
-verify that it is stopped. Shared network vaults remain unsupported.
+confirming the previous process has stopped. It refuses a TrewSync on this
+machine that still holds the vault, `--force` or not. `--force` is for what
+this machine cannot check: a holder recorded on another machine, which you
+must verify has stopped, or a running process here that holds nothing, which is
+what a process id reused after a restart looks like; check what that process
+is first. Shared network vaults remain unsupported.
 
 ## Preview and verify
 

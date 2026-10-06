@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeVault } from "./vault.ts";
 import { removeTree } from "../core/test-server.ts";
 import { generateDeviceId, generateDeviceToken } from "../core/pairing.ts";
+import { plainDigest } from "../core/digest.ts";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -256,6 +257,28 @@ describe("a filesystem that answers with an error rather than an answer", () => 
     expect(await v.sameFile("nothing.md", "a.md")).toBe(false);
   });
 
+  /**
+   * T19. `stat` is what the engine asks before it decides a note it could not
+   * read is gone, and it answered every error with "absent". A folder that
+   * lost its search permission between the scan and the read therefore made
+   * an unsent edit read as a deletion, which went to the server and from there
+   * to the trash of every other device.
+   */
+  it("does not call a note absent because its stat failed (T19)", async () => {
+    await mkdir(join(root, "Projects"));
+    await writeFile(join(root, "Projects", "plan.md"), "the plan, edited here");
+    const v = new NodeVault(root);
+    for (const code of ["EACCES", "EIO"]) {
+      failWith(lstat, code, (p) => p.endsWith(join("Projects", "plan.md")));
+      await expect(v.stat("Projects/plan.md"), code).rejects.toThrow(new RegExp(code));
+    }
+    // Absent is still absent, and so is a path whose folder is a file.
+    expect(await v.stat("Projects/nothing.md")).toBeUndefined();
+    await writeFile(join(root, "flat"), "a file, not a folder");
+    expect(await v.stat("flat/plan.md")).toBeUndefined();
+    expect(await readFile(join(root, "Projects", "plan.md"), "utf8")).toBe("the plan, edited here");
+  });
+
   it("does not write under an unverified spelling when the directory cannot be listed", async () => {
     await writeFile(join(root, "Note.md"), "old spelling");
     const v = new NodeVault(root);
@@ -319,6 +342,58 @@ describe("what a flush remembers", () => {
     for (const dir of [root, join(root, "deep"), join(root, "deep", "er"), join(root, ".trash")]) {
       expect(synced, `${dir} was not synced`).toContain(dir);
     }
+  });
+
+  /**
+   * A download is published by a link from a staged copy, and flushing the
+   * staging folder for every one of them was close to half of what a download
+   * cost, for a name nothing needs after a crash. What has to be durable before
+   * the index is saved is the note's own folder, and `flush` is what does that
+   * (rule 3): so the staging folder is not synced by the download, and the
+   * note's folder is synced by the flush, every time.
+   */
+  it("flushes a download's folder before the index, and not the staging folder", async () => {
+    const v = new NodeVault(root);
+    await writeFile(join(root, "kept.md"), "old");
+    await v.list();
+    const synced = watchSyncs();
+    const times = { mtime: 1, ctime: 1 };
+    await v.replace("notes/new.md", undefined, enc.encode("new"), times, "notes/k.md");
+    const old = { contentId: await plainDigest(enc.encode("old")), idOf: plainDigest };
+    await v.replace("kept.md", old, enc.encode("newer"), times, "kept (k).md");
+    expect(synced, "a download flushed its staging folder").not.toContain(
+      join(root, ".trew", "tmp"),
+    );
+    await v.flush();
+    expect(synced).toContain(join(root, "notes"));
+    expect(synced).toContain(root);
+  });
+});
+
+/**
+ * Matching the spelling a download writes to the one on the disk reads the
+ * whole folder, which is what keeps a case-only rename from losing the note on
+ * a disk that folds case, and 4 ms or more of every download over an existing
+ * note in a folder of 10,000. On a disk that keeps case apart there is nothing
+ * to match, so the folder is not read.
+ */
+describe("a download over a note on a disk that keeps case apart", () => {
+  it("does not read the whole folder to find the name it was given", async () => {
+    await mkdir(join(root, "notes"));
+    await writeFile(join(root, "notes", "a.md"), "old");
+    const v = new NodeVault(root);
+    // What the probe concludes on ext4, set directly so this runs on any disk.
+    (v as unknown as { foldsCaseSync: boolean }).foldsCaseSync = false;
+    await v.list();
+    vi.mocked(readdir).mockClear();
+    const old = { contentId: await plainDigest(enc.encode("old")), idOf: plainDigest };
+    const times = { mtime: 1, ctime: 1 };
+    expect(await v.replace("notes/a.md", old, enc.encode("new"), times, "notes/k.md")).toEqual({
+      landed: true,
+    });
+    expect(await readFile(join(root, "notes", "a.md"), "utf8")).toBe("new");
+    const folder = join(root, "notes");
+    expect(vi.mocked(readdir).mock.calls.filter(([dir]) => String(dir) === folder)).toEqual([]);
   });
 });
 
@@ -635,6 +710,84 @@ describe("replacing a note across a mount boundary", () => {
     // made is that it is never nowhere.
     expect(named, "the error did not say where the note is").toBeDefined();
     expect(await readFile(join(root, named!), "utf8")).toBe("the unsent edit\n");
+  });
+});
+
+/**
+ * T18. A filesystem with no hard links at all: exFAT and FAT, which answer
+ * `link` with ENOTSUP on macOS and EPERM on Linux.
+ *
+ * Every preserving write moves the note aside and then publishes with `link`,
+ * and puts it back with `link` too, so on such a disk the note was moved and
+ * then had nowhere to go: a download over `Note.md` left it at a hidden
+ * `Note.md..trew-tmp-keep...`, and the listing afterwards was empty, which the
+ * next pass reads as a deletion. Nothing that needs a link may start there.
+ */
+describe("a filesystem with no hard links (T18)", () => {
+  const times = { mtime: 2000, ctime: 1000 };
+  const unexpected = { contentId: "a digest of something else", idOf: async () => "not that" };
+  function noLinks(code: string): void {
+    vi.mocked(link).mockImplementation(async () => {
+      throw errno(code);
+    });
+  }
+  const visible = async () => (await readdir(root)).filter((n) => !n.startsWith("."));
+
+  for (const code of ["ENOTSUP", "EPERM"]) {
+    it(`replaces nothing, and the note stays at its name (${code})`, async () => {
+      await writeFile(join(root, "Note.md"), "my note, synced\n");
+      const vault = new NodeVault(root);
+      noLinks(code);
+      const err = await vault
+        .replace("Note.md", unexpected, enc.encode("edited elsewhere\n"), times, "Note (kept).md")
+        .then(
+          () => undefined,
+          (e: Error) => e,
+        );
+      // The note first: at its own name, with its own bytes, and nothing
+      // hidden beside it.
+      expect(await visible()).toEqual(["Note.md"]);
+      expect(await readFile(join(root, "Note.md"), "utf8")).toBe("my note, synced\n");
+      expect(await temps(root)).toEqual([]);
+      expect(err?.message).toMatch(/hard links/);
+    });
+
+    it(`takes nothing off its name to remove it (${code})`, async () => {
+      await writeFile(join(root, "Note.md"), "an edit nobody has seen\n");
+      const vault = new NodeVault(root);
+      noLinks(code);
+      const err = await vault.removeExpecting("Note.md", unexpected, "Note (kept).md").then(
+        () => undefined,
+        (e: Error) => e,
+      );
+      expect(await visible()).toEqual(["Note.md"]);
+      expect(await readFile(join(root, "Note.md"), "utf8")).toBe("an edit nobody has seen\n");
+      expect(await temps(root)).toEqual([]);
+      expect(err?.message).toMatch(/hard links/);
+    });
+
+    it(`refuses a scan that would write, and still lists for a look (${code})`, async () => {
+      await writeFile(join(root, "Note.md"), "x");
+      noLinks(code);
+      await expect(new NodeVault(root).list()).rejects.toThrow(/hard links/);
+      const looked = await new NodeVault(root, { observeOnly: true }).list();
+      expect(looked.map((f) => f.path)).toEqual(["Note.md"]);
+    });
+  }
+
+  it("still says where the note is when a link fails for another reason", async () => {
+    // EIO is a disk failing, not a filesystem without links, so nothing is
+    // refused up front and the existing recovery names where the note went.
+    await writeFile(join(root, "Note.md"), "the unsent edit\n");
+    const vault = new NodeVault(root);
+    noLinks("EIO");
+    const err = await vault
+      .replace("Note.md", unexpected, enc.encode("x"), times, "Note (kept).md")
+      .then(
+        () => undefined,
+        (e: Error) => e,
+      );
+    expect(err?.message).not.toMatch(/hard links/);
   });
 });
 

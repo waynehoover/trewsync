@@ -4,6 +4,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   symlink,
@@ -14,9 +15,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { JsonIndexStore, NodeVault, TEMP_MARK, isTemporary, writeDurably } from "./vault.ts";
+import {
+  JsonIndexStore,
+  NodeVault,
+  TEMP_MARK,
+  isParkedOriginal,
+  isTemporary,
+  midReplace,
+  writeDurably,
+} from "./vault.ts";
 import { removeTree } from "../core/test-server.ts";
 import { deferred, within } from "../core/test-async.ts";
+import { plainDigest } from "../core/digest.ts";
 
 let root: string;
 
@@ -123,6 +133,70 @@ describe("listing", () => {
     }
   });
 
+  /**
+   * T16. A vault whose root is a mount point is ordinary on Linux, and when the
+   * disk goes away the mount point stays behind as an empty folder; a folder
+   * moved away and made again looks the same. A watching `trew` listed that,
+   * read every note as deleted here, and sent the deletions to every device.
+   */
+  describe("when the folder is no longer the one that was opened (T16)", () => {
+    const config = () => join(root, ".trew", "config.json");
+    async function paired(): Promise<NodeVault> {
+      await mkdir(join(root, ".trew"));
+      await writeFile(config(), "{}");
+      for (const name of ["one", "two", "three"]) await writeFile(join(root, `${name}.md`), name);
+      const vault = new NodeVault(root, { pairing: config() });
+      expect((await vault.list()).map((f) => f.path).sort()).toEqual([
+        "one.md",
+        "three.md",
+        "two.md",
+      ]);
+      return vault;
+    }
+
+    it("refuses an empty folder in its place rather than listing nothing", async () => {
+      const vault = await paired();
+      // What an unmounted disk leaves at its mount point, and what moving
+      // the vault away and making a folder of the same name leaves.
+      const away = `${root}-away`;
+      await rename(root, away);
+      await mkdir(root);
+      try {
+        await expect(vault.list()).rejects.toThrow(/not the folder this trew opened/);
+        // Nor is anything else answered from it: "absent" from here is a
+        // deletion as surely as an empty listing is.
+        await expect(vault.exists("one.md")).rejects.toThrow(/not the folder/);
+        await expect(vault.stat("one.md")).rejects.toThrow(/not the folder/);
+        await expect(
+          vault.write("new.md", new TextEncoder().encode("x"), { mtime: 1, ctime: 1 }),
+        ).rejects.toThrow(/not the folder/);
+        expect(await readdir(root)).toEqual([]);
+        // And the notes are where they were, untouched.
+        expect(await readFile(join(away, "two.md"), "utf8")).toBe("two");
+      } finally {
+        await removeTree(away);
+      }
+    });
+
+    it("refuses the same folder once it no longer holds the pairing", async () => {
+      // Which a folder made again can be, on a filesystem that hands the old
+      // inode number back.
+      const vault = await paired();
+      await rm(config());
+      await expect(vault.list()).rejects.toThrow(/no longer holds this device's pairing/);
+    });
+
+    it("refuses a first look at a folder that does not hold the pairing", async () => {
+      // So a folder standing in for the vault before the first scan is not
+      // taken for the vault from then on.
+      const vault = new NodeVault(root, { pairing: config() });
+      await expect(vault.exists("one.md")).rejects.toThrow(/pairing/);
+      await mkdir(join(root, ".trew"));
+      await writeFile(config(), "{}");
+      expect(await vault.exists("one.md")).toBe(false);
+    });
+  });
+
   it("refuses to report an empty vault when a directory cannot be read", async () => {
     // Rule 2: absent and unreadable are different states. Reporting the
     // second as the first would tell the engine every file in it was deleted.
@@ -197,6 +271,47 @@ describe("reading and writing", () => {
     expect(await v.exists("dir2")).toBe(true);
     await v.remove("dir2");
     expect(await v.exists("dir2")).toBe(false);
+  });
+
+  /**
+   * T23. A download lands as a new file, staged with the default mode, so a
+   * diary somebody had made readable only by themselves came back readable by
+   * everyone on the machine after the next edit from another device.
+   */
+  it("keeps a note's permissions when a new version replaces it (T23)", async () => {
+    const v = new NodeVault(root);
+    const mode = async (name: string) => (await stat(join(root, name))).mode & 0o7777;
+    for (const [name, before] of [
+      ["diary.md", 0o600],
+      ["tool.sh", 0o750],
+    ] as const) {
+      await writeFile(join(root, name), "version one\n");
+      await chmod(join(root, name), before);
+      const digest = await plainDigest(enc.encode("version one\n"));
+      const out = await v.replace(
+        name,
+        { contentId: digest, idOf: plainDigest },
+        enc.encode("version two, from another device\n"),
+        { mtime: 1_700_000_000_000, ctime: 1_700_000_000_000 },
+        `${name} (kept)`,
+      );
+      expect(out).toEqual({ landed: true });
+      expect(await readFile(join(root, name), "utf8")).toBe("version two, from another device\n");
+      expect((await mode(name)).toString(8), name).toBe(before.toString(8));
+    }
+    // Only the permissions, never set-id: a peer's bytes do not get to run as
+    // this file's owner because the file they replaced could.
+    await writeFile(join(root, "odd.sh"), "version one\n");
+    await chmod(join(root, "odd.sh"), 0o4755);
+    const digest = await plainDigest(enc.encode("version one\n"));
+    await v.replace(
+      "odd.sh",
+      { contentId: digest, idOf: plainDigest },
+      enc.encode("version two\n"),
+      { mtime: 1_700_000_000_000, ctime: 1_700_000_000_000 },
+      "odd (kept).sh",
+    );
+    expect((await mode("odd.sh")).toString(8)).toBe("755");
   });
 });
 
@@ -565,6 +680,134 @@ describe("deleting, which must be recoverable", () => {
     const { readdir } = await import("node:fs/promises");
     await expect(readdir(join(root, ".trash"))).rejects.toThrow();
   });
+
+  /**
+   * T24. Only the last name was numbered, so a file already in the trash where
+   * a folder of the deleted note's path has to go stopped the deletion for
+   * good: an earlier deleted note called `Ideas`, with no extension, made every
+   * removal under `Ideas/` fail with ENOTDIR on every pass, and sync exit 1.
+   */
+  it("numbers a folder of the path when a file in the trash has its name (T24)", async () => {
+    const v = new NodeVault(root);
+    await mkdir(join(root, ".trash"));
+    await writeFile(join(root, ".trash", "Ideas"), "an earlier note called Ideas");
+    await v.write("Ideas/x.md", enc.encode("x"), { mtime: 1, ctime: 1 });
+    await v.write("Ideas/deep/y.md", enc.encode("y"), { mtime: 1, ctime: 1 });
+    await v.remove("Ideas/x.md");
+    const digest = await plainDigest(enc.encode("y"));
+    expect(
+      await v.removeExpecting(
+        "Ideas/deep/y.md",
+        { contentId: digest, idOf: plainDigest },
+        "Ideas/deep/y (kept).md",
+      ),
+    ).toEqual({ landed: true });
+
+    expect(await v.exists("Ideas/x.md")).toBe(false);
+    expect(await v.exists("Ideas/deep/y.md")).toBe(false);
+    expect(await readFile(join(root, ".trash", "Ideas (1)", "x.md"), "utf8")).toBe("x");
+    expect(await readFile(join(root, ".trash", "Ideas (1)", "deep", "y.md"), "utf8")).toBe("y");
+    // And what was in the trash already is untouched.
+    expect(await readFile(join(root, ".trash", "Ideas"), "utf8")).toBe(
+      "an earlier note called Ideas",
+    );
+  });
+});
+
+/**
+ * T63. A file or folder name may be up to 255 bytes, and the server accepts
+ * one that long. The names this client makes from a note's name, to move it
+ * aside, to stage it, to keep a second version beside it or a second copy in
+ * the trash, added up to 23 bytes, so every one of them failed with
+ * ENAMETOOLONG for a note of 233 bytes or more: an update never landed, a
+ * deletion never happened, and the pass failed the same way for ever.
+ */
+describe("a note whose name is near the longest a name can be (T63)", () => {
+  const bytes = (s: string) => Buffer.byteLength(s);
+  const times = { mtime: 1_700_000_000_000, ctime: 1_700_000_000_000 };
+  const broken = String.fromCodePoint(0xfffd);
+  // 240 and 253 bytes, and one in two-byte characters, which must not be cut
+  // in half.
+  const names = [`${"n".repeat(237)}.md`, `${"m".repeat(250)}.md`, `${"é".repeat(118)}.md`];
+  // A conflict-copy name that is itself near the limit, for each of those.
+  const keeps = [`${"k".repeat(249)}.md`, `${"q".repeat(250)}.md`, `${"ké".repeat(83)}.md`];
+  const expecting = async (text: string) => ({
+    contentId: await plainDigest(enc.encode(text)),
+    idOf: plainDigest,
+  });
+
+  it("is replaced, and a version it displaces is kept beside it", async () => {
+    const v = new NodeVault(root);
+    for (const [i, name] of names.entries()) {
+      expect(bytes(name)).toBeGreaterThan(232);
+      await writeFile(join(root, name), "version one\n");
+      const one = await expecting("version one\n");
+      expect(await v.replace(name, one, enc.encode("two\n"), times, "k.md")).toEqual({
+        landed: true,
+      });
+      expect(await readFile(join(root, name), "utf8")).toBe("two\n");
+      // An edit nobody expected is kept, and beside its conflict name when
+      // that is taken, which makes a name longer still.
+      const keep = keeps[i]!;
+      await writeFile(join(root, keep), "already here");
+      const other = await expecting("not this");
+      const out = await v.replace(name, other, enc.encode("three\n"), times, keep);
+      expect(out.landed).toBe(true);
+      expect(out.keptAt).toBeDefined();
+      expect(out.keptAt).not.toBe(keep);
+      expect(await readFile(join(root, out.keptAt!), "utf8")).toBe("two\n");
+      expect(await readFile(join(root, keep), "utf8")).toBe("already here");
+      expect(await readFile(join(root, name), "utf8")).toBe("three\n");
+    }
+    for (const name of await readdir(root)) {
+      expect(bytes(name), name).toBeLessThanOrEqual(255);
+      expect(name).not.toContain(broken);
+    }
+  });
+
+  it("is parked under a shortened name that is still known for what it is", async () => {
+    // The name a crash would leave it at, which the scan has to report as a
+    // version waiting and never list as a note.
+    const v = new NodeVault(root);
+    const name = names[1]!;
+    await writeFile(join(root, name), "version one\n");
+    let parked: string[] = [];
+    midReplace.nameFree = async () => {
+      parked = (await readdir(root)).filter((n) => n !== name && !n.startsWith("."));
+    };
+    try {
+      await v.replace(name, await expecting("version one\n"), enc.encode("two\n"), times, "k.md");
+    } finally {
+      midReplace.nameFree = async () => {};
+    }
+    expect(parked).toHaveLength(1);
+    expect(bytes(parked[0]!)).toBeLessThanOrEqual(255);
+    expect(isParkedOriginal(parked[0]!)).toBe(true);
+    expect(isTemporary(parked[0]!)).toBe(true);
+  });
+
+  it("is created, removed and trashed a second time", async () => {
+    const v = new NodeVault(root);
+    for (const name of names) {
+      expect(await v.create(name, enc.encode("first\n"), times)).toBe(true);
+      await v.remove(name);
+      expect(await v.create(name, enc.encode("second\n"), times)).toBe(true);
+      const second = await expecting("second\n");
+      expect(await v.removeExpecting(name, second, "kept.md")).toEqual({ landed: true });
+      expect(await v.exists(name)).toBe(false);
+    }
+    const trashed = await readdir(join(root, ".trash"));
+    expect(trashed).toHaveLength(6);
+    const kept = await Promise.all(
+      trashed.map((name) => readFile(join(root, ".trash", name), "utf8")),
+    );
+    expect(kept.filter((k) => k === "first\n")).toHaveLength(3);
+    expect(kept.filter((k) => k === "second\n")).toHaveLength(3);
+    for (const name of trashed) {
+      expect(bytes(name), name).toBeLessThanOrEqual(255);
+      expect(name).not.toContain(broken);
+    }
+  });
 });
 
 /**
@@ -721,6 +964,30 @@ describe("reading a file in blocks and in ranges", () => {
     } finally {
       await removeTree(dir);
     }
+  });
+
+  /**
+   * T25. A file over 8 MiB is read in blocks and ranges rather than whole, and
+   * those reads followed a link where `read` refuses one. An attachment
+   * swapped for a link to this device's credential after the scan was read
+   * through it, and what came back would have been uploaded as the
+   * attachment.
+   */
+  it("refuses a note that has become a link, as reading it whole does (T25)", async () => {
+    await mkdir(join(root, ".trew"));
+    await writeFile(join(root, ".trew", "config.json"), '{"token":"this device"}');
+    await writeFile(join(root, "big.pdf"), body(10));
+    const vault = new NodeVault(root);
+    expect((await vault.list()).map((f) => f.path)).toEqual(["big.pdf"]);
+    await rm(join(root, "big.pdf"));
+    await symlink(join(root, ".trew", "config.json"), join(root, "big.pdf"));
+
+    await expect(vault.read("big.pdf")).rejects.toThrow(/through a link/);
+    const blocks = async () => {
+      for await (const b of vault.readBlocks("big.pdf")) void b;
+    };
+    await expect(blocks()).rejects.toThrow(/through a link/);
+    await expect(vault.readRange("big.pdf", 0, 16)).rejects.toThrow(/through a link/);
   });
 });
 
@@ -981,6 +1248,64 @@ describe("an --ignore spelled the way a Mac shell spells it", () => {
       await rm(root, { recursive: true, force: true });
     });
   }
+});
+
+/**
+ * T17. On a disk that folds case, `archive/photo.md` is a file inside the
+ * `Archive` folder `--ignore Archive` keeps off this device, and the ignore
+ * list was compared exactly. A peer's note under the other spelling was
+ * written in there, then left out of every listing because `Archive` is
+ * ignored, read as deleted here, and deleted on every device.
+ */
+describe("an ignored name on a disk that folds case (T17)", () => {
+  const times = { mtime: 1_700_000_000_000, ctime: 1_700_000_000_000 };
+  const errorOf = (p: Promise<unknown>) =>
+    p.then(
+      () => undefined,
+      (err: Error & { code?: string }) => err,
+    );
+
+  it("refuses the name in any case, as ignored, while it does not know the disk", async () => {
+    // Before the disk is asked, it is taken to fold, which is the safe side.
+    const v = new NodeVault(root, { alsoIgnore: ["Archive"] });
+    await mkdir(join(root, "Archive"));
+    await writeFile(join(root, "Archive", "local-only.md"), "mine, never synced");
+    for (const path of ["archive/photo.md", "ARCHIVE/photo.md", "notes/archive/photo.md"]) {
+      expect((await errorOf(v.write(path, enc.encode("a peer's"), times)))?.code, path).toBe(
+        "ignored",
+      );
+      // And asked whether it is there, it says ignored rather than "yes", so
+      // a path the listing will never show is never taken for deleted.
+      expect((await errorOf(v.exists(path)))?.code, path).toBe("ignored");
+    }
+    expect(await readdir(join(root, "Archive"))).toEqual(["local-only.md"]);
+    // The listing agrees: a folder spelled the other way is the same folder.
+    await mkdir(join(root, "notes", "ARCHIVE"), { recursive: true });
+    await writeFile(join(root, "notes", "ARCHIVE", "x.md"), "x");
+    expect((await v.list()).map((f) => f.path)).toEqual(["notes"]);
+  });
+
+  it("goes by what the disk does once it has asked", async () => {
+    const v = new NodeVault(root, { alsoIgnore: ["Archive"] });
+    await v.probeCase();
+    await writeFile(join(root, "Probe.md"), "x");
+    const folds = await stat(join(root, "probe.md")).then(
+      () => true,
+      () => false,
+    );
+    await rm(join(root, "Probe.md"));
+    const err = await errorOf(v.write("archive/photo.md", enc.encode("a peer's"), times));
+    if (folds) {
+      expect(err?.code).toBe("ignored");
+      await expect(readdir(join(root, "archive"))).rejects.toThrow(/ENOENT/);
+    } else {
+      // Two folders on this disk, and only one of them is ignored.
+      expect(err).toBeUndefined();
+      expect(await readFile(join(root, "archive", "photo.md"), "utf8")).toBe("a peer's");
+    }
+    // The ignored spelling itself is refused everywhere.
+    expect((await errorOf(v.write("Archive/x.md", enc.encode("x"), times)))?.code).toBe("ignored");
+  });
 });
 
 describe("a name the disk spells in NFD", () => {

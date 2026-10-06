@@ -1,6 +1,6 @@
 import type { Args, Console } from "./cli.ts";
 import { credentialsFor, type ClientOptions } from "../core/client.ts";
-import { indexPath, type Config } from "./config.ts";
+import { configPath, indexPath, type Config } from "./config.ts";
 import { JsonIndexStore, NodeVault } from "./vault.ts";
 
 export async function clientOptions(
@@ -16,6 +16,10 @@ export async function clientOptions(
     // Preview lists files, so transport-only inspection would still compact
     // the recovery ledger and normalize names beside a running writer.
     observeOnly,
+    // The config this was loaded from, which a folder standing in for the
+    // vault, such as the mount point of a disk that went away, does not hold
+    // (T16).
+    pairing: configPath(args.dir),
   });
   // Once, here, before anything canonicalises a path. Until the probe has run
   // `canonical` folds case, which is the safe default and the wrong answer on

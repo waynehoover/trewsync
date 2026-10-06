@@ -39,6 +39,7 @@ import {
   obsidianSpaces,
   splitName,
 } from "../core/paths.ts";
+import { MAX_SEGMENT_BYTES } from "../core/path-policy.ts";
 import { composite, seam } from "../core/seam.ts";
 import {
   DISPLACED_LOG,
@@ -65,6 +66,7 @@ import type {
   Times,
   Vault,
 } from "../core/vault.ts";
+import { printable } from "./terminal.ts";
 
 /**
  * This client's state folder, spelled here rather than imported.
@@ -94,6 +96,20 @@ async function occupied(file: string): Promise<boolean> {
   try {
     await access(file, constants.F_OK);
     return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+}
+
+/**
+ * Whether something other than a folder is at a path, for a caller about to
+ * use the path as a folder (T24). Absent and a folder are both usable; an
+ * error is not an answer, for the reason `occupied` gives.
+ */
+async function heldByNonFolder(path: string): Promise<boolean> {
+  try {
+    return !(await lstat(path)).isDirectory();
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw err;
@@ -173,6 +189,20 @@ function foldedExclusion(name: string): string {
   return name.toLowerCase().toUpperCase().normalize("NFC");
 }
 
+/**
+ * The protocol's case fold (`foldPath`), with printable ASCII done natively
+ * (T17).
+ *
+ * Every name a scan meets is asked whether it is ignored, so this is on the
+ * scan's path. For printable ASCII, which most names are, the fold is exactly
+ * the lower case: the table maps A to Z and nothing else below 0x80. Folding
+ * 10,000 paths with the table took about 5 ms where comparing them exactly
+ * took 1, against a whole scan of that many of 25 to 50.
+ */
+function foldName(text: string): string {
+  return /^[ -~]*$/.test(text) ? text.toLowerCase() : foldPath(text);
+}
+
 export interface NodeVaultOptions {
   /** Extra names to leave alone, at any depth. */
   readonly alsoIgnore?: readonly string[];
@@ -221,6 +251,14 @@ export interface NodeVaultOptions {
    * never re-spelled on the disk (`reported` below).
    */
   readonly normalForm?: (name: string) => string;
+  /**
+   * The paired vault's config file, which has to be there on every look (T16).
+   *
+   * Passed by the commands that open a paired vault, and nothing else: a
+   * folder that does not hold its pairing is not the vault that was opened,
+   * whatever it is called. See `sameVault`.
+   */
+  readonly pairing?: string;
 }
 
 /**
@@ -463,10 +501,47 @@ async function freeSiblingName(full: string, why: string): Promise<string> {
   const stem = dot <= 0 ? base : base.slice(0, dot);
   const ext = dot <= 0 ? "" : base.slice(dot);
   for (let n = 1; n < 1000; n++) {
-    const at = join(dir, `${stem} (${why} ${n})${ext}`);
-    if (!(await lstat(at).catch(() => undefined))) return at;
+    const at = join(dir, withSuffix(stem, ` (${why} ${n})${ext}`));
+    // `occupied`, so a name that cannot be looked at is not taken for free.
+    if (!(await occupied(at))) return at;
   }
   throw new Error(`no free name beside ${full}`);
+}
+
+/**
+ * `name` with `suffix` after it, the name cut short at a character so the two
+ * fit in one file name (T63).
+ *
+ * A file or folder name may be 255 bytes, and the server accepts one that
+ * long, so every name this client makes out of a note's name has to make
+ * room. They added up to 23 bytes: moving a note aside, staging it, keeping a
+ * version beside it and numbering a second copy in the trash all failed with
+ * ENAMETOOLONG for a note of 233 bytes or more, so its update never landed and
+ * its deletion never happened, on every pass.
+ *
+ * The suffix is what is kept whole, because it is what carries the meaning:
+ * the markers `isTemporary`, `isParkedOriginal` and the reaper go by, the
+ * random part that keeps the name unique, the number, the extension. What is
+ * cut is the end of the note's own name, which is there for a person to read
+ * and is never parsed back out: a displaced version's note is the one the
+ * ledger records. Cut at a code point, so never half a character.
+ */
+function withSuffix(name: string, suffix: string): string {
+  const room = MAX_SEGMENT_BYTES - Buffer.byteLength(suffix);
+  if (Buffer.byteLength(name) <= room) return name + suffix;
+  let kept = "";
+  let used = 0;
+  for (const ch of name) {
+    used += Buffer.byteLength(ch);
+    if (used > room) break;
+    kept += ch;
+  }
+  return kept + suffix;
+}
+
+/** A name beside `full`, made of its own name and `suffix` (T63). */
+function besideName(full: string, suffix: string): string {
+  return join(dirname(full), withSuffix(basename(full), suffix));
 }
 
 /**
@@ -525,6 +600,8 @@ export async function refuseOutsideVaultAt(vault: string, full: string): Promise
 export class NodeVault implements Vault {
   private readonly root: string;
   private readonly ignore: Set<string>;
+  /** The same names case-folded, for a disk that folds case (T17). */
+  private readonly ignoreFolded: Set<string>;
   /** How this vault spells one name on the disk. NFC everywhere but a test. */
   private readonly normal: (name: string) => string;
   /**
@@ -575,6 +652,7 @@ export class NodeVault implements Vault {
 
   constructor(root: string, opts: NodeVaultOptions = {}) {
     this.root = resolve(root);
+    this.pairing = opts.pairing;
     this.observeOnly = opts.observeOnly ?? false;
     const normal = opts.normalForm ?? canonicalSpelling;
     this.normal = normal;
@@ -593,8 +671,11 @@ export class NodeVault implements Vault {
       configDir,
       ...(opts.alsoIgnore ?? []).map((name) => this.reported(name)),
     ]);
+    this.ignoreFolded = new Set([...this.ignore].map(foldName));
+    // Spelled out for the terminal, like every other line (T20): these name
+    // paths, and a path can hold anything another device put in it.
     this.ledger = new DisplacedLedger(new NodeDisplacedFiles(this.root), (m) =>
-      console.warn(`trew: ${m}`),
+      console.warn(printable(`trew: ${m}`)),
     );
   }
 
@@ -625,6 +706,69 @@ export class NodeVault implements Vault {
 
   /** The vault root with its links resolved, worked out once. */
   private realRootOnce: Promise<string> | undefined;
+
+  /** See `NodeVaultOptions.pairing`. */
+  private readonly pairing: string | undefined;
+
+  /** The root folder's identity when this vault first looked at it (T16). */
+  private rootSeen: { dev: bigint; ino: bigint } | undefined;
+
+  /**
+   * Refuses a root that is no longer the folder this vault opened (T16).
+   *
+   * Asked before every scan, after every full walk, and by `absolute`, which
+   * every other question about a path goes through. A vault whose root is a
+   * mount point is ordinary on Linux, and when the disk goes away the mount
+   * point stays behind as an empty folder; so does a vault folder moved away
+   * and made again. Nothing below could tell either from a vault whose notes
+   * had all been deleted, and a `trew sync --watch` acted on exactly that: its
+   * next scan found nothing, every note read as deleted here, and the deletions
+   * went to every other device. A one-shot sync was safe only because it reads
+   * the pairing first and found none.
+   *
+   * So the folder is the one first looked at, by device and inode. A paired
+   * vault's config file must also still be in it, which catches a folder made
+   * again on a filesystem that hands the old inode number back; that is asked
+   * by every scan and the first look, and the other questions ask only the
+   * stat, since they come between two scans that ask both. Measured under Node
+   * at about 10 microseconds a question, against a scan or a write that makes
+   * dozens of syscalls. The same folder remounted under a new device number is
+   * refused too, and that is the safe side: starting trew again takes it as it
+   * now is.
+   */
+  private async sameVault(withPairing: boolean): Promise<void> {
+    const refuse = (why: string): never => {
+      throw new Error(
+        `${this.root} is not the folder this trew opened as the vault: ${why}. Nothing was ` +
+          `listed or changed, because a folder standing in for it would read as every note ` +
+          `deleted. Put the vault back (mount its disk again, for example) and start trew again.`,
+      );
+    };
+    let now: BigIntStats;
+    try {
+      now = await stat(this.root, { bigint: true });
+    } catch (err) {
+      return refuse(`it cannot be looked at (${(err as Error).message})`);
+    }
+    if (!now.isDirectory()) refuse("it is not a folder");
+    const seen = this.rootSeen;
+    if (seen !== undefined && (now.dev !== seen.dev || now.ino !== seen.ino)) {
+      refuse(
+        "a different folder is at its path now, which is what an unmounted disk or a vault " +
+          "moved away leaves behind",
+      );
+    }
+    if (
+      this.pairing !== undefined &&
+      (withPairing || seen === undefined) &&
+      !(await occupied(this.pairing))
+    ) {
+      refuse(`it no longer holds this device's pairing, ${relative(this.root, this.pairing)}`);
+    }
+    // Remembered only once it has passed, so a first look at a folder standing
+    // in for the vault does not make that folder the one expected from then on.
+    this.rootSeen ??= { dev: now.dev, ino: now.ino };
+  }
 
   /**
    * Directories written to since the last flush.
@@ -975,6 +1119,7 @@ export class NodeVault implements Vault {
    * device well; a bug on another device is enough.
    */
   private async absolute(path: string): Promise<string> {
+    await this.sameVault(false);
     const full = resolve(this.root, path);
     const outside = relative(this.root, full);
     if (outside === "" || outside === ".." || outside.startsWith(`..${sep}`)) {
@@ -1005,7 +1150,8 @@ export class NodeVault implements Vault {
       // from. A name in this device's own ignore list is the person who
       // passed `--ignore` getting what they asked for, and a peer that syncs
       // it is not doing anything wrong either.
-      throw ignoredHere(rel, this.ignore)
+      const [asked, ignoring] = this.ignoreQuestion(rel);
+      throw ignoredHere(asked, ignoring)
         ? ignoredHereError(`not writing under a name this device is set to ignore: ${path}`)
         : neverSync(`refusing to write inside a folder that is never synced: ${path}`);
     }
@@ -1014,7 +1160,27 @@ export class NodeVault implements Vault {
 
   /** The one answer to "does this path sync", asked the same way in every direction. */
   private neverSynced(rel: string): boolean {
-    return isNeverSynced(rel, this.ignore);
+    return isNeverSynced(...this.ignoreQuestion(rel));
+  }
+
+  /**
+   * A path and the ignore list in the form this disk compares names in (T17).
+   *
+   * Case-folded both, on a disk that folds case. Compared exactly, `--ignore
+   * Archive` let a peer's `archive/photo.md` in: on such a disk that is a file
+   * inside the ignored folder, so it was written there, then left out of every
+   * listing because `Archive` is ignored, read as deleted here, and deleted on
+   * every device. Folded, the write is refused as ignored, and so is `exists`,
+   * so the engine reports the path instead of deleting it; and `list` leaves a
+   * folder spelled either way out, because to this disk it is one folder.
+   *
+   * The protocol's fold, which errs towards calling two names one, and that is
+   * the side to err on here: a name taken for an ignored one is refused and
+   * reported, never written and lost. Before the probe has run the disk is
+   * taken to fold, the same safe default `canonical` has.
+   */
+  private ignoreQuestion(rel: string): [string, ReadonlySet<string>] {
+    return this.foldsCaseSync ? [foldName(rel), this.ignoreFolded] : [rel, this.ignore];
   }
 
   /**
@@ -1452,6 +1618,14 @@ export class NodeVault implements Vault {
     if (options.checked && !this.observeOnly) {
       throw new Error("checked inventory requires an observe-only vault");
     }
+    // Before anything is read or reaped (T16): an empty folder standing in
+    // for the vault lists as every note deleted.
+    await this.sameVault(true);
+    // A pass on a disk with no hard links would fail every download and
+    // removal one by one, and anything it uploaded first would sync one way
+    // only; so it is refused whole, once, in words that say why (T18). A look
+    // writes nothing and is allowed.
+    if (!this.observeOnly) await this.refuseWithoutLinks(this.root);
     // Neither of the two writes a scan normally makes happens in observe-only
     // mode (R12): reaping a crashed run's temporaries, and re-spelling names.
     // The pass over staging still runs, because counting what it will not
@@ -1774,6 +1948,9 @@ export class NodeVault implements Vault {
     };
     const scanRoot = checked ? await (this.realRootOnce ??= realpath(this.root)) : this.root;
     const listed = await walk(scanRoot, "");
+    // And again after the walk, which reads every folder by its path: a root
+    // that changed part way through gave half a listing from each (T16).
+    await this.sameVault(true);
     if (
       !this.observeOnly &&
       this.listingWatchers.size > 0 &&
@@ -1816,11 +1993,29 @@ export class NodeVault implements Vault {
    * deciding and opening for the path to become a link.
    */
   async read(path: string): Promise<Uint8Array> {
+    const handle = await this.openNote(path);
+    try {
+      return new Uint8Array(await handle.readFile());
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /**
+   * Opens a note for reading, refusing a link at its name or above it (F24).
+   *
+   * One door for every read of a note's bytes (T25). `readBlocks` and
+   * `readRange` opened the path plainly, so a file over 8 MiB, which the
+   * engine reads in blocks rather than whole, was read through a link that
+   * `read` would have refused: an attachment swapped for a link to
+   * `.trew/config.json` after the scan handed over the device credential to be
+   * uploaded as the attachment.
+   */
+  private async openNote(path: string): Promise<Awaited<ReturnType<typeof open>>> {
     const full = await this.absolute(path);
     await this.readableDir(full);
-    let handle;
     try {
-      handle = await open(full, constants.O_RDONLY | constants.O_NOFOLLOW);
+      return await open(full, constants.O_RDONLY | constants.O_NOFOLLOW);
     } catch (err) {
       // ELOOP is what both kernels raise for a link under O_NOFOLLOW. macOS
       // has also been seen to answer EMLINK, which means nothing else here.
@@ -1830,11 +2025,6 @@ export class NodeVault implements Vault {
       }
       throw err;
     }
-    try {
-      return new Uint8Array(await handle.readFile());
-    } finally {
-      await handle.close();
-    }
   }
 
   /**
@@ -1843,25 +2033,34 @@ export class NodeVault implements Vault {
    * `lstat`, not `stat`, and deliberately: the question is whether this path
    * still holds the file the pass decided about, and a symlink that appeared
    * where a note was is a different answer, not the same one seen through.
-   * Anything unreadable is reported as absent, which makes the engine keep
-   * both copies rather than assume the file is unchanged.
+   *
+   * Only absence is absent (T19, rule 2). Every error used to be reported as
+   * absent, and the engine asks this after a read fails to decide whether the
+   * note is gone: a folder that lost its search permission between the scan
+   * and the read made an unsent edit read as a deletion, which went to the
+   * server and from there into the trash of every other device. A stat that
+   * fails now fails, and the engine keeps the file and tries again.
    */
   async stat(path: string): Promise<FileStat | undefined> {
+    let st;
     try {
-      const st = await lstat(await this.absolute(path));
-      if (st.isDirectory()) return { path, folder: true, mtime: 0, ctime: 0, size: 0 };
-      if (!st.isFile()) return undefined;
-      return {
-        path,
-        folder: false,
-        mtime: st.mtimeMs,
-        ctime: st.birthtimeMs || st.ctimeMs,
-        size: st.size,
-        changeId: `${st.dev}:${st.ino}:${st.ctimeMs}`,
-      };
-    } catch {
-      return undefined;
+      st = await lstat(await this.absolute(path));
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // Not there, or an ancestor that is a file rather than a folder.
+      if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+      throw err;
     }
+    if (st.isDirectory()) return { path, folder: true, mtime: 0, ctime: 0, size: 0 };
+    if (!st.isFile()) return undefined;
+    return {
+      path,
+      folder: false,
+      mtime: st.mtimeMs,
+      ctime: st.birthtimeMs || st.ctimeMs,
+      size: st.size,
+      changeId: `${st.dev}:${st.ino}:${st.ctimeMs}`,
+    };
   }
 
   /**
@@ -1871,7 +2070,7 @@ export class NodeVault implements Vault {
    * small enough that peak memory is bounded by something other than the file.
    */
   async *readBlocks(path: string, blockSize = 1024 * 1024): AsyncGenerator<Uint8Array> {
-    const handle = await open(await this.absolute(path), "r");
+    const handle = await this.openNote(path);
     try {
       const buf = new Uint8Array(blockSize);
       for (;;) {
@@ -1888,7 +2087,7 @@ export class NodeVault implements Vault {
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
-    const handle = await open(await this.absolute(path), "r");
+    const handle = await this.openNote(path);
     try {
       const out = new Uint8Array(end - start);
       let at = 0;
@@ -1961,8 +2160,20 @@ export class NodeVault implements Vault {
    *
    * Only reached when the target already exists, which for a first download is
    * never, so it costs nothing on the path that moves the most files.
+   *
+   * And not at all on a disk the probe found keeps case apart, which is where
+   * the headless client mostly runs (ext4 on a server or a NAS). There
+   * `NOTE.md` and `Note.md` are two files, the stat finds the exact name or
+   * nothing, and the whole folder was read for every download over an
+   * existing note only to find the name it was given: 4 to 4.5 ms a download
+   * in a folder of 10,000 and 0.07 ms in one of 100, measured under Node on a
+   * case-sensitive APFS volume. Unicode spellings do not depend on this
+   * either, since `absolute` hands over the disk's own spelling of every name
+   * it has met. A disk that folds case still pays it, because there it is
+   * what keeps a case-only rename from losing the note.
    */
   private async matchCase(full: string): Promise<void> {
+    if (!this.foldsCaseSync) return;
     let there;
     try {
       there = await stat(full);
@@ -2034,6 +2245,9 @@ export class NodeVault implements Vault {
     await this.insideForReal(full);
     const had = await this.deepestExisting(full);
     await mkdir(dirname(full), { recursive: true });
+    // Before anything is moved: publishing, putting back and keeping are all
+    // links (T18).
+    await this.refuseWithoutLinks(dirname(full));
     await this.matchCase(full);
     await this.checkStaging();
 
@@ -2050,15 +2264,36 @@ export class NodeVault implements Vault {
     await this.insideForReal(kept);
     let staged = join(this.staging, `replace.${randomBytes(8).toString("hex")}`);
     // Named out here so the `finally` can say it is no longer this call's.
-    const parked = `${full}.${PARKED_MARK}${randomBytes(4).toString("hex")}`;
+    const parked = besideName(full, `.${PARKED_MARK}${randomBytes(4).toString("hex")}`);
     let retained: string | undefined;
     let failed = false;
     const failure = (error: unknown): unknown =>
       retained === undefined ? error : new PreservationError(error, [retained]);
     try {
+      // With the note's own permissions (T23). The new version is a new file,
+      // and staged with the default mode a note somebody had made readable
+      // only by themselves came back readable by everyone on the machine
+      // after the next edit from another device. The permission bits only:
+      // a peer's bytes do not get to run as this file's owner because the
+      // file they replace could.
+      const mode = await permissionsOf(full);
+      const stage = { mtime: times.mtime, ...(mode === undefined ? {} : { mode }) };
       // Durable before anything is moved: a crash after the rename below must
       // not leave the path empty and the new content only in memory.
-      await writeDurably(staged, bytes, true, { mtime: times.mtime, stageIn: this.staging });
+      //
+      // The bytes, that is, and not the staged name, so the staging folder is
+      // not flushed here. On a Mac, where an fsync reaches the drive, that
+      // flush was about half of a first download (a median of 14 ms with it
+      // and 6.5 without, under Node), for a name nothing ever needs after a
+      // crash: the file's own flush, which stays, makes its bytes
+      // durable before anything moves, and the `link` below gives the note's
+      // name that same file. That name's folder is dirty from then on, and
+      // `flush` makes it durable before the engine saves the index, so the
+      // index still never says a note is synced ahead of the disk holding it
+      // (rule 3, and `NodeVault.flush`). The staged name is gone in the
+      // `finally`, or, after a crash, left for the reaper to take, and a
+      // crash that loses it loses nothing but a copy the server still has.
+      await writeDurably(staged, bytes, false, { ...stage, stageIn: this.staging });
 
       // On the destination's filesystem, decided before the original moves
       // (R37).
@@ -2071,8 +2306,10 @@ export class NodeVault implements Vault {
       // second staging copy beside the destination, where a link always
       // reaches.
       if (!(await sameFilesystem(staged, dirname(full)))) {
-        const near = `${full}.${TEMP_MARK}near${randomBytes(4).toString("hex")}`;
-        await writeDurably(near, bytes, true, { mtime: times.mtime });
+        const near = besideName(full, `.${TEMP_MARK}near${randomBytes(4).toString("hex")}`);
+        // Its folder is the note's, which the publication below marks for
+        // `flush` anyway, so it is not flushed twice (see above).
+        await writeDurably(near, bytes, false, stage);
         await rm(staged, { force: true });
         staged = near;
       }
@@ -2116,6 +2353,11 @@ export class NodeVault implements Vault {
         // caller who expected content and found none. Either way there is
         // nothing to preserve.
         moved = false;
+      }
+      if (moved && (await isFolder(parked))) {
+        await this.putFolderBack(parked, full, path);
+        retained = undefined;
+        throw new Error(`refusing to write a file over the folder at ${path}`);
       }
 
       let landed = true;
@@ -2250,6 +2492,38 @@ export class NodeVault implements Vault {
   }
 
   /**
+   * Puts back a folder that the move aside meant for a note took (T22).
+   *
+   * `rename` moves a folder as readily as a file, and a folder can appear at a
+   * note's name after the pass looked. It went on to be written over or
+   * trashed as the note it was not, left at a hidden name, and its notes fell
+   * out of the listing, which reads them as deleted. So it goes straight back.
+   * `rename` is the right tool for that where `link` is not, and it is as
+   * safe: it refuses to put a folder over a file or over a folder with
+   * anything in it, so whatever took the name in between keeps it, and this
+   * one is then written down where it is and named in the error.
+   */
+  private async putFolderBack(parked: string, full: string, path: string): Promise<void> {
+    try {
+      await rename(parked, full);
+    } catch (err) {
+      await this.noteDisplaced(
+        parked,
+        full,
+        `the folder at ${path} was taken aside in place of a note and could not be put back`,
+      );
+      throw new PreservationError(
+        new Error(
+          `the folder at ${path} was taken aside in place of a note and could not be put back ` +
+            `(${(err as Error).message}); it is at ${relative(this.root, parked)}`,
+        ),
+        [relative(this.root, parked)],
+      );
+    }
+    this.unflushed.add(dirname(full));
+  }
+
+  /**
    * Removes a file, and says so when what it removed was not what the caller
    * meant to remove (R01).
    *
@@ -2281,6 +2555,8 @@ export class NodeVault implements Vault {
       // this missing-path observation, bypassing the expected digest.
       return { landed: true };
     }
+    // Keeping what it finds, and putting it back, are links (T18).
+    await this.refuseWithoutLinks(dirname(full));
 
     // Moved out of the way first, and identified afterwards (R22).
     //
@@ -2295,7 +2571,7 @@ export class NodeVault implements Vault {
     // trash. Parked at the conflict-copy path it reached the trash *called* a
     // conflict copy, which is a name nobody searches for and a claim that
     // something was in conflict when nothing was.
-    const aside = `${full}.${PARKED_MARK}${randomBytes(4).toString("hex")}`;
+    const aside = besideName(full, `.${PARKED_MARK}${randomBytes(4).toString("hex")}`);
     // Not a stranded version while this call is holding it; see `replace`.
     liveTemps.add(aside);
     try {
@@ -2306,6 +2582,14 @@ export class NodeVault implements Vault {
       return { landed: true }; // gone between the lstat and here
     }
     this.unflushed.add(dirname(full));
+    if (await isFolder(aside)) {
+      try {
+        await this.putFolderBack(aside, full, path);
+      } finally {
+        liveTemps.delete(aside);
+      }
+      throw new Error(`refusing to remove the folder at ${path} as if it were a note`);
+    }
     await midTrash.parked(aside);
 
     // Everything from here can fail, and the note is off its own name until
@@ -2514,12 +2798,27 @@ export class NodeVault implements Vault {
    * a note onto it would replace what is there, so an error is not a "no".
    */
   private async freeTrashPath(path: string): Promise<string> {
-    const base = join(this.root, TRASH_DIR, path);
-    // Split on the vault-relative path, which always uses forward slashes,
-    // and take the extension off the joined absolute one, which may not.
-    const { ext } = splitName(path);
-    const stem = ext === "" ? base : base.slice(0, base.length - ext.length);
-    return firstFreeName(base, occupied, (n) => `${stem} (${n})${ext}`);
+    const parts = path.split("/");
+    const leaf = parts.pop()!;
+    // Each folder of the path as well as its last name (T24).
+    //
+    // Only the last name used to be numbered, so a file already in the trash
+    // where one of the folders has to go stopped the deletion for good: a note
+    // called `Ideas`, deleted earlier, made every removal under `Ideas/` fail
+    // with ENOTDIR on every pass. A folder that is there is used as it is; a
+    // name held by anything else is passed over for the next numbered one.
+    let dir = join(this.root, TRASH_DIR);
+    for (const part of parts) {
+      const parent = dir;
+      dir = await firstFreeName(join(parent, part), heldByNonFolder, (n) =>
+        join(parent, withSuffix(part, ` (${n})`)),
+      );
+    }
+    // Numbered inside the extension, and cut to fit the longest name (T63).
+    const { stem, ext } = splitName(leaf);
+    return firstFreeName(join(dir, leaf), occupied, (n) =>
+      join(dir, withSuffix(stem, ` (${n})${ext}`)),
+    );
   }
 
   async mkdir(path: string): Promise<void> {
@@ -2602,6 +2901,49 @@ export class NodeVault implements Vault {
         await rm(probe, { force: true }).catch(() => {});
       }
     })());
+  }
+
+  /** Whether each filesystem this vault has asked about can make hard links, by device (T18). */
+  private readonly linksOn = new Map<number, true | string>();
+
+  /**
+   * Refuses, before anything is moved, a folder on a filesystem that cannot
+   * make hard links (T18).
+   *
+   * Every preserving write and removal here takes the note off its name with
+   * `rename` and then publishes, puts back or keeps with `link`, which creates
+   * a name or fails and so never writes over a save that arrived in between.
+   * On exFAT and FAT there are no links: macOS answers ENOTSUP and Linux
+   * EPERM. A download over `Note.md` moved the note aside, could neither
+   * publish nor put it back, and left it at a hidden `..trew-tmp-keep` name,
+   * with the next listing reading the note as deleted. `create` can fall back
+   * to an exclusive open, because it moves nothing; these cannot, because the
+   * only fallbacks either replace a save made in the gap (`rename`) or leave
+   * a half-written note under its real name after a crash (an exclusive
+   * write). So the question is asked first, once per filesystem, and nothing
+   * is touched where the answer is no.
+   *
+   * Asked with a probe file of its own in `dir`, dot-prefixed so neither
+   * client lists it and the watcher ignores it, rather than with a note.
+   * A probe that cannot be made at all, or a link refused for another reason,
+   * says nothing about links: nothing is remembered and the operation goes
+   * ahead, failing the way it always did if it must.
+   */
+  private async refuseWithoutLinks(dir: string): Promise<void> {
+    const { dev } = await stat(dir);
+    let known = this.linksOn.get(dev);
+    if (known === undefined) {
+      known = await linkSupport(dir);
+      if (known === undefined) return;
+      this.linksOn.set(dev, known);
+    }
+    if (known === true) return;
+    throw new Error(
+      `${dir} is on a filesystem that cannot make hard links (link answered ${known}), and ` +
+        `trew needs them to replace or remove a note without a moment in which the note could ` +
+        `be lost, so nothing was changed. exFAT and FAT drives are like this. Keep the vault ` +
+        `on a filesystem with hard links, such as APFS, ext4, btrfs or XFS.`,
+    );
   }
 
   /**
@@ -2742,9 +3084,14 @@ export class NodeVault implements Vault {
         // The state folder changes on every single pass, because that is
         // where the index is written. Watching it would mean each pass
         // scheduled the next one, forever.
-        if (this.neverSynced(path)) return;
-        if (isTemporary(basename(path), join(this.root, path))) return;
+        //
+        // Asked of the name as the scan reports it, so the two agree: the
+        // disk's own spelling (NFD from a Mac, a no-break space) of an
+        // ignored folder missed the ignore list here and started a pass for
+        // every change inside it.
         const normal = this.normalPath(path);
+        if (this.neverSynced(normal)) return;
+        if (isTemporary(basename(path), join(this.root, path))) return;
         const known = this.cachedListing?.get(normal);
         if (event === "change" && known && !known.folder) this.listingChanges.add(normal);
         else this.invalidateListing();
@@ -2797,7 +3144,10 @@ export class JsonIndexStore implements IndexStore {
       // Loud by default, and on stderr, because everything this reports is a
       // thing the person running the client would want to know about their
       // index. A caller with somewhere better to put it passes one in.
-      log: (message: string, ...rest: unknown[]) => console.warn(`trew: ${message}`, ...rest),
+      // Spelled out for the terminal (T20): an error quoted here can carry
+      // bytes of the index, and the index holds paths.
+      log: (message: string, ...rest: unknown[]) =>
+        console.warn(printable(`trew: ${message}`), ...rest),
       ...opts,
     });
   }
@@ -3039,7 +3389,10 @@ async function openTemp(
   if (stageIn !== undefined) await mkdir(stageIn, { recursive: true });
   const base = stageIn !== undefined ? join(stageIn, basename(full)) : full;
   for (let attempt = 0; attempt < 64; attempt++) {
-    const tmp = `${base}${TEMP_MARK}${(tempCounter++).toString(36)}${attempt ? `-${attempt}` : ""}`;
+    const tmp = besideName(
+      base,
+      `${TEMP_MARK}${(tempCounter++).toString(36)}${attempt ? `-${attempt}` : ""}`,
+    );
     try {
       const handle = await open(tmp, "wx", mode);
       liveTemps.add(tmp);
@@ -3060,7 +3413,7 @@ async function openTemp(
  */
 async function freeTempName(full: string): Promise<string> {
   for (let n = 0; n < 64; n++) {
-    const at = `${full}.${TEMP_MARK}${randomBytes(4).toString("hex")}`;
+    const at = besideName(full, `.${TEMP_MARK}${randomBytes(4).toString("hex")}`);
     if (!(await lstat(at).catch(() => undefined))) return at;
   }
   throw new Error(`no free temporary name beside ${full}`);
@@ -3080,6 +3433,58 @@ async function sameFilesystem(a: string, b: string): Promise<boolean> {
     lstat(b).catch(() => undefined),
   ]);
   return one !== undefined && two !== undefined && one.dev === two.dev;
+}
+
+/**
+ * A file's permission bits, for the version about to replace it (T23), or
+ * undefined where there is no file. Read without the set-id and sticky bits.
+ * A path that cannot be looked at reads as no file: the new version gets the
+ * default mode, and the move aside that follows says why the path cannot be
+ * used, if it cannot.
+ */
+async function permissionsOf(path: string): Promise<number | undefined> {
+  const st = await lstat(path).catch(() => undefined);
+  return st?.isFile() ? st.mode & 0o777 : undefined;
+}
+
+/**
+ * Whether what a move aside just took is a folder (T22). A path that cannot be
+ * looked at reads as not one, which leaves it to the ordinary handling of a
+ * displaced file, where it is kept and named.
+ */
+async function isFolder(path: string): Promise<boolean> {
+  return (await lstat(path).catch(() => undefined))?.isDirectory() === true;
+}
+
+/**
+ * What `link` answers on a filesystem with no hard links (T18): ENOTSUP on
+ * macOS's exFAT and FAT, EPERM on Linux's. Linux also says EPERM for a link to
+ * somebody else's file under `fs.protected_hardlinks`, which a probe file of
+ * this process's own cannot meet.
+ */
+const NO_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP"]);
+
+/**
+ * Whether `dir`'s filesystem can make a hard link: true, the error saying it
+ * cannot, or undefined when the probe could not tell (T18).
+ */
+async function linkSupport(dir: string): Promise<true | string | undefined> {
+  const probe = join(dir, `.trew-linkprobe-${process.pid}-${randomBytes(4).toString("hex")}`);
+  try {
+    await (await open(probe, "wx")).close();
+  } catch {
+    return undefined;
+  }
+  try {
+    await link(probe, `${probe}-link`);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? "";
+    return NO_LINKS.has(code) ? code : undefined;
+  } finally {
+    await rm(`${probe}-link`, { force: true }).catch(() => {});
+    await rm(probe, { force: true }).catch(() => {});
+  }
 }
 
 /**

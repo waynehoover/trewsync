@@ -79,7 +79,7 @@ import {
   type SearchPage,
 } from "../core/transport.ts";
 import { renderMatch } from "./search-output.ts";
-import { printable, safeJson } from "./terminal.ts";
+import { forTerminal, printable, safeJson } from "./terminal.ts";
 import { describeOutcome, exitCodeOf, outcomeOf } from "../core/outcome.ts";
 import { validateStoredState } from "../core/stored-state.ts";
 import type { StoredState } from "../core/vault.ts";
@@ -147,9 +147,10 @@ Options
                    everyone else sees. This client declining to write, not the server refusing
                    it. Recorded in the config by pair, so a cron job cannot lose it by
                    forgetting the flag
-  --force          for unlock: clear a lock held on another machine. This one cannot tell whether
-                   that process is still running, so saying it is not is your assertion. It will
-                   not break a lock held by a process on this machine that is still running
+  --force          for unlock: clear a lock this machine cannot check: one held on another machine,
+                   or one naming a process here that holds nothing, such as a process id reused
+                   after a restart. Saying it is not a running trew is your assertion. It will
+                   not break a lock a trew on this machine is holding
   --ttl DURATION   how long an invite lasts, like 10m or 1h (default: 1h, at most 1h)
   --uid N          restore one exact version, from trew history
   --to PATH        restore somewhere other than where it came from
@@ -193,7 +194,48 @@ const RETIRED = new Map<string, string>([
   ],
 ]);
 
-export async function run(argv: readonly string[], io: Console): Promise<number> {
+/**
+ * What a request to stop has to reach (T21).
+ *
+ * Ctrl-C is the documented way to stop `trew sync --watch`, and SIGTERM is how
+ * a service manager or a shutdown stops anything. Both used to kill the
+ * process where it stood, which the kernel's exclusion survives and the lock
+ * record does not: it stayed behind naming a pid that was gone, and once that
+ * pid went to another process, as it likely does after a reboot, every command
+ * refused the vault. So a stop is asked of the command instead: every client
+ * open is closed, which ends a watcher's connection and has a pass in flight
+ * fail its remaining network work and finish its writes, a watcher's wait
+ * between reconnections is cut short and it does not start another, and the
+ * command returns through the same `finally` that releases the lock when it
+ * ends of its own accord. `bin.ts` owns the signals and what happens after.
+ */
+const stopping = {
+  asked: false,
+  clients: new Set<Client>(),
+  wake: undefined as (() => void) | undefined,
+};
+
+/** Asks the command running in this process to stop and let the vault go (T21). */
+export function interrupt(): void {
+  stopping.asked = true;
+  stopping.wake?.();
+  for (const client of stopping.clients) void client.close().catch(() => undefined);
+}
+
+export async function run(argv: readonly string[], terminal: Console): Promise<number> {
+  stopping.asked = false;
+  stopping.clients.clear();
+  stopping.wake = undefined;
+  // Every line every command prints goes through here, so nothing a name
+  // holds reaches the terminal as an instruction (T20, terminal.ts). One door
+  // rather than an escape at each place a name is printed: that was the
+  // arrangement before, and only `search` and part of `status` had one.
+  const style = terminal.color === true;
+  const io: Console = {
+    out: (line) => terminal.out(forTerminal(line, style)),
+    err: (line) => terminal.err(forTerminal(line, false)),
+    ...(terminal.color === undefined ? {} : { color: terminal.color }),
+  };
   const retired = RETIRED.get(argv[0] ?? "");
   if (retired !== undefined) {
     io.err(`trew: ${retired}`);
@@ -213,11 +255,12 @@ export async function run(argv: readonly string[], io: Console): Promise<number>
   }
 
   if (args.version) {
-    io.out(args.json ? JSON.stringify({ ok: true, version: VERSION }) : VERSION);
+    io.out(args.json ? safeJson({ ok: true, version: VERSION }) : VERSION);
     return 0;
   }
   if (args.help || args.command === undefined) {
-    io.out(USAGE);
+    // A line at a time, since a newline inside one is spelled out (T20).
+    for (const line of USAGE.split("\n")) io.out(line);
     return args.command === undefined && !args.help ? 2 : 0;
   }
 
@@ -225,7 +268,7 @@ export async function run(argv: readonly string[], io: Console): Promise<number>
     validateUsage(args);
   } catch (err) {
     const error = (err as Error).message;
-    if (args.json) io.out(JSON.stringify({ ok: false, error }));
+    if (args.json) io.out(safeJson({ ok: false, error }));
     else io.err(`trew: ${error}`);
     return 2;
   }
@@ -273,7 +316,7 @@ export async function run(argv: readonly string[], io: Console): Promise<number>
         return await cmdUnlock(args, io);
       default:
         io.err(`no such command: ${args.command}`);
-        io.err(USAGE);
+        for (const line of USAGE.split("\n")) io.err(line);
         return 2;
     }
   } catch (err) {
@@ -281,8 +324,11 @@ export async function run(argv: readonly string[], io: Console): Promise<number>
     // is for a bug in this program; the common failures are a server that is
     // not running and a string that was pasted wrong, and those deserve to
     // be readable.
-    const message = withRecovery(err);
-    if (args.json) io.out(JSON.stringify({ ok: false, error: message }));
+    // A command stopped by a signal fails however its closed connection or
+    // input happened to say so; said once in plain words (T21).
+    const why = withRecovery(err);
+    const message = stopping.asked ? `stopped, as asked (${why})` : why;
+    if (args.json) io.out(safeJson({ ok: false, error: message }));
     else io.err(`trew: ${message}`);
     return 1;
   }
@@ -519,7 +565,7 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
 
   if (args.json) {
     io.out(
-      JSON.stringify({
+      safeJson({
         ok: true,
         paired: args.dir,
         device: paired.device,
@@ -648,7 +694,7 @@ async function cmdInvite(args: Args, io: Console): Promise<number> {
   }
   if (args.json) {
     io.out(
-      JSON.stringify({
+      safeJson({
         ok: true,
         invite: issued.invite,
         id: issued.id,
@@ -703,7 +749,7 @@ async function cmdDevices(args: Args, io: Console): Promise<number> {
     await client.close();
   }
   if (args.json) {
-    io.out(JSON.stringify({ ok: true, devices, invites, thisDevice }));
+    io.out(safeJson({ ok: true, devices, invites, thisDevice }));
     return 0;
   }
   for (const d of devices) {
@@ -806,7 +852,7 @@ async function cmdUninvite(args: Args, io: Console): Promise<number> {
     await client.close();
   }
   if (args.json) {
-    io.out(JSON.stringify({ ok: true, cancelled: invite }));
+    io.out(safeJson({ ok: true, cancelled: invite }));
     return 0;
   }
   io.out(`Cancelled ${invite}. That string no longer adds a device.`);
@@ -861,12 +907,12 @@ async function cmdRename(args: Args, io: Console): Promise<number> {
         `${(err as Error).message}. Conflict copies made here will still say ` +
         `${JSON.stringify(config.device)} until this runs again.`,
     );
-    if (args.json) io.out(JSON.stringify({ ok: false, renamed: true, name: said, saved: false }));
+    if (args.json) io.out(safeJson({ ok: false, renamed: true, name: said, saved: false }));
     return 1;
   }
 
   if (args.json) {
-    io.out(JSON.stringify({ ok: true, renamed: true, name: said, saved: true }));
+    io.out(safeJson({ ok: true, renamed: true, name: said, saved: true }));
     return 0;
   }
   io.out(`This device is now ${said} in the device list.`);
@@ -909,7 +955,7 @@ async function cmdRevoke(args: Args, io: Console): Promise<number> {
     await client.close();
   }
   if (args.json) {
-    io.out(JSON.stringify({ ok: true, revoked: deviceId, self }));
+    io.out(safeJson({ ok: true, revoked: deviceId, self }));
     return 0;
   }
   io.out(`Revoked ${deviceId}. Its sessions are closed and it cannot connect again.`);
@@ -1124,6 +1170,16 @@ async function watchForever(config: Config, args: Args, io: Console): Promise<nu
       },
     },
     {
+      // Stopped by a signal the way it stops for anything else (T21): no
+      // next connection, no rest of a backoff, and the live client closed.
+      keepGoing: () => !stopping.asked,
+      onWaiting: (wake) => {
+        stopping.wake = wake;
+      },
+      onConnecting: (client) => {
+        stopping.clients.add(client);
+        if (stopping.asked) void client.close().catch(() => undefined);
+      },
       onClient: (client) => {
         watching = client;
         settled = false;
@@ -1403,7 +1459,7 @@ async function cmdStatus(args: Args, io: Console): Promise<number> {
     attentionUnknown !== undefined;
 
   if (args.json) {
-    io.out(JSON.stringify({ ok: !wrong, ...local, server }));
+    io.out(safeJson({ ok: !wrong, ...local, server }));
     return wrong ? 1 : 0;
   }
 
@@ -1545,7 +1601,7 @@ async function cmdRepair(args: Args, io: Console): Promise<number> {
     const out = await client.repair();
     const wrong = out.failed.length > 0 || out.stillMissing > 0;
     if (args.json) {
-      io.out(JSON.stringify({ ok: !wrong, ...out }));
+      io.out(safeJson({ ok: !wrong, ...out }));
       return wrong ? 1 : 0;
     }
 
@@ -1603,7 +1659,7 @@ async function cmdDeleted(args: Args, io: Console): Promise<number> {
       args.before > 0 ? args.before : undefined,
     );
     if (args.json) {
-      io.out(JSON.stringify({ ok: true, deleted: gone.notes, more: gone.more }));
+      io.out(safeJson({ ok: true, deleted: gone.notes, more: gone.more }));
       return 0;
     }
     if (gone.notes.length === 0) {
@@ -1661,7 +1717,7 @@ async function cmdPreview(args: Args, io: Console): Promise<number> {
   try {
     const preview = await client.preview();
     const ok = !preview.files.some((file) => file.action === "blocked");
-    if (args.json) io.out(JSON.stringify({ ok, ...preview, counts: previewCounts(preview) }));
+    if (args.json) io.out(safeJson({ ok, ...preview, counts: previewCounts(preview) }));
     else {
       io.out("Preview only. Files are checked again during sync.");
       for (const file of preview.files)
@@ -1692,7 +1748,7 @@ async function cmdHistory(args: Args, io: Console): Promise<number> {
     });
     const nextBefore = versions.length === limit ? versions.at(-1)!.uid : null;
     if (args.json) {
-      io.out(JSON.stringify({ ok: true, path, versions, limit, nextBefore }));
+      io.out(safeJson({ ok: true, path, versions, limit, nextBefore }));
       return 0;
     }
     if (versions.length === 0) {
@@ -1939,7 +1995,7 @@ async function cmdRestore(args: Args, io: Console): Promise<number> {
       const sent = client.engine.serverHasOurs(done.path);
       if (args.json) {
         io.out(
-          JSON.stringify({
+          safeJson({
             ok: false,
             restored: true,
             path: done.path,
@@ -1976,7 +2032,7 @@ async function cmdRestore(args: Args, io: Console): Promise<number> {
       const outcome = outcomeOf(report, undefined, client.vault.recovery, client.vault.stranded);
       const code = exitCodeOf(outcome);
       io.out(
-        JSON.stringify({
+        safeJson({
           ok: code === 0,
           restored: true,
           sent,
@@ -2046,7 +2102,7 @@ async function cmdUnlock(args: Args, io: Console): Promise<number> {
   if (args.json) {
     const ok = outcome.did === "nothing" || outcome.did === "removed";
     io.out(
-      JSON.stringify({
+      safeJson({
         ok,
         did: outcome.did,
         why: outcome.why,
@@ -2089,7 +2145,7 @@ async function cmdUnlink(args: Args, io: Console): Promise<number> {
   const unfinished = config !== undefined && isPendingPairing(config);
   if (args.json) {
     io.out(
-      JSON.stringify({
+      safeJson({
         ok: true,
         unlinked: args.dir,
         wasPaired: config !== undefined && !unfinished,
@@ -2166,7 +2222,10 @@ async function open(
     ...(await clientOptions(config, args, io, opts.inspect)),
     ...(opts.inspect === true ? { inspect: true } : {}),
   });
+  // Where a request to stop can reach it, and not started once one came (T21).
+  stopping.clients.add(client);
   try {
+    if (stopping.asked) throw new Error("stopped before connecting, as asked");
     await client.connect(opts);
   } catch (err) {
     await client.close();
@@ -2212,7 +2271,7 @@ export function renderReport(
     // non-zero exit was a real divergence, and one field being derived from
     // counters while another was hardcoded is how it happened.
     io.out(
-      JSON.stringify({
+      safeJson({
         ok: exitCodeOf(outcome) === 0,
         outcome,
         ...r,

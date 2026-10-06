@@ -55,7 +55,7 @@ vault. Commands use the current directory unless `--dir` is set. Run
 | `--context N` | `search`: 0 to 3 lines of context around each match. |
 | `--all` | `search`: every page of matches, not only the first. |
 | `--after CURSOR` | `search`: the page after the one that ended with this cursor. |
-| `--force` | `unlock` only: clear a holder recorded on another machine after verifying it stopped. |
+| `--force` | `unlock` only: clear a holder recorded on another machine after verifying it stopped, or a running process here that holds nothing (a process id reused after a restart) after checking it is not a TrewSync. |
 | `-v`, `--verbose` | Engine logging. |
 | `--` | End options; remaining arguments are literal values. |
 

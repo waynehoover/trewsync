@@ -12,7 +12,17 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile, mkdir } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+  mkdir,
+} from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -31,6 +41,7 @@ import {
   parseInvite,
   startPairing,
 } from "../core/pairing.ts";
+import { Client } from "../core/client.ts";
 import type { SyncReport } from "../core/engine.ts";
 import { loadConfig, saveConfig } from "./config.ts";
 import {
@@ -44,6 +55,7 @@ import {
   USAGE,
   type Console,
 } from "./cli.ts";
+import { clientOptions } from "./client-options.ts";
 import { NodeVault } from "./vault.ts";
 
 beforeAll(async () => {
@@ -2068,6 +2080,42 @@ describe("a folder this device ignores and another device syncs (R2)", () => {
     expect(r.code, r.all).toBe(1);
     expect(r.json()["ignored"]).toBe(0);
   }, 300_000);
+
+  /**
+   * T17. On a disk that folds case, a peer's `archive/photo.md` is a file
+   * inside the `Archive` folder this device ignores. It was written in there,
+   * left out of the next listing because `Archive` is ignored, read as deleted
+   * here, and deleted on every device, including the one that made it.
+   */
+  it("does not delete a peer's note spelled like the ignored folder in another case (T17)", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    await write(b, "Archive/local-only.md", "b's, never synced\n");
+    await write(a, "archive/photo.md", "a's note\n");
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    const folds = await stat(join(b, "ARCHIVE")).then(
+      () => true,
+      () => false,
+    );
+
+    for (const pass of [1, 2]) {
+      const r = await cli("sync", "--dir", b, "--ignore", "Archive", "--json");
+      expect(r.code, `pass ${pass}: ${r.all}`).toBe(0);
+    }
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+
+    // The note is where its author put it, and the server never heard of a
+    // deletion, whichever way this disk treats case.
+    expect(await read(a, "archive/photo.md")).toBe("a's note\n");
+    expect((await versionsOf(a, "archive/photo.md")).some((v) => v.deleted)).toBe(false);
+    expect((await versionsOf(a, "Archive/local-only.md")).length).toBe(0);
+    if (folds) {
+      // One folder here, and it is ignored: nothing went into it.
+      expect(await readdir(join(b, "Archive"))).toEqual(["local-only.md"]);
+    } else {
+      expect(await read(b, "archive/photo.md")).toBe("a's note\n");
+    }
+  }, 300_000);
 });
 
 /**
@@ -2700,4 +2748,207 @@ describe("the device name it makes up", () => {
     expect(made, "a name the person chose was quietly changed").toBe(typed);
     expect(() => checkName("device", made)).toThrow(/at most 64/);
   });
+});
+
+/**
+ * A client that stays open across passes, built the way `trew sync --watch`
+ * builds one, so a test can change the disk between two of its passes.
+ * `wrap` may stand a vault in front of the real one.
+ */
+async function longRunning(
+  dir: string,
+  wrap: (vault: NodeVault) => NodeVault = (vault) => vault,
+): Promise<Client> {
+  const opts = await clientOptions(
+    (await loadConfig(dir))!,
+    parseArgs(["sync", "--watch", "--dir", dir]),
+  );
+  const client = new Client({ ...opts, vault: wrap(opts.vault as NodeVault) });
+  await client.connect({ waitForBacklog: false });
+  return client;
+}
+
+/** Every version the server holds of one path, as `trew history --json` lists them. */
+async function versionsOf(dir: string, path: string): Promise<{ deleted: boolean }[]> {
+  const h = await cli("history", path, "--dir", dir, "--json");
+  expect(h.code, h.all).toBe(0);
+  return h.json()["versions"] as { deleted: boolean }[];
+}
+
+/**
+ * T19, through the engine. A pass that cannot read a note asks the vault
+ * whether it is gone, and the vault answered every failed stat with "gone": a
+ * folder that lost its search permission between the scan and the read sent
+ * an unsent edit to the server as a deletion, and the other device moved its
+ * copy to the trash.
+ */
+describe("a note this device could not look at for a moment (T19)", () => {
+  it("is not sent as deleted, and its edit arrives once it can be read", async (ctx) => {
+    // Permissions do not stop root, so there is nothing to simulate there.
+    if (process.getuid?.() === 0) ctx.skip();
+    await fresh();
+    const { a, b } = await twoDevices();
+    await write(a, "Projects/plan.md", "the plan, version 1\n");
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    // An edit, so the pass has to read the note.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await write(a, "Projects/plan.md", "the plan, version 2, edited on a\n");
+
+    const folder = join(a, "Projects");
+    const client = await longRunning(
+      a,
+      (vault) =>
+        new Proxy(vault, {
+          get(target, prop) {
+            if (prop === "read") {
+              return async (path: string) => {
+                // After the scan, before the read.
+                if (path === "Projects/plan.md") await chmod(folder, 0o600);
+                return target.read(path);
+              };
+            }
+            const value = Reflect.get(target, prop, target) as unknown;
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        }),
+    );
+    try {
+      const report = await client.settle().catch(() => undefined);
+      expect(report?.deletedRemotely ?? 0, "an unread note was sent as deleted").toBe(0);
+    } finally {
+      await client.close();
+      await chmod(folder, 0o755);
+    }
+
+    expect((await versionsOf(b, "Projects/plan.md")).some((v) => v.deleted)).toBe(false);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    expect(await read(b, "Projects/plan.md")).toBe("the plan, version 1\n");
+    // And once the folder can be read again, the edit goes where it was going.
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    expect(await read(b, "Projects/plan.md")).toBe("the plan, version 2, edited on a\n");
+    expect(await read(a, "Projects/plan.md")).toBe("the plan, version 2, edited on a\n");
+  }, 300_000);
+});
+
+/**
+ * T16, through the engine and on to the other device. A watching client's
+ * vault folder is replaced by an empty one, which is what the mount point of
+ * an unmounted disk is, and what moving the vault away and making the folder
+ * again leaves. Its next pass found nothing, read every note as deleted here,
+ * and sent the deletions; the other device moved every note to its trash.
+ */
+describe("a vault folder replaced while a client is running (T16)", () => {
+  it("sends no deletions, and the other device keeps every note", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    const names = ["one.md", "two.md", "three.md"];
+    for (const name of names) await write(a, name, `${name}\n`);
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+
+    const away = `${a}-away`;
+    dirs.push(away);
+    const client = await longRunning(a);
+    let after: unknown;
+    try {
+      await client.settle();
+      await rename(a, away);
+      await mkdir(a);
+      after = await client.settle().then(
+        (report) => report,
+        (err: unknown) => err,
+      );
+    } finally {
+      await client.close();
+    }
+
+    // The notes first, because they are the point: no deletion on the server,
+    // and every note still on the other device, with nothing in its trash.
+    for (const name of names) {
+      expect(
+        (await versionsOf(b, name)).some((v) => v.deleted),
+        `${name} deleted`,
+      ).toBe(false);
+    }
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    for (const name of names) expect(await read(b, name)).toBe(`${name}\n`);
+    expect(await readdir(join(b, ".trash")).catch(() => [])).toEqual([]);
+    // And the pass said why it stopped rather than reporting a quiet vault.
+    expect(after, "a pass over a folder standing in for the vault went ahead").toBeInstanceOf(
+      Error,
+    );
+    expect((after as Error).message).toMatch(/not the folder this trew opened/);
+  }, 300_000);
+});
+
+/**
+ * T20. Names reach the terminal from three places nobody here controls: files
+ * on this disk, paths another device or an agent wrote, and device names. Only
+ * `search` and part of `status` spelled out what a terminal would act on, and
+ * the server refuses only C0 controls and DEL in a name, so a C1 control (a
+ * one-byte CSI or OSC) or a direction override from a peer went straight to
+ * the terminal from `sync`, `preview`, `deleted`, `history` and `devices`.
+ */
+describe("what reaches the terminal (T20)", () => {
+  const ch = (code: number) => String.fromCodePoint(code);
+  // ESC ] 0 ; ... BEL sets the window title.
+  const local = `notes${ch(0x1b)}]0;owned${ch(0x07)}.md`;
+  // A one-byte CSI that clears the screen, and a right-to-left override.
+  const peers = `report ${ch(0x9b)}2J${ch(0x202e)}gnp.md`;
+  const device = `lap${ch(0x9b)}0;31mtop`;
+  const acted = new RegExp(
+    "[" +
+      [
+        [0x00, 0x08],
+        [0x0b, 0x1f],
+        [0x7f, 0x9f],
+        [0x2028, 0x2029],
+        [0x202a, 0x202e],
+        [0x2066, 0x2069],
+      ]
+        .map(([a, b]) => `${ch(a!)}-${ch(b!)}`)
+        .join("") +
+      "\\n]",
+    "u",
+  );
+  /** Every line a run printed that holds something a terminal would act on. */
+  const raw = (r: Run) => [...r.out, ...r.err].filter((line) => acted.test(line));
+
+  it("spells out what a terminal would act on, in every command that prints a name", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    await writeFile(join(a, local), "x");
+    await writeFile(join(b, peers), "y");
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    const seen: [string, Run][] = [];
+    seen.push(["sync", await cli("sync", "--dir", a)]);
+    seen.push(["preview", await cli("preview", "--dir", a)]);
+    await rm(join(b, peers));
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    expect((await cli("rename", device, "--dir", b)).code).toBe(0);
+    seen.push(["deleted", await cli("deleted", "--dir", a)]);
+    seen.push(["history", await cli("history", peers, "--dir", a)]);
+    seen.push(["devices", await cli("devices", "--dir", a)]);
+    seen.push(["status", await cli("status", "--dir", a)]);
+    for (const [command, r] of seen) {
+      expect(raw(r), `trew ${command} printed: ${r.all}`).toEqual([]);
+    }
+    // Spelled out rather than dropped, so a person can see the name is odd.
+    const deleted = seen.find(([c]) => c === "deleted")![1];
+    expect(deleted.stdout).toContain("\\u{9b}2J\\u{202e}gnp.md");
+    const devices = seen.find(([c]) => c === "devices")![1];
+    expect(devices.stdout).toContain("lap\\u{9b}0;31mtop");
+
+    // And the JSON a script reads holds the same names, escaped as JSON
+    // escapes them, so it still parses to exactly what the server holds.
+    const json = await cli("devices", "--dir", a, "--json");
+    expect(raw(json), json.all).toEqual([]);
+    const listed = json.json()["devices"] as { name: string }[];
+    expect(listed.map((d) => d.name)).toContain(device);
+    const gone = await cli("deleted", "--dir", a, "--json");
+    expect(raw(gone), gone.all).toEqual([]);
+    expect((gone.json()["deleted"] as { path: string }[]).map((d) => d.path)).toContain(peers);
+  }, 300_000);
 });
