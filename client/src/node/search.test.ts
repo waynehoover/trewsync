@@ -18,7 +18,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
 import { run, type Console } from "./cli.ts";
 import { matchSpan, matchLine } from "./search-output.ts";
-import { printable, safeJson } from "./terminal.ts";
+import { STYLE, forTerminal, printable, safeJson } from "./terminal.ts";
 
 beforeAll(async () => {
   await serverBinary();
@@ -348,6 +348,28 @@ describe("the terminal", () => {
     expect(printable(`a\tb${ESC}[0m${BEL}\r\n${CSI}${RLO}\u00e9`)).toBe(
       "a\tb\\u{1b}[0m\\u{7}\\u{d}\\u{a}\\u{9b}\\u{202e}" + String.fromCodePoint(0xe9),
     );
+  });
+
+  /**
+   * T20. The door every printed line goes through: everything a terminal acts
+   * on is spelled out, newlines included, and only this program's own colour
+   * sequences go through, and only when colour was asked for.
+   */
+  it("lets this program's colours through on the way out, and nothing else (T20)", () => {
+    const ours = `${STYLE.match}needle${STYLE.reset}`;
+    const theirs = `${ESC}]0;title${BEL}${CSI}2J${RLO}\n`;
+    expect(forTerminal(ours + theirs, true)).toBe(
+      ours + "\\u{1b}]0;title\\u{7}\\u{9b}2J\\u{202e}\\u{a}",
+    );
+    // No colour asked for: the colour sequences are spelled out as well.
+    expect(forTerminal(ours, false)).toBe("\\u{1b}[1;31mneedle\\u{1b}[0m");
+    // A sequence that only looks like ours is not ours.
+    expect(forTerminal(`${ESC}[1;32m`, true)).toBe("\\u{1b}[1;32m");
+    // And it is safe to apply twice, since what it writes is plain text.
+    for (const style of [true, false]) {
+      const once = forTerminal(ours + theirs + "\ta", style);
+      expect(forTerminal(once, style)).toBe(once);
+    }
   });
 
   it("escapes C1 controls and bidirectional marks in JSON, which still parses to the same", () => {

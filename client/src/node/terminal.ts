@@ -46,3 +46,36 @@ export const STYLE = {
   line: "\u001b[32m",
   reset: "\u001b[0m",
 } as const;
+
+/** One of the STYLE sequences, exactly, or one character `printable` spells out. */
+const STYLED_OR_UNSAFE = new RegExp(
+  `${Object.values(STYLE)
+    .map((s) => s.replace(/[[\]]/g, "\\$&"))
+    .join("|")}|${UNSAFE.source}`,
+  "gu",
+);
+
+/**
+ * A line on its way out, as the terminal may see it (T20).
+ *
+ * Every line the CLI prints passes through here once, because the names in
+ * them come from places nobody here controls: files on this disk, paths
+ * another device or an agent wrote, device names. Only `search` and part of
+ * `status` used to spell anything out, and the server refuses only C0
+ * controls and DEL in a name, so a peer's one-byte CSI or a direction override
+ * reached the terminal from `sync`, `preview`, `deleted`, `history` and
+ * `devices` as an instruction.
+ *
+ * A line is one line: a newline inside one is spelled out too, so a name
+ * cannot print a line of its own. With `style`, which is only ever set for a
+ * terminal that may be sent colour, the exact sequences in STYLE go through
+ * as they are, since those are this program's own; nothing else does. Text
+ * that went through here already comes out the same, so it is safe to escape
+ * twice, and JSON from `safeJson` holds nothing this would change.
+ */
+export function forTerminal(line: string, style: boolean): string {
+  if (!style) return printable(line);
+  return line.replace(STYLED_OR_UNSAFE, (m) =>
+    m.length > 1 ? m : `\\u{${m.codePointAt(0)!.toString(16)}}`,
+  );
+}

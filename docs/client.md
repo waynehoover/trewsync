@@ -194,6 +194,12 @@ Exit **0** means the command succeeded,
 **1** means a failure or unresolved issue, and **2** means invalid arguments.
 For sync, `outcome` explains the result and the counters describe the work.
 
+A name can hold characters a terminal would act on, from a file on this disk,
+a note another device or an agent wrote, or a device's name. Every command
+prints those spelled out, as `\u{1b}` for an escape, so nothing it prints can
+change what your terminal displays. `--json` escapes them the way JSON does,
+and parses back to the exact names.
+
 A conflict exits 0 because both versions were preserved. Ignored files and
 changes held back by read-only mode also do not make a sync fail. Inspect those
 fields if your job needs a stricter condition. Hidden versions awaiting recovery

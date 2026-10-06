@@ -40,6 +40,7 @@ import {
   splitName,
 } from "../core/paths.ts";
 import { MAX_SEGMENT_BYTES } from "../core/path-policy.ts";
+import { printable } from "./terminal.ts";
 import { composite, seam } from "../core/seam.ts";
 import {
   DISPLACED_LOG,
@@ -670,8 +671,10 @@ export class NodeVault implements Vault {
       ...(opts.alsoIgnore ?? []).map((name) => this.reported(name)),
     ]);
     this.ignoreFolded = new Set([...this.ignore].map(foldName));
+    // Spelled out for the terminal, like every other line (T20): these name
+    // paths, and a path can hold anything another device put in it.
     this.ledger = new DisplacedLedger(new NodeDisplacedFiles(this.root), (m) =>
-      console.warn(`trew: ${m}`),
+      console.warn(printable(`trew: ${m}`)),
     );
   }
 
@@ -3113,7 +3116,10 @@ export class JsonIndexStore implements IndexStore {
       // Loud by default, and on stderr, because everything this reports is a
       // thing the person running the client would want to know about their
       // index. A caller with somewhere better to put it passes one in.
-      log: (message: string, ...rest: unknown[]) => console.warn(`trew: ${message}`, ...rest),
+      // Spelled out for the terminal (T20): an error quoted here can carry
+      // bytes of the index, and the index holds paths.
+      log: (message: string, ...rest: unknown[]) =>
+        console.warn(printable(`trew: ${message}`), ...rest),
       ...opts,
     });
   }

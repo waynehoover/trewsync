@@ -2882,3 +2882,73 @@ describe("a vault folder replaced while a client is running (T16)", () => {
     expect((after as Error).message).toMatch(/not the folder this trew opened/);
   }, 300_000);
 });
+
+/**
+ * T20. Names reach the terminal from three places nobody here controls: files
+ * on this disk, paths another device or an agent wrote, and device names. Only
+ * `search` and part of `status` spelled out what a terminal would act on, and
+ * the server refuses only C0 controls and DEL in a name, so a C1 control (a
+ * one-byte CSI or OSC) or a direction override from a peer went straight to
+ * the terminal from `sync`, `preview`, `deleted`, `history` and `devices`.
+ */
+describe("what reaches the terminal (T20)", () => {
+  const ch = (code: number) => String.fromCodePoint(code);
+  // ESC ] 0 ; ... BEL sets the window title.
+  const local = `notes${ch(0x1b)}]0;owned${ch(0x07)}.md`;
+  // A one-byte CSI that clears the screen, and a right-to-left override.
+  const peers = `report ${ch(0x9b)}2J${ch(0x202e)}gnp.md`;
+  const device = `lap${ch(0x9b)}0;31mtop`;
+  const acted = new RegExp(
+    "[" +
+      [
+        [0x00, 0x08],
+        [0x0b, 0x1f],
+        [0x7f, 0x9f],
+        [0x2028, 0x2029],
+        [0x202a, 0x202e],
+        [0x2066, 0x2069],
+      ]
+        .map(([a, b]) => `${ch(a!)}-${ch(b!)}`)
+        .join("") +
+      "\\n]",
+    "u",
+  );
+  /** Every line a run printed that holds something a terminal would act on. */
+  const raw = (r: Run) => [...r.out, ...r.err].filter((line) => acted.test(line));
+
+  it("spells out what a terminal would act on, in every command that prints a name", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    await writeFile(join(a, local), "x");
+    await writeFile(join(b, peers), "y");
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    const seen: [string, Run][] = [];
+    seen.push(["sync", await cli("sync", "--dir", a)]);
+    seen.push(["preview", await cli("preview", "--dir", a)]);
+    await rm(join(b, peers));
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    expect((await cli("rename", device, "--dir", b)).code).toBe(0);
+    seen.push(["deleted", await cli("deleted", "--dir", a)]);
+    seen.push(["history", await cli("history", peers, "--dir", a)]);
+    seen.push(["devices", await cli("devices", "--dir", a)]);
+    seen.push(["status", await cli("status", "--dir", a)]);
+    for (const [command, r] of seen) {
+      expect(raw(r), `trew ${command} printed: ${r.all}`).toEqual([]);
+    }
+    // Spelled out rather than dropped, so a person can see the name is odd.
+    const deleted = seen.find(([c]) => c === "deleted")![1];
+    expect(deleted.stdout).toContain("\\u{9b}2J\\u{202e}gnp.md");
+    const devices = seen.find(([c]) => c === "devices")![1];
+    expect(devices.stdout).toContain("lap\\u{9b}0;31mtop");
+
+    // And the JSON a script reads holds the same names, escaped as JSON
+    // escapes them, so it still parses to exactly what the server holds.
+    const json = await cli("devices", "--dir", a, "--json");
+    expect(raw(json), json.all).toEqual([]);
+    const listed = json.json()["devices"] as { name: string }[];
+    expect(listed.map((d) => d.name)).toContain(device);
+    const gone = await cli("deleted", "--dir", a, "--json");
+    expect(raw(gone), gone.all).toEqual([]);
+    expect((gone.json()["deleted"] as { path: string }[]).map((d) => d.path)).toContain(peers);
+  }, 300_000);
+});
