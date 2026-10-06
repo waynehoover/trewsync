@@ -799,10 +799,10 @@ func (m *mutation) brokenLinks(made planned, path string) (any, any, error) {
 	}
 	out := facts{previewTrusted: m.previewFacts(made), BrokenLinksComplete: true}
 	broken := []Text{}
-	view, _, scan, err := m.c.linkHead(path, made.view.head)
-	if err != nil {
-		return nil, nil, err
-	}
+	// The view the deletion was planned through, at the same head: this read
+	// the vault's listing a second time, as long again as the preview's own
+	// (T50).
+	view, scan := m.c.linkView(made.view, path)
 	out.Scan = scan
 	marked, err := notes.PlanDelete(view, path, true)
 	if err != nil {

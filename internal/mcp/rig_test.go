@@ -221,6 +221,37 @@ func writeEntry(st *store.Store, e store.Entry, body []byte) (int64, error) {
 	return st.AppendEntry(testVault, e)
 }
 
+// writeAll commits new notes in one batch, as a device's first upload does:
+// bodies first, then every entry in one transaction, which a test that needs
+// a vault larger than a page reads can afford where a commit per note takes
+// seconds.
+func (r *rig) writeAll(texts map[string]string) {
+	r.t.Helper()
+	var bodies [][]byte
+	var entries []store.Entry
+	for path, text := range texts {
+		e := store.Entry{Path: path, Size: int64(len(text)), Device: "laptop", MTime: 1_700_000_000_000, Chunks: []string{}}
+		sizes := notes.SizesFor(e.Size, notes.IsTextPath(path), store.ChunkMax)
+		for _, c := range notes.ChunkBytes([]byte(text), sizes, notes.IsTextPath(path)) {
+			e.Chunks = append(e.Chunks, chunks.Name(c.Bytes))
+			bodies = append(bodies, c.Bytes)
+		}
+		entries = append(entries, e)
+	}
+	if err := r.st.Chunks().PutAll(testVault, bodies); err != nil {
+		r.t.Fatal(err)
+	}
+	res, err := r.st.AppendMany(testVault, entries, make([]int64, len(entries)), make([]int64, len(entries)))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	for i, x := range res {
+		if x.Err != nil {
+			r.t.Fatalf("writing %s: %v", entries[i].Path, x.Err)
+		}
+	}
+}
+
 func (r *rig) rename(from, to, text string) int64 {
 	r.t.Helper()
 	uid, err := writeEntry(r.st, store.Entry{Path: to, Prev: from}, []byte(text))

@@ -87,12 +87,13 @@ const replacement = '\ufffd'
 //     and emoji need them.
 //  3. Imitations of the envelope's framing are defused: a reserved name
 //     (schema_version, tool, security, trusted, untrusted_content, in any
-//     case) written as a JSON key, in double quotes followed by a colon,
-//     has its quotes replaced by U+FF02; written as a tag ("<trusted>",
-//     "</untrusted_content"), its "<" becomes U+FF1C. The text still reads
-//     the same to a person; it no longer looks like the envelope to a model.
-//     Other text, instruction-shaped or not, is left alone: the envelope, not
-//     a filter, is what keeps it from being taken as instructions.
+//     case) written as a JSON key, in double quotes followed by a colon
+//     after any JSON whitespace, has its quotes replaced by U+FF02; written
+//     as a tag ("<trusted>", "</untrusted_content"), its "<" becomes U+FF1C.
+//     The text still reads the same to a person; it no longer looks like the
+//     envelope to a model. Other text, instruction-shaped or not, is left
+//     alone: the envelope, not a filter, is what keeps it from being taken as
+//     instructions.
 //  4. The result is cut to MaxTextBytes, at a character boundary.
 //
 // Normalizing a normalised string changes nothing.
@@ -236,8 +237,11 @@ func neutralize(s string, c *Changes) string {
 			if n == 0 || i+1+n >= len(s) || s[i+1+n] != '"' {
 				continue
 			}
+			// Any JSON whitespace may come before the colon: a key with a
+			// line break before it is as much a key as one with a space,
+			// and passed until only spaces and tabs were skipped (T54).
 			j := i + 2 + n
-			for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
 				j++
 			}
 			if j >= len(s) || s[j] != ':' {

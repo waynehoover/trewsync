@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/waynehoover/trewsync/internal/notes"
 	"github.com/waynehoover/trewsync/internal/store"
 )
 
@@ -750,6 +753,118 @@ func TestRestoreNoteReadsOnlyWhatReadNoteReads(t *testing.T) {
 	}
 	if r.head("leak.md") != 0 || r.operations() != 0 {
 		t.Fatalf("a refused restore of an attachment wrote leak.md at %d, %d operations", r.head("leak.md"), r.operations())
+	}
+}
+
+// A call that runs out of time is busy, whichever tool it is and however the
+// store or the index noticed: it was internal, logged as a failure, for the
+// tools that met the deadline inside a read rather than after it (T53). A
+// write that commits regardless is still committed, as below.
+func TestACallOutOfTimeIsBusyNeverInternal(t *testing.T) {
+	r := newRig(t, withLimits(Limits{TokenBurst: 1000, TokenRate: 1000, ToolDeadline: time.Nanosecond}))
+	a := r.writer("agent")
+	uid := r.write("a.md", "---\ntags: [x]\n---\n[[b]]\n")
+	r.write("b.md", "x\n")
+	r.indexed()
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"vault_status", nil},
+		{"list_notes", nil},
+		{"search_notes", map[string]any{"query": "xyz"}},
+		{"backlinks", map[string]any{"path": "b.md"}},
+		{"outgoing_links", map[string]any{"path": "a.md"}},
+		{"broken_links", nil},
+		{"orphans", nil},
+		{"move_note", map[string]any{"path": "a.md", "base": uid, "to": "c.md", "epoch": r.epoch()}},
+		{"delete_note", map[string]any{"path": "b.md", "base": r.head("b.md"), "epoch": r.epoch()}},
+		{"delete_note", map[string]any{"path": "b.md", "base": r.head("b.md"), "markBroken": true, "epoch": r.epoch()}},
+		{"rename_tag", map[string]any{"oldTag": "x", "newTag": "y"}},
+		{"add_tags", map[string]any{"paths": []string{"a.md"}, "tags": []string{"z"}}},
+	} {
+		if code := invoke(t, a.cs, c.tool, c.args).errorCode(); code != "busy" {
+			t.Errorf("%s %v out of time: %q, want busy", c.tool, c.args, code)
+		}
+	}
+	if logs := r.logs.String(); strings.Contains(logs, "level=ERROR") {
+		t.Errorf("a call that ran out of time was logged as a failure:\n%s", logs)
+	}
+	if w := wrote(t, invoke(t, a.cs, "create_note", map[string]any{"path": "new.md", "content": "x"})); w.OpID == "" {
+		t.Fatal("a write committed past the deadline")
+	}
+}
+
+// A plan reads note after note through its call's view, and stops at the next
+// one once the call has ended: a move's or a deletion's preview that ran out
+// of time went on reading the vault, holding one of the eight calls its token
+// may have in flight, to produce a reply nobody would get (T50).
+func TestAPlanStopsReadingWhenItsCallEnds(t *testing.T) {
+	r := newRig(t, withoutIndex())
+	r.write("hub.md", "# hub\n")
+	for i := 0; i < 5; i++ {
+		r.write(fmt.Sprintf("n%d.md", i), "see [[hub]]\n")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &call{ctx: ctx, h: r.h, now: time.Now()}
+	v, err := c.viewAt(r.head("n4.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, err := notes.PlanMove(v, "hub.md", "moved.md", true); err != nil || len(p.Changes) != 6 {
+		t.Fatalf("the plan while the call lasts: %+v %v", p.Changes, err)
+	}
+	cancel()
+	for _, plan := range []func() (notes.Plan, error){
+		func() (notes.Plan, error) { return notes.PlanMove(v, "hub.md", "moved.md", true) },
+		func() (notes.Plan, error) { return notes.PlanDelete(v, "hub.md", true) },
+	} {
+		if p, err := plan(); !errors.Is(err, context.Canceled) {
+			t.Fatalf("a plan through an ended call's view: %+v %v", p.Changes, err)
+		}
+	}
+}
+
+// A plan's or a page's view is the vault at its head, whichever way it was
+// listed: from the live set at the latest head, and as of the head at any
+// other, a continuation's.
+func TestAViewIsTheVaultAtItsHead(t *testing.T) {
+	r := newRig(t, withoutIndex())
+	r.write("a.md", "a\n")
+	r.write("dir/b.md", "b\n")
+	early := r.write("c.md", "c\n")
+	r.rename("a.md", "moved/a.md", "a\n")
+	r.remove("c.md")
+	r.write("dir/b.md", "b again\n")
+	if _, err := writeEntry(r.st, store.Entry{Path: "empty", Folder: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := r.st.LatestUID(testVault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &call{ctx: context.Background(), h: r.h, now: time.Now()}
+	for _, head := range []int64{early, latest} {
+		v, err := c.viewAt(head)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want []string
+		if err := r.st.EachAsOf(testVault, head, store.AsOfRange{}, func(e store.Entry) (bool, error) {
+			if !e.Folder && !e.Deleted {
+				want = append(want, fmt.Sprintf("%s@%d", e.Path, e.UID))
+			}
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, p := range v.files {
+			got = append(got, fmt.Sprintf("%s@%d", p, v.live[p].UID))
+		}
+		if strings.Join(got, " ") != strings.Join(want, " ") || v.head != head {
+			t.Fatalf("the view at %d lists %v, and the vault there is %v", head, got, want)
+		}
 	}
 }
 

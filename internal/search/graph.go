@@ -3,21 +3,21 @@ package search
 import (
 	"context"
 	"database/sql"
-	"fmt"
 )
 
-// LinkGraph is the whole link index for a read of the vault at one head: every
-// note's version and link keys, for the vault-health tools that ask about many
-// targets at once (broken_links, orphans), where Backlinks answers for one.
-// The rules are Backlinks's: it narrows only when Current, which it is only
-// when the generation queries use is trusted, of this version, and has
-// indexed exactly the head asked about, checked in the one read that takes
-// the keys; and it only rules notes out, so a note it knows nothing about, or
-// holds at another version, or could not read the links of, is always read.
+// LinkGraph is the whole link index: every note's version and link keys, for
+// the vault-health tools that ask about many targets at once (broken_links,
+// orphans), where Backlinks answers for one. The rules are Backlinks's: it
+// narrows only when Usable, which it is only when the generation queries use
+// is trusted, of this version, and agreed with its counters in the one read
+// that takes the keys; it answers for each note only in the version it holds,
+// whatever head a page reads (T51); and it only rules notes out, so a note it
+// knows nothing about, or holds at another version, or could not read the
+// links of, is always read.
 type LinkGraph struct {
 	Generation  int64
 	IndexedHead int64
-	Current     bool
+	Usable      bool
 	Why         string
 	notes       map[string]graphNote
 	byKey       map[string][]string
@@ -30,9 +30,9 @@ type graphNote struct {
 }
 
 // Proven reports whether the graph can speak for the note at path in version
-// uid: it is current, holds that very version, and read its links.
+// uid: it is usable, holds that very version, and read its links.
 func (g LinkGraph) Proven(path string, uid int64) bool {
-	if !g.Current {
+	if !g.Usable {
 		return false
 	}
 	n, ok := g.notes[path]
@@ -63,7 +63,9 @@ func (g LinkGraph) MayLinkTo(path string, uid int64, keys []string) bool {
 }
 
 // Sharing is every note the graph holds that has one of keys, for a caller
-// that then adds the notes the graph cannot speak for.
+// that then adds the notes the graph cannot speak for. A path here may be one
+// the caller's head does not hold, or holds at another version: the caller
+// keeps only those it can prove (Proven).
 func (g LinkGraph) Sharing(keys []string) map[string]bool {
 	out := map[string]bool{}
 	for _, k := range keys {
@@ -74,8 +76,8 @@ func (g LinkGraph) Sharing(keys []string) map[string]bool {
 	return out
 }
 
-// LinkGraph reads the link index for a read of the vault at head.
-func (x *Index) LinkGraph(ctx context.Context, head int64) (LinkGraph, error) {
+// LinkGraph reads the whole link index, for a read of the vault at any head.
+func (x *Index) LinkGraph(ctx context.Context) (LinkGraph, error) {
 	var g LinkGraph
 	x.mu.Lock()
 	var active *generation
@@ -107,10 +109,6 @@ func (x *Index) LinkGraph(ctx context.Context, head int64) (LinkGraph, error) {
 		return g, nil
 	}
 	g.Generation, g.IndexedHead = now.gen, now.through
-	if now.through != head {
-		g.Why = fmt.Sprintf("the index has indexed through uid %d, and this read is of the vault at uid %d", now.through, head)
-		return g, nil
-	}
 	t := tablesOf(now.gen)
 	if why := cheapCheck(tx, t, now); why != "" {
 		x.distrusted(why)
@@ -168,6 +166,6 @@ func (x *Index) LinkGraph(ctx context.Context, head int64) (LinkGraph, error) {
 	if err := ctx.Err(); err != nil {
 		return g, err
 	}
-	g.Current = true
+	g.Usable = true
 	return g, nil
 }

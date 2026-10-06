@@ -229,14 +229,14 @@ func TestBacklinksFindEveryLinkByTheResolver(t *testing.T) {
 	}
 }
 
-// heldGraph is the index as a page meets it when the worker has not reached
-// the head: it narrows nothing, for backlinks or for the graph.
+// heldGraph is the index as a page meets it when it cannot answer: it
+// narrows nothing, for backlinks or for the graph.
 type heldGraph struct{ heldIndex }
 
-func (h heldGraph) LinkGraph(ctx context.Context, head int64) (search.LinkGraph, error) {
-	g, err := h.Index.LinkGraph(ctx, head)
-	return search.LinkGraph{Generation: g.Generation, IndexedHead: g.IndexedHead - 1,
-		Why: "held behind the head for the test"}, err
+func (h heldGraph) LinkGraph(ctx context.Context) (search.LinkGraph, error) {
+	g, err := h.Index.LinkGraph(ctx)
+	return search.LinkGraph{Generation: g.Generation, IndexedHead: g.IndexedHead,
+		Why: "held unusable for the test"}, err
 }
 
 func withHeldGraph() rigOption {
@@ -246,9 +246,9 @@ func withHeldGraph() rigOption {
 }
 
 // In a vault of more notes than one page reads, backlinks and broken_links
-// narrow through the index when it is current, and read every note, a page at
-// a time, when it is behind or absent; the links found are the same.
-func TestVaultHealthPagesTheScanWhenTheIndexIsBehind(t *testing.T) {
+// narrow through the index when it can answer, and read every note, a page at
+// a time, when it cannot or there is none; the links found are the same.
+func TestVaultHealthPagesTheScanWithoutTheIndex(t *testing.T) {
 	build := func(r *rig) {
 		for i := 0; i < 600; i++ {
 			r.write(fmt.Sprintf("bulk/%03d.md", i), "nothing to see here\n")
@@ -495,6 +495,83 @@ func TestOrphansAreScanIncompleteWithoutTheIndexInALargeVault(t *testing.T) {
 	token, _ = held.token(store.ScopeRead)
 	if code := invoke(t, held.mustConnect(token, ""), "orphans", map[string]any{}).errorCode(); code != "scan_incomplete" {
 		t.Fatalf("without the index: %s", code)
+	}
+}
+
+// A continuation keeps the head its first page pinned, and the link index
+// keeps narrowing it after the vault moves on: the index speaks for a note
+// only in the version it indexed, so a note written since the page's head is
+// read as it stood then, whether the index is behind that head or past it.
+// Held to exactly the pinned head, every continuation after any write read
+// the whole vault, and orphans, which must read every note that may link to
+// a target, answered scan_incomplete for that cursor for ever, telling the
+// agent to wait for an index that could never help it (T51). Between the
+// pages a link is added and another taken away; the pages still describe the
+// vault at their head, and a new first page the vault as it is.
+func TestAContinuationKeepsTheLinkIndexAfterAWrite(t *testing.T) {
+	r := newRig(t, withLimits(Limits{TokenBurst: 1e6, TokenRate: 1e6}))
+	// More notes than a page reads, which is what made orphans
+	// scan_incomplete: 590 that share one body (one chunk to store) and link
+	// to hub.md, all linked from index.md, which nothing links to. p.md is the
+	// other orphan; x.md links to y.md.
+	vault := map[string]string{"hub.md": "# hub\n", "p.md": "# p\n", "q.md": "# q\n", "x.md": "[[y]]\n",
+		"y.md": "# y\n"}
+	index := "[[q]] [[x]]\n"
+	for i := 0; i < 590; i++ {
+		vault[fmt.Sprintf("bulk/%03d.md", i)] = "see [[hub]]\n"
+		index += fmt.Sprintf("[[bulk/%03d]]\n", i)
+	}
+	vault["index.md"] = index
+	r.writeAll(vault)
+	r.indexed()
+	token, _ := r.token(store.ScopeRead)
+	cs := r.mustConnect(token, "")
+	first := healthRead(t, invoke(t, cs, "orphans", map[string]any{"limit": 1}))
+	if len(first.orphans) != 1 || first.orphans[0].Path != "index.md" || first.NextCursor == nil ||
+		first.Scan.Method != "index" {
+		t.Fatalf("the first page: %+v %v", first, first.orphans)
+	}
+
+	// After the first page, p.md gains a link and y.md loses its only one.
+	r.write("q.md", "[[p]]\n")
+	r.write("x.md", "# x\n")
+	r.write("unrelated.md", "hello\n")
+	r.indexed()
+	args := map[string]any{"limit": 1, "cursor": *first.NextCursor}
+	var found []string
+	for pages := 1; ; pages++ {
+		e := invoke(t, cs, "orphans", args)
+		if e.isError {
+			t.Fatalf("page %d, after a write: %s", pages+1, e.raw)
+		}
+		p := healthRead(t, e)
+		if p.Scan.Method != "index" || p.Scan.IndexedHead != first.Head+3 || p.Head != first.Head {
+			t.Fatalf("page %d: scan %+v at head %d; the first page's head was %d", pages+1, p.Scan, p.Head, first.Head)
+		}
+		for _, o := range p.orphans {
+			found = append(found, o.Path)
+		}
+		if p.NextCursor == nil {
+			if !p.Complete {
+				t.Fatalf("the last page is not complete: %+v", p)
+			}
+			break
+		}
+		if pages > 50 {
+			t.Fatal("more than 50 pages")
+		}
+		args["cursor"] = *p.NextCursor
+	}
+	if strings.Join(found, " ") != "p.md" {
+		t.Fatalf("the pages after the first, at its head: %v", found)
+	}
+	now, _ := every(t, r, token, "orphans", map[string]any{})
+	var names []string
+	for _, o := range now.orphans {
+		names = append(names, o.Path)
+	}
+	if strings.Join(names, " ") != "index.md unrelated.md y.md" || now.Scan.Method != "index" {
+		t.Fatalf("a new first page: %v, scan %+v", names, now.Scan)
 	}
 }
 

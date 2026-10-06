@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -80,10 +79,12 @@ func (h *Handler) at(point string) {
 // is its paths and uids, a few kilobytes even for 32 paths of 1 KiB.
 const mutationResultBytes = MaxReplyBytes / 4
 
-// indexWait is how long a move or a deletion that rewrites backlinks waits for
-// the link index to reach the head it plans at before it reads every note
-// instead. The worker is nudged by every commit, so a moment is usually
-// enough; a longer wait would only delay the scan it avoids.
+// indexWait is how long a preview of a move or a deletion that rewrites
+// backlinks, or a vault-health tool's first page, waits for the link index to
+// reach the head it reads (pinHead). The index answers at any head, but a
+// note written since its last batch is one it cannot rule out, so the wait
+// saves reading those. The worker is nudged by every commit, so a moment is
+// usually enough; a longer wait would only delay the reads it saves.
 const indexWait = 2 * time.Second
 
 // mutation is one write tool's call in progress, from begin to its reply.
@@ -589,8 +590,11 @@ func (m *mutation) failed(err error) outcome {
 		out.Error = &cp
 		about, cp.Path = cp.Path, ""
 	default:
-		out.Error = toolError(err)
-		c.h.log.Error("MCP tool failed", "tool", c.tool.Name, "err", err)
+		// Before any commit: what the tool met preparing it, the call's own
+		// deadline included, which is busy (T53).
+		if out.Error = c.errorOf(err); out.Error.Code == "internal" {
+			c.h.log.Error("MCP tool failed", "tool", c.tool.Name, "err", err)
+		}
 	}
 	var untrusted any
 	switch {
@@ -682,15 +686,38 @@ type storeView struct {
 	live  map[string]store.Entry
 }
 
+// viewAt is the vault at head. The vault's latest head is listed from its
+// live set (store.EachLive), in time that grows with the vault and not with
+// its history: the as-of listing behind every move, deletion, tag change and
+// vault-health page took 24 ms over ten thousand notes of one version each
+// and 240 ms over twenty versions each, and this takes 30 (the review of
+// 2026-10-06). Any other head, a continuation's, and the latest one when a
+// commit lands before the live set is read, is listed as of that head
+// (store.EachAsOf), so the view is always exactly the vault at head.
 func (c *call) viewAt(head int64) (*storeView, error) {
-	v := &storeView{c: c, head: head, live: map[string]store.Entry{}}
-	err := c.h.st.EachAsOf(c.h.vault, head, store.AsOfRange{}, func(e store.Entry) (bool, error) {
+	var v *storeView
+	keep := func(e store.Entry) (bool, error) {
 		if !e.Folder && !e.Deleted {
 			v.files = append(v.files, e.Path)
 			v.live[e.Path] = e
 		}
 		return c.ctx.Err() == nil, nil
-	})
+	}
+	latest, err := c.h.st.LatestUID(c.h.vault)
+	if err != nil {
+		return nil, err
+	}
+	listed := int64(-1)
+	if latest == head {
+		v = &storeView{c: c, head: head, live: map[string]store.Entry{}}
+		if listed, err = c.h.st.EachLive(c.h.vault, keep); err != nil {
+			return nil, err
+		}
+	}
+	if listed != head {
+		v = &storeView{c: c, head: head, live: map[string]store.Entry{}}
+		err = c.h.st.EachAsOf(c.h.vault, head, store.AsOfRange{}, keep)
+	}
 	if err == nil {
 		err = c.ctx.Err()
 	}
@@ -699,7 +726,16 @@ func (c *call) viewAt(head int64) (*storeView, error) {
 
 func (v *storeView) Files() ([]string, error) { return v.files, nil }
 
+// Read is the live file at path, the version the view's head holds. Every
+// plan and vault-health page reads its notes here, one after another, so here
+// is where one stops once its call has ended: the context's error, which the
+// call reports as busy. A preview that ran out of time went on reading the
+// vault, holding one of the eight calls its token may have in flight, to
+// produce a reply nobody would get (T50).
 func (v *storeView) Read(path string) (notes.Version, error) {
+	if err := v.c.ctx.Err(); err != nil {
+		return notes.Version{}, err
+	}
 	e, ok := v.live[path]
 	if !ok {
 		return notes.Version{}, &notes.Refusal{Code: "not_found", Message: "no note is at that path now"}
@@ -747,49 +783,44 @@ type scanInfo struct {
 }
 
 // linkHead is the head a move or a deletion that rewrites backlinks plans at,
-// and the view narrowed by the link index when the index has indexed exactly
-// it. A preview (fixed == 0) takes the vault's head, waiting a moment for the
-// index to reach it, and takes a newer head if the vault moves on meanwhile;
-// an apply plans at the head its preview named.
+// the vault there, and the view the plan reads it through (linkView). A
+// preview (fixed == 0) takes the vault's head once the index has had a moment
+// to reach it, and a newer head if the vault moves on meanwhile (pinHead); an
+// apply plans at the head its preview named.
 func (c *call) linkHead(target string, fixed int64) (notes.View, *storeView, scanInfo, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, indexWait)
-	defer cancel()
-	var why string
-	for attempt := 0; ; attempt++ {
-		head := fixed
-		if head == 0 {
-			var err error
-			if head, err = c.h.st.LatestUID(c.h.vault); err != nil {
-				return nil, nil, scanInfo{}, err
-			}
-		}
-		view, err := c.viewAt(head)
-		if err != nil {
+	head := fixed
+	if head == 0 {
+		var err error
+		if head, err = c.pinHead(); err != nil {
 			return nil, nil, scanInfo{}, err
 		}
-		if c.h.index == nil {
-			return view, view, scanInfo{Method: "vault", Why: "this server keeps no link index"}, nil
-		}
-		// Waiting helps only an index that is answering and behind; one being
-		// built from nothing, or distrusted, would only make the scan later.
-		if c.h.index.Status().Usable {
-			c.h.index.Await(ctx, head)
-		}
-		b, err := c.h.index.Backlinks(c.ctx, head, notes.TargetKeys(target))
-		if err != nil {
-			c.h.log.Warn("the link index could not be read; reading every note", "err", err)
-			return view, view, scanInfo{Method: "vault", Why: "the link index could not be read"}, nil
-		}
-		if b.Current {
-			return &linkedView{storeView: view, target: target, links: b},
-				view, scanInfo{Method: "index", IndexedHead: b.IndexedHead}, nil
-		}
-		why = b.Why
-		if fixed != 0 || b.IndexedHead <= head || attempt >= 2 || ctx.Err() != nil {
-			return view, view, scanInfo{Method: "vault", IndexedHead: b.IndexedHead, Why: why}, nil
-		}
-		// The vault moved on while the index caught up: plan at its new head.
 	}
+	v, err := c.viewAt(head)
+	if err != nil {
+		return nil, nil, scanInfo{}, err
+	}
+	view, scan := c.linkView(v, target)
+	return view, v, scan, nil
+}
+
+// linkView is v narrowed by the link index for target whenever the index can
+// answer, and how the plan reads the vault because of it. The index answers
+// for each note in the version it holds, so a note v holds at another
+// version, one written since the index's last batch, is read like any other,
+// whatever head v is of (T51).
+func (c *call) linkView(v *storeView, target string) (notes.View, scanInfo) {
+	if c.h.index == nil {
+		return v, scanInfo{Method: "vault", Why: "this server keeps no link index"}
+	}
+	b, err := c.h.index.Backlinks(c.ctx, notes.TargetKeys(target))
+	if err != nil {
+		c.h.log.Warn("the link index could not be read; reading every note", "err", err)
+		return v, scanInfo{Method: "vault", Why: "the link index could not be read"}
+	}
+	if !b.Usable {
+		return v, scanInfo{Method: "vault", IndexedHead: b.IndexedHead, Why: b.Why}
+	}
+	return &linkedView{storeView: v, target: target, links: b}, scanInfo{Method: "index", IndexedHead: b.IndexedHead}
 }
 
 // normalizedChanges is a plan as its preview showed it: every string through

@@ -86,16 +86,18 @@ func TestAnEpochBindsTheUIDsAcrossABackupAndARestore(t *testing.T) {
 	}
 }
 
-// heldIndex is the search index as a move meets it when the worker has not
-// reached the head: it narrows nothing, and waiting for it does not help.
+// heldIndex is the search index as a move meets it when it cannot answer, as
+// one distrusted or building its first generation cannot: it narrows nothing,
+// and waiting for it does not help. An index that is only behind the head
+// still narrows, for the notes it holds at the versions the plan reads (T51).
 type heldIndex struct{ *search.Index }
 
 func (h heldIndex) Await(context.Context, int64) bool { return false }
 
-func (h heldIndex) Backlinks(ctx context.Context, head int64, keys []string) (search.Backlinks, error) {
-	b, err := h.Index.Backlinks(ctx, head, keys)
-	return search.Backlinks{Generation: b.Generation, IndexedHead: b.IndexedHead - 1,
-		Why: "held behind the head for the test"}, err
+func (h heldIndex) Backlinks(ctx context.Context, keys []string) (search.Backlinks, error) {
+	b, err := h.Index.Backlinks(ctx, keys)
+	return search.Backlinks{Generation: b.Generation, IndexedHead: b.IndexedHead,
+		Why: "held unusable for the test"}, err
 }
 
 func withHeldIndex() rigOption {
@@ -105,11 +107,11 @@ func withHeldIndex() rigOption {
 }
 
 // A move's backlinks through the link index (M5 task 6): in a vault of more
-// notes than the scan reads, a move plans through the index when it has
-// indexed the head, reading only the notes that may link to the note, and the
-// backlink a device has just written is in the plan; with the index behind,
-// the same move reads every note, as Basalt did, and so is scan_incomplete,
-// never a plan without a backlink.
+// notes than the scan reads, a move plans through the index, reading only the
+// notes that may link to the note, and the backlink a device has just written
+// is in the plan; with an index that cannot answer, the same move reads every
+// note, as Basalt did, and so is scan_incomplete, never a plan without a
+// backlink.
 func TestAMoveThroughTheLinkIndexAndWithoutIt(t *testing.T) {
 	build := func(r *rig) int64 {
 		for i := 0; i < 600; i++ {

@@ -67,8 +67,9 @@ type View interface {
 // LinkIndex is what a View may also be: one that can rule a note out of the
 // scan a move or a deletion with markBroken makes of the vault's links
 // (PLAN.md M5 task 6). The tool layer backs it with the search index's link
-// keys (LinkKeys), and only when the index has indexed exactly the head the
-// View reads; a View that is not one is scanned whole, as Basalt did.
+// keys (LinkKeys), which speak for a note only in the version the index
+// holds, whatever head the View reads; a View that is not one is scanned
+// whole, as Basalt did.
 //
 // The index narrows which notes are read and nothing else: every note the
 // plan then reads is read through Read, from the store, and its links are
@@ -240,6 +241,10 @@ func (r *planReader) links(list []string, path string, source Version, to string
 	var own []SourceEdit
 	ambiguous := 0
 	index, narrowed := r.view.(LinkIndex)
+	// One changer for every note: its resolvers are over the inventory, which
+	// is the same for each (T50).
+	changer := newLinkChanger(LinkChange{From: path, To: to, Delete: deletion, Inventory: r.inventory,
+		Canonical: paths.Fold})
 	for _, p := range list {
 		if deletion && paths.Fold(p) == paths.Fold(path) {
 			continue
@@ -256,9 +261,7 @@ func (r *planReader) links(list []string, path string, source Version, to string
 		if err != nil {
 			return Plan{}, err
 		}
-		edits, n, err := ChangeLinks(text, LinkChange{
-			Path: p, From: path, To: to, Delete: deletion, Inventory: r.inventory, Canonical: paths.Fold,
-		})
+		edits, n, err := changer.change(text, p)
 		if err != nil {
 			return Plan{}, about(err, p)
 		}
@@ -268,6 +271,14 @@ func (r *planReader) links(list []string, path string, source Version, to string
 			own = edits
 		case len(edits) > 0:
 			changes = append(changes, PlannedChange{Path: p, Base: v.UID, Action: "edit", Edits: edits})
+			// With the note's own change these are more than a batch holds,
+			// so the plan is batch_too_large however the rest reads: the rest
+			// is not read, where a note with three hundred backlinks read
+			// them all only to be refused (T50). A refusal one of them would
+			// have made instead is not looked for.
+			if len(changes) >= BatchFiles {
+				return Plan{}, batchTooLarge()
+			}
 		}
 	}
 	action := "move"

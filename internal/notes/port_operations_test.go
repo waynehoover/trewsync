@@ -278,6 +278,45 @@ func TestScanBounds(t *testing.T) {
 	}
 }
 
+// A move or a struck-through deletion whose backlinks cannot fit one batch is
+// refused as soon as they cannot, not after every note that links is read: a
+// note three hundred notes link to took a move's preview eight seconds in a
+// vault of ten thousand, only to answer batch_too_large (T50).
+func TestAPlanStopsReadingOnceItCannotFitABatch(t *testing.T) {
+	pairs := []string{"hub.md", "# hub\n"}
+	for i := range 100 {
+		pairs = append(pairs, fmt.Sprintf("n%03d.md", i), "see [[hub]]\n")
+	}
+	for _, c := range []struct {
+		name string
+		plan func(View) (Plan, error)
+	}{
+		{"move", func(v View) (Plan, error) { return PlanMove(v, "hub.md", "moved.md", true) }},
+		{"delete", func(v View) (Plan, error) { return PlanDelete(v, "hub.md", true) }},
+	} {
+		v := &countingView{mapView: testVault(pairs...)}
+		if _, err := c.plan(v); codeOf(err) != "batch_too_large" {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		// The note itself and BatchFiles backlinks, which with the note's own
+		// change are one more than a batch holds.
+		if v.reads != BatchFiles+1 {
+			t.Errorf("%s read %d notes, where %d decide it", c.name, v.reads, BatchFiles+1)
+		}
+	}
+}
+
+// countingView is a mapView that counts the notes read from it.
+type countingView struct {
+	mapView
+	reads int
+}
+
+func (v *countingView) Read(path string) (Version, error) {
+	v.reads++
+	return v.mapView.Read(path)
+}
+
 func TestSuppliedPlanBounds(t *testing.T) {
 	edit := SourceEdit{Start: 0, End: 1, Old: "a", Text: "b"}
 	change := func(path string, edits int) PlannedChange {

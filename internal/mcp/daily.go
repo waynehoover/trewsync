@@ -223,7 +223,7 @@ func (c *call) templateText(path, what string) (string, error) {
 	if err := c.readable(path); err != nil {
 		return "", err
 	}
-	e, err := c.headNote(path)
+	e, err := c.headNote(path, 0)
 	if err != nil {
 		var te *ToolError
 		if errors.As(err, &te) && te.Code == "not_found" {

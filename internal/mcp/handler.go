@@ -597,7 +597,7 @@ func (h *Handler) callTool(ctx context.Context, r *http.Request, cred *credentia
 		// deadline cannot take a commit back, and busy would tell the agent
 		// nothing was written, with no opId to ask about.
 		if cctx.Err() != nil && !o.isError && o.raw == nil {
-			o = c.fail(&ToolError{Code: "busy", Message: "the call ran out of time or was cancelled; try a smaller page"})
+			o = c.fail(outOfTime())
 		}
 		cancel()
 	}

@@ -27,12 +27,13 @@ import (
 
 // SearchIndex is what the tools ask of the search index; *search.Index is
 // one. Nil means there is none, and search scans, and a move or a deletion
-// that rewrites backlinks reads every note.
+// that rewrites backlinks reads every note. Its answers hold for any head a
+// tool reads, note by note in the version the index holds (T51).
 type SearchIndex interface {
 	Status() search.Status
 	Propose(ctx context.Context, q notes.Query, folder, from string) (search.Proposal, error)
-	Backlinks(ctx context.Context, head int64, keys []string) (search.Backlinks, error)
-	LinkGraph(ctx context.Context, head int64) (search.LinkGraph, error)
+	Backlinks(ctx context.Context, keys []string) (search.Backlinks, error)
+	LinkGraph(ctx context.Context) (search.LinkGraph, error)
 	Await(ctx context.Context, head int64) bool
 }
 
@@ -216,11 +217,29 @@ func (c *call) versionBytes(e store.Entry) ([]byte, error) {
 	return out, nil
 }
 
-// headNote is the note at path now: a live file, or not_found.
-func (c *call) headNote(path string) (store.Entry, error) {
-	e, state, _, err := c.h.st.EntryAsOf(c.h.vault, path, 0)
+// headNote is the note at path now: a live file, or not_found. With base, it
+// is stale unless the path's head is base, and the same read decides both:
+// read_note checked its base with one query and read the head with another,
+// and a commit landing between the two was answered as the base's version,
+// so an agent paging through one version could join two (T52). The head is
+// the path's own entry, or the rename that took it away, as Store.Head counts
+// it.
+func (c *call) headNote(path string, base int64) (store.Entry, error) {
+	e, state, movedAt, err := c.h.st.EntryAsOf(c.h.vault, path, 0)
 	if err != nil {
 		return store.Entry{}, err
+	}
+	if base != 0 {
+		head := e.UID
+		if state == store.PathMoved {
+			head = movedAt
+		}
+		if head != base {
+			// currentUid is this path's, never the vault's: a commit to
+			// another note never makes this read stale (research section 5).
+			return store.Entry{}, &ToolError{Code: "stale", Message: "the note changed since that base; read it again " +
+				"and reconsider", Path: path, CurrentUID: &head}
+		}
 	}
 	if state != store.PathLive || e.Folder {
 		return store.Entry{}, &ToolError{Code: "not_found", Message: "no note is at that path now; deleted_notes and note_history say what was"}
@@ -487,23 +506,23 @@ func readNote(c *call, a *args) outcome {
 	if err != nil {
 		return c.failErr(err)
 	}
-	if base != 0 {
-		head, err := c.h.st.CurrentUID(c.h.vault, path)
-		if err != nil {
-			return c.failErr(err)
-		}
-		if head != base {
-			// currentUid is this path's, never the vault's: a commit to
-			// another note never makes this read stale (research section 5).
-			return c.fail(&ToolError{Code: "stale", Message: "the note changed since that base; read it again and reconsider",
-				Path: path, CurrentUID: &head})
-		}
-	}
 	var e store.Entry
 	source := "head"
 	if uid == 0 {
-		e, err = c.headNote(path)
+		e, err = c.headNote(path, base)
 	} else {
+		// A version's bytes never change, so the base is only a check of the
+		// head, and its own read.
+		if base != 0 {
+			head, err := c.h.st.CurrentUID(c.h.vault, path)
+			if err != nil {
+				return c.failErr(err)
+			}
+			if head != base {
+				return c.fail(&ToolError{Code: "stale", Message: "the note changed since that base; read it again " +
+					"and reconsider", Path: path, CurrentUID: &head})
+			}
+		}
 		e, err = c.version(path, uid)
 		source = "history"
 	}
@@ -673,7 +692,7 @@ func compareVersions(c *call, a *args) outcome {
 	}
 	var to store.Entry
 	if toUID == 0 {
-		to, err = c.headNote(path)
+		to, err = c.headNote(path, 0)
 	} else {
 		to, err = c.version(path, toUID)
 	}
