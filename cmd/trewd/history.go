@@ -29,7 +29,7 @@ func cmdHistory(args []string, out io.Writer) error {
 	path := fs.String("path", "", "the note's path in the vault (required)")
 	limit := fs.Int("limit", 50, fmt.Sprintf("the most versions to list, up to %d", historyPage))
 	before := fs.Int64("before", 0, "list only versions older than this uid, to page back")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *path == "" {
@@ -114,7 +114,7 @@ func cmdDeleted(args []string, out io.Writer) error {
 	vault := fs.String("vault", defaultVault, "the vault to read")
 	limit := fs.Int("limit", 100, fmt.Sprintf("the most deletions to list, up to %d", store.DeletedMax))
 	before := fs.Int64("before", 0, "list only deletions older than this uid, to page back")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	st, done, err := openToRead(*dataDir, "read")

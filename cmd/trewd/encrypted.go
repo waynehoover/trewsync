@@ -156,7 +156,7 @@ func cmdBackupKey(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("backup-key", flag.ContinueOnError)
 	outFile := fs.String("out", "", "where to write the identity, mode 0600; the recipient goes beside it as FILE.pub")
 	classic := fs.Bool("x25519", false, "make a classic X25519 key rather than a post-quantum one")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *outFile == "" {
@@ -219,7 +219,7 @@ func cmdUnpack(args []string, out io.Writer) error {
 	to := fs.String("to", "", "a new or empty directory to write the data directory into")
 	record := fs.String("record", "", "a data directory (or its last-backup.json) whose last backup this archive must be")
 	other := fs.Bool("not-last-backup", false, "unpack an archive that is not the recorded last backup, with a warning")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *from == "" || *identity == "" || *to == "" {

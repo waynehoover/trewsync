@@ -47,7 +47,7 @@ func cmdService(args []string, out io.Writer) error {
 	// every agent pointed at it would get a 404 with nothing in the journal.
 	serveMCP := fs.Bool("mcp", false,
 		"write -mcp into the unit, so the service also serves the MCP endpoint at /mcp")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 

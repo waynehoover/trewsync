@@ -31,11 +31,8 @@ func cmdRestore(args []string, out io.Writer) error {
 	head := fs.Int64("head", 0, "refuse unless the vault is still at this uid, the head a dry run printed")
 	apply := fs.Bool("apply", false, "commit the restore; without it, nothing is written")
 	asJSON := fs.Bool("json", false, "print the plan, or what was done, or why not, as JSON")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("restore takes no arguments, and was given %q", fs.Args())
 	}
 	if *toUID <= 0 {
 		return errors.New("restore needs -to-uid N, the uid to put the vault back to")

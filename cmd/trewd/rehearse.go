@@ -56,7 +56,7 @@ func cmdRehearse(ctx context.Context, args []string, out io.Writer) error {
 	work := fs.String("work", "", "where to restore it (default: a new directory inside the data directory, removed after)")
 	keep := fs.Bool("keep", false, "leave the restored directory in place afterwards")
 	other := fs.Bool("not-last-backup", false, "rehearse an archive that is not the last backup the data directory recorded, with a warning")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *backup == "" {

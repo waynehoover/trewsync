@@ -75,7 +75,7 @@ func cmdCat(args []string, out io.Writer) error {
 	vault := fs.String("vault", defaultVault, "the vault to read")
 	path := fs.String("path", "", "the note's path in the vault (required)")
 	uid := fs.Int64("uid", 0, "a version of that path to print instead of the live one")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *path == "" {
@@ -157,7 +157,7 @@ func cmdExport(args []string, out io.Writer) error {
 	vault := fs.String("vault", defaultVault, "the vault to read")
 	uid := fs.Int64("uid", 0, "the version to export (required)")
 	to := fs.String("to", "", "the file to write it to, which must not exist (required)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *uid <= 0 || *to == "" {

@@ -37,11 +37,8 @@ func cmdDoctor(ctx context.Context, args []string, out io.Writer) error {
 	fs.Var(&accept, "accept", "a check whose warning the operator has accepted, repeatable ("+
 		strings.Join(doctor.Checks, ", ")+")")
 	asJSON := fs.Bool("json", false, "print the report as JSON")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("doctor takes no arguments, and was given %q", fs.Args())
 	}
 	accepted := map[string]bool{}
 	for _, a := range accept {

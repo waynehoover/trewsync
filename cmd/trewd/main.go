@@ -158,6 +158,26 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	return cmdServe(ctx, args, out)
 }
 
+// parseFlags parses a command's flags and refuses anything left over, for every
+// command that takes no arguments (T41).
+//
+// Go's flag package stops at the first argument that is not a flag and leaves
+// the rest unread, and most commands never looked at what was left: `trewd
+// verify -data big extra -deep` ran a shallow verify and exited 0, the -deep
+// after the stray word never seen, and the same dropped unpack's -record, the
+// one check of an archive's origin, purge's -grace and serve's -max-file, -url
+// and -mcp. A command told something it cannot use does nothing, and says so.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("%s takes no arguments, and was given %q; every flag after the first of them would "+
+			"have been ignored, so nothing was done", fs.Name(), fs.Args())
+	}
+	return nil
+}
+
 // dataFlags are shared by every subcommand, because every one of them opens the
 // same store and opening a second copy of it is how two processes disagree
 // about what is stored.
@@ -335,7 +355,7 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	alertEvery := fs.Duration("alert-every", defaultAlertEvery,
 		"how often the server checks itself and logs an alert, with its remedy, when something needs attention; 0 turns it off")
 	flags := settingsFlags(fs)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	// The configuration file, with the flags over it (settings.go). A daily
@@ -927,7 +947,7 @@ func cmdVerify(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	dataDir := dataFlags(fs)
 	deep := fs.Bool("deep", false, "read every chunk and check it against its name")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
@@ -1018,7 +1038,7 @@ func cmdPurge(args []string, out io.Writer) error {
 	// space. They would see everything spared and have no way to say otherwise.
 	grace := fs.Duration("grace", chunks.DefaultGrace,
 		"spare unreferenced bodies written within this long, in case a push was interrupted mid-upload")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *grace < 0 {
@@ -1462,7 +1482,7 @@ func cmdBackup(args []string, out io.Writer) error {
 	fs.Var(&recipientsFiles, "recipients-file", "a file of age recipients, one per line, repeatable")
 	plaintextOK := fs.Bool("plaintext-ok", false,
 		"write a plaintext data directory: every note readable by whoever can read -to")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *to == "" {

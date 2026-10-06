@@ -335,11 +335,8 @@ func cmdInvite(args []string, out io.Writer) error {
 	label := fs.String("label", "", "a name for the invite, shown in the device list until it is used")
 	outFile := fs.String("out", "", "write the invite to this file, mode 0600, instead of printing it")
 	url := fs.String("url", "", "the address the invite names, ws:// or wss:// (default: the server's own)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("invite takes no arguments, and was given %q", fs.Args())
 	}
 	if *ttl < 0 {
 		return fmt.Errorf("-ttl %s: an invite cannot expire before it is issued", *ttl)
@@ -385,7 +382,7 @@ func cmdDevices(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("devices", flag.ContinueOnError)
 	dataDir, vault := adminFlags(fs)
 	asJSON := fs.Bool("json", false, "print the list as JSON")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	reply, err := administer(*dataDir, *vault, "list devices", control.Request{Op: "devices"})
