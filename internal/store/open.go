@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -105,7 +106,32 @@ const (
 	// ReadOnly opens without creating, without migrating and without writing
 	// the schema, and SQLite itself refuses writes through the handle.
 	ReadOnly
+	// Source opens a store a backup is taken from, beside a server that may
+	// be running on it: it must already be there and at this build's schema,
+	// and it is neither migrated nor given the schema (T37). The handle can
+	// write, because SQLite refuses `VACUUM INTO` on a read-only one, and
+	// nothing the backup asks of it writes to the store.
+	Source
 )
+
+// ErrOlderSchema is a store at a schema older than this build's, opened by a
+// command that may not upgrade it.
+var ErrOlderSchema = errors.New("this store is at a schema older than this " + Program + "'s")
+
+// olderSchema is the refusal of a store older than this build, for a command
+// that may not upgrade it: what the store is, why this command leaves it
+// alone, and what does upgrade it.
+//
+// A backup's source (T37): the server running on it is the older build,
+// which `trewd update` leaves running until it restarts, so the backup is the
+// one command that would meet it, every night.
+func olderSchema(dbPath string, have int) error {
+	return fmt.Errorf("%w: %s is schema %d and this %s writes %d. A server running on it is the older "+
+		"build, and a backup that upgraded the store under it would leave that build refusing its own "+
+		"store, and the rollback to it too. Restart the server with this build (systemctl restart trew), "+
+		"which upgrades the store when it opens it, and run this again; nothing was changed",
+		ErrOlderSchema, dbPath, have, Program, SchemaVersion)
+}
 
 // OpenMode opens a store with an explicit contract about what it may change.
 //
@@ -131,7 +157,7 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 		if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 			return nil, err
 		}
-	case Existing, ReadOnly:
+	case Existing, ReadOnly, Source:
 		// Named rather than created. `trewd verify -data /typo` used to make
 		// an empty store and report it healthy, which is a true statement about
 		// a directory nobody wanted and a false answer to the question asked.
@@ -141,7 +167,7 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 	}
 
 	openChunks := chunks.New
-	if mode == ReadOnly {
+	if mode == ReadOnly || mode == Source {
 		openChunks = chunks.OpenExisting
 	}
 	cs, err := openChunks(chunkDir, ChunkMax)
@@ -167,8 +193,12 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 		db.Close()
 		return nil, fmt.Errorf("%s holds no store: it has no tables, so it was never initialised", dbPath)
 	}
+	if mode == Source && id.SchemaVersion < SchemaVersion {
+		db.Close()
+		return nil, olderSchema(dbPath, id.SchemaVersion)
+	}
 
-	if mode != ReadOnly {
+	if mode != ReadOnly && mode != Source {
 		if empty {
 			id, err = initialise(db, dbPath)
 		} else {

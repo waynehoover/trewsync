@@ -40,6 +40,11 @@ A backup carries the devices and no outstanding invite: restoring an old copy
 must not bring back an invite that has since been used or cancelled, so
 `backup` says how many it left out.
 
+After `trewd update`, restart the server before the next backup. A backup
+never upgrades the store it copies: it refuses a store an older build wrote,
+since the server still running that build would then meet a store it no
+longer reads, and says to restart the server, which upgrades it.
+
 If a plaintext destination has unfinished SQLite recovery from an earlier
 server run, backup refuses to replace it. Keep that directory intact and choose
 a fresh backup directory; do not remove its journal files to bypass the

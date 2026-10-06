@@ -208,8 +208,9 @@ func openExisting(dataDir, verb string) (*store.Store, error) {
 //
 // Not every read-only-sounding command belongs here. `backup` reads the source
 // and issues `VACUUM INTO`, which is a statement SQLite refuses on a read-only
-// connection however harmless its effect on the source; `purge` writes by
-// definition. Both keep the writable path, and this comment is why.
+// connection however harmless its effect on the source, so it opens a
+// writable handle that does not migrate (store.Source, T37); `purge` writes by
+// definition and keeps the writable path. This comment is why.
 func openForInspection(dataDir, verb string) (*store.Store, error) {
 	if err := requireDataDir(dataDir, verb); err != nil {
 		return nil, err
@@ -1477,7 +1478,11 @@ func cmdBackup(args []string, out io.Writer) error {
 	}
 	defer lock.Release()
 
-	st, err := openExisting(*dataDir, "back up")
+	// Not migrated (T37): a server may be running on it, and `trewd update`
+	// leaves the older build running until it restarts. A store older than
+	// this build is refused, saying to restart the server.
+	dbPath, chunkDir := store.DataDir(*dataDir)
+	st, err := store.OpenMode(dbPath, chunkDir, store.Source, store.SyncFull)
 	if err != nil {
 		return err
 	}

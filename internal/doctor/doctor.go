@@ -548,8 +548,13 @@ func (r *run) identity() {
 		return
 	}
 	if id.SchemaVersion < store.SchemaVersion {
+		// Not "take a backup first" any more: this build's backup refuses a
+		// store older than itself rather than upgrade it under the older
+		// server still running on it (T37).
 		r.bad(Warn, CheckIdentity, fmt.Sprintf("the store is at schema %d and this build writes %d", id.SchemaVersion, store.SchemaVersion),
-			"Take a backup, then start this build's `trewd serve`, which upgrades the store when it opens it.")
+			"Restart the server with this build (or start this build's `trewd serve`), which upgrades the store when "+
+				"it opens it. Until then this build's backup refuses the store rather than upgrade it under the older "+
+				"server.")
 		return
 	}
 	r.ok(CheckIdentity, fmt.Sprintf("product %s, schema %d, epoch %s, vault %q at uid %d", id.Product, id.SchemaVersion,
