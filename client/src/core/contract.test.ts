@@ -78,7 +78,9 @@ interface Contract {
       name: string;
       live: { path: string; folder?: boolean }[];
       op: { type: "create" | "move"; path: string; prev?: string; folder?: boolean };
-      expect: "ok" | "collision";
+      // `stale` is a refusal of its own, not a collision: the server's verdict
+      // on a write that turns a live folder into a file while notes live in it.
+      expect: "ok" | "collision" | "stale";
     }[];
   };
   formats: {
