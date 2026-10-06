@@ -392,14 +392,20 @@ func (s *Store) readUndoPaths(vault string, rec OperationRecord, plan *UndoPlan)
 		}
 		ps[i] = u
 	}
-	// A move is two rows sharing one output: the destination, whose output
-	// names the source as its previous path, and the source.
+	// A move is two rows sharing one output: the destination's write and the
+	// source's retirement, recorded with the same after_uid. They are paired by
+	// those rows, which the log keeps, and not by reading the output back
+	// (T32): a purge can take the output once the destination has been edited
+	// and the source's name used again, since it is then neither a head nor a
+	// rename any path still needs, and pairing through it failed the undo, the
+	// copy too, as internal. Where the output is still there it must name the
+	// source as its previous path, as the log says.
 	for i := range ps {
 		if ps[i].Role != "source" {
 			continue
 		}
 		for j := range ps {
-			if ps[j].Role == "write" && ps[j].AfterUID == ps[i].AfterUID && ps[j].after.Prev == ps[i].Path {
+			if ps[j].Role == "write" && ps[j].AfterUID == ps[i].AfterUID {
 				ps[i].partner, ps[j].partner = j, i
 				break
 			}
@@ -407,6 +413,10 @@ func (s *Store) readUndoPaths(vault string, rec OperationRecord, plan *UndoPlan)
 		if ps[i].partner < 0 {
 			return nil, failed("", fmt.Errorf("operation %s retired %q at uid %d and wrote no destination for it",
 				rec.ID, ps[i].Path, ps[i].AfterUID))
+		}
+		if dest := ps[ps[i].partner]; dest.after.UID != 0 && dest.after.Prev != ps[i].Path {
+			return nil, failed("", fmt.Errorf("operation %s retired %q at uid %d, and the version it wrote there "+
+				"moved %q", rec.ID, ps[i].Path, ps[i].AfterUID, dest.after.Prev))
 		}
 	}
 	return ps, nil
