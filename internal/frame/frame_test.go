@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -180,6 +182,92 @@ func TestTheProbeSkipsDeflatingIncompressibleChunks(t *testing.T) {
 	}
 	if out, err := Decode(f, 1<<20); err != nil || !bytes.Equal(out, mixed) {
 		t.Fatalf("the raw frame did not round-trip: %v", err)
+	}
+}
+
+// prose is n bytes of text that deflates about as a note does.
+func prose(n int) []byte {
+	var buf bytes.Buffer
+	for i := 0; buf.Len() < n; i++ {
+		fmt.Fprintf(&buf, "Line %d of a note, with a [[link to %d]] and a #tag, then some words.\n", i, i%17)
+	}
+	return buf.Bytes()[:n]
+}
+
+// The pools hand a compressor and a decompressor from one body to the next,
+// so nothing one body leaves behind may reach another: each frame decodes to
+// exactly its own bytes whatever was framed before it on the same goroutine,
+// after a frame the decoder refused, and on many goroutines at once, which
+// -race watches.
+func TestPooledFramingKeepsEveryBodyItsOwn(t *testing.T) {
+	bodies := [][]byte{
+		prose(1 << 10), sha256CTR("pool", 16<<10), prose(64 << 10), []byte("x"),
+		make([]byte, 4096), sha256CTR("pool, again", 300<<10), prose(3000),
+	}
+	check := func(raw []byte) {
+		framed := Encode(raw)
+		if len(framed) > len(raw)+1 {
+			t.Errorf("a %d-byte body framed to %d bytes", len(raw), len(framed))
+		}
+		out, err := Decode(framed, 1<<20)
+		if err != nil || !bytes.Equal(out, raw) {
+			t.Errorf("a %d-byte body did not come back as itself: %v", len(raw), err)
+		}
+	}
+	for round := 0; round < 3; round++ {
+		for _, raw := range bodies {
+			check(raw)
+		}
+	}
+	if _, err := Decode([]byte{MarkerDeflate, 0xff, 0xff, 0xff}, 1<<20); err == nil {
+		t.Fatal("a broken deflate stream decoded")
+	}
+	check(prose(2048))
+
+	var wg sync.WaitGroup
+	for g := 0; g < 16; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 40; i++ {
+				check(bodies[(g+i)%len(bodies)])
+			}
+		}(g)
+	}
+	wg.Wait()
+}
+
+// What framing a body costs, which is what the pools are for.
+//
+//	go test ./internal/frame -run '^$' -bench . -benchmem
+func BenchmarkEncode(b *testing.B) {
+	for _, c := range []struct {
+		name string
+		raw  []byte
+	}{
+		{"text-1KiB", prose(1 << 10)},
+		{"text-64KiB", prose(64 << 10)},
+		{"incompressible-256KiB", sha256CTR("bench", 256<<10)},
+	} {
+		b.Run(c.name, func(b *testing.B) {
+			b.SetBytes(int64(len(c.raw)))
+			b.ReportAllocs()
+			for b.Loop() {
+				Encode(c.raw)
+			}
+		})
+	}
+}
+
+func BenchmarkDecode(b *testing.B) {
+	raw := prose(1 << 10)
+	framed := Encode(raw)
+	b.SetBytes(int64(len(raw)))
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := Decode(framed, 1<<20); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
