@@ -2462,7 +2462,7 @@ func (s *Store) verifyLive() ([]Fault, error) {
 	}
 	var faults []Fault
 	for _, v := range vaults {
-		diff, err := liveDifference(s.db, v)
+		diff, err := s.liveDrift(v)
 		if err != nil {
 			return faults, err
 		}
@@ -2472,6 +2472,25 @@ func (s *Store) verifyLive() ([]Fault, error) {
 		}
 	}
 	return faults, nil
+}
+
+// liveDrift is liveDifference for one vault, both of its reads inside one read
+// transaction (T30).
+//
+// They were separate autocommit reads, each its own snapshot, and `verify`
+// runs against a live server: a device's commit landing between the read of
+// the entries and the read of the tables was in one and not the other, and
+// was reported as a livekeys fault, 9 passes of 30 while a device wrote and
+// none once it stopped, with verify exiting non-zero over drift that was never
+// there. RepairLive compares the same way at startup, where the same split
+// rebuilt a live set that agreed.
+func (s *Store) liveDrift(vaultID string) (string, error) {
+	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	return liveDifference(tx, vaultID)
 }
 
 // verifyEntries checks the entries themselves, rather than the bodies they name.
