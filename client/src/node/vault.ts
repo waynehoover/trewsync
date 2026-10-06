@@ -40,7 +40,6 @@ import {
   splitName,
 } from "../core/paths.ts";
 import { MAX_SEGMENT_BYTES } from "../core/path-policy.ts";
-import { printable } from "./terminal.ts";
 import { composite, seam } from "../core/seam.ts";
 import {
   DISPLACED_LOG,
@@ -67,6 +66,7 @@ import type {
   Times,
   Vault,
 } from "../core/vault.ts";
+import { printable } from "./terminal.ts";
 
 /**
  * This client's state folder, spelled here rather than imported.
@@ -195,8 +195,9 @@ function foldedExclusion(name: string): string {
  *
  * Every name a scan meets is asked whether it is ignored, so this is on the
  * scan's path. For printable ASCII, which most names are, the fold is exactly
- * the lower case: the table maps A to Z and nothing else below 0x80. Over
- * 10,000 paths the table alone added about 4 ms to a scan of about 25.
+ * the lower case: the table maps A to Z and nothing else below 0x80. Folding
+ * 10,000 paths with the table took about 5 ms where comparing them exactly
+ * took 1, against a whole scan of that many of 25 to 50.
  */
 function foldName(text: string): string {
   return /^[ -~]*$/.test(text) ? text.toLowerCase() : foldPath(text);

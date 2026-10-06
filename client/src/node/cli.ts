@@ -219,7 +219,7 @@ const stopping = {
 export function interrupt(): void {
   stopping.asked = true;
   stopping.wake?.();
-  for (const client of stopping.clients) void client.close();
+  for (const client of stopping.clients) void client.close().catch(() => undefined);
 }
 
 export async function run(argv: readonly string[], terminal: Console): Promise<number> {
@@ -1178,7 +1178,7 @@ async function watchForever(config: Config, args: Args, io: Console): Promise<nu
       },
       onConnecting: (client) => {
         stopping.clients.add(client);
-        if (stopping.asked) void client.close();
+        if (stopping.asked) void client.close().catch(() => undefined);
       },
       onClient: (client) => {
         watching = client;
