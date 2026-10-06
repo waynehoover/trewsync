@@ -25,6 +25,7 @@ import {
   chunkName,
   chunkNames,
   isChunkName,
+  plainDigest,
   randomBytes,
 } from "./digest.ts";
 
@@ -101,10 +102,10 @@ describe("chunk names", () => {
 });
 
 /**
- * WebCrypto is handed an ArrayBuffer, and a Uint8Array that is a view into a
- * larger buffer is where that gets dangerous: hand over the buffer and the call
- * reads the neighbours too. The helper only skips its copy when the view spans
- * its whole buffer, so these pin the case it must never skip.
+ * A Uint8Array that is a view into a larger buffer is where hashing gets
+ * dangerous: hand over the buffer and the call reads the neighbours too. The
+ * view itself is what WebCrypto is handed now, with no copy (P-e), so these
+ * pin that a view is named by its own bytes wherever it sits in its buffer.
  */
 describe("a view into a larger buffer", () => {
   const bytes = enc.encode("the bytes that are actually the message");
@@ -123,6 +124,12 @@ describe("a view into a larger buffer", () => {
   it("names a chunk by its own bytes, not its neighbours'", async () => {
     for (const at of [0, 32, 64]) {
       expect(await chunkName(embedded(at)), `at ${at}`).toBe(await chunkName(bytes));
+    }
+  });
+
+  it("digests a file's bytes by its own bytes too", async () => {
+    for (const at of [0, 32, 64]) {
+      expect(await plainDigest(embedded(at)), `at ${at}`).toBe(await plainDigest(bytes));
     }
   });
 });

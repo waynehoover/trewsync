@@ -40,7 +40,7 @@ export function randomBytes(n: number): Uint8Array {
  * caught on the first upload rather than becoming a corrupt vault.
  */
 export async function chunkName(raw: Uint8Array): Promise<string> {
-  const digest = await subtle().digest("SHA-256", toBuffer(raw));
+  const digest = await subtle().digest("SHA-256", viewOf(raw));
   return hex(new Uint8Array(digest));
 }
 
@@ -85,7 +85,7 @@ export async function chunkNames(
  * at two moments, and it never leaves the device.
  */
 export async function plainDigest(bytes: Uint8Array): Promise<string> {
-  return hex(new Uint8Array(await subtle().digest("SHA-256", toBuffer(bytes))));
+  return hex(new Uint8Array(await subtle().digest("SHA-256", viewOf(bytes))));
 }
 
 /**
@@ -105,23 +105,25 @@ export function isChunkName(v: unknown): v is string {
  * ---------------------------------------------------------------- */
 
 /**
- * A standalone ArrayBuffer holding exactly a view's bytes.
+ * The view itself, for WebCrypto, which hashes exactly a view's bytes.
  *
- * WebCrypto accepts a BufferSource, but a Uint8Array that is a *view* into a
- * larger buffer has caused real bugs in this shape of code: passing the view's
- * buffer where the view was meant hands over neighbouring data. So the buffer
- * that leaves here always holds the view's bytes and nothing else.
+ * A Uint8Array that is a view into a larger buffer has caused real bugs in this
+ * shape of code: passing the view's *buffer* where the view was meant hands
+ * over the neighbouring data. So the view is what is passed, never its buffer.
+ * A `BufferSource` may be a view, and digesting one digests the bytes it
+ * spans and no others (WebCrypto, "get a copy of the bytes held by the buffer
+ * source"), which `digest.test.ts` holds at offsets in a larger buffer.
  *
- * A view that already spans its whole buffer is that buffer, and copying it
- * only makes a second one with the same contents. The hazard cannot arise, so
- * the copy is skipped. It is the common case: a chunk read from a file owns its
- * bytes, and copying every one of them cost 1.36x on attachments.
+ * This used to copy any view that did not span its whole buffer, and every raw
+ * body a fetch decodes is one, `frame.subarray(1)`: 64 MiB of them hashed in
+ * 7.0 ms that way and 3.5 ms as views under JavaScriptCore, 11.4 and 6.0 ms
+ * under Node, with the same names (P-e). WebCrypto takes its own copy anyway.
+ *
+ * The cast is the types' and not the data's: a view of a SharedArrayBuffer is
+ * not a `BufferSource` and WebCrypto refuses it, and nothing here makes one.
  */
-function toBuffer(view: Uint8Array): ArrayBuffer {
-  if (view.byteOffset === 0 && view.byteLength === view.buffer.byteLength) {
-    return view.buffer as ArrayBuffer;
-  }
-  return view.slice().buffer;
+function viewOf(view: Uint8Array): Uint8Array<ArrayBuffer> {
+  return view as Uint8Array<ArrayBuffer>;
 }
 
 export function hex(bytes: Uint8Array): string {
