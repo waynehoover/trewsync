@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
-	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,25 +18,22 @@ import (
 // The link index (PLAN.md M5 task 6): the keys it holds, when it may narrow a
 // plan's scan, and that it narrows nothing it cannot vouch for.
 
-// backlinks is the index's answer for target at the store's head now.
+// backlinks is the index's answer for target.
 func (r *rig) backlinks(target string) Backlinks {
 	r.t.Helper()
-	head, err := r.st.LatestUID(vault)
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	b, err := r.x.Backlinks(context.Background(), head, notes.TargetKeys(target))
+	b, err := r.x.Backlinks(context.Background(), notes.TargetKeys(target))
 	if err != nil {
 		r.t.Fatal(err)
 	}
 	return b
 }
 
-// mayLink is, for every live note, whether the answer lets a plan skip it.
-func (r *rig) mayLink(b Backlinks) map[string]bool {
+// mayLink is, for every note live at head (0 for the store's head now),
+// whether the answer lets a plan reading the vault there skip it.
+func (r *rig) mayLink(b Backlinks, head int64) map[string]bool {
 	r.t.Helper()
 	out := map[string]bool{}
-	if err := r.st.EachAsOf(vault, 0, store.AsOfRange{}, func(e store.Entry) (bool, error) {
+	if err := r.st.EachAsOf(vault, head, store.AsOfRange{}, func(e store.Entry) (bool, error) {
 		if searchable(e) {
 			out[e.Path] = b.MayLink(e.Path, e.UID)
 		}
@@ -47,14 +44,14 @@ func (r *rig) mayLink(b Backlinks) map[string]bool {
 	return out
 }
 
-// linksTo is, by ChangeLinks itself over the store's own bytes, every note
-// with a link a move of target would rewrite: what the index must never rule
-// out.
-func (r *rig) linksTo(target string) map[string]bool {
+// linksTo is, by ChangeLinks itself over the store's own bytes at head (0 for
+// the store's head now), every note with a link a move of target would
+// rewrite there: what the index must never rule out.
+func (r *rig) linksTo(target string, head int64) map[string]bool {
 	r.t.Helper()
 	var inventory []string
 	var live []store.Entry
-	if err := r.st.EachAsOf(vault, 0, store.AsOfRange{}, func(e store.Entry) (bool, error) {
+	if err := r.st.EachAsOf(vault, head, store.AsOfRange{}, func(e store.Entry) (bool, error) {
 		if !e.Folder && !e.Deleted {
 			inventory = append(inventory, e.Path)
 			live = append(live, e)
@@ -68,7 +65,7 @@ func (r *rig) linksTo(target string) map[string]bool {
 		if !paths.MCPEditable(e.Path) || e.Path == target {
 			continue
 		}
-		full, _, _, err := r.st.EntryAsOf(vault, e.Path, 0)
+		full, _, _, err := r.st.EntryAsOf(vault, e.Path, head)
 		if err != nil {
 			r.t.Fatal(err)
 		}
@@ -106,11 +103,11 @@ func TestTheLinkIndexKeepsEveryBacklinkAndRulesOutTheRest(t *testing.T) {
 	check := func(when string, unlinked ...string) {
 		t.Helper()
 		b := r.backlinks("target.md")
-		if !b.Current {
-			t.Fatalf("%s: the index is not current at its own head: %s", when, b.Why)
+		if !b.Usable {
+			t.Fatalf("%s: the caught-up index did not answer: %s", when, b.Why)
 		}
-		may := r.mayLink(b)
-		for path := range r.linksTo("target.md") {
+		may := r.mayLink(b, 0)
+		for path := range r.linksTo("target.md", 0) {
 			if !may[path] {
 				t.Errorf("%s: %s links to the target and the index ruled it out", when, path)
 			}
@@ -136,7 +133,7 @@ func TestTheLinkIndexKeepsEveryBacklinkAndRulesOutTheRest(t *testing.T) {
 	r.remove("c/d.md")
 	r.caughtUp()
 	check("after the edits", "e.md", "a.md")
-	may := r.mayLink(r.backlinks("target.md"))
+	may := r.mayLink(r.backlinks("target.md"), 0)
 	if !may["f.md"] || may["a.md"] || !may["g/b.md"] {
 		t.Fatalf("the keys did not follow the writes: %v", may)
 	}
@@ -145,42 +142,70 @@ func TestTheLinkIndexKeepsEveryBacklinkAndRulesOutTheRest(t *testing.T) {
 	}
 }
 
-// An index behind the head a plan reads, or past it, narrows nothing: a
-// backlink written after the index's last batch is never ruled out, because
-// no note is.
-func TestAnIndexNotAtThePlansHeadNarrowsNothing(t *testing.T) {
+// The index answers for the versions it holds, whatever head a plan or a page
+// reads (T51). Behind that head, a note written since the index's last batch,
+// a new backlink among them, is one it holds at another version or not at
+// all, and is read; past it, a note the head holds at an older version is
+// read just the same, a backlink removed since among them. A note nobody
+// changed is still ruled out, which is the index's whole use. It used to
+// narrow nothing unless it had indexed exactly the head asked about, which a
+// continuation pinned before any later write never met again.
+func TestAnIndexNotAtThePlansHeadAnswersForTheVersionsItHolds(t *testing.T) {
 	r := newRig(t)
 	r.write("target.md", "# Target\n")
 	r.write("a.md", "unrelated\n")
+	r.write("b.md", "see [[target]]\n")
+	r.write("plain.md", "no links\n")
+	r.write("still.md", "never changed\n")
 	r.caughtUp()
+	early, _ := r.st.LatestUID(vault)
 
+	check := func(when string, head int64, read ...string) {
+		t.Helper()
+		b, err := r.x.Backlinks(context.Background(), notes.TargetKeys("target.md"))
+		if err != nil || !b.Usable {
+			t.Fatalf("%s: the index did not answer for the vault at uid %d: %+v %v", when, head, b, err)
+		}
+		may := r.mayLink(b, head)
+		for path := range r.linksTo("target.md", head) {
+			if !may[path] {
+				t.Errorf("%s: %s links to the target at uid %d and was ruled out", when, path, head)
+			}
+		}
+		for _, path := range read {
+			if !may[path] {
+				t.Errorf("%s: %s, which the index holds at another version or not at all, was ruled out", when, path)
+			}
+		}
+		if may["still.md"] {
+			t.Errorf("%s: still.md, unchanged and unlinked, was not ruled out: %v", when, may)
+		}
+	}
+
+	// Behind the head: the worker is held while a backlink is added, one is
+	// taken away, a linking note arrives and a note is renamed.
 	release := make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	defer free()
 	r.x.mu.Lock()
 	r.x.beforeBatch = func(string) error {
 		<-release
 		return nil
 	}
 	r.x.mu.Unlock()
-	defer close(release)
 	r.write("a.md", "a new backlink: [[target]]\n")
-	b := r.backlinks("target.md")
-	if b.Current || !strings.Contains(b.Why, "indexed through") {
-		t.Fatalf("an index behind the head narrowed: %+v", b)
-	}
-	for path, may := range r.mayLink(b) {
-		if !may {
-			t.Fatalf("%s was ruled out by an index behind the head", path)
-		}
-	}
+	r.write("b.md", "no longer linked\n")
+	r.write("new.md", "[[Target]] as well\n")
+	r.rename("plain.md", "moved/plain.md", "no links\n")
+	late, _ := r.st.LatestUID(vault)
+	check("behind", late, "a.md", "b.md", "new.md", "moved/plain.md")
 
-	head, _ := r.st.LatestUID(vault)
-	ahead, err := r.x.Backlinks(context.Background(), head-2, notes.TargetKeys("target.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ahead.Current {
-		t.Fatalf("an index past the plan's head narrowed: %+v", ahead)
-	}
+	// Past the head: the worker catches up, and a read of the vault as it
+	// stood before those writes reads every note they changed.
+	free()
+	r.caughtUp()
+	check("past", early, "a.md", "b.md", "plain.md")
 }
 
 // Await is how the tools give a busy index the moment it needs: it returns
@@ -212,7 +237,7 @@ func TestAwaitWaitsForTheIndexAndGivesUp(t *testing.T) {
 	if !<-done {
 		t.Fatal("Await gave up although the worker caught up")
 	}
-	if b := r.backlinks("a.md"); !b.Current || b.IndexedHead != head {
+	if b := r.backlinks("a.md"); !b.Usable || b.IndexedHead != head {
 		t.Fatalf("after Await: %+v", b)
 	}
 }
@@ -231,14 +256,14 @@ func TestATruncatedLinkTableIsCaught(t *testing.T) {
 		tablesOf(before.Generation).notes + ` WHERE path = 'n3.md')`); err != nil {
 		t.Fatal(err)
 	}
-	if b := r.backlinks("target.md"); b.Current {
+	if b := r.backlinks("target.md"); b.Usable {
 		t.Fatal("a truncated link table still narrowed")
 	}
 	after := r.caughtUp()
 	if after.Generation <= before.Generation {
 		t.Fatalf("no new generation after the corruption: %+v", after)
 	}
-	if may := r.mayLink(r.backlinks("target.md")); !may["n3.md"] {
+	if may := r.mayLink(r.backlinks("target.md"), 0); !may["n3.md"] {
 		t.Fatalf("the rebuilt index rules out n3.md: %v", may)
 	}
 }
@@ -279,7 +304,7 @@ func TestAnIndexWithoutLinkKeysIsBuiltAgain(t *testing.T) {
 	if version != IndexVersion {
 		t.Fatalf("after reopening, queries use a generation of version %d", version)
 	}
-	if b := r.backlinks("target.md"); !b.Current || !r.mayLink(b)["a.md"] {
+	if b := r.backlinks("target.md"); !b.Usable || !r.mayLink(b, 0)["a.md"] {
 		t.Fatalf("the rebuilt index: %+v", b)
 	}
 }

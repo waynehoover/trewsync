@@ -27,11 +27,11 @@
 // It keeps the links too. Every note's link keys (notes.LinkKeys) are held
 // beside its tags, so a move or a deletion that rewrites backlinks can read
 // only the notes that may link to the path it changes (PLAN.md M5 task 6).
-// The same two rules hold there: the keys only narrow, and every note a plan
-// edits is read from the store; and a plan narrows by them only when the
-// generation has indexed exactly the head it reads, checked in the same read
-// as the keys (Backlinks), so a lagging index costs a scan and never a
-// backlink.
+// The same rules hold there: the keys only narrow, every note a plan edits is
+// read from the store, and the index speaks for a note only in the version it
+// holds, so a note written since its last batch, a new backlink among them, is
+// always read. A lagging index costs the reading of what it has not seen, and
+// never a backlink, whatever head the plan reads (Backlinks).
 //
 // It is generational and checked. A rebuild captures a head, indexes the
 // vault as it stood then in bounded batches, replays the entries after it,
@@ -670,20 +670,21 @@ func (x *Index) Propose(ctx context.Context, q notes.Query, folder, from string)
 	return p, nil
 }
 
-// Backlinks is what the link index says, for a plan reading the vault at one
-// head, about which notes may link to a target (PLAN.md M5 task 6).
+// Backlinks is what the link index says about which notes may link to a
+// target (PLAN.md M5 task 6), for a plan or a page reading the vault at any
+// head: it answers for each note in the version it holds.
 type Backlinks struct {
 	// Generation and IndexedHead are the generation that answered, and how
 	// far it had indexed.
 	Generation  int64
 	IndexedHead int64
-	// Current says the generation is trusted and had indexed exactly the
-	// head asked about, checked in the same read as its keys, so it may rule
+	// Usable says the generation is trusted, of this version, and agreed
+	// with its own counters in the read that took the keys, so it may rule
 	// notes out. When it is not, Why says why, and every note may link.
-	Current bool
-	Why     string
-	notes   map[string]linked
-	hits    map[string]bool
+	Usable bool
+	Why    string
+	notes  map[string]linked
+	hits   map[string]bool
 }
 
 // linked is one note as the link index holds it: its version, and whether
@@ -695,10 +696,10 @@ type linked struct {
 
 // MayLink reports whether the note at path, in its version uid, may hold a
 // link to the target the keys were asked for: always, unless the index is
-// current, holds that very version, read its links, and found none of the
+// usable, holds that very version, read its links, and found none of the
 // target's keys among them.
 func (b Backlinks) MayLink(path string, uid int64) bool {
-	if !b.Current {
+	if !b.Usable {
 		return true
 	}
 	ix, ok := b.notes[path]
@@ -709,14 +710,22 @@ func (b Backlinks) MayLink(path string, uid int64) bool {
 }
 
 // Backlinks asks the index which notes may hold a link with one of keys
-// (notes.TargetKeys of the path a plan moves or deletes), for a plan that
-// reads the vault at head. It narrows only when the generation queries use is
-// trusted, of this version, and has indexed exactly head: an index behind the
-// head has not seen a backlink written since, and one past it describes notes
-// the plan does not read. Both are checked in the one read that takes the
-// keys, with the counters, so a generation that moves on or is truncated
-// meanwhile cannot answer for a head it no longer describes.
-func (x *Index) Backlinks(ctx context.Context, head int64, keys []string) (Backlinks, error) {
+// (notes.TargetKeys of the path a plan moves or deletes). It narrows only when
+// the generation queries use is trusted and of this version, and its tables
+// agree with its counters in the one read that takes the keys.
+//
+// It answers for any head the caller reads, because MayLink answers for a
+// note only in the version the index holds, which is that version's own text:
+// a row is a (path, uid) and its keys, written with indexed_through in one
+// transaction, and the index is dropped when a restore mints a new epoch.
+// Behind the caller's head, a note written since is one the index holds at
+// another version or not at all; past it, a note the head holds at an older
+// version is the same. Either way MayLink is true and the note is read. It
+// used to narrow only when the index had indexed exactly the head asked
+// about, so a continuation pinned before any later write read the whole vault
+// on every page after it, and orphans answered scan_incomplete for that
+// cursor for ever (T51).
+func (x *Index) Backlinks(ctx context.Context, keys []string) (Backlinks, error) {
 	var b Backlinks
 	x.mu.Lock()
 	var g *generation
@@ -748,10 +757,6 @@ func (x *Index) Backlinks(ctx context.Context, head int64, keys []string) (Backl
 		return b, nil
 	}
 	b.Generation, b.IndexedHead = now.gen, now.through
-	if now.through != head {
-		b.Why = fmt.Sprintf("the index has indexed through uid %d, and the plan reads the vault at uid %d", now.through, head)
-		return b, nil
-	}
 	t := tablesOf(now.gen)
 	if why := cheapCheck(tx, t, now); why != "" {
 		x.distrusted(why)
@@ -803,7 +808,7 @@ func (x *Index) Backlinks(ctx context.Context, head int64, keys []string) (Backl
 			return b, err
 		}
 	}
-	b.Current = true
+	b.Usable = true
 	return b, nil
 }
 

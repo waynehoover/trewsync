@@ -67,8 +67,9 @@ type View interface {
 // LinkIndex is what a View may also be: one that can rule a note out of the
 // scan a move or a deletion with markBroken makes of the vault's links
 // (PLAN.md M5 task 6). The tool layer backs it with the search index's link
-// keys (LinkKeys), and only when the index has indexed exactly the head the
-// View reads; a View that is not one is scanned whole, as Basalt did.
+// keys (LinkKeys), which speak for a note only in the version the index
+// holds, whatever head the View reads; a View that is not one is scanned
+// whole, as Basalt did.
 //
 // The index narrows which notes are read and nothing else: every note the
 // plan then reads is read through Read, from the store, and its links are

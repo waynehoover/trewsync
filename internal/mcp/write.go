@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -80,10 +79,12 @@ func (h *Handler) at(point string) {
 // is its paths and uids, a few kilobytes even for 32 paths of 1 KiB.
 const mutationResultBytes = MaxReplyBytes / 4
 
-// indexWait is how long a move or a deletion that rewrites backlinks waits for
-// the link index to reach the head it plans at before it reads every note
-// instead. The worker is nudged by every commit, so a moment is usually
-// enough; a longer wait would only delay the scan it avoids.
+// indexWait is how long a preview of a move or a deletion that rewrites
+// backlinks, or a vault-health tool's first page, waits for the link index to
+// reach the head it reads (pinHead). The index answers at any head, but a
+// note written since its last batch is one it cannot rule out, so the wait
+// saves reading those. The worker is nudged by every commit, so a moment is
+// usually enough; a longer wait would only delay the reads it saves.
 const indexWait = 2 * time.Second
 
 // mutation is one write tool's call in progress, from begin to its reply.
@@ -750,49 +751,44 @@ type scanInfo struct {
 }
 
 // linkHead is the head a move or a deletion that rewrites backlinks plans at,
-// and the view narrowed by the link index when the index has indexed exactly
-// it. A preview (fixed == 0) takes the vault's head, waiting a moment for the
-// index to reach it, and takes a newer head if the vault moves on meanwhile;
-// an apply plans at the head its preview named.
+// the vault there, and the view the plan reads it through (linkView). A
+// preview (fixed == 0) takes the vault's head once the index has had a moment
+// to reach it, and a newer head if the vault moves on meanwhile (pinHead); an
+// apply plans at the head its preview named.
 func (c *call) linkHead(target string, fixed int64) (notes.View, *storeView, scanInfo, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, indexWait)
-	defer cancel()
-	var why string
-	for attempt := 0; ; attempt++ {
-		head := fixed
-		if head == 0 {
-			var err error
-			if head, err = c.h.st.LatestUID(c.h.vault); err != nil {
-				return nil, nil, scanInfo{}, err
-			}
-		}
-		view, err := c.viewAt(head)
-		if err != nil {
+	head := fixed
+	if head == 0 {
+		var err error
+		if head, err = c.pinHead(); err != nil {
 			return nil, nil, scanInfo{}, err
 		}
-		if c.h.index == nil {
-			return view, view, scanInfo{Method: "vault", Why: "this server keeps no link index"}, nil
-		}
-		// Waiting helps only an index that is answering and behind; one being
-		// built from nothing, or distrusted, would only make the scan later.
-		if c.h.index.Status().Usable {
-			c.h.index.Await(ctx, head)
-		}
-		b, err := c.h.index.Backlinks(c.ctx, head, notes.TargetKeys(target))
-		if err != nil {
-			c.h.log.Warn("the link index could not be read; reading every note", "err", err)
-			return view, view, scanInfo{Method: "vault", Why: "the link index could not be read"}, nil
-		}
-		if b.Current {
-			return &linkedView{storeView: view, target: target, links: b},
-				view, scanInfo{Method: "index", IndexedHead: b.IndexedHead}, nil
-		}
-		why = b.Why
-		if fixed != 0 || b.IndexedHead <= head || attempt >= 2 || ctx.Err() != nil {
-			return view, view, scanInfo{Method: "vault", IndexedHead: b.IndexedHead, Why: why}, nil
-		}
-		// The vault moved on while the index caught up: plan at its new head.
 	}
+	v, err := c.viewAt(head)
+	if err != nil {
+		return nil, nil, scanInfo{}, err
+	}
+	view, scan := c.linkView(v, target)
+	return view, v, scan, nil
+}
+
+// linkView is v narrowed by the link index for target whenever the index can
+// answer, and how the plan reads the vault because of it. The index answers
+// for each note in the version it holds, so a note v holds at another
+// version, one written since the index's last batch, is read like any other,
+// whatever head v is of (T51).
+func (c *call) linkView(v *storeView, target string) (notes.View, scanInfo) {
+	if c.h.index == nil {
+		return v, scanInfo{Method: "vault", Why: "this server keeps no link index"}
+	}
+	b, err := c.h.index.Backlinks(c.ctx, notes.TargetKeys(target))
+	if err != nil {
+		c.h.log.Warn("the link index could not be read; reading every note", "err", err)
+		return v, scanInfo{Method: "vault", Why: "the link index could not be read"}
+	}
+	if !b.Usable {
+		return v, scanInfo{Method: "vault", IndexedHead: b.IndexedHead, Why: b.Why}
+	}
+	return &linkedView{storeView: v, target: target, links: b}, scanInfo{Method: "index", IndexedHead: b.IndexedHead}
 }
 
 // normalizedChanges is a plan as its preview showed it: every string through

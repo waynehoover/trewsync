@@ -23,12 +23,15 @@ import (
 // Every page is read at one head, which the first page pins and every
 // continuation keeps, and is bounded as a search page is: at most
 // notes.SearchFiles notes and notes.SearchBytes of their text read, then a
-// cursor resumes it. The link index (note_links) narrows which notes are read,
-// and only when it is provably current: trusted, of this build's version, and
-// indexed through exactly the pinned head, checked in the same read as its
-// keys, as a move's plan uses it. Otherwise every note is read, and what that
-// cannot cover says so: complete false with a cursor, or for orphans, which
-// needs every note's links at once, scan_incomplete.
+// cursor resumes it. The link index (note_links) narrows which notes are read
+// whenever it is trusted, of this build's version and agrees with its
+// counters, checked in the same read as its keys, as a move's plan uses it.
+// It speaks for a note only in the version it holds, so a note the page's
+// head holds at another version (written since the index's last batch, or
+// since the page's head) is read like any other, whichever of the two heads
+// is ahead (T51). Otherwise every note is read, and what that cannot cover
+// says so: complete false with a cursor, or for orphans, which needs every
+// note's links at once, scan_incomplete.
 
 // maxCandidates is the most candidates an ambiguous link's row lists; the
 // rest are counted in candidatesTotal.
@@ -91,9 +94,11 @@ func healthTools() []*Tool {
 	}
 }
 
-// pinHead is the head a first page reads at: the latest, after a moment's wait
-// for the link index to reach it, taking a newer head if the vault moves on
-// meanwhile, as a move's preview does (linkHead).
+// pinHead is the head a first page, or the preview of a move or a deletion
+// that rewrites backlinks (linkHead), reads at: the latest, after a moment's
+// wait for the link index to reach it, taking a newer head if the vault moves
+// on meanwhile. The index answers at any head; the wait only spares reading
+// the notes written since its last batch, which it cannot rule out.
 func (c *call) pinHead() (int64, error) {
 	head, err := c.h.st.LatestUID(c.h.vault)
 	if err != nil || c.h.index == nil || !c.h.index.Status().Usable {
@@ -308,12 +313,12 @@ func backlinks(c *call, a *args) outcome {
 	scan := scanInfo{Method: "vault", Why: "this server keeps no link index"}
 	var index search.Backlinks
 	if c.h.index != nil {
-		if index, err = c.h.index.Backlinks(c.ctx, head, notes.TargetKeys(target)); err != nil {
+		if index, err = c.h.index.Backlinks(c.ctx, notes.TargetKeys(target)); err != nil {
 			c.h.log.Warn("the link index could not be read; reading every note", "err", err)
 			index = search.Backlinks{Why: "the link index could not be read"}
 		}
 		scan = scanInfo{Method: "vault", IndexedHead: index.IndexedHead, Why: index.Why}
-		if index.Current {
+		if index.Usable {
 			scan = scanInfo{Method: "index", IndexedHead: index.IndexedHead}
 		}
 	}
@@ -497,18 +502,18 @@ func outgoingLinks(c *call, a *args) outcome {
 		}{rows})
 }
 
-// linkGraph is the link index for a page at head, and how the page reads the
-// vault because of it.
-func (c *call) linkGraph(head int64) (search.LinkGraph, scanInfo) {
+// linkGraph is the link index for a page, and how the page reads the vault
+// because of it.
+func (c *call) linkGraph() (search.LinkGraph, scanInfo) {
 	if c.h.index == nil {
 		return search.LinkGraph{}, scanInfo{Method: "vault", Why: "this server keeps no link index"}
 	}
-	g, err := c.h.index.LinkGraph(c.ctx, head)
+	g, err := c.h.index.LinkGraph(c.ctx)
 	if err != nil {
 		c.h.log.Warn("the link index could not be read; reading every note", "err", err)
 		return search.LinkGraph{}, scanInfo{Method: "vault", Why: "the link index could not be read"}
 	}
-	if !g.Current {
+	if !g.Usable {
 		return g, scanInfo{Method: "vault", IndexedHead: g.IndexedHead, Why: g.Why}
 	}
 	return g, scanInfo{Method: "index", IndexedHead: g.IndexedHead}
@@ -537,7 +542,7 @@ func brokenLinks(c *call, a *args) outcome {
 	if err != nil {
 		return c.failErr(err)
 	}
-	graph, scan := c.linkGraph(head)
+	graph, scan := c.linkGraph()
 	page := linkPage{limit: limit}
 	rows, skipped := []linkRow{}, []skipRow{}
 	var last *notes.Position
@@ -632,7 +637,7 @@ func orphans(c *call, a *args) outcome {
 	if err != nil {
 		return c.failErr(err)
 	}
-	graph, scan := c.linkGraph(head)
+	graph, scan := c.linkGraph()
 
 	// linkedBy is, for each note read, the fold of every file its links can
 	// mean; a skipped note has none, and is listed.
@@ -669,10 +674,17 @@ func orphans(c *call, a *args) outcome {
 		}
 	}
 	scanBound := func() outcome {
-		return c.fail(&ToolError{Code: "scan_incomplete", Message: "deciding whether a note is linked means reading " +
-			"every note that may link to it, and that is more than one call reads (512 notes or 8 MiB) while the " +
-			"link index is not current for this head; try again once vault_status reports the index fresh, or " +
-			"ask for a smaller limit"})
+		message := "deciding whether a note is linked means reading every note that may link to it, and the link " +
+			"index cannot rule out enough of them for one call to read the rest (512 notes or 8 MiB); "
+		if resuming {
+			// The page reads the vault at the first page's head, and the
+			// notes written since are ones the index holds at other
+			// versions: no wait helps this cursor.
+			message += "start again without the cursor once vault_status reports the index fresh"
+		} else {
+			message += "try again once vault_status reports the index fresh"
+		}
+		return c.fail(&ToolError{Code: "scan_incomplete", Message: message})
 	}
 	type row struct {
 		Path  Text  `json:"path"`
@@ -693,7 +705,7 @@ func orphans(c *call, a *args) outcome {
 			continue
 		}
 		candidates := unproven
-		if graph.Current {
+		if graph.Usable {
 			share := graph.Sharing(notes.TargetKeys(t))
 			candidates = append([]string(nil), unproven...)
 			for s := range share {

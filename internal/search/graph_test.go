@@ -2,7 +2,6 @@ package search
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/waynehoover/trewsync/internal/notes"
@@ -10,19 +9,18 @@ import (
 )
 
 // The whole link graph, for the vault-health tools: it speaks only for the
-// versions it indexed at exactly the head asked about, and then says which
+// versions it indexed, whatever head a page reads (T51), and then says which
 // notes have links at all and which may link to a target, never ruling out a
 // note that does.
-func TestTheLinkGraphSpeaksOnlyForTheHeadItIndexed(t *testing.T) {
+func TestTheLinkGraphSpeaksOnlyForTheVersionsItIndexed(t *testing.T) {
 	r := newRig(t)
 	r.write("target.md", "# Target\n")
 	r.write("links.md", "see [[target]] and [x](other.md)\n")
 	r.write("plain.md", "no links here\n")
 	r.write("bad.md", "---\nnever: closed\n[[target]]\n")
 	r.caughtUp()
-	head, _ := r.st.LatestUID(vault)
-	g, err := r.x.LinkGraph(context.Background(), head)
-	if err != nil || !g.Current {
+	g, err := r.x.LinkGraph(context.Background())
+	if err != nil || !g.Usable {
 		t.Fatalf("a caught-up index: %+v %v", g, err)
 	}
 	uids := map[string]int64{}
@@ -47,9 +45,28 @@ func TestTheLinkGraphSpeaksOnlyForTheHeadItIndexed(t *testing.T) {
 	case !g.Sharing(keys)["links.md"] || g.Sharing(keys)["plain.md"]:
 		t.Fatalf("sharing: %v", g.Sharing(keys))
 	}
-	behind, err := r.x.LinkGraph(context.Background(), head+1)
-	if err != nil || behind.Current || !strings.Contains(behind.Why, "indexed through") ||
-		behind.Proven("links.md", uids["links.md"]) || !behind.HasLinks("plain.md", uids["plain.md"]) {
-		t.Fatalf("an index behind the head narrowed: %+v %v", behind, err)
+	// The worker is held while plain.md gains a link and links.md loses its
+	// own: the graph read now answers for the versions it holds, which a
+	// page pinned before the writes reads, and for neither new one.
+	release := make(chan struct{})
+	defer close(release)
+	r.x.mu.Lock()
+	r.x.beforeBatch = func(string) error {
+		<-release
+		return nil
+	}
+	r.x.mu.Unlock()
+	plain := r.write("plain.md", "now [[target]]\n")
+	links := r.write("links.md", "no links any more\n")
+	later, err := r.x.LinkGraph(context.Background())
+	switch {
+	case err != nil || !later.Usable:
+		t.Fatalf("an index behind the head did not answer: %+v %v", later, err)
+	case later.Proven("plain.md", plain) || !later.HasLinks("plain.md", plain) || !later.MayLinkTo("plain.md", plain, keys):
+		t.Fatal("plain.md's new version, which the index has not read, was spoken for")
+	case later.Proven("links.md", links) || !later.MayLinkTo("links.md", links, keys):
+		t.Fatal("links.md's new version, which the index has not read, was spoken for")
+	case !later.Proven("links.md", uids["links.md"]) || later.HasLinks("plain.md", uids["plain.md"]):
+		t.Fatal("the versions the index holds are no longer spoken for")
 	}
 }

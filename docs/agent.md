@@ -294,12 +294,16 @@ the last page when nothing was skipped. A note whose links cannot be read
 `skipped` with the reason, and the pages are not complete.
 
 The server's link index lets these tools read only the notes that may hold a
-matching link. It is used only when it has caught up with exactly the head the
-page reads (`scan.method` is `index`); otherwise every note is read, 512 notes
-or 8 MiB a page (`scan.method` is `vault`, with `scan.why`). `orphans` has to
-know every note's links at once, so on a vault of more than 512 notes it
-answers `scan_incomplete` while the index is behind, and works once
-`vault_status` reports the index fresh.
+matching link (`scan.method` is `index`). It vouches for a note only as it
+indexed it, so a note written since its last update, or since a first page
+pinned its head, is read in full; the index never hides a link. Without a
+usable index, before the first one is built or when it is being rebuilt
+after a fault, every note is read, 512 notes or 8 MiB a page (`scan.method`
+is `vault`, with `scan.why`). `orphans` has to know every note's links at
+once, so on a vault of more than 512 notes it answers `scan_incomplete` when
+the index cannot rule out enough of them; on a first page, try again once
+`vault_status` reports the index fresh, and with a cursor, start again
+without it.
 
 ## Daily notes and templates
 
