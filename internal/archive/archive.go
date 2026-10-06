@@ -242,6 +242,11 @@ func Pack(dir, out string, recipients []age.Recipient) (Report, error) {
 	if err := f.Close(); err != nil {
 		return rep, err
 	}
+	// Again at the rename, which is what replaces the file: the caller asked
+	// before staging, and a pack can take a while.
+	if err := CheckDestination(out); err != nil {
+		return rep, err
+	}
 	if err := os.Rename(tmp, out); err != nil {
 		return rep, err
 	}
@@ -256,6 +261,52 @@ func Pack(dir, out string, recipients []age.Recipient) (Report, error) {
 // gives an archive, so an archive can be compared with a record of one
 // before it is decrypted.
 func FileSHA256(p string) (string, error) { return fileDigest(p) }
+
+// ageHeader is how every binary age file starts, and so every archive Pack
+// writes.
+const ageHeader = "age-encryption.org/v1\n"
+
+// CheckDestination says whether Pack may write its archive at out: nothing is
+// there, or an age file is, which is what an earlier archive is (T35).
+//
+// Pack renames its archive over whatever out names, and only a directory used
+// to be refused, so a -to that named the age identity (the two flags are easy
+// to mix up during a rehearsal, which needs the identity on the machine)
+// replaced the one key that opens every archive with an archive it opens.
+// Reproduced: the identity began "# created:" before the backup and
+// "age-encryption.org/v1" after. A file that does not start as an age file
+// does is not an earlier backup, whatever its name, and nothing is written
+// over it. Followed through a symlink, since the rename replaces the link and
+// not what it names.
+func CheckDestination(out string) error {
+	info, err := os.Stat(out)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("-to %s is a directory: an encrypted backup is one file, such as %s",
+			out, filepath.Join(out, "trew-backup.tar.age"))
+	}
+	head := make([]byte, len(ageHeader))
+	n := 0
+	if info.Mode().IsRegular() {
+		f, err := os.Open(out)
+		if err != nil {
+			return err
+		}
+		n, _ = io.ReadFull(f, head)
+		f.Close()
+	}
+	if string(head[:n]) != ageHeader {
+		return fmt.Errorf("-to %s exists and is not an age archive, so it is not an earlier backup to replace: "+
+			"it could be the identity, or anything else. An encrypted backup writes over nothing but an earlier "+
+			"archive; choose another name. Nothing was backed up", out)
+	}
+	return nil
+}
 
 // Pruned is what Prune removed.
 type Pruned struct {

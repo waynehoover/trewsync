@@ -34,9 +34,10 @@ const stagingDirName = "backup-staging"
 // it as one age archive at to.
 func backupEncrypted(st *store.Store, dataDir, to string, deep bool, recipients []age.Recipient, out io.Writer) (doctor.BackupRecord, error) {
 	rec := doctor.BackupRecord{To: to, Deep: deep, Encrypted: true}
-	if info, err := os.Stat(to); err == nil && info.IsDir() {
-		return rec, fmt.Errorf("-to %s is a directory: an encrypted backup is one file, such as %s",
-			to, filepath.Join(to, "trew-backup.tar.age"))
+	// Nothing but an earlier archive is written over (T35), and that is asked
+	// before anything is staged.
+	if err := archive.CheckDestination(to); err != nil {
+		return rec, err
 	}
 	if err := store.RefuseSamePlace(filepath.Dir(to), dataDir); err != nil {
 		return rec, fmt.Errorf("an encrypted backup inside the data directory is not a copy of it: %w", err)

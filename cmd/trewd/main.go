@@ -29,6 +29,8 @@ import (
 	"github.com/waynehoover/trewsync/internal/control"
 	"github.com/waynehoover/trewsync/internal/dirlock"
 	"github.com/waynehoover/trewsync/internal/doctor"
+	"github.com/waynehoover/trewsync/internal/gitexport"
+	"github.com/waynehoover/trewsync/internal/search"
 	"github.com/waynehoover/trewsync/internal/server"
 	"github.com/waynehoover/trewsync/internal/store"
 	"github.com/waynehoover/trewsync/internal/wire"
@@ -1525,6 +1527,9 @@ func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writ
 	if err := store.CheckBackupDestination(destDir); err != nil {
 		return err
 	}
+	if err := refuseLiveDestination(destDir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return err
 	}
@@ -1625,8 +1630,52 @@ func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writ
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "This backup holds every note in the clear, as the server does. Keep it")
 	fmt.Fprintln(out, "somewhere only you can read, as you would the notes themselves.")
-	fmt.Fprintf(out, "\nTo restore: point the server at it, or copy it back.\n")
+	// Copy, never serve it where it is (T35): a backup directory a server has
+	// used is a live store, and the next backup into it is refused rather than
+	// let replace what that server wrote.
+	fmt.Fprintf(out, "\nTo restore: stop the server and copy this directory into a new data directory\n"+
+		"(docs/server-operations.md, \"Restore\"); serve the copy, never the backup itself.\n")
 	fmt.Fprintf(out, "  trewd verify -deep -data %s\n", rep.Dir)
+	return nil
+}
+
+// liveMarks are files only a store's own server leaves in its data directory:
+// its record of its starts, its lock, its socket, its search index, its first
+// device's invite and its Git export. Nothing serves a backup directory, so
+// none of them is ever in one. trewd.json is not among them, because a
+// backup carries it (T38).
+var liveMarks = []string{doctor.RuntimeRecordFile, dirlock.Server, control.SocketName, search.FileName,
+	firstInviteFile, gitexport.Dir}
+
+// refuseLiveDestination refuses a plaintext backup destination a server has
+// used (T35).
+//
+// A backup publishes its snapshot over whatever database the destination
+// holds, and everything else in front of that let a stopped server's own data
+// directory through: it holds a trewd database, nothing holds its locks, and a
+// clean stop leaves no write-ahead log. So the nightly job, unchanged, after
+// somebody restored by serving the backup directory itself as the backup's
+// own advice then said, replaced the live store's database with a snapshot of
+// the abandoned one the next time the server was down, and a mistyped -to
+// between two data directories did the same at once. Reproduced: the other
+// store's note was gone and `cat` said the vault had never held it.
+//
+// Checked whether or not a database is there, since a live directory that has
+// lost its database is one to keep exactly as it is, not one to back up into.
+func refuseLiveDestination(destDir string) error {
+	for _, name := range liveMarks {
+		_, err := os.Lstat(filepath.Join(destDir, name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%s is a live data directory, not a backup: a server has used it (%s is there). "+
+			"A backup replaces the database in its destination, so backing up into it would replace that "+
+			"store's notes with these. Choose another directory for the backup; nothing was written",
+			destDir, name)
+	}
 	return nil
 }
 
