@@ -109,6 +109,39 @@ import {
 const log = (message: string, ...rest: unknown[]): void =>
   console.debug("TrewSync:", message, ...rest);
 
+/**
+ * Where an unloaded instance of this plugin leaves the close it started, for
+ * the next instance on the same app to wait for (T10).
+ *
+ * On the app, as `appStartOf` keeps the start id, because disabling and
+ * enabling a plugin (the Settings toggle, an update through BRAT, a hot
+ * reload) evaluates this module again and keeps the app. The old instance's
+ * close drains the pass it was in, which goes on landing files after
+ * `onunload` has returned, and the new instance started at once: two engines
+ * on one vault, each landing what the other was landing. Toggled after 20 of
+ * 120 notes had arrived, the vault held 220 notes, 100 of them conflict
+ * copies. An unlink still being finished was a pairing the next instance
+ * could read before the unlink had removed it.
+ */
+const CLOSING = Symbol.for("trew.closing");
+
+/** Every close an earlier instance of this plugin started on this app. */
+function closingOn(app: object): Promise<void> {
+  const held = (app as Record<symbol, unknown>)[CLOSING];
+  return held instanceof Promise ? (held as Promise<void>) : Promise.resolve();
+}
+
+/** Adds a close to what the next instance on this app waits for. */
+function leaveClosing(app: object, closing: Promise<void>): void {
+  const all = Promise.all([closingOn(app), closing]).then(() => undefined);
+  Object.defineProperty(app, CLOSING, {
+    value: all,
+    configurable: true,
+    writable: true,
+    enumerable: false,
+  });
+}
+
 /** What the status bar is saying, which is also what the modal shows. */
 export type State =
   | { kind: "unpaired" }
@@ -373,6 +406,12 @@ export default class TrewPlugin extends Plugin {
   }
 
   override async onload(): Promise<void> {
+    // Nothing of this instance exists until an earlier one on this app has
+    // finished closing: not a command, not a read of `data.json`, not a pass
+    // (T10). Usually there is none, and this costs nothing.
+    const mine = this.generation;
+    await closingOn(this.app);
+    if (mine !== this.generation) return;
     this.stopResume = watchResume(() => this.resume());
     // Android pauses Obsidian when the screen turns off, and the sync socket
     // goes with it, so a first sync longer than the screen timeout was cut
@@ -631,6 +670,9 @@ export default class TrewPlugin extends Plugin {
     ])
       .then(() => undefined)
       .catch(() => undefined);
+    // And for the next instance of this plugin, which Obsidian may load into
+    // the same app before this close has finished (T10).
+    leaveClosing(this.app, this.closing);
   }
 
   /* ------------------------------------------------------------ *

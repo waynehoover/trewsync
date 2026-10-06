@@ -400,6 +400,63 @@ describe("loading", () => {
     expect(plugin.currentState.kind).toBe("stopped");
     expect(plugin.savedData).not.toBe(null);
   }, 300_000);
+
+  /**
+   * T10. Disabling and enabling the plugin (the Settings toggle, an update
+   * through BRAT, a hot reload) unloads one instance and loads another into
+   * the same app. The old one's close drains the pass it was in, which goes on
+   * landing files; the new one started at once, and the two engines landed
+   * each other's downloads beside their own.
+   */
+  it("does not start again on the same app until the instance before it has closed", async () => {
+    await fresh();
+    const writer = await load();
+    await startVault(writer.plugin, "writer");
+    await synced(writer.plugin);
+    const first = await load();
+    await first.plugin.pair(await anInvite(), "phone");
+    await synced(first.plugin);
+
+    // The first instance's landing of an incoming note, held open.
+    const adapter = first.app.vault.adapter;
+    const gate = deferred();
+    let held = false;
+    const rename = adapter.rename.bind(adapter);
+    adapter.rename = async (from, to) => {
+      if (!held && from.includes(".trew-tmp-")) {
+        held = true;
+        await gate.promise;
+      }
+      return rename(from, to);
+    };
+    const notes = Array.from({ length: 6 }, (_, i) => `Inbox/note-${i}.md`);
+    for (const path of notes) writer.app.vault.adapter.seed(path, `${path}\n`);
+    await writer.plugin.syncNow();
+    await until("the first instance to be landing a note", () => held);
+
+    first.plugin.onunload();
+    let firstClosed = false;
+    void first.plugin.closing!.then(() => (firstClosed = true));
+    const second = makePlugin(first.app);
+    (second as unknown as { confirmSync: () => Promise<boolean> }).confirmSync = async () => true;
+    second.savedData = first.plugin.savedData;
+    loaded.push(second);
+    let secondLoaded = false;
+    const loading = second.onload().then(() => (secondLoaded = true));
+    // Every turn the new instance's own loading needs, and many more.
+    for (let i = 0; i < 50; i++) await nextTurn();
+    expect(firstClosed, "the held landing did not hold the first close").toBe(false);
+    expect(secondLoaded, "the second instance loaded while the first was closing").toBe(false);
+
+    gate.resolve();
+    await loading;
+    expect(firstClosed).toBe(true);
+    await synced(second);
+    await second.syncNow();
+    const inVault = adapter.filePaths().filter((p) => !p.startsWith(".obsidian/"));
+    expect(inVault.filter((p) => p.includes("Conflicted copy"))).toEqual([]);
+    for (const path of notes) expect(adapter.text(path)).toBe(`${path}\n`);
+  }, 300_000);
 });
 
 describe("where its own state goes", () => {
