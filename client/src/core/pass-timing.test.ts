@@ -11,7 +11,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { combinePasses, type PassPhases, type SyncReport } from "./engine.ts";
-import { timedVault, MemoryVault, type StoredState } from "./vault.ts";
+import { timedVault, MemoryVault, type StoredState, type Vault } from "./vault.ts";
 import {
   JournalIndexStore,
   type JournalFiles,
@@ -150,6 +150,81 @@ describe("the filesystem overlay", () => {
     const timed = timedVault(new MemoryVault(), into);
     await expect(timed.read("missing.md")).rejects.toThrow();
     expect(into["read"]?.calls).toBe(1);
+  });
+
+  /**
+   * And it claims every ability the vault underneath does have (T64).
+   *
+   * It dropped `respellFolder` and `contentDigest`, so whenever
+   * `pass-timings.ndjson` existed, as it does in the phone benchmark, a
+   * case-only folder rename was never respelled and a large file was digested
+   * another way: the measured runs were not running the shipped code. The list
+   * below is checked against `Vault` by the compiler, so a member added there
+   * and not here is a type error rather than another quiet difference.
+   */
+  it("forwards every optional member the vault underneath has", async () => {
+    type OptionalOf<T> = { [K in keyof T]-?: object extends Pick<T, K> ? K : never }[keyof T];
+    const optional = [
+      "ambiguous",
+      "flush",
+      "readBlocks",
+      "readRange",
+      "replace",
+      "respellFolder",
+      "sameFile",
+      "canonical",
+      "create",
+      "stranded",
+      "displaced",
+      "recovery",
+      "contentDigest",
+      "removeExpecting",
+      "watch",
+    ] as const satisfies readonly OptionalOf<Vault>[];
+    type Unlisted = Exclude<OptionalOf<Vault>, (typeof optional)[number]>;
+    const everyOneListed: [Unlisted] extends [never] ? true : Unlisted = true;
+    expect(everyOneListed).toBe(true);
+
+    /** A vault with every optional member, so none can be left out unseen. */
+    class Equipped extends MemoryVault {
+      readonly stranded: readonly string[] = ["a.md..trew-tmp-keep1"];
+      readonly displaced = [];
+      readonly recovery = { complete: true } as unknown as NonNullable<Vault["recovery"]>;
+      respelled: string[] = [];
+      ambiguous(): readonly [] {
+        return [];
+      }
+      async flush(): Promise<void> {}
+      async *readBlocks(path: string): AsyncIterable<Uint8Array> {
+        yield await this.read(path);
+      }
+      async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
+        return (await this.read(path)).slice(start, end);
+      }
+      async respellFolder(from: string, to: string): Promise<boolean> {
+        this.respelled.push(`${from}>${to}`);
+        return true;
+      }
+      async sameFile(a: string, b: string): Promise<boolean> {
+        return a === b;
+      }
+      canonical(path: string): string {
+        return path;
+      }
+    }
+    const inner = new Equipped();
+    await inner.edit("note.md", "hello\n");
+    const into: Record<string, { ms: number; calls: number }> = {};
+    const timed = timedVault(inner, into);
+    for (const name of optional) {
+      expect(name in timed, `the wrapper dropped ${name}`).toBe(name in inner);
+    }
+    expect(timed.stranded).toEqual(inner.stranded);
+    expect(await timed.respellFolder!("Old", "OLD")).toBe(true);
+    expect(inner.respelled).toEqual(["Old>OLD"]);
+    expect(await timed.contentDigest!("note.md")).toBe(await inner.contentDigest("note.md"));
+    expect(into["respellFolder"]?.calls).toBe(1);
+    expect(into["contentDigest"]?.calls).toBe(1);
   });
 
   it("does not claim an ability the vault underneath does not have", async () => {

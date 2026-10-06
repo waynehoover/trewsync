@@ -948,6 +948,15 @@ export function timedVault(
             time("readRange", () => inner.readRange!(path, start, end)),
         }
       : {}),
+    // These two were left out (T64), so a measured run never respelled a
+    // folder another device renamed by case, and digested a large file a way
+    // the shipped code does not: the numbers were of a different program.
+    ...(inner.respellFolder
+      ? { respellFolder: (from, to) => time("respellFolder", () => inner.respellFolder!(from, to)) }
+      : {}),
+    ...(inner.contentDigest
+      ? { contentDigest: (path) => time("contentDigest", () => inner.contentDigest!(path)) }
+      : {}),
     ...(inner.readBlocks
       ? {
           // Timed as one span over the whole stream, because that is the thing
@@ -957,5 +966,9 @@ export function timedVault(
         }
       : {}),
   };
+  // Read through, not copied: an adapter refreshes these on every scan.
+  for (const key of ["stranded", "displaced", "recovery"] as const) {
+    if (key in inner) Object.defineProperty(out, key, { get: () => inner[key], enumerable: true });
+  }
   return out;
 }
