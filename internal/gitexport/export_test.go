@@ -2,6 +2,7 @@ package gitexport
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -300,6 +301,88 @@ func TestARestoreIsOneMarkedCommit(t *testing.T) {
 	}
 	if files := git(t, repo(out), "ls-tree", "-r", "--name-only", after); files != "kept.md" {
 		t.Fatalf("the restore's commit holds %q", files)
+	}
+}
+
+// rotChunks overwrites the store's bodies of path's live version, so a step
+// that read them would fail.
+func (r *rig) rotChunks(path string) {
+	r.t.Helper()
+	e, _, _, err := r.st.EntryAsOf(vault, path, 0)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	for _, name := range e.Chunks {
+		p, err := r.st.Chunks().Path(vault, name)
+		if err != nil {
+			r.t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("rotted"), 0o600); err != nil {
+			r.t.Fatal(err)
+		}
+	}
+}
+
+// A version whose bytes the repository already holds is named by its blob,
+// not read from the store and streamed into fast-import again (ops review,
+// performance). Renaming a 64 MiB attachment cost a full read, a temporary
+// copy and an fsync under LFS (1.5 to 2.2 s here) and a full read and stream
+// as a plain blob (5.1 to 6.3 s), for bytes the repository had. The moved
+// notes' bodies are made unreadable in the store first, so a step that read
+// them would fail; the export names them, and the commit holds them.
+func TestARenameNamesTheBlobItAlreadyHas(t *testing.T) {
+	r := newRig(t)
+	out := t.TempDir()
+	x := r.exporter(out, settings(t, out, ""))
+	small := []byte("a note that moves\n")
+	large := bytes.Repeat([]byte("an attachment over the LFS threshold\n"), 300)
+	r.put("Laptop", "note.md", small)
+	r.put("Laptop", "big.bin", large)
+	r.clock.advance(time.Hour)
+	x.sync(t)
+	pointer := git(t, repo(out), "show", "main:big.bin")
+
+	r.rename("Laptop", "note.md", "moved/note.md", small)
+	r.rename("Laptop", "big.bin", "moved/big.bin", large)
+	r.rotChunks("moved/note.md")
+	r.rotChunks("moved/big.bin")
+	r.clock.advance(time.Hour)
+	x.sync(t)
+	if got := git(t, repo(out), "show", "main:moved/note.md"); got+"\n" != string(small) {
+		t.Fatalf("the moved note holds %q", got)
+	}
+	if got := git(t, repo(out), "show", "main:moved/big.bin"); got != pointer {
+		t.Fatalf("the moved attachment's pointer is\n%s\nnot\n%s", got, pointer)
+	}
+}
+
+// A blob the repository has lost, to a gc somebody ran in it for instance,
+// fails the step that names it; the export then forgets every blob it
+// remembered, and the next step streams the bytes again.
+func TestABlobTheRepositoryLostIsStreamedAgain(t *testing.T) {
+	r := newRig(t)
+	out := t.TempDir()
+	x := r.exporter(out, settings(t, out, ""))
+	body := []byte("a note copied somewhere else\n")
+	r.put("Laptop", "a.md", body)
+	r.clock.advance(time.Hour)
+	x.sync(t)
+	e, _, _, err := r.st.EntryAsOf(vault, "a.md", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.db.Exec(`UPDATE blobs SET sha = ? WHERE content = ?`, strings.Repeat("1", 40), contentKey(e)); err != nil {
+		t.Fatal(err)
+	}
+
+	r.put("Laptop", "copy.md", body)
+	r.clock.advance(time.Hour)
+	if _, _, err := x.cycle(context.Background()); err == nil {
+		t.Fatal("a step naming a blob the repository does not have succeeded")
+	}
+	x.sync(t)
+	if got := git(t, repo(out), "show", "main:copy.md"); got+"\n" != string(body) {
+		t.Fatalf("the copy holds %q", got)
 	}
 }
 
