@@ -691,16 +691,29 @@ type ManyResult struct {
 // true and is a different shape of batch, one dominated by the chunk bodies
 // that were already written before any of this runs.
 //
-// A savepoint per entry is what keeps the two properties from fighting. The
-// outer transaction pays one fsync; the inner savepoint is rolled back for an
-// entry that is stale or malformed, so that entry is refused by itself and the
-// rest of the batch still commits, which is what the acks promise. A rolled
-// back savepoint also gives back the uid it took, because the base checks run
-// before the sequence is touched.
+// Checking each entry in full before writing any of it is what keeps the two
+// properties from fighting. The outer transaction pays one fsync; an entry
+// that is stale or malformed is refused by checkEntry, which only reads, so it
+// is refused by itself with nothing of it written, and the rest of the batch
+// still commits, which is what the acks promise. It takes no uid either:
+// applyEntry is the only thing that does, and it runs only for an entry that
+// passed.
+//
+// Each entry used to run inside a savepoint, rolled back for a refusal. Every
+// refusal already came before the entry's first write, so the savepoints
+// rolled back nothing, and they cost about a twelfth of a batch's time:
+// SQLite journals every page a statement changes while a savepoint is open
+// (BenchmarkABatchOfNewNotes, 36.2 ms with them against 33.3 ms without, for
+// 256 notes and no fsync). The split into checkEntry and applyEntry is what
+// makes going without them a property of the code rather than of the order
+// its statements happen to be in.
 //
 // All or nothing on infrastructure failure, and per entry on the client's own
 // mistakes. That is the same division the per-entry version had: a disk error
 // took the whole batch down there too, because it took the connection with it.
+// Whatever applyEntry returns is the database's failure, never a refusal, and
+// abandons the whole transaction, so an entry is never half written into a
+// batch that commits.
 func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []int64) ([]ManyResult, error) {
 	if len(bases) != len(entries) || len(prevBases) != len(entries) {
 		return nil, fmt.Errorf("%d entries with %d bases and %d prevBases", len(entries), len(bases), len(prevBases))
@@ -756,33 +769,24 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 	err := immediate(s.db, func(q execer) error {
 		at := s.clock().UnixMilli()
 		for _, i := range pending {
-			name := fmt.Sprintf("%s_entry_%d", Product, i)
-			if _, err := q.Exec("SAVEPOINT " + name); err != nil {
-				return err
-			}
-			uid, err := writeEntry(q, vaultID, entries[i], &bases[i], prevBases[i], at)
-			if err == nil {
-				if _, err := q.Exec("RELEASE SAVEPOINT " + name); err != nil {
+			// A refusal this entry earned, found before anything of it was
+			// written, so it is refused on its own and leaves nothing behind.
+			// Anything else is the database itself, and a batch that cannot
+			// talk to its database has no per-entry answer to give.
+			if err := checkEntry(q, vaultID, entries[i], &bases[i], prevBases[i]); err != nil {
+				if !errors.Is(err, ErrStale) && !errors.Is(err, ErrBadEntry) && !errors.Is(err, ErrUnknownVault) &&
+					!errors.Is(err, ErrCollision) {
 					return err
 				}
-				out[i] = ManyResult{UID: uid}
-				committed++
+				out[i] = ManyResult{Err: err}
 				continue
 			}
-			// A refusal this entry earned, rolled back on its own. Anything
-			// else is the database itself, and a batch that cannot talk to its
-			// database has no per-entry answer to give.
-			if !errors.Is(err, ErrStale) && !errors.Is(err, ErrBadEntry) && !errors.Is(err, ErrUnknownVault) &&
-				!errors.Is(err, ErrCollision) {
+			uid, err := applyEntry(q, vaultID, entries[i], at)
+			if err != nil {
 				return err
 			}
-			if _, rerr := q.Exec("ROLLBACK TO SAVEPOINT " + name); rerr != nil {
-				return rerr
-			}
-			if _, rerr := q.Exec("RELEASE SAVEPOINT " + name); rerr != nil {
-				return rerr
-			}
-			out[i] = ManyResult{Err: err}
+			out[i] = ManyResult{UID: uid}
+			committed++
 		}
 		return nil
 	})
@@ -853,44 +857,69 @@ func (s *Store) sizeAccountedFor(vaultID string, e Entry) error {
 	return nil
 }
 
-// writeEntry is the conditional check and the three inserts, inside whatever
-// transaction or savepoint the caller has opened: a device's put and batch,
-// and each entry of an agent's operation (CommitOperation), so the three
-// cannot come to different conclusions about one write.
+// writeEntry is checkEntry and then applyEntry, inside whatever transaction
+// the caller has opened: a device's put, and each entry of an agent's
+// operation (CommitOperation). A batch (AppendMany) runs the same two itself,
+// so the three cannot come to different conclusions about one write.
 //
 // at is the server's clock at the commit, in milliseconds, recorded beside
 // the entry in entry_times (see entryTimesSchema).
 func writeEntry(tx execer, vaultID string, e Entry, base *int64, prevBase int64, at int64) (int64, error) {
+	if err := checkEntry(tx, vaultID, e, base, prevBase); err != nil {
+		return 0, err
+	}
+	return applyEntry(tx, vaultID, e, at)
+}
+
+// checkEntry is every refusal a write can earn against the state in the
+// caller's transaction, and it only reads, which is why it is given a querier
+// and not an execer. A batch stands on that: AppendMany refuses an entry by
+// not applying it, with no savepoint to roll back, so anything a check wrote
+// would be committed with the rest of the batch.
+func checkEntry(q querier, vaultID string, e Entry, base *int64, prevBase int64) error {
 	if base != nil {
-		head, deleted, err := pathHead(tx, vaultID, e.Path)
+		head, deleted, err := pathHead(q, vaultID, e.Path)
 		if err != nil {
-			return 0, err
+			return err
 		}
 		if head != *base && !(*base == 0 && deleted) {
-			return 0, ErrStale
+			return ErrStale
 		}
 		if e.Prev != "" {
-			previous, gone, err := pathHead(tx, vaultID, e.Prev)
+			previous, gone, err := pathHead(q, vaultID, e.Prev)
 			if err != nil {
-				return 0, err
+				return err
 			}
 			if previous != prevBase && !(prevBase == 0 && gone) {
-				return 0, ErrStale
+				return ErrStale
 			}
 		}
 	}
 
 	// A folder is deleted only once nothing live is in it (ErrFolderNotEmpty),
 	// and the collision rule after that, both after the preconditions so a
-	// stale write is told it is stale first, and before a uid is taken so a
-	// refused entry gives its uid back with its savepoint.
-	if err := checkEmptied(tx, vaultID, e); err != nil {
-		return 0, err
+	// stale write is told it is stale first.
+	if err := checkEmptied(q, vaultID, e); err != nil {
+		return err
 	}
-	if err := checkCollision(tx, vaultID, e); err != nil {
-		return 0, err
+	if err := checkCollision(q, vaultID, e); err != nil {
+		return err
 	}
+	// And the vault, last, which is where taking the uid used to find it
+	// missing.
+	var vault int
+	err := q.QueryRow(`SELECT 1 FROM vaults WHERE vault_id = ?`, vaultID).Scan(&vault)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %q", ErrUnknownVault, vaultID)
+	}
+	return err
+}
 
+// applyEntry takes the next uid and writes an entry checkEntry has passed: the
+// row, its chunks, its time and the live set. It refuses nothing, so whatever
+// it returns is the database failing, and the caller abandons the transaction
+// the entry was part of rather than commit it with this entry half written.
+func applyEntry(tx execer, vaultID string, e Entry, at int64) (int64, error) {
 	var uid int64
 	err := tx.QueryRow(
 		`UPDATE vaults SET next_uid = next_uid + 1 WHERE vault_id = ?
@@ -923,8 +952,8 @@ func writeEntry(tx execer, vaultID string, e Entry, base *int64, prevBase int64,
 		vaultID, uid, at); err != nil {
 		return 0, err
 	}
-	// The live set moves with the entry, in the same transaction or savepoint,
-	// so the next entry of a batch is checked against the state this one left.
+	// The live set moves with the entry, in the same transaction, so the next
+	// entry of a batch is checked against the state this one left.
 	if err := moveLive(tx, vaultID, e); err != nil {
 		return 0, err
 	}
@@ -968,9 +997,9 @@ func (s *Store) appendEntry(vaultID string, e Entry, base *int64, prevBase int64
 	// writeMu orders the commits of this process; this is what makes one of
 	// them wait for a writer outside it.
 	//
-	// The same function `AppendMany` runs inside a savepoint, so a single put
-	// and one entry of a batch cannot come to different conclusions about the
-	// same write.
+	// The same checks and writes `AppendMany` runs for each entry, so a single
+	// put and one entry of a batch cannot come to different conclusions about
+	// the same write.
 	var uid int64
 	if err := immediate(s.db, func(q execer) error {
 		var err error

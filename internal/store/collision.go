@@ -36,8 +36,8 @@ var ErrCollision = errors.New("collision")
 //     positive; the row goes when it reaches zero.
 //
 // They are written in the same transaction as the entry that changes them,
-// by writeEntry and nowhere else, so they cannot be ahead of or behind the
-// entries: a refused entry's savepoint rolls its table changes back with it,
+// by applyEntry and nowhere else, so they cannot be ahead of or behind the
+// entries: a refused entry is refused by checkEntry before it changes them,
 // and a batch's later entries see what its earlier ones left, which is the
 // order the protocol specifies.
 //
