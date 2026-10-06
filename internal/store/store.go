@@ -1762,7 +1762,7 @@ func (s *Store) Purge(vaultID string, grace time.Duration) (PurgeReport, error) 
 		if err := tx.QueryRow(
 			`SELECT COUNT(*) FROM entries WHERE vault_id = ?
 			    AND uid IN (`+pinnedUIDs+`) AND uid NOT IN (`+baseSurvivorUIDs+`)`,
-			append([]any{vaultID, vaultID, now.UnixMilli()}, survivors[:4]...)...).Scan(&rep.VersionsPinned); err != nil {
+			append([]any{vaultID, vaultID, now.UnixMilli()}, survivors[:5]...)...).Scan(&rep.VersionsPinned); err != nil {
 			return err
 		}
 
@@ -1970,7 +1970,7 @@ func (s *Store) Reclaimable(vaultID string, grace time.Duration) (Reclaimable, e
 	if err := s.db.QueryRow(
 		`SELECT COUNT(*) FROM entries WHERE vault_id = ?
 		    AND uid IN (`+pinnedUIDs+`) AND uid NOT IN (`+baseSurvivorUIDs+`)`,
-		append([]any{vaultID, vaultID, now.UnixMilli()}, survivors[:4]...)...).Scan(&r.Pinned); err != nil {
+		append([]any{vaultID, vaultID, now.UnixMilli()}, survivors[:5]...)...).Scan(&r.Pinned); err != nil {
 		return r, err
 	}
 

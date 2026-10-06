@@ -26,6 +26,12 @@ const notRetiredByRename = `NOT EXISTS (
 // a genuine deletion look like a legacy rename's tail. A retained predecessor
 // with content remains recoverable, including its bodies.
 //
+// And the folder entry a deleted head follows (T31). Deleted tells a folder's
+// deletion from a note's by the version before it, and a purge that dropped
+// that version listed every emptied folder as a deleted note with nothing to
+// restore. Only a folder entry is kept for it: a row with no body, and the
+// version before a note's deletion is still dropped with its bodies.
+//
 // pinnedUIDs is what agents add (PLAN.md section 4.5): every version an
 // operation displaced, until its pin expires. Keeping extra versions cannot
 // disturb the first part, because none of them is newer than a head: the
@@ -56,7 +62,14 @@ SELECT rename_uid FROM deletions
 UNION
 SELECT MAX(p.uid) FROM entries p JOIN deletions d ON d.path = p.path
  WHERE p.vault_id = ? AND p.uid < d.uid AND p.uid > d.rename_uid
- GROUP BY p.path`
+ GROUP BY p.path
+UNION
+SELECT p.uid FROM entries e
+  JOIN heads h ON h.path = e.path AND h.uid = e.uid
+  JOIN entries p ON p.vault_id = e.vault_id AND p.path = e.path AND p.folder = 1
+   AND p.uid = (SELECT MAX(b.uid) FROM entries b
+                 WHERE b.vault_id = e.vault_id AND b.path = e.path AND b.uid < e.uid)
+ WHERE e.vault_id = ? AND e.deleted = 1`
 
 const pinnedUIDs = `
 SELECT p.uid FROM op_pins p
@@ -66,12 +79,13 @@ SELECT p.uid FROM op_pins p
 const purgeSurvivorUIDs = baseSurvivorUIDs + `
 UNION` + pinnedUIDs
 
-// survivorArgs are purgeSurvivorUIDs' arguments: the vault four times for the
-// base set, then the vault and the time, in milliseconds, that decides which
-// pins still hold. One clock reading for the whole purge, so the set it
-// captures and the set it deletes against are the same set.
+// survivorArgs are purgeSurvivorUIDs' arguments: the vault five times for the
+// base set (survivorArgs(...)[:5] is baseSurvivorUIDs' own), then the vault
+// and the time, in milliseconds, that decides which pins still hold. One clock
+// reading for the whole purge, so the set it captures and the set it deletes
+// against are the same set.
 func survivorArgs(vaultID string, now int64) []any {
-	return []any{vaultID, vaultID, vaultID, vaultID, vaultID, now}
+	return []any{vaultID, vaultID, vaultID, vaultID, vaultID, vaultID, now}
 }
 
 // A rename is also a tombstone for its previous path at the same UID.

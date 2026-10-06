@@ -328,19 +328,33 @@ func TestARestoreRefusesAPathPurgedAtThePointAndDeletedSince(t *testing.T) {
 			h := newTestStore(t)
 			h.file(t, "other.md", "another note") // uid 1
 			if folder {
+				// Made, deleted, made again and deleted again: a purge keeps
+				// the folder entry a deleted head follows (T31), here uid 4,
+				// and takes the one that was live at the point.
 				if err := h.writeAt(t, "gone", "", true); err != nil { // uid 2, purged
 					t.Fatal(err)
 				}
-				h.remove(t, "gone") // uid 3
+				h.remove(t, "gone")                                    // uid 3, purged
+				if err := h.writeAt(t, "gone", "", true); err != nil { // uid 4
+					t.Fatal(err)
+				}
+				h.remove(t, "gone") // uid 5
 			} else {
 				h.file(t, "gone.md", "a note at the point") // uid 2, purged
 				h.remove(t, "gone.md")                      // uid 3
 			}
+			reached, err := h.LatestUID("v1")
+			if err != nil {
+				t.Fatal(err)
+			}
 			if _, err := h.Purge("v1", 0); err != nil {
 				t.Fatal(err)
 			}
-			if mark, err := h.PurgedThrough("v1"); err != nil || mark != 3 {
-				t.Fatalf("the purge mark is %d (%v), and the purge reached uid 3", mark, err)
+			if mark, err := h.PurgedThrough("v1"); err != nil || mark != reached {
+				t.Fatalf("the purge mark is %d (%v), and the purge reached uid %d", mark, err, reached)
+			}
+			if _, ok, err := h.EntryByUID("v1", 2); err != nil || ok {
+				t.Fatalf("uid 2 survived the purge (%v), and the case this test is about is not reached", err)
 			}
 
 			plan, err := h.PlanRestore(RestoreRequest{Vault: "v1", ToUID: 2, Now: 7000})
