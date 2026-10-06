@@ -14,6 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { FakeAdapter, FakeVaultIndex, asVault, normalizePath } from "./fake.ts";
+import { resetStub, setApiVersion } from "./stub.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
 import { plainDigest } from "../core/digest.ts";
 
@@ -798,6 +799,36 @@ describe("creating a file only where nothing is", () => {
       op === "writeBinary" && isStaging(path, "new.md") ? 1 : undefined;
     await expect(vault.create("new.md", enc.encode("mine"), times)).rejects.toThrow(/wrote 1/);
     expect(await adapter.exists("new.md")).toBe(false);
+  });
+
+  /**
+   * P-1b. Both adapters look for the destination inside the rename's own turn
+   * of their queue (1.13.7 and 1.14.4), so a look from here before it is
+   * earlier than theirs and narrows nothing. The claim is the rename's.
+   */
+  it("leaves the look to the rename on an Obsidian whose rename makes it", async () => {
+    const asked = () => adapter.calls.filter((c) => c.op === "exists" && c.path === "new.md");
+    expect(await vault.create("new.md", enc.encode("mine"), times)).toBe(true);
+    expect(asked(), "looked at the destination before the rename").toEqual([]);
+
+    adapter.seed("taken.md", "theirs");
+    expect(await vault.create("taken.md", enc.encode("mine"), times)).toBe(false);
+    expect(adapter.text("taken.md")).toBe("theirs");
+    expect(stagingCopies(adapter)).toEqual([]);
+  });
+
+  it("still looks first on an Obsidian older than the one whose rename was read", async () => {
+    setApiVersion("1.13.6");
+    try {
+      adapter.seed("taken.md", "theirs");
+      expect(await vault.create("taken.md", enc.encode("mine"), times)).toBe(false);
+      // Refused before anything was staged.
+      expect(adapter.calls.some((c) => c.op === "writeBinary")).toBe(false);
+      expect(await vault.create("new.md", enc.encode("mine"), times)).toBe(true);
+      expect(adapter.calls.filter((c) => c.op === "exists" && c.path === "new.md")).toHaveLength(2);
+    } finally {
+      resetStub();
+    }
   });
 });
 

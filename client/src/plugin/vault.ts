@@ -44,9 +44,14 @@
  * target exists, unless the two names differ only by case on a filesystem that
  * folds it. The Capacitor adapter was read again for 1.13.7 and makes the same
  * check with the same message and the same single exception before it hands
- * anything to the platform plugin, so the refusal is not desktop-only: what is
- * still the platform's is what happens if the destination appears between that
- * check and the rename, which is why `create` looks once more just before it.
+ * anything to the platform plugin, so the refusal is not desktop-only. Both
+ * make the check inside the rename's own turn of the adapter's queue (read
+ * again in 1.14.4), the queue every adapter call from Obsidian and from
+ * plugins waits in. What is still the platform's is a destination another
+ * program creates between that check and the rename itself, and a look from
+ * here cannot narrow that: it happens before the adapter's own check, not
+ * between it and the rename. An earlier version of this comment said `create`
+ * looked once more for that reason, which it could not do.
  * So there is no replace-by-rename through this API on either platform, and
  * `replace` below says what is done instead.
  *
@@ -59,6 +64,7 @@
 
 import {
   normalizePath,
+  requireApiVersion,
   type DataAdapter,
   type TAbstractFile,
   type Vault as ObsidianVaultApi,
@@ -1571,20 +1577,29 @@ export class ObsidianVault implements Vault {
    * Writes a file only if nothing is at the path, and says whether it did.
    *
    * The staged copy is renamed into place, and `rename` refusing an occupied
-   * destination is what makes the claim exclusive on desktop. The Capacitor
-   * adapter's answer to an occupied destination is the platform's, so the
-   * path is looked at once more just before the rename to make the gap as
-   * narrow as this API allows, and a refusal is read as "taken" whenever
-   * something is there afterwards.
+   * destination is what makes the claim exclusive: both adapters look for
+   * the destination inside the rename's own turn of their queue (read out of
+   * 1.13.7 and 1.14.4, see the header), and a refusal is read as "taken"
+   * whenever something is there afterwards.
+   *
+   * It used to look twice more, before staging and again just before the
+   * rename, and said the second look narrowed the gap on mobile. It could
+   * not: the adapter's own check comes later than any look from here, and
+   * what is left of the race, another program taking the name between that
+   * check and the rename, is invisible to both. On a phone each look is a
+   * turn of the adapter's one queue, about 2 ms of every new file apiece
+   * (P-1b). They stay for an Obsidian older than 1.13.7, whose rename
+   * nothing here has read.
    */
   async create(path: string, bytes: Uint8Array, times: Times): Promise<boolean> {
     const normalized = this.resolve(path);
-    if (await this.adapter.exists(normalized)) return false;
+    const looks = !requireApiVersion("1.13.7");
+    if (looks && (await this.adapter.exists(normalized))) return false;
     await this.ensureParents(normalized);
     const temp = await freeStagingPath(this.adapter, normalized);
     await stage(this.adapter, temp, bytes.slice(), writeOptions(times));
 
-    if (await this.adapter.exists(normalized)) {
+    if (looks && (await this.adapter.exists(normalized))) {
       await this.discardStaging(temp);
       return false;
     }
