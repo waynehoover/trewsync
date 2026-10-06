@@ -2159,8 +2159,20 @@ export class NodeVault implements Vault {
    *
    * Only reached when the target already exists, which for a first download is
    * never, so it costs nothing on the path that moves the most files.
+   *
+   * And not at all on a disk the probe found keeps case apart, which is where
+   * the headless client mostly runs (ext4 on a server or a NAS). There
+   * `NOTE.md` and `Note.md` are two files, the stat finds the exact name or
+   * nothing, and the whole folder was read for every download over an
+   * existing note only to find the name it was given: 4 to 4.5 ms a download
+   * in a folder of 10,000 and 0.07 ms in one of 100, measured under Node on a
+   * case-sensitive APFS volume. Unicode spellings do not depend on this
+   * either, since `absolute` hands over the disk's own spelling of every name
+   * it has met. A disk that folds case still pays it, because there it is
+   * what keeps a case-only rename from losing the note.
    */
   private async matchCase(full: string): Promise<void> {
+    if (!this.foldsCaseSync) return;
     let there;
     try {
       there = await stat(full);
@@ -2267,7 +2279,20 @@ export class NodeVault implements Vault {
       const stage = { mtime: times.mtime, ...(mode === undefined ? {} : { mode }) };
       // Durable before anything is moved: a crash after the rename below must
       // not leave the path empty and the new content only in memory.
-      await writeDurably(staged, bytes, true, { ...stage, stageIn: this.staging });
+      //
+      // The bytes, that is, and not the staged name, so the staging folder is
+      // not flushed here. On a Mac, where an fsync reaches the drive, that
+      // flush was about half of a first download (a median of 14 ms with it
+      // and 6.5 without, under Node), for a name nothing ever needs after a
+      // crash: the file's own flush, which stays, makes its bytes
+      // durable before anything moves, and the `link` below gives the note's
+      // name that same file. That name's folder is dirty from then on, and
+      // `flush` makes it durable before the engine saves the index, so the
+      // index still never says a note is synced ahead of the disk holding it
+      // (rule 3, and `NodeVault.flush`). The staged name is gone in the
+      // `finally`, or, after a crash, left for the reaper to take, and a
+      // crash that loses it loses nothing but a copy the server still has.
+      await writeDurably(staged, bytes, false, { ...stage, stageIn: this.staging });
 
       // On the destination's filesystem, decided before the original moves
       // (R37).
@@ -2281,7 +2306,9 @@ export class NodeVault implements Vault {
       // reaches.
       if (!(await sameFilesystem(staged, dirname(full)))) {
         const near = besideName(full, `.${TEMP_MARK}near${randomBytes(4).toString("hex")}`);
-        await writeDurably(near, bytes, true, stage);
+        // Its folder is the note's, which the publication below marks for
+        // `flush` anyway, so it is not flushed twice (see above).
+        await writeDurably(near, bytes, false, stage);
         await rm(staged, { force: true });
         staged = near;
       }
