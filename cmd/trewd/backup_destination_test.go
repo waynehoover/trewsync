@@ -92,3 +92,38 @@ func TestAnEncryptedBackupReplacesOnlyAnArchive(t *testing.T) {
 		t.Fatal("the second backup did not replace the first archive")
 	}
 }
+
+// T42. An encrypted backup is one file, and what has to be kept out of the
+// data directory is that file. The check asked instead whether the file's
+// directory and the data directory contained one another, so with the default
+// data directory ~/.trew an archive at ~/trew.tar.age, beside it rather than
+// in it, was refused, and in purge's words: "nothing was purged".
+func TestAnEncryptedBackupBesideTheDataDirectoryIsTaken(t *testing.T) {
+	dir := seeded(t)
+	key := filepath.Join(t.TempDir(), "key")
+	mustRun(t, "backup-key", "-x25519", "-out", key)
+
+	beside := filepath.Join(filepath.Dir(dir), "trew-backup.tar.age")
+	if out, err := trew(t, "backup", "-data", dir, "-to", beside, "-recipients-file", key+".pub"); err != nil {
+		t.Fatalf("an archive beside the data directory was refused: %v\n%s", err, out)
+	}
+
+	// Inside is still refused, and in a backup's words.
+	inside := filepath.Join(dir, "trew-backup.tar.age")
+	out, err := trew(t, "backup", "-data", dir, "-to", inside, "-recipients-file", key+".pub")
+	if err == nil {
+		t.Fatalf("an archive inside the data directory was written:\n%s", out)
+	}
+	if strings.Contains(err.Error(), "purged") || !strings.Contains(err.Error(), "inside the data directory") {
+		t.Fatalf("the refusal is not a backup's: %v", err)
+	}
+	if _, err := os.Stat(inside); !os.IsNotExist(err) {
+		t.Fatalf("the refused backup wrote %s (%v)", inside, err)
+	}
+	// A plaintext destination that holds the data directory is refused too,
+	// and is not called a purge either.
+	_, err = trew(t, "backup", "-plaintext-ok", "-data", dir, "-to", filepath.Dir(dir))
+	if err == nil || strings.Contains(err.Error(), "purged") {
+		t.Fatalf("a plaintext backup into the data directory's parent: %v", err)
+	}
+}

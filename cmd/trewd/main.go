@@ -1236,7 +1236,7 @@ func backupCovers(
 	source *store.Store,
 ) (latest int64, release func(), err error) {
 	if err := store.RefuseSamePlace(dir, dataDir); err != nil {
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("%w; nothing was purged", err)
 	}
 	bkDB, bkChunks := store.DataDir(dir)
 	if _, err := os.Stat(bkDB); err != nil {
@@ -1518,7 +1518,7 @@ func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writ
 		return err
 	}
 	if err := store.RefuseSamePlace(destDir, dataDir); err != nil {
-		return err
+		return fmt.Errorf("%w; nothing was backed up", err)
 	}
 	// A destination holding another product's database is refused before it
 	// is locked or written: a snapshot published beside a Basalt database

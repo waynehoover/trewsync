@@ -39,8 +39,8 @@ func backupEncrypted(st *store.Store, dataDir, to string, deep bool, recipients 
 	if err := archive.CheckDestination(to); err != nil {
 		return rec, err
 	}
-	if err := store.RefuseSamePlace(filepath.Dir(to), dataDir); err != nil {
-		return rec, fmt.Errorf("an encrypted backup inside the data directory is not a copy of it: %w", err)
+	if err := store.RefuseInside(to, dataDir); err != nil {
+		return rec, err
 	}
 	staging := filepath.Join(dataDir, stagingDirName)
 	if err := store.CheckBackupDestination(staging); err != nil {

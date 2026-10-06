@@ -907,6 +907,10 @@ func ResolveForLock(path string) (string, error) { return resolvePath(path) }
 // reported that the history it had just destroyed was safely held by the
 // directory it had destroyed it in. Aliases do it too, so this resolves rather
 // than compares strings.
+//
+// The refusal says what the two directories are and nothing about what the
+// caller did not do: a purge and a backup both ask it, and a backup refused
+// with "nothing was purged" (T42) sent somebody looking for a purge.
 func RefuseSamePlace(backupDir, dataDir string) error {
 	backup, err := resolvePath(backupDir)
 	if err != nil {
@@ -918,13 +922,37 @@ func RefuseSamePlace(backupDir, dataDir string) error {
 	}
 	if backup == data {
 		return fmt.Errorf(
-			"the backup at %s is this store's own data directory, so it is not a backup of "+
-				"anything; nothing was purged", backupDir)
+			"the backup at %s is this store's own data directory, so it is not a backup of anything",
+			backupDir)
 	}
 	if overlaps(backup, data) {
 		return fmt.Errorf(
 			"the backup at %s and the data directory %s contain one another, so one is not an "+
-				"independent copy of the other; nothing was purged", backupDir, dataDir)
+				"independent copy of the other", backupDir, dataDir)
+	}
+	return nil
+}
+
+// RefuseInside refuses a file that would be inside a data directory, following
+// symlinks and relative paths on both sides, for an encrypted backup's archive
+// (T42).
+//
+// It asks about the file and not its directory. An archive beside the data
+// directory is a copy of it, and the directory holding both is not a problem:
+// asked of the directory, RefuseSamePlace refused ~/trew.tar.age for the
+// default data directory ~/.trew, because the home directory contains it.
+func RefuseInside(path, dataDir string) error {
+	p, err := resolvePath(path)
+	if err != nil {
+		return err
+	}
+	data, err := resolvePath(dataDir)
+	if err != nil {
+		return err
+	}
+	if p == data || isUnder(p, data) {
+		return fmt.Errorf("%s is inside the data directory %s, so a backup there is not a copy of it: whatever "+
+			"loses the one loses the other. Put the archive outside it; nothing was backed up", path, dataDir)
 	}
 	return nil
 }
