@@ -1699,7 +1699,17 @@ export class Engine {
       : [];
     if (!first && !removedFolders.length) return;
     const preview = await this.preview(stats);
-    if (first) {
+    // Asked only where something local is at stake (T12). A first sync whose
+    // every local file is already the server's, and where the rest only
+    // arrives, changes nothing here and has nothing to decide, and asking
+    // stopped the sync until somebody answered: on a phone, again after every
+    // first sync Android interrupted, whose landed notes are exactly that.
+    // Not remembered as confirmed, so a later pass that finds something at
+    // stake still asks.
+    if (
+      first &&
+      preview.files.some((file) => file.action !== "unchanged" && file.action !== "download")
+    ) {
       if (!(await this.opts.confirmFirstSync(preview)))
         throw new Error("First sync paused for review.");
       this.firstSyncConfirmed = true;
@@ -1728,6 +1738,9 @@ export class Engine {
 
   private async pass(opts: SyncOptions = {}): Promise<SyncReport> {
     const report = emptyReport();
+    // A checkpoint's half minute is counted from here, so a short pass never
+    // takes one however long ago the last save was (T12).
+    this.checkpointedAt = Date.now();
     if (this.liveSetShrank) {
       this.liveSetShrank = false;
       for (const [path, skip] of this.skipped) {
@@ -3631,6 +3644,7 @@ export class Engine {
       try {
         const from = local.get(d);
         const reused = from === undefined ? "ask" : await this.landFromLocal(d, from, report);
+        if (reused !== "ask") this.writtenSinceSave++;
         if (reused === "landed") {
           if (d.kind === "download") {
             report.downloaded++;
@@ -3656,6 +3670,7 @@ export class Engine {
               // be verified. Ordinary healthy batches keep the shared fetch.
               await this.land(d, await this.fetchFor(d), report)
             : await this.land(d, bodies, report);
+        this.writtenSinceSave++;
         // Counted only when it happened. A conflict copy is not a download,
         // and reporting one is the kind of true-sounding status rule 7 is
         // about: the incoming version is on this disk either way, but under
@@ -3669,6 +3684,52 @@ export class Engine {
       } catch (err) {
         this.recordFailure(d.path, err, report);
       }
+    }
+    await this.checkpoint();
+  }
+
+  /** Files a fill has written since the index was last saved, for `checkpoint`. */
+  private writtenSinceSave = 0;
+  /** When the index was last saved or the pass began, by the wall clock. */
+  private checkpointedAt = 0;
+
+  /**
+   * Saves the index part way through a long pass (T12).
+   *
+   * It was saved once, at the end of a pass, and a first sync of a few
+   * thousand notes is one pass of minutes. Android reclaims a backgrounded
+   * Obsidian well inside that, and the restart then had an index from before
+   * any of it: it asked for the first-sync review again, and read and hashed
+   * every note that had already landed, twice over, to find out it was the
+   * server's.
+   *
+   * After a fill, at most once a batch's worth of files or once every half
+   * minute, so a pass of a few downloads never pays for it. The vault is
+   * flushed first, exactly as at the end of a pass, so the index is never
+   * durable ahead of the notes it names (rule 3). What the pass has not done
+   * yet stays on the inbound work list and is decided again after a restart,
+   * as after any pass that ends early. A checkpoint that fails is said and
+   * passed over: the index on the disk is then the older one, which is safe,
+   * and the save at the end of the pass is the one whose failure stops it.
+   */
+  private async checkpoint(): Promise<void> {
+    if (this.writtenSinceSave === 0) return;
+    if (
+      this.writtenSinceSave < CHECKPOINT_FILES &&
+      Date.now() - this.checkpointedAt < CHECKPOINT_MS
+    )
+      return;
+    try {
+      await this.opts.vault.flush?.();
+      await this.save();
+    } catch (err) {
+      // Not asked again at the very next fill: a store that cannot write now
+      // is asked at the next interval, and at the end of the pass.
+      this.writtenSinceSave = 0;
+      this.checkpointedAt = Date.now();
+      this.log("could not save the index part way through the pass; the end of it will", {
+        why: (err as Error).message,
+      });
     }
   }
 
@@ -5571,6 +5632,8 @@ export class Engine {
       remote,
       pending: [...this.pending],
     });
+    this.writtenSinceSave = 0;
+    this.checkpointedAt = Date.now();
   }
 
   /**
@@ -5992,6 +6055,16 @@ const INTERACTIVE_GAP_MS = 200;
  * until its file is written.
  */
 const INBOX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * How much a long pass does before it saves the index part way (T12): a full
+ * batch of files written, or half a minute of wall time since the pass began
+ * or last saved. A phone reclaims a backgrounded Obsidian in about the time a
+ * first sync of a few thousand notes takes, and this bounds what a restart
+ * does again to one batch or thirty seconds of it.
+ */
+const CHECKPOINT_FILES = MAX_BATCH_ENTRIES;
+const CHECKPOINT_MS = 30_000;
 
 /**
  * What one chunk of a file is costed at when only the file's size is known:

@@ -71,7 +71,9 @@ the server to pair a new one.
    them with your synced vault. An older copy can bring back files moved or
    deleted elsewhere. **Cancel** leaves your files and invite untouched.
 5. If **Review your first sync** appears, review the counts and choose
-   **Continue sync**. An empty vault starts downloading immediately.
+   **Continue sync**. An empty vault, or one whose files are all already the
+   server's, starts downloading immediately, and so does a first sync that was
+   interrupted before it finished.
    Keep Obsidian open until it finishes. On desktop the review opens in the
    main Obsidian window, even when you paired from a separate Settings window.
    While it waits, the status bar says so; click it to bring the review back.
