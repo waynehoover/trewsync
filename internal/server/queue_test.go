@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,6 +179,241 @@ func TestS1APeerThatStopsReadingMidFetchIsStillReaped(t *testing.T) {
 	waitFor(t, "the stalled peer to be reaped", func() bool {
 		return r.srv.hub.peerCount(testVault) == 0
 	})
+}
+
+// throttledProxy forwards connections to target, passing what the client sends
+// at rate bytes a second, an uplink, and what the server sends at full speed.
+// Setting stall stops the uplink altogether, as a link that dies does, while
+// the socket stays open.
+func throttledProxy(t *testing.T, target string, rate int, stall *atomic.Bool) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	// Released at the end, so a stalled forwarder finds its sockets closed and
+	// returns rather than outliving the test.
+	t.Cleanup(func() { stall.Store(false) })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			s, err := net.Dial("tcp", target)
+			if err != nil {
+				c.Close()
+				return
+			}
+			t.Cleanup(func() { c.Close(); s.Close() })
+			go func() { _, _ = io.Copy(c, s); c.Close() }()
+			go func() {
+				defer s.Close()
+				buf := make([]byte, 4096)
+				tick := time.Duration(float64(time.Second) * float64(len(buf)) / float64(rate))
+				for {
+					n, err := c.Read(buf)
+					for stall.Load() {
+						time.Sleep(10 * time.Millisecond)
+					}
+					if n > 0 {
+						if _, err := s.Write(buf[:n]); err != nil {
+							return
+						}
+						time.Sleep(tick)
+					}
+					if err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// uploadThrough dials the rig through a throttled proxy, says hello, puts one
+// file of the given bodies and sends them, with a reader running the whole
+// time, as every client has, so that each ping is answered as it arrives and
+// the pong goes out behind whatever the client has already written. It returns
+// the reply that ended the put, or the error that ended the connection.
+func uploadThrough(t *testing.T, r *rig, addr string, bodies [][]byte) (string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+	conn, _, err := websocket.Dial(ctx, "ws://"+addr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.CloseNow() })
+	conn.SetReadLimit(ReadLimit)
+	cl := &client{t: t, rig: r, conn: conn, ctx: ctx, cancel: cancel, name: "phone"}
+	cl.hello(0)
+
+	names := make([]string, len(bodies))
+	var size int64
+	for i, b := range bodies {
+		names[i] = chunks.Name(b)
+		size += int64(len(b))
+	}
+	cl.sendJSON(wire.In{Op: "put", Path: "big.pdf", Chunks: names, Meta: wire.PutMeta{Size: size, MTime: 5}})
+	cl.recvInto("want", &wire.Want{})
+
+	replies := make(chan string, 1)
+	failed := make(chan error, 1)
+	go func() {
+		for {
+			_, data, err := conn.Read(ctx)
+			if err != nil {
+				failed <- err
+				return
+			}
+			if !strings.Contains(string(data), `"op":"batch"`) {
+				replies <- string(data)
+				return
+			}
+		}
+	}()
+	for _, b := range bodies {
+		if err := conn.Write(ctx, websocket.MessageBinary, append([]byte{frame.MarkerRaw}, b...)); err != nil {
+			return "", err
+		}
+	}
+	select {
+	case reply := <-replies:
+		return reply, nil
+	case err := <-failed:
+		return "", err
+	}
+}
+
+// T56: a device uploading over a slow link is alive, though its pong is late.
+//
+// During an upload the session waits in its read for the next body, so the
+// keepalive pings it, and the client's pong is written behind the bodies it
+// has already handed its socket: Node's WebSocket queues it there, and so does
+// coder/websocket once the frame it is writing is out. Waiting the pong out
+// took the uplink as dead, though bytes were arriving the whole time: below
+// about 2.2 Mbit/s a large upload was cut off a minute into every connection,
+// and below about 150 kbit/s a 1 MiB body could not arrive inside one, so that
+// file never uploaded. The timings are scaled down together: each body takes
+// a second to cross the link, and a pong is given 300 ms.
+func TestASlowUplinkUploadIsNotTakenForADeadPeer(t *testing.T) {
+	r := newRig(t)
+	r.srv.pingEvery = 100 * time.Millisecond
+	r.srv.pongWait = 300 * time.Millisecond
+	var stall atomic.Bool
+	addr := throttledProxy(t, strings.TrimPrefix(r.http.URL, "http://"), 256<<10, &stall)
+
+	bodies := [][]byte{incompressible(100, 256<<10), incompressible(101, 256<<10), incompressible(102, 256<<10)}
+	start := time.Now()
+	reply, err := uploadThrough(t, r, addr, bodies)
+	if err != nil {
+		t.Fatalf("the server hung up %v into a live upload: %v", time.Since(start).Round(time.Millisecond), err)
+	}
+	if !strings.Contains(reply, `"res":"ack"`) {
+		t.Fatalf("the upload was answered %s", reply)
+	}
+}
+
+// And an upload whose bytes stop arriving is still a dead peer: what keeps a
+// session alive past an unanswered ping is bytes arriving, not a read in
+// progress. Here the link stops a quarter of the way into the body, the
+// socket stays open, and the session is reaped within a ping or two.
+func TestAnUploadThatStopsArrivingIsStillReaped(t *testing.T) {
+	r := newRig(t)
+	r.srv.pingEvery = 100 * time.Millisecond
+	r.srv.pongWait = 300 * time.Millisecond
+	var stall atomic.Bool
+	addr := throttledProxy(t, strings.TrimPrefix(r.http.URL, "http://"), 256<<10, &stall)
+	time.AfterFunc(time.Second, func() { stall.Store(true) })
+
+	start := time.Now()
+	if reply, err := uploadThrough(t, r, addr, [][]byte{incompressible(200, 1<<20)}); err == nil {
+		t.Fatalf("a stalled upload was answered %s", reply)
+	}
+	// Not before the link stalled, while the body was still arriving, and not
+	// long after it.
+	if took := time.Since(start); took < time.Second || took > 10*time.Second {
+		t.Fatalf("the upload was reaped %v in, and its link stalled at 1s", took.Round(time.Millisecond))
+	}
+	if st := r.mustStats(); st.Versions != 0 {
+		t.Fatalf("%d versions from an upload that never finished", st.Versions)
+	}
+}
+
+// A commit on another device does not drop a peer that is downloading (T55).
+//
+// A fetch keeps its peer's send queue full on purpose: send waits for room,
+// and that is the backpressure. A live batch from another device's commit goes
+// through trySend instead, which drops a peer it finds no room for, and small
+// chunks fill the queue's frames long before its bytes, so a fetch larger than
+// the socket buffers kept it full from end to end. A save anywhere else then
+// cut a phone off in the middle of its first sync, and a vault somebody kept
+// typing into could keep it from ever finishing. Modelled by not reading until
+// the fetch has filled the queue, the steady state of any fetch over a link
+// slower than the disk, and then committing the largest batch an exchange may
+// carry, every entry of it a broadcast to the phone at once.
+func TestACommitElsewhereDoesNotDropAPeerMidFetch(t *testing.T) {
+	r := newRig(t)
+	const n = 800
+	names := make([]string, n)
+	bodies := make([][]byte, n)
+	for i := range names {
+		bodies[i] = incompressible(1000+i, 8<<10)
+		names[i] = chunks.Name(bodies[i])
+	}
+	if err := r.st.Chunks().PutAll(testVault, bodies); err != nil {
+		t.Fatal(err)
+	}
+
+	phone := r.dial("phone")
+	phone.hello(0)
+	peer := r.onlyPeer()
+	laptop := r.dial("laptop")
+	laptop.hello(0)
+
+	phone.sendJSON(wire.In{Op: "fetch", Chunks: names})
+	phone.expectBodies(n)
+	waitFor(t, "the phone's queue to fill with its own fetch", func() bool {
+		return peer.inflight.Load() >= SendQueueDepth
+	})
+
+	entries := make([]wire.PutEntry, 0, wire.MaxBatchEntries)
+	saved := map[string]string{}
+	for i := 0; i < wire.MaxBatchEntries; i++ {
+		e, b := entryFor(fmt.Sprintf("saved/%d.md", i), fmt.Sprintf("a line typed on the laptop, %d", i))
+		entries = append(entries, e)
+		for k, v := range b {
+			saved[k] = v
+		}
+	}
+	for i, res := range laptop.putMany(entries, saved).Results {
+		if res.UID == 0 {
+			t.Fatalf("entry %d of the laptop's batch: %+v", i, res)
+		}
+	}
+
+	got, batches := 0, 0
+	for got < n || batches < wire.MaxBatchEntries {
+		typ, data, err := phone.read()
+		if err != nil {
+			t.Fatalf("the phone was cut off after %d of %d bodies and %d of %d batches, %d peers evicted: %v",
+				got, n, batches, wire.MaxBatchEntries, r.srv.Metrics().Snapshot().EvictedPeers, err)
+		}
+		if typ == websocket.MessageBinary {
+			got++
+			continue
+		}
+		if !strings.Contains(string(data), `"op":"batch"`) {
+			t.Fatalf("an unexpected text frame mid-fetch: %s", data)
+		}
+		batches++
+	}
+	if ev := r.srv.Metrics().Snapshot().EvictedPeers; ev != 0 {
+		t.Fatalf("%d peers were evicted", ev)
+	}
 }
 
 // S2: the handover from catch-up to live delivery waits for room in the queue

@@ -49,8 +49,7 @@ func TestFanoutSharesImmutableFramesAcrossLiveAndCatchingUpPeers(t *testing.T) {
 	if !bytes.Equal(a.data, want) || !bytes.Equal(buffered, want) {
 		t.Fatal("a later broadcast changed the retained earlier update")
 	}
-	first.queued.Add(-int64(len(a.data)))
-	first.inflight.Add(-1)
+	first.release(a)
 	if second.queued.Load() <= 0 || catchingUp.pendingBytes != int64(len(buffered)+len(catchingUp.pending[1].frame)) {
 		t.Fatal("draining one peer changed another peer's accounting")
 	}
@@ -82,9 +81,7 @@ func BenchmarkLiveFanout(b *testing.B) {
 				for b.Loop() {
 					hub.broadcast("v", e, sessions[0])
 					for _, s := range sessions {
-						f := <-s.out
-						s.queued.Add(-int64(len(f.data)))
-						s.inflight.Add(-1)
+						s.release(<-s.out)
 					}
 				}
 			})

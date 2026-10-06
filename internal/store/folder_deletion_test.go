@@ -283,6 +283,31 @@ func TestThePurgeKeepsWhatTellsAFolderDeletionFromANote(t *testing.T) {
 	h.verified(t)
 }
 
+// A folder made a file is judged under every spelling that folds alike, as its
+// deletion is (T58). Between the moves of a case-only folder rename the folder
+// entry's new spelling is live while the note is still under the old one, and
+// the note is in that folder on every disk that folds case, so neither an
+// update of the entry nor another case-only move may make it a file.
+func TestAFolderMidCaseRenameIsNotMadeAFileOverItsOldSpelling(t *testing.T) {
+	h := newTestStore(t)
+	if err := h.writeAt(t, "Notes", "", true); err != nil {
+		t.Fatal(err)
+	}
+	h.file(t, "Notes/a.md", "a note in the folder")
+	if err := h.writeAt(t, "notes", "Notes", true); err != nil {
+		t.Fatalf("the case-only rename of the folder entry: %v", err)
+	}
+	for _, c := range []struct{ path, prev string }{{"notes", ""}, {"NOTES", "notes"}} {
+		err := h.writeAt(t, c.path, c.prev, false)
+		if !errors.Is(err, ErrFolderNotEmpty) || !strings.Contains(err.Error(), `"Notes/a.md"`) {
+			t.Fatalf("making %q a file while Notes/a.md is live was answered %v", c.path, err)
+		}
+	}
+	if live := liveNow(t, h); len(live) != 2 || !live[1].Folder {
+		t.Fatalf("the refusals changed the live set to %v", live)
+	}
+}
+
 // A case-only folder rename moves the folder entry and its files one move at
 // a time, so between the moves the folder's new spelling is live while its
 // files are still live under the old one. Those files are in the folder all

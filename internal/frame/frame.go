@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // The two markers. Any other first byte is refused.
@@ -46,22 +47,42 @@ const probeBytes = 4096
 // megabyte of JPEG to learn that costs CPU on every fetch for nothing. The probe
 // is an optimisation only; the output rule above still decides.
 func Encode(raw []byte) []byte {
+	if framed, ok := deflated(raw); ok {
+		return framed
+	}
+	return rawFrame(raw)
+}
+
+// EncodeWithHeadroom is Encode for a chunk read with one spare byte in front of
+// it, buf[1:], as chunks.Store.GetWithHeadroom reads one. A raw frame is then
+// buf itself, the spare byte its marker, so a body that does not deflate,
+// which is most of an attachment, goes out without being copied to make room
+// for one byte. The spare byte must be MarkerRaw, zero, as a fresh buffer
+// already is, and it is never written: the same buffer may be framed again
+// while an earlier frame of it is still being sent.
+func EncodeWithHeadroom(buf []byte) []byte {
+	raw := buf[1:]
+	if buf[0] != MarkerRaw {
+		return Encode(raw)
+	}
+	if framed, ok := deflated(raw); ok {
+		return framed
+	}
+	return buf
+}
+
+// deflated is raw's deflate frame, when deflating makes it shorter; see Encode
+// for the probe.
+func deflated(raw []byte) ([]byte, bool) {
 	if len(raw) > 2*probeBytes && !deflates(raw[:probeBytes]) {
-		return rawFrame(raw)
+		return nil, false
 	}
 	var buf bytes.Buffer
 	buf.WriteByte(MarkerDeflate)
-	w, err := flate.NewWriter(&buf, 6)
-	if err == nil {
-		_, err = w.Write(raw)
+	if deflate(&buf, raw) == nil && buf.Len()-1 < len(raw) {
+		return buf.Bytes(), true
 	}
-	if err == nil {
-		err = w.Close()
-	}
-	if err == nil && buf.Len()-1 < len(raw) {
-		return buf.Bytes()
-	}
-	return rawFrame(raw)
+	return nil, false
 }
 
 func rawFrame(raw []byte) []byte {
@@ -74,17 +95,39 @@ func rawFrame(raw []byte) []byte {
 // deflates reports whether deflating b at level 6 makes it shorter.
 func deflates(b []byte) bool {
 	var buf bytes.Buffer
-	w, err := flate.NewWriter(&buf, 6)
-	if err != nil {
-		return false
-	}
+	return deflate(&buf, b) == nil && buf.Len() < len(b)
+}
+
+// compressors and decompressors are flate's, kept from one body to the next
+// rather than built for each. A level 6 compressor is about a megabyte of
+// state, and Encode built one for every body it framed and another for every
+// probe: a first sync of fifteen thousand note chunks allocated 16 GB to send
+// them. Each is reset before it is used, so what one body leaves in it never
+// reaches the next, and reset again before it is put back, so the pool does
+// not hold the last body it saw in memory.
+var (
+	compressors = sync.Pool{New: func() any {
+		w, err := flate.NewWriter(io.Discard, 6)
+		if err != nil {
+			panic(err) // level 6 is always a valid level
+		}
+		return w
+	}}
+	decompressors = sync.Pool{New: func() any { return flate.NewReader(bytes.NewReader(nil)) }}
+)
+
+// deflate writes the raw DEFLATE stream of b, at level 6, to dst.
+func deflate(dst *bytes.Buffer, b []byte) error {
+	w := compressors.Get().(*flate.Writer)
+	defer func() {
+		w.Reset(io.Discard)
+		compressors.Put(w)
+	}()
+	w.Reset(dst)
 	if _, err := w.Write(b); err != nil {
-		return false
+		return err
 	}
-	if err := w.Close(); err != nil {
-		return false
-	}
-	return buf.Len() < len(b)
+	return w.Close()
 }
 
 // Decode returns the raw chunk a frame carries, refusing anything that is not
@@ -117,8 +160,14 @@ func Decode(frame []byte, maxRaw int) ([]byte, error) {
 		}
 		return payload, nil
 	case MarkerDeflate:
-		r := flate.NewReader(bytes.NewReader(payload))
-		defer r.Close()
+		r := decompressors.Get().(io.ReadCloser)
+		defer func() {
+			_ = r.(flate.Resetter).Reset(bytes.NewReader(nil), nil)
+			decompressors.Put(r)
+		}()
+		if err := r.(flate.Resetter).Reset(bytes.NewReader(payload), nil); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+		}
 		out, err := io.ReadAll(io.LimitReader(r, int64(maxRaw)+1))
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)

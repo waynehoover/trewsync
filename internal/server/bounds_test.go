@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -198,6 +199,90 @@ func TestS21AFetchOverTheByteCapIsRefusedWithNoBodies(t *testing.T) {
 }
 
 /* ---------------------------------------------------------------- *
+ * T57: catch-up is bounded by bytes
+ * ---------------------------------------------------------------- */
+
+// A catch-up batch is no larger than the batch budget `ready` advertised,
+// however many chunks its entries name (T57).
+//
+// It was bounded by count alone, two hundred entries, and a client parses no
+// text frame longer than twice the advertised budget. With the budget lowered
+// to a mebibyte, which `-max-batch-bytes` allows, a device two hundred versions
+// behind on an ordinary attachment of 256 chunks was sent a first batch of 3.4
+// MB, refused it, reconnected at the same cursor, was sent the same batch, and
+// never caught up. An entry larger than the budget by itself is still sent, on
+// its own, since no smaller batch could carry it.
+func TestACatchUpBatchFitsTheAdvertisedBudget(t *testing.T) {
+	r := newRig(t)
+	r.srv.SetMaxBatchBytes(1 << 20)
+
+	var names []string
+	var size int64
+	for i := 0; i < 256; i++ {
+		b := []byte(fmt.Sprintf("chunk body %d", i))
+		n := chunks.Name(b)
+		if err := r.st.Chunks().Put(testVault, n, b); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, n)
+		size += int64(len(b))
+	}
+	// Eighty versions of the attachment are 1.4 MB of chunk names, and one
+	// entry naming 17,000 chunks is 1.1 MB on its own.
+	const versions = 81
+	huge := make([]string, 17_000)
+	for i := range huge {
+		huge[i] = names[0]
+	}
+	for v := 0; v < versions; v++ {
+		e := store.Entry{Path: "big.pdf", Size: size, MTime: int64(v + 1), Device: "x", Chunks: names}
+		if v == 40 {
+			e = store.Entry{Path: "huge.md", Size: int64(len(huge) * len("chunk body 0")), MTime: 1, Device: "x", Chunks: huge}
+		}
+		if _, err := r.st.AppendEntry(testVault, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cl := r.dial("new-phone")
+	cl.sendJSON(cl.deviceHello(0))
+	var ready wire.Ready
+	cl.recvInto("ready", &ready)
+	var cursor int64
+	got, batches := 0, 0
+	for {
+		raw := cl.recvRaw()
+		var b struct {
+			wire.Batch
+			Cursor int64 `json:"cursor"`
+		}
+		if err := json.Unmarshal([]byte(raw), &b); err != nil {
+			t.Fatal(err)
+		}
+		if b.Op == "caught-up" {
+			if b.Cursor != cursor {
+				t.Fatalf("caught up at %d, the batches reached %d", b.Cursor, cursor)
+			}
+			break
+		}
+		if b.From != cursor+1 {
+			t.Fatalf("a batch from %d after cursor %d", b.From, cursor)
+		}
+		if int64(len(raw)) > ready.MaxBatchBytes && len(b.Entries) != 1 {
+			t.Fatalf("a catch-up batch of %d entries is %d bytes, over the %d advertised",
+				len(b.Entries), len(raw), ready.MaxBatchBytes)
+		}
+		cursor = b.To
+		got += len(b.Entries)
+		batches++
+	}
+	if got != versions || cursor != versions {
+		t.Fatalf("caught up with %d entries to cursor %d, want all %d", got, cursor, versions)
+	}
+	t.Logf("%d entries in %d batches under a %d byte budget", versions, batches, ready.MaxBatchBytes)
+}
+
+/* ---------------------------------------------------------------- *
  * S19: pre-auth bounds
  * ---------------------------------------------------------------- */
 
@@ -221,27 +306,98 @@ func TestS19AConnectionThatNeverSaysHelloIsClosedAtTheDeadline(t *testing.T) {
 	waitFor(t, "the session to be forgotten", func() bool { return r.srv.PreAuth() == 0 })
 }
 
+// A connection that has said nothing gives its place to one that arrives
+// when the pre-auth slots are full, so sockets held open in silence cannot
+// keep a device out (T61).
+//
+// The cap used to refuse the newcomer. Thirty-two sockets that never spoke,
+// each reopened when its hello deadline closed it, then refused every device
+// the server has, for as long as somebody bothered to keep them open; a
+// device sends its hello the moment it connects, so the connection that has
+// waited longest without a word is the one to close.
+func TestS19ASilentConnectionMakesRoomForADeviceThatSpeaks(t *testing.T) {
+	r := newRig(t)
+	r.srv.maxPreAuth = 2
+	first := r.dial("silent-1")
+	waitFor(t, "the first silent connection", func() bool { return r.srv.PreAuth() == 1 })
+	second := r.dial("silent-2")
+	waitFor(t, "two pre-auth sessions", func() bool { return r.srv.PreAuth() == 2 })
+
+	device := r.dial("laptop")
+	if _, got := device.hello(0); len(got) != 0 {
+		t.Fatalf("an empty vault caught up with %d entries", len(got))
+	}
+
+	// The one that waited longest was told why and closed; the other is
+	// still waiting, and the cap was never exceeded.
+	f := rawFields(t, first.recvRaw())
+	if f["res"] != "err" || f["code"] != wire.CodeBusy {
+		t.Fatalf("the silent connection was told %v, want busy", f)
+	}
+	if !first.closed() {
+		t.Fatal("the oldest silent connection was left open")
+	}
+	if got := r.srv.PreAuth(); got != 1 {
+		t.Fatalf("%d connections are waiting to authenticate, want the second silent one", got)
+	}
+	second.sendJSON(second.deviceHello(0))
+	second.recvInto("ready", nil)
+}
+
+// A hello already being answered is not a silent connection, and is not
+// closed to make room: when every pre-auth slot holds one, the newcomer is
+// refused busy, as before.
+func TestS19AHelloInProgressIsNotClosedToMakeRoom(t *testing.T) {
+	r := newRig(t)
+	r.srv.maxPreAuth = 1
+	inside := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	r.srv.beforePublish = func() {
+		once.Do(func() { close(inside) })
+		<-release
+	}
+
+	speaking := r.dial("laptop")
+	speaking.sendJSON(speaking.deviceHello(0))
+	<-inside
+
+	late := r.dial("phone")
+	f := rawFields(t, late.recvRaw())
+	close(release)
+	if f["res"] != "err" || f["code"] != wire.CodeBusy {
+		t.Fatalf("the newcomer was told %v, want busy", f)
+	}
+	speaking.recvInto("ready", nil)
+}
+
 // Connections that have not said hello are capped as a total, so a flood of
-// sockets that never authenticate cannot exhaust the server. A refused one is
-// told busy; a slot opens as soon as one of them authenticates or goes away.
+// sockets that never authenticate cannot exhaust the server. Past the cap the
+// one that has been silent longest is closed for the newcomer (T61); a slot
+// opens as soon as one of them authenticates or goes away.
 func TestS19PreAuthConnectionsAreCapped(t *testing.T) {
 	r := newRig(t)
 	r.srv.maxPreAuth = 2
 	a := r.dial("a")
+	waitFor(t, "one pre-auth session", func() bool { return r.srv.PreAuth() == 1 })
 	b := r.dial("b")
 	waitFor(t, "two pre-auth sessions", func() bool { return r.srv.PreAuth() == 2 })
 
+	// A third takes the place of the first, and the total stays at the cap.
 	c := r.dial("c")
-	f := rawFields(t, c.recvRaw())
+	f := rawFields(t, a.recvRaw())
 	if f["res"] != "err" || f["code"] != wire.CodeBusy {
-		t.Fatalf("the third connection was told %v, want busy", f)
+		t.Fatalf("the first connection was told %v, want busy", f)
 	}
-	if !c.closed() {
-		t.Fatal("the third connection was admitted past the cap")
+	if !a.closed() {
+		t.Fatal("the first connection was left open past the cap")
+	}
+	if got := r.srv.PreAuth(); got != 2 {
+		t.Fatalf("%d connections waiting to authenticate, the cap is 2", got)
 	}
 
 	// One authenticates: it leaves the count and a slot opens.
-	a.hello(0)
+	c.hello(0)
 	waitFor(t, "the count to drop", func() bool { return r.srv.PreAuth() == 1 })
 	d := r.dial("d")
 	d.hello(0)
@@ -251,7 +407,7 @@ func TestS19PreAuthConnectionsAreCapped(t *testing.T) {
 	b.conn.CloseNow()
 	waitFor(t, "the closed connection to be forgotten", func() bool { return r.srv.PreAuth() == 0 })
 	if got := r.srv.Peers(testVault); got != 2 {
-		t.Fatalf("%d peers joined, want a and d", got)
+		t.Fatalf("%d peers joined, want c and d", got)
 	}
 }
 

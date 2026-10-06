@@ -222,7 +222,8 @@ func checkCollision(q querier, vaultID string, e Entry) error {
 // `stale` rather than a code of its own, because it is the same condition
 // seen from the folder: the write was prepared against a vault that has
 // changed since, and the answer is the one every stale refusal gets, reading
-// what arrived and deciding again. Only an explicit deletion is asked. A
+// what arrived and deciding again. An explicit deletion is asked, and so is a
+// folder entry made a file (T58), which takes the folder away as surely. A
 // rename's retirement of its source is not, because a case-only folder rename
 // moves the folder entry and its files one move at a time, across batches
 // (plan/protocol.md, "Paths", collision rule 1).
@@ -230,10 +231,40 @@ var ErrFolderNotEmpty = fmt.Errorf("%w: the folder still holds live paths", ErrS
 
 // checkEmptied applies that rule to one entry, against the live set as it
 // stands in the caller's transaction, so a batch that deletes a folder's
-// files ahead of the folder commits all of it.
+// files ahead of the folder commits all of it. It only reads, and the caller
+// asks it before anything of the entry is written, so a refusal is the
+// entry's alone.
+//
+// Two kinds of entry take a folder away: its deletion, and a file written over
+// a live folder entry (T58), by an update of the folder's own path or by a move
+// that changes only its case. Collision rules 2 and 1 let both of the latter
+// past checkCollision without a question, so a device replacing folder x with
+// a file x, sending the deletion of x/a.md and then the file, had the file
+// taken while another device's x/b.md, committed a moment before, was still
+// live inside it: every device then held a note inside a file, reported a
+// clash, and refused every new note in x as a collision until somebody
+// renamed something. The same race against the folder's deletion was already
+// refused here. A move to another name leaves its source's folder where it
+// was, implied by whatever is in it, so it is the collision rule's to judge.
 func checkEmptied(q querier, vaultID string, e Entry) error {
+	folder := e.Path
 	if !e.Deleted {
-		return nil
+		if e.Folder {
+			return nil
+		}
+		if e.Prev != "" {
+			if paths.Fold(e.Prev) != paths.Fold(e.Path) {
+				return nil
+			}
+			folder = e.Prev
+		}
+		was, err := liveState(q, vaultID, folder)
+		if err != nil {
+			return err
+		}
+		if !was.live || !was.folder {
+			return nil
+		}
 	}
 	// Every live path beneath is a key in [path + "/", path + "0"): "/" is
 	// 0x2F and "0" the byte after it, and the table compares bytes, so a
@@ -244,19 +275,23 @@ func checkEmptied(q querier, vaultID string, e Entry) error {
 	// folder under any spelling that folds alike: between the moves of a
 	// case-only folder rename, `notes` is live while `Notes/a.md` still is,
 	// and the note is in the folder on every disk that folds case.
-	fold := paths.Fold(e.Path)
+	fold := paths.Fold(folder)
 	var held string
 	err := q.QueryRow(`SELECT path FROM (
 	    SELECT path FROM live_paths WHERE vault_id = ? AND path > ? AND path < ?
 	    UNION ALL
 	    SELECT path FROM live_paths WHERE vault_id = ? AND fold > ? AND fold < ?)
 	  ORDER BY path LIMIT 1`,
-		vaultID, e.Path+"/", e.Path+"0", vaultID, fold+"/", fold+"0").Scan(&held)
+		vaultID, folder+"/", folder+"0", vaultID, fold+"/", fold+"0").Scan(&held)
 	if errNoRow(err) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if !e.Deleted {
+		return fmt.Errorf("%w: the folder %q cannot become a file while %q is live in it; "+
+			"a folder is made a file after everything in it has gone", ErrFolderNotEmpty, folder, held)
 	}
 	return fmt.Errorf("%w: %q cannot be deleted while %q is live in it; a folder is deleted after everything in it",
 		ErrFolderNotEmpty, e.Path, held)

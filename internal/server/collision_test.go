@@ -100,6 +100,57 @@ func TestAnEntryThatFreesAKeyGivesItToALaterOneInTheBatch(t *testing.T) {
 	}
 }
 
+// A folder that holds a note does not become a file (T58).
+//
+// The race is an ordinary one: a device replaces folder x with a file x, so it
+// sends the deletion of x/a.md and then the file, based on the folder's uid,
+// while another device has just put x/b.md in the folder. Rule 2 took the
+// file as an update of a live path without asking anything more, and every
+// device then held a note inside a file: each reported a clash, and every new
+// note in x was refused as a collision until somebody renamed something. Rule
+// 1 let a case-only move do the same. Both are refused `stale` now, as
+// deleting the folder is, because the write was prepared against a vault that
+// has changed since; once the folder is empty the file is taken.
+func TestAFolderHoldingANoteDoesNotBecomeAFile(t *testing.T) {
+	r := newRig(t)
+	a := r.dial("a")
+	a.hello(0)
+	b := r.dial("b")
+	b.hello(0)
+	a.sendJSON(wire.In{Op: "put", Path: "x", Chunks: []string{}, Meta: wire.PutMeta{Folder: true, MTime: 1}})
+	a.recvInto("have", nil)
+	folder := a.head("x")
+	a.put("x/a.md", "a note in x")
+	b.put("x/b.md", "put in x on the other device a moment before")
+
+	file, bodies := entryFor("x", "x is a file now")
+	gone := wire.PutEntry{Path: "x/a.md", Meta: wire.PutMeta{MTime: 6, Deleted: true}, Chunks: []string{}}
+	acks := a.putMany([]wire.PutEntry{gone, file}, bodies)
+	if acks.Results[0].UID == 0 || acks.Results[1].Code != wire.CodeStale ||
+		!strings.Contains(acks.Results[1].Msg, `"x/b.md"`) {
+		t.Fatalf("replacing folder x with a file while x/b.md is in it came back %+v", acks.Results)
+	}
+
+	// The same through a case-only move, which rule 1 lets through whatever
+	// the collision rule would say.
+	a.sendJSON(wire.In{Op: "put", Path: "X", Chunks: file.Chunks, PrevBase: folder,
+		Meta: wire.PutMeta{Size: file.Meta.Size, MTime: 7, Prev: "x"}})
+	if msg := a.expectErr(wire.CodeStale); !strings.Contains(msg, `"x/b.md"`) {
+		t.Fatalf("the refusal of the move does not name the note still in x: %s", msg)
+	}
+	if head := a.head("x"); head != folder {
+		t.Fatalf("x is at %d after the refusals, want the folder at %d", head, folder)
+	}
+
+	// Emptied, the folder becomes a file like any other path.
+	b.sendJSON(wire.In{Op: "put", Path: "x/b.md", Chunks: []string{}, Base: b.head("x/b.md"),
+		Meta: wire.PutMeta{MTime: 8, Deleted: true}})
+	b.recvInto("have", nil)
+	if acks := a.putMany([]wire.PutEntry{file}, bodies); acks.Results[0].UID == 0 {
+		t.Fatalf("an empty folder could not become a file: %+v", acks.Results)
+	}
+}
+
 // A case-only rename is allowed, one move at a time, which is how a client
 // renames a folder by case: each move keeps every folded key where it was.
 func TestACaseOnlyRenameIsNotACollision(t *testing.T) {

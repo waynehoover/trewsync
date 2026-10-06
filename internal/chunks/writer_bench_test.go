@@ -1,11 +1,50 @@
 package chunks
 
 import (
+	"crypto/rand"
 	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// BenchmarkWriterAddHeld is what a batch of sixteen 1 MiB bodies costs before
+// the disk: every body is already held, so place returns once it has checked
+// the body against its name and found it, and what is measured is the hashing
+// on the caller's goroutine, which an upload waits on, and on the writers'.
+//
+//	go test ./internal/chunks -run '^$' -bench WriterAddHeld -benchmem
+func BenchmarkWriterAddHeld(b *testing.B) {
+	s, err := New(filepath.Join(b.TempDir(), "chunks"), 1<<20)
+	if err != nil {
+		b.Fatal(err)
+	}
+	bodies := make([][]byte, 16)
+	names := make([]string, len(bodies))
+	for i := range bodies {
+		bodies[i] = make([]byte, 1<<20)
+		if _, err := rand.Read(bodies[i]); err != nil {
+			b.Fatal(err)
+		}
+		names[i] = Name(bodies[i])
+		if err := s.Put("v1", names[i], bodies[i]); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.SetBytes(int64(len(bodies)) << 20)
+	b.ReportAllocs()
+	for b.Loop() {
+		w := s.NewWriter("v1")
+		for i, body := range bodies {
+			if err := w.Add(names[i], body); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 // BenchmarkWriterWidth is where the value of Writers comes from.
 //

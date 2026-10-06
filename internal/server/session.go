@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strings"
@@ -37,10 +38,12 @@ type Session struct {
 	// the count, so the writer's decrements drove it negative and the byte bound
 	// switched itself off). Both are reserved before the frame goes on the
 	// channel and released after the write returns, so a zero means every frame
-	// has reached the socket. drained wakes a waiter when the writer has taken
-	// some away.
+	// has reached the socket. fanQueued is the share of queued that other
+	// goroutines put there, which has a budget of its own (FanoutQueueBytes,
+	// T55). drained wakes a waiter when the writer has taken some away.
 	queued    atomic.Int64
 	inflight  atomic.Int64
+	fanQueued atomic.Int64
 	drained   chan struct{}
 	dead      chan struct{}
 	closeOnce sync.Once
@@ -52,6 +55,11 @@ type Session struct {
 	// twice: it pings only when this is set, and it treats a ping that went
 	// unanswered while this was clear as no verdict. See keepalive.
 	reading atomic.Bool
+	// received counts the message bytes read off the connection, as they
+	// arrive rather than a message at a time, so keepalive can tell a peer
+	// whose pong is late behind what it is sending from one that has gone
+	// (T56). See readMsg.
+	received atomic.Int64
 
 	vaultID string
 	device  string
@@ -103,8 +111,13 @@ type Session struct {
 	saidSkewed bool
 
 	// counted is true while this session is in the server's pre-auth count,
-	// guarded by Server.sessMu (S19).
-	counted bool
+	// and admission is its place in the order sessions were admitted, both
+	// guarded by Server.sessMu (S19). heard is set once its first frame has
+	// arrived, which is what keeps it from being closed to make room for a
+	// newer connection (T61); see Server.admit.
+	counted   bool
+	admission int64
+	heard     atomic.Bool
 
 	// Guards the catch-up handover. Live changes buffer in pending until the
 	// backlog is on the wire; see handleHello for why the order matters.
@@ -131,6 +144,10 @@ type outFrame struct {
 	// final marks the one frame a revoked session is still sent: the notice
 	// that it was revoked. See writeLoop.
 	final bool
+	// fanout marks a frame another goroutine queued without waiting, a live
+	// batch or a notice, which counts against the fan-out budget rather than
+	// the session's own (T55). See trySendFrame.
+	fanout bool
 }
 
 // pendingChange is a live batch held back during catch-up, already marshalled.
@@ -149,7 +166,7 @@ func (s *Server) Handle(ctx context.Context, conn *websocket.Conn, remote string
 	conn.SetReadLimit(HelloReadLimit)
 	sess := &Session{
 		srv: s, conn: conn, ctx: ctx, remote: remote,
-		out:     make(chan outFrame, SendQueueDepth),
+		out:     make(chan outFrame, SendQueueDepth+FanoutQueueDepth),
 		drained: make(chan struct{}, 1),
 		dead:    make(chan struct{}),
 	}
@@ -162,17 +179,24 @@ func (s *Server) Handle(ctx context.Context, conn *websocket.Conn, remote string
 	// refusal carries no id, because it answers no request; a client reads an
 	// error before `ready` as the reason the connection is closing, and `busy`
 	// is the code.
-	if err := s.admit(sess); err != nil {
+	victim, err := s.admit(sess)
+	if err != nil {
 		s.log.Info("session refused", "remote", remote, "why", err)
 		_ = sess.fatalWith(wire.CodeBusy, err, ShutdownRetryAfter)
 		sess.drain(2 * time.Second)
 		sess.kill(nil)
 		return
 	}
+	if victim != nil {
+		// Closed on its own goroutine, since it is given a moment to read why,
+		// and this connection's hello should not wait on that (T61).
+		s.log.Info("closing a silent connection to make room", "remote", victim.remote, "for", remote)
+		go victim.makeRoom()
+	}
 	defer s.forget(sess)
 	go sess.keepalive()
 
-	err := sess.run()
+	err = sess.run()
 	if err != nil {
 		s.log.Info("session ended", "remote", remote, "vault", sess.vaultID, "err", err)
 	}
@@ -208,8 +232,7 @@ func (s *Session) writeLoop() {
 			// Released only now, after the write returned, so a zero on either
 			// counter means the frame has reached the socket rather than merely
 			// left the channel. drain relies on that (S10).
-			s.queued.Add(-int64(len(f.data)))
-			s.inflight.Add(-1)
+			s.release(f)
 			// Non-blocking, and one pending wake is enough: a waiter rechecks
 			// the counter rather than trusting the signal.
 			select {
@@ -281,6 +304,14 @@ func (s *Session) drain(timeout time.Duration) {
 //
 // The bytes are reserved before the frame is offered and given back if it is
 // refused, so the counter is never below what the writer will subtract.
+//
+// The session's own frames and the fan-out have a budget each (T55). The
+// own frames stop at SendQueueDepth frames and SendQueueBytes, counting
+// whatever else is queued, so they can never take the room the queue keeps
+// for a broadcast, FanoutQueueDepth frames and FanoutQueueBytes. A fan-out
+// frame is held to its own bytes alone, so however full the session's own
+// frames keep the queue, a broadcast is refused only when the fan-out itself
+// has piled up, which is a peer that has stopped reading.
 func (s *Session) enqueue(typ websocket.MessageType, data []byte) bool {
 	return s.enqueueFrame(outFrame{typ: typ, data: data})
 }
@@ -289,19 +320,42 @@ func (s *Session) enqueue(typ websocket.MessageType, data []byte) bool {
 // frame marked final reaches the queue.
 func (s *Session) enqueueFrame(f outFrame) bool {
 	n := int64(len(f.data))
-	if after := s.queued.Add(n); after > SendQueueBytes && after != n {
-		s.queued.Add(-n)
-		return false
+	if f.fanout {
+		if after := s.fanQueued.Add(n); after > FanoutQueueBytes && after != n {
+			s.fanQueued.Add(-n)
+			return false
+		}
+		s.queued.Add(n)
+	} else {
+		// Only the session's own goroutine queues its own frames, so nothing
+		// else can add one between this look and the reservation below.
+		if s.inflight.Load() >= SendQueueDepth {
+			return false
+		}
+		if after := s.queued.Add(n); after > SendQueueBytes && after != n {
+			s.queued.Add(-n)
+			return false
+		}
 	}
 	s.inflight.Add(1)
 	select {
 	case s.out <- f:
 		return true
 	default:
-		s.queued.Add(-n)
-		s.inflight.Add(-1)
+		s.release(f)
 		return false
 	}
+}
+
+// release gives back what a frame held of the budgets, once the writer has
+// written it or the queue has refused it.
+func (s *Session) release(f outFrame) {
+	n := int64(len(f.data))
+	s.queued.Add(-n)
+	if f.fanout {
+		s.fanQueued.Add(-n)
+	}
+	s.inflight.Add(-1)
 }
 
 // send blocks until the frame is queued.
@@ -335,13 +389,16 @@ func (s *Session) trySend(typ websocket.MessageType, data []byte) bool {
 	return s.trySendFrame(outFrame{typ: typ, data: data})
 }
 
-// trySendFrame is trySend for a frame already built.
+// trySendFrame is trySend for a frame already built. Everything sent this way
+// comes from another goroutine, or a timer, and counts against the fan-out's
+// budget rather than the session's own (T55).
 func (s *Session) trySendFrame(f outFrame) bool {
 	select {
 	case <-s.dead:
 		return false
 	default:
 	}
+	f.fanout = true
 	if !s.enqueueFrame(f) {
 		s.srv.metrics.Evicted()
 		s.kill(errors.New("send queue overflow, peer too slow"))
@@ -447,6 +504,12 @@ func (s *Session) takeID(m wire.In) error {
 // A client that answers pings and sends nothing else holds a session open. That
 // is a slow-loris in a system built for one person's own devices behind a
 // tunnel. Per-session queues and frame sizes are bounded.
+//
+// The message is read readStep bytes at a time, as conn.Read would read it
+// whole, so that received moves while a large body is still arriving (T56).
+// Each read returns only once its whole step has arrived, so the step is the
+// grain of the liveness keepalive judges by: at 16 KiB, any uplink faster than
+// about 9 kbit/s shows progress within a pong's fifteen seconds.
 func (s *Session) readMsg() (websocket.MessageType, []byte, error) {
 	// A pong is processed only inside this Read, so keepalive may ping only
 	// while it is running. The flag is cleared on the way out because the
@@ -454,8 +517,29 @@ func (s *Session) readMsg() (websocket.MessageType, []byte, error) {
 	// be seen.
 	s.reading.Store(true)
 	defer s.reading.Store(false)
-	return s.conn.Read(s.ctx)
+	typ, r, err := s.conn.Reader(s.ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	b := make([]byte, 0, 512)
+	for {
+		n, err := r.Read(b[len(b):min(cap(b), len(b)+readStep)])
+		b = b[:len(b)+n]
+		s.received.Add(int64(n))
+		if errors.Is(err, io.EOF) {
+			return typ, b, nil
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		if len(b) == cap(b) {
+			b = append(b, 0)[:len(b)]
+		}
+	}
 }
+
+// readStep is the most readMsg asks of the connection at once; see there.
+const readStep = 16 << 10
 
 // keepalive asks a quiet connection whether it is still there.
 //
@@ -488,6 +572,7 @@ func (s *Session) keepalive() {
 			if hook := s.srv.beforePing.Load(); hook != nil {
 				(*hook)()
 			}
+			before := s.received.Load()
 			ctx, cancel := context.WithTimeout(s.ctx, s.srv.pongWait)
 			err := s.conn.Ping(ctx)
 			cancel()
@@ -500,6 +585,18 @@ func (s *Session) keepalive() {
 				// and the pong is sitting unprocessed behind it. That is not a
 				// verdict on the connection. The next tick asks again once the
 				// session is back in a read.
+				continue
+			}
+			if s.received.Load() != before {
+				// Bytes kept arriving while the pong did not (T56). A device
+				// uploading over a slow link writes its pong behind the bodies
+				// it has already handed its socket, and Node's WebSocket queues
+				// up to megabytes there, so below about 2.2 Mbit/s the pong
+				// came after PongWait and the upload was cut off a minute into
+				// every connection; below about 150 kbit/s a 1 MiB body could
+				// not arrive inside one, and that file never uploaded. A peer
+				// whose bytes are arriving has not gone; one whose bytes stop
+				// is judged at the next tick.
 				continue
 			}
 			// Closing the connection ends the read this session is parked on,
@@ -569,6 +666,17 @@ func (s *Session) shutdown() {
 	s.kill(nil)
 }
 
+// makeRoom closes this session, which has sent nothing since it connected, so
+// a newer connection can have its pre-auth slot (T61). It is told why, as
+// `busy`, in case it is a device on a link slow enough to try again.
+func (s *Session) makeRoom() {
+	if b, err := json.Marshal(s.errFrame(0, wire.CodeBusy, errMadeRoom.Error(), ShutdownRetryAfter)); err == nil {
+		s.trySend(websocket.MessageText, b)
+	}
+	s.drain(time.Second)
+	s.kill(errors.New("closed to make room for a newer connection"))
+}
+
 // evict closes this session from another goroutine because the device it
 // authenticated as was revoked.
 //
@@ -610,6 +718,9 @@ func (s *Session) run() error {
 	if err != nil {
 		return err
 	}
+	// Whatever it turns out to be, this connection has spoken, and is being
+	// answered rather than holding a slot in silence (T61).
+	s.heard.Store(true)
 	if typ != websocket.MessageText {
 		return s.fatal(wire.CodeProtoState,
 			fmt.Errorf("first frame must be text hello, got %v", typ))
@@ -810,6 +921,19 @@ func (s *Session) handleHello(m wire.In) error {
 // yesterday. The log says which, for the operator.
 var errNotAuthorised = errors.New("not authorised for this vault")
 
+// errCredentialUnchecked is what a hello is told when the store failed while
+// its credential was being looked up: a device's row, or an invite being
+// redeemed (T60).
+//
+// Fixed, like errNotAuthorised, because nothing has authenticated yet. The
+// refusal used to carry the store's own error, "SQL logic error: no such
+// table: devices" or whatever else SQLite said about a database in trouble,
+// to anyone on the port, which made it the one pre-auth answer that described
+// the server rather than the request. The detail is logged for the operator.
+// It is `internal`, so a client retries, and a redemption that did commit is
+// recognised on the retry (plan/protocol.md, "Invite redemption", step 2).
+var errCredentialUnchecked = errors.New("the server could not check this credential; try again in a moment")
+
 // refuseUnserved is the served-vault check (F19), made on both routes once
 // the request's own shape has been judged and before anything is looked up by
 // the name the caller sent, so an invite for an unserved vault is refused
@@ -865,7 +989,8 @@ func (s *Session) helloAsDevice(m wire.In) error {
 	}
 	_, stored, ok, err := s.srv.st.DeviceByID(m.Vault, m.DeviceID)
 	if err != nil {
-		return s.fatal(wire.CodeInternal, err)
+		s.srv.log.Error("device lookup failed", "remote", s.remote, "vault", m.Vault, "err", err)
+		return s.fatal(wire.CodeInternal, errCredentialUnchecked)
 	}
 	// The token is the device's 32 random bytes in unpadded base64url, and
 	// anything else is refused (plan/protocol.md, "Device session"). The
@@ -1061,8 +1186,8 @@ func (s *Session) helloAsInvite(m wire.In) error {
 	case errors.Is(err, store.ErrBadEntry):
 		return s.fatal(wire.CodeBadEntry, err)
 	default:
-		s.srv.log.Error("redeem failed", "vault", m.Vault, "err", err)
-		return s.fatal(wire.CodeInternal, errors.New("the invite could not be redeemed: "+err.Error()))
+		s.srv.log.Error("redeem failed", "remote", s.remote, "vault", m.Vault, "err", err)
+		return s.fatal(wire.CodeInternal, errCredentialUnchecked)
 	}
 
 	s.srv.log.Info("invite redeemed", "remote", s.remote, "vault", m.Vault,
@@ -1093,10 +1218,17 @@ var errRevokedSelf = errors.New("this device revoked itself, closing")
 func checkName(what, name string, max int) error { return store.CheckName(what, name, max) }
 
 // replay sends the backlog as batches and returns the cursor it reached.
+//
+// Each batch is bounded by the batch budget `ready` advertised as well as by
+// count (T57): a client parses no text frame longer than twice that budget,
+// and two hundred entries naming hundreds of chunks each were megabytes past
+// it, refused on every reconnect at the same cursor. A batch is cut short
+// rather than sent over the budget, and carries one entry alone when that one
+// is over it by itself.
 func (s *Session) replay(vaultID string, cursor int64) (int64, int, error) {
 	sent := 0
 	for {
-		b, ok, err := s.srv.st.NextBatch(vaultID, cursor, s.srv.batchSize)
+		b, ok, err := s.srv.st.NextBatchWithin(vaultID, cursor, s.srv.batchSize, s.srv.maxBatchBytes)
 		if err != nil {
 			return cursor, sent, s.fatal(wire.CodeInternal, err)
 		}
@@ -2186,7 +2318,7 @@ func kindOf(e store.Entry) string {
 }
 
 // handleFetch streams the requested chunk bodies as binary frames, in the order
-// requested, each one framed by frame.Encode.
+// requested, each one framed by frame.EncodeWithHeadroom.
 //
 // Every chunk is checked to be present, and then read and checked against its
 // own name, before any frame is sent. Discovering the third of five is missing
@@ -2251,10 +2383,15 @@ func (s *Session) handleFetch(m wire.In) error {
 	// merely held. The guarantee is untouched either way: every body is
 	// verified before the header, and nothing here decides whether to verify,
 	// only whether to remember.
+	//
+	// Each body is read with a spare byte in front of it, where a raw frame's
+	// marker goes, so one that does not deflate, most of an attachment, is
+	// sent as it was read rather than copied a megabyte at a time to make room
+	// for one byte (frame.EncodeWithHeadroom).
 	kept := make(map[string][]byte, len(m.Chunks))
 	var keptBytes int64
 	for i, n := range m.Chunks {
-		body, err := s.srv.st.Chunks().Get(s.vaultID, n)
+		body, err := s.srv.st.Chunks().GetWithHeadroom(s.vaultID, n)
 		if err != nil {
 			s.quarantineIfCorrupt(n, err)
 			return s.reject(wire.CodeNoChunk,
@@ -2281,7 +2418,7 @@ func (s *Session) handleFetch(m wire.In) error {
 			// disk is reported here rather than shipped to a device that would
 			// refuse it for reasons it cannot diagnose.
 			var err error
-			body, err = s.srv.st.Chunks().Get(s.vaultID, n)
+			body, err = s.srv.st.Chunks().GetWithHeadroom(s.vaultID, n)
 			if err != nil {
 				s.quarantineIfCorrupt(n, err)
 				// It verified a moment ago and cannot be read now, so the disk
@@ -2296,7 +2433,7 @@ func (s *Session) handleFetch(m wire.In) error {
 		// Framed here and nowhere else, at the transport boundary: deflated
 		// when that is shorter, raw otherwise, so every frame is at most one
 		// byte longer than the chunk it carries.
-		if err := s.writeBinary(frame.Encode(body)); err != nil {
+		if err := s.writeBinary(frame.EncodeWithHeadroom(body)); err != nil {
 			return err
 		}
 	}

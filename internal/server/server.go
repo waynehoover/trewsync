@@ -55,8 +55,10 @@ const (
 	// MaxPreAuth caps connections that have not completed hello, across every
 	// vault, and HelloTimeout is how long one may take to send it (S19). The
 	// cap applies before authentication: a port scanner opening
-	// sockets held a goroutine and a buffer each for ever. Past the cap a new
-	// connection is refused with `busy`; past the deadline a silent one is told
+	// sockets held a goroutine and a buffer each for ever. Past the cap the
+	// connection that has waited longest without sending anything is closed
+	// to make room (T61), and a new one is refused with `busy` only when every
+	// waiting connection has spoken; past the deadline a silent one is told
 	// `protostate` and closed. Both are generous for anything that is a device.
 	MaxPreAuth   = 32
 	HelloTimeout = 10 * time.Second
@@ -98,12 +100,35 @@ const (
 	// treated as gone.
 	PongWait = 15 * time.Second
 
-	// SendQueueDepth is buffered frames per peer before it is dropped as too
-	// slow. Sized for a burst of fan-out, not for a catch-up: catch-up runs on
-	// the session's own goroutine and blocks rather than buffering.
+	// SendQueueDepth is how many of a session's own frames, its replies,
+	// catch-up and fetch bodies, may be queued before it waits for room.
+	// Catch-up and fetches run on the session's own goroutine and wait rather
+	// than buffering.
 	SendQueueDepth = 256
 
-	// SendQueueBytes bounds what one peer may have waiting in memory.
+	// FanoutQueueDepth and FanoutQueueBytes are room kept apart for what other
+	// sessions' commits send a peer, live batches and notices, which cannot
+	// wait and drop the peer when there is none (T55).
+	//
+	// The two used to share one budget, which a fetch keeps full on purpose:
+	// send waits for room, and that is the backpressure. Small chunks fill the
+	// frames long before the bytes, so a fetch longer than the socket buffers
+	// kept the queue full from end to end, and one save on any other device
+	// dropped a phone in the middle of its first sync; in a vault somebody
+	// kept typing into, the phone never finished. The queue now holds both,
+	// and a session's own frames stop at their own limits, so a broadcast
+	// always finds this much room however full a fetch keeps the rest.
+	//
+	// A whole batch's worth of frames, because one putmany of that many
+	// entries is that many broadcasts in a row, faster than any peer reads
+	// them. The bytes match SendQueueBytes, so a peer that has stopped reading
+	// altogether holds at most twice that, and is dropped once a burst of that
+	// size is waiting.
+	FanoutQueueDepth = wire.MaxBatchEntries
+	FanoutQueueBytes = SendQueueBytes
+
+	// SendQueueBytes bounds what a session's own frames may have waiting in
+	// memory; FanoutQueueBytes, above, bounds the rest.
 	//
 	// The depth above bounds frames, and a frame carrying a chunk body can be a
 	// megabyte, so a peer that stopped reading held 256 of them: measured at
@@ -160,10 +185,12 @@ type Server struct {
 
 	// maxPreAuth and helloTimeout are MaxPreAuth and HelloTimeout unless a test
 	// lowers them. preAuth counts connections between accept and a completed
-	// hello, guarded by sessMu.
+	// hello, and admissions numbers every connection admitted, so the one that
+	// has waited longest can be told apart (T61); both guarded by sessMu.
 	maxPreAuth   int
 	helloTimeout time.Duration
 	preAuth      int
+	admissions   int64
 
 	// maxBatchBytes and maxFetchBytes are the wire constants unless a test
 	// lowers them. One field each for advertising and enforcing, for the same
@@ -343,20 +370,46 @@ type Server struct {
 var errShuttingDown = errors.New("this server is shutting down, reconnect in a moment")
 
 // errTooManyPreAuth is the reason a connection is refused when too many others
-// have connected and not yet said hello (S19).
+// have connected and not yet said hello, and every one of them has at least
+// sent it (S19, T61).
 var errTooManyPreAuth = errors.New("too many connections are waiting to authenticate, try again in a moment")
 
-// admit registers a session, unless the server is shutting down or too many
-// sessions are still waiting to say hello. The reason is returned so the
-// refusal can say which.
-func (s *Server) admit(sess *Session) error {
+// errMadeRoom is what a connection is told when it is closed to make room for
+// a newer one, having sent nothing since it connected (T61).
+var errMadeRoom = errors.New("too many connections are waiting to authenticate, and this one " +
+	"had sent nothing for longest; reconnect and send hello at once")
+
+// admit registers a session, unless the server is shutting down. The reason is
+// returned so the refusal can say which.
+//
+// Past the pre-auth cap it makes room rather than refusing (T61): the session
+// that has waited longest without its first frame arriving leaves the count,
+// and is returned for the caller to close. Refusing the newcomer let anybody
+// holding MaxPreAuth sockets open in silence, each reopened when its hello
+// deadline closed it, keep every device out for as long as they cared to. A
+// device sends its hello the moment it connects, so the one that has said
+// nothing for longest is the one least likely to be a device. A connection
+// whose hello has arrived is being answered and is never chosen; when every
+// waiting connection is one of those, the newcomer is refused as before.
+func (s *Server) admit(sess *Session) (victim *Session, err error) {
 	s.sessMu.Lock()
 	defer s.sessMu.Unlock()
 	if s.closing {
-		return errShuttingDown
+		return nil, errShuttingDown
 	}
 	if s.preAuth >= s.maxPreAuth {
-		return errTooManyPreAuth
+		for other := range s.sessions {
+			if other.counted && !other.heard.Load() && (victim == nil || other.admission < victim.admission) {
+				victim = other
+			}
+		}
+		if victim == nil {
+			return nil, errTooManyPreAuth
+		}
+		// Out of the count now, so the slot is the newcomer's at once, and the
+		// victim's own forget has nothing left to release.
+		victim.counted = false
+		s.preAuth--
 	}
 	if s.sessions == nil {
 		s.sessions = make(map[*Session]struct{})
@@ -365,9 +418,11 @@ func (s *Server) admit(sess *Session) error {
 		s.sessionsDone = make(chan struct{})
 	}
 	s.sessions[sess] = struct{}{}
+	s.admissions++
+	sess.admission = s.admissions
 	sess.counted = true
 	s.preAuth++
-	return nil
+	return victim, nil
 }
 
 // authenticated moves a session out of the pre-auth count. Called once, when

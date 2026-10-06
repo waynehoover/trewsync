@@ -867,7 +867,9 @@
   "collisions": {
     "note": [
       "live is the set of live entries (folder marks a folder entry); op is one create or move.",
-      "Evaluated one op at a time; a batch applies its entries in order, each against the state the earlier ones left."
+      "Evaluated one op at a time; a batch applies its entries in order, each against the state the earlier ones left.",
+      "expect is ok, collision, or stale: a live folder entry made a file while something is live in it,",
+      "which the server refuses as it refuses deleting that folder, and judges before the collision rule."
     ],
     "scenarios": [
       {
@@ -1191,6 +1193,73 @@
         "op": {
           "type": "create",
           "path": "Notes.md"
+        },
+        "expect": "ok"
+      },
+      {
+        "name": "a folder entry with a note in it, made a file",
+        "live": [
+          {
+            "path": "x",
+            "folder": true
+          },
+          {
+            "path": "x/a.md"
+          }
+        ],
+        "op": {
+          "type": "create",
+          "path": "x"
+        },
+        "expect": "stale"
+      },
+      {
+        "name": "a folder entry with a note in it, made a file by a case-only move",
+        "live": [
+          {
+            "path": "x",
+            "folder": true
+          },
+          {
+            "path": "x/a.md"
+          }
+        ],
+        "op": {
+          "type": "move",
+          "prev": "x",
+          "path": "X"
+        },
+        "expect": "stale"
+      },
+      {
+        "name": "an empty folder entry, made a file",
+        "live": [
+          {
+            "path": "x",
+            "folder": true
+          }
+        ],
+        "op": {
+          "type": "create",
+          "path": "x"
+        },
+        "expect": "ok"
+      },
+      {
+        "name": "a folder entry with a note in it, written again as a folder",
+        "live": [
+          {
+            "path": "x",
+            "folder": true
+          },
+          {
+            "path": "x/a.md"
+          }
+        ],
+        "op": {
+          "type": "create",
+          "path": "x",
+          "folder": true
         },
         "expect": "ok"
       }

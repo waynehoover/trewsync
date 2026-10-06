@@ -928,9 +928,10 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 			return OpResult{}, refused(opID, OpCodeCollision, e.Path, 0, err)
 		case errors.Is(err, ErrStale):
 			// The base checks above are writeEntry's own, so this is reached
-			// only by a folder deletion with something live still in it
-			// (ErrFolderNotEmpty), one not marked EmptyFolder: an undo's is
-			// refused above as not_empty.
+			// only by ErrFolderNotEmpty: a folder deletion with something live
+			// still in it, one not marked EmptyFolder (an undo's is refused
+			// above as not_empty), or a live folder entry being made a file
+			// while something is live beneath it (T58).
 			return OpResult{}, refused(opID, OpCodeStale, e.Path, head, err)
 		case errors.Is(err, ErrBadEntry), errors.Is(err, ErrUnknownVault):
 			return OpResult{}, refused(opID, OpCodeInternal, e.Path, 0, err)

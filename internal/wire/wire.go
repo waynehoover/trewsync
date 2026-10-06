@@ -292,8 +292,25 @@ func (p PutEntry) Entry(device string) store.Entry {
 		Deleted: p.Meta.Deleted,
 		Device:  device,
 		Prev:    p.Meta.Prev,
-		Chunks:  p.Chunks,
+		Chunks:  chunkList(p.Chunks),
 	}
+}
+
+// chunkList is the chunk names a put carried, as an array even when the put
+// carried none (T59).
+//
+// A deletion or a folder has no chunks, and a writer may send null for them or
+// leave the field out, which both decode to nil. The committed entry is what
+// every other device is sent, and a nil list marshals to "chunks":null, which
+// the client's batch check refuses as a protocol error: one writer's omission
+// used to drop every other connected device. The store's read paths already
+// give an empty array (store.Entry.Chunks); this is the same rule where the
+// entry is made rather than where it is read.
+func chunkList(names []string) []string {
+	if names == nil {
+		return []string{}
+	}
+	return names
 }
 
 // MaxBatchEntries bounds one batched put.
@@ -365,7 +382,7 @@ func (in In) Entry(device string) store.Entry {
 		Deleted: in.Meta.Deleted,
 		Device:  device,
 		Prev:    in.Meta.Prev,
-		Chunks:  in.Chunks,
+		Chunks:  chunkList(in.Chunks),
 	}
 }
 

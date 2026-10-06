@@ -290,6 +290,27 @@ def collision(live: list[dict], op: dict, table: dict[int, str]) -> str:
     return "ok"
 
 
+def folder_not_empty(live: list[dict], op: dict, table: dict[int, str]) -> bool:
+    """plan/protocol.md "Paths": a live folder entry made a file while something is live in it.
+
+    By an update of its own path, or by a move that changes only its case, which rules 2 and 1
+    let past the collision rule. The server refuses it as `stale`, as it refuses deleting that
+    folder, and judges it before the collision rule.
+    """
+    if op.get("folder"):
+        return False
+    if op["type"] == "create":
+        folder = op["path"]
+    elif fold(op["prev"], table) == fold(op["path"], table):
+        folder = op["prev"]
+    else:
+        return False
+    if not any(e["path"] == folder and e.get("folder") for e in live):
+        return False
+    inside = fold(folder, table) + "/"
+    return any(e["path"].startswith(folder + "/") or fold(e["path"], table).startswith(inside) for e in live)
+
+
 def collision_vectors(table: dict[int, str]) -> list[dict]:
     def f(path: str) -> dict:
         return {"path": path}
@@ -336,10 +357,19 @@ def collision_vectors(table: dict[int, str]) -> list[dict]:
             "collision",
         ),
         ("a different name is no collision", [f("Note.md")], {"type": "create", "path": "Notes.md"}, "ok"),
+        ("a folder entry with a note in it, made a file", [d("x"), f("x/a.md")], {"type": "create", "path": "x"}, "stale"),
+        (
+            "a folder entry with a note in it, made a file by a case-only move",
+            [d("x"), f("x/a.md")],
+            {"type": "move", "prev": "x", "path": "X"},
+            "stale",
+        ),
+        ("an empty folder entry, made a file", [d("x")], {"type": "create", "path": "x"}, "ok"),
+        ("a folder entry with a note in it, written again as a folder", [d("x"), f("x/a.md")], {"type": "create", "path": "x", "folder": True}, "ok"),
     ]
     out = []
     for name, live, op, expect in scenarios:
-        got = collision(live, op, table)
+        got = "stale" if folder_not_empty(live, op, table) else collision(live, op, table)
         if got != expect:
             sys.exit(f"collision reference disagrees with the stated expectation for {name!r}: {got} != {expect}")
         out.append({"name": name, "live": live, "op": op, "expect": expect})
@@ -749,6 +779,8 @@ def main() -> None:
         "note": [
             "live is the set of live entries (folder marks a folder entry); op is one create or move.",
             "Evaluated one op at a time; a batch applies its entries in order, each against the state the earlier ones left.",
+            "expect is ok, collision, or stale: a live folder entry made a file while something is live in it,",
+            "which the server refuses as it refuses deleting that folder, and judges before the collision rule.",
         ],
         "scenarios": collision_vectors(table),
     }
