@@ -2026,6 +2026,41 @@ describe("a note edited while the other side of its merge is in flight (F01)", (
     // And a's paragraph is not lost either: it is beside the note.
     expect(everywhere(b)).toContain("First, from a.");
   }, 240_000);
+
+  /**
+   * And what goes up for the note is what is on the disk now (T04).
+   *
+   * Keeping both uploads the note too, and the upload named the chunks the
+   * scan had cut, which are of the version this merge read and not of the one
+   * typed since. The server lacked them, so the body read found the change and
+   * failed the write; it was only the next pass that sent the note.
+   */
+  it("sends the note as it is on the disk, in the same pass (T04)", async () => {
+    await fresh();
+    const a = await device("a");
+    const racy = new EditsAfterLooking();
+    const b = await device("b", undefined, racy);
+
+    const base = "# Note\n\nFirst paragraph.\n\nSecond paragraph.\n";
+    await a.vault.edit("note.md", base);
+    await convergeBoth(a, b);
+
+    await a.vault.edit("note.md", base.replace("First paragraph.", "First, from a."));
+    await a.settle();
+    await receiveCommitted(b.transport);
+    await b.vault.edit("note.md", base.replace("Second paragraph.", "Second, from b."));
+    const typed = base.replace("Second paragraph.", "Third, typed during the merge.");
+    racy.text_ = typed;
+    racy.armed = "note.md";
+
+    const report = await b.engine.sync();
+
+    expect(report.conflicted).toBe(1);
+    expect(report.retrying, "the note's upload failed and waits for another pass").toBe(0);
+    const [newest] = await b.transport.history("note.md", { limit: 1 });
+    const held = new TextDecoder().decode(await b.engine.contentOf(newest!.uid));
+    expect(held, "the server's newest version of the note is not what is on the disk").toBe(typed);
+  }, 240_000);
 });
 
 describe("a merge against an ancestor that has been purged", () => {

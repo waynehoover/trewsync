@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { chunkName } from "./digest.ts";
-import { FakeSocket, engineOnFakeSocket, settle } from "./fake-socket.ts";
+import { CommittingServer, FakeSocket, engineOnFakeSocket, settle } from "./fake-socket.ts";
 import type { WireEntry } from "./transport.ts";
 import { MemoryVault } from "./vault.ts";
 
@@ -117,6 +117,46 @@ describe("a note edited while its next version is in flight (F01)", () => {
       `nothing beside the note: ${JSON.stringify(copies)}`,
     ).toContain("two");
     expect(report.conflicted, "keeping both was not reported as a conflict").toBe(1);
+  });
+
+  /**
+   * What the note goes up as, once both are kept (T04).
+   *
+   * The upload of the note named the chunks the scan had cut, which are the
+   * old synced version and which the server already holds, so it answered
+   * `have` and committed the old text on top of the other device's: every
+   * other device then downloaded "one" over "two", and the edit made here went
+   * up only on the next pass.
+   */
+  it("sends the edit that is on the disk, not the version the scan saw (T04)", async () => {
+    const { engine, socket, vault } = await engineOnFakeSocket();
+    const server = new CommittingServer(socket);
+    socket.raw({
+      op: "batch",
+      from: 1,
+      to: 1,
+      entries: [await server.version(1, "note.md", "one")],
+    });
+    await accepted(engine, 1);
+    await engine.sync({ coalesceWrites: false });
+    expect(vault.text("note.md")).toBe("one");
+
+    const two = await server.version(2, "note.md", "two", { mtime: 2000, device: "phone" });
+    server.duringFetch = async () => {
+      await vault.write("note.md", enc.encode("mine"), { mtime: 5000, ctime: 1000 });
+    };
+    socket.raw({ op: "batch", from: 2, to: 2, entries: [two] });
+    await accepted(engine, 1);
+    const report = await engine.sync({ coalesceWrites: false });
+
+    expect(vault.text("note.md")).toBe("mine");
+    expect(report.conflicted).toBe(1);
+    const sent = server.committed.map((c) => ({ path: c.path, text: server.text(c) }));
+    expect(
+      sent.filter((c) => c.path === "note.md").map((c) => c.text),
+      `what went up: ${JSON.stringify(sent)}`,
+    ).toEqual(["mine"]);
+    expect(sent.filter((c) => c.path !== "note.md").map((c) => c.text)).toEqual(["two"]);
   });
 
   it("keeps a note created under the path while a first version is in flight", async () => {

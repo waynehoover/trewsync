@@ -4787,8 +4787,14 @@ export class Engine {
       version: d.remote.uid,
     });
     // The entry is re-read from disk on the next pass, and must not claim the
-    // scan's stale shape in the meantime.
+    // scan's stale shape in the meantime. Nor in this one (T04): `conflict`
+    // uploads the note, and `planUpload` sends whatever names the entry holds,
+    // which are the scan's, the old synced version the server already has. It
+    // answered `have` and committed the old text over the other device's, and
+    // the edit that caused all this went up only on the next pass.
     const entry = this.entryFor(d.path);
+    entry.hash = "";
+    entry.chunks = [];
     await this.conflict(d.path, entry, d.remote, report, "changed during the fetch", content);
   }
 
@@ -5131,6 +5137,11 @@ export class Engine {
         // is what a divergence this pass cannot resolve has always meant.
         const why = "it changed while the other side of the merge was being fetched";
         this.log("merge refused", path, why);
+        // And the note goes up as it is now, not under the names the scan cut
+        // from the version this merge read (T04). The server lacked those, so
+        // reading the bodies found the change and failed the write.
+        entry.hash = "";
+        entry.chunks = [];
         await this.conflict(path, entry, remote, report, why, theirsBytes);
         return;
       }
