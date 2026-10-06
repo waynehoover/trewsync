@@ -324,7 +324,10 @@ export async function run(argv: readonly string[], terminal: Console): Promise<n
     // is for a bug in this program; the common failures are a server that is
     // not running and a string that was pasted wrong, and those deserve to
     // be readable.
-    const message = withRecovery(err);
+    // A command stopped by a signal fails however its closed connection or
+    // input happened to say so; said once in plain words (T21).
+    const why = withRecovery(err);
+    const message = stopping.asked ? `stopped, as asked (${why})` : why;
     if (args.json) io.out(safeJson({ ok: false, error: message }));
     else io.err(`trew: ${message}`);
     return 1;

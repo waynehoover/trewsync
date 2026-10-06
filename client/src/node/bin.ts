@@ -11,6 +11,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     stoppedBy ??= signal;
     interrupt();
+    // `trew pair -` may be waiting on standard input, which nothing else ends.
+    process.stdin.destroy();
     setTimeout(() => process.kill(process.pid, signal), 5_000).unref();
   });
 }
