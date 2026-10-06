@@ -296,6 +296,8 @@ Refusals, all of the request and none of the session unless it says so, with the
 
 Unchanged: `perFileMax` default 64 MiB, `chunkMax` 1 MiB, `maxChunks` 65,536, `maxBatchBytes` 16 MiB, `maxFetchBytes` 64 MiB, 256 entries per batch, request ids 1 to 2^32-1, hello read limit 64 KiB, post-auth read limit 32 MiB, ping every 45 s with a 15 s pong wait.
 
+**Settled for T57: a catch-up batch is bounded by bytes too.** It is at most 200 entries and at most `maxBatchBytes` of JSON, the budget `ready` advertises, cut short rather than sent over it; an entry over that by itself is sent as a batch of one, the only batch that can carry it. A count alone let two hundred versions of an attachment of 256 chunks make a 3.4 MB batch under a budget lowered to 1 MiB, which a client that parses at most twice the budget refused on every reconnect.
+
 The four upload budgets, stated separately: **raw** bytes, the sum of declared sizes in one `putmany`, at most `maxBatchBytes`; **frame** bytes on the wire, one binary frame per chunk of at most `chunkMax + 1`; **control** bytes, one text frame at most the post-auth read limit (the hello at most 64 KiB); and the **aggregate** per request, the raw budget, since a frame's marker byte is the only overhead and is bounded per frame. Each is pinned at its boundary by a fixture in M1.
 
 ## MCP over HTTP

@@ -1034,6 +1034,24 @@ type Batch struct {
 // be delivered with an empty chunk list: a note that reads as emptied rather
 // than as an error.
 func (s *Store) NextBatch(vaultID string, cursor int64, limit int) (Batch, bool, error) {
+	return s.NextBatchWithin(vaultID, cursor, limit, 0)
+}
+
+// NextBatchWithin is NextBatch bounded by size as well as by count (T57): it
+// stops adding entries once their JSON could pass maxBytes, and always returns
+// at least one, which is the only way an entry larger than the bound by itself
+// is ever delivered. Zero is no bound.
+//
+// A count alone is no bound on a frame. A client parses no text frame longer
+// than twice the batch budget it was advertised, and two hundred versions of
+// an attachment of 256 chunks are 3.4 MB of chunk names: under a budget
+// lowered to a mebibyte, a device that far behind was sent that batch,
+// refused it, reconnected at the same cursor and was sent it again, for ever.
+// An entry may name 65,536 chunks, so two hundred of them were also about
+// 880 MB held here at once. The size is worked out from the rows before any
+// chunk list is read (wireBytes), so only the entries the batch keeps have
+// theirs read at all.
+func (s *Store) NextBatchWithin(vaultID string, cursor int64, limit int, maxBytes int64) (Batch, bool, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
@@ -1062,12 +1080,46 @@ func (s *Store) NextBatch(vaultID string, cursor int64, limit int) (Batch, bool,
 	if len(entries) == 0 {
 		return Batch{}, false, nil
 	}
+	if maxBytes > 0 {
+		// The batch's own framing, from and to at their widest, comes out of
+		// the budget first. The range then ends at the last entry kept, which
+		// is still a covered range: nothing lies between it and the next.
+		used := int64(batchFraming)
+		for i, e := range entries {
+			used += e.wireBytes()
+			if i > 0 && used > maxBytes {
+				entries = entries[:i]
+				break
+			}
+		}
+	}
 
 	b := Batch{From: cursor + 1, To: entries[len(entries)-1].UID, Entries: entries}
 	if err := attachChunks(tx, vaultID, b.Entries); err != nil {
 		return Batch{}, false, err
 	}
 	return b, true, nil
+}
+
+// batchFraming is the most a batch's JSON adds around its entries:
+// {"op":"batch","from":N,"to":N,"entries":[]} with both numbers at their
+// widest, twenty characters each.
+const batchFraming = 128
+
+// wireBytes is the most bytes e's JSON can take in a frame, its chunk names
+// included, worked out from the row rather than by encoding it, so a batch can
+// be cut before its chunk lists are read (T57).
+//
+// An upper bound rather than an estimate. Each string is counted at six bytes
+// a byte, which is encoding/json's widest escape (\u00XX, and � for a
+// byte that is not UTF-8); every number at twenty characters; and each chunk
+// name at the 64 hex characters, two quotes and a comma it always is. The rest
+// is the field names and punctuation, about 110 bytes, given 256, which also
+// covers the comma between entries and an operation reference a history entry
+// may carry.
+func (e Entry) wireBytes() int64 {
+	const fields = 256 + 5*20
+	return fields + 6*int64(len(e.Path)+len(e.Device)+len(e.Prev)) + int64(chunks.NameLen+3)*int64(e.nChunks)
 }
 
 // EntryByUID returns one version, with its chunk list.

@@ -1133,10 +1133,17 @@ var errRevokedSelf = errors.New("this device revoked itself, closing")
 func checkName(what, name string, max int) error { return store.CheckName(what, name, max) }
 
 // replay sends the backlog as batches and returns the cursor it reached.
+//
+// Each batch is bounded by the batch budget `ready` advertised as well as by
+// count (T57): a client parses no text frame longer than twice that budget,
+// and two hundred entries naming hundreds of chunks each were megabytes past
+// it, refused on every reconnect at the same cursor. A batch is cut short
+// rather than sent over the budget, and carries one entry alone when that one
+// is over it by itself.
 func (s *Session) replay(vaultID string, cursor int64) (int64, int, error) {
 	sent := 0
 	for {
-		b, ok, err := s.srv.st.NextBatch(vaultID, cursor, s.srv.batchSize)
+		b, ok, err := s.srv.st.NextBatchWithin(vaultID, cursor, s.srv.batchSize, s.srv.maxBatchBytes)
 		if err != nil {
 			return cursor, sent, s.fatal(wire.CodeInternal, err)
 		}

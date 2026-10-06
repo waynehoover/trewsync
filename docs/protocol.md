@@ -173,6 +173,10 @@ and connection-closing errors are handled separately from request replies.
 Its range covers `from <= uid <= to`. Clients require `from == cursor + 1`.
 Purge can leave holes, so a covered range need not contain every UID.
 
+A catch-up batch holds at most 200 entries and at most `maxBatchBytes` of JSON,
+the budget `ready` advertises; an entry larger than that on its own arrives as
+a batch of one.
+
 The server orders batches by UID, including concurrent commits. A device's own
 write is delivered to it as an empty batch that advances its cursor. Live
 changes during catch-up are held and delivered in order afterwards.
