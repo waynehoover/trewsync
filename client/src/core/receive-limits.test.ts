@@ -26,7 +26,13 @@ import { describe, expect, it } from "vitest";
 import { chunkName } from "./digest.ts";
 import { FakeSocket, rawFrame, ready } from "./fake-socket.ts";
 import { FrameError, MARKER_DEFLATE, decodeFrame, encodeFrame } from "./frame.ts";
-import { LOCAL_MAX_CHUNK_BYTES, PROTO, ProtocolError, Transport } from "./transport.ts";
+import {
+  LOCAL_MAX_BATCH_BYTES,
+  LOCAL_MAX_CHUNK_BYTES,
+  PROTO,
+  ProtocolError,
+  Transport,
+} from "./transport.ts";
 
 /** A body frame of a test's own making: a marker, then whatever payload. */
 function frameOf(marker: number, payload: Uint8Array): Uint8Array {
@@ -177,13 +183,66 @@ describe("a text frame larger than any control message", () => {
     expect(codeOf(cause()), cause()?.message).toBe("toolarge");
   });
 
-  it("is refused after the handshake by the batch ceiling the server advertised", async () => {
-    // A server that advertised a small batch cap cannot then send a frame
-    // of many times that, which it could never legitimately need.
+  /**
+   * After the handshake the bound is this device's own, whatever the server
+   * advertised (T07).
+   *
+   * It was twice the advertised `maxBatchBytes`, on the reading that a batch
+   * is bounded by it. A catch-up batch is bounded by its count of entries, two
+   * hundred, and by nothing in bytes, so a server started with
+   * `-max-batch-bytes` lowered to a mebibyte sends two hundred versions of
+   * large attachments in more than two: refused as `toolarge`, which is not
+   * retryable, and the device stopped syncing for good. The advertised figure
+   * bounds what this device sends; the parse is bounded by what it will hold.
+   */
+  it("is refused after the handshake by this device's own ceiling, whatever was advertised", async () => {
     const { t, socket, cause } = await helloed({ maxBatchBytes: 4096 });
-    socket.onmessage?.({ data: "{".repeat(4096 * 2 + 1) });
+    socket.onmessage?.({ data: "{".repeat(2 * LOCAL_MAX_BATCH_BYTES + 1) });
     expect(t.isClosed).toBe(true);
     expect(codeOf(cause()), cause()?.message).toBe("toolarge");
+  });
+
+  it("reads a catch-up batch larger than twice an advertised batch cap (T07)", async () => {
+    const socket = new FakeSocket();
+    let cause: Error | undefined;
+    let taken = 0;
+    const t = new Transport("ws://test", {
+      onBatch: (b) => void (taken += b.entries.length),
+      onClosed: (c) => {
+        cause = c;
+      },
+      socketFactory: () => socket,
+      timeoutMs: 5000,
+    });
+    const connecting = t.connect();
+    socket.open();
+    await connecting;
+    const hello = t.hello({ vault: "v", deviceId: "d1", device: "d", token: "t", cursor: 0 });
+    socket.reply(ready({ cursor: 0, maxBatchBytes: 1 << 20 }));
+    await hello;
+
+    // Two hundred versions of an attachment cut into many chunks, which is
+    // what the server replays in one batch however its byte cap was set.
+    const names = Array.from({ length: 160 }, (_, i) => i.toString(16).padStart(64, "0"));
+    const entries = Array.from({ length: 200 }, (_, i) => ({
+      uid: i + 1,
+      path: `Attachments/recording-${i}.m4a`,
+      size: 160 * 256 * 1024,
+      ctime: 1000,
+      mtime: 1000,
+      folder: false,
+      deleted: false,
+      chunks: names,
+      device: "other",
+    }));
+    const frame = JSON.stringify({ op: "batch", from: 1, to: 200, entries });
+    expect(frame.length, "the batch is not over the old ceiling").toBeGreaterThan(2 << 20);
+    socket.onmessage?.({ data: frame });
+    for (let i = 0; i < 50 && taken < 200; i++) await new Promise((r) => setTimeout(r, 0));
+
+    expect(cause?.message, "the batch ended the session").toBeUndefined();
+    expect(taken).toBe(200);
+    t.close();
   });
 
   it("is still read when it is under the ceiling", async () => {

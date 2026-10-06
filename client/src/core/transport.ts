@@ -732,16 +732,23 @@ export class Transport {
   /**
    * The largest text frame this device will parse (R13).
    *
-   * A control message, so the bound is the largest legitimate one: a batch,
-   * which the server bounds by the `maxBatchBytes` it advertised. Before
-   * `ready` nothing has been advertised and the only frames that should arrive
-   * are the handshake's, so the fallback is generous enough for any of those
-   * and far below what makes a parse dangerous.
+   * A control message, so the bound is the largest legitimate one: a batch.
+   * Before `ready` nothing has been advertised and the only frames that should
+   * arrive are the handshake's, so the fallback is generous enough for any of
+   * those and far below what makes a parse dangerous.
+   *
+   * After it, this device's own batch ceiling, twice over for the framing, and
+   * not the server's advertised `maxBatchBytes` (T07). That figure bounds what
+   * a device sends, and it was read as a bound on what the server sends too,
+   * which a catch-up batch is not: the server replays two hundred entries at a
+   * time whatever they weigh, so one started with `-max-batch-bytes` lowered
+   * to a mebibyte sent two hundred versions of large attachments in a frame
+   * over twice that, and the `toolarge` that refused it is not retryable: the
+   * device stopped syncing for good. The parse stays bounded, by the same
+   * number the server's own read limit is.
    */
   private textFrameCeiling(): number {
-    const agreed = this.limits?.maxBatchBytes;
-    // Room for the framing around a batch that is exactly at the limit.
-    return agreed === undefined ? MAX_UNAGREED_FRAME_BYTES : agreed * 2;
+    return this.limits === undefined ? MAX_UNAGREED_FRAME_BYTES : 2 * LOCAL_MAX_BATCH_BYTES;
   }
 
   constructor(
