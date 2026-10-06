@@ -1502,6 +1502,36 @@ describe("renames, which only Obsidian can report", () => {
     expect(gone, `deleted list was ${JSON.stringify(gone)}`).not.toContain("old-name.md");
   }, 300_000);
 
+  /**
+   * T14. The engine is reached through the client, and there is a client only
+   * while connected: a rename made while loading, offline or paused was sent
+   * as a deletion and a new file, so the note's history was out of reach of
+   * its new name and Browse deleted gained a phantom.
+   */
+  it("keeps a rename made while there is no connection, for when there is one", async () => {
+    await fresh();
+    const { plugin, app } = await load();
+    app.vault.adapter.seed("old-name.md", "the same content throughout");
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+
+    const toggle = () => (plugin as unknown as { togglePause(): Promise<void> }).togglePause();
+    await toggle();
+    expect(plugin.currentState.kind).toBe("paused");
+    await app.vault.adapter.rename("old-name.md", "new-name.md");
+    app.vault.fire("rename", { path: "new-name.md" }, "old-name.md");
+    await toggle();
+    await synced(plugin);
+    for (let i = 0; i < 2; i++) await plugin.syncNow();
+
+    const client = (
+      plugin as unknown as { client?: { deleted(): Promise<{ notes: { path: string }[] }> } }
+    ).client;
+    const gone = (await client!.deleted()).notes.map((v) => v.path);
+    expect(gone, `deleted list was ${JSON.stringify(gone)}`).not.toContain("old-name.md");
+    expect(app.vault.adapter.text("new-name.md")).toBe("the same content throughout");
+  }, 300_000);
+
   it("still moves the file when nothing told it the old path", async () => {
     // The delete-plus-add path, which is what happens on any platform that
     // cannot report a rename. Noisier, and it must still not lose anything.

@@ -382,6 +382,13 @@ export default class TrewPlugin extends Plugin {
   /** What `onunload` started and could not wait for, for anything that can. */
   closing: Promise<void> | undefined;
   /**
+   * Renames Obsidian reported while there was no client to tell, oldest
+   * first, for the next one (T14). Only for this instance's life: a rename
+   * made just before the plugin is unloaded, with no connection in between,
+   * still travels as a deletion and a new file.
+   */
+  private readonly renamesWaiting: [string, string][] = [];
+  /**
    * Every config save or index reset in flight, so `unlink` cannot be overtaken by one.
    *
    * All of them, not the newest. Two reconnects inside one unlink window
@@ -575,10 +582,16 @@ export default class TrewPlugin extends Plugin {
       // Not for a rename this client is making itself, such as moving the
       // old bytes of an attachment aside before writing the new ones. The
       // engine decided that one and was told the note stayed where it was.
+      //
+      // And kept when there is no client to tell: while the first catch-up
+      // loads, while offline, while paused (T14). Sent as a deletion and a
+      // new file instead, the note's history was out of reach of its new
+      // name and Browse deleted listed a note that was still there.
       this.registerEvent(
         this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
           if (!this.liveVault?.ownRename(oldPath, file.path)) {
-            void this.client?.noteRename(oldPath, file.path);
+            if (this.client) void this.client.noteRename(oldPath, file.path);
+            else this.renamesWaiting.push([oldPath, file.path]);
           }
           this.nudge();
         }),
@@ -1190,6 +1203,10 @@ export default class TrewPlugin extends Plugin {
         if (!current()) return;
         this.client = client;
         if (!client) return;
+        // Renames made while there was no client, in the order they were
+        // made, and ahead of the settle that follows this: the client queues
+        // them before its first pass (T14).
+        for (const [from, to] of this.renamesWaiting.splice(0)) void client.noteRename(from, to);
         this.everConnected = true;
         this.setState({ kind: "syncing", since: Date.now() });
         // Nothing to write back. The pairing that made this device settled
