@@ -12,7 +12,17 @@
  */
 
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile, mkdir } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+  mkdir,
+} from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -2783,5 +2793,56 @@ describe("a note this device could not look at for a moment (T19)", () => {
     expect((await cli("sync", "--dir", b)).code).toBe(0);
     expect(await read(b, "Projects/plan.md")).toBe("the plan, version 2, edited on a\n");
     expect(await read(a, "Projects/plan.md")).toBe("the plan, version 2, edited on a\n");
+  }, 300_000);
+});
+
+/**
+ * T16, through the engine and on to the other device. A watching client's
+ * vault folder is replaced by an empty one, which is what the mount point of
+ * an unmounted disk is, and what moving the vault away and making the folder
+ * again leaves. Its next pass found nothing, read every note as deleted here,
+ * and sent the deletions; the other device moved every note to its trash.
+ */
+describe("a vault folder replaced while a client is running (T16)", () => {
+  it("sends no deletions, and the other device keeps every note", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    const names = ["one.md", "two.md", "three.md"];
+    for (const name of names) await write(a, name, `${name}\n`);
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+
+    const away = `${a}-away`;
+    dirs.push(away);
+    const client = await longRunning(a);
+    let after: unknown;
+    try {
+      await client.settle();
+      await rename(a, away);
+      await mkdir(a);
+      after = await client.settle().then(
+        (report) => report,
+        (err: unknown) => err,
+      );
+    } finally {
+      await client.close();
+    }
+
+    // The notes first, because they are the point: no deletion on the server,
+    // and every note still on the other device, with nothing in its trash.
+    for (const name of names) {
+      expect(
+        (await versionsOf(b, name)).some((v) => v.deleted),
+        `${name} deleted`,
+      ).toBe(false);
+    }
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    for (const name of names) expect(await read(b, name)).toBe(`${name}\n`);
+    expect(await readdir(join(b, ".trash")).catch(() => [])).toEqual([]);
+    // And the pass said why it stopped rather than reporting a quiet vault.
+    expect(after, "a pass over a folder standing in for the vault went ahead").toBeInstanceOf(
+      Error,
+    );
+    expect((after as Error).message).toMatch(/not the folder this trew opened/);
   }, 300_000);
 });

@@ -221,6 +221,14 @@ export interface NodeVaultOptions {
    * never re-spelled on the disk (`reported` below).
    */
   readonly normalForm?: (name: string) => string;
+  /**
+   * The paired vault's config file, which has to be there on every look (T16).
+   *
+   * Passed by the commands that open a paired vault, and nothing else: a
+   * folder that does not hold its pairing is not the vault that was opened,
+   * whatever it is called. See `sameVault`.
+   */
+  readonly pairing?: string;
 }
 
 /**
@@ -575,6 +583,7 @@ export class NodeVault implements Vault {
 
   constructor(root: string, opts: NodeVaultOptions = {}) {
     this.root = resolve(root);
+    this.pairing = opts.pairing;
     this.observeOnly = opts.observeOnly ?? false;
     const normal = opts.normalForm ?? canonicalSpelling;
     this.normal = normal;
@@ -625,6 +634,69 @@ export class NodeVault implements Vault {
 
   /** The vault root with its links resolved, worked out once. */
   private realRootOnce: Promise<string> | undefined;
+
+  /** See `NodeVaultOptions.pairing`. */
+  private readonly pairing: string | undefined;
+
+  /** The root folder's identity when this vault first looked at it (T16). */
+  private rootSeen: { dev: bigint; ino: bigint } | undefined;
+
+  /**
+   * Refuses a root that is no longer the folder this vault opened (T16).
+   *
+   * Asked before every scan, after every full walk, and by `absolute`, which
+   * every other question about a path goes through. A vault whose root is a
+   * mount point is ordinary on Linux, and when the disk goes away the mount
+   * point stays behind as an empty folder; so does a vault folder moved away
+   * and made again. Nothing below could tell either from a vault whose notes
+   * had all been deleted, and a `trew sync --watch` acted on exactly that: its
+   * next scan found nothing, every note read as deleted here, and the deletions
+   * went to every other device. A one-shot sync was safe only because it reads
+   * the pairing first and found none.
+   *
+   * So the folder is the one first looked at, by device and inode. A paired
+   * vault's config file must also still be in it, which catches a folder made
+   * again on a filesystem that hands the old inode number back; that is asked
+   * by every scan and the first look, and the other questions ask only the
+   * stat, since they come between two scans that ask both. Measured under Node
+   * at about 10 microseconds a question, against a scan or a write that makes
+   * dozens of syscalls. The same folder remounted under a new device number is
+   * refused too, and that is the safe side: starting trew again takes it as it
+   * now is.
+   */
+  private async sameVault(withPairing: boolean): Promise<void> {
+    const refuse = (why: string): never => {
+      throw new Error(
+        `${this.root} is not the folder this trew opened as the vault: ${why}. Nothing was ` +
+          `listed or changed, because a folder standing in for it would read as every note ` +
+          `deleted. Put the vault back (mount its disk again, for example) and start trew again.`,
+      );
+    };
+    let now: BigIntStats;
+    try {
+      now = await stat(this.root, { bigint: true });
+    } catch (err) {
+      return refuse(`it cannot be looked at (${(err as Error).message})`);
+    }
+    if (!now.isDirectory()) refuse("it is not a folder");
+    const seen = this.rootSeen;
+    if (seen !== undefined && (now.dev !== seen.dev || now.ino !== seen.ino)) {
+      refuse(
+        "a different folder is at its path now, which is what an unmounted disk or a vault " +
+          "moved away leaves behind",
+      );
+    }
+    if (
+      this.pairing !== undefined &&
+      (withPairing || seen === undefined) &&
+      !(await occupied(this.pairing))
+    ) {
+      refuse(`it no longer holds this device's pairing, ${relative(this.root, this.pairing)}`);
+    }
+    // Remembered only once it has passed, so a first look at a folder standing
+    // in for the vault does not make that folder the one expected from then on.
+    this.rootSeen ??= { dev: now.dev, ino: now.ino };
+  }
 
   /**
    * Directories written to since the last flush.
@@ -975,6 +1047,7 @@ export class NodeVault implements Vault {
    * device well; a bug on another device is enough.
    */
   private async absolute(path: string): Promise<string> {
+    await this.sameVault(false);
     const full = resolve(this.root, path);
     const outside = relative(this.root, full);
     if (outside === "" || outside === ".." || outside.startsWith(`..${sep}`)) {
@@ -1452,6 +1525,9 @@ export class NodeVault implements Vault {
     if (options.checked && !this.observeOnly) {
       throw new Error("checked inventory requires an observe-only vault");
     }
+    // Before anything is read or reaped (T16): an empty folder standing in
+    // for the vault lists as every note deleted.
+    await this.sameVault(true);
     // Neither of the two writes a scan normally makes happens in observe-only
     // mode (R12): reaping a crashed run's temporaries, and re-spelling names.
     // The pass over staging still runs, because counting what it will not
@@ -1774,6 +1850,9 @@ export class NodeVault implements Vault {
     };
     const scanRoot = checked ? await (this.realRootOnce ??= realpath(this.root)) : this.root;
     const listed = await walk(scanRoot, "");
+    // And again after the walk, which reads every folder by its path: a root
+    // that changed part way through gave half a listing from each (T16).
+    await this.sameVault(true);
     if (
       !this.observeOnly &&
       this.listingWatchers.size > 0 &&

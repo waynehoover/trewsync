@@ -4,6 +4,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   symlink,
@@ -121,6 +122,70 @@ describe("listing", () => {
     } finally {
       await removeTree(outside);
     }
+  });
+
+  /**
+   * T16. A vault whose root is a mount point is ordinary on Linux, and when the
+   * disk goes away the mount point stays behind as an empty folder; a folder
+   * moved away and made again looks the same. A watching `trew` listed that,
+   * read every note as deleted here, and sent the deletions to every device.
+   */
+  describe("when the folder is no longer the one that was opened (T16)", () => {
+    const config = () => join(root, ".trew", "config.json");
+    async function paired(): Promise<NodeVault> {
+      await mkdir(join(root, ".trew"));
+      await writeFile(config(), "{}");
+      for (const name of ["one", "two", "three"]) await writeFile(join(root, `${name}.md`), name);
+      const vault = new NodeVault(root, { pairing: config() });
+      expect((await vault.list()).map((f) => f.path).sort()).toEqual([
+        "one.md",
+        "three.md",
+        "two.md",
+      ]);
+      return vault;
+    }
+
+    it("refuses an empty folder in its place rather than listing nothing", async () => {
+      const vault = await paired();
+      // What an unmounted disk leaves at its mount point, and what moving
+      // the vault away and making a folder of the same name leaves.
+      const away = `${root}-away`;
+      await rename(root, away);
+      await mkdir(root);
+      try {
+        await expect(vault.list()).rejects.toThrow(/not the folder this trew opened/);
+        // Nor is anything else answered from it: "absent" from here is a
+        // deletion as surely as an empty listing is.
+        await expect(vault.exists("one.md")).rejects.toThrow(/not the folder/);
+        await expect(vault.stat("one.md")).rejects.toThrow(/not the folder/);
+        await expect(
+          vault.write("new.md", new TextEncoder().encode("x"), { mtime: 1, ctime: 1 }),
+        ).rejects.toThrow(/not the folder/);
+        expect(await readdir(root)).toEqual([]);
+        // And the notes are where they were, untouched.
+        expect(await readFile(join(away, "two.md"), "utf8")).toBe("two");
+      } finally {
+        await removeTree(away);
+      }
+    });
+
+    it("refuses the same folder once it no longer holds the pairing", async () => {
+      // Which a folder made again can be, on a filesystem that hands the old
+      // inode number back.
+      const vault = await paired();
+      await rm(config());
+      await expect(vault.list()).rejects.toThrow(/no longer holds this device's pairing/);
+    });
+
+    it("refuses a first look at a folder that does not hold the pairing", async () => {
+      // So a folder standing in for the vault before the first scan is not
+      // taken for the vault from then on.
+      const vault = new NodeVault(root, { pairing: config() });
+      await expect(vault.exists("one.md")).rejects.toThrow(/pairing/);
+      await mkdir(join(root, ".trew"));
+      await writeFile(config(), "{}");
+      expect(await vault.exists("one.md")).toBe(false);
+    });
   });
 
   it("refuses to report an empty vault when a directory cannot be read", async () => {

@@ -65,19 +65,26 @@ async function watched() {
   return vault;
 }
 
+/**
+ * The stats of the vault's notes, which a cached listing must not repeat. The
+ * root's own is left out: every listing asks it once, to know the folder is
+ * still the vault that was opened (T16), and that is one stat, not a scan.
+ */
+const noteStats = () => vi.mocked(stat).mock.calls.filter(([path]) => String(path) !== root);
+
 it("refreshes only the edited file between authoritative scans", async () => {
   const vault = await watched();
   await writeFile(join(root, "notes/one.md"), "the edited note");
   watching.notify!("change", "notes/one.md");
   const listed = await vault.list();
   expect(listed.find((entry) => entry.path === "notes/one.md")?.size).toBe(15);
-  expect(vi.mocked(stat).mock.calls).toHaveLength(0);
+  expect(noteStats()).toHaveLength(0);
   expect(vi.mocked(lstat).mock.calls.filter(([path]) => String(path).endsWith(".md"))).toHaveLength(
     1,
   );
   vi.mocked(lstat).mockClear();
   await vault.list();
-  expect(vi.mocked(stat).mock.calls).toHaveLength(0);
+  expect(noteStats()).toHaveLength(0);
   expect(vi.mocked(lstat).mock.calls.filter(([path]) => String(path).endsWith(".md"))).toHaveLength(
     0,
   );
@@ -99,7 +106,7 @@ it("refreshes a no-break-space note under the name it reports", async () => {
   const listed = await vault.list();
   expect(listed.find((entry) => entry.path === "notes/a b.md")?.size).toBe(15);
   expect(listed.some((entry) => entry.path === disk)).toBe(false);
-  expect(vi.mocked(stat).mock.calls).toHaveLength(0);
+  expect(noteStats()).toHaveLength(0);
   expect(vi.mocked(lstat).mock.calls.map(([path]) => String(path))).toEqual([join(root, disk)]);
 });
 
