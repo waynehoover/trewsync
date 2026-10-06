@@ -274,11 +274,31 @@ export function checkEntryShape(e: WireEntry): void {
   if (e.path === "") {
     throw new Error(`version ${e.uid} has an empty path, and no file is called nothing`);
   }
+  // The types too, because these go into the saved index as they arrive and
+  // the index refuses at its next load what it did not refuse here (T03). A
+  // value no index can hold ends the session, which is retried, rather than
+  // being saved and leaving a device that cannot start. A time before 1970 is
+  // a date, and is taken.
+  for (const [field, value] of [
+    ["mtime", e.mtime],
+    ["ctime", e.ctime],
+  ] as const) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+      throw new Error(
+        `version ${e.uid} has ${field} ${JSON.stringify(value)}, which is not a time`,
+      );
+    }
+  }
+  if (typeof e.folder !== "boolean" || typeof e.deleted !== "boolean") {
+    throw new Error(`version ${e.uid} does not say plainly whether it is a folder or a deletion`);
+  }
   if (e.folder && e.deleted) {
     throw new Error(`version ${e.uid} is both a folder and a deletion`);
   }
-  if (e.size < 0) {
-    throw new Error(`version ${e.uid} declares ${e.size} bytes, and there is no such file`);
+  if (typeof e.size !== "number" || !Number.isSafeInteger(e.size) || e.size < 0) {
+    throw new Error(
+      `version ${e.uid} declares ${JSON.stringify(e.size)} bytes, and there is no such file`,
+    );
   }
   for (const name of e.chunks) {
     if (!isDigest(name)) {

@@ -19,6 +19,7 @@ import {
   OWN_LIMITS,
   answeredVersion,
   boundedBy,
+  checkEntryShape,
   contentId,
   refuseIfBehind,
   type SyncReport,
@@ -3418,6 +3419,98 @@ describe("a batch that contradicts itself", () => {
         ],
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * A timestamp before 1970 is a date, not a corrupt index (T03).
+ *
+ * A zip entry dated 1970-01-01 00:00 local time, unpacked east of UTC, is
+ * -3,600,000 ms; a Windows FILETIME of zero and an HFS date of 1904 are below
+ * zero too, and the server stores whatever it is sent. The index stored such a
+ * time as it came, from a stat or from a batch, and refused it when it loaded,
+ * so the device that had the file, and every device that received a version of
+ * it, failed at its next start. Removing the index, which the refusal advised,
+ * rebuilt the same state and failed again.
+ */
+describe("a timestamp from before 1970 (T03)", () => {
+  const BEFORE_1970 = -3_600_000;
+
+  /** What a restart does with this store: the engine starting is the property. */
+  async function restartsOn(store: MemoryIndexStore, cursor: number): Promise<void> {
+    const again = await engineOnFakeSocket({ cursor }, { store });
+    expect(again.engine.status().cursor).toBe(cursor);
+    again.t.close();
+  }
+
+  it("survives a restart after sending a file dated before 1970", async () => {
+    const vault = new MemoryVault();
+    await vault.write("old.md", new TextEncoder().encode("from an old archive\n"), {
+      mtime: BEFORE_1970,
+      ctime: BEFORE_1970,
+    });
+    const rig = await engineOnFakeSocket({}, { vault });
+    const server = new CommittingServer(rig.socket);
+    const report = await rig.engine.sync({ coalesceWrites: false });
+    expect(report.uploaded, JSON.stringify(report.needsAttention)).toBe(1);
+    expect(server.committed.map((c) => server.text(c))).toEqual(["from an old archive\n"]);
+    rig.t.close();
+    await restartsOn(rig.store, 0);
+  });
+
+  it("survives a restart after receiving a version dated before 1970", async () => {
+    const rig = await engineOnFakeSocket();
+    const server = new CommittingServer(rig.socket);
+    const folder = {
+      uid: 1,
+      path: "Archive",
+      size: 0,
+      ctime: 0,
+      mtime: BEFORE_1970,
+      folder: true,
+      deleted: false,
+      chunks: [],
+      device: "other",
+    };
+    const note = await server.version(2, "Archive/old.md", "kept\n", { mtime: BEFORE_1970 });
+    rig.socket.raw({ op: "batch", from: 1, to: 2, entries: [folder, note] });
+    await settleUntil("the versions to be taken", () => rig.engine.status().pending === 2);
+    const report = await rig.engine.sync({ coalesceWrites: false });
+    expect(report.downloaded).toBe(1);
+    expect(rig.vault.text("Archive/old.md")).toBe("kept\n");
+    rig.t.close();
+    await restartsOn(rig.store, 2);
+  });
+
+  it("is taken from the server, and what is not a time or a flag is not", () => {
+    const entry = {
+      uid: 3,
+      path: "old.md",
+      size: 5,
+      ctime: BEFORE_1970,
+      mtime: BEFORE_1970,
+      folder: false,
+      deleted: false,
+      chunks: ["c".repeat(64)],
+      device: "other",
+    };
+    expect(() => checkEntryShape(entry)).not.toThrow();
+    // Refused where it arrives, so a value no index could hold ends the
+    // session and is retried rather than being saved and refused at the next
+    // start, which is a device that cannot start.
+    for (const [what, over] of [
+      ["a time that is not a whole number", { mtime: 1.5 }],
+      ["a time past the safe integers", { ctime: 2 ** 60 }],
+      ["a time that is a string", { mtime: "1000" }],
+      ["a size that is not a whole number", { size: 4.5 }],
+      ["a negative size", { size: -5 }],
+      ["a folder flag that is a number", { folder: 1 }],
+      ["a deletion flag that is missing", { deleted: undefined }],
+    ] as const) {
+      expect(() => checkEntryShape({ ...entry, ...over } as unknown as typeof entry), what).toThrow(
+        /version 3/,
+      );
+    }
   });
 });
 
