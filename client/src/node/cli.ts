@@ -194,7 +194,38 @@ const RETIRED = new Map<string, string>([
   ],
 ]);
 
+/**
+ * What a request to stop has to reach (T21).
+ *
+ * Ctrl-C is the documented way to stop `trew sync --watch`, and SIGTERM is how
+ * a service manager or a shutdown stops anything. Both used to kill the
+ * process where it stood, which the kernel's exclusion survives and the lock
+ * record does not: it stayed behind naming a pid that was gone, and once that
+ * pid went to another process, as it likely does after a reboot, every command
+ * refused the vault. So a stop is asked of the command instead: every client
+ * open is closed, which ends a watcher's connection and has a pass in flight
+ * fail its remaining network work and finish its writes, a watcher's wait
+ * between reconnections is cut short and it does not start another, and the
+ * command returns through the same `finally` that releases the lock when it
+ * ends of its own accord. `bin.ts` owns the signals and what happens after.
+ */
+const stopping = {
+  asked: false,
+  clients: new Set<Client>(),
+  wake: undefined as (() => void) | undefined,
+};
+
+/** Asks the command running in this process to stop and let the vault go (T21). */
+export function interrupt(): void {
+  stopping.asked = true;
+  stopping.wake?.();
+  for (const client of stopping.clients) void client.close();
+}
+
 export async function run(argv: readonly string[], terminal: Console): Promise<number> {
+  stopping.asked = false;
+  stopping.clients.clear();
+  stopping.wake = undefined;
   // Every line every command prints goes through here, so nothing a name
   // holds reaches the terminal as an instruction (T20, terminal.ts). One door
   // rather than an escape at each place a name is printed: that was the
@@ -1136,6 +1167,16 @@ async function watchForever(config: Config, args: Args, io: Console): Promise<nu
       },
     },
     {
+      // Stopped by a signal the way it stops for anything else (T21): no
+      // next connection, no rest of a backoff, and the live client closed.
+      keepGoing: () => !stopping.asked,
+      onWaiting: (wake) => {
+        stopping.wake = wake;
+      },
+      onConnecting: (client) => {
+        stopping.clients.add(client);
+        if (stopping.asked) void client.close();
+      },
       onClient: (client) => {
         watching = client;
         settled = false;
@@ -2178,7 +2219,10 @@ async function open(
     ...(await clientOptions(config, args, io, opts.inspect)),
     ...(opts.inspect === true ? { inspect: true } : {}),
   });
+  // Where a request to stop can reach it, and not started once one came (T21).
+  stopping.clients.add(client);
   try {
+    if (stopping.asked) throw new Error("stopped before connecting, as asked");
     await client.connect(opts);
   } catch (err) {
     await client.close();

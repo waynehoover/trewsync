@@ -249,8 +249,10 @@ of the old path and a creation of the new one; both names retain their history.
 ## A command says the vault is locked
 
 Stop an existing watcher before starting another command that writes to the
-vault. On supported local macOS and Linux setups, process exit releases the
-lock automatically, including after a crash.
+vault. Ctrl-C or SIGTERM stops a command the way it would finish, closing its
+connection and releasing the lock; a second Ctrl-C stops it at once. On
+supported local macOS and Linux setups, process exit releases the lock
+automatically, including after a crash.
 
 If TrewSync reports that manual recovery is required, run `trew unlock` after
 confirming the previous process has stopped. It refuses a TrewSync on this
