@@ -610,7 +610,8 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	// The git export (internal/gitexport), for every serve: its worker idles
 	// while the export is off, reads only committed entries, and never holds
 	// the commit lock, so a device's write never waits on it. Stopped before
-	// the store, by the order of the defers, letting the git it runs finish.
+	// the store, by the order of the defers: the git it runs is told to stop
+	// with SIGTERM, which lets git remove its locks, not killed (T44).
 	export := startGitExport(*dataDir, st, *vault, settings, log)
 	defer export.Close()
 	var agents *mcpEndpoint

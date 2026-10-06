@@ -270,6 +270,49 @@ func TestSSHIsRunWithOnlyTheKeyAndTheKnownHosts(t *testing.T) {
 	}
 }
 
+// T44. Every git call runs under a context the export cancels when it
+// stops, and exec.CommandContext answers a cancel with SIGKILL, which gives
+// git no chance to remove the lock files it holds while it writes: a config,
+// a symbolic-ref or an update-ref killed mid-write leaves a .lock that stops
+// the export until somebody deletes it by hand. The comments said the
+// export let git finish. git is now told to stop with SIGTERM, which it
+// answers by removing its locks, and killed only if it has not ended soon
+// after. The stand-in git here records the signal it was given.
+func TestStoppingTheExportLetsGitCleanUp(t *testing.T) {
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "mark")
+	script := "#!/bin/sh\ntrap 'echo term > \"" + mark + ".term\"; exit 143' TERM\n" +
+		"echo started > \"" + mark + ".started\"\nwhile :; do sleep 0.05; done\n"
+	git := filepath.Join(dir, "git")
+	if err := os.WriteFile(git, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r := &runner{git: git, gitDir: filepath.Join(dir, "repo.git"), home: dir}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.run(ctx, time.Minute, nil, "config", "remote.trew.url", "git@example.test:o/r.git")
+		done <- err
+	}()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(mark + ".started"); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the stand-in git never started")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("git was not stopped")
+	}
+	if _, err := os.Stat(mark + ".term"); err != nil {
+		t.Fatalf("git was killed rather than told to stop, so a lock it held would be left: %v", err)
+	}
+}
+
 // TestTheTokenIsReadFromItsFileAndNeverShown: git asks the export's
 // credential helper for the HTTPS token, which reads it from the file when
 // asked; an error that echoes it has it redacted.

@@ -48,6 +48,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/waynehoover/trewsync/internal/fsync"
@@ -171,7 +172,9 @@ func (x *Exporter) Start() {
 }
 
 // Close stops the worker, waiting for the step it is in: a git process it
-// runs is let finish or run out its own deadline.
+// runs is told to stop with SIGTERM, which git answers by removing the locks
+// it holds, and killed only if it has not ended ten seconds later
+// (stopGently, T44). A step stopped part way is done again at the next start.
 func (x *Exporter) Close() error {
 	started := x.sub.C != nil
 	x.once.Do(func() { close(x.stop) })
@@ -697,7 +700,7 @@ func (x *Exporter) write(ctx context.Context, r *runner, s Settings, parent, ado
 	cmd.Env, cmd.Dir = r.env(), r.home
 	stderr := &limited{max: stderrLimit}
 	cmd.Stdout, cmd.Stderr = io.Discard, stderr
-	cmd.WaitDelay = 10 * time.Second
+	stopGently(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return "", nil, err
@@ -725,9 +728,10 @@ func (x *Exporter) write(ctx context.Context, r *runner, s Settings, parent, ado
 	}
 	cerr := stdin.Close()
 	if err != nil {
-		// fast-import is told nothing more and killed: what it wrote is
-		// objects no ref names, which the next step writes again.
-		_ = cmd.Process.Kill()
+		// fast-import is told nothing more and told to stop, as every git
+		// call is (stopGently, T44): what it wrote is objects no ref names,
+		// which the next step writes again.
+		_ = cmd.Process.Signal(syscall.SIGTERM)
 		_ = cmd.Wait()
 		return "", nil, err
 	}
