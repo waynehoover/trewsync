@@ -11,8 +11,16 @@
  * shipped bundle.
  */
 
+import { chunkName } from "./digest.ts";
 import { Engine } from "./engine.ts";
-import { PROTO, Transport, type SocketLike } from "./transport.ts";
+import { decodeFrame } from "./frame.ts";
+import {
+  LOCAL_MAX_CHUNK_BYTES,
+  PROTO,
+  Transport,
+  type SocketLike,
+  type WireEntry,
+} from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 export class FakeSocket implements SocketLike {
@@ -95,6 +103,116 @@ export class FakeSocket implements SocketLike {
 
   hangUp(code = 1006, reason = "gone"): void {
     this.onclose?.({ code, reason });
+  }
+}
+
+/** One write a `CommittingServer` took, as the device sent it. */
+export interface Committed {
+  readonly uid: number;
+  readonly path: string;
+  readonly base: number;
+  readonly deleted: boolean;
+  readonly chunks: readonly string[];
+}
+
+/**
+ * A server behind a fake socket that keeps what it is told.
+ *
+ * It serves every body it holds, asks for the bodies a write names that it
+ * lacks, and commits each write under the next uid, so a case can ask what
+ * this device actually sent: which path, whether as a deletion, and with which
+ * bytes. Rule 10 is about exactly that: two devices agreeing proves nothing if
+ * what they agree on is the wrong text (T01, T04).
+ *
+ * It commits and does not broadcast, like a server whose echo of a device's
+ * own write carries no payload. A case that wants a peer's write sends the
+ * batch itself, with `version` for the entry.
+ */
+export class CommittingServer {
+  readonly bodies = new Map<string, Uint8Array>();
+  readonly committed: Committed[] = [];
+  nextUid = 100;
+  /** Runs once, before the next fetch is answered: the editor's moment. */
+  duringFetch: (() => Promise<void> | void) | undefined;
+
+  constructor(readonly socket: FakeSocket) {
+    socket.autoReply = (frame, s) => void this.answer(frame, s);
+  }
+
+  /** A peer's version of `path` holding `text`, as a batch carries it. */
+  async version(
+    uid: number,
+    path: string,
+    text: string,
+    over: { deleted?: boolean; mtime?: number; device?: string; prev?: string } = {},
+  ): Promise<WireEntry> {
+    const raw = new TextEncoder().encode(over.deleted ? "" : text);
+    const name = raw.length > 0 ? await chunkName(raw) : undefined;
+    if (name !== undefined) this.bodies.set(name, raw);
+    return {
+      uid,
+      path,
+      size: raw.length,
+      ctime: 1000,
+      mtime: over.mtime ?? 1000,
+      folder: false,
+      deleted: over.deleted ?? false,
+      chunks: name === undefined ? [] : [name],
+      device: over.device ?? "other",
+      ...(over.prev !== undefined ? { prev: over.prev } : {}),
+    };
+  }
+
+  /** The text a committed write holds, from the bodies this server has. */
+  text(c: Pick<Committed, "chunks">): string {
+    return c.chunks.map((n) => new TextDecoder().decode(this.bodies.get(n)!)).join("");
+  }
+
+  private async answer(frame: Record<string, unknown>, s: FakeSocket): Promise<void> {
+    const op = frame["op"];
+    const id = frame["id"];
+    if (op === "ping") {
+      s.raw({ res: "pong" });
+    } else if (op === "applied") {
+      s.raw({ res: "applied", id, cursor: frame["applied"] });
+    } else if (op === "fetch") {
+      const during = this.duringFetch;
+      this.duringFetch = undefined;
+      if (during) await during();
+      const names = frame["chunks"] as string[];
+      s.raw({ res: "bodies", id, count: names.length });
+      for (const n of names) s.body(rawFrame(this.bodies.get(n)!));
+    } else if (op === "put" || op === "putmany") {
+      const entries = op === "putmany" ? (frame["entries"] as Record<string, unknown>[]) : [frame];
+      const missing = [...new Set(entries.flatMap((e) => e["chunks"] as string[]))].filter(
+        (n) => !this.bodies.has(n),
+      );
+      if (missing.length > 0) {
+        const before = s.sentBinary.length;
+        s.raw({ res: "want", id, chunks: missing });
+        await settleUntil(
+          "the bodies the server asked for to arrive",
+          () => s.sentBinary.length >= before + missing.length,
+        );
+        missing.forEach((n, i) => {
+          this.bodies.set(n, decodeFrame(s.sentBinary[before + i]!, LOCAL_MAX_CHUNK_BYTES));
+        });
+      }
+      const results = entries.map((e) => {
+        const uid = this.nextUid++;
+        const meta = e["meta"] as { deleted?: boolean };
+        this.committed.push({
+          uid,
+          path: e["path"] as string,
+          base: e["base"] as number,
+          deleted: meta.deleted === true,
+          chunks: e["chunks"] as string[],
+        });
+        return { uid };
+      });
+      if (op === "putmany") s.raw({ res: "acks", id, results });
+      else s.raw({ res: missing.length > 0 ? "ack" : "have", id, uid: results[0]!.uid });
+    }
   }
 }
 

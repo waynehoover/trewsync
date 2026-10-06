@@ -349,8 +349,21 @@ function decideMissingLocally(remote: RemoteState, index: IndexEntry): Action {
   if (base === "") {
     return { kind: "download", why: "new on the server" };
   }
-  if (remote.hash === base) {
+  // Unchanged means the version this device synced, not the same bytes (T01).
+  // A note restored from history, an undo of its deletion and a rename back to
+  // its old name all arrive as a new version holding the bytes this device last
+  // synced, and an entry that outlived an earlier deletion read each of them as
+  // "deleted here and unchanged", so the device deleted it on the server again,
+  // and from there on every device. A version this device never saw is newer
+  // information than a deletion made before it, and is kept like any other.
+  if (remote.hash === base && remote.uid === index.syncuid) {
     return { kind: "deleteRemote", why: "deleted here and unchanged on the server" };
+  }
+  if (remote.hash === base) {
+    return {
+      kind: "restoreLocal",
+      why: "deleted here, and written again since as a version this device never synced, so it is restored",
+    };
   }
   // Deleted here, changed there. The change is newer information than the
   // deletion, and a deletion can be repeated where an edit cannot be

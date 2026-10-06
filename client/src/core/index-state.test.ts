@@ -134,8 +134,22 @@ describe("pairing a device against a vault it already has", () => {
 
 describe("deletions, where losing a note is easiest", () => {
   it("propagates a local delete when the server has not moved", () => {
-    const a = at(undefined, remote({ hash: BASE }), entry({ synchash: BASE }));
+    const a = at(undefined, remote({ hash: BASE }), entry({ synchash: BASE, syncuid: 7 }));
     expect(a.kind).toBe("deleteRemote");
+  });
+
+  /**
+   * The same bytes under a version this device never synced are not "unchanged
+   * since I synced it" (T01).
+   *
+   * A note restored from history, an undo of its deletion, or a rename back to
+   * its old name arrives as a new version holding the bytes the index last
+   * synced. Read against a leftover entry as an unchanged file deleted here, it
+   * was deleted on the server again, and from there on every device.
+   */
+  it("restores the same bytes written again as a version it never synced", () => {
+    const a = at(undefined, remote({ uid: 9, hash: BASE }), entry({ synchash: BASE, syncuid: 7 }));
+    expect(a.kind).toBe("restoreLocal");
   });
 
   it("propagates a remote delete when the local file has not moved", () => {

@@ -2485,6 +2485,18 @@ export class Engine {
             synced(entry, local.hash, entry.chunks, remote.uid, now);
           }
         }
+        // Gone here and gone on the server, so the entry describes nothing
+        // (T01). Kept, it went on claiming a sync of bytes that are nowhere:
+        // `prune` keeps any entry with a `synchash`, so the entry and the
+        // tombstone beside it stayed for ever. Its old uid held back the
+        // applied checkpoint other devices wait on, and the next version to
+        // arrive with the same bytes (a restore, an undo, a rename back) read
+        // against it as "deleted here and unchanged" and was deleted on the
+        // server again. It is reached by both deletions crossing, and by this
+        // device's own deletion or rename whose acknowledgement was lost and
+        // came back in catch-up. Forgetting it is what a deletion committed
+        // here already does, and `prune` then drops the tombstone.
+        if (local === undefined && remote?.deleted) this.entries.delete(path);
         return;
 
       case "upload":

@@ -27,7 +27,12 @@ import { chunkBytes, sizesFor } from "./chunk.ts";
 import { NAME_WINDOW, chunkName, chunkNames } from "./digest.ts";
 import { decodeFrame } from "./frame.ts";
 import { ConnectionError, LOCAL_MAX_CHUNK_BYTES, ProtocolError, Transport } from "./transport.ts";
-import { engineOnFakeSocket, settleUntil } from "./fake-socket.ts";
+import {
+  CommittingServer,
+  type FakeSocket,
+  engineOnFakeSocket,
+  settleUntil,
+} from "./fake-socket.ts";
 import { MemoryIndexStore, MemoryVault, type FileStat, type Times } from "./vault.ts";
 import { conflictCopyPath } from "./merge.ts";
 import { firstFreeName, ignoredHereError, neverSync } from "./paths.ts";
@@ -2615,6 +2620,166 @@ describe("a file that could not sync, and then could", () => {
     // is still too long.
     expect(said.filter((m) => m === "skipped for good").length).toBe(2);
   }, 300_000);
+});
+
+/**
+ * A path gone from this disk and gone from the server, whose entry outlived
+ * both (T01).
+ *
+ * `decide` answers "nothing" for it, which is right, and the pass recorded
+ * nothing, which left the entry claiming a sync of bytes no longer anywhere.
+ * `prune` keeps an entry with a `synchash`, so the entry and the server's
+ * tombstone beside it stayed for ever, and the next version to arrive at the
+ * path holding the same bytes, a restore, an undo of the deletion, a rename
+ * back, read against it as "deleted here and unchanged on the server" and was
+ * deleted on the server again, and from there on every device.
+ */
+describe("a note deleted on both sides (T01)", () => {
+  it("is downloaded when it is written back, not deleted on the server again", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    await a.vault.edit("x.md", "one\n");
+    await convergeBoth(a, b);
+    expect(b.vault.text("x.md")).toBe("one\n");
+
+    // Deleted here, on B, and on A too, whose deletion reaches B before B's
+    // own pass sends one.
+    await b.vault.remove("x.md");
+    await a.vault.remove("x.md");
+    await a.settle();
+    await receiveCommitted(b.transport);
+    const settled = await b.settle();
+    // And a device in that state has applied everything: other devices wait on
+    // this cursor, and the leftover entry's old uid held it back for ever.
+    expect(settled.appliedCursor, "a settled device never said how far it had got").toBe(
+      b.engine.status().cursor,
+    );
+
+    // The same bytes written back at the same name, which is what restoring it
+    // from history or from the trash does.
+    await a.vault.edit("x.md", "one\n");
+    await convergeBoth(a, b, 6);
+
+    expect(a.vault.text("x.md"), "the note written back was deleted again").toBe("one\n");
+    expect(b.vault.text("x.md"), "the note written back never arrived").toBe("one\n");
+  }, 240_000);
+
+  /** A peer's deletion, the same bytes again, and what this device sends about them. */
+  async function syncedOnce(): Promise<{
+    engine: Engine;
+    server: CommittingServer;
+    vault: MemoryVault;
+    store: MemoryIndexStore;
+    socket: FakeSocket;
+  }> {
+    const rig = await engineOnFakeSocket();
+    const server = new CommittingServer(rig.socket);
+    rig.socket.raw({
+      op: "batch",
+      from: 1,
+      to: 1,
+      entries: [await server.version(1, "x.md", "one")],
+    });
+    await settleUntil("the version to be taken", () => rig.engine.status().pending === 1);
+    await rig.engine.sync({ coalesceWrites: false });
+    expect(rig.vault.text("x.md")).toBe("one");
+    return { ...rig, server };
+  }
+
+  it("does not delete a restored note when the other deletion arrived first", async () => {
+    const { engine, server, vault, socket } = await syncedOnce();
+
+    await vault.remove("x.md");
+    const gone = await server.version(2, "x.md", "", { deleted: true });
+    socket.raw({ op: "batch", from: 2, to: 2, entries: [gone] });
+    await settleUntil("the deletion to be taken", () => engine.status().pending === 1);
+    await engine.sync({ coalesceWrites: false });
+    const quiet = await engine.sync({ coalesceWrites: false });
+    expect(quiet.appliedCursor, "nothing is outstanding, and the cursor was never applied").toBe(2);
+
+    const restored = await server.version(3, "x.md", "one", { device: "desktop" });
+    socket.raw({ op: "batch", from: 3, to: 3, entries: [restored] });
+    await settleUntil("the restore to be taken", () => engine.status().pending === 1);
+    await engine.sync({ coalesceWrites: false });
+
+    expect(
+      server.committed.filter((c) => c.deleted),
+      "this device deleted the restored note on the server",
+    ).toEqual([]);
+    expect(vault.text("x.md")).toBe("one");
+  });
+
+  it("does not delete a restored note after its own deletion's ack was lost", async () => {
+    const { engine, vault, store, socket } = await syncedOnce();
+
+    // Deleted here; the server commits it and the connection drops before
+    // the acknowledgement arrives.
+    await vault.remove("x.md");
+    socket.autoReply = (frame, s) => {
+      if (frame["op"] === "putmany" || frame["op"] === "put") setTimeout(() => s.hangUp(), 0);
+      else if (frame["op"] === "ping") s.raw({ res: "pong" });
+    };
+    await engine.sync({ coalesceWrites: false });
+
+    // The next connection is a fresh engine on the saved index at the old
+    // cursor, and catch-up replays this device's own deletion with its payload.
+    const next = await engineOnFakeSocket({ cursor: 1 }, { store, vault });
+    const again = new CommittingServer(next.socket);
+    const gone = await again.version(2, "x.md", "", { deleted: true, device: "d" });
+    next.socket.raw({ op: "batch", from: 2, to: 2, entries: [gone] });
+    await settleUntil(
+      "the replayed deletion to be taken",
+      () => next.engine.status().pending === 1,
+    );
+    await next.engine.sync({ coalesceWrites: false });
+
+    const restored = await again.version(3, "x.md", "one", { device: "desktop" });
+    next.socket.raw({ op: "batch", from: 3, to: 3, entries: [restored] });
+    await settleUntil("the restore to be taken", () => next.engine.status().pending === 1);
+    await next.engine.sync({ coalesceWrites: false });
+
+    expect(
+      again.committed.filter((c) => c.deleted),
+      "the restored note was deleted",
+    ).toEqual([]);
+    expect(vault.text("x.md")).toBe("one");
+  });
+
+  it("keeps a note renamed back after its rename's ack was lost", async () => {
+    const { engine, vault, store, socket } = await syncedOnce();
+
+    // Renamed here; the server commits the move and the ack is lost.
+    await vault.write("b.md", new TextEncoder().encode("one"), { mtime: 1000, ctime: 1000 });
+    await vault.remove("x.md");
+    engine.noteRename("x.md", "b.md");
+    socket.autoReply = (frame, s) => {
+      if (frame["op"] === "putmany" || frame["op"] === "put") setTimeout(() => s.hangUp(), 0);
+      else if (frame["op"] === "ping") s.raw({ res: "pong" });
+    };
+    await engine.sync({ coalesceWrites: false });
+
+    // Catch-up replays the move, and two passes settle it.
+    const next = await engineOnFakeSocket({ cursor: 1 }, { store, vault });
+    const again = new CommittingServer(next.socket);
+    const moved = await again.version(2, "b.md", "one", { device: "d", prev: "x.md" });
+    next.socket.raw({ op: "batch", from: 2, to: 2, entries: [moved] });
+    await settleUntil("the replayed move to be taken", () => next.engine.status().pending === 2);
+    await next.engine.sync({ coalesceWrites: false });
+    await next.engine.sync({ coalesceWrites: false });
+
+    // Another device renames it back.
+    const back = await again.version(3, "x.md", "one", { device: "desktop", prev: "b.md" });
+    next.socket.raw({ op: "batch", from: 3, to: 3, entries: [back] });
+    await settleUntil("the rename back to be taken", () => next.engine.status().pending === 2);
+    await next.engine.sync({ coalesceWrites: false });
+
+    expect(vault.snapshot(), "the note left this vault").toEqual({ "x.md": "one" });
+    expect(
+      again.committed.filter((c) => c.deleted),
+      "the note was deleted everywhere",
+    ).toEqual([]);
+  });
 });
 
 /** How many paths the persisted index still has the server's word about. */
