@@ -311,18 +311,23 @@ async function readRaw(adapter: Writer, normalized: string): Promise<Uint8Array 
  * and a staged copy of the right length with the wrong bytes would have been
  * renamed into place and become the note. The memory is a moment; the
  * corruption would have been for good.
+ *
+ * The read is the whole check. A stat used to come first, for a missing
+ * file, a folder and a wrong length, and the read answers all three: neither
+ * adapter reads anything but a file, and the length is compared before the
+ * bytes are. On a phone the stat was one more turn of the adapter's queue,
+ * about 2 ms of every file landed, and Capacitor's `readBinary` stats the
+ * file itself before reading it (P-1c).
  */
 async function verify(adapter: Writer, path: string, bytes: Uint8Array): Promise<void> {
-  const stat = await adapter.stat(path);
-  if (stat === null || stat.type !== "file") {
-    throw new Error(`${path} is not there after writing it`);
+  let back: Uint8Array;
+  try {
+    back = new Uint8Array(await adapter.readBinary(path));
+  } catch (err) {
+    throw new Error(`${path} cannot be read back after writing it: ${(err as Error).message}`);
   }
-  if (stat.size !== bytes.length) {
-    throw new Error(`${path} is ${stat.size} bytes after writing ${bytes.length}`);
-  }
-  const back = new Uint8Array(await adapter.readBinary(path));
   if (back.length !== bytes.length) {
-    throw new Error(`${path} reads back as ${back.length} bytes after writing ${bytes.length}`);
+    throw new Error(`${path} is ${back.length} bytes after writing ${bytes.length}`);
   }
   for (let i = 0; i < bytes.length; i++) {
     if (back[i] !== bytes[i]) {

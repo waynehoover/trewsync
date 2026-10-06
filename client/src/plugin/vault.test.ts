@@ -729,6 +729,21 @@ describe("landing a note without a moment where it is half written", () => {
     expect(stagingCopies(adapter)).toEqual([]);
   });
 
+  it("a staging copy the adapter reported and never wrote is caught, and named", async () => {
+    // The read-back is the whole check now (P-1c), so a file that is not
+    // there has to be found by it, and said in words that name the path.
+    adapter.seed("note.md", "old");
+    const realWrite = adapter.writeBinary.bind(adapter);
+    adapter.writeBinary = async (path, data, options) => {
+      if (isStaging(path)) return;
+      return realWrite(path, data, options);
+    };
+    await expect(vault.write("note.md", enc.encode("new content"), times)).rejects.toThrow(
+      /\.trew-tmp-[0-9a-f]+-note\.md cannot be read back after writing it: ENOENT/,
+    );
+    expect(adapter.text("note.md")).toBe("old");
+  });
+
   it("a failure while replacing keeps the complete new copy beside the note and names it", async () => {
     adapter.seed("note.md", "old");
     adapter.fault = (op, path) => (op === "writeBinary" && path === "note.md" ? 1 : undefined);
