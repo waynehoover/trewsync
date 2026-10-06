@@ -173,6 +173,19 @@ function foldedExclusion(name: string): string {
   return name.toLowerCase().toUpperCase().normalize("NFC");
 }
 
+/**
+ * The protocol's case fold (`foldPath`), with printable ASCII done natively
+ * (T17).
+ *
+ * Every name a scan meets is asked whether it is ignored, so this is on the
+ * scan's path. For printable ASCII, which most names are, the fold is exactly
+ * the lower case: the table maps A to Z and nothing else below 0x80. Over
+ * 10,000 paths the table alone added about 4 ms to a scan of about 25.
+ */
+function foldName(text: string): string {
+  return /^[ -~]*$/.test(text) ? text.toLowerCase() : foldPath(text);
+}
+
 export interface NodeVaultOptions {
   /** Extra names to leave alone, at any depth. */
   readonly alsoIgnore?: readonly string[];
@@ -533,6 +546,8 @@ export async function refuseOutsideVaultAt(vault: string, full: string): Promise
 export class NodeVault implements Vault {
   private readonly root: string;
   private readonly ignore: Set<string>;
+  /** The same names case-folded, for a disk that folds case (T17). */
+  private readonly ignoreFolded: Set<string>;
   /** How this vault spells one name on the disk. NFC everywhere but a test. */
   private readonly normal: (name: string) => string;
   /**
@@ -602,6 +617,7 @@ export class NodeVault implements Vault {
       configDir,
       ...(opts.alsoIgnore ?? []).map((name) => this.reported(name)),
     ]);
+    this.ignoreFolded = new Set([...this.ignore].map(foldName));
     this.ledger = new DisplacedLedger(new NodeDisplacedFiles(this.root), (m) =>
       console.warn(`trew: ${m}`),
     );
@@ -1078,7 +1094,8 @@ export class NodeVault implements Vault {
       // from. A name in this device's own ignore list is the person who
       // passed `--ignore` getting what they asked for, and a peer that syncs
       // it is not doing anything wrong either.
-      throw ignoredHere(rel, this.ignore)
+      const [asked, ignoring] = this.ignoreQuestion(rel);
+      throw ignoredHere(asked, ignoring)
         ? ignoredHereError(`not writing under a name this device is set to ignore: ${path}`)
         : neverSync(`refusing to write inside a folder that is never synced: ${path}`);
     }
@@ -1087,7 +1104,27 @@ export class NodeVault implements Vault {
 
   /** The one answer to "does this path sync", asked the same way in every direction. */
   private neverSynced(rel: string): boolean {
-    return isNeverSynced(rel, this.ignore);
+    return isNeverSynced(...this.ignoreQuestion(rel));
+  }
+
+  /**
+   * A path and the ignore list in the form this disk compares names in (T17).
+   *
+   * Case-folded both, on a disk that folds case. Compared exactly, `--ignore
+   * Archive` let a peer's `archive/photo.md` in: on such a disk that is a file
+   * inside the ignored folder, so it was written there, then left out of every
+   * listing because `Archive` is ignored, read as deleted here, and deleted on
+   * every device. Folded, the write is refused as ignored, and so is `exists`,
+   * so the engine reports the path instead of deleting it; and `list` leaves a
+   * folder spelled either way out, because to this disk it is one folder.
+   *
+   * The protocol's fold, which errs towards calling two names one, and that is
+   * the side to err on here: a name taken for an ignored one is refused and
+   * reported, never written and lost. Before the probe has run the disk is
+   * taken to fold, the same safe default `canonical` has.
+   */
+  private ignoreQuestion(rel: string): [string, ReadonlySet<string>] {
+    return this.foldsCaseSync ? [foldName(rel), this.ignoreFolded] : [rel, this.ignore];
   }
 
   /**
@@ -2843,9 +2880,14 @@ export class NodeVault implements Vault {
         // The state folder changes on every single pass, because that is
         // where the index is written. Watching it would mean each pass
         // scheduled the next one, forever.
-        if (this.neverSynced(path)) return;
-        if (isTemporary(basename(path), join(this.root, path))) return;
+        //
+        // Asked of the name as the scan reports it, so the two agree: the
+        // disk's own spelling (NFD from a Mac, a no-break space) of an
+        // ignored folder missed the ignore list here and started a pass for
+        // every change inside it.
         const normal = this.normalPath(path);
+        if (this.neverSynced(normal)) return;
+        if (isTemporary(basename(path), join(this.root, path))) return;
         const known = this.cachedListing?.get(normal);
         if (event === "change" && known && !known.folder) this.listingChanges.add(normal);
         else this.invalidateListing();

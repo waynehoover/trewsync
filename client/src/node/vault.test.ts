@@ -1072,6 +1072,64 @@ describe("an --ignore spelled the way a Mac shell spells it", () => {
   }
 });
 
+/**
+ * T17. On a disk that folds case, `archive/photo.md` is a file inside the
+ * `Archive` folder `--ignore Archive` keeps off this device, and the ignore
+ * list was compared exactly. A peer's note under the other spelling was
+ * written in there, then left out of every listing because `Archive` is
+ * ignored, read as deleted here, and deleted on every device.
+ */
+describe("an ignored name on a disk that folds case (T17)", () => {
+  const times = { mtime: 1_700_000_000_000, ctime: 1_700_000_000_000 };
+  const errorOf = (p: Promise<unknown>) =>
+    p.then(
+      () => undefined,
+      (err: Error & { code?: string }) => err,
+    );
+
+  it("refuses the name in any case, as ignored, while it does not know the disk", async () => {
+    // Before the disk is asked, it is taken to fold, which is the safe side.
+    const v = new NodeVault(root, { alsoIgnore: ["Archive"] });
+    await mkdir(join(root, "Archive"));
+    await writeFile(join(root, "Archive", "local-only.md"), "mine, never synced");
+    for (const path of ["archive/photo.md", "ARCHIVE/photo.md", "notes/archive/photo.md"]) {
+      expect((await errorOf(v.write(path, enc.encode("a peer's"), times)))?.code, path).toBe(
+        "ignored",
+      );
+      // And asked whether it is there, it says ignored rather than "yes", so
+      // a path the listing will never show is never taken for deleted.
+      expect((await errorOf(v.exists(path)))?.code, path).toBe("ignored");
+    }
+    expect(await readdir(join(root, "Archive"))).toEqual(["local-only.md"]);
+    // The listing agrees: a folder spelled the other way is the same folder.
+    await mkdir(join(root, "notes", "ARCHIVE"), { recursive: true });
+    await writeFile(join(root, "notes", "ARCHIVE", "x.md"), "x");
+    expect((await v.list()).map((f) => f.path)).toEqual(["notes"]);
+  });
+
+  it("goes by what the disk does once it has asked", async () => {
+    const v = new NodeVault(root, { alsoIgnore: ["Archive"] });
+    await v.probeCase();
+    await writeFile(join(root, "Probe.md"), "x");
+    const folds = await stat(join(root, "probe.md")).then(
+      () => true,
+      () => false,
+    );
+    await rm(join(root, "Probe.md"));
+    const err = await errorOf(v.write("archive/photo.md", enc.encode("a peer's"), times));
+    if (folds) {
+      expect(err?.code).toBe("ignored");
+      await expect(readdir(join(root, "archive"))).rejects.toThrow(/ENOENT/);
+    } else {
+      // Two folders on this disk, and only one of them is ignored.
+      expect(err).toBeUndefined();
+      expect(await readFile(join(root, "archive", "photo.md"), "utf8")).toBe("a peer's");
+    }
+    // The ignored spelling itself is refused everywhere.
+    expect((await errorOf(v.write("Archive/x.md", enc.encode("x"), times)))?.code).toBe("ignored");
+  });
+});
+
 describe("a name the disk spells in NFD", () => {
   const nfd = "café.md";
   const nfc = "café.md";

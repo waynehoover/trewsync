@@ -2080,6 +2080,42 @@ describe("a folder this device ignores and another device syncs (R2)", () => {
     expect(r.code, r.all).toBe(1);
     expect(r.json()["ignored"]).toBe(0);
   }, 300_000);
+
+  /**
+   * T17. On a disk that folds case, a peer's `archive/photo.md` is a file
+   * inside the `Archive` folder this device ignores. It was written in there,
+   * left out of the next listing because `Archive` is ignored, read as deleted
+   * here, and deleted on every device, including the one that made it.
+   */
+  it("does not delete a peer's note spelled like the ignored folder in another case (T17)", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    await write(b, "Archive/local-only.md", "b's, never synced\n");
+    await write(a, "archive/photo.md", "a's note\n");
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    const folds = await stat(join(b, "ARCHIVE")).then(
+      () => true,
+      () => false,
+    );
+
+    for (const pass of [1, 2]) {
+      const r = await cli("sync", "--dir", b, "--ignore", "Archive", "--json");
+      expect(r.code, `pass ${pass}: ${r.all}`).toBe(0);
+    }
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+
+    // The note is where its author put it, and the server never heard of a
+    // deletion, whichever way this disk treats case.
+    expect(await read(a, "archive/photo.md")).toBe("a's note\n");
+    expect((await versionsOf(a, "archive/photo.md")).some((v) => v.deleted)).toBe(false);
+    expect((await versionsOf(a, "Archive/local-only.md")).length).toBe(0);
+    if (folds) {
+      // One folder here, and it is ignored: nothing went into it.
+      expect(await readdir(join(b, "Archive"))).toEqual(["local-only.md"]);
+    } else {
+      expect(await read(b, "archive/photo.md")).toBe("a's note\n");
+    }
+  }, 300_000);
 });
 
 /**
