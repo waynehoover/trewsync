@@ -137,14 +137,19 @@ func TestAPeerOfAnotherAccountIsRefused(t *testing.T) {
 		t.Skip("running as root, which every server lets in")
 	}
 	dir := t.TempDir()
-	srv, err := Listen(dir, echo{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer srv.Close()
+	// Set before Listen starts the goroutines that read it, and put back
+	// only after Close has waited for every one of them.
 	was := ownUID
 	ownUID = func() int { return os.Geteuid() + 1 }
-	defer func() { ownUID = was }()
+	srv, err := Listen(dir, echo{}, nil)
+	if err != nil {
+		ownUID = was
+		t.Fatal(err)
+	}
+	defer func() {
+		srv.Close()
+		ownUID = was
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
