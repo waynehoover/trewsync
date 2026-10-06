@@ -177,8 +177,10 @@ verified backup into its data volume. Restore ownership to `65532:65532` and
 verify it with the same server image before starting. Do not restore over a
 running server or delete its volume as part of the procedure.
 
-A snapshot made by `trewd backup` has a store epoch of its own, so restoring
-one starts a new history as far as the devices are concerned. Each device
+A store restored from a `trewd backup` snapshot starts a store epoch of its
+own the first time it is served, every time a snapshot is restored, the same
+one twice included, so restoring one starts a new history as far as the
+devices are concerned. The server's log says so at that start. Each device
 notices at its next connection and, with nothing asked of anybody, reads the
 restored history as a fresh listing: files that match agree, files that differ
 are kept both ways as a conflict copy, files only that device holds are sent
@@ -190,8 +192,12 @@ mirror does not upload its local changes.
 
 A data directory copied back some other way, such as a filesystem snapshot or
 a copy of the live directory, keeps its old epoch with an older history. A
-device that has seen newer versions then stops with a `cursor` error. Preserve
-its local notes and take a backup of the server, then:
+device that has seen newer versions stops with a `cursor` error only while the
+copied-back store is behind its cursor: once other devices have written past
+that cursor, it is served from there without an error and never receives the
+versions in between. So pause sync on every device before starting a store
+copied back this way, and before any device writes to it, preserve each
+device's local notes, take a backup of the server, then:
 
 - In Obsidian, use **Rejoin this server** and confirm the positions shown.
 - In the CLI, run `trew unlink`, then pair again with a new invite.

@@ -633,6 +633,13 @@ func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 		dest.Close()
 		return rep, fmt.Errorf("giving the snapshot its own epoch: %w", err)
 	}
+	// And marked as a snapshot no server has served, so each restore of it
+	// starts an epoch of its own the first time it is served (T27): one
+	// epoch per snapshot was one epoch for two restores of the same archive.
+	if err := dest.markSnapshot(); err != nil {
+		dest.Close()
+		return rep, fmt.Errorf("marking the snapshot as not yet served: %w", err)
+	}
 	// Nor is an outstanding invite carried into it. An invite is a bearer
 	// credential that lives an hour, and the backup is for notes: restoring a
 	// week-old copy would otherwise revive every invite that was outstanding

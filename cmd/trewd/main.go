@@ -433,9 +433,11 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	}
 	defer st.Close()
 	// Before anything reads the store (store.GoLive): WAL mode, which a
-	// restored store was never in (T26). A switch a long reader in another
-	// process held off is said, and the store is served anyway, correctly,
-	// only more slowly beside such a reader.
+	// restored store was never in (T26), and an epoch of its own for a
+	// backup's snapshot served for the first time, so two restores of one
+	// archive are two histories to every device (T27). A switch a long reader
+	// in another process held off is said, and the store is served anyway,
+	// correctly, only more slowly beside such a reader.
 	live, err := st.GoLive()
 	if err != nil {
 		return err
@@ -444,6 +446,11 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		log.Warn("the store could not be put in WAL mode, so a long backup or verify can hold up commits",
 			"mode", live.Journal, "err", live.JournalErr,
 			"hint", "restart the server when no backup or verify is running, and it switches")
+	}
+	if live.Renewed {
+		log.Warn("serving a restored backup for the first time, under an epoch of its own: every device reads "+
+			"it whole at its next connection and sends back what it lacks", "snapshotEpoch", live.Was,
+			"epoch", st.Epoch())
 	}
 
 	if ephemeral {
