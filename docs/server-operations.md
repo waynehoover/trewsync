@@ -85,7 +85,10 @@ trewd backup -data /var/lib/trew -to /srv/trew-backups/trew.tar.age \
 
 Configure the remote path and credentials for the account running the job.
 Prevent overlapping jobs, and do not modify the backup while it is being
-transferred. Use `-deep` periodically to check existing content for corruption.
+transferred. Use `-deep` periodically to check existing content for corruption:
+a deep backup replaces a body that has rotted in the backup since an earlier
+run with the source's copy, keeps the rotted one aside as quarantined, and
+says so. A shallow backup does not read what the backup already holds.
 Do not copy the live database with ordinary file-copy tools.
 
 Keep dated or otherwise separate backup generations when you need older

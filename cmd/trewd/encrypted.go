@@ -78,6 +78,10 @@ func backupEncrypted(st *store.Store, dataDir, to string, deep bool, recipients 
 	fmt.Fprintf(out, "encrypted backup written to %s\n", to)
 	fmt.Fprintf(out, "  %d bodies (%s) and the database, verified in the staging copy at %s\n",
 		packed.Manifest.Bodies, humanBytes(packed.Manifest.BodyBytes), staging)
+	if rep.Healed > 0 {
+		fmt.Fprintf(out, "  %d bodies had rotted in the staging copy since an earlier run: each was set aside as "+
+			"quarantined and copied again from the store. Check the disk\n", rep.Healed)
+	}
 	// The archive is written; now the staging copy drops what it did not
 	// archive, which after a purge is the purged history in plaintext. A
 	// failure here does not undo a good archive, so it is said loudly rather

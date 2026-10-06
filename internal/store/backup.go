@@ -54,6 +54,11 @@ type BackupReport struct {
 	// Verified is chunk references checked in the backup after writing it.
 	Verified int
 
+	// Healed is bodies a deep backup found rotted in its own directory, where
+	// an earlier backup had put them, and replaced from the source, setting
+	// the rotted copy aside as quarantined (T33).
+	Healed int
+
 	// InvitesLeftOut is invites the source still had outstanding, which the
 	// backup does not carry; see Backup for why a restore must not bring one
 	// back.
@@ -736,6 +741,28 @@ func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 		dest.Close()
 		return rep, err
 	}
+	// A body that rotted here, in the backup's own directory, after an earlier
+	// backup put it there (T33). The copy above skips a body the directory
+	// has, by a stat, so nothing ever replaced it: every deep backup failed on
+	// it for ever, and a shallow one published snapshot after snapshot that
+	// referenced it, while the source held a good copy. The deep pass is what
+	// reads the bytes, so it is what finds one; it is set aside, copied again
+	// from the source and checked again, and only then does the backup decide.
+	if rep.Healed, err = s.healRotted(dest, blocking); err != nil {
+		dest.Close()
+		return rep, err
+	}
+	if rep.Healed > 0 {
+		if checked, err = dest.Verify(deep); err != nil {
+			dest.Close()
+			return rep, err
+		}
+		rep.Verified = checked.Chunks
+		if inherited, blocking, err = s.splitInheritedFaults(checked.Faults, deep); err != nil {
+			dest.Close()
+			return rep, err
+		}
+	}
 	rep.Inherited = inherited
 	if len(blocking) > 0 {
 		dest.Close()
@@ -822,6 +849,35 @@ func refuseDestinationRecovery(destDir string) error {
 		}
 	}
 	return nil
+}
+
+// healRotted replaces, in the backup dest is being written into, each body a
+// deep verify of it found corrupt, from this store, and returns how many it
+// replaced (T33). The rotted copy is quarantined, renamed aside rather than
+// deleted (rule 3: it is evidence of a disk going bad, and nothing is
+// destroyed on the strength of a hash alone), and the replacement is read
+// through Get first, so rot at the source is reported against the source, as
+// the copy reports it, rather than written into the backup.
+func (s *Store) healRotted(dest *Store, faults []Fault) (int, error) {
+	healed := map[string]bool{}
+	for _, f := range faults {
+		if f.Reason != "corrupt" || f.Chunk == "" || healed[f.VaultID+"/"+f.Chunk] {
+			continue
+		}
+		body, err := s.chunks.Get(f.VaultID, f.Chunk)
+		if err != nil {
+			return len(healed), fmt.Errorf("the backup's copy of %s in vault %s has rotted, and reading it again "+
+				"from the source failed: %w", f.Chunk, f.VaultID, err)
+		}
+		if err := dest.chunks.Quarantine(f.VaultID, f.Chunk); err != nil {
+			return len(healed), fmt.Errorf("setting aside the backup's rotted copy of %s: %w", f.Chunk, err)
+		}
+		if err := dest.chunks.Put(f.VaultID, f.Chunk, body); err != nil {
+			return len(healed), fmt.Errorf("writing %s to the backup again: %w", f.Chunk, err)
+		}
+		healed[f.VaultID+"/"+f.Chunk] = true
+	}
+	return len(healed), nil
 }
 
 // distinctChunkCount is how many distinct bodies this store's entries

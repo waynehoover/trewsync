@@ -1582,6 +1582,10 @@ func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writ
 		rep.Vaults, rep.Refs, rep.Copied, humanBytes(rep.Bytes))
 	fmt.Fprintf(out, "  %d bodies at source, %d in the backup\n", rep.SourceBodies, rep.DestBodies)
 	fmt.Fprintf(out, "  verified %d chunk references in the backup, all present\n", rep.Verified)
+	if rep.Healed > 0 {
+		fmt.Fprintf(out, "  %d bodies had rotted in the backup since an earlier run: each was set aside as quarantined "+
+			"and copied again from the source. Check the disk the backup is on\n", rep.Healed)
+	}
 	// Faults the copy has because the store it came from has them. They do not
 	// stop a backup, because no backup can mend them and refusing would leave
 	// the last good copy unrefreshed for ever, but they are the operator's to
