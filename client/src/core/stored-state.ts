@@ -91,9 +91,16 @@ function checkEntry(path: string, entry: unknown, refuse: (what: string) => Erro
   if ("path" in entry && entry["path"] !== path) {
     throw refuse(`${at}.path is ${describe(entry["path"])}, which is not its key`);
   }
-  for (const field of ["ctime", "mtime", "size", "syncuid", "synctime"]) {
+  for (const field of ["size", "syncuid", "synctime"]) {
     if (field in entry && !isCount(entry[field])) {
       throw refuse(`${at}.${field} is ${describe(entry[field])}, not a non-negative integer`);
+    }
+  }
+  for (const field of ["ctime", "mtime"]) {
+    if (field in entry && !isTime(entry[field])) {
+      throw refuse(
+        `${at}.${field} is ${describe(entry[field])}, not a whole number of milliseconds`,
+      );
     }
   }
   if ("folder" in entry && typeof entry["folder"] !== "boolean") {
@@ -140,10 +147,11 @@ function checkRemote(path: string, state: unknown, refuse: (what: string) => Err
       throw refuse(`${at}.${field} is ${describe(state[field])}, not a boolean`);
     }
   }
-  for (const field of ["mtime", "size"]) {
-    if (!isCount(state[field])) {
-      throw refuse(`${at}.${field} is ${describe(state[field])}, not a non-negative integer`);
-    }
+  if (!isTime(state["mtime"])) {
+    throw refuse(`${at}.mtime is ${describe(state["mtime"])}, not a whole number of milliseconds`);
+  }
+  if (!isCount(state["size"])) {
+    throw refuse(`${at}.size is ${describe(state["size"])}, not a non-negative integer`);
   }
   if (typeof state["hash"] !== "string") {
     throw refuse(`${at}.hash is ${describe(state["hash"])}, not a string`);
@@ -168,6 +176,21 @@ function isObject(v: unknown): v is Record<string, unknown> {
 
 function isCount(v: unknown): v is number {
   return typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+}
+
+/**
+ * A timestamp in milliseconds, which may be before 1970 (T03).
+ *
+ * Held to a count once, and a count it is not: a zip entry dated 1970-01-01
+ * 00:00 local time and unpacked east of UTC is -3,600,000, and so are a Windows
+ * FILETIME of zero and an HFS date of 1904, below zero. The server stores what
+ * it is sent, so one such file made the index of its own device and of every
+ * device that received it unloadable, and removing the index, as the refusal
+ * advised, rebuilt the same state. Clamping where it is observed instead would
+ * make the stat disagree with the index and the file read again every pass.
+ */
+function isTime(v: unknown): v is number {
+  return typeof v === "number" && Number.isSafeInteger(v);
 }
 
 function isPath(v: unknown): v is string {

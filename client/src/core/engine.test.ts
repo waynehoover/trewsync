@@ -19,6 +19,7 @@ import {
   OWN_LIMITS,
   answeredVersion,
   boundedBy,
+  checkEntryShape,
   contentId,
   refuseIfBehind,
   type SyncReport,
@@ -27,7 +28,12 @@ import { chunkBytes, sizesFor } from "./chunk.ts";
 import { NAME_WINDOW, chunkName, chunkNames } from "./digest.ts";
 import { decodeFrame } from "./frame.ts";
 import { ConnectionError, LOCAL_MAX_CHUNK_BYTES, ProtocolError, Transport } from "./transport.ts";
-import { engineOnFakeSocket, settleUntil } from "./fake-socket.ts";
+import {
+  CommittingServer,
+  type FakeSocket,
+  engineOnFakeSocket,
+  settleUntil,
+} from "./fake-socket.ts";
 import { MemoryIndexStore, MemoryVault, type FileStat, type Times } from "./vault.ts";
 import { conflictCopyPath } from "./merge.ts";
 import { firstFreeName, ignoredHereError, neverSync } from "./paths.ts";
@@ -1016,6 +1022,78 @@ describe("concurrent edits, which is where notes get lost", () => {
  * (plan/protocol.md, "Paths"). A rename nobody reported is the describe after
  * this one.
  */
+/**
+ * The deletions a received folder rename brings (P-b).
+ *
+ * Every deletion asks whether it would remove a file this pass wrote, and it
+ * asked about every file the pass wrote: a folder of two thousand notes renamed
+ * elsewhere is two thousand of each, four million questions, 4.5 s in memory
+ * and about 50 s where `sameFile` is two stats. Only names that can be one file
+ * need asking, and the answer for those must not change.
+ */
+describe("the deletions a folder renamed elsewhere brings (P-b)", () => {
+  /** A vault that says what one file is by upper case, the way NTFS does, and counts asking. */
+  class UpperCaseDisk extends MemoryVault {
+    asked = 0;
+    async sameFile(a: string, b: string): Promise<boolean> {
+      this.asked++;
+      return a.toUpperCase() === b.toUpperCase();
+    }
+  }
+
+  async function synced(vault: UpperCaseDisk, paths: string[]) {
+    const rig = await engineOnFakeSocket({}, { vault });
+    const server = new CommittingServer(rig.socket);
+    const entries = [];
+    for (const [i, path] of paths.entries()) {
+      entries.push(await server.version(i + 1, path, `body of ${path}\n`));
+    }
+    rig.socket.raw({ op: "batch", from: 1, to: paths.length, entries });
+    await settleUntil("the notes to be taken", () => rig.engine.status().pending === paths.length);
+    await rig.engine.sync({ coalesceWrites: false });
+    return { ...rig, server };
+  }
+
+  it("asks whether two names are one file only where they can be", async () => {
+    const n = 200;
+    const old = Array.from({ length: n }, (_, i) => `Old Folder/note ${i}.md`);
+    const vault = new UpperCaseDisk();
+    const { engine, socket, server } = await synced(vault, old);
+    const moves = [];
+    for (const [i, path] of old.entries()) {
+      const to = path.replace("Old Folder", "New Folder");
+      moves.push(await server.version(n + i + 1, to, `body of ${path}\n`, { prev: path }));
+    }
+    socket.raw({ op: "batch", from: n + 1, to: 2 * n, entries: moves });
+    await settleUntil("the moves to be taken", () => engine.status().pending === 2 * n);
+    vault.asked = 0;
+    const report = await engine.sync({ coalesceWrites: false });
+
+    expect(report.downloaded).toBe(n);
+    expect(report.deletedLocally).toBe(n);
+    expect(vault.paths().every((p) => p.startsWith("New Folder/"))).toBe(true);
+    expect(vault.asked, "every deletion asked about every write").toBeLessThanOrEqual(n);
+  });
+
+  it("still refuses a deletion that would remove the file it just wrote", async () => {
+    // `ı` and `i` are one name to a disk that compares in upper case and two
+    // to the protocol's fold, so the key the writes are kept under has to be
+    // wider than the fold or this deletion goes ahead and takes the note.
+    const vault = new UpperCaseDisk();
+    const { engine, socket, server } = await synced(vault, ["ı.md"]);
+    const moved = await server.version(2, "i.md", "body of ı.md\n", { prev: "ı.md" });
+    socket.raw({ op: "batch", from: 2, to: 2, entries: [moved] });
+    await settleUntil("the move to be taken", () => engine.status().pending === 2);
+    const report = await engine.sync({ coalesceWrites: false });
+
+    expect(vault.text("i.md")).toBe("body of ı.md\n");
+    expect(vault.text("ı.md"), "the deletion removed the file the pass had written").toBe(
+      "body of ı.md\n",
+    );
+    expect(report.deletedLocally).toBe(0);
+  });
+});
+
 describe("a case-only rename on a receiving device", () => {
   async function scenario(others: number): Promise<{ b: Device; report: SyncReport }> {
     await fresh();
@@ -1641,6 +1719,40 @@ describe("folders and renames", () => {
  * them: the refused note stays on its disk, is named with the server's
  * reason, and goes through once somebody renames it.
  */
+/**
+ * What the disk files a name under is remembered between passes (P-c), and
+ * forgotten the moment the vault learns its disk keeps case apart: both
+ * vaults start on the safe answer that it folds and find out later, and a name
+ * remembered folded would go on blocking a second note the disk can hold.
+ */
+describe("what the disk files a name under, remembered", () => {
+  it("is asked afresh once the vault finds its disk keeps case apart", async () => {
+    class LearnsItsDisk extends MemoryVault {
+      folds = true;
+      canonical(path: string): string {
+        return this.folds ? path.toLowerCase() : path;
+      }
+    }
+    const vault = new LearnsItsDisk();
+    await vault.edit("Note.md", "this device's note\n", 1000);
+    const { engine, socket } = await engineOnFakeSocket({}, { vault });
+    const server = new CommittingServer(socket);
+    await engine.sync({ coalesceWrites: false });
+
+    vault.folds = false;
+    const other = await server.version(1, "note.md", "another device's note\n");
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [other] });
+    await settleUntil("the version to be taken", () => engine.status().pending === 1);
+    const report = await engine.sync({ coalesceWrites: false });
+
+    expect(report.blocked, JSON.stringify(report.inTheWay)).toBe(0);
+    expect(vault.snapshot()).toEqual({
+      "Note.md": "this device's note\n",
+      "note.md": "another device's note\n",
+    });
+  });
+});
+
 describe("two notes the receiving disk cannot hold apart", () => {
   it("refuses the second of two names that differ only by case, and keeps both", async () => {
     await fresh();
@@ -2020,6 +2132,41 @@ describe("a note edited while the other side of its merge is in flight (F01)", (
     expect(report.conflicted).toBe(1);
     // And a's paragraph is not lost either: it is beside the note.
     expect(everywhere(b)).toContain("First, from a.");
+  }, 240_000);
+
+  /**
+   * And what goes up for the note is what is on the disk now (T04).
+   *
+   * Keeping both uploads the note too, and the upload named the chunks the
+   * scan had cut, which are of the version this merge read and not of the one
+   * typed since. The server lacked them, so the body read found the change and
+   * failed the write; it was only the next pass that sent the note.
+   */
+  it("sends the note as it is on the disk, in the same pass (T04)", async () => {
+    await fresh();
+    const a = await device("a");
+    const racy = new EditsAfterLooking();
+    const b = await device("b", undefined, racy);
+
+    const base = "# Note\n\nFirst paragraph.\n\nSecond paragraph.\n";
+    await a.vault.edit("note.md", base);
+    await convergeBoth(a, b);
+
+    await a.vault.edit("note.md", base.replace("First paragraph.", "First, from a."));
+    await a.settle();
+    await receiveCommitted(b.transport);
+    await b.vault.edit("note.md", base.replace("Second paragraph.", "Second, from b."));
+    const typed = base.replace("Second paragraph.", "Third, typed during the merge.");
+    racy.text_ = typed;
+    racy.armed = "note.md";
+
+    const report = await b.engine.sync();
+
+    expect(report.conflicted).toBe(1);
+    expect(report.retrying, "the note's upload failed and waits for another pass").toBe(0);
+    const [newest] = await b.transport.history("note.md", { limit: 1 });
+    const held = new TextDecoder().decode(await b.engine.contentOf(newest!.uid));
+    expect(held, "the server's newest version of the note is not what is on the disk").toBe(typed);
   }, 240_000);
 });
 
@@ -2615,6 +2762,166 @@ describe("a file that could not sync, and then could", () => {
     // is still too long.
     expect(said.filter((m) => m === "skipped for good").length).toBe(2);
   }, 300_000);
+});
+
+/**
+ * A path gone from this disk and gone from the server, whose entry outlived
+ * both (T01).
+ *
+ * `decide` answers "nothing" for it, which is right, and the pass recorded
+ * nothing, which left the entry claiming a sync of bytes no longer anywhere.
+ * `prune` keeps an entry with a `synchash`, so the entry and the server's
+ * tombstone beside it stayed for ever, and the next version to arrive at the
+ * path holding the same bytes, a restore, an undo of the deletion, a rename
+ * back, read against it as "deleted here and unchanged on the server" and was
+ * deleted on the server again, and from there on every device.
+ */
+describe("a note deleted on both sides (T01)", () => {
+  it("is downloaded when it is written back, not deleted on the server again", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    await a.vault.edit("x.md", "one\n");
+    await convergeBoth(a, b);
+    expect(b.vault.text("x.md")).toBe("one\n");
+
+    // Deleted here, on B, and on A too, whose deletion reaches B before B's
+    // own pass sends one.
+    await b.vault.remove("x.md");
+    await a.vault.remove("x.md");
+    await a.settle();
+    await receiveCommitted(b.transport);
+    const settled = await b.settle();
+    // And a device in that state has applied everything: other devices wait on
+    // this cursor, and the leftover entry's old uid held it back for ever.
+    expect(settled.appliedCursor, "a settled device never said how far it had got").toBe(
+      b.engine.status().cursor,
+    );
+
+    // The same bytes written back at the same name, which is what restoring it
+    // from history or from the trash does.
+    await a.vault.edit("x.md", "one\n");
+    await convergeBoth(a, b, 6);
+
+    expect(a.vault.text("x.md"), "the note written back was deleted again").toBe("one\n");
+    expect(b.vault.text("x.md"), "the note written back never arrived").toBe("one\n");
+  }, 240_000);
+
+  /** A peer's deletion, the same bytes again, and what this device sends about them. */
+  async function syncedOnce(): Promise<{
+    engine: Engine;
+    server: CommittingServer;
+    vault: MemoryVault;
+    store: MemoryIndexStore;
+    socket: FakeSocket;
+  }> {
+    const rig = await engineOnFakeSocket();
+    const server = new CommittingServer(rig.socket);
+    rig.socket.raw({
+      op: "batch",
+      from: 1,
+      to: 1,
+      entries: [await server.version(1, "x.md", "one")],
+    });
+    await settleUntil("the version to be taken", () => rig.engine.status().pending === 1);
+    await rig.engine.sync({ coalesceWrites: false });
+    expect(rig.vault.text("x.md")).toBe("one");
+    return { ...rig, server };
+  }
+
+  it("does not delete a restored note when the other deletion arrived first", async () => {
+    const { engine, server, vault, socket } = await syncedOnce();
+
+    await vault.remove("x.md");
+    const gone = await server.version(2, "x.md", "", { deleted: true });
+    socket.raw({ op: "batch", from: 2, to: 2, entries: [gone] });
+    await settleUntil("the deletion to be taken", () => engine.status().pending === 1);
+    await engine.sync({ coalesceWrites: false });
+    const quiet = await engine.sync({ coalesceWrites: false });
+    expect(quiet.appliedCursor, "nothing is outstanding, and the cursor was never applied").toBe(2);
+
+    const restored = await server.version(3, "x.md", "one", { device: "desktop" });
+    socket.raw({ op: "batch", from: 3, to: 3, entries: [restored] });
+    await settleUntil("the restore to be taken", () => engine.status().pending === 1);
+    await engine.sync({ coalesceWrites: false });
+
+    expect(
+      server.committed.filter((c) => c.deleted),
+      "this device deleted the restored note on the server",
+    ).toEqual([]);
+    expect(vault.text("x.md")).toBe("one");
+  });
+
+  it("does not delete a restored note after its own deletion's ack was lost", async () => {
+    const { engine, vault, store, socket } = await syncedOnce();
+
+    // Deleted here; the server commits it and the connection drops before
+    // the acknowledgement arrives.
+    await vault.remove("x.md");
+    socket.autoReply = (frame, s) => {
+      if (frame["op"] === "putmany" || frame["op"] === "put") setTimeout(() => s.hangUp(), 0);
+      else if (frame["op"] === "ping") s.raw({ res: "pong" });
+    };
+    await engine.sync({ coalesceWrites: false });
+
+    // The next connection is a fresh engine on the saved index at the old
+    // cursor, and catch-up replays this device's own deletion with its payload.
+    const next = await engineOnFakeSocket({ cursor: 1 }, { store, vault });
+    const again = new CommittingServer(next.socket);
+    const gone = await again.version(2, "x.md", "", { deleted: true, device: "d" });
+    next.socket.raw({ op: "batch", from: 2, to: 2, entries: [gone] });
+    await settleUntil(
+      "the replayed deletion to be taken",
+      () => next.engine.status().pending === 1,
+    );
+    await next.engine.sync({ coalesceWrites: false });
+
+    const restored = await again.version(3, "x.md", "one", { device: "desktop" });
+    next.socket.raw({ op: "batch", from: 3, to: 3, entries: [restored] });
+    await settleUntil("the restore to be taken", () => next.engine.status().pending === 1);
+    await next.engine.sync({ coalesceWrites: false });
+
+    expect(
+      again.committed.filter((c) => c.deleted),
+      "the restored note was deleted",
+    ).toEqual([]);
+    expect(vault.text("x.md")).toBe("one");
+  });
+
+  it("keeps a note renamed back after its rename's ack was lost", async () => {
+    const { engine, vault, store, socket } = await syncedOnce();
+
+    // Renamed here; the server commits the move and the ack is lost.
+    await vault.write("b.md", new TextEncoder().encode("one"), { mtime: 1000, ctime: 1000 });
+    await vault.remove("x.md");
+    engine.noteRename("x.md", "b.md");
+    socket.autoReply = (frame, s) => {
+      if (frame["op"] === "putmany" || frame["op"] === "put") setTimeout(() => s.hangUp(), 0);
+      else if (frame["op"] === "ping") s.raw({ res: "pong" });
+    };
+    await engine.sync({ coalesceWrites: false });
+
+    // Catch-up replays the move, and two passes settle it.
+    const next = await engineOnFakeSocket({ cursor: 1 }, { store, vault });
+    const again = new CommittingServer(next.socket);
+    const moved = await again.version(2, "b.md", "one", { device: "d", prev: "x.md" });
+    next.socket.raw({ op: "batch", from: 2, to: 2, entries: [moved] });
+    await settleUntil("the replayed move to be taken", () => next.engine.status().pending === 2);
+    await next.engine.sync({ coalesceWrites: false });
+    await next.engine.sync({ coalesceWrites: false });
+
+    // Another device renames it back.
+    const back = await again.version(3, "x.md", "one", { device: "desktop", prev: "b.md" });
+    next.socket.raw({ op: "batch", from: 3, to: 3, entries: [back] });
+    await settleUntil("the rename back to be taken", () => next.engine.status().pending === 2);
+    await next.engine.sync({ coalesceWrites: false });
+
+    expect(vault.snapshot(), "the note left this vault").toEqual({ "x.md": "one" });
+    expect(
+      again.committed.filter((c) => c.deleted),
+      "the note was deleted everywhere",
+    ).toEqual([]);
+  });
 });
 
 /** How many paths the persisted index still has the server's word about. */
@@ -3218,6 +3525,98 @@ describe("a batch that contradicts itself", () => {
         ],
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * A timestamp before 1970 is a date, not a corrupt index (T03).
+ *
+ * A zip entry dated 1970-01-01 00:00 local time, unpacked east of UTC, is
+ * -3,600,000 ms; a Windows FILETIME of zero and an HFS date of 1904 are below
+ * zero too, and the server stores whatever it is sent. The index stored such a
+ * time as it came, from a stat or from a batch, and refused it when it loaded,
+ * so the device that had the file, and every device that received a version of
+ * it, failed at its next start. Removing the index, which the refusal advised,
+ * rebuilt the same state and failed again.
+ */
+describe("a timestamp from before 1970 (T03)", () => {
+  const BEFORE_1970 = -3_600_000;
+
+  /** What a restart does with this store: the engine starting is the property. */
+  async function restartsOn(store: MemoryIndexStore, cursor: number): Promise<void> {
+    const again = await engineOnFakeSocket({ cursor }, { store });
+    expect(again.engine.status().cursor).toBe(cursor);
+    again.t.close();
+  }
+
+  it("survives a restart after sending a file dated before 1970", async () => {
+    const vault = new MemoryVault();
+    await vault.write("old.md", new TextEncoder().encode("from an old archive\n"), {
+      mtime: BEFORE_1970,
+      ctime: BEFORE_1970,
+    });
+    const rig = await engineOnFakeSocket({}, { vault });
+    const server = new CommittingServer(rig.socket);
+    const report = await rig.engine.sync({ coalesceWrites: false });
+    expect(report.uploaded, JSON.stringify(report.needsAttention)).toBe(1);
+    expect(server.committed.map((c) => server.text(c))).toEqual(["from an old archive\n"]);
+    rig.t.close();
+    await restartsOn(rig.store, 0);
+  });
+
+  it("survives a restart after receiving a version dated before 1970", async () => {
+    const rig = await engineOnFakeSocket();
+    const server = new CommittingServer(rig.socket);
+    const folder = {
+      uid: 1,
+      path: "Archive",
+      size: 0,
+      ctime: 0,
+      mtime: BEFORE_1970,
+      folder: true,
+      deleted: false,
+      chunks: [],
+      device: "other",
+    };
+    const note = await server.version(2, "Archive/old.md", "kept\n", { mtime: BEFORE_1970 });
+    rig.socket.raw({ op: "batch", from: 1, to: 2, entries: [folder, note] });
+    await settleUntil("the versions to be taken", () => rig.engine.status().pending === 2);
+    const report = await rig.engine.sync({ coalesceWrites: false });
+    expect(report.downloaded).toBe(1);
+    expect(rig.vault.text("Archive/old.md")).toBe("kept\n");
+    rig.t.close();
+    await restartsOn(rig.store, 2);
+  });
+
+  it("is taken from the server, and what is not a time or a flag is not", () => {
+    const entry = {
+      uid: 3,
+      path: "old.md",
+      size: 5,
+      ctime: BEFORE_1970,
+      mtime: BEFORE_1970,
+      folder: false,
+      deleted: false,
+      chunks: ["c".repeat(64)],
+      device: "other",
+    };
+    expect(() => checkEntryShape(entry)).not.toThrow();
+    // Refused where it arrives, so a value no index could hold ends the
+    // session and is retried rather than being saved and refused at the next
+    // start, which is a device that cannot start.
+    for (const [what, over] of [
+      ["a time that is not a whole number", { mtime: 1.5 }],
+      ["a time past the safe integers", { ctime: 2 ** 60 }],
+      ["a time that is a string", { mtime: "1000" }],
+      ["a size that is not a whole number", { size: 4.5 }],
+      ["a negative size", { size: -5 }],
+      ["a folder flag that is a number", { folder: 1 }],
+      ["a deletion flag that is missing", { deleted: undefined }],
+    ] as const) {
+      expect(() => checkEntryShape({ ...entry, ...over } as unknown as typeof entry), what).toThrow(
+        /version 3/,
+      );
+    }
   });
 });
 

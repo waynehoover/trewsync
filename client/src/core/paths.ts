@@ -20,6 +20,7 @@
  */
 
 import { fold } from "./fold.ts";
+import { MAX_PATH_BYTES, MAX_SEGMENT_BYTES } from "./path-policy.ts";
 
 /**
  * Whether any segment of a vault-relative path is one that never syncs.
@@ -93,7 +94,7 @@ export async function firstFreeName(
   nth: (n: number) => string = numbered(base),
 ): Promise<string> {
   if (!(await taken(base))) return base;
-  for (let n = 1; n < 1000; n++) {
+  for (let n = 1; n <= ALTERNATIVES; n++) {
     const candidate = nth(n);
     if (!(await taken(candidate))) return candidate;
   }
@@ -103,10 +104,99 @@ export async function firstFreeName(
   throw new Error(`cannot find an unused name beside ${base}`);
 }
 
+/**
+ * How many names `firstFreeName` tries after the one it was given: " 2" up to
+ * " 999". It counted to " 1000", one byte more than a name beside a note
+ * leaves room for (T63).
+ */
+const ALTERNATIVES = 998;
+
+/** The most bytes `firstFreeName` adds to a name, which is " 999". */
+export const FREE_NAME_NUMBER_BYTES = ` ${ALTERNATIVES + 1}`.length;
+
 /** " 2", " 3", and so on, with the extension kept on the end. */
 function numbered(base: string): (n: number) => string {
   const { stem, ext } = splitName(base);
   return (n) => `${stem} ${n + 1}${ext}`;
+}
+
+const utf8 = new TextEncoder();
+/** Bytes of UTF-8, which is what the limits on a name and a path count. */
+export const byteLength = (s: string): number => utf8.encode(s).length;
+
+/**
+ * How many bytes a new name in `dir` may take: the tighter of a name's own
+ * limit and what the folders in front of it leave of a path's, less the number
+ * `firstFreeName` may still add to it.
+ */
+export function roomBeside(dir: string): number {
+  return Math.min(MAX_SEGMENT_BYTES, MAX_PATH_BYTES - byteLength(dir)) - FREE_NAME_NUMBER_BYTES;
+}
+
+/**
+ * `<stem><words><ext>`, cut to the protocol's limits on a name and a path, with
+ * room left for the number `firstFreeName` may add (T63).
+ *
+ * The names put beside a note, a conflict copy and a restored copy, add words
+ * to the note's own name, and a note whose name was already near the 255 bytes
+ * a name may hold got a copy no disk would create: ENAMETOOLONG on every pass,
+ * and the edit the copy was keeping never synced. So the note's name gives way,
+ * from its end, whole characters as a person sees them (a letter with its
+ * accents, an emoji with its joiners), which also keeps it in NFC.
+ *
+ * An "extension" too long to keep beside even one character of the name is not
+ * one: in `Version 1.2 of the plan ...` it is everything after the last dot.
+ * It is cut with the name instead of being kept whole.
+ *
+ * A name whose folders leave no room even then is left as it is, and the
+ * server's refusal of it is what says so.
+ */
+export function nameBeside(stem: string, words: string, ext: string): string {
+  const cut = stem.lastIndexOf("/") + 1;
+  const dir = stem.slice(0, cut);
+  let name = stem.slice(cut);
+  const room = roomBeside(dir);
+  if (byteLength(ext) + byteLength(words) + 1 > room) {
+    name += ext;
+    ext = "";
+  }
+  const over = byteLength(name) + byteLength(words) + byteLength(ext) - room;
+  if (over > 0) name = clipped(name, byteLength(name) - over);
+  return `${dir}${name}${words}${ext}`;
+}
+
+/**
+ * The longest prefix of `s` within `limit` UTF-8 bytes, in whole characters as
+ * a person sees them, without trailing spaces, dots or hyphens, and never
+ * empty.
+ *
+ * Never empty because an empty name or author is not one `conflictOriginal`
+ * reads as a copy, and a copy nobody can find is the failure a copy exists to
+ * prevent. Whole characters because half of one is at best a different name (a
+ * letter without its accent) and at worst a lone surrogate, which is not UTF-8
+ * and which the server refuses in a path. Without `Intl.Segmenter` it falls
+ * back to whole code points, which still never splits a surrogate pair.
+ */
+export function clipped(s: string, limit: number): string {
+  let out = "";
+  let used = 0;
+  for (const piece of graphemes(s)) {
+    const n = byteLength(piece);
+    if (out !== "" && used + n > limit) break;
+    out += piece;
+    used += n;
+  }
+  const trimmed = out.replace(/[\s.-]+$/u, "");
+  return trimmed === "" ? out : trimmed;
+}
+
+const segmenter =
+  typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter() : undefined;
+
+/** `s` in grapheme clusters where the platform can say, and in code points where not. */
+function graphemes(s: string): Iterable<string> {
+  if (segmenter === undefined) return s;
+  return Array.from(segmenter.segment(s), (g) => g.segment);
 }
 
 /**

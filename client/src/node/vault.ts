@@ -2991,6 +2991,28 @@ export class NodeVault implements Vault {
         if (code !== "EPERM" && code !== "ENOTSUP" && code !== "EOPNOTSUPP" && code !== "EXDEV") {
           throw err;
         }
+        // Across a mount, a temporary beside the destination is on its
+        // filesystem, and a link from it is the same atomic claim (R37). A
+        // download to a name nothing held is a create (P-a), and the exclusive
+        // open below writes into the name itself, so a crash part way left a
+        // partial note there that the next pass would have sent as the note.
+        if (code === "EXDEV") {
+          const beside = await writeTemp(full, bytes, { mtime: times.mtime }, undefined);
+          try {
+            await link(beside, full);
+            this.dirty(full, had);
+            return true;
+          } catch (e) {
+            const why = (e as NodeJS.ErrnoException).code;
+            if (why === "EEXIST") return false;
+            if (why !== "EPERM" && why !== "ENOTSUP" && why !== "EOPNOTSUPP" && why !== "EXDEV") {
+              throw e;
+            }
+          } finally {
+            await rm(beside, { force: true }).catch(() => {});
+            liveTemps.delete(beside);
+          }
+        }
         // No link across this boundary. Exclusive open, then the bytes again,
         // which keeps the no-overwrite promise: `wx` fails if anything is
         // there, including something that appeared since the link was tried.

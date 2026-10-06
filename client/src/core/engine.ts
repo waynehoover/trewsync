@@ -274,11 +274,31 @@ export function checkEntryShape(e: WireEntry): void {
   if (e.path === "") {
     throw new Error(`version ${e.uid} has an empty path, and no file is called nothing`);
   }
+  // The types too, because these go into the saved index as they arrive and
+  // the index refuses at its next load what it did not refuse here (T03). A
+  // value no index can hold ends the session, which is retried, rather than
+  // being saved and leaving a device that cannot start. A time before 1970 is
+  // a date, and is taken.
+  for (const [field, value] of [
+    ["mtime", e.mtime],
+    ["ctime", e.ctime],
+  ] as const) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+      throw new Error(
+        `version ${e.uid} has ${field} ${JSON.stringify(value)}, which is not a time`,
+      );
+    }
+  }
+  if (typeof e.folder !== "boolean" || typeof e.deleted !== "boolean") {
+    throw new Error(`version ${e.uid} does not say plainly whether it is a folder or a deletion`);
+  }
   if (e.folder && e.deleted) {
     throw new Error(`version ${e.uid} is both a folder and a deletion`);
   }
-  if (e.size < 0) {
-    throw new Error(`version ${e.uid} declares ${e.size} bytes, and there is no such file`);
+  if (typeof e.size !== "number" || !Number.isSafeInteger(e.size) || e.size < 0) {
+    throw new Error(
+      `version ${e.uid} declares ${JSON.stringify(e.size)} bytes, and there is no such file`,
+    );
   }
   for (const name of e.chunks) {
     if (!isDigest(name)) {
@@ -1679,7 +1699,17 @@ export class Engine {
       : [];
     if (!first && !removedFolders.length) return;
     const preview = await this.preview(stats);
-    if (first) {
+    // Asked only where something local is at stake (T12). A first sync whose
+    // every local file is already the server's, and where the rest only
+    // arrives, changes nothing here and has nothing to decide, and asking
+    // stopped the sync until somebody answered: on a phone, again after every
+    // first sync Android interrupted, whose landed notes are exactly that.
+    // Not remembered as confirmed, so a later pass that finds something at
+    // stake still asks.
+    if (
+      first &&
+      preview.files.some((file) => file.action !== "unchanged" && file.action !== "download")
+    ) {
       if (!(await this.opts.confirmFirstSync(preview)))
         throw new Error("First sync paused for review.");
       this.firstSyncConfirmed = true;
@@ -1708,6 +1738,9 @@ export class Engine {
 
   private async pass(opts: SyncOptions = {}): Promise<SyncReport> {
     const report = emptyReport();
+    // A checkpoint's half minute is counted from here, so a short pass never
+    // takes one however long ago the last save was (T12).
+    this.checkpointedAt = Date.now();
     if (this.liveSetShrank) {
       this.liveSetShrank = false;
       for (const [path, skip] of this.skipped) {
@@ -1853,6 +1886,7 @@ export class Engine {
     // What the disk will file each local path under, for the collision
     // check in `fill`. Worked out here, once per pass, from the same listing
     // the decisions are made from.
+    this.checkIdentityProbe();
     this.localByIdentity = new Map();
     for (const path of onDisk.keys()) this.localByIdentity.set(this.identity(path), path);
     this.deletingThisPass = new Set();
@@ -1862,12 +1896,10 @@ export class Engine {
     //    neither side, and left out of this set it would be refused in
     //    silence, which is the one thing a refusal that waits on a person
     //    must not be.
-    const paths = new Set<string>([
-      ...onDisk.keys(),
-      ...this.entries.keys(),
-      ...this.remote.keys(),
-      ...ambiguous.keys(),
-    ]);
+    const paths = new Set<string>(onDisk.keys());
+    for (const path of this.entries.keys()) paths.add(path);
+    for (const path of this.remote.keys()) paths.add(path);
+    for (const path of ambiguous.keys()) paths.add(path);
 
     const active = this.opts.activePath?.();
     const priority = (path: string) =>
@@ -1878,9 +1910,16 @@ export class Engine {
             ? 1
             : 2
           : 3;
-    const ordered = [...paths]
-      .map((path) => ({ path, priority: priority(path) }))
-      .sort((a, b) => a.priority - b.priority || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    // By priority, then by path in UTF-16 code units, which is what `<`
+    // compares and what a sort with no comparator does (P-c). Sorting each
+    // priority on its own natively is the same order without a comparator
+    // called a hundred thousand times on a vault of ten thousand.
+    const byPriority: string[][] = [[], [], [], []];
+    for (const path of paths) byPriority[priority(path)]!.push(path);
+    const ordered: { path: string; priority: number }[] = [];
+    byPriority.forEach((group, at) => {
+      for (const path of group.sort()) ordered.push({ path, priority: at });
+    });
     let previousPriority = 0;
     let visitedActive = false;
     let activeRemoteUid: number | undefined;
@@ -1991,7 +2030,7 @@ export class Engine {
         this.skipped.delete(path);
         this.log("written-off file is gone, and the server never had it", path);
       } else if (skip) {
-        if (fingerprintOf(this.entries.get(path)) === skip.fingerprint) {
+        if (fingerprintOf(this.entries.get(path), this.remote.get(path)) === skip.fingerprint) {
           noteSkipped(report, path);
           continue;
         }
@@ -2006,9 +2045,17 @@ export class Engine {
       // notes. Worked out fresh every pass, like the clash below and for the
       // same reason: the moment one of them is renamed there is nothing here
       // to notice, so a remembered refusal would never clear.
-      const claimed = ambiguous.has(path)
-        ? path
-        : parents(path).find((ancestor) => ambiguous.has(ancestor));
+      //
+      // The folders above are walked only when some name is claimed twice,
+      // which on almost every pass none is (P-c): building them for every path
+      // of a settled vault was 3.7 ms of a pass at ten thousand, to find
+      // nothing.
+      const claimed =
+        ambiguous.size === 0
+          ? undefined
+          : ambiguous.has(path)
+            ? path
+            : parents(path).find((ancestor) => ambiguous.has(ancestor));
       if (claimed !== undefined) {
         const why = ambiguous.get(claimed)!;
         nowBlocked.add(path);
@@ -2020,8 +2067,12 @@ export class Engine {
         continue;
       }
 
-      const blockedBy = parents(path).find((ancestor) => filePaths.has(ancestor));
-      if (blockedBy !== undefined && !onDisk.has(path)) {
+      // Only for a path not on this disk, which is the only one it can block,
+      // so a settled vault walks no folders here either (P-c).
+      const blockedBy = onDisk.has(path)
+        ? undefined
+        : parents(path).find((ancestor) => filePaths.has(ancestor));
+      if (blockedBy !== undefined) {
         // Something upstream is a file where this path needs a folder.
         // Nothing can be written here until somebody renames one of
         // them, and a real filesystem answers ENOTDIR, which does not
@@ -2070,7 +2121,7 @@ export class Engine {
     into("decideMs");
     await this.fill(report);
     await this.applyDeletes(report);
-    this.wroteThisPass = [];
+    this.wroteThisPass = new Map();
     await this.flush(report);
     // Folders last, once every file this pass moves has moved: a folder's
     // deletion goes to the server after the deletions of what was in it have
@@ -2485,6 +2536,18 @@ export class Engine {
             synced(entry, local.hash, entry.chunks, remote.uid, now);
           }
         }
+        // Gone here and gone on the server, so the entry describes nothing
+        // (T01). Kept, it went on claiming a sync of bytes that are nowhere:
+        // `prune` keeps any entry with a `synchash`, so the entry and the
+        // tombstone beside it stayed for ever. Its old uid held back the
+        // applied checkpoint other devices wait on, and the next version to
+        // arrive with the same bytes (a restore, an undo, a rename back) read
+        // against it as "deleted here and unchanged" and was deleted on the
+        // server again. It is reached by both deletions crossing, and by this
+        // device's own deletion or rename whose acknowledgement was lost and
+        // came back in catch-up. Forgetting it is what a deletion committed
+        // here already does, and `prune` then drops the tombstone.
+        if (local === undefined && remote?.deleted) this.entries.delete(path);
         return;
 
       case "upload":
@@ -2538,7 +2601,7 @@ export class Engine {
         // does.
         this.skipped.set(path, {
           why: `${action.why}. Rename one of them, and it will sync.`,
-          fingerprint: fingerprintOf(entry),
+          fingerprint: fingerprintOf(entry, remote),
         });
         noteSkipped(report, path);
         this.log("cannot be both", path, action.why);
@@ -3599,6 +3662,7 @@ export class Engine {
       try {
         const from = local.get(d);
         const reused = from === undefined ? "ask" : await this.landFromLocal(d, from, report);
+        if (reused !== "ask") this.writtenSinceSave++;
         if (reused === "landed") {
           if (d.kind === "download") {
             report.downloaded++;
@@ -3624,6 +3688,7 @@ export class Engine {
               // be verified. Ordinary healthy batches keep the shared fetch.
               await this.land(d, await this.fetchFor(d), report)
             : await this.land(d, bodies, report);
+        this.writtenSinceSave++;
         // Counted only when it happened. A conflict copy is not a download,
         // and reporting one is the kind of true-sounding status rule 7 is
         // about: the incoming version is on this disk either way, but under
@@ -3638,6 +3703,52 @@ export class Engine {
         this.recordFailure(d.path, err, report);
       }
     }
+    await this.checkpoint();
+  }
+
+  /** Files a fill has written since the index was last saved, for `checkpoint`. */
+  private writtenSinceSave = 0;
+  /** When the index was last saved or the pass began, by the wall clock. */
+  private checkpointedAt = 0;
+
+  /**
+   * Saves the index part way through a long pass (T12).
+   *
+   * It was saved once, at the end of a pass, and a first sync of a few
+   * thousand notes is one pass of minutes. Android reclaims a backgrounded
+   * Obsidian well inside that, and the restart then had an index from before
+   * any of it: it asked for the first-sync review again, and read and hashed
+   * every note that had already landed, twice over, to find out it was the
+   * server's.
+   *
+   * After a fill, at most once a batch's worth of files or once every half
+   * minute, so a pass of a few downloads never pays for it. The vault is
+   * flushed first, exactly as at the end of a pass, so the index is never
+   * durable ahead of the notes it names (rule 3). What the pass has not done
+   * yet stays on the inbound work list and is decided again after a restart,
+   * as after any pass that ends early. A checkpoint that fails is said and
+   * passed over: the index on the disk is then the older one, which is safe,
+   * and the save at the end of the pass is the one whose failure stops it.
+   */
+  private async checkpoint(): Promise<void> {
+    if (this.writtenSinceSave === 0) return;
+    if (
+      this.writtenSinceSave < CHECKPOINT_FILES &&
+      Date.now() - this.checkpointedAt < CHECKPOINT_MS
+    )
+      return;
+    try {
+      await this.opts.vault.flush?.();
+      await this.save();
+    } catch (err) {
+      // Not asked again at the very next fill: a store that cannot write now
+      // is asked at the next interval, and at the end of the pass.
+      this.writtenSinceSave = 0;
+      this.checkpointedAt = Date.now();
+      this.log("could not save the index part way through the pass; the end of it will", {
+        why: (err as Error).message,
+      });
+    }
   }
 
   /** Local paths as the disk files them, from this pass's listing. */
@@ -3645,9 +3756,37 @@ export class Engine {
   /** Paths this pass has decided to delete locally, which cannot collide with a write. */
   private deletingThisPass = new Set<string>();
 
-  /** What the disk will file a path under. The vault knows; otherwise the safe guess. */
+  /**
+   * What the disk will file a path under. The vault knows; otherwise the safe
+   * guess.
+   *
+   * Remembered per path (P-c). Every pass asks it of every path on the disk,
+   * and the plugin's answer normalises the path and lower-cases it: 4.8 ms of a
+   * settled pass at ten thousand notes, every pass, for answers that do not
+   * change. The one thing that changes them is the vault learning whether its
+   * disk folds case, which both vaults find out once, after starting on the
+   * safe answer that it does; `identityProbe` notices that and starts the
+   * memory afresh. Pruned with the refusal memo, in `prune`.
+   */
   private identity(path: string): string {
-    return this.opts.vault.canonical ? this.opts.vault.canonical(path) : foldPath(path);
+    const known = this.identityOf.get(path);
+    if (known !== undefined) return known;
+    const vault = this.opts.vault;
+    const id = vault.canonical ? vault.canonical(path) : foldPath(path);
+    this.identityOf.set(path, id);
+    return id;
+  }
+
+  private readonly identityOf = new Map<string, string>();
+  /** The vault's answer for a name with both cases in it, when `identityOf` was begun. */
+  private identityProbe: string | undefined;
+
+  /** Forgets every remembered identity if the vault's way of filing names has changed. */
+  private checkIdentityProbe(): void {
+    const probe = this.opts.vault.canonical?.("Aa");
+    if (probe === this.identityProbe) return;
+    this.identityProbe = probe;
+    this.identityOf.clear();
   }
 
   /**
@@ -3724,7 +3863,17 @@ export class Engine {
    * the pass when it would describe whatever the editor had done since.
    */
   private deleteBaseline = new Map<string, string>();
-  private wroteThisPass: string[] = [];
+  /**
+   * What this pass wrote, by `sameFileKey`, in the order it wrote them.
+   *
+   * By key because every deletion asks whether it would remove one of these
+   * (P-b), and it asked about every one of them: a folder of two thousand
+   * notes renamed on another device is two thousand writes and two thousand
+   * deletions, four million questions, 4.5 s in memory and about 50 s on the
+   * headless client, whose `sameFile` is two stats. Two names that can be one
+   * file always share a key, so only those are asked.
+   */
+  private wroteThisPass = new Map<string, string[]>();
 
   /**
    * Whether removing `path` would remove something this pass wrote.
@@ -3742,7 +3891,7 @@ export class Engine {
     path: string,
   ): Promise<{ wrote: string; sure: boolean } | undefined> {
     const vault = this.opts.vault;
-    for (const wrote of this.wroteThisPass) {
+    for (const wrote of this.wroteThisPass.get(sameFileKey(path)) ?? []) {
       if (wrote === path) continue;
       if (vault.sameFile) {
         if (await vault.sameFile(wrote, path)) return { wrote, sure: true };
@@ -4166,7 +4315,10 @@ export class Engine {
    * way" of anything and landed over it.
    */
   private landed(path: string): void {
-    this.wroteThisPass.push(path);
+    const key = sameFileKey(path);
+    const same = this.wroteThisPass.get(key);
+    if (same) same.push(path);
+    else this.wroteThisPass.set(key, [path]);
     this.localByIdentity.set(this.identity(path), path);
   }
 
@@ -4298,12 +4450,16 @@ export class Engine {
   /**
    * Fetches a list of chunks in as many asks as the server's caps require.
    *
-   * One `fetch` may carry at most `maxFetchBytes` of summed budget and at
-   * most 65536 names, and the server refuses more with `toolarge` and no
-   * bodies. This device does not know the size of a chunk it has not got, so
-   * it costs each at its share of the file's declared size, which for a whole
-   * file adds up to exactly what the server counts. The bodies come back in
-   * the order asked, across every ask.
+   * One `fetch` may carry at most `maxFetchBytes` of the chunks' real sizes
+   * and at most 65536 names, and the server refuses more with `toolarge`, no
+   * bodies, and the session kept. This device does not know the size of a
+   * chunk it has not got, so it costs each at its share of the file's declared
+   * size. Over a whole file that adds up to what the server counts, and over
+   * part of one it need not: a large file split across asks whose first chunks
+   * are bigger than its average put more than the cap in one ask. So an ask
+   * the server refuses is asked again in halves, which is one more round trip
+   * where the plan missed, and a single chunk always fits (T02). The bodies
+   * come back in the order asked, across every ask.
    */
   private async fetchAll(
     names: readonly string[],
@@ -4328,20 +4484,50 @@ export class Engine {
         // frame and a raw one a marker byte longer, so adding raw lengths
         // mixed two units and stepped the progress back at every boundary.
         let received = 0;
-        for (const ask of planFetches(names, budgetOf, cap, MAX_FETCH_NAMES)) {
+        const fetchInHalves = async (ask: readonly string[]): Promise<void> => {
           let inThis = 0;
-          const bodies = await transport.fetch(
-            ask,
-            onBytes === undefined
-              ? undefined
-              : (n) => {
-                  inThis = n;
-                  onBytes(received + n);
-                },
-            interleave,
-          );
+          let bodies: Uint8Array[];
+          try {
+            bodies = await transport.fetch(
+              ask,
+              onBytes === undefined
+                ? undefined
+                : (n) => {
+                    inThis = n;
+                    onBytes(received + n);
+                  },
+              interleave,
+            );
+          } catch (err) {
+            if (!(err instanceof ProtocolError) || err.code !== "toolarge") throw err;
+            // A refusal of the plan, not of a file (T02). It was written off
+            // as `toolarge` against every file in the batch, the small ones
+            // included, with "make it smaller" as the remedy, and the batch
+            // formed the same way after every reconnect. The server refuses
+            // before sending anything and keeps the session, so the halves can
+            // simply be asked for.
+            if (ask.length > 1 && !transport.isClosed) {
+              const half = Math.ceil(ask.length / 2);
+              await fetchInHalves(ask.slice(0, half));
+              await fetchInHalves(ask.slice(half));
+              return;
+            }
+            // One chunk over the limit is a server whose fetch limit is below
+            // its own chunk size, which a TrewSync server refuses to start
+            // with, and an ended session is a server that sent more than it
+            // said. Neither is about the file, so neither code reaches
+            // `recordFailure`, which would write the file off for good.
+            throw new Error(
+              transport.isClosed
+                ? `the download ended: ${err.message}`
+                : `the server will not send even one chunk of this file in a fetch: ${err.message}`,
+            );
+          }
           for (const b of bodies) out.push(b);
           received += inThis;
+        };
+        for (const ask of planFetches(names, budgetOf, cap, MAX_FETCH_NAMES)) {
+          await fetchInHalves(ask);
         }
         return out;
       };
@@ -4454,6 +4640,10 @@ export class Engine {
     const names = await chunkNames(parts);
     if (contentId(names) !== contentId(d.chunks)) return "ask";
 
+    // A move's destination is usually a name nothing held, and then one
+    // exclusive create is the whole write, as in `land`.
+    if (await this.createdWhereNothingWas(d, bytes)) return "landed";
+
     // The same check as `land`, for the same reason: this writes over
     // `d.path` too, and finding the bytes on this disk rather than on the
     // wire does not make the destination any less somebody's open note.
@@ -4476,18 +4666,48 @@ export class Engine {
     ) {
       return "kept";
     }
+    this.settled(d, bytes.length);
+    return "landed";
+  }
+
+  /**
+   * A version now at its path, recorded: written this pass, observed as the
+   * disk will report it, and synced against the server's own chunk list, so
+   * nothing is re-chunked and nothing asked for again.
+   */
+  private settled(d: Incoming, size: number): void {
     this.landed(d.path);
-    observe(d.entry, {
-      folder: false,
-      mtime: d.remote.mtime,
-      ctime: d.remote.mtime,
-      size: bytes.length,
-    });
+    observe(d.entry, { folder: false, mtime: d.remote.mtime, ctime: d.remote.mtime, size });
     d.entry.chunks = [...d.chunks];
     d.entry.hash = contentId(d.chunks);
-    d.entry.size = bytes.length;
+    d.entry.size = size;
     synced(d.entry, d.entry.hash, d.entry.chunks, d.remote.uid, this.now());
-    return "landed";
+  }
+
+  /**
+   * Writes a version to a path that held nothing when the pass decided, with
+   * one exclusive create, and says whether it did (P-a).
+   *
+   * Where the listing showed nothing, the preserving write has nothing to
+   * preserve, and every step it takes before writing is a look for something
+   * that is not there: the stat in `unchangedSince`, the free conflict name,
+   * and inside the adapter the read, the move aside and the second look. Five
+   * adapter calls per file on a phone, measured at 66 ms against 52 per new
+   * file over a first sync of 3,778. An exclusive create is the same promise
+   * those looks make, kept by the adapter in one step: it writes only where
+   * nothing is, so it cannot overwrite (R33).
+   *
+   * False, and nothing written, when something took the name since the
+   * listing. The ordinary landing then runs as it always did, finds what is
+   * there and keeps both.
+   */
+  private async createdWhereNothingWas(d: Incoming, content: Uint8Array): Promise<boolean> {
+    const vault = this.opts.vault;
+    if (d.based !== undefined || vault.create === undefined) return false;
+    const times = { mtime: d.remote.mtime, ctime: d.remote.mtime };
+    if (!(await vault.create(d.path, content, times))) return false;
+    this.settled(d, content.length);
+    return true;
   }
 
   /**
@@ -4775,8 +4995,14 @@ export class Engine {
       version: d.remote.uid,
     });
     // The entry is re-read from disk on the next pass, and must not claim the
-    // scan's stale shape in the meantime.
+    // scan's stale shape in the meantime. Nor in this one (T04): `conflict`
+    // uploads the note, and `planUpload` sends whatever names the entry holds,
+    // which are the scan's, the old synced version the server already has. It
+    // answered `have` and committed the old text over the other device's, and
+    // the edit that caused all this went up only on the next pass.
     const entry = this.entryFor(d.path);
+    entry.hash = "";
+    entry.chunks = [];
     await this.conflict(d.path, entry, d.remote, report, "changed during the fetch", content);
   }
 
@@ -4808,6 +5034,10 @@ export class Engine {
       d.remote.size,
     );
 
+    // A name nothing held when the pass looked takes one exclusive create,
+    // which is all the checks below would establish about it (P-a).
+    if (await this.createdWhereNothingWas(d, content)) return true;
+
     // The last thing before the bytes go down (F01).
     if (!(await this.unchangedSince(d.path, d.based))) {
       await this.landedOnAChangedFile(d, content, report);
@@ -4832,19 +5062,7 @@ export class Engine {
     ) {
       return false;
     }
-    this.landed(d.path);
-    observe(d.entry, {
-      folder: false,
-      mtime: d.remote.mtime,
-      ctime: d.remote.mtime,
-      size: content.length,
-    });
-    // The chunk list is the server's, so the cache is filled without
-    // re-chunking what was just reassembled, and without asking again.
-    d.entry.chunks = [...d.chunks];
-    d.entry.hash = contentId(d.chunks);
-    d.entry.size = content.length;
-    synced(d.entry, d.entry.hash, d.entry.chunks, d.remote.uid, this.now());
+    this.settled(d, content.length);
     return true;
   }
 
@@ -5119,6 +5337,11 @@ export class Engine {
         // is what a divergence this pass cannot resolve has always meant.
         const why = "it changed while the other side of the merge was being fetched";
         this.log("merge refused", path, why);
+        // And the note goes up as it is now, not under the names the scan cut
+        // from the version this merge read (T04). The server lacked those, so
+        // reading the bodies found the change and failed the write.
+        entry.hash = "";
+        entry.chunks = [];
         await this.conflict(path, entry, remote, report, why, theirsBytes);
         return;
       }
@@ -5371,7 +5594,7 @@ export class Engine {
         // Two sentences, so the server's reason and the remedy do not run
         // into each other: "... a control character. Rename it ...".
         why: next === "" ? message : `${/[.!?]$/.test(message) ? message : `${message}.`} ${next}`,
-        fingerprint: fingerprintOf(this.entries.get(path)),
+        fingerprint: fingerprintOf(this.entries.get(path), this.remote.get(path)),
         code,
       });
       noteSkipped(report, path);
@@ -5458,14 +5681,18 @@ export class Engine {
     // keyed by every path a pass walks, which includes the ones on disk, so a
     // vault that churns through names would otherwise keep an answer about
     // each of them for the life of the process.
-    if (this.refusalOf.size > onDisk.size + this.entries.size + this.remote.size) {
+    // The identity memo the same way and for the same reason (P-c).
+    const bound = onDisk.size + this.entries.size + this.remote.size;
+    if (this.refusalOf.size > bound || this.identityOf.size > bound) {
       const live = new Set<string>([
         ...onDisk.keys(),
         ...this.entries.keys(),
         ...this.remote.keys(),
       ]);
-      for (const path of this.refusalOf.keys()) {
-        if (!live.has(path)) this.refusalOf.delete(path);
+      for (const memo of [this.refusalOf, this.identityOf]) {
+        for (const path of memo.keys()) {
+          if (!live.has(path)) memo.delete(path);
+        }
       }
     }
   }
@@ -5494,6 +5721,8 @@ export class Engine {
       remote,
       pending: [...this.pending],
     });
+    this.writtenSinceSave = 0;
+    this.checkpointedAt = Date.now();
   }
 
   /**
@@ -5846,9 +6075,15 @@ const INBOUND_REFUSALS: Record<PathReason, string> = {
  * A path with nothing on disk is not observed, so its entry keeps whatever it
  * had and a refusal that was never about a local file stays put, which is
  * right: nothing here changed.
+ *
+ * And the server's version, because a refusal of a download is about that
+ * version (T02). A file not yet downloaded has no local shape, so its stat
+ * half is the same for every version of it, and a download written off once
+ * stayed written off for the session however many new versions arrived.
  */
-function fingerprintOf(entry: IndexEntry | undefined): string {
-  return entry ? `${entry.mtime}:${entry.size}` : "gone";
+function fingerprintOf(entry: IndexEntry | undefined, remote: RemoteState | undefined): string {
+  const version = remote?.uid ?? 0;
+  return entry ? `${entry.mtime}:${entry.size}:${version}` : `gone:${version}`;
 }
 
 /**
@@ -5911,10 +6146,22 @@ const INTERACTIVE_GAP_MS = 200;
 const INBOX_BYTES = 8 * 1024 * 1024;
 
 /**
+ * How much a long pass does before it saves the index part way (T12): a full
+ * batch of files written, or half a minute of wall time since the pass began
+ * or last saved. A phone reclaims a backgrounded Obsidian in about the time a
+ * first sync of a few thousand notes takes, and this bounds what a restart
+ * does again to one batch or thirty seconds of it.
+ */
+const CHECKPOINT_FILES = MAX_BATCH_ENTRIES;
+const CHECKPOINT_MS = 30_000;
+
+/**
  * What one chunk of a file is costed at when only the file's size is known:
  * its share of the declared size, rounded up. Over a whole file the shares add
  * up to at least the declared size, which is the sum of the chunks' raw
- * lengths and exactly what the server's fetch budget counts.
+ * lengths and exactly what the server's fetch budget counts. Over part of a
+ * file they need not, because chunks are not all one size, and `fetchAll`
+ * asks again in halves when the server says so (T02).
  */
 function perChunkBudget(size: number, chunks: number): number {
   return entryBudget(Math.ceil(size / Math.max(1, chunks)));
@@ -5925,8 +6172,12 @@ function perChunkBudget(size: number, chunks: number): number {
  *
  * Greedy and in order, so the bodies come back in the order the names were
  * given when the asks are made in sequence. A single name over the byte
- * budget goes on its own: the budget is a guess that is never too small, so
- * a chunk the server holds is one the server will serve alone.
+ * budget goes on its own, and a single chunk is what the server always serves.
+ *
+ * The budget is an estimate, not a bound: a chunk's real size is known only
+ * once it has arrived, and an ask holding part of a large file can be over the
+ * server's cap by whatever that part's chunks are over the file's average.
+ * `fetchAll` answers that refusal by halving the ask (T02).
  *
  * Exported because the property worth testing is that nothing in any ask is
  * over either bound and that every name is asked for exactly once.
@@ -6078,6 +6329,20 @@ type PutFacts = Pick<BatchEntry, "path" | "meta" | "names">;
 interface UploadPlan {
   readonly names: string[];
   readonly bodyOf: (name: string) => Promise<Uint8Array>;
+}
+
+/**
+ * A key that two names of one file share on every disk this runs on (P-b).
+ *
+ * The protocol's fold, and then upper case over it, because a disk folds by
+ * its own table and some tables join names the fold keeps apart: NTFS and
+ * exFAT upper-case to compare, and `ı` and `i` both upper-case to `I`. Only
+ * ever wider than the fold, since it is computed from it, so it can put two
+ * names under one key that are two files (the vault is then asked, and says
+ * so) and never puts one file's two names under two keys.
+ */
+function sameFileKey(path: string): string {
+  return foldPath(path).toUpperCase();
 }
 
 /** Paths once each, those with more segments first, then in order. */

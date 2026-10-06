@@ -11,6 +11,8 @@ import { nextTurn } from "./test-async.ts";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client, restoredCopyPath } from "./client.ts";
+import { pathReason } from "./path-policy.ts";
+import { firstFreeName } from "./paths.ts";
 import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
@@ -98,6 +100,29 @@ describe("restoring onto an occupied path", () => {
     await c.close();
     await expect(c.restore(folder, "another-folder")).rejects.toThrow(/closed/);
     expect(await vault.exists("another-folder")).toBe(false);
+  });
+
+  /**
+   * A restored copy of a note whose name is near the 255 bytes a name may hold
+   * (T63). `(restored 123456)` went on the end with nothing cut, so the copy
+   * was a name no disk could create and the restore failed.
+   */
+  it("names the restored copy of a long note within the limits", async () => {
+    const version = { uid: 123456 } as Parameters<typeof restoredCopyPath>[1];
+    for (const name of [
+      `Notes/${"a".repeat(240)}.md`,
+      `Notes/${"é".repeat(125)}.md`,
+      `Notes/Version 1.${"x".repeat(240)}`,
+    ]) {
+      const copy = restoredCopyPath(name, version);
+      expect(pathReason(copy), copy).toBe(undefined);
+      expect(copy).toContain(" (restored 123456)");
+      let looked = 0;
+      const last = await firstFreeName(copy, async () => ++looked < 999);
+      expect(pathReason(last), last).toBe(undefined);
+    }
+    // A short name is spelled as it always was.
+    expect(restoredCopyPath("Notes/note.md", version)).toBe("Notes/note (restored 123456).md");
   });
 
   it("numbers a second restored copy rather than writing over the first", async () => {

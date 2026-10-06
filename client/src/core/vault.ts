@@ -793,7 +793,19 @@ export class MemoryVault implements Vault {
     return this.files.has(path) || this.folders.has(path);
   }
 
+  /**
+   * Runs as a create begins, before the name is claimed: where a save that
+   * takes the name first lands (R33).
+   *
+   * `midReplace`'s sibling. A download to a name nothing held is one exclusive
+   * create (P-a) and never reaches `replace`, so this is the only moment left
+   * after the pass looked at the path, and a note created here is the case
+   * the create has to refuse.
+   */
+  midCreate: ((path: string) => Promise<void> | void) | undefined;
+
   async create(path: string, bytes: Uint8Array, times: Times): Promise<boolean> {
+    await this.midCreate?.(path);
     if (this.files.has(path) || this.folders.has(path)) return false;
     await this.write(path, bytes, times);
     return true;
@@ -948,6 +960,15 @@ export function timedVault(
             time("readRange", () => inner.readRange!(path, start, end)),
         }
       : {}),
+    // These two were left out (T64), so a measured run never respelled a
+    // folder another device renamed by case, and digested a large file a way
+    // the shipped code does not: the numbers were of a different program.
+    ...(inner.respellFolder
+      ? { respellFolder: (from, to) => time("respellFolder", () => inner.respellFolder!(from, to)) }
+      : {}),
+    ...(inner.contentDigest
+      ? { contentDigest: (path) => time("contentDigest", () => inner.contentDigest!(path)) }
+      : {}),
     ...(inner.readBlocks
       ? {
           // Timed as one span over the whole stream, because that is the thing
@@ -957,5 +978,9 @@ export function timedVault(
         }
       : {}),
   };
+  // Read through, not copied: an adapter refreshes these on every scan.
+  for (const key of ["stranded", "displaced", "recovery"] as const) {
+    if (key in inner) Object.defineProperty(out, key, { get: () => inner[key], enumerable: true });
+  }
   return out;
 }

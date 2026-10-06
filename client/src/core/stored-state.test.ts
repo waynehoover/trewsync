@@ -72,6 +72,16 @@ export const corpus: [string, (s: Record<string, unknown>) => unknown, RegExp][]
     /size is -4/,
   ],
   [
+    "an entry with a fractional mtime",
+    (s) => ({ ...s, entries: { "a.md": { mtime: 1.5 } } }),
+    /mtime is 1.5, not a whole number of milliseconds/,
+  ],
+  [
+    "a remote state whose mtime is a string",
+    (s) => ({ ...s, remote: { "a.md": { ...remoteA(), mtime: "2" } }, pending: [] }),
+    /mtime is "2", not a whole number of milliseconds/,
+  ],
+  [
     "an entry whose folder flag is a string",
     (s) => ({ ...s, entries: { "a.md": { folder: "yes" } } }),
     /folder is "yes"/,
@@ -138,6 +148,22 @@ describe("what a saved index must look like", () => {
     const authored = good();
     authored.remote["a.md"] = { ...remoteA(), device: "Claude on Mac" };
     expect(validateStoredState(authored)).toEqual(authored);
+  });
+
+  /**
+   * A file dated before 1970 is a date, not a corrupt index (T03). A zip entry
+   * of 1970-01-01 00:00 unpacked east of UTC is this; refused, it left every
+   * device that had the file or a version of it unable to start.
+   */
+  it("accepts a time before 1970, on an entry and on the server's word", () => {
+    const old = good();
+    old.entries["a.md"] = {
+      ...(old.entries["a.md"] as Record<string, unknown>),
+      mtime: -3_600_000,
+      ctime: -3_600_000,
+    };
+    old.remote["a.md"] = { ...remoteA(), mtime: -3_600_000 };
+    expect(validateStoredState(old)).toEqual(old);
   });
 
   it("keeps the epoch its cursor was read under, and invents none", () => {

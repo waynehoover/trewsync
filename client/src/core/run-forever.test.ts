@@ -305,14 +305,43 @@ describe("what the loop does with a refusal (I2)", () => {
     // A connection that simply dropped is not a refusal, and is retried.
     expect(isFatal(new Error("the connection closed"))).toBe(false);
 
-    // The wait is the backoff, or the server's hint if that is longer.
-    expect(
-      retryWait(new ProtocolError("busy", "x", { retryable: true, retryAfterMs: 30_000 }), 5_000),
-    ).toBe(30_000);
-    expect(
-      retryWait(new ProtocolError("busy", "x", { retryable: true, retryAfterMs: 1_000 }), 5_000),
-    ).toBe(5_000);
+    // The wait is the backoff, or the server's hint if that is longer, and
+    // never less than the hint.
+    const busy = (ms: number) =>
+      new ProtocolError("busy", "x", { retryable: true, retryAfterMs: ms });
+    expect(retryWait(busy(30_000), 5_000, () => 0)).toBe(30_000);
+    expect(retryWait(busy(30_000), 5_000, () => 0.999)).toBeLessThan(45_000);
+    expect(retryWait(busy(1_000), 5_000)).toBe(5_000);
     expect(retryWait(new Error("dropped"), 2_500)).toBe(2_500);
+  });
+
+  /**
+   * The herd the jitter exists to break up (T06).
+   *
+   * A server shutting down tells every device to come back in five seconds,
+   * and the first backoff after a settled session is 2.5 to 5 seconds, so the
+   * hint won every time and every device came back at exactly 5,000 ms, on the
+   * same instant, which is what the backoff's jitter was meant to prevent.
+   */
+  it("spreads devices told the same retry hint across a window (T06)", async () => {
+    const { retryWait } = await import("./client.ts");
+    const { Backoff, ProtocolError } = await import("./transport.ts");
+    const waits = new Set<number>();
+    for (let device = 0; device < 20; device++) {
+      const backoff = new Backoff();
+      backoff.success();
+      backoff.fail();
+      const shutdown = new ProtocolError("busy", "shutting down", {
+        retryable: true,
+        retryAfterMs: 5_000,
+      });
+      const wait = retryWait(shutdown, backoff.delay());
+      expect(wait, "came back before the server said it would be there").toBeGreaterThanOrEqual(
+        5_000,
+      );
+      waits.add(wait);
+    }
+    expect(waits.size, `every device waits ${[...waits].join(", ")} ms`).toBeGreaterThan(10);
   });
 
   it("stops hammering a server that answers and then refuses everything", async () => {

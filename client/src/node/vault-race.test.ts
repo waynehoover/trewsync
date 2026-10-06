@@ -625,6 +625,45 @@ describe("replacing a note across a mount boundary", () => {
     expect(await readFile(join(root, "note (kept).md"), "utf8")).toBe("the unsent edit\n");
   });
 
+  /**
+   * A create across the boundary claims the name the same atomic way (P-a).
+   *
+   * A download to a name nothing held is now one create rather than a
+   * replace, and the create's fallback for a mount was an exclusive open of
+   * the note's own name, written into: a crash part way left a partial note
+   * that the next pass would send as the note. A temporary beside the
+   * destination is on its filesystem, and a link from it never leaves one.
+   */
+  it("creates a note there by linking a temporary beside it, not by writing into the name", async () => {
+    const vault = new NodeVault(root);
+    stagingOnAnotherMount();
+
+    const made = await vault.create("fresh.md", enc.encode("the server's version\n"), {
+      mtime: 2000,
+      ctime: 1000,
+    });
+
+    expect(made).toBe(true);
+    expect(await readFile(join(root, "fresh.md"), "utf8")).toBe("the server's version\n");
+    const writtenInPlace = vi
+      .mocked(open)
+      .mock.calls.some(
+        ([path, flags]) => String(path) === join(root, "fresh.md") && flags === "wx",
+      );
+    expect(writtenInPlace, "the note's own name was opened and written into").toBe(false);
+    expect(
+      (await readdir(root)).filter((name) => name.includes(TEMP_MARK)),
+      "a temporary was left beside the note",
+    ).toEqual([]);
+    // And the claim is still exclusive.
+    const again = await vault.create("fresh.md", enc.encode("another\n"), {
+      mtime: 3000,
+      ctime: 1000,
+    });
+    expect(again).toBe(false);
+    expect(await readFile(join(root, "fresh.md"), "utf8")).toBe("the server's version\n");
+  });
+
   it("creates a note it has never seen there too", async () => {
     const vault = new NodeVault(root);
     stagingOnAnotherMount();

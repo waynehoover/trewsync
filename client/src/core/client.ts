@@ -61,7 +61,7 @@ import {
   type DeviceConfig,
   type PendingPairing,
 } from "./pairing.ts";
-import { firstFreeName, splitName } from "./paths.ts";
+import { firstFreeName, nameBeside, splitName } from "./paths.ts";
 
 export interface ClientOptions {
   readonly vault: Vault;
@@ -1414,10 +1414,14 @@ export interface Version {
  * is never overwritten by something arriving from elsewhere. Somebody restoring
  * a note from last week onto a note they have been editing today should end up
  * with both.
+ *
+ * Within the limits on a name and a path, as a conflict copy is (T63): a note
+ * whose name was near the 255 bytes a name may hold got a copy name no disk
+ * would create, and the restore failed.
  */
 export function restoredCopyPath(path: string, version: Version): string {
   const { stem, ext } = splitName(path);
-  return `${stem} (restored ${version.uid})${ext}`;
+  return nameBeside(stem, ` (restored ${version.uid})`, ext);
 }
 
 /** What a long-running client tells whoever is watching it. */
@@ -1660,10 +1664,22 @@ export function isFatal(cause: Error): boolean {
  * go away first; one refused for a shutdown is told five, because the server
  * is about to be back. Neither is a reason to wait less than the backoff
  * already would, so the longer of the two wins.
+ *
+ * And a hint that wins is spread, over half as long again (T06). The backoff
+ * carries its own jitter, and a hint taken as it stands threw it away: the
+ * first backoff after a settled session is 2.5 to 5 seconds, a shutdown says
+ * 5, so every device came back at exactly 5,000 ms, together, which is the
+ * herd the jitter exists to break up. Spread above the hint and never below
+ * it, because the server said when it would be back.
  */
-export function retryWait(cause: Error, backoffMs: number): number {
-  const hint = cause instanceof ProtocolError ? cause.retryAfterMs : undefined;
-  return Math.max(backoffMs, hint ?? 0);
+export function retryWait(
+  cause: Error,
+  backoffMs: number,
+  random: () => number = Math.random,
+): number {
+  const hint = cause instanceof ProtocolError ? (cause.retryAfterMs ?? 0) : 0;
+  if (backoffMs >= hint) return backoffMs;
+  return Math.floor(hint * (1 + 0.5 * random()));
 }
 
 /* ---------------------------------------------------------------- *

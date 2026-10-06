@@ -39,6 +39,7 @@ import {
   entryBudget,
   type Batch,
 } from "./transport.ts";
+import { MemoryVault } from "./vault.ts";
 
 /** Random bytes, which do not compress, so they travel in a raw frame. */
 function noise(n: number): Uint8Array {
@@ -2130,9 +2131,9 @@ describe("keeping to the caps the server advertised", () => {
   /**
    * A fetch is bounded by the summed budget of what it asks for and by a
    * count of names. The client cannot see a stored chunk's size, so it costs
-   * each at its share of the file's declared size plus the allowance the
-   * server's own rule grants, which is never under what the server will
-   * count.
+   * each at its share of the file's declared size, which over part of a file
+   * can be under what the server counts; the engine asks again in halves when
+   * the server says so (T02, below).
    */
   it("splits a fetch by the byte cap and asks for every chunk once", async () => {
     const { Engine, planFetches } = await import("./engine.ts");
@@ -2207,6 +2208,185 @@ describe("keeping to the caps the server advertised", () => {
       files.map((f) => f.name).sort(),
     );
     for (const f of files) expect(vault.text(f.path)).toBe(new TextDecoder().decode(f.text));
+  });
+
+  /**
+   * A server that counts a fetch by the chunks' real sizes, as `handleFetch`
+   * does, and refuses one over its cap with `toolarge`, keeping the session.
+   *
+   * The device plans by each file's average chunk, which over a whole file is
+   * what the server counts and over part of one is not: a large file's first
+   * chunks are often bigger than its average. The refusal used to be recorded
+   * as a fact about every file in the batch, written off for good as "too
+   * large", small notes included, and the batch formed the same way after
+   * every reconnect (T02).
+   */
+  function countingRealBytes(
+    socket: FakeSocket,
+    bodies: Map<string, Uint8Array>,
+    cap: number,
+  ): { answered: string[][]; refused: number } {
+    const seen = { answered: [] as string[][], refused: 0 };
+    socket.autoReply = (frame, s) => {
+      if (frame["op"] === "fetch") {
+        const asked = frame["chunks"] as string[];
+        const total = asked.reduce((t, n) => t + bodies.get(n)!.length, 0);
+        if (total > cap) {
+          seen.refused++;
+          s.raw({
+            res: "err",
+            id: frame["id"],
+            code: "toolarge",
+            msg: `the ${asked.length} chunks asked for hold ${total} bytes, limit for one fetch is ${cap}; ask in smaller sets`,
+          });
+          return;
+        }
+        seen.answered.push(asked);
+        s.raw({ res: "bodies", id: frame["id"], count: asked.length });
+        for (const n of asked) s.body(rawFrame(bodies.get(n)!));
+      } else if (frame["op"] === "ping") s.raw({ res: "pong" });
+    };
+    return seen;
+  }
+
+  /** A file of chunks of the given sizes, each filled with its own byte. */
+  async function fileOf(
+    uid: number,
+    path: string,
+    sizes: number[],
+    bodies: Map<string, Uint8Array>,
+  ) {
+    const parts = sizes.map((n, i) => new Uint8Array(n).fill((uid * 31 + i) % 251));
+    const names: string[] = [];
+    for (const p of parts) {
+      const name = await chunkName(p);
+      bodies.set(name, p);
+      names.push(name);
+    }
+    const bytes = new Uint8Array(sizes.reduce((a, b) => a + b, 0));
+    let at = 0;
+    for (const p of parts) {
+      bytes.set(p, at);
+      at += p.length;
+    }
+    const entry = {
+      uid,
+      path,
+      size: bytes.length,
+      ctime: 1,
+      mtime: 1,
+      folder: false,
+      deleted: false,
+      chunks: names,
+      device: "other",
+    };
+    return { entry, bytes };
+  }
+
+  it("asks again in smaller sets when a planned fetch is refused as too large (T02)", async () => {
+    const cap = 4 << 20;
+    const { engine, socket, vault } = await engineOnFakeSocket({
+      maxFetchBytes: cap,
+      maxChunks: 1000,
+    });
+    const bodies = new Map<string, Uint8Array>();
+    // Three chunks of a mebibyte and then many small ones, so the average is
+    // far below what the first chunks hold, beside a small file.
+    const big = await fileOf(
+      1,
+      "media/big.bin",
+      [...[1, 1, 1].map((m) => m << 20), ...Array(24).fill(128 << 10)],
+      bodies,
+    );
+    const small = await fileOf(2, "media/a-small.bin", [1000], bodies);
+    const seen = countingRealBytes(socket, bodies, cap);
+
+    socket.raw({ op: "batch", from: 1, to: 2, entries: [big.entry, small.entry] });
+    for (let i = 0; i < 200 && engine.status().pending < 2; i++) await settle();
+    const report = await engine.sync({ coalesceWrites: false });
+
+    expect(seen.refused, "the server never refused a plan, so this proves nothing").toBeGreaterThan(
+      0,
+    );
+    expect(report.skipped, JSON.stringify(report.needsAttention)).toBe(0);
+    expect(report.downloaded).toBe(2);
+    expect(
+      Buffer.from((await vault.read("media/big.bin")).subarray()).equals(Buffer.from(big.bytes)),
+    ).toBe(true);
+    expect(
+      Buffer.from(await vault.read("media/a-small.bin")).equals(Buffer.from(small.bytes)),
+    ).toBe(true);
+    // Every chunk was asked for and answered once, within the cap.
+    expect(seen.answered.flat().sort()).toEqual(
+      [...big.entry.chunks, ...small.entry.chunks].sort(),
+    );
+    for (const ask of seen.answered) {
+      expect(ask.reduce((t, n) => t + bodies.get(n)!.length, 0)).toBeLessThanOrEqual(cap);
+    }
+  });
+
+  it("does not write a file off when even one chunk is over the fetch limit (T02)", async () => {
+    // A server whose fetch limit is below its own chunk size cannot serve
+    // that chunk at all. That is the server's configuration, not the file's
+    // size, so it is retried and named, never written off as too large.
+    const cap = 64 << 10;
+    const { engine, socket } = await engineOnFakeSocket({ maxFetchBytes: cap, maxChunks: 1000 });
+    const bodies = new Map<string, Uint8Array>();
+    const one = await fileOf(1, "one.bin", [128 << 10], bodies);
+    countingRealBytes(socket, bodies, cap);
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [one.entry] });
+    for (let i = 0; i < 200 && engine.status().pending < 1; i++) await settle();
+    const report = await engine.sync({ coalesceWrites: false });
+    expect(report.skipped, JSON.stringify(report.needsAttention)).toBe(0);
+    expect(report.retrying).toBe(1);
+  });
+
+  it("tries a written-off download again when a new version arrives (T02)", async () => {
+    // A write-off is keyed on what the file looked like, and a file not yet
+    // downloaded has no local shape: every version of it looked alike, so a
+    // download written off once stayed written off for the session, however
+    // many new versions arrived.
+    class RefusesOnce extends MemoryVault {
+      refused = false;
+      override async replace(...args: Parameters<MemoryVault["replace"]>) {
+        if (!this.refused && args[0] === "note.md") {
+          this.refused = true;
+          const err = new Error("this vault will not write that name just now") as Error & {
+            code: string;
+          };
+          err.code = "neversync";
+          throw err;
+        }
+        return super.replace(...args);
+      }
+      override async create(...args: Parameters<MemoryVault["create"]>) {
+        if (!this.refused && args[0] === "note.md") {
+          this.refused = true;
+          const err = new Error("this vault will not write that name just now") as Error & {
+            code: string;
+          };
+          err.code = "neversync";
+          throw err;
+        }
+        return super.create(...args);
+      }
+    }
+    const vault = new RefusesOnce();
+    const { engine, socket } = await engineOnFakeSocket({}, { vault });
+    const bodies = new Map<string, Uint8Array>();
+    const first = await fileOf(1, "note.md", [100], bodies);
+    countingRealBytes(socket, bodies, 64 << 20);
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [first.entry] });
+    for (let i = 0; i < 200 && engine.status().pending < 1; i++) await settle();
+    const refused = await engine.sync({ coalesceWrites: false });
+    expect(refused.skipped, "the vault's refusal was not written off").toBe(1);
+
+    const second = await fileOf(2, "note.md", [200], bodies);
+    socket.raw({ op: "batch", from: 2, to: 2, entries: [second.entry] });
+    for (let i = 0; i < 200 && engine.status().pending < 1; i++) await settle();
+    const report = await engine.sync({ coalesceWrites: false });
+    expect(report.skipped, "a new version was never tried").toBe(0);
+    expect(Buffer.from(await vault.read("note.md")).equals(Buffer.from(second.bytes))).toBe(true);
   });
 });
 

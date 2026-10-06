@@ -409,24 +409,43 @@ export class JournalIndexStore implements IndexStore {
   }
 
   private async append(delta: JournalDelta, shape: SavedShape, before: number): Promise<number> {
-    const line = encodeRecord(this.seq + 1, delta);
-    await this.files.appendLog(line);
-    // Rule 4: the call returning is not the outcome. A short append is a
-    // record that will be discarded on the next load, silently, which is the
-    // one failure this format cannot see for itself.
-    const stamps = await this.files.stamps();
-    const wrote = (stamps.log?.size ?? 0) - before;
-    if (wrote !== byteLength(line)) {
-      throw new Error(
-        `the index journal grew by ${wrote} bytes for a ${byteLength(line)} byte record, ` +
-          "so the append did not land whole",
-      );
+    // The number is spent before the write, whatever happens to the write
+    // (T05). It used to advance only on success, and an append that fails
+    // after its bytes are down, as the headless client's does when the write
+    // lands and the fsync after it fails, leaves a whole record numbered
+    // seq + 1 on disk while this store still says seq. The next save read that
+    // record as another writer's, said so, and stamped its snapshot with the
+    // old seq; a crash before the log was truncated then replayed the stale
+    // record over the newer snapshot, cursor and deleted entries included.
+    // Spent, the snapshot that follows is numbered at or above whatever was
+    // written, and replay skips it.
+    const line = encodeRecord(++this.seq, delta);
+    try {
+      await this.files.appendLog(line);
+      // Rule 4: the call returning is not the outcome. A short append is a
+      // record that will be discarded on the next load, silently, which is the
+      // one failure this format cannot see for itself.
+      const stamps = await this.files.stamps();
+      const wrote = (stamps.log?.size ?? 0) - before;
+      if (wrote !== byteLength(line)) {
+        throw new Error(
+          `the index journal grew by ${wrote} bytes for a ${byteLength(line)} byte record, ` +
+            "so the append did not land whole",
+        );
+      }
+      this.records++;
+      this.saved = shape;
+      this.left = stamps;
+      return byteLength(line);
+    } catch (err) {
+      // Whatever reached the log is this session's own, so it is what the
+      // next save compares against rather than an alarm about somebody else,
+      // and that save is a whole snapshot, which a record of unknown fate
+      // cannot be appended beside.
+      this.mustSnapshot = true;
+      this.left = await this.files.stamps().catch(() => this.left);
+      throw err;
     }
-    this.seq++;
-    this.records++;
-    this.saved = shape;
-    this.left = stamps;
-    return byteLength(line);
   }
 
   /**

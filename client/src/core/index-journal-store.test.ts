@@ -25,6 +25,13 @@ class FakeFiles implements JournalFiles {
   crashBeforeTruncate = false;
   /** Throw instead of publishing a snapshot, the way a full disk would. */
   failWriteSnapshot = false;
+  /**
+   * Land the whole record and then throw, as `write` succeeding and `fsync`
+   * failing does in the headless client's append.
+   */
+  throwAfterAppend = false;
+  /** Fail the next look at the files, once, the way a stat that errors does. */
+  failStampsOnce = false;
   appends = 0;
   snapshots = 0;
 
@@ -55,6 +62,7 @@ class FakeFiles implements JournalFiles {
     this.log = (this.log ?? "") + write;
     this.logAt = this.clock++;
     this.appends++;
+    if (this.throwAfterAppend) throw new Error("EIO on fsync");
   }
   async truncateLog(): Promise<void> {
     if (this.crashBeforeTruncate) throw new Error("power cut");
@@ -62,6 +70,10 @@ class FakeFiles implements JournalFiles {
     this.logAt = this.clock++;
   }
   async stamps(): Promise<JournalStamps> {
+    if (this.failStampsOnce) {
+      this.failStampsOnce = false;
+      throw new Error("stat failed");
+    }
     return {
       ...(this.snapshot === undefined
         ? {}
@@ -225,6 +237,62 @@ describe("an append that did not land whole", () => {
     files.truncateAppendsTo = 5;
     await expect(store.save(state({ cursor: 2 }))).rejects.toThrow(/did not land whole/);
   });
+});
+
+/**
+ * A record that reached the disk from a save that then failed (T05).
+ *
+ * The sequence advanced only on success, so the record was on disk under
+ * seq + 1 while the store still said seq. The next save took the record for
+ * somebody else's write, said so, and published a snapshot stamped with the
+ * old seq; a crash before the log was truncated then replayed that stale record
+ * over the newer snapshot: an older cursor, and a deleted entry back.
+ */
+describe("an append that landed and then failed (T05)", () => {
+  for (const [what, arm] of [
+    ["the append itself reports the failure", (f: FakeFiles) => (f.throwAfterAppend = true)],
+    ["the check of the append fails", (f: FakeFiles) => (f.failStampsOnce = true)],
+  ] as const) {
+    it(`does not replay its record over a newer snapshot when ${what}`, async () => {
+      const files = new FakeFiles();
+      const said: string[] = [];
+      const store = new JournalIndexStore(files, { log: (m) => said.push(m) });
+      await store.load();
+      await store.save(state({ cursor: 1, entries: { "a.md": entry("a.md", 10) } }));
+      await store.save(state({ cursor: 2, entries: { "a.md": entry("a.md", 20) } }));
+
+      // The record lands whole, and the save fails all the same.
+      const failing = state({
+        cursor: 3,
+        entries: { "a.md": entry("a.md", 30), "gone.md": entry("gone.md", 1) },
+      });
+      if (what === "the check of the append fails") {
+        // After the append, not before it: the save's own first look succeeds.
+        const appendLog = files.appendLog.bind(files);
+        files.appendLog = async (line) => {
+          await appendLog(line);
+          arm(files);
+        };
+        await expect(store.save(failing)).rejects.toThrow(/stat failed/);
+        files.appendLog = appendLog;
+      } else {
+        arm(files);
+        await expect(store.save(failing)).rejects.toThrow(/EIO/);
+        files.throwAfterAppend = false;
+      }
+
+      // The next save snapshots, and the process dies before the log is
+      // truncated behind it.
+      files.crashBeforeTruncate = true;
+      const newest = state({ cursor: 4, entries: { "a.md": entry("a.md", 40) } });
+      await expect(store.save(newest)).rejects.toThrow(/power cut/);
+
+      expect(await new JournalIndexStore(files).load()).toEqual(newest);
+      expect(said.join(" "), "its own record was taken for another writer's").not.toMatch(
+        /something else is writing the index/,
+      );
+    });
+  }
 });
 
 describe("a crash between publishing a snapshot and truncating the log", () => {

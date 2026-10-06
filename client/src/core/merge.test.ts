@@ -397,6 +397,51 @@ describe("conflict copy names", () => {
     expect(under.startsWith("d/".repeat(480))).toBe(true);
   });
 
+  /**
+   * A name already near the 255 bytes a name may hold (T63).
+   *
+   * Every copy has to be a name the disk can create and the server takes,
+   * however long the note's own name is, or keeping an edit fails with
+   * ENAMETOOLONG on every pass and the note never syncs. Three ways past the
+   * limit were left: the thousandth number `firstFreeName` hands out is five
+   * bytes and four were reserved; a "extension" is whatever follows the last
+   * dot, which in a name like `Version 1.2 of the plan ...` is most of it, and
+   * was never cut; and a cut could fall inside a character a person sees as
+   * one (an accent on a letter with no precomposed form, an emoji sequence).
+   */
+  it("keeps every copy of a long name within the limits, and a copy (T63)", async () => {
+    const at = new Date(2026, 9, 6, 12, 0);
+    const bytes = (s: string) => new TextEncoder().encode(s).length;
+    const graphemes = (s: string) => [...new Intl.Segmenter().segment(s)].map((g) => g.segment);
+    const names = [
+      `Folder/${"a".repeat(240)}.md`,
+      `Folder/${"é".repeat(125)}.md`,
+      `Folder/${"👍".repeat(62)}.md`,
+      `Folder/${"q̃".repeat(80)}.md`,
+      `Folder/${"🧑‍💻".repeat(22)}.md`,
+      `Folder/Version 1.${"x".repeat(240)}`,
+      `${"d/".repeat(480)}${"n".repeat(60)}.md`,
+    ];
+    for (const name of names) {
+      expect(pathReason(name), name).toBe(undefined);
+      const copy = conflictCopyPath(name, "Wayne's MacBook Pro", at);
+      expect(pathReason(copy), copy).toBe(undefined);
+      expect(conflictOriginal(copy), `${copy} is not read as a copy`).not.toBe(undefined);
+      // The last name the search beside it can hand out fits as well.
+      let looked = 0;
+      const last = await firstFreeName(copy, async () => ++looked < 999);
+      expect(pathReason(last), last).toBe(undefined);
+      // Cut between characters a person sees, never inside one.
+      const kept = copy.slice(copy.lastIndexOf("/") + 1, copy.indexOf(" (Conflicted copy "));
+      const whole = graphemes(name.slice(name.lastIndexOf("/") + 1));
+      expect(
+        whole.join("").startsWith(kept) && graphemes(kept).every((g, i) => g === whole[i]),
+        `${JSON.stringify(kept)} cuts a character of ${name}`,
+      ).toBe(true);
+      expect(bytes(copy.slice(copy.lastIndexOf("/") + 1))).toBeLessThanOrEqual(MAX_SEGMENT_BYTES);
+    }
+  });
+
   it("keeps the extension where an extension belongs", () => {
     const at = new Date(2026, 0, 2, 3, 4);
     expect(conflictCopyPath("a/b.tar.gz", "dev", at)).toBe(
