@@ -1839,14 +1839,7 @@ export default class TrewPlugin extends Plugin {
     let report: SyncReport;
     this.setState({ kind: "syncing", since: Date.now() });
     try {
-      // The editor's autosave has its own delay. A manual sync must include
-      // those buffers, not just the previous version already on disk.
-      for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-        // Deferred background tabs have no editor or save method. A leaf
-        // can also change views while an earlier editor is being saved.
-        const view = leaf.view as Partial<MarkdownView>;
-        if (typeof view.save === "function") await view.save();
-      }
+      await this.saveOpenEditors();
       if (mine !== this.generation || this.client !== client) return;
       report = await client.settle({ coalesceWrites: false, verifyContents, retryFailures: true });
     } catch (err) {
@@ -1861,6 +1854,25 @@ export default class TrewPlugin extends Plugin {
     // The state was set by onPass, once per pass. This is the feedback the
     // command owes.
     new Notice(`TrewSync: ${summarise(report)}`);
+  }
+
+  /**
+   * Saves every open editor, so what was typed inside the autosave delay is
+   * on the disk for whatever is about to read it.
+   *
+   * The editor's autosave has its own delay. A manual sync must include those
+   * buffers, not just the previous version already on disk, and so must an
+   * undo, which sends this device's changes first and then writes into the
+   * very notes the editors may be holding (T15). A save that fails fails the
+   * caller: the unsent text is still only in the editor.
+   */
+  private async saveOpenEditors(): Promise<void> {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      // Deferred background tabs have no editor or save method. A leaf can
+      // also change views while an earlier editor is being saved.
+      const view = leaf.view as Partial<MarkdownView>;
+      if (typeof view.save === "function") await view.save();
+    }
   }
 
   private passFailed(why: string): void {
@@ -2709,7 +2721,12 @@ export default class TrewPlugin extends Plugin {
           throw new Error(
             "this version was not written by an operation, so there is nothing to undo",
           );
-        return this.client.undo(version.operation.id, opts);
+        const id = version.operation.id;
+        // What is in an open editor is among this device's changes, which
+        // the undo sends first (T15).
+        await this.saveOpenEditors();
+        if (!this.client) throw new Error(this.whyNoClient());
+        return this.client.undo(id, opts);
       },
       currentText: async (path, maxBytes) => {
         // The note can go between the look and the read: somebody deleting

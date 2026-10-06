@@ -6173,6 +6173,60 @@ describe("compact sync menu", () => {
   });
 });
 
+/**
+ * T15. "This device's unsent changes are sent first", docs/plugin.md says of
+ * Undo this change, and the client does settle before it asks the server. A
+ * paragraph still in an editor's buffer, inside the autosave delay, was not
+ * among them: Sync now saved open editors first and Undo did not, and the undo
+ * then wrote into the editor holding it.
+ */
+describe("undoing a change from the history panel", () => {
+  it("saves open editors before it asks the server", async () => {
+    const { plugin, app } = await load();
+    const order: string[] = [];
+    app.workspace.markdownLeaves.push({ isDeferred: true, view: {} });
+    app.workspace.markdownLeaves.push({
+      view: { save: async () => void order.push("saved the editor") },
+    });
+    (plugin as unknown as { client: unknown }).client = {
+      undo: async (id: string) => {
+        order.push(`undo ${id}`);
+        return { notes: [] };
+      },
+      close: async () => undefined,
+    };
+    await plugin.historySource().undoOperation!({ operation: { id: "op-1" } } as never, {
+      toCopy: false,
+    });
+    expect(order).toEqual(["saved the editor", "undo op-1"]);
+  });
+
+  it("does not undo anything when an editor cannot save", async () => {
+    const { plugin, app } = await load();
+    let undone = false;
+    app.workspace.markdownLeaves.push({
+      view: {
+        save: async () => {
+          throw new Error("editor disk full");
+        },
+      },
+    });
+    (plugin as unknown as { client: unknown }).client = {
+      undo: async () => {
+        undone = true;
+        return { notes: [] };
+      },
+      close: async () => undefined,
+    };
+    await expect(
+      plugin.historySource().undoOperation!({ operation: { id: "op-1" } } as never, {
+        toCopy: false,
+      }),
+    ).rejects.toThrow(/editor disk full/);
+    expect(undone).toBe(false);
+  });
+});
+
 it("unload waits for a pause that is still draining writes", async () => {
   const { plugin } = await load();
   const pending = deferred<void>();
