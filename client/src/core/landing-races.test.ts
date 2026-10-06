@@ -730,6 +730,45 @@ describe("an edit a stat cannot tell apart", () => {
     // nothing: the metadata check that follows the fetch sees the new file and
     // stops the write on its own, so the test would pass with the adapter
     // writing over it. This hook runs after that check.
+    //
+    // In `create`, since a download to a name nothing held is one exclusive
+    // create and never reaches `replace` (P-a); the variant below keeps the
+    // seam in `replace` for a vault that cannot create.
+    servingWith(socket, bodies);
+    vault.midCreate = async (path) => {
+      if (path !== "fresh.md") return;
+      vault.midCreate = undefined;
+      await vault.write("fresh.md", enc.encode("unsent local\n"), { mtime: 5000, ctime: 5000 });
+    };
+    socket.raw({
+      op: "batch",
+      from: 1,
+      to: 1,
+      entries: [await entryFor(1, "fresh.md", "the server's version\n", bodies)],
+    });
+    await accepted(engine, 1);
+    await engine.sync({ coalesceWrites: false });
+
+    expect(vault.midCreate, "the create never ran, so this proves nothing").toBeUndefined();
+    const texts = vault.paths().map((p) => vault.text(p));
+    expect(
+      texts,
+      `the note created under the write is gone. The vault holds: ${JSON.stringify(vault.paths())}`,
+    ).toContain("unsent local\n");
+    expect(texts).toContain("the server's version\n");
+    // At its own name, which the create refused to take.
+    expect(vault.text("fresh.md")).toBe("unsent local\n");
+  });
+
+  it("keeps a note created at a path the pass had never seen, on a vault that cannot create", async () => {
+    // Without an exclusive create the landing is the preserving write, and
+    // the gap that remains is inside the adapter's replace.
+    class CannotCreate extends MemoryVault {
+      override create = undefined as unknown as MemoryVault["create"];
+    }
+    const vault = new CannotCreate();
+    const { engine, socket } = await engineOnFakeSocket({}, { vault });
+    const bodies = new Map<string, Uint8Array>();
     servingWith(socket, bodies);
     vault.midReplace = async (path) => {
       vault.midReplace = undefined;
@@ -751,6 +790,60 @@ describe("an edit a stat cannot tell apart", () => {
       `the note created under the write is gone. The vault holds: ${JSON.stringify(vault.paths())}`,
     ).toContain("unsent local\n");
     expect(texts).toContain("the server's version\n");
+  });
+
+  /**
+   * A first download is one exclusive create (P-a).
+   *
+   * Every check the preserving write makes before it writes is a look for
+   * something at the path, and where the listing showed nothing the create
+   * makes the same promise in one call: on a phone that was five adapter calls
+   * a file. Rule 7 too: the download is counted as one, and the next pass reads
+   * nothing, because the index recorded the server's chunk list.
+   */
+  it("lands a version where nothing was with one create and nothing else", async () => {
+    class Counting extends MemoryVault {
+      calls: string[] = [];
+      override async stat(path: string) {
+        this.calls.push("stat");
+        return super.stat(path);
+      }
+      override async exists(path: string) {
+        this.calls.push("exists");
+        return super.exists(path);
+      }
+      override async create(...args: Parameters<MemoryVault["create"]>) {
+        this.calls.push("create");
+        return super.create(...args);
+      }
+      override async replace(...args: Parameters<MemoryVault["replace"]>) {
+        this.calls.push("replace");
+        return super.replace(...args);
+      }
+    }
+    const vault = new Counting();
+    const { engine, socket } = await engineOnFakeSocket({}, { vault });
+    const bodies = new Map<string, Uint8Array>();
+    servingWith(socket, bodies);
+    socket.raw({
+      op: "batch",
+      from: 1,
+      to: 2,
+      entries: [
+        await entryFor(1, "a.md", "first\n", bodies),
+        await entryFor(2, "b.md", "second\n", bodies),
+      ],
+    });
+    await accepted(engine, 2);
+    const report = await engine.sync({ coalesceWrites: false });
+
+    expect(report.downloaded).toBe(2);
+    expect(vault.snapshot()).toEqual({ "a.md": "first\n", "b.md": "second\n" });
+    expect(vault.calls).toEqual(["create", "create"]);
+    const reads = vault.reads;
+    const quiet = await engine.sync({ coalesceWrites: false });
+    expect(quiet.unchanged).toBe(2);
+    expect(vault.reads - reads, "a landed version was read again").toBe(0);
   });
 
   /**

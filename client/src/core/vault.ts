@@ -793,7 +793,19 @@ export class MemoryVault implements Vault {
     return this.files.has(path) || this.folders.has(path);
   }
 
+  /**
+   * Runs as a create begins, before the name is claimed: where a save that
+   * takes the name first lands (R33).
+   *
+   * `midReplace`'s sibling. A download to a name nothing held is one exclusive
+   * create (P-a) and never reaches `replace`, so this is the only moment left
+   * after the pass looked at the path, and a note created here is the case
+   * the create has to refuse.
+   */
+  midCreate: ((path: string) => Promise<void> | void) | undefined;
+
   async create(path: string, bytes: Uint8Array, times: Times): Promise<boolean> {
+    await this.midCreate?.(path);
     if (this.files.has(path) || this.folders.has(path)) return false;
     await this.write(path, bytes, times);
     return true;

@@ -4581,6 +4581,10 @@ export class Engine {
     const names = await chunkNames(parts);
     if (contentId(names) !== contentId(d.chunks)) return "ask";
 
+    // A move's destination is usually a name nothing held, and then one
+    // exclusive create is the whole write, as in `land`.
+    if (await this.createdWhereNothingWas(d, bytes)) return "landed";
+
     // The same check as `land`, for the same reason: this writes over
     // `d.path` too, and finding the bytes on this disk rather than on the
     // wire does not make the destination any less somebody's open note.
@@ -4603,18 +4607,48 @@ export class Engine {
     ) {
       return "kept";
     }
+    this.settled(d, bytes.length);
+    return "landed";
+  }
+
+  /**
+   * A version now at its path, recorded: written this pass, observed as the
+   * disk will report it, and synced against the server's own chunk list, so
+   * nothing is re-chunked and nothing asked for again.
+   */
+  private settled(d: Incoming, size: number): void {
     this.landed(d.path);
-    observe(d.entry, {
-      folder: false,
-      mtime: d.remote.mtime,
-      ctime: d.remote.mtime,
-      size: bytes.length,
-    });
+    observe(d.entry, { folder: false, mtime: d.remote.mtime, ctime: d.remote.mtime, size });
     d.entry.chunks = [...d.chunks];
     d.entry.hash = contentId(d.chunks);
-    d.entry.size = bytes.length;
+    d.entry.size = size;
     synced(d.entry, d.entry.hash, d.entry.chunks, d.remote.uid, this.now());
-    return "landed";
+  }
+
+  /**
+   * Writes a version to a path that held nothing when the pass decided, with
+   * one exclusive create, and says whether it did (P-a).
+   *
+   * Where the listing showed nothing, the preserving write has nothing to
+   * preserve, and every step it takes before writing is a look for something
+   * that is not there: the stat in `unchangedSince`, the free conflict name,
+   * and inside the adapter the read, the move aside and the second look. Five
+   * adapter calls per file on a phone, measured at 66 ms against 52 per new
+   * file over a first sync of 3,778. An exclusive create is the same promise
+   * those looks make, kept by the adapter in one step: it writes only where
+   * nothing is, so it cannot overwrite (R33).
+   *
+   * False, and nothing written, when something took the name since the
+   * listing. The ordinary landing then runs as it always did, finds what is
+   * there and keeps both.
+   */
+  private async createdWhereNothingWas(d: Incoming, content: Uint8Array): Promise<boolean> {
+    const vault = this.opts.vault;
+    if (d.based !== undefined || vault.create === undefined) return false;
+    const times = { mtime: d.remote.mtime, ctime: d.remote.mtime };
+    if (!(await vault.create(d.path, content, times))) return false;
+    this.settled(d, content.length);
+    return true;
   }
 
   /**
@@ -4941,6 +4975,10 @@ export class Engine {
       d.remote.size,
     );
 
+    // A name nothing held when the pass looked takes one exclusive create,
+    // which is all the checks below would establish about it (P-a).
+    if (await this.createdWhereNothingWas(d, content)) return true;
+
     // The last thing before the bytes go down (F01).
     if (!(await this.unchangedSince(d.path, d.based))) {
       await this.landedOnAChangedFile(d, content, report);
@@ -4965,19 +5003,7 @@ export class Engine {
     ) {
       return false;
     }
-    this.landed(d.path);
-    observe(d.entry, {
-      folder: false,
-      mtime: d.remote.mtime,
-      ctime: d.remote.mtime,
-      size: content.length,
-    });
-    // The chunk list is the server's, so the cache is filled without
-    // re-chunking what was just reassembled, and without asking again.
-    d.entry.chunks = [...d.chunks];
-    d.entry.hash = contentId(d.chunks);
-    d.entry.size = content.length;
-    synced(d.entry, d.entry.hash, d.entry.chunks, d.remote.uid, this.now());
+    this.settled(d, content.length);
     return true;
   }
 
