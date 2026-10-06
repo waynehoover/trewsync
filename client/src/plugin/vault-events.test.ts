@@ -428,12 +428,19 @@ describe("rapid saves", () => {
     // Same length, so nothing but reading every byte finds it. The engine's
     // write has landed and is being verified when the person's own save
     // overwrites it: the write must not be reported as done.
+    //
+    // Fifteen bytes against fifteen. This used to save sixteen, which the
+    // length check caught first, so the test still passed with the byte
+    // comparison deleted and proved nothing about it (T65). And on the
+    // read-back itself, the one call every version of the check makes.
+    const save = "AAAAAAAAAAAAAAA";
+    expect(save.length).toBe("from the server".length);
     s.adapter.fault = (op, path) => {
-      if (op === "stat" && path === "note.md") s.adapter.seed("note.md", "AAAAAAAAAAAAAAAA");
+      if (op === "readBinary" && path === "note.md") s.adapter.seed("note.md", save);
       return undefined;
     };
     await expect(s.vault.write("note.md", enc.encode("from the server"), times)).rejects.toThrow(
-      /reads back differently|is \d+ bytes after writing/,
+      /reads back differently/,
     );
     // And the complete new copy is beside it, named in the error, so the
     // next pass has something to finish from rather than a half-written note.
