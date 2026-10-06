@@ -2263,6 +2263,11 @@ export class NodeVault implements Vault {
         // nothing to preserve.
         moved = false;
       }
+      if (moved && (await isFolder(parked))) {
+        await this.putFolderBack(parked, full, path);
+        retained = undefined;
+        throw new Error(`refusing to write a file over the folder at ${path}`);
+      }
 
       let landed = true;
       // The note's name holds nothing at all, and this operation emptied it.
@@ -2396,6 +2401,38 @@ export class NodeVault implements Vault {
   }
 
   /**
+   * Puts back a folder that the move aside meant for a note took (T22).
+   *
+   * `rename` moves a folder as readily as a file, and a folder can appear at a
+   * note's name after the pass looked. It went on to be written over or
+   * trashed as the note it was not, left at a hidden name, and its notes fell
+   * out of the listing, which reads them as deleted. So it goes straight back.
+   * `rename` is the right tool for that where `link` is not, and it is as
+   * safe: it refuses to put a folder over a file or over a folder with
+   * anything in it, so whatever took the name in between keeps it, and this
+   * one is then written down where it is and named in the error.
+   */
+  private async putFolderBack(parked: string, full: string, path: string): Promise<void> {
+    try {
+      await rename(parked, full);
+    } catch (err) {
+      await this.noteDisplaced(
+        parked,
+        full,
+        `the folder at ${path} was taken aside in place of a note and could not be put back`,
+      );
+      throw new PreservationError(
+        new Error(
+          `the folder at ${path} was taken aside in place of a note and could not be put back ` +
+            `(${(err as Error).message}); it is at ${relative(this.root, parked)}`,
+        ),
+        [relative(this.root, parked)],
+      );
+    }
+    this.unflushed.add(dirname(full));
+  }
+
+  /**
    * Removes a file, and says so when what it removed was not what the caller
    * meant to remove (R01).
    *
@@ -2454,6 +2491,14 @@ export class NodeVault implements Vault {
       return { landed: true }; // gone between the lstat and here
     }
     this.unflushed.add(dirname(full));
+    if (await isFolder(aside)) {
+      try {
+        await this.putFolderBack(aside, full, path);
+      } finally {
+        liveTemps.delete(aside);
+      }
+      throw new Error(`refusing to remove the folder at ${path} as if it were a note`);
+    }
     await midTrash.parked(aside);
 
     // Everything from here can fail, and the note is off its own name until
@@ -3276,6 +3321,15 @@ async function sameFilesystem(a: string, b: string): Promise<boolean> {
     lstat(b).catch(() => undefined),
   ]);
   return one !== undefined && two !== undefined && one.dev === two.dev;
+}
+
+/**
+ * Whether what a move aside just took is a folder (T22). A path that cannot be
+ * looked at reads as not one, which leaves it to the ordinary handling of a
+ * displaced file, where it is kept and named.
+ */
+async function isFolder(path: string): Promise<boolean> {
+  return (await lstat(path).catch(() => undefined))?.isDirectory() === true;
 }
 
 /**

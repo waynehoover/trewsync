@@ -424,6 +424,92 @@ describe("a displaced version the adapter could not place", () => {
   });
 });
 
+/**
+ * T22. `rename` moves a folder as readily as a file, so a folder that appeared
+ * at a note's name after the pass looked was taken aside whole, a file was
+ * published in its place, and the folder was left at a hidden
+ * `Ideas..trew-tmp-keep...` name. Its notes dropped out of the listing, which
+ * reads them as deleted.
+ */
+describe("a folder at the name a note is to land on or leave (T22)", () => {
+  async function folder(): Promise<{ dir: string; v: NodeVault }> {
+    const made = await vault();
+    await mkdir(join(made.dir, "Ideas"));
+    await writeFile(join(made.dir, "Ideas", "one.md"), "1");
+    await writeFile(join(made.dir, "Ideas", "two.md"), "2");
+    return made;
+  }
+  const settles = (p: Promise<unknown>) =>
+    p.then(
+      () => undefined,
+      (err: Error) => err,
+    );
+
+  it("is put back with everything in it, and nothing is written over it", async () => {
+    const { dir, v } = await folder();
+    const err = await settles(
+      v.replace(
+        "Ideas",
+        expecting("x".repeat(64)),
+        enc.encode("a file called Ideas"),
+        { mtime: 1000, ctime: 1000 },
+        "Ideas (kept)",
+      ),
+    );
+    expect((await readdir(dir)).filter((n) => !n.startsWith("."))).toEqual(["Ideas"]);
+    expect(await readFile(join(dir, "Ideas", "two.md"), "utf8")).toBe("2");
+    expect((await v.list()).map((f) => f.path).sort()).toEqual([
+      "Ideas",
+      "Ideas/one.md",
+      "Ideas/two.md",
+    ]);
+    expect(err?.message).toMatch(/folder/);
+  });
+
+  it("is not taken off its name by a removal either", async () => {
+    const { dir, v } = await folder();
+    const err = await settles(
+      v.removeExpecting("Ideas", expecting("x".repeat(64)), "Ideas (kept)"),
+    );
+    expect((await readdir(dir)).filter((n) => !n.startsWith("."))).toEqual(["Ideas"]);
+    expect((await v.list()).map((f) => f.path).sort()).toEqual([
+      "Ideas",
+      "Ideas/one.md",
+      "Ideas/two.md",
+    ]);
+    expect(err?.message).toMatch(/folder/);
+  });
+
+  it("is named and recorded when something took its name before it could go back", async () => {
+    const { dir, v } = await folder();
+    // A note saved at the name in the instant the folder was away.
+    const realStat = vi.mocked(lstat).getMockImplementation()!;
+    vi.mocked(lstat).mockImplementation(async (...args) => {
+      if (String(args[0]).includes(".trew-tmp-keep")) {
+        vi.mocked(lstat).mockImplementation(realStat);
+        await writeFile(join(dir, "Ideas"), "a note saved meanwhile");
+      }
+      return realStat(...args);
+    });
+    const err = await settles(
+      v.replace(
+        "Ideas",
+        expecting("x".repeat(64)),
+        enc.encode("a file called Ideas"),
+        { mtime: 1000, ctime: 1000 },
+        "Ideas (kept)",
+      ),
+    );
+    expect(err).toBeInstanceOf(PreservationError);
+    const at = (err as PreservationError).preserved[0]!;
+    expect(err!.message).toContain(at);
+    expect(await readFile(join(dir, at, "two.md"), "utf8")).toBe("2");
+    expect(await readFile(join(dir, "Ideas"), "utf8")).toBe("a note saved meanwhile");
+    await v.list();
+    expect(v.stranded).toContain(at);
+  });
+});
+
 describe("a deletion the pass decided about", () => {
   it("reaches the trash under the name the note had", async () => {
     const { dir, v } = await vault();
