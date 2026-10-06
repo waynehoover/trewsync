@@ -347,6 +347,74 @@ func TestReadNotePagesVersionsAndRefusals(t *testing.T) {
 	}
 }
 
+// read_note with a base answers the version the base names, or stale, never
+// a newer one as if it were the base's. The base was checked by one read and
+// the head read by another, and a commit landing between the two answered
+// the newer version without stale, so an agent paging through one version, as
+// the tool's description tells it to, could stitch the text of two together
+// (T52). A device writes the note as fast as it can while an agent reads it
+// by the head it last saw; every page that answers must be the base's bytes.
+func TestReadNoteWithABaseNeverAnswersAnotherVersion(t *testing.T) {
+	r := newRig(t, withoutIndex(), withLimits(Limits{TokenBurst: 1e9, TokenRate: 1e9, TokenBytesRate: 1e12,
+		TokenBytesBurst: 1e12}))
+	r.write("n.md", "v0\n")
+	token, _ := r.token(store.ScopeRead)
+	stop, done := make(chan struct{}), make(chan error, 1)
+	writes := 0
+	go func() {
+		for i := 1; ; i++ {
+			select {
+			case <-stop:
+				done <- nil
+				return
+			default:
+			}
+			if _, err := writeEntry(r.st, store.Entry{Path: "n.md"}, []byte(fmt.Sprintf("v%d\n", i))); err != nil {
+				done <- err
+				return
+			}
+			writes = i
+		}
+	}()
+	// Unfixed, a few hundred calls were enough; the time bound keeps the
+	// race detector's run short.
+	answered, stale := 0, 0
+	for i, until := 0, time.Now().Add(3*time.Second); i < 3000 && time.Now().Before(until); i++ {
+		base := r.head("n.md")
+		body := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"read_note",`+
+			`"arguments":{"path":"n.md","base":%d}}}`, i, base)
+		_, _, reply := r.post(legacy(token, body))
+		e := toolReply(t, reply)
+		if e.isError {
+			if e.errorCode() != "stale" {
+				t.Fatalf("call %d: %s", i, e.raw)
+			}
+			stale++
+			continue
+		}
+		var tr readResult
+		var un struct {
+			Content string `json:"content"`
+		}
+		e.trusted(t, &tr)
+		e.untrusted(t, &un)
+		if want := r.bytesAt(base); tr.UID != base || un.Content != want {
+			t.Fatalf("call %d: asked for base %d, answered uid %d reading %q, without stale; the base reads %q",
+				i, base, tr.UID, un.Content, want)
+		}
+		answered++
+	}
+	close(stop)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	// Both answers, and writes between them, or the race was never run.
+	if writes == 0 || answered == 0 || stale == 0 {
+		t.Fatalf("%d writes, %d pages answered and %d stale: the reads and the writes did not interleave",
+			writes, answered, stale)
+	}
+}
+
 func TestHistoryDeletionsAndComparisons(t *testing.T) {
 	r := newRig(t)
 	v1 := r.write("a.md", "one\ntwo\nthree\n")
