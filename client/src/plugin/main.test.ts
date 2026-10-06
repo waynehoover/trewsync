@@ -400,6 +400,63 @@ describe("loading", () => {
     expect(plugin.currentState.kind).toBe("stopped");
     expect(plugin.savedData).not.toBe(null);
   }, 300_000);
+
+  /**
+   * T10. Disabling and enabling the plugin (the Settings toggle, an update
+   * through BRAT, a hot reload) unloads one instance and loads another into
+   * the same app. The old one's close drains the pass it was in, which goes on
+   * landing files; the new one started at once, and the two engines landed
+   * each other's downloads beside their own.
+   */
+  it("does not start again on the same app until the instance before it has closed", async () => {
+    await fresh();
+    const writer = await load();
+    await startVault(writer.plugin, "writer");
+    await synced(writer.plugin);
+    const first = await load();
+    await first.plugin.pair(await anInvite(), "phone");
+    await synced(first.plugin);
+
+    // The first instance's landing of an incoming note, held open.
+    const adapter = first.app.vault.adapter;
+    const gate = deferred();
+    let held = false;
+    const rename = adapter.rename.bind(adapter);
+    adapter.rename = async (from, to) => {
+      if (!held && from.includes(".trew-tmp-")) {
+        held = true;
+        await gate.promise;
+      }
+      return rename(from, to);
+    };
+    const notes = Array.from({ length: 6 }, (_, i) => `Inbox/note-${i}.md`);
+    for (const path of notes) writer.app.vault.adapter.seed(path, `${path}\n`);
+    await writer.plugin.syncNow();
+    await until("the first instance to be landing a note", () => held);
+
+    first.plugin.onunload();
+    let firstClosed = false;
+    void first.plugin.closing!.then(() => (firstClosed = true));
+    const second = makePlugin(first.app);
+    (second as unknown as { confirmSync: () => Promise<boolean> }).confirmSync = async () => true;
+    second.savedData = first.plugin.savedData;
+    loaded.push(second);
+    let secondLoaded = false;
+    const loading = second.onload().then(() => (secondLoaded = true));
+    // Every turn the new instance's own loading needs, and many more.
+    for (let i = 0; i < 50; i++) await nextTurn();
+    expect(firstClosed, "the held landing did not hold the first close").toBe(false);
+    expect(secondLoaded, "the second instance loaded while the first was closing").toBe(false);
+
+    gate.resolve();
+    await loading;
+    expect(firstClosed).toBe(true);
+    await synced(second);
+    await second.syncNow();
+    const inVault = adapter.filePaths().filter((p) => !p.startsWith(".obsidian/"));
+    expect(inVault.filter((p) => p.includes("Conflicted copy"))).toEqual([]);
+    for (const path of notes) expect(adapter.text(path)).toBe(`${path}\n`);
+  }, 300_000);
 });
 
 describe("where its own state goes", () => {
@@ -1445,6 +1502,36 @@ describe("renames, which only Obsidian can report", () => {
     expect(gone, `deleted list was ${JSON.stringify(gone)}`).not.toContain("old-name.md");
   }, 300_000);
 
+  /**
+   * T14. The engine is reached through the client, and there is a client only
+   * while connected: a rename made while loading, offline or paused was sent
+   * as a deletion and a new file, so the note's history was out of reach of
+   * its new name and Browse deleted gained a phantom.
+   */
+  it("keeps a rename made while there is no connection, for when there is one", async () => {
+    await fresh();
+    const { plugin, app } = await load();
+    app.vault.adapter.seed("old-name.md", "the same content throughout");
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+
+    const toggle = () => (plugin as unknown as { togglePause(): Promise<void> }).togglePause();
+    await toggle();
+    expect(plugin.currentState.kind).toBe("paused");
+    await app.vault.adapter.rename("old-name.md", "new-name.md");
+    app.vault.fire("rename", { path: "new-name.md" }, "old-name.md");
+    await toggle();
+    await synced(plugin);
+    for (let i = 0; i < 2; i++) await plugin.syncNow();
+
+    const client = (
+      plugin as unknown as { client?: { deleted(): Promise<{ notes: { path: string }[] }> } }
+    ).client;
+    const gone = (await client!.deleted()).notes.map((v) => v.path);
+    expect(gone, `deleted list was ${JSON.stringify(gone)}`).not.toContain("old-name.md");
+    expect(app.vault.adapter.text("new-name.md")).toBe("the same content throughout");
+  }, 300_000);
+
   it("still moves the file when nothing told it the old path", async () => {
     // The delete-plus-add path, which is what happens on any platform that
     // cannot report a rename. Noisier, and it must still not lose anything.
@@ -1570,6 +1657,58 @@ describe("a device that only receives, while Obsidian's index catches up", () =>
     expect(notes(mac.app)).toEqual(["m3-photo.jpg"]);
     expect(notes(phone.app)).toEqual(["m3-photo.jpg"]);
     expect(renames.mock.calls, "the engine was told of a rename").toEqual([]);
+  }, 300_000);
+
+  /**
+   * P-3. Obsidian reports a file the plugin renamed into place when its
+   * watcher gets to it, as `create`. That was taken for news: the file was
+   * marked changed and the next round read and hashed again every file the
+   * pass had just written and read back, 12 to 14 ms a file on a phone.
+   */
+  it("takes Obsidian's report of a file it has just landed for its own, and anything else for news", async () => {
+    const { phone, mac } = await pair();
+    const changed = vi.spyOn(clientOf(mac.plugin), "noteChanged");
+    const told = () => changed.mock.calls.map((c) => c[0]);
+    const paths = Array.from({ length: 20 }, (_, i) => `Inbox/landed-${i}.md`);
+    const outside = "Inbox/replaced-outside.md";
+    mac.app.vault.adapter.holdWatcher();
+    for (const p of [...paths, outside]) {
+      phone.app.vault.adapter.seed(p, `${p} from the phone\n`, 1_700_000_000_000);
+    }
+    await phone.plugin.syncNow();
+    await until("the notes on the Mac", () =>
+      [...paths, outside].every((p) => mac.app.vault.adapter.text(p) !== undefined),
+    );
+    await mac.plugin.syncNow();
+    // Another program writes one of them again, the same length, before the
+    // watcher has reported the landing: a time of its own.
+    const again = new TextEncoder().encode(`${outside} from elsewhere\n`);
+    expect(again.length).toBe(new TextEncoder().encode(`${outside} from the phone\n`).length);
+    mac.app.vault.adapter.writeUnreported(outside, again, 1_800_000_000_000);
+
+    changed.mockClear();
+    const reads = () =>
+      mac.app.vault.adapter.calls.filter((c) => c.op === "readBinary" && paths.includes(c.path))
+        .length;
+    const before = reads();
+    mac.app.vault.adapter.releaseWatcher();
+    await nextTurn();
+    expect(
+      told().filter((p) => paths.includes(p)),
+      "its own landings were taken for news",
+    ).toEqual([]);
+    expect(told(), "a write from outside was taken for this client's own").toContain(outside);
+    await mac.plugin.syncNow();
+    expect(reads() - before, "a pass read again the files it had just landed").toBe(0);
+
+    // A save after the landing, with a time of its own, is news too.
+    await mac.app.vault.adapter.write(paths[0]!, "edited on the Mac\n", {
+      mtime: 1_800_000_000_000,
+    });
+    expect(told()).toContain(paths[0]);
+    await settleBoth(phone.plugin, mac.plugin);
+    expect(phone.app.vault.adapter.text(paths[0]!)).toBe("edited on the Mac\n");
+    expect(phone.app.vault.adapter.text(outside)).toBe(`${outside} from elsewhere\n`);
   }, 300_000);
 
   it("does not delete a new note it received in the pass that updated another", async () => {
@@ -6083,6 +6222,60 @@ describe("compact sync menu", () => {
     plugin.ribbonIcons[0]!.callback();
     await Menu.latest!.items.find((item) => item.label === "Resume sync")!.click();
     await synced(plugin);
+  });
+});
+
+/**
+ * T15. "This device's unsent changes are sent first", docs/plugin.md says of
+ * Undo this change, and the client does settle before it asks the server. A
+ * paragraph still in an editor's buffer, inside the autosave delay, was not
+ * among them: Sync now saved open editors first and Undo did not, and the undo
+ * then wrote into the editor holding it.
+ */
+describe("undoing a change from the history panel", () => {
+  it("saves open editors before it asks the server", async () => {
+    const { plugin, app } = await load();
+    const order: string[] = [];
+    app.workspace.markdownLeaves.push({ isDeferred: true, view: {} });
+    app.workspace.markdownLeaves.push({
+      view: { save: async () => void order.push("saved the editor") },
+    });
+    (plugin as unknown as { client: unknown }).client = {
+      undo: async (id: string) => {
+        order.push(`undo ${id}`);
+        return { notes: [] };
+      },
+      close: async () => undefined,
+    };
+    await plugin.historySource().undoOperation!({ operation: { id: "op-1" } } as never, {
+      toCopy: false,
+    });
+    expect(order).toEqual(["saved the editor", "undo op-1"]);
+  });
+
+  it("does not undo anything when an editor cannot save", async () => {
+    const { plugin, app } = await load();
+    let undone = false;
+    app.workspace.markdownLeaves.push({
+      view: {
+        save: async () => {
+          throw new Error("editor disk full");
+        },
+      },
+    });
+    (plugin as unknown as { client: unknown }).client = {
+      undo: async () => {
+        undone = true;
+        return { notes: [] };
+      },
+      close: async () => undefined,
+    };
+    await expect(
+      plugin.historySource().undoOperation!({ operation: { id: "op-1" } } as never, {
+        toCopy: false,
+      }),
+    ).rejects.toThrow(/editor disk full/);
+    expect(undone).toBe(false);
   });
 });
 

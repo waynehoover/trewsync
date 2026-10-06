@@ -64,12 +64,24 @@ export interface DisplacedFiles {
    * notes, and it applies at least as much to the record of where the notes
    * went: it is the only thing that knows.
    *
-   * Without it the log grows. Each record is a couple of hundred bytes and one
-   * is written per version that could not be placed, which is a rare event by
-   * construction, so an unbounded count of a rare thing is the cheaper end of
-   * this trade.
+   * Without it the log can only be emptied (`clear`), or grows. It is not a
+   * record of rare events in the plugin: every incoming deletion writes one
+   * before the note is moved aside to be identified, which is how a phone
+   * came to read a record back and look on the disk for every deletion it
+   * had ever applied, on every pass (T11).
    */
   rewrite?(text: string): Promise<void>;
+  /**
+   * Empties the log, but only while it still holds exactly `was`, and says
+   * whether it did.
+   *
+   * For a shell that cannot replace the log with other text safely (RR3) and
+   * can empty it: writing nothing cannot be cut short into half a record, so
+   * the log is either as it was or empty, and it is asked for only when every
+   * record in it is dead. A log that has changed since it was read is left
+   * alone, so a record written in between does not go with the dead ones.
+   */
+  clear?(was: string): Promise<boolean>;
   /** Whether something is still at this vault-relative path. */
   stillThere(at: string): Promise<boolean>;
 }
@@ -99,14 +111,48 @@ export interface Inventory {
  */
 const COMPACT_AT = 32;
 
+/**
+ * How long a record is taken at its word, whatever the disk says (T11).
+ *
+ * A record is written before its note is moved (RR2), so for a moment it
+ * names a file that is not there yet. Judged dead in that moment, it could be
+ * tidied out of the log, or remembered as gone, just before its note went
+ * into the hidden folder: a note nothing knew the place of. Every move
+ * follows its record within a few calls of the adapter; a minute is far
+ * longer than that, and far shorter than a log worth tidying.
+ */
+const SETTLING_MS = 60_000;
+
 export class DisplacedLedger {
   private readonly files: DisplacedFiles;
   private readonly say: (message: string) => void;
+  private readonly now: () => number;
 
-  constructor(files: DisplacedFiles, log: (message: string) => void = () => undefined) {
+  constructor(
+    files: DisplacedFiles,
+    log: (message: string) => void = () => undefined,
+    now: () => number = () => Date.now(),
+  ) {
     this.files = files;
     this.say = log;
+    this.now = now;
   }
+
+  /**
+   * Records this object has seen dead, by the whole record, so the disk is
+   * not asked about them again (T11).
+   *
+   * The plugin's log is not rare events: every incoming deletion writes one,
+   * the record goes dead as the note goes to the trash, and the log can only
+   * be emptied, so a phone stat'ed every deletion it had ever applied on
+   * every pass, behind Obsidian's own saves in the adapter's queue. A record
+   * seen gone stays gone: its name was made at random for it, and anything
+   * put there again is put there with a record of its own, which is a
+   * different record. Only past `SETTLING_MS`, and never on a check that
+   * failed, which still counts as present. For this object's life; a restart
+   * looks again.
+   */
+  private readonly gone = new Set<string>();
 
   /**
    * Whether anything is known to be missing from this log.
@@ -154,8 +200,9 @@ export class DisplacedLedger {
     // as permission to hide somebody's note, so "the call did not throw" is
     // not a strong enough thing to know: a short write that still returns, a
     // filesystem that reordered, an adapter whose append went somewhere else.
-    // Reading the whole log back costs one read on a path taken only when a
-    // version could not be placed, which is rare by construction.
+    // Reading the whole log back is one read per record, and the plugin
+    // writes a record for every incoming deletion; it stays small because a
+    // log whose records are all dead is emptied (T11).
     if (!(await this.readableNow(line))) {
       this.say(`wrote down that ${d.at} is waiting and could not read it back`);
       this.missing = `${d.from} was displaced to ${d.at} and the record cannot be read back`;
@@ -214,18 +261,27 @@ export class DisplacedLedger {
     for (const d of read.records) newest.set(d.at, d);
 
     const live: Displaced[] = [];
-    let dead = 0;
+    // What a rewrite keeps: the live records, and a dead one too young to be
+    // judged by the disk (`SETTLING_MS`).
+    const keep: Displaced[] = [];
+    const now = this.now();
     for (const d of newest.values()) {
-      if (await this.files.stillThere(d.at).catch(() => true)) live.push(d);
-      else dead++;
+      const key = JSON.stringify(d);
+      if (this.gone.has(key)) continue;
+      if (await this.files.stillThere(d.at).catch(() => true)) {
+        live.push(d);
+        keep.push(d);
+      } else if (now - d.when < SETTLING_MS) {
+        keep.push(d);
+      } else {
+        this.gone.add(key);
+      }
     }
     // Counted against the whole log rather than against the live records: a
     // log of a thousand resolved entries and one live one is what this is for.
-    if (
-      tidy &&
-      (read.records.length - live.length >= COMPACT_AT || (dead > 0 && live.length === 0))
-    ) {
-      await this.compact(live);
+    const dropped = read.records.length - keep.length;
+    if (tidy && dropped > 0 && (dropped >= COMPACT_AT || keep.length === 0)) {
+      await this.compact(keep, read);
     }
     live.sort((a, b) => a.when - b.when);
     const why = read.why ?? this.missing;
@@ -234,21 +290,36 @@ export class DisplacedLedger {
       : { waiting: live, complete: false, why };
   }
 
-  private async compact(live: readonly Displaced[]): Promise<void> {
-    const rewrite = this.files.rewrite?.bind(this.files);
-    // A shell that cannot replace the log safely does not replace it (RR3).
-    if (rewrite === undefined) return;
+  private async compact(keep: readonly Displaced[], read: Parsed): Promise<void> {
+    // A line that cannot be read goes into the new log as it was (T08). It
+    // named something, and dropping it reported the next inventory complete,
+    // the one before it having said it was not, with nothing resolved in
+    // between.
+    const text = [...keep.map((d) => JSON.stringify(d)), ...read.unreadable]
+      .map((line) => `${line}\n`)
+      .join("");
     try {
-      await rewrite(live.map((d) => `${JSON.stringify(d)}\n`).join(""));
+      if (text === "" && this.files.clear !== undefined && read.text !== undefined) {
+        if (await this.files.clear(read.text)) this.gone.clear();
+        return;
+      }
+      const rewrite = this.files.rewrite?.bind(this.files);
+      // A shell that cannot replace the log safely does not replace it (RR3).
+      if (rewrite === undefined) return;
+      await rewrite(text);
+      // Nothing seen gone is in the log any more, so nothing needs to be
+      // remembered about it.
+      this.gone.clear();
     } catch (err) {
       // The log keeps its dead records, which costs a longer file and nothing
       // else: `waiting` filters them every time. True only because `rewrite`
-      // is all-or-nothing where it exists at all.
+      // is all-or-nothing where it exists at all, and emptying is all or
+      // nothing by its nature.
       this.say(`could not tidy the displaced-version log: ${(err as Error).message}`);
     }
   }
 
-  private async parse(): Promise<{ records: Displaced[]; why?: string }> {
+  private async parse(): Promise<Parsed> {
     let text: string | undefined;
     try {
       text = await this.files.read();
@@ -260,11 +331,11 @@ export class DisplacedLedger {
       // renders it has to say which answer it got.
       const why = `the record of displaced versions could not be read (${(err as Error).message})`;
       this.say(why);
-      return { records: [], why };
+      return { records: [], unreadable: [], text: undefined, why };
     }
-    if (text === undefined || text.length === 0) return { records: [] };
+    if (text === undefined || text.length === 0) return { records: [], unreadable: [], text };
     const out: Displaced[] = [];
-    let torn: string | undefined;
+    const unreadable: string[] = [];
     for (const line of text.split("\n")) {
       if (line.trim().length === 0) continue;
       const d = parseLine(line);
@@ -273,10 +344,27 @@ export class DisplacedLedger {
       // before it are good. Skipped rather than thrown on, and counted rather
       // than passed over in silence: a line that cannot be read named
       // something, and whatever it named is not in the list beside it.
-      else torn = "the record of displaced versions has a line that cannot be read";
+      else unreadable.push(line);
     }
-    return torn === undefined ? { records: out } : { records: out, why: torn };
+    return unreadable.length === 0
+      ? { records: out, unreadable, text }
+      : {
+          records: out,
+          unreadable,
+          text,
+          why: "the record of displaced versions has a line that cannot be read",
+        };
   }
+}
+
+/** The log as `parse` read it, with the text a `clear` must still find there. */
+interface Parsed {
+  readonly records: Displaced[];
+  /** Lines that are not a record, as they stand in the log. */
+  readonly unreadable: string[];
+  /** The log as read, or undefined where there is none or it could not be read. */
+  readonly text: string | undefined;
+  readonly why?: string;
 }
 
 function parseLine(line: string): Displaced | undefined {

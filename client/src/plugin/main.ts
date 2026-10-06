@@ -109,6 +109,50 @@ import {
 const log = (message: string, ...rest: unknown[]): void =>
   console.debug("TrewSync:", message, ...rest);
 
+/**
+ * Where an unloaded instance of this plugin leaves the close it started, for
+ * the next instance on the same app to wait for (T10).
+ *
+ * On the app, as `appStartOf` keeps the start id, because disabling and
+ * enabling a plugin (the Settings toggle, an update through BRAT, a hot
+ * reload) evaluates this module again and keeps the app. The old instance's
+ * close drains the pass it was in, which goes on landing files after
+ * `onunload` has returned, and the new instance started at once: two engines
+ * on one vault, each landing what the other was landing. Toggled after 20 of
+ * 120 notes had arrived, the vault held 220 notes, 100 of them conflict
+ * copies. An unlink still being finished was a pairing the next instance
+ * could read before the unlink had removed it.
+ */
+const CLOSING = Symbol.for("trew.closing");
+
+/**
+ * The size and times a file event carries, or undefined for a folder.
+ * Structural, as `vault.ts` reads the index, rather than `instanceof TFile`.
+ */
+function statOfEvent(file: TAbstractFile): { size: number; mtime: number } | undefined {
+  const stat = (file as { stat?: { size?: unknown; mtime?: unknown } }).stat;
+  return stat && typeof stat.size === "number" && typeof stat.mtime === "number"
+    ? { size: stat.size, mtime: stat.mtime }
+    : undefined;
+}
+
+/** Every close an earlier instance of this plugin started on this app. */
+function closingOn(app: object): Promise<void> {
+  const held = (app as Record<symbol, unknown>)[CLOSING];
+  return held instanceof Promise ? (held as Promise<void>) : Promise.resolve();
+}
+
+/** Adds a close to what the next instance on this app waits for. */
+function leaveClosing(app: object, closing: Promise<void>): void {
+  const all = Promise.all([closingOn(app), closing]).then(() => undefined);
+  Object.defineProperty(app, CLOSING, {
+    value: all,
+    configurable: true,
+    writable: true,
+    enumerable: false,
+  });
+}
+
 /** What the status bar is saying, which is also what the modal shows. */
 export type State =
   | { kind: "unpaired" }
@@ -349,6 +393,13 @@ export default class TrewPlugin extends Plugin {
   /** What `onunload` started and could not wait for, for anything that can. */
   closing: Promise<void> | undefined;
   /**
+   * Renames Obsidian reported while there was no client to tell, oldest
+   * first, for the next one (T14). Only for this instance's life: a rename
+   * made just before the plugin is unloaded, with no connection in between,
+   * still travels as a deletion and a new file.
+   */
+  private readonly renamesWaiting: [string, string][] = [];
+  /**
    * Every config save or index reset in flight, so `unlink` cannot be overtaken by one.
    *
    * All of them, not the newest. Two reconnects inside one unlink window
@@ -373,6 +424,12 @@ export default class TrewPlugin extends Plugin {
   }
 
   override async onload(): Promise<void> {
+    // Nothing of this instance exists until an earlier one on this app has
+    // finished closing: not a command, not a read of `data.json`, not a pass
+    // (T10). Usually there is none, and this costs nothing.
+    const mine = this.generation;
+    await closingOn(this.app);
+    if (mine !== this.generation) return;
     this.stopResume = watchResume(() => this.resume());
     // Android pauses Obsidian when the screen turns off, and the sync socket
     // goes with it, so a first sync longer than the screen timeout was cut
@@ -519,9 +576,27 @@ export default class TrewPlugin extends Plugin {
     // thousands of pointless things rather than about correctness. The
     // callback runs immediately if the layout is already up.
     this.app.workspace.onLayoutReady(() => {
-      this.registerEvent(this.app.vault.on("create", (file) => this.nudge(file.path)));
-      this.registerEvent(this.app.vault.on("modify", (file) => this.nudge(file.path)));
-      this.registerEvent(this.app.vault.on("delete", (file) => this.nudge(file.path)));
+      // Except this client's own writes, which the engine accounts for itself
+      // (P-3). Obsidian reports a file renamed into place when its watcher
+      // gets to it, and a write in place, a removal or a new folder from
+      // inside the call; each was taken for news, marked the file changed and
+      // asked for another round, which read and hashed again every file the
+      // pass had just written and read back: 12 to 14 ms a file on a phone.
+      this.registerEvent(
+        this.app.vault.on("create", (file) => {
+          if (!this.liveVault?.ownCreate(file.path, statOfEvent(file))) this.nudge(file.path);
+        }),
+      );
+      this.registerEvent(
+        this.app.vault.on("modify", (file) => {
+          if (!this.liveVault?.ownChange(file.path)) this.nudge(file.path);
+        }),
+      );
+      this.registerEvent(
+        this.app.vault.on("delete", (file) => {
+          if (!this.liveVault?.ownChange(file.path)) this.nudge(file.path);
+        }),
+      );
       // The old path is the whole point of this event. A rename that
       // arrives as a delete plus an add still moves the file, but it
       // retires the old path as a deletion, and the list of deleted notes
@@ -536,10 +611,16 @@ export default class TrewPlugin extends Plugin {
       // Not for a rename this client is making itself, such as moving the
       // old bytes of an attachment aside before writing the new ones. The
       // engine decided that one and was told the note stayed where it was.
+      //
+      // And kept when there is no client to tell: while the first catch-up
+      // loads, while offline, while paused (T14). Sent as a deletion and a
+      // new file instead, the note's history was out of reach of its new
+      // name and Browse deleted listed a note that was still there.
       this.registerEvent(
         this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
           if (!this.liveVault?.ownRename(oldPath, file.path)) {
-            void this.client?.noteRename(oldPath, file.path);
+            if (this.client) void this.client.noteRename(oldPath, file.path);
+            else this.renamesWaiting.push([oldPath, file.path]);
           }
           this.nudge();
         }),
@@ -631,6 +712,9 @@ export default class TrewPlugin extends Plugin {
     ])
       .then(() => undefined)
       .catch(() => undefined);
+    // And for the next instance of this plugin, which Obsidian may load into
+    // the same app before this close has finished (T10).
+    leaveClosing(this.app, this.closing);
   }
 
   /* ------------------------------------------------------------ *
@@ -1148,6 +1232,10 @@ export default class TrewPlugin extends Plugin {
         if (!current()) return;
         this.client = client;
         if (!client) return;
+        // Renames made while there was no client, in the order they were
+        // made, and ahead of the settle that follows this: the client queues
+        // them before its first pass (T14).
+        for (const [from, to] of this.renamesWaiting.splice(0)) void client.noteRename(from, to);
         this.everConnected = true;
         this.setState({ kind: "syncing", since: Date.now() });
         // Nothing to write back. The pairing that made this device settled
@@ -1780,14 +1868,7 @@ export default class TrewPlugin extends Plugin {
     let report: SyncReport;
     this.setState({ kind: "syncing", since: Date.now() });
     try {
-      // The editor's autosave has its own delay. A manual sync must include
-      // those buffers, not just the previous version already on disk.
-      for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-        // Deferred background tabs have no editor or save method. A leaf
-        // can also change views while an earlier editor is being saved.
-        const view = leaf.view as Partial<MarkdownView>;
-        if (typeof view.save === "function") await view.save();
-      }
+      await this.saveOpenEditors();
       if (mine !== this.generation || this.client !== client) return;
       report = await client.settle({ coalesceWrites: false, verifyContents, retryFailures: true });
     } catch (err) {
@@ -1802,6 +1883,25 @@ export default class TrewPlugin extends Plugin {
     // The state was set by onPass, once per pass. This is the feedback the
     // command owes.
     new Notice(`TrewSync: ${summarise(report)}`);
+  }
+
+  /**
+   * Saves every open editor, so what was typed inside the autosave delay is
+   * on the disk for whatever is about to read it.
+   *
+   * The editor's autosave has its own delay. A manual sync must include those
+   * buffers, not just the previous version already on disk, and so must an
+   * undo, which sends this device's changes first and then writes into the
+   * very notes the editors may be holding (T15). A save that fails fails the
+   * caller: the unsent text is still only in the editor.
+   */
+  private async saveOpenEditors(): Promise<void> {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      // Deferred background tabs have no editor or save method. A leaf can
+      // also change views while an earlier editor is being saved.
+      const view = leaf.view as Partial<MarkdownView>;
+      if (typeof view.save === "function") await view.save();
+    }
   }
 
   private passFailed(why: string): void {
@@ -2650,7 +2750,12 @@ export default class TrewPlugin extends Plugin {
           throw new Error(
             "this version was not written by an operation, so there is nothing to undo",
           );
-        return this.client.undo(version.operation.id, opts);
+        const id = version.operation.id;
+        // What is in an open editor is among this device's changes, which
+        // the undo sends first (T15).
+        await this.saveOpenEditors();
+        if (!this.client) throw new Error(this.whyNoClient());
+        return this.client.undo(id, opts);
       },
       currentText: async (path, maxBytes) => {
         // The note can go between the look and the read: somebody deleting

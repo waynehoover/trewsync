@@ -443,9 +443,16 @@ that all server history is recoverable.
 
 ## Durability
 
-TrewSync stages incoming files and checks the written bytes before putting them
-in place. Desktop and mobile provide different guarantees during a power loss;
-keep independent backups of your notes.
+TrewSync writes a new file or a changed attachment beside its destination,
+checks the written bytes, and only then puts it in place. An incoming edit to a
+note is written into the note itself, so an open editor keeps showing it: what
+the note held is first copied beside it as a conflict copy and checked, and
+once the new text has been read back the copy goes if the server already has
+what it holds. If that write is cut short, by a full disk for example, TrewSync
+puts back what the note held and fetches the edit again; a note it cannot put
+back yet is not sent anywhere until it can. Desktop and mobile provide
+different guarantees during a power loss; keep independent backups of your
+notes.
 
 If the panel says **versions were kept somewhere Obsidian does not show**, keep
 the named files and the plugin's state folder. The notice gives their retained

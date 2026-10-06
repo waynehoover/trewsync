@@ -14,6 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { FakeAdapter, FakeVaultIndex, asVault, normalizePath } from "./fake.ts";
+import { resetStub, setApiVersion } from "./stub.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
 import { plainDigest } from "../core/digest.ts";
 
@@ -202,6 +203,49 @@ describe("reading and writing", () => {
   });
 
   /**
+   * P-1d. Obsidian has its folders in memory, so a folder its index holds is
+   * not asked about level by level for every file written into it.
+   */
+  it("asks the disk nothing about folders Obsidian's index already holds", async () => {
+    adapter.seed("a/b/old.md", "already here");
+    await vault.write("a/b/new.md", enc.encode("new"), { mtime: 1000, ctime: 1000 });
+    expect(adapter.text("a/b/new.md")).toBe("new");
+    const asked = adapter.calls.filter(
+      (c) => (c.op === "exists" || c.op === "mkdir") && (c.path === "a" || c.path === "a/b"),
+    );
+    expect(asked).toEqual([]);
+  });
+
+  it("fails a write into a folder the index still shows and the disk has lost, and lands it later", async () => {
+    // The index behind the disk: the folder went outside Obsidian and the
+    // watcher has not said so. The write has nowhere to go and must say so,
+    // not land somewhere else; the next pass finds the index caught up.
+    adapter.seed("gone/old.md", "already here");
+    await adapter.rmdir("gone", true);
+    const index = new FakeVaultIndex(adapter);
+    const stale = { path: "gone", name: "gone" };
+    index.getAbstractFileByPath = (p: string) => (p === "gone" ? (stale as never) : null);
+    const v = new ObsidianVault(asVault(index), ".obsidian");
+    // A disk, unlike the fake, refuses a file in a folder that is not there.
+    adapter.fault = (op, path) => {
+      const cut = path.lastIndexOf("/");
+      const folder = cut === -1 ? "" : path.slice(0, cut);
+      return op === "writeBinary" && folder !== "" && !adapter.everything().includes(folder)
+        ? new Error(`ENOENT: no such file or directory, open '${path}'`)
+        : undefined;
+    };
+    await expect(v.write("gone/new.md", enc.encode("new"), { mtime: 1, ctime: 1 })).rejects.toThrow(
+      /ENOENT/,
+    );
+    expect(adapter.filePaths()).toEqual([]);
+
+    // The watcher has reported the folder gone.
+    index.getAbstractFileByPath = () => null;
+    await v.write("gone/new.md", enc.encode("new"), { mtime: 1, ctime: 1 });
+    expect(adapter.text("gone/new.md")).toBe("new");
+  });
+
+  /**
    * The engine's decision table compares mtimes. A downloaded file stamped
    * with the moment it landed looks locally edited on the next pass, so the
    * device would upload back what it just received, forever.
@@ -221,6 +265,25 @@ describe("reading and writing", () => {
     const view = backing.subarray(2, 5);
     await vault.write("note.md", view, { mtime: 1, ctime: 1 });
     expect([...(await vault.read("note.md"))]).toEqual([1, 2, 3]);
+  });
+
+  it("hands bytes that fill their buffer to the adapter without copying them", async () => {
+    // Every copy is a whole file more in memory, and a 64 MiB attachment
+    // used to hold four at once on its way through `create` and `stage`.
+    const handed: ArrayBuffer[] = [];
+    const realWrite = adapter.writeBinary.bind(adapter);
+    adapter.writeBinary = async (path, data, options) => {
+      handed.push(data);
+      return realWrite(path, data, options);
+    };
+    const whole = new Uint8Array([1, 2, 3, 4]);
+    expect(await vault.create("whole.bin", whole, { mtime: 1, ctime: 1 })).toBe(true);
+    adapter.seed("old.bin", "x");
+    await vault.write("old.bin", whole, { mtime: 1, ctime: 1 });
+    expect(handed).toHaveLength(3);
+    expect(handed.every((data) => data === whole.buffer)).toBe(true);
+    expect([...(await vault.read("whole.bin"))]).toEqual([1, 2, 3, 4]);
+    expect([...(await vault.read("old.bin"))]).toEqual([1, 2, 3, 4]);
   });
 });
 
@@ -255,6 +318,35 @@ describe("deleting", () => {
     adapter.seed("doomed.md", "x");
     await vault.remove("doomed.md");
     expect(adapter.trashedLocally).toEqual(["doomed.md"]);
+  });
+
+  /**
+   * P-9. A phone has no system trash, and the Capacitor adapter answers
+   * false every time it is asked: one more turn of the adapter's queue for
+   * every deletion. A refusal is remembered for the session; a throw, which
+   * is one file that could not go, is not.
+   */
+  it("asks for the system trash once a session where the platform has none", async () => {
+    adapter.systemTrashWorks = false;
+    for (const name of ["a.md", "b.md", "c.md"]) adapter.seed(name, name);
+    for (const name of ["a.md", "b.md", "c.md"]) await vault.remove(name);
+    expect(adapter.calls.filter((c) => c.op === "trashSystem")).toHaveLength(1);
+    expect(adapter.trashedLocally).toEqual(["a.md", "b.md", "c.md"]);
+    expect(adapter.text(".trash/c.md")).toBe("c.md");
+  });
+
+  it("keeps asking a system trash that throws, and one that works", async () => {
+    adapter.systemTrashThrows = true;
+    for (const name of ["a.md", "b.md"]) adapter.seed(name, name);
+    for (const name of ["a.md", "b.md"]) await vault.remove(name);
+    expect(adapter.calls.filter((c) => c.op === "trashSystem")).toHaveLength(2);
+    expect(adapter.trashedLocally).toEqual(["a.md", "b.md"]);
+
+    adapter.systemTrashThrows = false;
+    adapter.systemTrashWorks = true;
+    for (const name of ["c.md", "d.md"]) adapter.seed(name, name);
+    for (const name of ["c.md", "d.md"]) await vault.remove(name);
+    expect(adapter.trashedToSystem).toEqual(["c.md", "d.md"]);
   });
 
   it("removing something already gone is not an error", async () => {
@@ -675,7 +767,7 @@ describe("writing a name that differs only by case", () => {
  */
 /** Whether a path is a staging copy beside `note`, whatever its random part. */
 const isStaging = (path: string, note = "note.md") =>
-  new RegExp(`^\\.trew-tmp-[0-9a-f]{8}-${note.replace(".", "\\.")}$`).test(path);
+  new RegExp(`^\\.trew-tmp-[0-9a-f]{32}-${note.replace(".", "\\.")}$`).test(path);
 /** The staging copies present, by name. */
 const stagingCopies = (a: FakeAdapter) => a.filePaths().filter((p) => p.includes(".trew-tmp-"));
 
@@ -728,11 +820,26 @@ describe("landing a note without a moment where it is half written", () => {
     expect(stagingCopies(adapter)).toEqual([]);
   });
 
+  it("a staging copy the adapter reported and never wrote is caught, and named", async () => {
+    // The read-back is the whole check now (P-1c), so a file that is not
+    // there has to be found by it, and said in words that name the path.
+    adapter.seed("note.md", "old");
+    const realWrite = adapter.writeBinary.bind(adapter);
+    adapter.writeBinary = async (path, data, options) => {
+      if (isStaging(path)) return;
+      return realWrite(path, data, options);
+    };
+    await expect(vault.write("note.md", enc.encode("new content"), times)).rejects.toThrow(
+      /\.trew-tmp-[0-9a-f]+-note\.md cannot be read back after writing it: ENOENT/,
+    );
+    expect(adapter.text("note.md")).toBe("old");
+  });
+
   it("a failure while replacing keeps the complete new copy beside the note and names it", async () => {
     adapter.seed("note.md", "old");
     adapter.fault = (op, path) => (op === "writeBinary" && path === "note.md" ? 1 : undefined);
     await expect(vault.write("note.md", enc.encode("new content"), times)).rejects.toThrow(
-      /complete new content is beside it at \.trew-tmp-[0-9a-f]{8}-note\.md/,
+      /complete new content is beside it at \.trew-tmp-[0-9a-f]{32}-note\.md/,
     );
     // The destination is what the adapter left, which is the failure this
     // API cannot prevent; the new version is whole beside it, and the old one
@@ -798,6 +905,36 @@ describe("creating a file only where nothing is", () => {
       op === "writeBinary" && isStaging(path, "new.md") ? 1 : undefined;
     await expect(vault.create("new.md", enc.encode("mine"), times)).rejects.toThrow(/wrote 1/);
     expect(await adapter.exists("new.md")).toBe(false);
+  });
+
+  /**
+   * P-1b. Both adapters look for the destination inside the rename's own turn
+   * of their queue (1.13.7 and 1.14.4), so a look from here before it is
+   * earlier than theirs and narrows nothing. The claim is the rename's.
+   */
+  it("leaves the look to the rename on an Obsidian whose rename makes it", async () => {
+    const asked = () => adapter.calls.filter((c) => c.op === "exists" && c.path === "new.md");
+    expect(await vault.create("new.md", enc.encode("mine"), times)).toBe(true);
+    expect(asked(), "looked at the destination before the rename").toEqual([]);
+
+    adapter.seed("taken.md", "theirs");
+    expect(await vault.create("taken.md", enc.encode("mine"), times)).toBe(false);
+    expect(adapter.text("taken.md")).toBe("theirs");
+    expect(stagingCopies(adapter)).toEqual([]);
+  });
+
+  it("still looks first on an Obsidian older than the one whose rename was read", async () => {
+    setApiVersion("1.13.6");
+    try {
+      adapter.seed("taken.md", "theirs");
+      expect(await vault.create("taken.md", enc.encode("mine"), times)).toBe(false);
+      // Refused before anything was staged.
+      expect(adapter.calls.some((c) => c.op === "writeBinary")).toBe(false);
+      expect(await vault.create("new.md", enc.encode("mine"), times)).toBe(true);
+      expect(adapter.calls.filter((c) => c.op === "exists" && c.path === "new.md")).toHaveLength(2);
+    } finally {
+      resetStub();
+    }
   });
 });
 
@@ -1285,18 +1422,108 @@ describe("a large staged copy with the right length and the wrong bytes", () => 
 });
 
 /**
+ * T63. The server takes a name of up to 255 bytes, which is what ext4, f2fs
+ * and APFS hold, and the staging copy's name is the note's name with the
+ * staging mark in front: nineteen bytes more. A note whose name was within
+ * nineteen bytes of the limit never landed here, and an incoming edit failed
+ * once its conflict copy's name, plus those bytes, passed it. Every pass
+ * tried again and failed the same way, which threat model D1 says a name the
+ * server accepted must never be.
+ */
+describe("a note whose name is near the filesystem's limit", () => {
+  const times = { mtime: 1000, ctime: 1000 };
+  const bytesIn = (s: string) => enc.encode(s).length;
+  /**
+   * A disk that refuses to make a name longer than 255 bytes, as ext4, f2fs
+   * and APFS do. Asking about one is not refused: nothing can be there.
+   */
+  const nameMax = (a: FakeAdapter) => {
+    const tooLong = (p: string) => p.split("/").some((part) => bytesIn(part) > 255);
+    const makes = new Set(["write", "writeBinary", "append", "mkdir", "rename", "copy"]);
+    a.fault = (op, path, to) =>
+      makes.has(op) && (tooLong(path) || (to !== undefined && tooLong(to)))
+        ? new Error(`ENAMETOOLONG: name too long, ${op} '${to ?? path}'`)
+        : undefined;
+  };
+  /** The staging names this test's writes used, by the calls that wrote them. */
+  const staged = (a: FakeAdapter) =>
+    a.calls
+      .filter((c) => c.op === "writeBinary" && c.path.includes(".trew-tmp-"))
+      .map((c) => c.path);
+  const unpaired = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  it("lands a new note whose name is 250 bytes", async () => {
+    nameMax(adapter);
+    const name = `Notes/${"n".repeat(247)}.md`;
+    expect(bytesIn(name.slice("Notes/".length))).toBe(250);
+    await vault.write(name, enc.encode("a note with a long name\n"), times);
+    expect(adapter.text(name)).toBe("a note with a long name\n");
+    expect(stagingCopies(adapter)).toEqual([]);
+    for (const p of staged(adapter)) {
+      const last = p.slice(p.lastIndexOf("/") + 1);
+      expect(bytesIn(last)).toBeLessThanOrEqual(255);
+      expect(last.startsWith(".trew-tmp-")).toBe(true);
+    }
+  });
+
+  it("cuts a name of three- and four-byte characters between characters, never inside one", async () => {
+    nameMax(adapter);
+    // 78 three-byte characters and an emoji of four bytes, 238 bytes, then the
+    // extension: the cut lands inside the emoji's surrogate pair or a
+    // character's bytes unless it is made between characters.
+    for (const name of [
+      `${"ノ".repeat(79)}.md`,
+      `${"ノ".repeat(78)}🪨🪨.md`,
+      `${"🪨".repeat(62)}.md`,
+    ]) {
+      expect(bytesIn(name)).toBeLessThanOrEqual(255);
+      await vault.write(name, enc.encode(name), times);
+      expect(adapter.text(name)).toBe(name);
+    }
+    expect(staged(adapter)).toHaveLength(3);
+    for (const p of staged(adapter)) {
+      expect(bytesIn(p)).toBeLessThanOrEqual(255);
+      expect(unpaired.test(p), `a surrogate was split in ${p}`).toBe(false);
+      expect(p.startsWith(".trew-tmp-")).toBe(true);
+    }
+  });
+
+  it("keeps the backup of an edited note whose conflict copy's name is 250 bytes", async () => {
+    nameMax(adapter);
+    adapter.seed("note.md", "the note as it was\n", 1000);
+    const keepAt = `${"k".repeat(247)}.md`;
+    const out = await vault.replace(
+      "note.md",
+      { contentId: "not-what-is-there", idOf: async () => "something-else" },
+      enc.encode("the incoming edit\n"),
+      { mtime: 2000, ctime: 1000 },
+      keepAt,
+    );
+    expect(out).toEqual({ keptAt: keepAt, landed: true });
+    expect(adapter.text(keepAt)).toBe("the note as it was\n");
+    expect(adapter.text("note.md")).toBe("the incoming edit\n");
+  });
+});
+
+/**
  * A staging copy under a fixed name was a name a person
  * could have given a real dotfile, which no listing shows and a sync of the
  * note beside it would have overwritten.
+ *
+ * The four random bytes that replaced it were looked for on the disk before
+ * every staged write. Sixteen are not (P-1e): no name a person, a peer or an
+ * older build could have given a file is one of them, which is what this
+ * checks. A generator pinned to repeat a name a file already has is no longer
+ * caught by a look; the chance of meeting one from a working generator is one
+ * in 2^128 per write.
  */
 describe("a dotfile of the user's where a staging copy would go", () => {
   it("is never written over", async () => {
-    // Every name the staging could pick is taken by a file of the user's:
-    // pin the random part so the collision is certain rather than lucky.
+    // Pinned, so the random part repeats what an older build's four bytes
+    // could have left beside the note, and the user's file has that name.
     const realRandom = crypto.getRandomValues.bind(crypto);
-    let calls = 0;
     crypto.getRandomValues = ((arr: Uint8Array) => {
-      arr.fill(calls++ < 1 ? 0xab : 0xcd);
+      arr.fill(0xab);
       return arr;
     }) as typeof crypto.getRandomValues;
     try {
@@ -1308,6 +1535,21 @@ describe("a dotfile of the user's where a staging copy would go", () => {
     } finally {
       crypto.getRandomValues = realRandom;
     }
+  });
+
+  it("carries 128 random bits, a fresh draw for every write, and asks the disk nothing", async () => {
+    await vault.write("a.md", enc.encode("a"), { mtime: 1, ctime: 1 });
+    await vault.write("b.md", enc.encode("b"), { mtime: 1, ctime: 1 });
+    const names = adapter.calls
+      .filter((c) => c.op === "writeBinary" && c.path.includes(".trew-tmp-"))
+      .map((c) => c.path);
+    expect(names).toHaveLength(2);
+    const parts = names.map((p) => /^\.trew-tmp-([0-9a-f]{32})-[ab]\.md$/.exec(p)?.[1]);
+    expect(parts.every((p) => p !== undefined)).toBe(true);
+    expect(parts[0]).not.toBe(parts[1]);
+    expect(adapter.calls.filter((c) => c.op === "exists" && c.path.includes(".trew-tmp-"))).toEqual(
+      [],
+    );
   });
 });
 
@@ -1812,6 +2054,8 @@ describe("writing over a file the pass did not decide about", () => {
 
   it("retains a complete local backup if an in-place text write is cut short", async () => {
     adapter.seed("note.md", "unsent local text\n", 1000);
+    // A disk that stays full: the update is cut short, and so is every
+    // attempt to put back what the note held.
     adapter.fault = (op, path) => (op === "write" && path === "note.md" ? 3 : undefined);
     await expect(
       vault.replace(
@@ -1821,15 +2065,165 @@ describe("writing over a file the pass did not decide about", () => {
         { mtime: 2000, ctime: 1000 },
         "note (kept).md",
       ),
-    ).rejects.toThrow("The previous content is at note (kept).md");
-    expect(adapter.text("note.md")).toBe("inc");
+    ).rejects.toThrow(/could not be put back yet.*what it held is at note \(kept\)\.md/);
+    expect(adapter.text("note.md")?.length).toBe(3);
+    // The cut note is not handed to the engine, which would send it as an
+    // edit (T09), and it is still listed, which a deletion would not be.
+    await expect(vault.read("note.md")).rejects.toThrow(/cut short/);
+    const listed = (await vault.list()).map((f) => f.path);
+    expect(listed).toContain("note.md");
     // Listed before Obsidian's index has it, or it never syncs.
-    expect((await vault.list()).map((f) => f.path)).toContain("note (kept).md");
+    expect(listed).toContain("note (kept).md");
     // Obsidian lists the whole disk as it opens a vault again.
     adapter.reopen();
     const restarted = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian");
     expect((await restarted.list()).map((f) => f.path)).toContain("note (kept).md");
     expect(dec.decode(await restarted.read("note (kept).md"))).toBe("unsent local text\n");
+  });
+
+  /**
+   * T09. `process` truncates and then writes, so a write that stops part way
+   * leaves the start of the incoming text at the note's name. Read as an edit
+   * by the next pass, it was sent to every device as the note's newest
+   * version. What the note held goes back instead, with its own times, so the
+   * next pass finds it unchanged and fetches the update again.
+   */
+  it("puts the note back when its in-place update is cut short", async () => {
+    adapter.seed("note.md", "the synced text\n", 1000);
+    let armed = true;
+    adapter.fault = (op, path) => {
+      if (armed && op === "write" && path === "note.md") {
+        armed = false;
+        return 3;
+      }
+      return undefined;
+    };
+    await expect(
+      vault.replace(
+        "note.md",
+        { contentId: await plainDigest(enc.encode("the synced text\n")), idOf: plainDigest },
+        enc.encode("the incoming text\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow(/ENOSPC.*What the note held was put back$/);
+    expect(adapter.text("note.md")).toBe("the synced text\n");
+    expect((await adapter.stat("note.md"))?.mtime).toBe(1000);
+    // The server has that version, so its backup is a duplicate and goes.
+    expect(adapter.text("note (kept).md")).toBeUndefined();
+    expect(dec.decode(await vault.read("note.md"))).toBe("the synced text\n");
+
+    // And the update lands when it is tried again.
+    const out = await vault.replace(
+      "note.md",
+      { contentId: await plainDigest(enc.encode("the synced text\n")), idOf: plainDigest },
+      enc.encode("the incoming text\n"),
+      { mtime: 2000, ctime: 1000 },
+      "note (kept).md",
+    );
+    expect(out).toEqual({ landed: true });
+    expect(adapter.text("note.md")).toBe("the incoming text\n");
+  });
+
+  it("keeps the backup of what it put back when the server may not have it", async () => {
+    adapter.seed("note.md", "an unsent edit\n", 1000);
+    let armed = true;
+    adapter.fault = (op, path) => {
+      if (armed && op === "write" && path === "note.md") {
+        armed = false;
+        return 0;
+      }
+      return undefined;
+    };
+    await expect(
+      vault.replace(
+        "note.md",
+        undefined,
+        enc.encode("the incoming text\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow(/was put back, and is also at note \(kept\)\.md/);
+    expect(adapter.text("note.md")).toBe("an unsent edit\n");
+    expect(adapter.text("note (kept).md")).toBe("an unsent edit\n");
+  });
+
+  it("puts back a note cut inside a character", async () => {
+    const before = "日本語のノート\n";
+    adapter.seed("note.md", before, 1000);
+    let armed = true;
+    adapter.fault = (op, path) => {
+      if (armed && op === "write" && path === "note.md") {
+        armed = false;
+        // Inside the second character: the adapter reads U+FFFD there.
+        return 4;
+      }
+      return undefined;
+    };
+    await expect(
+      vault.replace(
+        "note.md",
+        { contentId: await plainDigest(enc.encode(before)), idOf: plainDigest },
+        enc.encode("日本語のノートと続き\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow(/was put back/);
+    expect(adapter.text("note.md")).toBe(before);
+  });
+
+  it("leaves alone a save made after the cut, which is nobody's cut text", async () => {
+    adapter.seed("note.md", "the synced text\n", 1000);
+    let cut = false;
+    adapter.fault = (op, path) => {
+      if (!cut && op === "write" && path === "note.md") {
+        cut = true;
+        return 3;
+      }
+      // The editor saves between the cut and the put-back.
+      if (cut && op === "read" && path === "note.md") {
+        adapter.seed("note.md", "typed after the cut\n", 3000);
+        adapter.fault = undefined;
+      }
+      return undefined;
+    };
+    await expect(
+      vault.replace(
+        "note.md",
+        undefined,
+        enc.encode("the incoming text\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow(/The previous content is at note \(kept\)\.md/);
+    expect(adapter.text("note.md")).toBe("typed after the cut\n");
+    expect(adapter.text("note (kept).md")).toBe("the synced text\n");
+    // Not on record as cut short: the save is read and syncs.
+    expect(dec.decode(await vault.read("note.md"))).toBe("typed after the cut\n");
+  });
+
+  it("puts the note back at the next listing when it cannot be at once, and reads it only then", async () => {
+    adapter.seed("note.md", "the synced text\n", 1000);
+    let cuts = 2;
+    adapter.fault = (op, path) =>
+      op === "write" && path === "note.md" && cuts-- > 0 ? 3 : undefined;
+    await expect(
+      vault.replace(
+        "note.md",
+        { contentId: await plainDigest(enc.encode("the synced text\n")), idOf: plainDigest },
+        enc.encode("the incoming text\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow(/could not be put back yet/);
+    await expect(vault.read("note.md")).rejects.toThrow(/cut short/);
+    await expect(vault.contentDigest("note.md")).rejects.toThrow(/cut short/);
+
+    // The disk has room again by the next pass.
+    const listed = await vault.list();
+    expect(listed.find((f) => f.path === "note.md")).toMatchObject({ size: 16, mtime: 1000 });
+    expect(dec.decode(await vault.read("note.md"))).toBe("the synced text\n");
+    expect(adapter.text("note (kept).md")).toBe("the synced text\n");
   });
 
   it("flushes the backup before truncation and the new note before removing the backup", async () => {
@@ -1923,8 +2317,33 @@ describe("writing over a file the pass did not decide about", () => {
       { mtime: 2000, ctime: 1000 },
       "note (kept).md",
     );
-    expect(out.landed).toBe(false);
+    expect(out).toEqual({ landed: false });
     expect(adapter.text("note.md")).toBe(edited);
+    // The backup held the version this was decided about, which the server
+    // has: kept, it was a copy of what every device had, named as if it held
+    // this device's words (T13).
+    expect(adapter.text("note (kept).md")).toBeUndefined();
+  });
+
+  it("keeps the backup when a save races an update and the server may not have the text", async () => {
+    const before = "an unsent edit\n";
+    adapter.seed("note.md", before, 1000);
+    adapter.fault = (op, path) => {
+      if (op === "read" && path === "note.md") {
+        adapter.seed(path, "saved again\n", 1000);
+        adapter.fault = undefined;
+      }
+      return undefined;
+    };
+    const out = await vault.replace(
+      "note.md",
+      undefined,
+      enc.encode("incoming\n"),
+      { mtime: 2000, ctime: 1000 },
+      "note (kept).md",
+    );
+    expect(out).toEqual({ keptAt: "note (kept).md", landed: false });
+    expect(adapter.text("note.md")).toBe("saved again\n");
     expect(adapter.text("note (kept).md")).toBe(before);
   });
 
@@ -2164,34 +2583,39 @@ describe("writing over a file the pass did not decide about", () => {
    * The hook is `afterRename`, not `beforeRename`: the latter is awaited, so a
    * competitor queued from it lands *before* the move and is preserved by it,
    * which is the opposite of the schedule this is about.
+   *
+   * An attachment, because only a file that is not text is moved aside: a
+   * note's update is written in place (R083-18), and this test, written for a
+   * note, had been exercising that path instead without saying so.
    */
   it("keeps a save that takes the name after the move aside", async () => {
-    const was = "the version the pass decided about\n";
-    await adapter.write("note.md", was, { mtime: 1000 });
+    const was = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+    const saved = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 9, 9, 9, 9]);
+    await adapter.writeBinary("photo.jpg", was.slice().buffer, { mtime: 1000 });
 
     adapter.afterRename = async (_from, to) => {
-      if (to !== "note (kept).md") return;
+      if (to !== "photo (kept).jpg") return;
       adapter.afterRename = undefined;
-      await adapter.write("note.md", "typed while the name was empty\n", { mtime: 1000 });
+      await adapter.writeBinary("photo.jpg", saved.slice().buffer, { mtime: 1000 });
     };
 
     const out = await vault.replace(
-      "note.md",
-      { contentId: await plainDigest(enc.encode(was)), idOf: plainDigest },
-      enc.encode("the server's version\n"),
+      "photo.jpg",
+      { contentId: await plainDigest(was), idOf: plainDigest },
+      new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 7]),
       { mtime: 2000, ctime: 1000 },
-      "note (kept).md",
+      "photo (kept).jpg",
     );
 
     expect(
-      adapter.text("note.md"),
+      [...new Uint8Array(await adapter.readBinary("photo.jpg"))],
       "the save that took the name was written over by the incoming version",
-    ).toBe("typed while the name was empty\n");
+    ).toEqual([...saved]);
     expect(out.landed, "a write that lost the name was reported as landed").toBe(false);
     // And the version it displaced is still where it was put, because the
     // write it was displaced for never happened.
-    expect(adapter.text("note (kept).md")).toBe(was);
-    expect(out.keptAt).toBe("note (kept).md");
+    expect([...new Uint8Array(await adapter.readBinary("photo (kept).jpg"))]).toEqual([...was]);
+    expect(out.keptAt).toBe("photo (kept).jpg");
   });
 
   it("says what a removal took away when it was not the expected version", async () => {

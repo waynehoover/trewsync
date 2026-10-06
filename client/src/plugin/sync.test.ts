@@ -877,3 +877,136 @@ describe("an edit its stat could not see, under an incoming version", () => {
     expect(b.adapter.trashedLocally).toEqual([]);
   }, 300_000);
 });
+
+/**
+ * T09. A text update is written in place, through `process`, which truncates
+ * the note and then writes it. A disk that fills in between leaves the note
+ * cut short, and nothing said the short note was this device's own failed
+ * write: the next pass took it for an edit, kept it at the note's name and
+ * sent it to every device as the note's newest version (a 410-byte note was
+ * fifteen bytes everywhere). The full text survived only in history and in
+ * conflict copies.
+ */
+describe("an incoming update cut short as it is written in place", () => {
+  it("never sends the cut note anywhere, and keeps the note whole on both devices", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    const lines =
+      Array.from({ length: 20 }, (_, i) => `line ${i + 1} of the note`).join("\n") + "\n";
+    a.adapter.seed("n.md", lines, 1_700_000_000_000);
+    await converge(a, b);
+    expect(b.text("n.md")).toBe(lines);
+
+    const next = `${lines}line 21 added on a\n`;
+    a.adapter.seed("n.md", next, 1_700_000_100_000);
+    let armed = true;
+    b.adapter.fault = (op, path) => {
+      if (armed && op === "write" && path === "n.md") {
+        armed = false;
+        // Fifteen bytes land, then the disk is full.
+        return 15;
+      }
+      return undefined;
+    };
+    await converge(a, b);
+    expect(armed, "the update was never written").toBe(false);
+    // The note as it was, never the fifteen bytes.
+    expect(b.text("n.md")).toBe(lines);
+
+    // The incoming version is tried again, and lands.
+    await b.client.settle({ retryFailures: true });
+    await converge(a, b);
+    expect(b.text("n.md")).toBe(next);
+    expect(a.text("n.md")).toBe(next);
+    const history = await a.client.history("n.md");
+    expect(
+      history.filter((v) => v.device === "b").map((v) => `${v.uid}:${v.size}B`),
+      "b sent a version of a note it never edited",
+    ).toEqual([]);
+    expect(a.notes()).toEqual(["n.md"]);
+    expect(b.notes()).toEqual(["n.md"]);
+  }, 300_000);
+});
+
+/**
+ * T13. A save that lands while a text update is backing the note up wins, as
+ * it should, and the update is placed beside it. The backup it had just made
+ * was left as well: a copy of the version both devices already had, named
+ * as if it held this device's words.
+ */
+describe("a save racing an incoming text update", () => {
+  it("keeps the save, and no copy of the old version named for this device", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    a.adapter.seed("n.md", "synced text\n", 1000);
+    await converge(a, b);
+    expect(b.text("n.md")).toBe("synced text\n");
+
+    a.adapter.seed("n.md", "synced text\nand a line from a\n", 2_000_000);
+    let armed = true;
+    b.adapter.beforeRename = (_from, to) => {
+      // The person on b saves while b's backup of the note lands.
+      if (armed && to.includes("(Conflicted copy b")) {
+        armed = false;
+        b.adapter.seed("n.md", "synced text\ntyped on b\n", 3_000_000);
+      }
+    };
+    await converge(a, b);
+    expect(armed, "the update never backed the note up").toBe(false);
+    for (const d of [a, b]) {
+      expect(d.text("n.md"), `${d.name} lost the save`).toContain("typed on b\n");
+      expect(d.text("n.md"), `${d.name} lost the update`).toContain("and a line from a\n");
+      expect(
+        d.notes().filter((p) => p.includes("(Conflicted copy b")),
+        `${d.name} holds a copy of the old version named for b`,
+      ).toEqual([]);
+    }
+  }, 300_000);
+});
+
+/**
+ * T63, through the server: names the server accepts, on a disk that holds
+ * nothing longer than 255 bytes.
+ *
+ * The plugin's staging name put nineteen bytes in front of the note's own, so
+ * a new note named within that of the limit never arrived, and an edit to a
+ * note whose conflict copy's name came within it never landed: the backup of
+ * what was there could not be staged. Both failed the same way on every pass.
+ */
+describe("a note whose name is near the filesystem's limit", () => {
+  const bytesIn = (s: string) => new TextEncoder().encode(s).length;
+  function nameMax(d: Device): void {
+    const tooLong = (p: string) => p.split("/").some((part) => bytesIn(part) > 255);
+    const makes = new Set(["write", "writeBinary", "append", "mkdir", "rename", "copy"]);
+    d.adapter.fault = (op, path, to) =>
+      makes.has(op) && (tooLong(path) || (to !== undefined && tooLong(to)))
+        ? new Error(`ENAMETOOLONG: name too long, ${op} '${to ?? path}'`)
+        : undefined;
+  }
+
+  it("arrives, and so do the edits made to it afterwards", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    nameMax(b);
+    // 250 bytes: within the staging mark's nineteen of the limit.
+    const long = `${"n".repeat(247)}.md`;
+    // 220 bytes, so the conflict copy of an edit, " (Conflicted copy b
+    // <stamp>)" more, fits in 255 and its staging copy used not to.
+    const edited = `${"e".repeat(217)}.md`;
+    expect([bytesIn(long), bytesIn(edited)]).toEqual([250, 220]);
+    a.adapter.seed(long, "a note with a long name\n", 1000);
+    a.adapter.seed(edited, "the first version\n", 1000);
+    await converge(a, b);
+    expect(b.text(long)).toBe("a note with a long name\n");
+    expect(b.text(edited)).toBe("the first version\n");
+
+    a.adapter.seed(edited, "the second version\n", 2_000_000);
+    await converge(a, b);
+    expect(b.text(edited)).toBe("the second version\n");
+    expect(b.notes().sort()).toEqual([edited, long].sort());
+    expect(b.adapter.filePaths().filter((p) => p.includes(".trew-tmp-"))).toEqual([]);
+  }, 300_000);
+});

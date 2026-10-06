@@ -44,9 +44,14 @@
  * target exists, unless the two names differ only by case on a filesystem that
  * folds it. The Capacitor adapter was read again for 1.13.7 and makes the same
  * check with the same message and the same single exception before it hands
- * anything to the platform plugin, so the refusal is not desktop-only: what is
- * still the platform's is what happens if the destination appears between that
- * check and the rename, which is why `create` looks once more just before it.
+ * anything to the platform plugin, so the refusal is not desktop-only. Both
+ * make the check inside the rename's own turn of the adapter's queue (read
+ * again in 1.14.4), the queue every adapter call from Obsidian and from
+ * plugins waits in. What is still the platform's is a destination another
+ * program creates between that check and the rename itself, and a look from
+ * here cannot narrow that: it happens before the adapter's own check, not
+ * between it and the rename. An earlier version of this comment said `create`
+ * looked once more for that reason, which it could not do.
  * So there is no replace-by-rename through this API on either platform, and
  * `replace` below says what is done instead.
  *
@@ -59,6 +64,7 @@
 
 import {
   normalizePath,
+  requireApiVersion,
   type DataAdapter,
   type TAbstractFile,
   type Vault as ObsidianVaultApi,
@@ -128,29 +134,69 @@ const STAGING_MARK = ".trew-tmp-";
  * rather than in one folder, so the rename that lands it never crosses a
  * mount and the copy a failure leaves behind is next to the note it was for.
  *
- * With a random part, and looked for before use. A fixed name was a name a
- * person could have given a real dotfile, which the listing never shows and
- * a sync of the note beside it would have overwritten without a word.
+ * With a random part (see `newStagingPath`). A fixed name was a name a person
+ * could have given a real dotfile, which the listing never shows and a sync
+ * of the note beside it would have overwritten without a word.
+ *
+ * Never longer than a disk holds (T63). The mark and the random part go in
+ * front of the note's own name, and a note named within that many bytes of
+ * the limit, which the server accepts, never landed here: the staging write
+ * was refused on every pass, for good. The note's name is cut from the end
+ * to fit, between characters; the mark and the random part are what make a
+ * staging copy one, and they are kept whole.
  */
 function stagingPath(normalized: string, nonce: string): string {
   const cut = normalized.lastIndexOf("/");
   const dir = cut === -1 ? "" : normalized.slice(0, cut + 1);
   const name = cut === -1 ? normalized : normalized.slice(cut + 1);
-  return `${dir}${STAGING_MARK}${nonce}-${name}`;
+  const mark = `${STAGING_MARK}${nonce}-`;
+  return `${dir}${mark}${cutToBytes(name, NAME_MAX - mark.length)}`;
 }
 
 /**
- * A staging name beside `normalized` that nothing occupies.
- *
- * The same search as the conflict copy and the trash, with a fresh nonce for
- * each try rather than a number: the name is random by design, and a numbered
- * second try would be exactly as guessable as the first. `stagingPath` puts
- * the dot prefix back on every candidate, which is what keeps the temporary
- * out of Obsidian's listing.
+ * The longest name one file can have, in bytes of UTF-8, on the disks a vault
+ * lives on: ext4 and f2fs on Android and Linux, and APFS. The server refuses
+ * a longer one (`segmenttoolong`), so a note's own name always fits.
  */
-async function freeStagingPath(adapter: Writer, normalized: string): Promise<string> {
-  const named = () => stagingPath(normalized, nonce());
-  return firstFreeName(named(), (path) => adapter.exists(path), named);
+const NAME_MAX = 255;
+
+/**
+ * `name`, cut from the end to at most `budget` bytes of UTF-8.
+ *
+ * Between characters, never inside one: `for...of` walks code points, so a
+ * surrogate pair is a single step, and each step is counted at the width
+ * UTF-8 gives it. A cut inside a character is a name the adapter would encode
+ * with U+FFFD in it, which is not a name anybody gave a file.
+ */
+function cutToBytes(name: string, budget: number): string {
+  let used = 0;
+  let end = 0;
+  for (const ch of name) {
+    const code = ch.codePointAt(0)!;
+    const width = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    if (used + width > budget) break;
+    used += width;
+    end += ch.length;
+  }
+  return name.slice(0, end);
+}
+
+/**
+ * A staging name beside `normalized` that nothing can already be using.
+ *
+ * Sixteen random bytes from the platform's cryptographic generator, and
+ * nothing asked of the disk (P-1e). It used to be four bytes and an `exists`
+ * before every staged write, with a fresh guess for each name found taken,
+ * and on a phone that look was a turn of the adapter's one queue, about 2 ms
+ * of every new file. What the look guarded against is a name somebody else
+ * could have used: a fixed one, or four bytes an older build's leftover
+ * could repeat. Nobody chooses a 128-bit name in advance, a dot-prefixed
+ * name never syncs so no other device can put one here, and a leftover of
+ * this plugin's carries a guess of its own: the chance of meeting one is
+ * one in 2^128 per write, far below what a disk can be trusted to.
+ */
+function newStagingPath(normalized: string): string {
+  return stagingPath(normalized, nonce(16));
 }
 
 /**
@@ -248,8 +294,8 @@ async function removeOwnEmptyFolder(
   }
 }
 
-function nonce(): string {
-  const bytes = new Uint8Array(4);
+function nonce(size = 4): string {
+  const bytes = new Uint8Array(size);
   crypto.getRandomValues(bytes);
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -259,6 +305,26 @@ type Writer = Pick<
   DataAdapter,
   "writeBinary" | "readBinary" | "stat" | "exists" | "rename" | "remove" | "mkdir" | "rmdir"
 >;
+
+/**
+ * The bytes as an `ArrayBuffer` that holds exactly them, for `writeBinary`.
+ *
+ * A view into a larger buffer would hand over its neighbours as well, and
+ * chunk reassembly produces exactly such views, so a view is copied. Bytes
+ * that already fill their whole buffer are handed over as they are. They
+ * used to be copied on the way into `create`, again in `stage`, and again for
+ * a write in place: a whole file more in memory each time, so a 64 MiB
+ * attachment held about four copies at once on its way to the disk. Neither
+ * adapter writes into the buffer it is given (desktop wraps it in a Node
+ * `Buffer`, mobile reads it into base64).
+ */
+function standalone(bytes: Uint8Array): ArrayBuffer {
+  const whole =
+    bytes.byteOffset === 0 &&
+    bytes.buffer instanceof ArrayBuffer &&
+    bytes.byteLength === bytes.buffer.byteLength;
+  return whole ? bytes.buffer : bytes.slice().buffer;
+}
 
 /**
  * Puts a staged copy of `bytes` at `temp` and proves it is all there.
@@ -274,7 +340,7 @@ async function stage(
   options: { mtime?: number; ctime?: number },
 ): Promise<void> {
   try {
-    await adapter.writeBinary(temp, bytes.slice().buffer, options);
+    await adapter.writeBinary(temp, standalone(bytes), options);
     await verify(adapter, temp, bytes);
   } catch (err) {
     await adapter.remove(temp).catch(() => undefined);
@@ -305,18 +371,23 @@ async function readRaw(adapter: Writer, normalized: string): Promise<Uint8Array 
  * and a staged copy of the right length with the wrong bytes would have been
  * renamed into place and become the note. The memory is a moment; the
  * corruption would have been for good.
+ *
+ * The read is the whole check. A stat used to come first, for a missing
+ * file, a folder and a wrong length, and the read answers all three: neither
+ * adapter reads anything but a file, and the length is compared before the
+ * bytes are. On a phone the stat was one more turn of the adapter's queue,
+ * about 2 ms of every file landed, and Capacitor's `readBinary` stats the
+ * file itself before reading it (P-1c).
  */
 async function verify(adapter: Writer, path: string, bytes: Uint8Array): Promise<void> {
-  const stat = await adapter.stat(path);
-  if (stat === null || stat.type !== "file") {
-    throw new Error(`${path} is not there after writing it`);
+  let back: Uint8Array;
+  try {
+    back = new Uint8Array(await adapter.readBinary(path));
+  } catch (err) {
+    throw new Error(`${path} cannot be read back after writing it: ${(err as Error).message}`);
   }
-  if (stat.size !== bytes.length) {
-    throw new Error(`${path} is ${stat.size} bytes after writing ${bytes.length}`);
-  }
-  const back = new Uint8Array(await adapter.readBinary(path));
   if (back.length !== bytes.length) {
-    throw new Error(`${path} reads back as ${back.length} bytes after writing ${bytes.length}`);
+    throw new Error(`${path} is ${back.length} bytes after writing ${bytes.length}`);
   }
   for (let i = 0; i < bytes.length; i++) {
     if (back[i] !== bytes[i]) {
@@ -519,6 +590,7 @@ export class ObsidianVault implements Vault {
    * file whole.
    */
   async *readBlocks(path: string, blockSize = 1024 * 1024): AsyncGenerator<Uint8Array> {
+    this.refuseCutShort(this.resolve(path));
     const res = await fetch(this.resourceUrl(path));
     if (!res.ok || !res.body) {
       throw new Error(`cannot stream ${path}: the vault answered ${res.status}`);
@@ -560,6 +632,7 @@ export class ObsidianVault implements Vault {
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    this.refuseCutShort(this.resolve(path));
     const res = await fetch(this.resourceUrl(path), {
       headers: { Range: `bytes=${start}-${end - 1}` },
     });
@@ -641,6 +714,10 @@ export class ObsidianVault implements Vault {
     // Resolved before the spellings are forgotten below, so a name the disk
     // spells differently is read under its own spelling.
     for (const path of options.present ?? []) this.unlisted.add(this.resolve(path));
+    // A note an update was cut short in is put back before it is listed, so
+    // the listing describes it whole and the pass fetches the update again
+    // rather than reading the cut text as an edit (T09).
+    for (const [normalized, held] of [...this.cutShort]) await this.putBack(normalized, held);
     this.actualName.clear();
     this.ambiguousPaths = [];
     const items = this.vault.getAllLoadedFiles();
@@ -709,6 +786,11 @@ export class ObsidianVault implements Vault {
     }
 
     if (this.unlisted.size > 0) await this.addUnlisted(byPath, out);
+    // A landing the index now has has been reported, and one with nothing on
+    // the disk never will be: neither is waited for any longer (P-3).
+    for (const path of this.landing.keys()) {
+      if (!this.unlisted.has(path)) this.landing.delete(path);
+    }
 
     // What this client has taken off a name and could not put back. From the
     // ledger only, unlike the headless client: Obsidian's index does not list
@@ -809,6 +891,63 @@ export class ObsidianVault implements Vault {
    */
   ownRename(from: string, to: string): boolean {
     return this.renaming.get(from) === to;
+  }
+
+  /**
+   * Files this client renamed into place, with the size and the time it gave
+   * them, until Obsidian reports them (P-3).
+   *
+   * A file renamed into place from a staging copy is reported by Obsidian's
+   * watcher some time later, as `create`, and the plugin used to take that
+   * for news: it marked the file changed and asked for another round, and the
+   * round read and hashed again every file the pass had just written and read
+   * back. On a first sync that was 12 to 14 ms more for every file on a phone.
+   * Kept until the report comes, or until a listing finds the index has the
+   * name or the disk has nothing there.
+   */
+  private readonly landing = new Map<string, { size: number; mtime: number }>();
+
+  /**
+   * Paths this client is writing in place, removing or making right now,
+   * with how many such calls are in hand for each (P-3). Obsidian reports a
+   * `modify`, `delete` or folder `create` from inside the call that caused
+   * it (read out of 1.13.7), so a report while one is held is this client's.
+   */
+  private readonly touching = new Map<string, number>();
+
+  /** Runs one adapter call on `normalized` as this client's own (see `touching`). */
+  private async touch<T>(normalized: string, work: () => Promise<T>): Promise<T> {
+    this.touching.set(normalized, (this.touching.get(normalized) ?? 0) + 1);
+    try {
+      return await work();
+    } finally {
+      const left = (this.touching.get(normalized) ?? 1) - 1;
+      if (left > 0) this.touching.set(normalized, left);
+      else this.touching.delete(normalized);
+    }
+  }
+
+  /**
+   * Whether a `create` Obsidian reports is a file this client has just
+   * landed, as it landed it, or a folder it is making (P-3).
+   *
+   * A file's report is matched against the size and time this client gave it,
+   * once: a write by anything else in between carries a time of its own and
+   * is reported as news, as before. The engine has already recorded what it
+   * landed, so nothing from the report is needed, and no byte is trusted from
+   * it.
+   */
+  ownCreate(path: string, stat: { size: number; mtime: number } | undefined): boolean {
+    if (stat === undefined) return this.touching.has(path);
+    const landed = this.landing.get(path);
+    if (landed === undefined) return false;
+    this.landing.delete(path);
+    return stat.size === landed.size && Math.round(stat.mtime) === Math.round(landed.mtime);
+  }
+
+  /** Whether a `modify` or `delete` Obsidian reports is this client's own (P-3). */
+  ownChange(path: string): boolean {
+    return this.touching.has(path);
   }
 
   /** Paths the last `list` left out because two names in the index claim them. */
@@ -957,7 +1096,9 @@ export class ObsidianVault implements Vault {
   private readonly normalised = new Map<string, string>();
 
   async read(path: string): Promise<Uint8Array> {
-    return new Uint8Array(await this.adapter.readBinary(this.resolve(path)));
+    const normalized = this.resolve(path);
+    this.refuseCutShort(normalized);
+    return new Uint8Array(await this.adapter.readBinary(normalized));
   }
 
   /**
@@ -1000,10 +1141,10 @@ export class ObsidianVault implements Vault {
     const normalized = this.resolve(path);
     await this.ensureParents(normalized);
     await this.matchCase(normalized);
-    // Copied into its own buffer. A Uint8Array that is a view into a larger
-    // one would hand over neighbouring bytes, and chunk reassembly produces
-    // exactly that kind of view.
-    await this.writeThroughStaging(normalized, bytes.slice(), writeOptions(times));
+    // Not copied here: a view into a larger buffer would hand over its
+    // neighbouring bytes, and chunk reassembly produces exactly that kind of
+    // view, but `standalone` copies one where the bytes meet the adapter.
+    await this.writeThroughStaging(normalized, bytes, writeOptions(times));
     this.wrote(normalized);
   }
 
@@ -1052,6 +1193,7 @@ export class ObsidianVault implements Vault {
   ): Promise<Replaced> {
     const from = this.resolve(path);
     const kept = this.resolve(keepAt);
+    await this.wholeBeforeTouching(from);
 
     // Whether this is a text update is decided from the name and from the
     // bytes that have already been fetched, before anything on disk is read
@@ -1143,7 +1285,7 @@ export class ObsidianVault implements Vault {
     ) {
       // The version this write was decided about: the copy is a duplicate of
       // something the server already holds.
-      await this.adapter.remove(kept).catch(() => undefined);
+      await this.dropDuplicate(kept);
       return { landed: true };
     }
     this.wrote(kept);
@@ -1167,10 +1309,12 @@ export class ObsidianVault implements Vault {
     expect: ExpectedContent | undefined,
     times: Times,
   ): Promise<Replaced> {
+    let was: Times;
     try {
       const stat = await this.adapter.stat(normalized);
       if (stat?.type !== "file") return { landed: false };
-      if (!(await this.create(keepAt, before, { mtime: stat.mtime, ctime: stat.ctime }))) {
+      was = { mtime: stat.mtime, ctime: stat.ctime };
+      if (!(await this.create(keepAt, before, was))) {
         return { landed: false };
       }
     } catch (error) {
@@ -1187,32 +1331,162 @@ export class ObsidianVault implements Vault {
       if (this.vault.getAbstractFileByPath(normalized)?.path !== normalized) {
         await this.matchCase(normalized);
       }
-      await this.adapter.process(
-        normalized,
-        (current) => {
-          // No awaits between this comparison and the queued write. An editor
-          // save made while the backup was being written keeps the original.
-          if (current !== previous) throw changed;
-          return next;
-        },
-        writeOptions(times),
+      await this.touch(normalized, () =>
+        this.adapter.process(
+          normalized,
+          (current) => {
+            // No awaits between this comparison and the queued write. An editor
+            // save made while the backup was being written keeps the original.
+            if (current !== previous) throw changed;
+            return next;
+          },
+          writeOptions(times),
+        ),
       );
       this.wrote(normalized);
       await verify(this.adapter, normalized, new TextEncoder().encode(next));
       await this.flush();
     } catch (error) {
-      if (error === changed) return { keptAt: keepAt, landed: false };
-      throw new Error(
-        `writing ${path} failed: ${String(error)}. The previous content is at ${keepAt}`,
-      );
+      if (error === changed) {
+        // The save that changed the note is kept and the update goes beside
+        // it. The backup is checked as it is after a write that lands: when
+        // it holds the version this was decided about, the server has it,
+        // and keeping it left a copy of what both devices already had, named
+        // as if it held this device's words (T13).
+        if (expect !== undefined && (await expect.idOf(before)) === expect.contentId) {
+          await this.dropDuplicate(this.resolve(keepAt));
+          return { landed: false };
+        }
+        return { keptAt: keepAt, landed: false };
+      }
+      // `process` truncates the note and then writes it, so a write that
+      // stopped part way (a full disk, an I/O error) left the start of the
+      // incoming version at the note's name, and nothing said it was this
+      // device's own failed write. The next pass read it as an edit, kept it
+      // at the name and sent it to every device as the newest version: a
+      // 410-byte note was fifteen bytes everywhere (T09). So what it held is
+      // put back, here and now, unless something else has been saved there.
+      const whole = await this.putBack(normalized, { previous, next, before, was });
+      const why = `writing ${path} failed: ${String(error)}`;
+      if (!whole) {
+        throw new Error(
+          this.cutShort.has(normalized)
+            ? `${why}. It was cut short and could not be put back yet, so it will not sync ` +
+                `until it is; what it held is at ${keepAt}`
+            : `${why}. The previous content is at ${keepAt}`,
+        );
+      }
+      if (expect !== undefined && (await expect.idOf(before)) === expect.contentId) {
+        // The note holds the version this was decided about, which the server
+        // has, so the backup is a duplicate, as it is after a write that lands.
+        await this.dropDuplicate(this.resolve(keepAt));
+        throw new Error(`${why}. What the note held was put back`);
+      }
+      throw new Error(`${why}. What the note held was put back, and is also at ${keepAt}`);
     }
 
     if (expect !== undefined && (await expect.idOf(before)) === expect.contentId) {
-      await this.adapter.remove(this.resolve(keepAt)).catch(() => undefined);
-      this.entryChanged(this.resolve(keepAt));
+      await this.dropDuplicate(this.resolve(keepAt));
       return { landed: true };
     }
     return { keptAt: keepAt, landed: true };
+  }
+
+  /**
+   * Removes a copy that duplicates a version the server holds, as this
+   * client's own removal (see `touching`). A failure leaves a duplicate,
+   * which costs a conflict copy and loses nothing.
+   */
+  private async dropDuplicate(normalized: string): Promise<void> {
+    await this.touch(normalized, () => this.adapter.remove(normalized)).catch(() => undefined);
+    this.entryChanged(normalized);
+  }
+
+  /**
+   * Notes whose in-place update was cut short and could not be put back whole
+   * yet, with what puts them back (T09).
+   *
+   * While one is here it is not read for the engine (`refuseCutShort`), so
+   * its start-of-another-version is never taken for an edit and sent, and
+   * every listing tries to put it back before anything reads it. Kept in
+   * memory: the backup beside the note is what survives a restart, and a
+   * note still cut short after one is read as it stands.
+   */
+  private readonly cutShort = new Map<string, CutShort>();
+
+  /**
+   * Puts back what a note held before its in-place update was cut short, and
+   * says whether the note now holds it, verified.
+   *
+   * Inside `process`, so it is decided in the same turn of the adapter's
+   * queue as the write: a note is put back only while it holds a strict
+   * prefix of the incoming text or of what it held, which is all a write cut
+   * short can leave, and anything else at the name (somebody's save in
+   * between) is left alone and the record dropped. Overwriting such a prefix
+   * loses no text: every byte of it is in the incoming version, which the
+   * server has, or in what is being put back. The note's own times go back
+   * with it, so the next pass sees it unchanged and fetches the incoming
+   * version again.
+   *
+   * A put-back that is cut short too, or cannot be verified, keeps the note
+   * on record and is tried again by the next listing; a note that has gone
+   * is not on record any more.
+   */
+  private async putBack(normalized: string, held: CutShort): Promise<boolean> {
+    let restoring = false;
+    try {
+      await this.touch(normalized, () =>
+        this.adapter.process(
+          normalized,
+          (current) => {
+            restoring = cutShortOf(current, held.next) || cutShortOf(current, held.previous);
+            return restoring ? held.previous : current;
+          },
+          writeOptions(held.was),
+        ),
+      );
+      if (restoring) {
+        this.wrote(normalized);
+        await verify(this.adapter, normalized, held.before);
+      }
+      this.cutShort.delete(normalized);
+      return restoring;
+    } catch (err) {
+      if (!(await this.stillThere(normalized))) {
+        this.cutShort.delete(normalized);
+        return false;
+      }
+      this.cutShort.set(normalized, held);
+      this.log(
+        `${normalized} was cut short while it was being updated and could not be put back yet`,
+        (err as Error).message,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Refuses to read a note whose update was cut short and is not whole yet
+   * (see `cutShort`), on every path the engine reads by.
+   */
+  private refuseCutShort(normalized: string): void {
+    if (!this.cutShort.has(normalized)) return;
+    throw new Error(
+      `${normalized} was cut short while an update was being written into it, and is not ` +
+        `read until what it held has been put back`,
+    );
+  }
+
+  /**
+   * Puts a note on record as cut short back before a write or a removal
+   * touches it, and refuses to touch it while it cannot be (T09): a backup or
+   * a kept copy of it would carry the cut text to every device instead.
+   */
+  private async wholeBeforeTouching(normalized: string): Promise<void> {
+    const held = this.cutShort.get(normalized);
+    if (held === undefined) return;
+    await this.putBack(normalized, held);
+    this.refuseCutShort(normalized);
   }
 
   /**
@@ -1245,6 +1519,7 @@ export class ObsidianVault implements Vault {
   ): Promise<Replaced> {
     const from = this.resolve(path);
     const kept = this.resolve(keepAt);
+    await this.wholeBeforeTouching(from);
     if (!(await this.adapter.exists(from))) {
       await this.remove(path);
       return { landed: true };
@@ -1353,6 +1628,7 @@ export class ObsidianVault implements Vault {
    * one copy and no more. The headless vault hashes as it reads.
    */
   contentDigest = async (path: string): Promise<string | undefined> => {
+    this.refuseCutShort(this.resolve(path));
     const bytes = await this.readIfThere(path);
     return bytes === undefined ? undefined : plainDigest(bytes);
   };
@@ -1520,14 +1796,16 @@ export class ObsidianVault implements Vault {
     bytes: Uint8Array,
     options: { mtime?: number; ctime?: number },
   ): Promise<void> {
-    const temp = await freeStagingPath(this.adapter, normalized);
+    const temp = newStagingPath(normalized);
     await stage(this.adapter, temp, bytes, options);
 
     if (!(await this.adapter.exists(normalized))) {
+      this.expectLanding(normalized, bytes.length, options.mtime);
       try {
         await this.move(temp, normalized);
         await verify(this.adapter, normalized, bytes);
       } catch (err) {
+        this.landing.delete(normalized);
         await this.adapter.remove(temp).catch(() => undefined);
         throw err;
       }
@@ -1535,7 +1813,9 @@ export class ObsidianVault implements Vault {
     }
 
     try {
-      await this.adapter.writeBinary(normalized, bytes.slice().buffer, options);
+      await this.touch(normalized, () =>
+        this.adapter.writeBinary(normalized, standalone(bytes), options),
+      );
       await verify(this.adapter, normalized, bytes);
     } catch (err) {
       // The staged copy stays. It is the only complete copy of the new
@@ -1571,33 +1851,59 @@ export class ObsidianVault implements Vault {
    * Writes a file only if nothing is at the path, and says whether it did.
    *
    * The staged copy is renamed into place, and `rename` refusing an occupied
-   * destination is what makes the claim exclusive on desktop. The Capacitor
-   * adapter's answer to an occupied destination is the platform's, so the
-   * path is looked at once more just before the rename to make the gap as
-   * narrow as this API allows, and a refusal is read as "taken" whenever
-   * something is there afterwards.
+   * destination is what makes the claim exclusive: both adapters look for
+   * the destination inside the rename's own turn of their queue (read out of
+   * 1.13.7 and 1.14.4, see the header), and a refusal is read as "taken"
+   * whenever something is there afterwards.
+   *
+   * It used to look twice more, before staging and again just before the
+   * rename, and said the second look narrowed the gap on mobile. It could
+   * not: the adapter's own check comes later than any look from here, and
+   * what is left of the race, another program taking the name between that
+   * check and the rename, is invisible to both. On a phone each look is a
+   * turn of the adapter's one queue, about 2 ms of every new file apiece
+   * (P-1b). They stay for an Obsidian older than 1.13.7, whose rename
+   * nothing here has read.
    */
   async create(path: string, bytes: Uint8Array, times: Times): Promise<boolean> {
     const normalized = this.resolve(path);
-    if (await this.adapter.exists(normalized)) return false;
+    const looks = !requireApiVersion("1.13.7");
+    if (looks && (await this.adapter.exists(normalized))) return false;
     await this.ensureParents(normalized);
-    const temp = await freeStagingPath(this.adapter, normalized);
-    await stage(this.adapter, temp, bytes.slice(), writeOptions(times));
+    const temp = newStagingPath(normalized);
+    await stage(this.adapter, temp, bytes, writeOptions(times));
 
-    if (await this.adapter.exists(normalized)) {
+    if (looks && (await this.adapter.exists(normalized))) {
       await this.discardStaging(temp);
       return false;
     }
+    this.expectLanding(normalized, bytes.length, writeOptions(times).mtime);
     try {
       await this.move(temp, normalized);
     } catch (err) {
+      this.landing.delete(normalized);
       await this.adapter.remove(temp).catch(() => undefined);
       if (await this.adapter.exists(normalized)) return false;
       throw err;
     }
-    await verify(this.adapter, normalized, bytes);
+    try {
+      await verify(this.adapter, normalized, bytes);
+    } catch (err) {
+      this.landing.delete(normalized);
+      throw err;
+    }
     this.wrote(normalized);
     return true;
+  }
+
+  /**
+   * Remembers a landing about to happen, for the report Obsidian makes of it
+   * later (see `landing`). Only with a time to match the report by: a file
+   * stamped with the moment it landed is not told apart from a write that
+   * came after, so its report is taken as news, as it always was.
+   */
+  private expectLanding(normalized: string, size: number, mtime: number | undefined): void {
+    if (mtime !== undefined) this.landing.set(normalized, { size, mtime });
   }
 
   /**
@@ -1702,15 +2008,31 @@ export class ObsidianVault implements Vault {
    * is sitting in a hidden folder at the time, and `resolve` refuses those.
    */
   private async intoTrash(normalized: string): Promise<void> {
-    try {
-      if (await this.adapter.trashSystem(normalized)) return;
-    } catch {
-      // No system trash here, or it refused. The local one is next, and a
-      // failure to reach the recycle bin is not a reason to give up on the
-      // deletion.
+    await this.touch(normalized, () => this.trash(normalized));
+  }
+
+  private async trash(normalized: string): Promise<void> {
+    if (this.systemTrash) {
+      try {
+        if (await this.adapter.trashSystem(normalized)) return;
+        // Refused, which is the platform's answer and not this file's: the
+        // Capacitor adapter catches whatever its trash throws and answers
+        // false, every time, on a phone that has none. Asked again, it was
+        // one more turn of the adapter's queue on every deletion (P-9). Both
+        // trashes keep the note recoverable, so this decides only which one
+        // the rest of this session's deletions go to.
+        this.systemTrash = false;
+      } catch {
+        // This file could not go to the recycle bin, which says nothing
+        // about the next one. The local trash is next, and a failure to reach
+        // the recycle bin is not a reason to give up on the deletion.
+      }
     }
     await this.adapter.trashLocal(normalized);
   }
+
+  /** Whether to offer a deletion to the system trash first (see `intoTrash`). */
+  private systemTrash = true;
 
   /**
    * Records a path that has left the vault.
@@ -1950,7 +2272,7 @@ export class ObsidianVault implements Vault {
     const normalized = this.resolve(path);
     if (await this.adapter.exists(normalized)) return;
     await this.ensureParents(normalized);
-    await this.adapter.mkdir(normalized);
+    await this.touch(normalized, () => this.adapter.mkdir(normalized));
     // A new directory is an entry in its parent, durable when the parent is.
     this.entryChanged(normalized);
   }
@@ -1964,8 +2286,21 @@ export class ObsidianVault implements Vault {
    *
    * `writeBinary` does not, and a note arriving in a folder this device has
    * never seen is the common case on a first sync.
+   *
+   * Nothing is asked of the disk when Obsidian's index already holds the
+   * parent as a folder, and then every folder above it too (P-1d). The look
+   * was an `exists` per level for every file written, about 2 ms each on a
+   * phone, mostly to find folders the index had in memory all along. An
+   * index behind the disk the other way, a folder removed outside Obsidian
+   * and not yet reported, leaves the staging write with no folder to go into:
+   * it fails, the pass retries it once the index has caught up, and a failed
+   * write lands nowhere, least of all on somebody else's file.
    */
   private async ensureParents(normalizedPath: string): Promise<void> {
+    const cut = normalizedPath.lastIndexOf("/");
+    if (cut === -1) return;
+    const parent = this.vault.getAbstractFileByPath(normalizedPath.slice(0, cut));
+    if (parent !== null && statOf(parent) === undefined) return;
     const parts = normalizedPath.split("/");
     parts.pop();
     let at = "";
@@ -1973,7 +2308,8 @@ export class ObsidianVault implements Vault {
       if (part === "") continue;
       at = at === "" ? part : `${at}/${part}`;
       if (!(await this.adapter.exists(at))) {
-        await this.adapter.mkdir(at);
+        const folder = at;
+        await this.touch(folder, () => this.adapter.mkdir(folder));
         this.entryChanged(at);
       }
     }
@@ -1989,6 +2325,33 @@ function writeOptions(times: Times): {
     ...(times.mtime > 0 ? { mtime: times.mtime } : {}),
     ...(times.ctime > 0 ? { ctime: times.ctime } : {}),
   };
+}
+
+/**
+ * What puts back a note whose in-place update was cut short (T09): the text
+ * it held, its bytes, its times, and the incoming text the write was cutting.
+ */
+interface CutShort {
+  readonly previous: string;
+  readonly next: string;
+  readonly before: Uint8Array;
+  readonly was: Times;
+}
+
+/**
+ * Whether `text` is what a write of `of` leaves when it stops part way: a
+ * strict prefix of it, as the adapter reads one back.
+ *
+ * A cut that fell inside a character leaves bytes that are not UTF-8, which
+ * the adapter's text read turns into U+FFFD, one or several depending on the
+ * platform's decoder, so those are not counted against the prefix. Nothing
+ * else is forgiven: a note holding one character that `of` does not have
+ * there is not a write of `of` cut short.
+ */
+function cutShortOf(text: string, of: string): boolean {
+  let start = text;
+  while (!of.startsWith(start) && start.endsWith("\uFFFD")) start = start.slice(0, -1);
+  return start.length < of.length && of.startsWith(start);
 }
 
 /** The same path with the case of its first cased letter flipped, or itself. */
@@ -2277,8 +2640,35 @@ class ObsidianDisplacedFiles implements DisplacedFiles {
   // still there and now unfindable. The ledger compacts only where a shell can
   // replace the whole file or none of it, and this adapter cannot: it has no
   // staged write, and remove-then-rename has a moment with no log at all,
-  // which reads as a clean vault. So this log grows instead. See
-  // `core/displaced.ts`.
+  // which reads as a clean vault. See `core/displaced.ts`.
+
+  /**
+   * Empties the log while it still holds exactly what was read (T11).
+   *
+   * What this shell can do instead of `rewrite`, and all the log needs here.
+   * Every incoming deletion writes a record before the note is moved aside,
+   * and the record is dead once the note is in the trash; a log that only
+   * grew had a phone reading back and looking on the disk for every deletion
+   * it had ever applied, on every pass. Writing nothing cannot be cut short
+   * into half a record, so the log is either as it was or empty, and the
+   * ledger asks for this only when every record in it is dead. Inside
+   * `process`, so a record appended since the log was read is not emptied
+   * with the dead ones; and the result is checked rather than trusted (rule
+   * 4).
+   */
+  async clear(was: string): Promise<boolean> {
+    let emptying = false;
+    await this.adapter.process(this.path, (current) => {
+      emptying = current === was;
+      return emptying ? "" : current;
+    });
+    if (!emptying) return false;
+    const stat = await this.adapter.stat(this.path);
+    if (stat === null || stat.type !== "file" || stat.size !== 0) {
+      throw new Error(`the displaced-version log at ${this.path} is not empty after emptying it`);
+    }
+    return true;
+  }
 
   async stillThere(at: string): Promise<boolean> {
     return (await this.adapter.stat(at)) !== null;
