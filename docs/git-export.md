@@ -47,8 +47,9 @@ of the server.
   and `Trew-Actor-Kind`.
 - **A device's edits, coalesced.** Obsidian saves every couple of seconds
   while you type; the export commits a device's versions together once that
-  device has been quiet for the window (5 minutes by default), authored by the
-  device's name, with a `Trew-Device` trailer.
+  device has been quiet for the window (5 minutes by default), and a minute
+  more for a save still landing, authored by the device's name, with a
+  `Trew-Device` trailer.
 - **Dated by the server**, when it committed the versions, never by a device's
   clock.
 - **The files as they are.** A deleted note is absent from the next commit; a

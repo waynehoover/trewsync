@@ -28,6 +28,20 @@ import (
 // vault is a few commits rather than one that has to be held whole.
 const maxCommitEntries = 20000
 
+// inFlight is how long past its quiet window a device's run is left open by
+// the clock, for a write already given its time and not yet landed (T47).
+//
+// The store takes a version's time before its commit's fsync, so a version
+// timed inside the window can land just after the export read the store at
+// the window's end. Closed then, the run was one commit in the export and the
+// version another, while a rebuild, deciding from the times alone, put the
+// version in the run: two histories of one store, and the remote refused the
+// documented remedy of rebuilding from scratch. A commit lands within the
+// store's five-second busy wait and an fsync, so a minute is margin to spare;
+// a write still in flight after it, or a clock stepped back across a window,
+// can still split a run, and only a rebuild's commits differ when one does.
+const inFlight = time.Minute
+
 // group is the versions one commit covers.
 type group struct {
 	op      *store.OpStamp // the operation, or nil for a device's run
@@ -125,22 +139,22 @@ func (p *planner) closeOpen() {
 // finish is called when every committed version has been added: the open
 // group is closed if it is an operation (whose versions are all in, since an
 // operation commits at once), or a device's run that has been quiet for the
-// window at now.
+// window, and for inFlight past it, at now.
 func (p *planner) finish(now int64) {
 	g := p.open
 	if g == nil {
 		return
 	}
-	if g.op != nil || now-g.at >= p.quiet.Milliseconds() {
+	if g.op != nil || now-g.at >= (p.quiet+inFlight).Milliseconds() {
 		p.closeOpen()
 	}
 }
 
-// openUntil is when the open group will have been quiet for the window, or
+// openUntil is when the open group will be closed by the clock (finish), or
 // zero when there is none.
 func (p *planner) openUntil() int64 {
 	if p.open == nil || p.open.op != nil {
 		return 0
 	}
-	return p.open.at + p.quiet.Milliseconds()
+	return p.open.at + (p.quiet + inFlight).Milliseconds()
 }

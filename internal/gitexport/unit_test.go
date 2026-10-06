@@ -204,11 +204,13 @@ func TestThePlan(t *testing.T) {
 		t.Fatalf("untimed versions grouped as %d groups", len(q.closed))
 	}
 
-	// A run whose window has not passed stays open, and says when it closes.
+	// A run whose window has not passed stays open, and says when it closes:
+	// its window and the margin for a write in flight after it (T47), and
+	// not before.
 	o := &planner{quiet: 5 * time.Minute}
 	o.add(e(1, "Laptop", "a"), 1*min, true, nil)
-	o.finish(3 * min)
-	if len(o.closed) != 0 || o.openUntil() != 6*min {
+	o.finish(6*min + inFlight.Milliseconds() - 1)
+	if len(o.closed) != 0 || o.openUntil() != 6*min+inFlight.Milliseconds() {
 		t.Fatalf("an open run closed early, or closes at %d", o.openUntil())
 	}
 }

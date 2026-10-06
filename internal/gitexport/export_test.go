@@ -154,6 +154,39 @@ func TestARebuildMakesTheSameCommits(t *testing.T) {
 	t.Logf("%s commits, the same in both", commits)
 }
 
+// T47. The export closes a device's run once its last version has been quiet
+// for the window by the clock, and a version's time is taken before its
+// commit lands, so a version given a time inside the window and landing just
+// after the export read the store was a run of its own in the export and part
+// of the first run in a rebuild, which decides from the times alone: two
+// histories of one store, and the remote then refuses the documented remedy,
+// rebuilding from scratch. A run is closed by the clock only a margin past
+// its window now, which a write in flight does not outlast.
+func TestAWriteLandingAsTheWindowClosesDoesNotSplitTheRun(t *testing.T) {
+	r := newRig(t)
+	incremental := t.TempDir()
+	x := r.exporter(incremental, settings(t, incremental, ""))
+	r.put("Laptop", "Journal.md", []byte("draft 1\n"))
+	// The export reads the store as the window closes on the first draft...
+	r.clock.advance(5 * time.Minute)
+	x.sync(t)
+	// ...while a second draft is in flight: its time was taken a second
+	// before that, and its commit lands after the read. The clock is put back
+	// to give it that time.
+	r.clock.advance(-time.Second)
+	r.put("Laptop", "Journal.md", []byte("draft 2\n"))
+	r.clock.advance(time.Hour)
+	x.sync(t)
+
+	scratch := t.TempDir()
+	y := r.exporter(scratch, settings(t, scratch, ""))
+	y.sync(t)
+	if a, b := tip(t, incremental, "main"), tip(t, scratch, "main"); a != b {
+		t.Fatalf("the incremental export is at %s and the rebuild at %s:\n%s\n---\n%s", a, b,
+			git(t, repo(incremental), "log", "--format=%H %s"), git(t, repo(scratch), "log", "--format=%H %s"))
+	}
+}
+
 // TestAQuietWindowCoalescesADevicesRun: a device's saves within the window are
 // one commit, dated by the server when the last was committed and never by the
 // device's mtime; a pause of the window starts the next; another device, or an
