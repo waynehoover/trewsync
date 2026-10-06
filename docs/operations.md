@@ -43,12 +43,12 @@ What each check means, and what to do:
 
 | Check | A `WARN` or `FAIL` means | Do this |
 |---|---|---|
-| `data-dir` | The directory is missing, is another product's, was written by a newer `trewd`, or other accounts can read into it. | Check `-data`. A newer schema needs the newer `trewd`. `chmod 700` the directory. |
+| `data-dir` | The directory is missing, is another product's, was written by a newer `trewd`, or other accounts can read into it; or a restore rehearsal's copy, every note in the clear, was left in it. | Check `-data`. A newer schema needs the newer `trewd`. `chmod 700` the directory. Remove a `rehearsal-*` copy once you no longer need it. |
 | `storage` | The data is on a tmpfs or a container's own layer: gone at the next restart or upgrade. | Mount a persistent volume at the data directory and move the store onto it with the server stopped. `serve` refuses to start an empty store there without `-allow-ephemeral`. |
 | `encryption` | Always a note: doctor can see a LUKS volume by its device name and nothing else. | See [Encryption at rest](#encryption-at-rest). |
 | `server` | A server holds the directory and does not answer, or it answers and cannot take a note (`disk-full`, `store-read-only`, `chunks-read-only`, `chunks-unreachable`). | Read the remedy for the word it gives; a hung server is restarted after reading its log. |
 | `restarts` | Five starts in ten minutes (a restart loop), or the last run was killed or crashed. | Read one run's log: a refusal at startup says why, and restarting will not change it. After a crash, `trewd verify -deep`. |
-| `identity` | The store is at an older schema, or does not hold the vault named. | Take a backup, then start this build's `serve`, which upgrades it. Use `-vault`. |
+| `identity` | The store is at an older schema, or does not hold the vault named. | Restart the server with this build, which upgrades the store; until then this build's `backup`, `verify` and doctor's other checks refuse it rather than upgrade it under the older server or read it wrongly. Use `-vault`. |
 | `store` | Verify's pass found faults: a body missing, a row malformed, a pinned before-image gone. Or a purge holds the directory. | See [Something is wrong with the store](#something-is-wrong-with-the-store). |
 | `chunks` | A sampled body is missing or does not hash to its name, or some are quarantined. | `trew repair` on a device that still holds those notes; `trewd verify -deep` names them. |
 | `space` | Under 1 GiB or 5% free warns; under 64 MiB fails, and the store refuses every write. Or the write-ahead log is over 512 MiB. | Free space or grow the volume. `trewd stats` says whether a purge would help. A huge write-ahead log means a long read is holding checkpoints back: let it finish, or restart. |
@@ -210,9 +210,13 @@ export only reads what the store has committed.
   Put the branch back, or stop the server and move `git-export/` aside to
   export again from the store; with the store unpurged and the settings
   unchanged the rebuild makes the same commits, so the remote accepts it.
-- **The store was restored from a backup.** The export adds one commit marked
-  `Restore:` holding the restored notes and goes on; it never rewrites the
-  branch.
+- **The store was restored from a backup.** With `git-export/` copied across
+  from the preserved directory ([Restore](server-operations.md#restore)), the
+  export adds one commit marked `Restore:` holding the restored notes and goes
+  on; it never rewrites the branch. A backup does not hold `git-export/`, and
+  without it the export starts a new repository whose first push is refused:
+  copy it across with the server stopped, or export to a new branch with
+  `trewd git-export set -branch NAME`.
 - **git or git-lfs is missing or too old.** Install git 2.36 or later and
   git-lfs 3.0 or later on the server's PATH; the container image and the Nix
   package carry both.
@@ -284,8 +288,11 @@ then it is still there, in the clear, beside the store; if a purge has to take
 effect at once, remove `backup-staging/` while no backup runs (the next backup
 makes it again, copying every body). A backup that cannot drop them says so
 with a `WARNING` line and still counts as taken, since its archive is good.
-A plaintext backup directory is different: it keeps purged history on purpose,
-because it is the one copy of it.
+A plaintext backup directory keeps the bodies of purged versions too, but each
+backup into it replaces its database with the new snapshot, which no longer
+records those versions, so from the next backup on it cannot give them back.
+The history a purge removes is kept by a separate backup taken before it and
+left alone ([Preserve history before a purge](server-operations.md#preserve-history-before-a-purge)).
 
 The window a restore would lose is the time since the last backup: with one a
 night, up to a day, plus however long the backup takes. Devices shrink it in
@@ -400,6 +407,7 @@ token, or a model provider reading what the agent reads.
 | `trewd.json` | The [configuration file](server-reference.md#configuration-file): the Git export's and the daily-note tools' settings. | Yes; every setting returns to its default. |
 | `git-export/` | The [Git export](git-export.md)'s bare repository (`repo.git`, with its LFS objects), its state, and the known_hosts it wrote. | With the server stopped; it is exported again from the store, and a remote it pushed to keeps its history. |
 | `backup-staging/` | The plaintext copy an encrypted backup is packed from, pruned to what the last archive holds. | Whenever no backup is running; the next one makes it again. |
+| `rehearsal-*/` | A restore rehearsal's work directory, a whole backup in the clear. Removed when the rehearsal ends, interrupted or not; one a killed rehearsal left is removed by the next, and `doctor` names any. | Whenever no rehearsal is running. |
 | `last-backup.json`, `last-rehearsal.json`, `runtime.json` | What the last backup, rehearsal and starts did, for `doctor`. | Yes; `doctor` then says nothing is recorded. |
 | `first-invite` | The first device's invite, mode 0600. | Once the first device is paired. |
 | `control.sock`, `server.lock`, `data.lock` | The operator's socket and the locks. | Never while a server runs; a stale socket is replaced at start. |

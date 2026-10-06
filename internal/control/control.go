@@ -21,8 +21,10 @@
 //
 // The socket is a unix socket in the data directory, mode 0600, so whoever can
 // reach it can already read the database beside it: the socket is not a new
-// authority, only the right way to use the one the file system gives. Each
-// connection carries one request and one reply, a line of JSON each way.
+// authority, only the right way to use the one the file system gives. The
+// kernel's word on who connected is asked as well, and anyone but the
+// server's own account and root is refused (admit). Each connection carries
+// one request and one reply, a line of JSON each way.
 package control
 
 import (
@@ -300,6 +302,50 @@ const (
 	CodeInternal   = "internal"
 )
 
+// ownUID is the account this server runs as, which a peer must be, or root.
+var ownUID = os.Geteuid
+
+// admit refuses a connection from any account but this server's own and
+// root's (T45).
+//
+// The mode on the socket is set after the bind made it, so with a permissive
+// umask, and a data directory other accounts can traverse, another account
+// could connect in between, and nothing afterwards asked who had: the
+// operator's powers, invite, revoke and the MCP tokens among them, went to
+// whoever got in. The kernel records the account of the process at the other
+// end when it connects, so asking at accept closes that window and any later
+// one, a socket somebody made readable for instance. Root reads the database
+// beside the socket anyway, and is how an operator often runs these.
+func admit(conn net.Conn) error {
+	uid, err := peerUID(conn)
+	if err != nil {
+		return fmt.Errorf("could not tell which account connected: %w", err)
+	}
+	if uid != ownUID() && uid != 0 {
+		return fmt.Errorf("account %d connected, and only this server's account (%d) or root may", uid, ownUID())
+	}
+	return nil
+}
+
+// fromRawConn runs get on conn's descriptor, for the platform files'
+// peerUID.
+func fromRawConn(conn net.Conn, get func(fd int) (int, error)) (int, error) {
+	uc, ok := conn.(*net.UnixConn)
+	if !ok {
+		return -1, fmt.Errorf("a %T is not a unix socket", conn)
+	}
+	raw, err := uc.SyscallConn()
+	if err != nil {
+		return -1, err
+	}
+	uid := -1
+	var gerr error
+	if err := raw.Control(func(fd uintptr) { uid, gerr = get(int(fd)) }); err != nil {
+		return -1, err
+	}
+	return uid, gerr
+}
+
 // Server is the listening socket.
 type Server struct {
 	ln   net.Listener
@@ -307,6 +353,11 @@ type Server struct {
 	log  *slog.Logger
 	h    Handler
 	wg   sync.WaitGroup
+
+	// stop ends every request's context, so Close can tell the requests in
+	// flight to finish (T46).
+	ctx  context.Context
+	stop context.CancelFunc
 
 	mu     sync.Mutex
 	closed bool
@@ -346,6 +397,7 @@ func Listen(dataDir string, h Handler, log *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("the control socket at %s is %v, not a private socket", path, info.Mode())
 	}
 	s := &Server{ln: ln, path: path, log: log, h: h}
+	s.ctx, s.stop = context.WithCancel(context.Background())
 	s.wg.Add(1)
 	go s.serve()
 	return s, nil
@@ -354,7 +406,15 @@ func Listen(dataDir string, h Handler, log *slog.Logger) (*Server, error) {
 // Path is where the socket is.
 func (s *Server) Path() string { return s.path }
 
-// Close stops accepting, waits for requests in flight, and removes the socket.
+// Close stops accepting, cancels the requests in flight and waits for them to
+// answer, and removes the socket.
+//
+// Cancelled rather than only waited for (T46): a `git-export adopt` fetches a
+// branch's whole history for up to twenty minutes, the systemd unit gives the
+// whole stop thirty seconds, and a stop that waits it out is killed part way,
+// recorded as a crash, with the store still open. Each request sees its
+// context end and answers; one that holds no context, a commit for instance,
+// finishes as it would have, since it is bounded by its own work.
 func (s *Server) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -363,6 +423,7 @@ func (s *Server) Close() error {
 	}
 	s.closed = true
 	s.mu.Unlock()
+	s.stop()
 	err := s.ln.Close()
 	s.wg.Wait()
 	if rerr := os.Remove(s.path); rerr != nil && !errors.Is(rerr, os.ErrNotExist) && err == nil {
@@ -395,6 +456,12 @@ func (s *Server) serve() {
 // answer reads one request and writes one reply.
 func (s *Server) answer(conn net.Conn) {
 	defer conn.Close()
+	if err := admit(conn); err != nil {
+		// Closed unanswered: the request is not read, and nothing about the
+		// server is said to whoever this is.
+		s.log.Warn("refused a control socket connection", "err", err)
+		return
+	}
 	_ = conn.SetDeadline(time.Now().Add(requestTimeout))
 	line, err := bufio.NewReader(io.LimitReader(conn, maxRequest+1)).ReadBytes('\n')
 	var reply Reply
@@ -412,7 +479,7 @@ func (s *Server) answer(conn net.Conn) {
 		}
 		t := Timeout(req)
 		_ = conn.SetDeadline(time.Now().Add(t))
-		ctx, cancel := context.WithTimeout(context.Background(), t)
+		ctx, cancel := context.WithTimeout(s.ctx, t)
 		reply = s.h.Handle(ctx, req)
 		cancel()
 		s.log.Info("control request", "op", req.Op, "refused", reply.Error != nil)

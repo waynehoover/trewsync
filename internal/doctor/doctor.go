@@ -337,8 +337,52 @@ func (r *run) dataDir() bool {
 			fmt.Sprintf("chmod 700 %s. The store holds every note in the clear.", dir))
 		return true
 	}
+	// A rehearsal's work directory is a whole backup restored in the clear,
+	// and one that outlives its rehearsal (killed part way, or kept with
+	// -keep) is out of every purge's reach and was mentioned by nothing (T39).
+	if copies := rehearsalCopies(dir); len(copies) > 0 {
+		r.bad(Warn, CheckDataDir, fmt.Sprintf("%s holds %d restore rehearsal copies, each a whole backup in the clear "+
+			"that no purge reaches: %s", dir, len(copies), strings.Join(copies, ", ")),
+			"Remove each once you no longer need it, with no rehearsal running (rm -rf). A rehearsal that was killed "+
+				"left it, or -keep kept it; the next `trewd rehearse` removes one a killed rehearsal left.")
+		return true
+	}
 	r.ok(CheckDataDir, fmt.Sprintf("%s is a trewd data directory, private to its owner", dir))
 	return true
+}
+
+// rehearsalCopies are the rehearsal work directories in the data directory
+// that no rehearsal is using now, by name.
+func rehearsalCopies(dir string) []string {
+	found, err := filepath.Glob(filepath.Join(dir, "rehearsal-*"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, d := range found {
+		if info, err := os.Lstat(d); err == nil && info.IsDir() && !lockHeld(d, dirlock.Data) {
+			out = append(out, filepath.Base(d))
+		}
+	}
+	return out
+}
+
+// lockHeld reports whether some process holds the named lock in dir now, by
+// asking the lock itself for a share of it and letting go at once, which a
+// pid in its record cannot say: the process that wrote it may be long gone and
+// its pid another's. It creates nothing; a lock file that is not there is a
+// lock nobody holds.
+func lockHeld(dir, name string) bool {
+	f, err := os.Open(filepath.Join(dir, name))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		return errors.Is(err, syscall.EWOULDBLOCK)
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false
 }
 
 // storage checks the directory is not on storage a restart or a container
@@ -365,7 +409,7 @@ func (r *run) storage() {
 			why = "the container's own writable layer, erased when the container is replaced, which every upgrade does"
 		}
 		r.bad(Fail, CheckStorage, fmt.Sprintf("%s is on %s: %s", s.Dir, where, why),
-			"Mount a persistent volume at the data directory (compose.yaml mounts ./trew/data at /data) and move the "+
+			"Mount a persistent volume at the data directory (compose.yaml mounts the trew-data volume at /data) and move the "+
 				"store onto it with the server stopped. Until then every note here is one restart from gone.")
 	default:
 		r.ok(CheckStorage, fmt.Sprintf("%s is on %s, which survives a restart", s.Dir, where))
@@ -441,8 +485,15 @@ func remedyForHealth(reason string) string {
 	return "Read the server's log for the error, and run `trewd verify -deep` with the server stopped."
 }
 
-// liveHolder is who holds a lock exclusively, by the record it wrote, when
-// that process is still alive. Read without taking the lock.
+// liveHolder is who holds a lock exclusively, by the record it wrote, when a
+// process holds the lock now.
+//
+// The record outlives a server killed outright, and a pid alive now is not
+// proof it is that server: pids are reused, and in a container trewd is pid
+// 1, so `docker compose run ... doctor` after an unclean stop found itself
+// at the recorded pid and reported a hung server for one that was not
+// running (T43). The lock is asked, and only when the recorded pid is alive,
+// since a dead one settles it and asking takes the lock, for an instant.
 func liveHolder(dataDir, name string) (string, bool) {
 	holder := dirlock.Holder(dataDir, name)
 	if holder == "" {
@@ -457,8 +508,10 @@ func liveHolder(dataDir, name string) (string, bool) {
 		return holder, false
 	}
 	// Signal 0 asks whether the process exists without touching it.
-	err = syscall.Kill(pid, 0)
-	return holder, err == nil || errors.Is(err, syscall.EPERM)
+	if err := syscall.Kill(pid, 0); err != nil && !errors.Is(err, syscall.EPERM) {
+		return holder, false
+	}
+	return holder, lockHeld(dataDir, name)
 }
 
 // restarts reads how the server has been starting: a restart loop, or a run
@@ -515,11 +568,25 @@ func (r *run) openStore() (func(), bool) {
 	}
 	dbPath, chunkDir := store.DataDir(r.opt.DataDir)
 	st, err := store.OpenForInspection(dbPath, chunkDir)
-	if err != nil {
+	var older *store.OlderSchemaError
+	switch {
+	case errors.As(err, &older):
+		// An older build's store is refused for inspection rather than read
+		// wrongly (T28), and this build's backup refuses it too rather than
+		// upgrade it under the older server (T37): what to do is restart.
+		lock.Release()
+		r.bad(Warn, CheckIdentity, fmt.Sprintf("the store is at schema %d and this build writes %d", older.Schema,
+			store.SchemaVersion),
+			"Restart the server with this build (or start this build's `trewd serve`), which upgrades the store when "+
+				"it opens it. Until then this build examines nothing in it, and its backup refuses the store rather "+
+				"than upgrade it under the older server.")
+		r.note(CheckStore, "not examined: the store is at an older schema than this build reads")
+		return nil, false
+	case err != nil:
 		lock.Release()
 		r.bad(Fail, CheckStore, fmt.Sprintf("the store cannot be opened: %v", err),
-			"If the schema is older, start `trewd serve` once to upgrade it. Otherwise keep the directory as it is, "+
-				"restore from a backup into a fresh directory (docs/operations.md), and read notes out with `trewd cat`.")
+			"Keep the directory as it is, restore from a backup into a fresh directory (docs/operations.md), and "+
+				"read notes out with `trewd cat`.")
 		return nil, false
 	}
 	r.st = st
@@ -547,11 +614,7 @@ func (r *run) identity() {
 			"Run doctor with -vault naming the vault the server serves.")
 		return
 	}
-	if id.SchemaVersion < store.SchemaVersion {
-		r.bad(Warn, CheckIdentity, fmt.Sprintf("the store is at schema %d and this build writes %d", id.SchemaVersion, store.SchemaVersion),
-			"Take a backup, then start this build's `trewd serve`, which upgrades the store when it opens it.")
-		return
-	}
+	// A store at an older schema never gets here: openStore reports it.
 	r.ok(CheckIdentity, fmt.Sprintf("product %s, schema %d, epoch %s, vault %q at uid %d", id.Product, id.SchemaVersion,
 		id.Epoch, r.opt.Vault, r.latest))
 }
@@ -626,7 +689,17 @@ func countsOf(m map[string]int) string {
 // bodies already quarantined.
 func (r *run) chunks() {
 	c := r.st.Chunks()
-	fp, err := c.Measure()
+	// Quick mode, every five minutes in the server's own alerts, counts the
+	// tree without a stat of every body and samples without reading every
+	// reference (docs review, performance): at a hundred thousand bodies it
+	// was 0.3 s of the two each time, growing with the vault. The tree is
+	// still listed, since that is what finds a quarantined body, a note some
+	// device has to send again, for the alert.
+	measure := c.Measure
+	if r.opt.Quick {
+		measure = c.Tally
+	}
+	fp, err := measure()
 	if err != nil {
 		r.bad(Fail, CheckChunks, fmt.Sprintf("the chunk tree cannot be walked: %v", err),
 			"Check the chunk directory is mounted and readable by the server's account.")
@@ -642,8 +715,16 @@ func (r *run) chunks() {
 
 	var sample []struct{ vault, name string }
 	seen := 0
-	if !r.opt.Deep {
-		if err := r.st.ChunkRefs(func(vault, name string) error {
+	var err2 error
+	switch {
+	case r.opt.Deep:
+	case r.opt.Quick:
+		err2 = r.st.SampleChunkRefs(r.opt.Sample, func(vault, name string) error {
+			sample = append(sample, struct{ vault, name string }{vault, name})
+			return nil
+		})
+	default:
+		err2 = r.st.ChunkRefs(func(vault, name string) error {
 			seen++
 			if len(sample) < r.opt.Sample {
 				sample = append(sample, struct{ vault, name string }{vault, name})
@@ -651,11 +732,12 @@ func (r *run) chunks() {
 				sample[j] = struct{ vault, name string }{vault, name}
 			}
 			return nil
-		}); err != nil {
-			r.bad(Fail, CheckChunks, fmt.Sprintf("the chunk references cannot be read: %v", err),
-				"Run `trewd verify -deep` with the server stopped.")
-			return
-		}
+		})
+	}
+	if err2 != nil {
+		r.bad(Fail, CheckChunks, fmt.Sprintf("the chunk references cannot be read: %v", err2),
+			"Run `trewd verify -deep` with the server stopped.")
+		return
 	}
 	var missing, corrupt []string
 	for _, s := range sample {
@@ -668,8 +750,12 @@ func (r *run) chunks() {
 		}
 	}
 	checked := fmt.Sprintf("%d of %d chunk references read and hashed", len(sample), seen)
-	if r.opt.Deep {
+	switch {
+	case r.opt.Deep:
 		checked = "every chunk reference read and hashed by the deep pass above"
+	case r.opt.Quick:
+		// No total: counting the references is the scan quick mode leaves out.
+		checked = fmt.Sprintf("%d chunk references chosen at random read and hashed", len(sample))
 	}
 	switch {
 	case len(missing)+len(corrupt) > 0:

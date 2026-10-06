@@ -48,9 +48,11 @@ var ErrFutureSchema = errors.New("this database was written by a newer " + Progr
 // Identity is what a store says about itself: which product wrote it, which
 // schema it is in, and which epoch its uid sequence belongs to.
 //
-// The epoch is minted when the store is created and again for every backup
-// snapshot, so a database served from a backup never shares an epoch with
-// the store it was copied from. A device keeps the epoch beside its cursor,
+// The epoch is minted when the store is created, again for every backup
+// snapshot, and again whenever a snapshot is first served (GoLive), so a
+// database served from a backup never shares an epoch with the store it was
+// copied from, nor with another restore of itself. A device keeps the epoch
+// beside its cursor,
 // and a different one in `ready` means the uid sequence it was following may
 // have been reissued: it lists again from zero rather than trusting a cursor
 // into a history that is not the one it read (plan/protocol.md, "Device

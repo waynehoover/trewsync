@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"filippo.io/age"
 
 	"github.com/waynehoover/trewsync/internal/archive"
+	"github.com/waynehoover/trewsync/internal/config"
 	"github.com/waynehoover/trewsync/internal/dirlock"
 	"github.com/waynehoover/trewsync/internal/doctor"
 	"github.com/waynehoover/trewsync/internal/store"
@@ -34,12 +36,13 @@ const stagingDirName = "backup-staging"
 // it as one age archive at to.
 func backupEncrypted(st *store.Store, dataDir, to string, deep bool, recipients []age.Recipient, out io.Writer) (doctor.BackupRecord, error) {
 	rec := doctor.BackupRecord{To: to, Deep: deep, Encrypted: true}
-	if info, err := os.Stat(to); err == nil && info.IsDir() {
-		return rec, fmt.Errorf("-to %s is a directory: an encrypted backup is one file, such as %s",
-			to, filepath.Join(to, "trew-backup.tar.age"))
+	// Nothing but an earlier archive is written over (T35), and that is asked
+	// before anything is staged.
+	if err := archive.CheckDestination(to); err != nil {
+		return rec, err
 	}
-	if err := store.RefuseSamePlace(filepath.Dir(to), dataDir); err != nil {
-		return rec, fmt.Errorf("an encrypted backup inside the data directory is not a copy of it: %w", err)
+	if err := store.RefuseInside(to, dataDir); err != nil {
+		return rec, err
 	}
 	staging := filepath.Join(dataDir, stagingDirName)
 	if err := store.CheckBackupDestination(staging); err != nil {
@@ -59,6 +62,10 @@ func backupEncrypted(st *store.Store, dataDir, to string, deep bool, recipients 
 		fmt.Fprintln(out, rep)
 		return rec, fmt.Errorf("staging the backup: %w", err)
 	}
+	// The settings go into the archive's manifest from the staging copy (T38).
+	if err := carrySettings(dataDir, staging); err != nil {
+		return rec, err
+	}
 	packed, err := archive.Pack(staging, to, recipients)
 	if err != nil {
 		return rec, fmt.Errorf("packing the encrypted backup: %w", err)
@@ -72,6 +79,10 @@ func backupEncrypted(st *store.Store, dataDir, to string, deep bool, recipients 
 	fmt.Fprintf(out, "encrypted backup written to %s\n", to)
 	fmt.Fprintf(out, "  %d bodies (%s) and the database, verified in the staging copy at %s\n",
 		packed.Manifest.Bodies, humanBytes(packed.Manifest.BodyBytes), staging)
+	if rep.Healed > 0 {
+		fmt.Fprintf(out, "  %d bodies had rotted in the staging copy since an earlier run: each was set aside as "+
+			"quarantined and copied again from the store. Check the disk\n", rep.Healed)
+	}
 	// The archive is written; now the staging copy drops what it did not
 	// archive, which after a purge is the purged history in plaintext. A
 	// failure here does not undo a good archive, so it is said loudly rather
@@ -114,6 +125,14 @@ func recordBackup(dataDir string, rec doctor.BackupRecord, err error, out io.Wri
 	} else {
 		rec.LastOK = rec.At
 	}
+	// The last good archive: this run's, when it wrote one, and otherwise the
+	// one before it, whatever this run was (T36). A failed run or a plaintext
+	// one used to leave no digest to compare with, and unpack and rehearse
+	// then took any archive the identity opens.
+	rec.LastArchive = prev.Archive()
+	if rec.OK && rec.Encrypted && rec.SHA256 != "" {
+		rec.LastArchive = &doctor.ArchiveRecord{SHA256: rec.SHA256, TakenAt: rec.TakenAt, To: rec.To, At: rec.At}
+	}
 	if werr := doctor.WriteRecord(dataDir, doctor.BackupRecordFile, rec); werr != nil {
 		fmt.Fprintf(out, "(the backup record in %s could not be written, so `trewd doctor` will not see this run: %v)\n",
 			dataDir, werr)
@@ -137,7 +156,7 @@ func cmdBackupKey(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("backup-key", flag.ContinueOnError)
 	outFile := fs.String("out", "", "where to write the identity, mode 0600; the recipient goes beside it as FILE.pub")
 	classic := fs.Bool("x25519", false, "make a classic X25519 key rather than a post-quantum one")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *outFile == "" {
@@ -200,17 +219,17 @@ func cmdUnpack(args []string, out io.Writer) error {
 	to := fs.String("to", "", "a new or empty directory to write the data directory into")
 	record := fs.String("record", "", "a data directory (or its last-backup.json) whose last backup this archive must be")
 	other := fs.Bool("not-last-backup", false, "unpack an archive that is not the recorded last backup, with a warning")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *from == "" || *identity == "" || *to == "" {
 		return errors.New("unpack needs -from FILE, -identity KEY and -to NEW_DIRECTORY")
 	}
-	origin, err := checkArchiveOrigin(*from, *record, *other, out)
+	origin, err := checkArchiveOrigin(*from, *record, true, *other, out)
 	if err != nil {
 		return err
 	}
-	rep, err := unpackArchive(*from, *identity, *to)
+	rep, err := unpackArchive(context.Background(), *from, *identity, *to)
 	if err != nil {
 		return err
 	}
@@ -221,16 +240,75 @@ func cmdUnpack(args []string, out io.Writer) error {
 	if err := origin.after(rep, out); err != nil {
 		return err
 	}
+	if err := restoreSettings(*to, rep.Manifest.Settings, origin.matched, out); err != nil {
+		return err
+	}
+	if err := upgradeCopy(*to); err != nil {
+		return err
+	}
 	return cmdVerify([]string{"-deep", "-data", *to}, out)
+}
+
+// settingsAside is where unpack puts the settings an archive carried when it
+// cannot say the archive is one this server wrote.
+const settingsAside = config.FileName + ".from-backup"
+
+// restoreSettings writes the settings an archive carried into the directory it
+// was unpacked into (T38): as the server's own when the archive is the backup
+// the record names, and otherwise beside them, unused, for a person to read.
+//
+// Settings choose where the Git export pushes the whole vault, and a forged
+// archive, which anyone holding the public recipient can make, could carry an
+// export to a remote of its maker's choosing: the devices would then send back
+// every note they hold to the restored server and it would push them there. An
+// archive's notes are taken on the operator's say-so after the digest check;
+// its settings are taken only on the check itself.
+func restoreSettings(dir string, settings []byte, verified bool, out io.Writer) error {
+	if len(settings) == 0 {
+		return nil
+	}
+	if verified {
+		if err := writeNewSecretFile(config.Path(dir), string(settings)); err != nil {
+			return fmt.Errorf("restoring the settings the backup carried: %w", err)
+		}
+		fmt.Fprintf(out, "  restored the server's settings (%s), as the recorded backup carried them\n", config.FileName)
+		return nil
+	}
+	aside := filepath.Join(dir, settingsAside)
+	if err := writeNewSecretFile(aside, string(settings)); err != nil {
+		return fmt.Errorf("writing the settings the backup carried: %w", err)
+	}
+	fmt.Fprintf(out, "  the backup carried its server's settings; they are in %s and not in use, because nothing "+
+		"compared this archive with a backup record. Read them, the Git export's remote above all, and rename "+
+		"the file to %s to use them\n", aside, config.FileName)
+	return nil
+}
+
+// upgradeCopy brings a store this command has just made, by unpacking or
+// copying a backup into a new directory, to this build's schema before it is
+// checked (T28).
+//
+// Inspection never migrates, and refuses a store older than this build rather
+// than read it wrongly, so an archive an older build made could not be
+// verified at all: unpack ended in `no such table: operations` on a store
+// that serve upgrades without a word. The copy is this command's own, nothing
+// serves it and nothing else has it open, so upgrading it is what serve would
+// do to it first anyway, done before rather than after the check.
+func upgradeCopy(dir string) error {
+	dbPath, chunkDir := store.DataDir(dir)
+	st, err := store.OpenMode(dbPath, chunkDir, store.Existing, store.SyncFull)
+	if err != nil {
+		return fmt.Errorf("upgrading the store unpacked into %s to this build's schema: %w", dir, err)
+	}
+	return st.Close()
 }
 
 // archiveOrigin is what checkArchiveOrigin found out about an archive before
 // it was decrypted, for after to finish once the manifest can be read.
 type archiveOrigin struct {
 	digest  string
-	rec     doctor.BackupRecord
-	known   bool // there was an encrypted backup on record to compare with
-	matched bool // and the archive is it
+	last    *doctor.ArchiveRecord // the last good archive recorded, when there is one
+	matched bool                  // and the archive is it
 }
 
 // checkArchiveOrigin compares an archive with the backup a data directory
@@ -239,12 +317,20 @@ type archiveOrigin struct {
 // The recipient an archive is encrypted to is public by design, and sits on
 // the server, so an archive that opens with the identity may have been made
 // by anyone who could read it, holding whatever store they chose. The backup
-// record holds the digest and snapshot time of the archive this server did
-// write. The same digest is that archive. Another is refused unless other
-// says it is meant (an older backup, say), and then warned about; no record
-// to compare with is said, since a restore after a disaster may have lost the
-// directory the record was in.
-func checkArchiveOrigin(from, recordAt string, other bool, out io.Writer) (archiveOrigin, error) {
+// record holds the digest and snapshot time of the last archive this server
+// did write. The same digest is that archive. Another is refused unless other
+// says it is meant (an older backup, say), and then warned about.
+//
+// With no record to compare with, required says what happens. `unpack
+// -record` names one, and a record that cannot answer, because there is none
+// where it points (a typo) or it records no encrypted backup, is refused
+// (T36): read as "no record", it unpacked any archive with a NOTE, which is
+// the check failing open exactly when somebody asked for it. Without -record
+// unpack goes on and says the archive is unchecked, since a restore after a
+// disaster may have lost the directory the record was in. `rehearse` is not
+// required to find one, and says so: it also compares the restore with every
+// version the live store holds.
+func checkArchiveOrigin(from, recordAt string, required, other bool, out io.Writer) (archiveOrigin, error) {
 	var o archiveOrigin
 	digest, err := archive.FileSHA256(from)
 	if err != nil {
@@ -264,24 +350,34 @@ func checkArchiveOrigin(from, recordAt string, other bool, out io.Writer) (archi
 	if info, err := os.Stat(recordAt); err == nil && !info.IsDir() {
 		dir, name = filepath.Dir(recordAt), filepath.Base(recordAt)
 	}
-	found, err := doctor.ReadRecord(dir, name, &o.rec)
+	var rec doctor.BackupRecord
+	found, err := doctor.ReadRecord(dir, name, &rec)
 	if err != nil {
 		return o, fmt.Errorf("the backup record in %s: %w", dir, err)
 	}
-	if !found || !o.rec.Encrypted || o.rec.SHA256 == "" {
-		unchecked(": " + dir + " records no encrypted backup")
+	o.last = rec.Archive()
+	if o.last == nil {
+		why := dir + " records no encrypted backup"
+		if !found {
+			why = "there is no " + name + " in " + dir
+		}
+		if required {
+			return o, fmt.Errorf("-record %s cannot be compared with: %s, so nothing says this archive is one this "+
+				"server wrote. Check the path, or leave -record off and compare the SHA-256 unpack prints with the "+
+				"one `trewd backup` printed; nothing was unpacked", recordAt, why)
+		}
+		unchecked(": " + why)
 		return o, nil
 	}
-	o.known = true
-	if digest == o.rec.SHA256 {
+	if digest == o.last.SHA256 {
 		o.matched = true
 		fmt.Fprintf(out, "%s is the backup this data directory last recorded (sha256 %s, snapshot taken %s)\n",
-			from, digest, o.rec.TakenAt)
+			from, digest, o.last.TakenAt)
 		return o, nil
 	}
 	why := fmt.Sprintf("%s is not the backup this data directory last recorded: its sha256 is %s, and %s records "+
 		"%s, written to %s, snapshot taken %s. Anyone holding the recipient can make an archive the identity opens",
-		from, digest, dir, o.rec.SHA256, o.rec.To, o.rec.TakenAt)
+		from, digest, dir, o.last.SHA256, o.last.To, o.last.TakenAt)
 	if !other {
 		return o, errors.New(why + ". If it is another backup of this server you mean to use (an older one, say), " +
 			"pass -not-last-backup")
@@ -298,18 +394,19 @@ func (o archiveOrigin) after(rep archive.Report, out io.Writer) error {
 		return fmt.Errorf("the archive changed while it was being read: sha256 %s before, %s as unpacked", o.digest, rep.SHA256)
 	}
 	switch {
-	case o.matched && o.rec.TakenAt != "" && rep.Manifest.TakenAt != o.rec.TakenAt:
+	case o.matched && o.last.TakenAt != "" && rep.Manifest.TakenAt != o.last.TakenAt:
 		return fmt.Errorf("the archive has the recorded digest, and its manifest says the snapshot was taken %s "+
-			"where the record says %s: the record does not describe it", rep.Manifest.TakenAt, o.rec.TakenAt)
-	case o.known && !o.matched:
+			"where the record says %s: the record does not describe it", rep.Manifest.TakenAt, o.last.TakenAt)
+	case o.last != nil && !o.matched:
 		fmt.Fprintf(out, "WARNING: this archive's snapshot was taken %s; the recorded backup's was taken %s\n",
-			rep.Manifest.TakenAt, o.rec.TakenAt)
+			rep.Manifest.TakenAt, o.last.TakenAt)
 	}
 	return nil
 }
 
-// unpackArchive is unpack without the printing, for the rehearsal.
-func unpackArchive(from, identity, to string) (archive.Report, error) {
+// unpackArchive is unpack without the printing, for the rehearsal too, which
+// stops it part way when ctx ends (T39).
+func unpackArchive(ctx context.Context, from, identity, to string) (archive.Report, error) {
 	ids, err := archive.ParseIdentities(identity)
 	if err != nil {
 		return archive.Report{}, err
@@ -319,9 +416,22 @@ func unpackArchive(from, identity, to string) (archive.Report, error) {
 		return archive.Report{}, err
 	}
 	defer f.Close()
-	rep, err := archive.Unpack(f, ids, to)
+	rep, err := archive.Unpack(ctxReader{ctx, f}, ids, to)
 	if err != nil {
 		return rep, fmt.Errorf("unpacking %s: %w", from, err)
 	}
 	return rep, nil
+}
+
+// ctxReader reads from r until ctx ends, and then reports why.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }

@@ -26,9 +26,12 @@ import (
 
 	"github.com/waynehoover/trewsync/internal/archive"
 	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/config"
 	"github.com/waynehoover/trewsync/internal/control"
 	"github.com/waynehoover/trewsync/internal/dirlock"
 	"github.com/waynehoover/trewsync/internal/doctor"
+	"github.com/waynehoover/trewsync/internal/gitexport"
+	"github.com/waynehoover/trewsync/internal/search"
 	"github.com/waynehoover/trewsync/internal/server"
 	"github.com/waynehoover/trewsync/internal/store"
 	"github.com/waynehoover/trewsync/internal/wire"
@@ -155,6 +158,26 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	return cmdServe(ctx, args, out)
 }
 
+// parseFlags parses a command's flags and refuses anything left over, for every
+// command that takes no arguments (T41).
+//
+// Go's flag package stops at the first argument that is not a flag and leaves
+// the rest unread, and most commands never looked at what was left: `trewd
+// verify -data big extra -deep` ran a shallow verify and exited 0, the -deep
+// after the stray word never seen, and the same dropped unpack's -record, the
+// one check of an archive's origin, purge's -grace and serve's -max-file, -url
+// and -mcp. A command told something it cannot use does nothing, and says so.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("%s takes no arguments, and was given %q; every flag after the first of them would "+
+			"have been ignored, so nothing was done", fs.Name(), fs.Args())
+	}
+	return nil
+}
+
 // dataFlags are shared by every subcommand, because every one of them opens the
 // same store and opening a second copy of it is how two processes disagree
 // about what is stored.
@@ -206,8 +229,9 @@ func openExisting(dataDir, verb string) (*store.Store, error) {
 //
 // Not every read-only-sounding command belongs here. `backup` reads the source
 // and issues `VACUUM INTO`, which is a statement SQLite refuses on a read-only
-// connection however harmless its effect on the source; `purge` writes by
-// definition. Both keep the writable path, and this comment is why.
+// connection however harmless its effect on the source, so it opens a
+// writable handle that does not migrate (store.Source, T37); `purge` writes by
+// definition and keeps the writable path. This comment is why.
 func openForInspection(dataDir, verb string) (*store.Store, error) {
 	if err := requireDataDir(dataDir, verb); err != nil {
 		return nil, err
@@ -331,7 +355,7 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	alertEvery := fs.Duration("alert-every", defaultAlertEvery,
 		"how often the server checks itself and logs an alert, with its remedy, when something needs attention; 0 turns it off")
 	flags := settingsFlags(fs)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	// The configuration file, with the flags over it (settings.go). A daily
@@ -429,6 +453,26 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	defer st.Close()
+	// Before anything reads the store (store.GoLive): WAL mode, which a
+	// restored store was never in (T26), and an epoch of its own for a
+	// backup's snapshot served for the first time, so two restores of one
+	// archive are two histories to every device (T27). A switch a long reader
+	// in another process held off is said, and the store is served anyway,
+	// correctly, only more slowly beside such a reader.
+	live, err := st.GoLive()
+	if err != nil {
+		return err
+	}
+	if live.JournalErr != nil {
+		log.Warn("the store could not be put in WAL mode, so a long backup or verify can hold up commits",
+			"mode", live.Journal, "err", live.JournalErr,
+			"hint", "restart the server when no backup or verify is running, and it switches")
+	}
+	if live.Renewed {
+		log.Warn("serving a restored backup for the first time, under an epoch of its own: every device reads "+
+			"it whole at its next connection and sends back what it lacks", "snapshotEpoch", live.Was,
+			"epoch", st.Epoch())
+	}
 
 	if ephemeral {
 		empty, err := storeIsEmpty(st)
@@ -566,7 +610,8 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	// The git export (internal/gitexport), for every serve: its worker idles
 	// while the export is off, reads only committed entries, and never holds
 	// the commit lock, so a device's write never waits on it. Stopped before
-	// the store, by the order of the defers, letting the git it runs finish.
+	// the store, by the order of the defers: the git it runs is told to stop
+	// with SIGTERM, which lets git remove its locks, not killed (T44).
 	export := startGitExport(*dataDir, st, *vault, settings, log)
 	defer export.Close()
 	var agents *mcpEndpoint
@@ -903,7 +948,7 @@ func cmdVerify(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	dataDir := dataFlags(fs)
 	deep := fs.Bool("deep", false, "read every chunk and check it against its name")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
@@ -994,7 +1039,7 @@ func cmdPurge(args []string, out io.Writer) error {
 	// space. They would see everything spared and have no way to say otherwise.
 	grace := fs.Duration("grace", chunks.DefaultGrace,
 		"spare unreferenced bodies written within this long, in case a push was interrupted mid-upload")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *grace < 0 {
@@ -1234,7 +1279,7 @@ func backupCovers(
 	source *store.Store,
 ) (latest int64, release func(), err error) {
 	if err := store.RefuseSamePlace(dir, dataDir); err != nil {
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("%w; nothing was purged", err)
 	}
 	bkDB, bkChunks := store.DataDir(dir)
 	if _, err := os.Stat(bkDB); err != nil {
@@ -1438,7 +1483,7 @@ func cmdBackup(args []string, out io.Writer) error {
 	fs.Var(&recipientsFiles, "recipients-file", "a file of age recipients, one per line, repeatable")
 	plaintextOK := fs.Bool("plaintext-ok", false,
 		"write a plaintext data directory: every note readable by whoever can read -to")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *to == "" {
@@ -1475,7 +1520,11 @@ func cmdBackup(args []string, out io.Writer) error {
 	}
 	defer lock.Release()
 
-	st, err := openExisting(*dataDir, "back up")
+	// Not migrated (T37): a server may be running on it, and `trewd update`
+	// leaves the older build running until it restarts. A store older than
+	// this build is refused, saying to restart the server.
+	dbPath, chunkDir := store.DataDir(*dataDir)
+	st, err := store.OpenMode(dbPath, chunkDir, store.Source, store.SyncFull)
 	if err != nil {
 		return err
 	}
@@ -1516,13 +1565,16 @@ func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writ
 		return err
 	}
 	if err := store.RefuseSamePlace(destDir, dataDir); err != nil {
-		return err
+		return fmt.Errorf("%w; nothing was backed up", err)
 	}
 	// A destination holding another product's database is refused before it
 	// is locked or written: a snapshot published beside a Basalt database
 	// would adopt its chunk tree, and a purge of the result would sweep every
 	// body in it.
 	if err := store.CheckBackupDestination(destDir); err != nil {
+		return err
+	}
+	if err := refuseLiveDestination(destDir); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
@@ -1542,12 +1594,19 @@ func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writ
 		fmt.Fprintln(out, rep)
 		return err
 	}
+	if err := carrySettings(dataDir, destDir); err != nil {
+		return err
+	}
 
 	fmt.Fprintf(out, "backed up to %s\n", rep.Dir)
 	fmt.Fprintf(out, "  %d vaults, %d chunk references, %d bodies copied (%s)\n",
 		rep.Vaults, rep.Refs, rep.Copied, humanBytes(rep.Bytes))
 	fmt.Fprintf(out, "  %d bodies at source, %d in the backup\n", rep.SourceBodies, rep.DestBodies)
 	fmt.Fprintf(out, "  verified %d chunk references in the backup, all present\n", rep.Verified)
+	if rep.Healed > 0 {
+		fmt.Fprintf(out, "  %d bodies had rotted in the backup since an earlier run: each was set aside as quarantined "+
+			"and copied again from the source. Check the disk the backup is on\n", rep.Healed)
+	}
 	// Faults the copy has because the store it came from has them. They do not
 	// stop a backup, because no backup can mend them and refusing would leave
 	// the last good copy unrefreshed for ever, but they are the operator's to
@@ -1574,17 +1633,19 @@ func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writ
 		fmt.Fprintf(out, "  (%d source bodies are referenced by no entry and were not copied)\n",
 			rep.SourceBodies-rep.DestBodies)
 	case rep.DestBodies > rep.SourceBodies:
-		// The other direction, and it is the backup working: a purge dropped
-		// old versions at the source, and their bodies stay here.
-		fmt.Fprintf(out, "  (the backup holds %d bodies the source no longer has, which is history it kept)\n",
+		// The other direction: a purge dropped old versions at the source,
+		// and their bodies stay here. Said for what they are, and not as
+		// "history it kept" (docs review): the snapshot just published no
+		// longer records those versions, so this directory cannot give them
+		// back; a backup taken before the purge and kept apart can.
+		fmt.Fprintf(out, "  (the backup holds %d bodies the source no longer has, left from versions a purge took;\n"+
+			"  the snapshot here no longer records those versions, so it cannot give them back)\n",
 			rep.DestBodies-rep.SourceBodies)
 	}
 	if rep.Retained > 0 {
-		// The backup holds history the newest snapshot no longer references,
-		// because the source purged it. This is a backup doing its job, not a
-		// discrepancy, so it is named rather than left to look like one.
-		fmt.Fprintf(out, "  (%d bodies are retained history the source has since purged)\n",
-			rep.Retained)
+		// Bodies the newest snapshot no longer references, because the source
+		// purged their versions: named, so they do not look like a fault.
+		fmt.Fprintf(out, "  (%d bodies are left from versions the source has since purged)\n", rep.Retained)
 	}
 
 	// Which devices may connect is in the database, so a restore needs no
@@ -1625,8 +1686,80 @@ func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writ
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "This backup holds every note in the clear, as the server does. Keep it")
 	fmt.Fprintln(out, "somewhere only you can read, as you would the notes themselves.")
-	fmt.Fprintf(out, "\nTo restore: point the server at it, or copy it back.\n")
+	// Copy, never serve it where it is (T35): a backup directory a server has
+	// used is a live store, and the next backup into it is refused rather than
+	// let replace what that server wrote.
+	fmt.Fprintf(out, "\nTo restore: stop the server and copy this directory into a new data directory\n"+
+		"(docs/server-operations.md, \"Restore\"); serve the copy, never the backup itself.\n")
 	fmt.Fprintf(out, "  trewd verify -deep -data %s\n", rep.Dir)
+	return nil
+}
+
+// carrySettings makes the configuration file in the backup at destDir the one
+// in dataDir, or removes it there when dataDir has none, so a restore comes
+// back with the settings the server ran with and not ones it has since
+// dropped (T38).
+//
+// A backup used to hold the database, the bodies and backup.json and nothing
+// of trewd.json, so the documented restore came up with the Git export off and
+// the daily-note settings at their defaults: the off-site history stopped
+// without a word, and today_note wrote to the vault's root. The file holds
+// paths and choices and never a secret (the export's credential is named by
+// its path), and is copied as it stands, written whole at 0600 and read back.
+func carrySettings(dataDir, destDir string) error {
+	b, err := os.ReadFile(config.Path(dataDir))
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(config.Path(destDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing settings the source no longer has from the backup: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading the settings to back up: %w", err)
+	}
+	if err := writeSecretFile(config.Path(destDir), string(b)); err != nil {
+		return fmt.Errorf("writing the settings into the backup: %w", err)
+	}
+	return nil
+}
+
+// liveMarks are files only a store's own server leaves in its data directory:
+// its record of its starts, its lock, its socket, its search index, its first
+// device's invite and its Git export. Nothing serves a backup directory, so
+// none of them is ever in one. trewd.json is not among them, because a
+// backup carries it (T38).
+var liveMarks = []string{doctor.RuntimeRecordFile, dirlock.Server, control.SocketName, search.FileName,
+	firstInviteFile, gitexport.Dir}
+
+// refuseLiveDestination refuses a plaintext backup destination a server has
+// used (T35).
+//
+// A backup publishes its snapshot over whatever database the destination
+// holds, and everything else in front of that let a stopped server's own data
+// directory through: it holds a trewd database, nothing holds its locks, and a
+// clean stop leaves no write-ahead log. So the nightly job, unchanged, after
+// somebody restored by serving the backup directory itself as the backup's
+// own advice then said, replaced the live store's database with a snapshot of
+// the abandoned one the next time the server was down, and a mistyped -to
+// between two data directories did the same at once. Reproduced: the other
+// store's note was gone and `cat` said the vault had never held it.
+//
+// Checked whether or not a database is there, since a live directory that has
+// lost its database is one to keep exactly as it is, not one to back up into.
+func refuseLiveDestination(destDir string) error {
+	for _, name := range liveMarks {
+		_, err := os.Lstat(filepath.Join(destDir, name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%s is a live data directory, not a backup: a server has used it (%s is there). "+
+			"A backup replaces the database in its destination, so backing up into it would replace that "+
+			"store's notes with these. Choose another directory for the backup; nothing was written",
+			destDir, name)
+	}
 	return nil
 }
 

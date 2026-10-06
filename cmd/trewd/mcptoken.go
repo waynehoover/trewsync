@@ -34,11 +34,8 @@ func cmdMCPToken(args []string, out io.Writer) error {
 	list := fs.Bool("list", false, "list the vault's tokens instead of minting one")
 	revoke := fs.String("revoke", "", "revoke the token with this id instead of minting one")
 	asJSON := fs.Bool("json", false, "with -list, print the list as JSON")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("mcp-token takes no arguments, and was given %q", fs.Args())
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })

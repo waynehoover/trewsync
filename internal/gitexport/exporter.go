@@ -48,6 +48,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/waynehoover/trewsync/internal/fsync"
@@ -171,7 +172,9 @@ func (x *Exporter) Start() {
 }
 
 // Close stops the worker, waiting for the step it is in: a git process it
-// runs is let finish or run out its own deadline.
+// runs is told to stop with SIGTERM, which git answers by removing the locks
+// it holds, and killed only if it has not ended ten seconds later
+// (stopGently, T44). A step stopped part way is done again at the next start.
 func (x *Exporter) Close() error {
 	started := x.sub.C != nil
 	x.once.Do(func() { close(x.stop) })
@@ -676,6 +679,11 @@ type importer struct {
 	tree    map[string]blobRef
 	lfs     int // how many tree entries are LFS pointers
 	oids    []lfsObject
+	// known are the blobs this stream has written or named, by content, and
+	// fresh the ones it wrote, for the blobs table once it has finished
+	// (blobs.go).
+	known map[string]knownBlob
+	fresh []knownBlob
 }
 
 // write runs fast-import over what fill writes, from parent, and returns the
@@ -697,7 +705,7 @@ func (x *Exporter) write(ctx context.Context, r *runner, s Settings, parent, ado
 	cmd.Env, cmd.Dir = r.env(), r.home
 	stderr := &limited{max: stderrLimit}
 	cmd.Stdout, cmd.Stderr = io.Discard, stderr
-	cmd.WaitDelay = 10 * time.Second
+	stopGently(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return "", nil, err
@@ -725,14 +733,21 @@ func (x *Exporter) write(ctx context.Context, r *runner, s Settings, parent, ado
 	}
 	cerr := stdin.Close()
 	if err != nil {
-		// fast-import is told nothing more and killed: what it wrote is
-		// objects no ref names, which the next step writes again.
-		_ = cmd.Process.Kill()
+		// fast-import is told nothing more and told to stop, as every git
+		// call is (stopGently, T44): what it wrote is objects no ref names,
+		// which the next step writes again.
+		_ = cmd.Process.Signal(syscall.SIGTERM)
 		_ = cmd.Wait()
 		return "", nil, err
 	}
 	if werr := cmd.Wait(); werr != nil || cerr != nil {
+		x.forgetBlobs()
 		return "", nil, &gitError{args: "fast-import", err: errors.Join(werr, cerr), stderr: r.redact(stderr.String())}
+	}
+	// What it wrote is in the repository now, named whatever happens to the
+	// branch, so later streams name it rather than write it again.
+	if err := x.rememberBlobs(w.fresh); err != nil {
+		return "", nil, err
 	}
 	if w.commits == 0 {
 		x.tree, x.treeOf = tree, parent
@@ -841,10 +856,12 @@ func finals(entries []store.Entry) ([]string, map[string]final) {
 	return order, out
 }
 
-// modify is one file line of a commit.
+// modify is one file line of a commit: the blob by its mark in this stream,
+// or by its sha when an earlier stream wrote it (mark 0).
 type modify struct {
 	path string
 	mark int
+	sha  string
 }
 
 // group writes one group's blobs and, if its tree differs from its parent's,
@@ -895,7 +912,7 @@ func (w *importer) group(g *group) error {
 		if old.lfs != ref.lfs {
 			lfsChanged = true
 		}
-		mods = append(mods, modify{p, mark})
+		mods = append(mods, modify{p, mark, ref.sha})
 		changes = append(changes, change{kind, p})
 		w.tree[p] = ref
 	}
@@ -918,8 +935,20 @@ func (w *importer) continues() bool { return w.commits == 0 && w.parent == "" &&
 
 // blob writes e's bytes as a blob, or as an LFS pointer with the object
 // stored beside the repository, and returns its name and its mark.
+//
+// Bytes the repository already holds are not read again: the blob is named by
+// its sha, mark 0, or by its mark when this stream wrote it (blobs.go).
 func (w *importer) blob(e store.Entry) (blobRef, int, error) {
-	if w.s.LFSThreshold > 0 && e.Size > w.s.LFSThreshold {
+	lfs := w.s.LFSThreshold > 0 && e.Size > w.s.LFSThreshold
+	if k, ok, err := w.knownFor(e, lfs); err != nil {
+		return blobRef{}, 0, err
+	} else if ok {
+		if lfs {
+			w.oids = append(w.oids, lfsObject{k.oid, e.Size})
+		}
+		return k.ref, k.mark, nil
+	}
+	if lfs {
 		oid, err := w.x.storeLFS(e)
 		if err != nil {
 			return blobRef{}, 0, err
@@ -930,7 +959,9 @@ func (w *importer) blob(e store.Entry) (blobRef, int, error) {
 		fmt.Fprintf(w.w, "blob\nmark :%d\ndata %d\n", w.mark, len(ptr))
 		w.w.Write(ptr)
 		w.w.WriteByte('\n')
-		return blobRef{sha: gitBlobName(ptr), lfs: true}, w.mark, nil
+		ref := blobRef{sha: gitBlobName(ptr), lfs: true}
+		w.wrote(e, ref, oid, w.mark)
+		return ref, w.mark, nil
 	}
 	w.mark++
 	fmt.Fprintf(w.w, "blob\nmark :%d\ndata %d\n", w.mark, e.Size)
@@ -944,7 +975,9 @@ func (w *importer) blob(e store.Entry) (blobRef, int, error) {
 		return blobRef{}, 0, fmt.Errorf("uid %d assembles to %d bytes and declares %d", e.UID, n, e.Size)
 	}
 	w.w.WriteByte('\n')
-	return blobRef{sha: hex.EncodeToString(h.Sum(nil))}, w.mark, nil
+	ref := blobRef{sha: hex.EncodeToString(h.Sum(nil))}
+	w.wrote(e, ref, "", w.mark)
+	return ref, w.mark, nil
 }
 
 // commit writes one commit on the scratch ref. writeAttrs says the
@@ -967,6 +1000,10 @@ func (w *importer) commit(author string, atMillis int64, msg string, dels []stri
 		fmt.Fprintf(w.w, "D %s\n", cQuote(p))
 	}
 	for _, m := range mods {
+		if m.mark == 0 {
+			fmt.Fprintf(w.w, "M 100644 %s %s\n", m.sha, cQuote(m.path))
+			continue
+		}
 		fmt.Fprintf(w.w, "M 100644 :%d %s\n", m.mark, cQuote(m.path))
 	}
 	if writeAttrs {
@@ -1019,7 +1056,7 @@ func (w *importer) restore(head int64, from, to string, now int64) error {
 			w.lfs++
 		}
 		w.tree[e.Path] = ref
-		mods = append(mods, modify{e.Path, mark})
+		mods = append(mods, modify{e.Path, mark, ref.sha})
 		return true, nil
 	})
 	if err != nil {

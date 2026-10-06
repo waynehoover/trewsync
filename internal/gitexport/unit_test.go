@@ -204,11 +204,13 @@ func TestThePlan(t *testing.T) {
 		t.Fatalf("untimed versions grouped as %d groups", len(q.closed))
 	}
 
-	// A run whose window has not passed stays open, and says when it closes.
+	// A run whose window has not passed stays open, and says when it closes:
+	// its window and the margin for a write in flight after it (T47), and
+	// not before.
 	o := &planner{quiet: 5 * time.Minute}
 	o.add(e(1, "Laptop", "a"), 1*min, true, nil)
-	o.finish(3 * min)
-	if len(o.closed) != 0 || o.openUntil() != 6*min {
+	o.finish(6*min + inFlight.Milliseconds() - 1)
+	if len(o.closed) != 0 || o.openUntil() != 6*min+inFlight.Milliseconds() {
 		t.Fatalf("an open run closed early, or closes at %d", o.openUntil())
 	}
 }
@@ -267,6 +269,49 @@ func TestSSHIsRunWithOnlyTheKeyAndTheKnownHosts(t *testing.T) {
 	}
 	if strings.Contains(got, "SSH_AUTH_SOCK") {
 		t.Error("ssh was given the agent's socket")
+	}
+}
+
+// T44. Every git call runs under a context the export cancels when it
+// stops, and exec.CommandContext answers a cancel with SIGKILL, which gives
+// git no chance to remove the lock files it holds while it writes: a config,
+// a symbolic-ref or an update-ref killed mid-write leaves a .lock that stops
+// the export until somebody deletes it by hand. The comments said the
+// export let git finish. git is now told to stop with SIGTERM, which it
+// answers by removing its locks, and killed only if it has not ended soon
+// after. The stand-in git here records the signal it was given.
+func TestStoppingTheExportLetsGitCleanUp(t *testing.T) {
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "mark")
+	script := "#!/bin/sh\ntrap 'echo term > \"" + mark + ".term\"; exit 143' TERM\n" +
+		"echo started > \"" + mark + ".started\"\nwhile :; do sleep 0.05; done\n"
+	git := filepath.Join(dir, "git")
+	if err := os.WriteFile(git, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r := &runner{git: git, gitDir: filepath.Join(dir, "repo.git"), home: dir}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.run(ctx, time.Minute, nil, "config", "remote.trew.url", "git@example.test:o/r.git")
+		done <- err
+	}()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(mark + ".started"); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the stand-in git never started")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("git was not stopped")
+	}
+	if _, err := os.Stat(mark + ".term"); err != nil {
+		t.Fatalf("git was killed rather than told to stop, so a lock it held would be left: %v", err)
 	}
 }
 

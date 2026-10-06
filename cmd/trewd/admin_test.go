@@ -187,6 +187,34 @@ func TestAnInviteWrittenToAFileIsPrivateAndUnprinted(t *testing.T) {
 	}
 }
 
+// T48. An invite is live from the moment the server mints it, and one whose
+// -out file could not be written was left outstanding, for an hour or, with
+// -ttl 0, for ever: a credential that adds a device, held by nobody, until
+// somebody read the device list. It is cancelled now, as mcp-token revokes a
+// token whose key file failed, and the error says so.
+func TestAnInviteWhoseFileCannotBeWrittenIsCancelled(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, where a directory of mode 500 stops nothing")
+	}
+	dir, _, _ := serving(t)
+	readOnly := filepath.Join(t.TempDir(), "invites")
+	if err := os.Mkdir(readOnly, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) })
+
+	_, err := trew(t, "invite", "-data", dir, "-ttl", "0", "-out", filepath.Join(readOnly, "invite"))
+	if err == nil {
+		t.Fatal("writing an invite into a read-only directory succeeded")
+	}
+	if !strings.Contains(err.Error(), "was cancelled") {
+		t.Fatalf("the error does not say the invite was cancelled: %v", err)
+	}
+	if _, invites := devicesJSON(t, dir); len(invites) != 0 {
+		t.Fatalf("an invite whose file could not be written is still outstanding: %+v", invites)
+	}
+}
+
 // With no server, the same commands act on the store, under the server lock
 // that keeps one from starting underneath. This is the way back into a vault
 // whose devices are all gone: history is kept, an invite is minted, a new

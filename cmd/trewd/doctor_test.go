@@ -357,6 +357,62 @@ func TestDoctorReportsEveryInjectedFault(t *testing.T) {
 	}
 }
 
+// T43. A server killed outright leaves its lock's record, "serve pid N",
+// and doctor took the process at that pid being alive for the server being
+// alive. In a container trewd is pid 1, so `docker compose run ... doctor`
+// after an unclean stop found itself at pid 1 and reported a hung server, a
+// Fail, for a server that was not running at all. The lock itself is asked
+// now: nothing holds it, so nothing is serving.
+func TestDoctorAsksTheLockAndNotAReusedPid(t *testing.T) {
+	dir := healthy(t)
+	// The record of a server killed outright, naming a pid that is alive:
+	// this one's, as pid 1 is the container's own.
+	if err := os.WriteFile(filepath.Join(dir, dirlock.Server), []byte(fmt.Sprintf("serve pid %d\n", os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep, failed := doctorOn(t, dir)
+	expect(t, rep, doctor.CheckServer, doctor.Note, "no server is running")
+	if failed {
+		t.Fatalf("doctor failed a directory no server holds: %+v", rep.Findings)
+	}
+}
+
+// The server's own alerts run doctor in quick mode every five minutes, which
+// now lists the chunk tree without a stat of every body and samples by row
+// rather than reading every reference (performance, ops review). What the
+// alerts are for still holds: a corrupt body in the sample fails, and a
+// quarantined body warns. The seeded store has fewer references than the
+// sample, so every one is read.
+func TestQuickDoctorStillFindsWhatTheAlertsAreFor(t *testing.T) {
+	quick := func(dir string) doctor.Finding {
+		rep := doctor.Run(context.Background(), doctor.Options{DataDir: dir, Quick: true, Sample: alertSample,
+			Storage: doctorStorage, Space: doctorSpace})
+		for _, f := range rep.Findings {
+			if f.Check == doctor.CheckChunks {
+				return f
+			}
+		}
+		t.Fatalf("quick doctor reported nothing for chunks: %+v", rep.Findings)
+		return doctor.Finding{}
+	}
+	sound := healthy(t)
+	if f := quick(sound); f.Status != doctor.OK || !strings.Contains(f.Summary, "chosen at random") {
+		t.Fatalf("a sound store: %s %s", f.Status, f.Summary)
+	}
+	rotten := healthy(t)
+	corruptOneBody(t, rotten)
+	if f := quick(rotten); f.Status != doctor.Fail || !strings.Contains(f.Summary, "1 corrupt") {
+		t.Fatalf("a corrupt body: %s %s", f.Status, f.Summary)
+	}
+	quarantined := healthy(t)
+	if err := os.WriteFile(bodyPaths(t, quarantined)[0]+".extra.corrupt", []byte("what failed its hash"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if f := quick(quarantined); f.Status != doctor.Warn || !strings.Contains(f.Summary, "quarantined") {
+		t.Fatalf("a quarantined body: %s %s", f.Status, f.Summary)
+	}
+}
+
 // swap replaces a seam for the length of a test.
 func swap[T any](t *testing.T, seam *T, with T) {
 	t.Helper()

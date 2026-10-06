@@ -1314,7 +1314,17 @@ type Footprint struct {
 }
 
 // Measure walks the chunk tree and counts it. It changes nothing.
-func (s *Store) Measure() (Footprint, error) {
+func (s *Store) Measure() (Footprint, error) { return s.measure(true) }
+
+// Tally is Measure without the bytes of the bodies, for a check that runs
+// every few minutes (doctor's quick mode, which the server's alerts run): a
+// listing of each directory, and a stat of only the quarantined and unfinished
+// files, the few it reports with their bytes. Measured over a hundred thousand
+// bodies at 80 ms against Measure's 280 ms, which stats every one. Bytes is
+// zero.
+func (s *Store) Tally() (Footprint, error) { return s.measure(false) }
+
+func (s *Store) measure(bodyBytes bool) (Footprint, error) {
 	var f Footprint
 	err := filepath.WalkDir(s.dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -1323,20 +1333,26 @@ func (s *Store) Measure() (Footprint, error) {
 		if d.IsDir() {
 			return nil
 		}
-		info, err := d.Info()
-		if err != nil {
-			return err
+		name := d.Name()
+		temp, quarantined := strings.HasPrefix(name, tmpPrefix), strings.HasSuffix(name, corruptSuffix)
+		var size int64
+		if bodyBytes || temp || quarantined {
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			size = info.Size()
 		}
-		switch name := d.Name(); {
-		case strings.HasPrefix(name, tmpPrefix):
+		switch {
+		case temp:
 			f.Temp++
-			f.TempBytes += info.Size()
-		case strings.HasSuffix(name, corruptSuffix):
+			f.TempBytes += size
+		case quarantined:
 			f.Quarantined++
-			f.QuarantinedBytes += info.Size()
+			f.QuarantinedBytes += size
 		default:
 			f.Bodies++
-			f.Bytes += info.Size()
+			f.Bytes += size
 		}
 		return nil
 	})

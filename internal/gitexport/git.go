@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -254,9 +255,7 @@ func (r *runner) run(ctx context.Context, timeout time.Duration, stdin io.Reader
 	var stdout bytes.Buffer
 	stderr := &limited{max: stderrLimit}
 	cmd.Stdout, cmd.Stderr = &stdout, stderr
-	// ssh can outlive git holding the pipes; give up on it a little after
-	// git is gone.
-	cmd.WaitDelay = 10 * time.Second
+	stopGently(cmd)
 	err := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
 		return stdout.Bytes(), fmt.Errorf("git %s: %w after %s", verb(args), errTimeout, timeout)
@@ -265,6 +264,22 @@ func (r *runner) run(ctx context.Context, timeout time.Duration, stdin io.Reader
 		return stdout.Bytes(), &gitError{args: verb(args), err: err, stderr: r.redact(stderr.String())}
 	}
 	return stdout.Bytes(), nil
+}
+
+// stopGently has cmd told to stop with SIGTERM when its context ends, and
+// killed only if it has not ended ten seconds later, which also gives up on an
+// ssh that outlives git holding the pipes (T44).
+//
+// exec.CommandContext kills by default, and every git call runs under the
+// context the export cancels when the server stops, so a stop killed whatever
+// git was doing. git removes the lock files it holds while it writes when it
+// is sent SIGTERM, and a kill leaves them: a config, a symbolic-ref or an
+// update-ref killed mid-write left a .lock that stopped the export until
+// somebody deleted it by hand, while the comments said the export let git
+// finish.
+func stopGently(cmd *exec.Cmd) {
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 10 * time.Second
 }
 
 // gitError is a git call that failed.

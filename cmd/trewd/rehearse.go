@@ -15,7 +15,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -53,7 +56,7 @@ func cmdRehearse(ctx context.Context, args []string, out io.Writer) error {
 	work := fs.String("work", "", "where to restore it (default: a new directory inside the data directory, removed after)")
 	keep := fs.Bool("keep", false, "leave the restored directory in place afterwards")
 	other := fs.Bool("not-last-backup", false, "rehearse an archive that is not the last backup the data directory recorded, with a warning")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *backup == "" {
@@ -71,6 +74,19 @@ func cmdRehearse(ctx context.Context, args []string, out io.Writer) error {
 	if err := requireDataDir(live, "rehearse a restore of"); err != nil {
 		return err
 	}
+	// A signal stops the rehearsal at its next step and lets it take its
+	// plaintext copy away (T39). No command but serve handled one, so a
+	// SIGTERM or a Ctrl-C after the copy ended the process there, past the
+	// deferred remove, and left a whole backup in the clear in the data
+	// directory, where no purge reaches it. A second signal ends it at once,
+	// as one always did; the next rehearsal sweeps what that leaves.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	sweepRehearsals(live, out)
 	// An archive is compared with the backup this data directory recorded
 	// before anything is decrypted: anyone holding the recipient can make one
 	// the identity opens, and a rehearsal that passes on it proves nothing
@@ -78,7 +94,7 @@ func cmdRehearse(ctx context.Context, args []string, out io.Writer) error {
 	// wrong archive named by mistake does not record a failed rehearsal.
 	var origin archiveOrigin
 	if encrypted {
-		if origin, err = checkArchiveOrigin(*backup, live, *other, out); err != nil {
+		if origin, err = checkArchiveOrigin(*backup, live, false, *other, out); err != nil {
 			return err
 		}
 	}
@@ -97,12 +113,30 @@ func cmdRehearse(ctx context.Context, args []string, out io.Writer) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	// Held for as long as the rehearsal runs, and let go of only by one that
+	// ends: a work directory whose lock still names a rehearsal and that
+	// nothing holds was left by one that was killed (sweepRehearsals).
+	lock, err := dirlock.Exclusive(dir, dirlock.Data, rehearsalRole)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
 	if !*keep {
 		defer os.RemoveAll(dir)
 	}
 
 	r := rehearsal{out: out, live: live, vault: *vault, dir: filepath.Join(dir, "restore"), origin: origin}
 	rec, err := r.run(ctx, *backup, encrypted, *identity)
+	if ctx.Err() != nil {
+		// Stopped, not failed: it proved nothing either way, so the record of
+		// the last one that finished stands.
+		what := "its work directory was removed"
+		if *keep {
+			what = "its work directory is at " + dir
+		}
+		fmt.Fprintf(out, "\nthe rehearsal was interrupted, and %s; nothing was recorded\n", what)
+		return fmt.Errorf("the rehearsal was interrupted: %w", ctx.Err())
+	}
 	rec.Backup, rec.At, rec.OK = *backup, time.Now().UnixMilli(), err == nil
 	var prev doctor.RehearsalRecord
 	_, _ = doctor.ReadRecord(live, doctor.RehearsalRecordFile, &prev)
@@ -124,6 +158,47 @@ func cmdRehearse(ctx context.Context, args []string, out io.Writer) error {
 	return nil
 }
 
+// rehearsalRole is what a rehearsal's lock on its work directory names it.
+const rehearsalRole = "rehearse"
+
+// sweepRehearsals removes what rehearsals that were killed left in the live
+// data directory: each one's work directory, a whole backup in plaintext,
+// which no purge reaches (T39).
+//
+// One is known by the lock its rehearsal took on it and never let go of,
+// whose record still names a rehearsal, and which nothing holds now. A work
+// directory kept with -keep let its lock go, so its record is empty and it is
+// left alone, as is one a rehearsal running now still holds, and anything not
+// a directory of that name. Never fails the rehearsal: what it cannot remove
+// it says, and doctor names every copy in the data directory.
+func sweepRehearsals(live string, out io.Writer) {
+	found, err := filepath.Glob(filepath.Join(live, "rehearsal-*"))
+	if err != nil {
+		return
+	}
+	for _, d := range found {
+		if info, err := os.Lstat(d); err != nil || !info.IsDir() {
+			continue
+		}
+		role, _, _ := strings.Cut(dirlock.Holder(d, dirlock.Data), " ")
+		if role != rehearsalRole {
+			continue
+		}
+		held, err := dirlock.Exclusive(d, dirlock.Data, "sweep")
+		if err != nil {
+			continue
+		}
+		err = os.RemoveAll(d)
+		held.Release()
+		if err != nil {
+			fmt.Fprintf(out, "WARNING: a rehearsal that was killed left %s, a plaintext copy of a backup, and it "+
+				"could not be removed: %v\n", d, err)
+			continue
+		}
+		fmt.Fprintf(out, "removed %s, which a rehearsal that was killed left behind: a plaintext copy of a backup\n", d)
+	}
+}
+
 // rehearsal is one rehearsal in progress.
 type rehearsal struct {
 	out   io.Writer
@@ -140,6 +215,16 @@ func (r *rehearsal) step(format string, args ...any) {
 	fmt.Fprintf(r.out, "%8.1fs  %s\n", time.Since(r.start).Seconds(), fmt.Sprintf(format, args...))
 }
 
+// checkpoint is where a rehearsal told to stop does so, between its steps.
+func (r *rehearsal) checkpoint(ctx context.Context) error {
+	duringRehearsal(ctx)
+	return ctx.Err()
+}
+
+// duringRehearsal runs at each checkpoint, and does nothing outside the test
+// that stops a rehearsal there with a real signal (T39).
+var duringRehearsal = func(context.Context) {}
+
 func (r *rehearsal) run(ctx context.Context, backup string, encrypted bool, identity string) (doctor.RehearsalRecord, error) {
 	var rec doctor.RehearsalRecord
 	r.start = time.Now()
@@ -147,7 +232,7 @@ func (r *rehearsal) run(ctx context.Context, backup string, encrypted bool, iden
 
 	// 1. The copy.
 	if encrypted {
-		rep, err := unpackArchive(backup, identity, r.dir)
+		rep, err := unpackArchive(ctx, backup, identity, r.dir)
 		if err != nil {
 			return rec, err
 		}
@@ -160,11 +245,25 @@ func (r *rehearsal) run(ctx context.Context, backup string, encrypted bool, iden
 		if err := store.CheckDataDir(backup); err != nil {
 			return rec, fmt.Errorf("the backup at %s: %w", backup, err)
 		}
-		n, err := copyDataDir(backup, r.dir)
+		n, err := copyDataDir(ctx, backup, r.dir)
 		if err != nil {
 			return rec, fmt.Errorf("copying the backup: %w", err)
 		}
 		r.step("copied %d files of the plaintext backup", n)
+	}
+	if err := r.checkpoint(ctx); err != nil {
+		return rec, err
+	}
+
+	// What the backup says it holds, read before anything opens the copy's
+	// database: backup.json describes that file byte for byte, and bringing a
+	// copy an older build made up to this build's schema, next, changes it.
+	meta, err := store.ReadBackupMeta(r.dir)
+	if err != nil {
+		return rec, err
+	}
+	if err := upgradeCopy(r.dir); err != nil {
+		return rec, err
 	}
 
 	// 2. Checked against itself, deeply.
@@ -186,6 +285,9 @@ func (r *rehearsal) run(ctx context.Context, backup string, encrypted bool, iden
 	}
 	r.step("verified deeply: %d entries, %d chunk references, %d registry rows and %d agent operations, no faults",
 		v.Entries, v.Chunks, v.Rows, v.Operations)
+	if err := r.checkpoint(ctx); err != nil {
+		return rec, err
+	}
 
 	st, err := store.Open(dbPath, chunkDir)
 	if err != nil {
@@ -193,10 +295,6 @@ func (r *rehearsal) run(ctx context.Context, backup string, encrypted bool, iden
 	}
 	defer st.Close()
 	stats, err := st.Stats(r.vault)
-	if err != nil {
-		return rec, err
-	}
-	meta, err := store.ReadBackupMeta(r.dir)
 	if err != nil {
 		return rec, err
 	}
@@ -231,6 +329,9 @@ func (r *rehearsal) run(ctx context.Context, backup string, encrypted bool, iden
 		return rec, err
 	} else if n > 0 {
 		r.step("every one of the live store's %d versions up to uid %d is in the restore, identical", n, stats.LatestUID)
+	}
+	if err := r.checkpoint(ctx); err != nil {
+		return rec, err
 	}
 
 	// 4. Served, and read back by a device paired from a new invite.
@@ -401,7 +502,7 @@ func (r *rehearsal) rebuildIndex(ctx context.Context, st *store.Store, latest in
 // copyDataDir copies the database, backup.json and the chunk tree of a
 // plaintext backup into a new directory, and nothing else: no lock files, no
 // socket, no staging debris.
-func copyDataDir(from, to string) (int, error) {
+func copyDataDir(ctx context.Context, from, to string) (int, error) {
 	if err := os.MkdirAll(to, 0o700); err != nil {
 		return 0, err
 	}
@@ -434,6 +535,10 @@ func copyDataDir(from, to string) (int, error) {
 	}
 	err := filepath.WalkDir(chunkDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
+			return err
+		}
+		// Told to stop, it stops between bodies (T39).
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		rel, err := filepath.Rel(from, p)

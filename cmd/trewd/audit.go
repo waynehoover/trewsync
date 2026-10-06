@@ -35,11 +35,8 @@ func cmdAudit(args []string, out io.Writer) error {
 	sinceFlag := fs.String("since", "",
 		"only operations committed since then: a duration back from now (24h, 7d) or a time (2026-09-23, RFC 3339); default all of them")
 	asJSON := fs.Bool("json", false, "print the operations as JSON")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("audit takes no arguments, and was given %q", fs.Args())
 	}
 	since, err := parseSince(*sinceFlag, time.Now())
 	if err != nil {

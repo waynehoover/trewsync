@@ -1392,8 +1392,12 @@ func TestBackupNeverPrintsANegativeBodyCount(t *testing.T) {
 	if strings.Contains(out, "(-") {
 		t.Fatalf("backup printed a negative body count:\n%s", out)
 	}
-	if !strings.Contains(out, "history it kept") {
-		t.Fatalf("backup does not say why it holds more bodies than the source:\n%s", out)
+	// And says what they are: bodies of purged versions, which the snapshot
+	// it just published no longer records. It used to call them "history it
+	// kept", which they are not once the database beside them has moved on.
+	if !strings.Contains(out, "left from versions a purge took") || !strings.Contains(out, "cannot give them back") ||
+		strings.Contains(out, "history it kept") {
+		t.Fatalf("backup does not say why it holds more bodies than the source, and what they are:\n%s", out)
 	}
 	if strings.Contains(out, "were not copied") {
 		t.Fatalf("backup says bodies were not copied when it holds more than the source:\n%s", out)

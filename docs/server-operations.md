@@ -40,6 +40,11 @@ A backup carries the devices and no outstanding invite: restoring an old copy
 must not bring back an invite that has since been used or cancelled, so
 `backup` says how many it left out.
 
+After `trewd update`, restart the server before the next backup. A backup
+never upgrades the store it copies: it refuses a store an older build wrote,
+since the server still running that build would then meet a store it no
+longer reads, and says to restart the server, which upgrades it.
+
 If a plaintext destination has unfinished SQLite recovery from an earlier
 server run, backup refuses to replace it. Keep that directory intact and choose
 a fresh backup directory; do not remove its journal files to bypass the
@@ -50,7 +55,7 @@ For Compose:
 ```bash
 sudo install -d -m 700 -o 65532 -g 65532 /srv/trew-backups
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup -v /etc/trew:/keys:ro \
-  trewd backup -to /backup/trew.tar.age -recipients-file /keys/backup-key.pub
+  trew backup -to /backup/trew.tar.age -recipients-file /keys/backup-key.pub
 ```
 
 The destination must be outside the data directory; TrewSync refuses nested
@@ -80,7 +85,10 @@ trewd backup -data /var/lib/trew -to /srv/trew-backups/trew.tar.age \
 
 Configure the remote path and credentials for the account running the job.
 Prevent overlapping jobs, and do not modify the backup while it is being
-transferred. Use `-deep` periodically to check existing content for corruption.
+transferred. Use `-deep` periodically to check existing content for corruption:
+a deep backup replaces a body that has rotted in the backup since an earlier
+run with the source's copy, keeps the rotted one aside as quarantined, and
+says so. A shallow backup does not read what the backup already holds.
 Do not copy the live database with ordinary file-copy tools.
 
 Keep dated or otherwise separate backup generations when you need older
@@ -123,8 +131,10 @@ rebuilds the search index, and prints how long it all took and how old the
 backup is. Before it decrypts anything it compares the archive's SHA-256 with
 the last backup the data directory recorded, and refuses any other archive
 unless `-not-last-backup` says it is meant to be another (an older backup,
-say), which it then warns about. The work directory is removed afterwards; the
-backup is never touched. The result is recorded for `trewd doctor`, which warns when no
+say), which it then warns about. The work directory is removed afterwards, by
+a rehearsal stopped with Ctrl-C or SIGTERM too, which records nothing; one a
+rehearsal killed outright leaves is removed by the next. The backup is never
+touched. The result is recorded for `trewd doctor`, which warns when no
 rehearsal has passed in 90 days.
 
 [Operating TrewSync](operations.md#rehearse-a-restore) has the steps to do it
@@ -142,13 +152,32 @@ installation:
 ```bash
 sudo systemctl stop trew
 sudo mv /var/lib/trew /var/lib/trew.before-restore
-sudo trewd unpack -from /srv/trew-backups/trew.tar.age -identity ~/trew-backup-key -to /var/lib/trew
+sudo trewd unpack -from /srv/trew-backups/trew.tar.age -identity ~/trew-backup-key -to /var/lib/trew \
+  -record /var/lib/trew.before-restore
+sudo cp -a /var/lib/trew.before-restore/git-export /var/lib/trew/   # with the Git export on
 sudo chown -R trew:trew /var/lib/trew
 sudo -u trew /usr/local/bin/trewd verify -deep -data /var/lib/trew
 ```
 
 From a plaintext backup directory, copy it into place instead of unpacking
-(`sudo rsync -a offsite:/backups/trew/ /var/lib/trew/`).
+(`sudo rsync -a offsite:/backups/trew/ /var/lib/trew/`). Never start the server
+on the backup directory itself: it would be a live store, and the next backup
+into it is refused.
+
+A backup carries the server's settings (`trewd.json`): the Git export's and
+the daily notes'. A copied plaintext backup brings them back as they were, and
+so does unpack when `-record` shows the archive is the recorded backup.
+Without that check, unpack sets them aside as `trewd.json.from-backup`, unused,
+because settings name where the Git export pushes every note: read them,
+the remote above all, and rename the file to `trewd.json` to use them.
+
+The [Git export](git-export.md)'s own repository is not in a backup. Copy
+`git-export/` across from the preserved directory, as above, before the first
+start, and the export adds one commit marked `Restore:` and goes on. Without
+it the export starts a new repository, and its first push is refused, since the
+remote's branch holds commits it did not make: copy it across then (with the
+server stopped, replacing the new one), or export to a new branch with `trewd
+git-export set -branch NAME`.
 
 **An archive that decrypts is not proof that this server wrote it.** The
 recipient is public by design and sits on the server, so anyone who can read
@@ -156,9 +185,10 @@ it can make an archive your identity opens, holding whatever notes they
 choose. Check the archive is the backup you took before restoring from it:
 pass `-record /var/lib/trew.before-restore` (the preserved directory, or a
 copy of its `last-backup.json`) and unpack refuses an archive whose digest is
-not the one recorded there, unless `-not-last-backup` is given. Without a
-record, unpack prints the archive's SHA-256: compare it with the one `trewd
-backup` printed, or with a copy of `last-backup.json` kept offsite.
+not the last good one recorded there, unless `-not-last-backup` is given, and
+refuses a `-record` that names no record. Without a record, unpack prints the
+archive's SHA-256: compare it with the one `trewd backup` printed, or with a
+copy of `last-backup.json` kept offsite.
 
 Use a new preservation path if `trew.before-restore` already exists. Run the
 commands one at a time and stop on an error. **Only after verification succeeds:**
@@ -172,8 +202,10 @@ verified backup into its data volume. Restore ownership to `65532:65532` and
 verify it with the same server image before starting. Do not restore over a
 running server or delete its volume as part of the procedure.
 
-A snapshot made by `trewd backup` has a store epoch of its own, so restoring
-one starts a new history as far as the devices are concerned. Each device
+A store restored from a `trewd backup` snapshot starts a store epoch of its
+own the first time it is served, every time a snapshot is restored, the same
+one twice included, so restoring one starts a new history as far as the
+devices are concerned. The server's log says so at that start. Each device
 notices at its next connection and, with nothing asked of anybody, reads the
 restored history as a fresh listing: files that match agree, files that differ
 are kept both ways as a conflict copy, files only that device holds are sent
@@ -185,8 +217,12 @@ mirror does not upload its local changes.
 
 A data directory copied back some other way, such as a filesystem snapshot or
 a copy of the live directory, keeps its old epoch with an older history. A
-device that has seen newer versions then stops with a `cursor` error. Preserve
-its local notes and take a backup of the server, then:
+device that has seen newer versions stops with a `cursor` error only while the
+copied-back store is behind its cursor: once other devices have written past
+that cursor, it is served from there without an error and never receives the
+versions in between. So pause sync on every device before starting a store
+copied back this way, and before any device writes to it, preserve each
+device's local notes, take a backup of the server, then:
 
 - In Obsidian, use **Rejoin this server** and confirm the positions shown.
 - In the CLI, run `trew unlink`, then pair again with a new invite.
@@ -247,7 +283,7 @@ its image and volume:
 sudo install -d -m 700 -o 65532 -g 65532 /srv/trew-backups
 docker compose stop trew
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
-  trewd backup -plaintext-ok -to /backup/before-purge
+  trew backup -plaintext-ok -to /backup/before-purge
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \
   trew verify -deep -data /backup/before-purge
 docker compose run --rm --no-deps -v /srv/trew-backups:/backup \

@@ -47,6 +47,17 @@ const RepoDir = "repo.git"
 // branch was adopted (adopt.go), and empty when the export made it from nothing.
 // Added after the first release of the table, so openState adds the column to
 // a database made before it.
+//
+// # blobs
+//
+// Every blob a fast-import the export ran has written, by the content it
+// holds: content names an entry's bytes by its size and chunk list (which
+// name its bytes, chunks being named by their SHA-256), lfs whether it went
+// in as an LFS pointer, sha the blob's name in the repository, and oid the
+// LFS object's. A version whose bytes the repository already holds, a rename
+// or a restore's unchanged notes, is named by sha rather than streamed again
+// (blobs.go). Derived like the rest, and emptied whenever a fast-import fails,
+// so a blob the repository lost is streamed again rather than named.
 const stateSchema = `
 CREATE TABLE IF NOT EXISTS branches (
   branch          TEXT    PRIMARY KEY,
@@ -80,6 +91,13 @@ CREATE TABLE IF NOT EXISTS remotes (
   last_error      TEXT    NOT NULL DEFAULT '',
   refused         TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (remote, branch)
+);
+CREATE TABLE IF NOT EXISTS blobs (
+  content TEXT    NOT NULL,
+  lfs     INTEGER NOT NULL,
+  sha     TEXT    NOT NULL,
+  oid     TEXT    NOT NULL DEFAULT '',
+  PRIMARY KEY (content, lfs)
 );
 `
 

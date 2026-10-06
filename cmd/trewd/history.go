@@ -16,6 +16,9 @@ import (
 // shell. Both read the store directly, read-only, under the shared data lock,
 // beside a live server, as `trewd cat` does.
 
+// historyPage is the most versions the store returns of a path at once.
+const historyPage = 500
+
 // cmdHistory lists a path's versions, newest first: each uid, what it is, who
 // wrote it, when by their clock, its size, and the agent operation that wrote
 // it when one did. `trewd cat -path P -uid N` prints any of them.
@@ -24,13 +27,20 @@ func cmdHistory(args []string, out io.Writer) error {
 	dataDir := dataFlags(fs)
 	vault := fs.String("vault", defaultVault, "the vault to read")
 	path := fs.String("path", "", "the note's path in the vault (required)")
-	limit := fs.Int("limit", 50, "the most versions to list, up to 500")
+	limit := fs.Int("limit", 50, fmt.Sprintf("the most versions to list, up to %d", historyPage))
 	before := fs.Int64("before", 0, "list only versions older than this uid, to page back")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *path == "" {
 		return errors.New("history needs -path, the note's path in the vault")
+	}
+	// The store answers a page outside 1 to 500 with 100, so -limit 1000 on a
+	// note of 150 versions listed 100 and no hint that more follow, a short
+	// history that looked whole (T40). Refused instead, saying how to page.
+	if *limit < 1 || *limit > historyPage {
+		return fmt.Errorf("-limit %d: history lists 1 to %d versions at a time; page back with -before UID, the "+
+			"oldest uid a page listed", *limit, historyPage)
 	}
 	st, done, err := openToRead(*dataDir, "read")
 	if err != nil {
@@ -104,7 +114,7 @@ func cmdDeleted(args []string, out io.Writer) error {
 	vault := fs.String("vault", defaultVault, "the vault to read")
 	limit := fs.Int("limit", 100, fmt.Sprintf("the most deletions to list, up to %d", store.DeletedMax))
 	before := fs.Int64("before", 0, "list only deletions older than this uid, to page back")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	st, done, err := openToRead(*dataDir, "read")

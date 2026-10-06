@@ -149,7 +149,7 @@ path. One object with a section per feature:
   "git_export": {
     "enabled": true,
     "remote": "git@github.com:you/vault-history.git",
-    "key": "/home/you/.trew-keys/vault-history",
+    "key": "/var/lib/trew/keys/vault-history",
     "quiet": "5m"
   },
   "daily": {
@@ -467,14 +467,18 @@ server: it is the only thing that reads the backups.
 
 `trewd unpack -from FILE -identity KEY -to DIR` decrypts an encrypted backup
 into DIR, which must be new or empty, checks every body against its name and
-the database against the archive's manifest, writes the database last, and
-then runs `verify -deep` on the result. A damaged or truncated archive never
+the database against the archive's manifest, writes the database last, brings
+a store an older `trewd` wrote up to this build's schema, and then runs
+`verify -deep` on the result. A damaged or truncated archive never
 becomes a data directory. `-record DIR` (a data directory, or a copy of its
-`last-backup.json`) compares the archive's SHA-256 with the last backup
-recorded there before decrypting, and refuses another archive unless
-`-not-last-backup` is given; without `-record` it prints the digest and says
-it was not compared. Anyone holding the recipient can make an archive the
-identity opens, so an archive that decrypts is not proof the server wrote it.
+`last-backup.json`) compares the archive's SHA-256 with the last encrypted
+archive a backup wrote whole from there, which a failed or plaintext backup
+since does not change, before decrypting, and refuses another archive unless
+`-not-last-backup` is given; a `-record` with no record there, or one that
+records no encrypted backup, is refused rather than ignored. Without `-record`
+it prints the digest and says it was not compared. Anyone holding the
+recipient can make an archive the identity opens, so an archive that decrypts
+is not proof the server wrote it.
 
 `trewd rehearse -backup PATH [-identity KEY]` rehearses a restore of an
 encrypted archive or a plaintext backup directory: into a work directory of
@@ -529,7 +533,9 @@ A backup has to say which it is: with neither `-encrypt-to` nor
 staged as an ordinary verified backup in `backup-staging` inside the data
 directory, where the plaintext already is, and only the archive leaves it; the
 staging copy makes the next backup incremental and can be removed whenever no
-backup is running.
+backup is running. Both kinds carry the [configuration file](#configuration-file),
+`trewd.json`, and neither the Git export's repository; [Restore](server-operations.md#restore)
+says what a restore does with each.
 Each backup, good or failed, is recorded in `last-backup.json` for `doctor`.
 
 Follow the [purge procedure](server-operations.md#purge), including a separate

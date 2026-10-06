@@ -77,9 +77,10 @@ this point, since every chunk it cut would be refused.
 ### The store epoch
 
 `epoch` is an opaque name for the store's history. Every data directory has
-one, and every `trewd backup` snapshot is given a new one, so restoring a
-snapshot always starts a new epoch. A device stores the epoch beside its cursor
-and sends it in hello.
+one, and a `trewd backup` snapshot is given a new one each time a restored copy
+of it is first served, so restoring a snapshot always starts a new epoch, and
+restoring the same snapshot twice starts two. A device stores the epoch beside
+its cursor and sends it in hello.
 
 When the hello's epoch is not the store's, the server does not honour the
 cursor in either direction: it replays the vault from uid 1, and `ready`

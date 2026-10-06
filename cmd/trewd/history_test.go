@@ -1,9 +1,56 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/store"
 )
+
+// T40. -limit is "the most versions to list, up to 500", and the store
+// answers a page of more than 500 with 100, so `-limit 1000` on a note of 150
+// versions listed 100 and no "older versions may follow", since 100 is not
+// the 1,000 asked for: a history that looked whole and was not. A limit
+// outside what one page can be is now refused, saying how to page, and the
+// hint is given whenever a page is full.
+func TestHistorySaysWhenThereIsMoreThanItListed(t *testing.T) {
+	dir := seeded(t)
+	withStore(t, dir, func(st *store.Store) {
+		for i := 0; i < 150; i++ {
+			body := fmt.Sprintf("v%d", i)
+			n := chunks.Name([]byte(body))
+			if err := st.Chunks().Put("default", n, []byte(body)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.AppendEntry("default", store.Entry{Path: "many.md", Size: int64(len(body)), MTime: 1,
+				Device: "d", Chunks: []string{n}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	listed := func(out string) int { return strings.Count(out, "  uid ") }
+	const more = "older versions may follow"
+
+	for _, limit := range []string{"1000", "501", "0", "-5"} {
+		out, err := trew(t, "history", "-data", dir, "-path", "many.md", "-limit", limit)
+		if err == nil {
+			t.Fatalf("-limit %s listed %d versions without a word:\n%s", limit, listed(out), out)
+		}
+		if !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "-before") {
+			t.Fatalf("-limit %s is refused without saying how to page: %v", limit, err)
+		}
+	}
+	if out := mustRun(t, "history", "-data", dir, "-path", "many.md", "-limit", "500"); listed(out) != 150 ||
+		strings.Contains(out, more) {
+		t.Fatalf("-limit 500 on 150 versions listed %d:\n%s", listed(out), out)
+	}
+	if out := mustRun(t, "history", "-data", dir, "-path", "many.md", "-limit", "100"); listed(out) != 100 ||
+		!strings.Contains(out, more) {
+		t.Fatalf("a full page of 100 does not say more may follow:\n%s", out)
+	}
+}
 
 // `trewd history` answers "what did this note hold" from the shell: every
 // version of the path, newest first, with its uid for `trewd cat`, and the

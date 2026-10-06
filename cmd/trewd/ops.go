@@ -25,7 +25,7 @@ func cmdHealth(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("health", flag.ContinueOnError)
 	addr := fs.String("addr", "127.0.0.1:3003", "address of the server to ask")
 	timeout := fs.Duration("timeout", 5*time.Second, "how long to wait")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
@@ -80,7 +80,7 @@ func cmdStats(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("stats", flag.ContinueOnError)
 	dataDir := dataFlags(fs)
 	asJSON := fs.Bool("json", false, "print one JSON object instead of prose")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if err := requireDataDir(*dataDir, "report on"); err != nil {

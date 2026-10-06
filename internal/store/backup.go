@@ -1,8 +1,10 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +55,11 @@ type BackupReport struct {
 
 	// Verified is chunk references checked in the backup after writing it.
 	Verified int
+
+	// Healed is bodies a deep backup found rotted in its own directory, where
+	// an earlier backup had put them, and replaced from the source, setting
+	// the rotted copy aside as quarantined (T33).
+	Healed int
 
 	// InvitesLeftOut is invites the source still had outstanding, which the
 	// backup does not carry; see Backup for why a restore must not bring one
@@ -438,7 +445,7 @@ func ReadBackupMeta(dir string) (BackupMeta, error) {
 func (r BackupReport) String() string {
 	return fmt.Sprintf(
 		"%s: %d vaults, %d chunk references, %d bodies copied (%d bytes), "+
-			"%d bodies at source and %d in the backup (%d retained history), %d references verified",
+			"%d bodies at source and %d in the backup (%d left from purged versions), %d references verified",
 		r.Dir, r.Vaults, r.Refs, r.Copied, r.Bytes,
 		r.SourceBodies, r.DestBodies, r.Retained, r.Verified)
 }
@@ -493,6 +500,45 @@ func (s *Store) ChunkRefs(fn func(vaultID, name string) error) error {
 		}
 	}
 	return rows.Err()
+}
+
+// SampleChunkRefs calls fn for n chunk references chosen at random, or for
+// every one when the table has no more rows than that, without reading the
+// rest: a random row id, and the first row at or after it, n times.
+//
+// For doctor's quick mode, which the server's alerts run every five minutes,
+// and which read every reference to choose 32 of them (ChunkRefs into a
+// reservoir): a scan of the whole table each time, 25 ms over a hundred
+// thousand references and growing with them. This is n lookups of the row id
+// whatever the size. Rows just after a gap a purge left are a little likelier
+// to be chosen and a row can be chosen twice, which a sample for rot does not
+// mind; a uniform sample is ChunkRefs into a reservoir.
+func (s *Store) SampleChunkRefs(n int, fn func(vaultID, name string) error) error {
+	var top sql.NullInt64
+	if err := s.db.QueryRow(`SELECT MAX(rowid) FROM entry_chunks`).Scan(&top); err != nil {
+		return err
+	}
+	if !top.Valid || n <= 0 {
+		return nil
+	}
+	if top.Int64 <= int64(n) {
+		return s.ChunkRefs(fn)
+	}
+	for i := 0; i < n; i++ {
+		var vaultID, name string
+		err := s.db.QueryRow(`SELECT vault_id, name FROM entry_chunks WHERE rowid >= ? ORDER BY rowid LIMIT 1`,
+			1+rand.Int64N(top.Int64)).Scan(&vaultID, &name)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := fn(vaultID, name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // stagedPrefix names a snapshot being written but not yet published. Every
@@ -633,6 +679,13 @@ func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 		dest.Close()
 		return rep, fmt.Errorf("giving the snapshot its own epoch: %w", err)
 	}
+	// And marked as a snapshot no server has served, so each restore of it
+	// starts an epoch of its own the first time it is served (T27): one
+	// epoch per snapshot was one epoch for two restores of the same archive.
+	if err := dest.markSnapshot(); err != nil {
+		dest.Close()
+		return rep, fmt.Errorf("marking the snapshot as not yet served: %w", err)
+	}
 	// Nor is an outstanding invite carried into it. An invite is a bearer
 	// credential that lives an hour, and the backup is for notes: restoring a
 	// week-old copy would otherwise revive every invite that was outstanding
@@ -729,6 +782,28 @@ func (s *Store) Backup(destDir string, deep bool) (BackupReport, error) {
 		dest.Close()
 		return rep, err
 	}
+	// A body that rotted here, in the backup's own directory, after an earlier
+	// backup put it there (T33). The copy above skips a body the directory
+	// has, by a stat, so nothing ever replaced it: every deep backup failed on
+	// it for ever, and a shallow one published snapshot after snapshot that
+	// referenced it, while the source held a good copy. The deep pass is what
+	// reads the bytes, so it is what finds one; it is set aside, copied again
+	// from the source and checked again, and only then does the backup decide.
+	if rep.Healed, err = s.healRotted(dest, blocking); err != nil {
+		dest.Close()
+		return rep, err
+	}
+	if rep.Healed > 0 {
+		if checked, err = dest.Verify(deep); err != nil {
+			dest.Close()
+			return rep, err
+		}
+		rep.Verified = checked.Chunks
+		if inherited, blocking, err = s.splitInheritedFaults(checked.Faults, deep); err != nil {
+			dest.Close()
+			return rep, err
+		}
+	}
 	rep.Inherited = inherited
 	if len(blocking) > 0 {
 		dest.Close()
@@ -815,6 +890,35 @@ func refuseDestinationRecovery(destDir string) error {
 		}
 	}
 	return nil
+}
+
+// healRotted replaces, in the backup dest is being written into, each body a
+// deep verify of it found corrupt, from this store, and returns how many it
+// replaced (T33). The rotted copy is quarantined, renamed aside rather than
+// deleted (rule 3: it is evidence of a disk going bad, and nothing is
+// destroyed on the strength of a hash alone), and the replacement is read
+// through Get first, so rot at the source is reported against the source, as
+// the copy reports it, rather than written into the backup.
+func (s *Store) healRotted(dest *Store, faults []Fault) (int, error) {
+	healed := map[string]bool{}
+	for _, f := range faults {
+		if f.Reason != "corrupt" || f.Chunk == "" || healed[f.VaultID+"/"+f.Chunk] {
+			continue
+		}
+		body, err := s.chunks.Get(f.VaultID, f.Chunk)
+		if err != nil {
+			return len(healed), fmt.Errorf("the backup's copy of %s in vault %s has rotted, and reading it again "+
+				"from the source failed: %w", f.Chunk, f.VaultID, err)
+		}
+		if err := dest.chunks.Quarantine(f.VaultID, f.Chunk); err != nil {
+			return len(healed), fmt.Errorf("setting aside the backup's rotted copy of %s: %w", f.Chunk, err)
+		}
+		if err := dest.chunks.Put(f.VaultID, f.Chunk, body); err != nil {
+			return len(healed), fmt.Errorf("writing %s to the backup again: %w", f.Chunk, err)
+		}
+		healed[f.VaultID+"/"+f.Chunk] = true
+	}
+	return len(healed), nil
 }
 
 // distinctChunkCount is how many distinct bodies this store's entries
@@ -907,6 +1011,10 @@ func ResolveForLock(path string) (string, error) { return resolvePath(path) }
 // reported that the history it had just destroyed was safely held by the
 // directory it had destroyed it in. Aliases do it too, so this resolves rather
 // than compares strings.
+//
+// The refusal says what the two directories are and nothing about what the
+// caller did not do: a purge and a backup both ask it, and a backup refused
+// with "nothing was purged" (T42) sent somebody looking for a purge.
 func RefuseSamePlace(backupDir, dataDir string) error {
 	backup, err := resolvePath(backupDir)
 	if err != nil {
@@ -918,13 +1026,37 @@ func RefuseSamePlace(backupDir, dataDir string) error {
 	}
 	if backup == data {
 		return fmt.Errorf(
-			"the backup at %s is this store's own data directory, so it is not a backup of "+
-				"anything; nothing was purged", backupDir)
+			"the backup at %s is this store's own data directory, so it is not a backup of anything",
+			backupDir)
 	}
 	if overlaps(backup, data) {
 		return fmt.Errorf(
 			"the backup at %s and the data directory %s contain one another, so one is not an "+
-				"independent copy of the other; nothing was purged", backupDir, dataDir)
+				"independent copy of the other", backupDir, dataDir)
+	}
+	return nil
+}
+
+// RefuseInside refuses a file that would be inside a data directory, following
+// symlinks and relative paths on both sides, for an encrypted backup's archive
+// (T42).
+//
+// It asks about the file and not its directory. An archive beside the data
+// directory is a copy of it, and the directory holding both is not a problem:
+// asked of the directory, RefuseSamePlace refused ~/trew.tar.age for the
+// default data directory ~/.trew, because the home directory contains it.
+func RefuseInside(path, dataDir string) error {
+	p, err := resolvePath(path)
+	if err != nil {
+		return err
+	}
+	data, err := resolvePath(dataDir)
+	if err != nil {
+		return err
+	}
+	if p == data || isUnder(p, data) {
+		return fmt.Errorf("%s is inside the data directory %s, so a backup there is not a copy of it: whatever "+
+			"loses the one loses the other. Put the archive outside it; nothing was backed up", path, dataDir)
 	}
 	return nil
 }
