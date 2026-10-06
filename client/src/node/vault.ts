@@ -1843,25 +1843,34 @@ export class NodeVault implements Vault {
    * `lstat`, not `stat`, and deliberately: the question is whether this path
    * still holds the file the pass decided about, and a symlink that appeared
    * where a note was is a different answer, not the same one seen through.
-   * Anything unreadable is reported as absent, which makes the engine keep
-   * both copies rather than assume the file is unchanged.
+   *
+   * Only absence is absent (T19, rule 2). Every error used to be reported as
+   * absent, and the engine asks this after a read fails to decide whether the
+   * note is gone: a folder that lost its search permission between the scan
+   * and the read made an unsent edit read as a deletion, which went to the
+   * server and from there into the trash of every other device. A stat that
+   * fails now fails, and the engine keeps the file and tries again.
    */
   async stat(path: string): Promise<FileStat | undefined> {
+    let st;
     try {
-      const st = await lstat(await this.absolute(path));
-      if (st.isDirectory()) return { path, folder: true, mtime: 0, ctime: 0, size: 0 };
-      if (!st.isFile()) return undefined;
-      return {
-        path,
-        folder: false,
-        mtime: st.mtimeMs,
-        ctime: st.birthtimeMs || st.ctimeMs,
-        size: st.size,
-        changeId: `${st.dev}:${st.ino}:${st.ctimeMs}`,
-      };
-    } catch {
-      return undefined;
+      st = await lstat(await this.absolute(path));
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // Not there, or an ancestor that is a file rather than a folder.
+      if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+      throw err;
     }
+    if (st.isDirectory()) return { path, folder: true, mtime: 0, ctime: 0, size: 0 };
+    if (!st.isFile()) return undefined;
+    return {
+      path,
+      folder: false,
+      mtime: st.mtimeMs,
+      ctime: st.birthtimeMs || st.ctimeMs,
+      size: st.size,
+      changeId: `${st.dev}:${st.ino}:${st.ctimeMs}`,
+    };
   }
 
   /**

@@ -256,6 +256,28 @@ describe("a filesystem that answers with an error rather than an answer", () => 
     expect(await v.sameFile("nothing.md", "a.md")).toBe(false);
   });
 
+  /**
+   * T19. `stat` is what the engine asks before it decides a note it could not
+   * read is gone, and it answered every error with "absent". A folder that
+   * lost its search permission between the scan and the read therefore made
+   * an unsent edit read as a deletion, which went to the server and from there
+   * to the trash of every other device.
+   */
+  it("does not call a note absent because its stat failed (T19)", async () => {
+    await mkdir(join(root, "Projects"));
+    await writeFile(join(root, "Projects", "plan.md"), "the plan, edited here");
+    const v = new NodeVault(root);
+    for (const code of ["EACCES", "EIO"]) {
+      failWith(lstat, code, (p) => p.endsWith(join("Projects", "plan.md")));
+      await expect(v.stat("Projects/plan.md"), code).rejects.toThrow(new RegExp(code));
+    }
+    // Absent is still absent, and so is a path whose folder is a file.
+    expect(await v.stat("Projects/nothing.md")).toBeUndefined();
+    await writeFile(join(root, "flat"), "a file, not a folder");
+    expect(await v.stat("flat/plan.md")).toBeUndefined();
+    expect(await readFile(join(root, "Projects", "plan.md"), "utf8")).toBe("the plan, edited here");
+  });
+
   it("does not write under an unverified spelling when the directory cannot be listed", async () => {
     await writeFile(join(root, "Note.md"), "old spelling");
     const v = new NodeVault(root);

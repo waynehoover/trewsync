@@ -12,7 +12,17 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile, mkdir } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+  mkdir,
+} from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -31,6 +41,7 @@ import {
   parseInvite,
   startPairing,
 } from "../core/pairing.ts";
+import { Client } from "../core/client.ts";
 import type { SyncReport } from "../core/engine.ts";
 import { loadConfig, saveConfig } from "./config.ts";
 import {
@@ -44,6 +55,7 @@ import {
   USAGE,
   type Console,
 } from "./cli.ts";
+import { clientOptions } from "./client-options.ts";
 import { NodeVault } from "./vault.ts";
 
 beforeAll(async () => {
@@ -2700,4 +2712,86 @@ describe("the device name it makes up", () => {
     expect(made, "a name the person chose was quietly changed").toBe(typed);
     expect(() => checkName("device", made)).toThrow(/at most 64/);
   });
+});
+
+/**
+ * A client that stays open across passes, built the way `trew sync --watch`
+ * builds one, so a test can change the disk between two of its passes.
+ * `wrap` may stand a vault in front of the real one.
+ */
+async function longRunning(
+  dir: string,
+  wrap: (vault: NodeVault) => NodeVault = (vault) => vault,
+): Promise<Client> {
+  const opts = await clientOptions(
+    (await loadConfig(dir))!,
+    parseArgs(["sync", "--watch", "--dir", dir]),
+  );
+  const client = new Client({ ...opts, vault: wrap(opts.vault as NodeVault) });
+  await client.connect({ waitForBacklog: false });
+  return client;
+}
+
+/** Every version the server holds of one path, as `trew history --json` lists them. */
+async function versionsOf(dir: string, path: string): Promise<{ deleted: boolean }[]> {
+  const h = await cli("history", path, "--dir", dir, "--json");
+  expect(h.code, h.all).toBe(0);
+  return h.json()["versions"] as { deleted: boolean }[];
+}
+
+/**
+ * T19, through the engine. A pass that cannot read a note asks the vault
+ * whether it is gone, and the vault answered every failed stat with "gone": a
+ * folder that lost its search permission between the scan and the read sent
+ * an unsent edit to the server as a deletion, and the other device moved its
+ * copy to the trash.
+ */
+describe("a note this device could not look at for a moment (T19)", () => {
+  it("is not sent as deleted, and its edit arrives once it can be read", async (ctx) => {
+    // Permissions do not stop root, so there is nothing to simulate there.
+    if (process.getuid?.() === 0) ctx.skip();
+    await fresh();
+    const { a, b } = await twoDevices();
+    await write(a, "Projects/plan.md", "the plan, version 1\n");
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    // An edit, so the pass has to read the note.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await write(a, "Projects/plan.md", "the plan, version 2, edited on a\n");
+
+    const folder = join(a, "Projects");
+    const client = await longRunning(
+      a,
+      (vault) =>
+        new Proxy(vault, {
+          get(target, prop) {
+            if (prop === "read") {
+              return async (path: string) => {
+                // After the scan, before the read.
+                if (path === "Projects/plan.md") await chmod(folder, 0o600);
+                return target.read(path);
+              };
+            }
+            const value = Reflect.get(target, prop, target) as unknown;
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        }),
+    );
+    try {
+      const report = await client.settle().catch(() => undefined);
+      expect(report?.deletedRemotely ?? 0, "an unread note was sent as deleted").toBe(0);
+    } finally {
+      await client.close();
+      await chmod(folder, 0o755);
+    }
+
+    expect((await versionsOf(b, "Projects/plan.md")).some((v) => v.deleted)).toBe(false);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    expect(await read(b, "Projects/plan.md")).toBe("the plan, version 1\n");
+    // And once the folder can be read again, the edit goes where it was going.
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    expect(await read(b, "Projects/plan.md")).toBe("the plan, version 2, edited on a\n");
+    expect(await read(a, "Projects/plan.md")).toBe("the plan, version 2, edited on a\n");
+  }, 300_000);
 });
