@@ -323,7 +323,7 @@ function standalone(bytes: Uint8Array): ArrayBuffer {
     bytes.byteOffset === 0 &&
     bytes.buffer instanceof ArrayBuffer &&
     bytes.byteLength === bytes.buffer.byteLength;
-  return whole ? (bytes.buffer as ArrayBuffer) : bytes.slice().buffer;
+  return whole ? bytes.buffer : bytes.slice().buffer;
 }
 
 /**
