@@ -1283,7 +1283,19 @@ export class ObsidianVault implements Vault {
       await verify(this.adapter, normalized, new TextEncoder().encode(next));
       await this.flush();
     } catch (error) {
-      if (error === changed) return { keptAt: keepAt, landed: false };
+      if (error === changed) {
+        // The save that changed the note is kept and the update goes beside
+        // it. The backup is checked as it is after a write that lands: when
+        // it holds the version this was decided about, the server has it,
+        // and keeping it left a copy of what both devices already had, named
+        // as if it held this device's words (T13).
+        if (expect !== undefined && (await expect.idOf(before)) === expect.contentId) {
+          await this.adapter.remove(this.resolve(keepAt)).catch(() => undefined);
+          this.entryChanged(this.resolve(keepAt));
+          return { landed: false };
+        }
+        return { keptAt: keepAt, landed: false };
+      }
       // `process` truncates the note and then writes it, so a write that
       // stopped part way (a full disk, an I/O error) left the start of the
       // incoming version at the note's name, and nothing said it was this

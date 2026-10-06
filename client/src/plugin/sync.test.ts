@@ -930,6 +930,43 @@ describe("an incoming update cut short as it is written in place", () => {
 });
 
 /**
+ * T13. A save that lands while a text update is backing the note up wins, as
+ * it should, and the update is placed beside it. The backup it had just made
+ * was left as well: a copy of the version both devices already had, named
+ * as if it held this device's words.
+ */
+describe("a save racing an incoming text update", () => {
+  it("keeps the save, and no copy of the old version named for this device", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    a.adapter.seed("n.md", "synced text\n", 1000);
+    await converge(a, b);
+    expect(b.text("n.md")).toBe("synced text\n");
+
+    a.adapter.seed("n.md", "synced text\nand a line from a\n", 2_000_000);
+    let armed = true;
+    b.adapter.beforeRename = (_from, to) => {
+      // The person on b saves while b's backup of the note lands.
+      if (armed && to.includes("(Conflicted copy b")) {
+        armed = false;
+        b.adapter.seed("n.md", "synced text\ntyped on b\n", 3_000_000);
+      }
+    };
+    await converge(a, b);
+    expect(armed, "the update never backed the note up").toBe(false);
+    for (const d of [a, b]) {
+      expect(d.text("n.md"), `${d.name} lost the save`).toContain("typed on b\n");
+      expect(d.text("n.md"), `${d.name} lost the update`).toContain("and a line from a\n");
+      expect(
+        d.notes().filter((p) => p.includes("(Conflicted copy b")),
+        `${d.name} holds a copy of the old version named for b`,
+      ).toEqual([]);
+    }
+  }, 300_000);
+});
+
+/**
  * T63, through the server: names the server accepts, on a disk that holds
  * nothing longer than 255 bytes.
  *

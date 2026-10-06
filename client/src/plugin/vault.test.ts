@@ -2317,8 +2317,33 @@ describe("writing over a file the pass did not decide about", () => {
       { mtime: 2000, ctime: 1000 },
       "note (kept).md",
     );
-    expect(out.landed).toBe(false);
+    expect(out).toEqual({ landed: false });
     expect(adapter.text("note.md")).toBe(edited);
+    // The backup held the version this was decided about, which the server
+    // has: kept, it was a copy of what every device had, named as if it held
+    // this device's words (T13).
+    expect(adapter.text("note (kept).md")).toBeUndefined();
+  });
+
+  it("keeps the backup when a save races an update and the server may not have the text", async () => {
+    const before = "an unsent edit\n";
+    adapter.seed("note.md", before, 1000);
+    adapter.fault = (op, path) => {
+      if (op === "read" && path === "note.md") {
+        adapter.seed(path, "saved again\n", 1000);
+        adapter.fault = undefined;
+      }
+      return undefined;
+    };
+    const out = await vault.replace(
+      "note.md",
+      undefined,
+      enc.encode("incoming\n"),
+      { mtime: 2000, ctime: 1000 },
+      "note (kept).md",
+    );
+    expect(out).toEqual({ keptAt: "note (kept).md", landed: false });
+    expect(adapter.text("note.md")).toBe("saved again\n");
     expect(adapter.text("note (kept).md")).toBe(before);
   });
 
@@ -2558,34 +2583,39 @@ describe("writing over a file the pass did not decide about", () => {
    * The hook is `afterRename`, not `beforeRename`: the latter is awaited, so a
    * competitor queued from it lands *before* the move and is preserved by it,
    * which is the opposite of the schedule this is about.
+   *
+   * An attachment, because only a file that is not text is moved aside: a
+   * note's update is written in place (R083-18), and this test, written for a
+   * note, had been exercising that path instead without saying so.
    */
   it("keeps a save that takes the name after the move aside", async () => {
-    const was = "the version the pass decided about\n";
-    await adapter.write("note.md", was, { mtime: 1000 });
+    const was = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+    const saved = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 9, 9, 9, 9]);
+    await adapter.writeBinary("photo.jpg", was.slice().buffer, { mtime: 1000 });
 
     adapter.afterRename = async (_from, to) => {
-      if (to !== "note (kept).md") return;
+      if (to !== "photo (kept).jpg") return;
       adapter.afterRename = undefined;
-      await adapter.write("note.md", "typed while the name was empty\n", { mtime: 1000 });
+      await adapter.writeBinary("photo.jpg", saved.slice().buffer, { mtime: 1000 });
     };
 
     const out = await vault.replace(
-      "note.md",
-      { contentId: await plainDigest(enc.encode(was)), idOf: plainDigest },
-      enc.encode("the server's version\n"),
+      "photo.jpg",
+      { contentId: await plainDigest(was), idOf: plainDigest },
+      new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 7]),
       { mtime: 2000, ctime: 1000 },
-      "note (kept).md",
+      "photo (kept).jpg",
     );
 
     expect(
-      adapter.text("note.md"),
+      [...new Uint8Array(await adapter.readBinary("photo.jpg"))],
       "the save that took the name was written over by the incoming version",
-    ).toBe("typed while the name was empty\n");
+    ).toEqual([...saved]);
     expect(out.landed, "a write that lost the name was reported as landed").toBe(false);
     // And the version it displaced is still where it was put, because the
     // write it was displaced for never happened.
-    expect(adapter.text("note (kept).md")).toBe(was);
-    expect(out.keptAt).toBe("note (kept).md");
+    expect([...new Uint8Array(await adapter.readBinary("photo (kept).jpg"))]).toEqual([...was]);
+    expect(out.keptAt).toBe("photo (kept).jpg");
   });
 
   it("says what a removal took away when it was not the expected version", async () => {
