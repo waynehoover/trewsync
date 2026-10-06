@@ -10,7 +10,10 @@ the plugin. The server can read what it stores: see
 [Security and privacy](security.md).
 
 **Experimental.** Use macOS or Linux, Node **22 or newer**, and a local
-filesystem. Run one TrewSync process that writes to each directory, and keep
+filesystem that has hard links, such as APFS, ext4, btrfs or XFS. TrewSync
+replaces a note through a hard link so that nothing is lost if the note
+changes at that moment, and refuses to sync a folder on exFAT or FAT, which
+have none. Run one TrewSync process that writes to each directory, and keep
 other sync tools and the Obsidian plugin off that same directory. For everyday
 editing, use the [Obsidian plugin](plugin.md).
 

@@ -1565,6 +1565,11 @@ export class NodeVault implements Vault {
     // Before anything is read or reaped (T16): an empty folder standing in
     // for the vault lists as every note deleted.
     await this.sameVault(true);
+    // A pass on a disk with no hard links would fail every download and
+    // removal one by one, and anything it uploaded first would sync one way
+    // only; so it is refused whole, once, in words that say why (T18). A look
+    // writes nothing and is allowed.
+    if (!this.observeOnly) await this.refuseWithoutLinks(this.root);
     // Neither of the two writes a scan normally makes happens in observe-only
     // mode (R12): reaping a crashed run's temporaries, and re-spelling names.
     // The pass over staging still runs, because counting what it will not
@@ -2172,6 +2177,9 @@ export class NodeVault implements Vault {
     await this.insideForReal(full);
     const had = await this.deepestExisting(full);
     await mkdir(dirname(full), { recursive: true });
+    // Before anything is moved: publishing, putting back and keeping are all
+    // links (T18).
+    await this.refuseWithoutLinks(dirname(full));
     await this.matchCase(full);
     await this.checkStaging();
 
@@ -2419,6 +2427,8 @@ export class NodeVault implements Vault {
       // this missing-path observation, bypassing the expected digest.
       return { landed: true };
     }
+    // Keeping what it finds, and putting it back, are links (T18).
+    await this.refuseWithoutLinks(dirname(full));
 
     // Moved out of the way first, and identified afterwards (R22).
     //
@@ -2740,6 +2750,49 @@ export class NodeVault implements Vault {
         await rm(probe, { force: true }).catch(() => {});
       }
     })());
+  }
+
+  /** Whether each filesystem this vault has asked about can make hard links, by device (T18). */
+  private readonly linksOn = new Map<number, true | string>();
+
+  /**
+   * Refuses, before anything is moved, a folder on a filesystem that cannot
+   * make hard links (T18).
+   *
+   * Every preserving write and removal here takes the note off its name with
+   * `rename` and then publishes, puts back or keeps with `link`, which creates
+   * a name or fails and so never writes over a save that arrived in between.
+   * On exFAT and FAT there are no links: macOS answers ENOTSUP and Linux
+   * EPERM. A download over `Note.md` moved the note aside, could neither
+   * publish nor put it back, and left it at a hidden `..trew-tmp-keep` name,
+   * with the next listing reading the note as deleted. `create` can fall back
+   * to an exclusive open, because it moves nothing; these cannot, because the
+   * only fallbacks either replace a save made in the gap (`rename`) or leave
+   * a half-written note under its real name after a crash (an exclusive
+   * write). So the question is asked first, once per filesystem, and nothing
+   * is touched where the answer is no.
+   *
+   * Asked with a probe file of its own in `dir`, dot-prefixed so neither
+   * client lists it and the watcher ignores it, rather than with a note.
+   * A probe that cannot be made at all, or a link refused for another reason,
+   * says nothing about links: nothing is remembered and the operation goes
+   * ahead, failing the way it always did if it must.
+   */
+  private async refuseWithoutLinks(dir: string): Promise<void> {
+    const { dev } = await stat(dir);
+    let known = this.linksOn.get(dev);
+    if (known === undefined) {
+      known = await linkSupport(dir);
+      if (known === undefined) return;
+      this.linksOn.set(dev, known);
+    }
+    if (known === true) return;
+    throw new Error(
+      `${dir} is on a filesystem that cannot make hard links (link answered ${known}), and ` +
+        `trew needs them to replace or remove a note without a moment in which the note could ` +
+        `be lost, so nothing was changed. exFAT and FAT drives are like this. Keep the vault ` +
+        `on a filesystem with hard links, such as APFS, ext4, btrfs or XFS.`,
+    );
   }
 
   /**
@@ -3223,6 +3276,37 @@ async function sameFilesystem(a: string, b: string): Promise<boolean> {
     lstat(b).catch(() => undefined),
   ]);
   return one !== undefined && two !== undefined && one.dev === two.dev;
+}
+
+/**
+ * What `link` answers on a filesystem with no hard links (T18): ENOTSUP on
+ * macOS's exFAT and FAT, EPERM on Linux's. Linux also says EPERM for a link to
+ * somebody else's file under `fs.protected_hardlinks`, which a probe file of
+ * this process's own cannot meet.
+ */
+const NO_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP"]);
+
+/**
+ * Whether `dir`'s filesystem can make a hard link: true, the error saying it
+ * cannot, or undefined when the probe could not tell (T18).
+ */
+async function linkSupport(dir: string): Promise<true | string | undefined> {
+  const probe = join(dir, `.trew-linkprobe-${process.pid}-${randomBytes(4).toString("hex")}`);
+  try {
+    await (await open(probe, "wx")).close();
+  } catch {
+    return undefined;
+  }
+  try {
+    await link(probe, `${probe}-link`);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? "";
+    return NO_LINKS.has(code) ? code : undefined;
+  } finally {
+    await rm(`${probe}-link`, { force: true }).catch(() => {});
+    await rm(probe, { force: true }).catch(() => {});
+  }
 }
 
 /**

@@ -661,6 +661,84 @@ describe("replacing a note across a mount boundary", () => {
 });
 
 /**
+ * T18. A filesystem with no hard links at all: exFAT and FAT, which answer
+ * `link` with ENOTSUP on macOS and EPERM on Linux.
+ *
+ * Every preserving write moves the note aside and then publishes with `link`,
+ * and puts it back with `link` too, so on such a disk the note was moved and
+ * then had nowhere to go: a download over `Note.md` left it at a hidden
+ * `Note.md..trew-tmp-keep...`, and the listing afterwards was empty, which the
+ * next pass reads as a deletion. Nothing that needs a link may start there.
+ */
+describe("a filesystem with no hard links (T18)", () => {
+  const times = { mtime: 2000, ctime: 1000 };
+  const unexpected = { contentId: "a digest of something else", idOf: async () => "not that" };
+  function noLinks(code: string): void {
+    vi.mocked(link).mockImplementation(async () => {
+      throw errno(code);
+    });
+  }
+  const visible = async () => (await readdir(root)).filter((n) => !n.startsWith("."));
+
+  for (const code of ["ENOTSUP", "EPERM"]) {
+    it(`replaces nothing, and the note stays at its name (${code})`, async () => {
+      await writeFile(join(root, "Note.md"), "my note, synced\n");
+      const vault = new NodeVault(root);
+      noLinks(code);
+      const err = await vault
+        .replace("Note.md", unexpected, enc.encode("edited elsewhere\n"), times, "Note (kept).md")
+        .then(
+          () => undefined,
+          (e: Error) => e,
+        );
+      // The note first: at its own name, with its own bytes, and nothing
+      // hidden beside it.
+      expect(await visible()).toEqual(["Note.md"]);
+      expect(await readFile(join(root, "Note.md"), "utf8")).toBe("my note, synced\n");
+      expect(await temps(root)).toEqual([]);
+      expect(err?.message).toMatch(/hard links/);
+    });
+
+    it(`takes nothing off its name to remove it (${code})`, async () => {
+      await writeFile(join(root, "Note.md"), "an edit nobody has seen\n");
+      const vault = new NodeVault(root);
+      noLinks(code);
+      const err = await vault.removeExpecting("Note.md", unexpected, "Note (kept).md").then(
+        () => undefined,
+        (e: Error) => e,
+      );
+      expect(await visible()).toEqual(["Note.md"]);
+      expect(await readFile(join(root, "Note.md"), "utf8")).toBe("an edit nobody has seen\n");
+      expect(await temps(root)).toEqual([]);
+      expect(err?.message).toMatch(/hard links/);
+    });
+
+    it(`refuses a scan that would write, and still lists for a look (${code})`, async () => {
+      await writeFile(join(root, "Note.md"), "x");
+      noLinks(code);
+      await expect(new NodeVault(root).list()).rejects.toThrow(/hard links/);
+      const looked = await new NodeVault(root, { observeOnly: true }).list();
+      expect(looked.map((f) => f.path)).toEqual(["Note.md"]);
+    });
+  }
+
+  it("still says where the note is when a link fails for another reason", async () => {
+    // EIO is a disk failing, not a filesystem without links, so nothing is
+    // refused up front and the existing recovery names where the note went.
+    await writeFile(join(root, "Note.md"), "the unsent edit\n");
+    const vault = new NodeVault(root);
+    noLinks("EIO");
+    const err = await vault
+      .replace("Note.md", unexpected, enc.encode("x"), times, "Note (kept).md")
+      .then(
+        () => undefined,
+        (e: Error) => e,
+      );
+    expect(err?.message).not.toMatch(/hard links/);
+  });
+});
+
+/**
  * The two halves `docs/design.md` claims for both clients, on the real one.
  *
  * A pass decides from a scan and writes seconds later, and nothing locks the
