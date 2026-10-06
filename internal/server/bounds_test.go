@@ -221,27 +221,98 @@ func TestS19AConnectionThatNeverSaysHelloIsClosedAtTheDeadline(t *testing.T) {
 	waitFor(t, "the session to be forgotten", func() bool { return r.srv.PreAuth() == 0 })
 }
 
+// A connection that has said nothing gives its place to one that arrives
+// when the pre-auth slots are full, so sockets held open in silence cannot
+// keep a device out (T61).
+//
+// The cap used to refuse the newcomer. Thirty-two sockets that never spoke,
+// each reopened when its hello deadline closed it, then refused every device
+// the server has, for as long as somebody bothered to keep them open; a
+// device sends its hello the moment it connects, so the connection that has
+// waited longest without a word is the one to close.
+func TestS19ASilentConnectionMakesRoomForADeviceThatSpeaks(t *testing.T) {
+	r := newRig(t)
+	r.srv.maxPreAuth = 2
+	first := r.dial("silent-1")
+	waitFor(t, "the first silent connection", func() bool { return r.srv.PreAuth() == 1 })
+	second := r.dial("silent-2")
+	waitFor(t, "two pre-auth sessions", func() bool { return r.srv.PreAuth() == 2 })
+
+	device := r.dial("laptop")
+	if _, got := device.hello(0); len(got) != 0 {
+		t.Fatalf("an empty vault caught up with %d entries", len(got))
+	}
+
+	// The one that waited longest was told why and closed; the other is
+	// still waiting, and the cap was never exceeded.
+	f := rawFields(t, first.recvRaw())
+	if f["res"] != "err" || f["code"] != wire.CodeBusy {
+		t.Fatalf("the silent connection was told %v, want busy", f)
+	}
+	if !first.closed() {
+		t.Fatal("the oldest silent connection was left open")
+	}
+	if got := r.srv.PreAuth(); got != 1 {
+		t.Fatalf("%d connections are waiting to authenticate, want the second silent one", got)
+	}
+	second.sendJSON(second.deviceHello(0))
+	second.recvInto("ready", nil)
+}
+
+// A hello already being answered is not a silent connection, and is not
+// closed to make room: when every pre-auth slot holds one, the newcomer is
+// refused busy, as before.
+func TestS19AHelloInProgressIsNotClosedToMakeRoom(t *testing.T) {
+	r := newRig(t)
+	r.srv.maxPreAuth = 1
+	inside := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	r.srv.beforePublish = func() {
+		once.Do(func() { close(inside) })
+		<-release
+	}
+
+	speaking := r.dial("laptop")
+	speaking.sendJSON(speaking.deviceHello(0))
+	<-inside
+
+	late := r.dial("phone")
+	f := rawFields(t, late.recvRaw())
+	close(release)
+	if f["res"] != "err" || f["code"] != wire.CodeBusy {
+		t.Fatalf("the newcomer was told %v, want busy", f)
+	}
+	speaking.recvInto("ready", nil)
+}
+
 // Connections that have not said hello are capped as a total, so a flood of
-// sockets that never authenticate cannot exhaust the server. A refused one is
-// told busy; a slot opens as soon as one of them authenticates or goes away.
+// sockets that never authenticate cannot exhaust the server. Past the cap the
+// one that has been silent longest is closed for the newcomer (T61); a slot
+// opens as soon as one of them authenticates or goes away.
 func TestS19PreAuthConnectionsAreCapped(t *testing.T) {
 	r := newRig(t)
 	r.srv.maxPreAuth = 2
 	a := r.dial("a")
+	waitFor(t, "one pre-auth session", func() bool { return r.srv.PreAuth() == 1 })
 	b := r.dial("b")
 	waitFor(t, "two pre-auth sessions", func() bool { return r.srv.PreAuth() == 2 })
 
+	// A third takes the place of the first, and the total stays at the cap.
 	c := r.dial("c")
-	f := rawFields(t, c.recvRaw())
+	f := rawFields(t, a.recvRaw())
 	if f["res"] != "err" || f["code"] != wire.CodeBusy {
-		t.Fatalf("the third connection was told %v, want busy", f)
+		t.Fatalf("the first connection was told %v, want busy", f)
 	}
-	if !c.closed() {
-		t.Fatal("the third connection was admitted past the cap")
+	if !a.closed() {
+		t.Fatal("the first connection was left open past the cap")
+	}
+	if got := r.srv.PreAuth(); got != 2 {
+		t.Fatalf("%d connections waiting to authenticate, the cap is 2", got)
 	}
 
 	// One authenticates: it leaves the count and a slot opens.
-	a.hello(0)
+	c.hello(0)
 	waitFor(t, "the count to drop", func() bool { return r.srv.PreAuth() == 1 })
 	d := r.dial("d")
 	d.hello(0)
@@ -251,7 +322,7 @@ func TestS19PreAuthConnectionsAreCapped(t *testing.T) {
 	b.conn.CloseNow()
 	waitFor(t, "the closed connection to be forgotten", func() bool { return r.srv.PreAuth() == 0 })
 	if got := r.srv.Peers(testVault); got != 2 {
-		t.Fatalf("%d peers joined, want a and d", got)
+		t.Fatalf("%d peers joined, want c and d", got)
 	}
 }
 

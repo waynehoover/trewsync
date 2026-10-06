@@ -55,8 +55,10 @@ const (
 	// MaxPreAuth caps connections that have not completed hello, across every
 	// vault, and HelloTimeout is how long one may take to send it (S19). The
 	// cap applies before authentication: a port scanner opening
-	// sockets held a goroutine and a buffer each for ever. Past the cap a new
-	// connection is refused with `busy`; past the deadline a silent one is told
+	// sockets held a goroutine and a buffer each for ever. Past the cap the
+	// connection that has waited longest without sending anything is closed
+	// to make room (T61), and a new one is refused with `busy` only when every
+	// waiting connection has spoken; past the deadline a silent one is told
 	// `protostate` and closed. Both are generous for anything that is a device.
 	MaxPreAuth   = 32
 	HelloTimeout = 10 * time.Second
@@ -160,10 +162,12 @@ type Server struct {
 
 	// maxPreAuth and helloTimeout are MaxPreAuth and HelloTimeout unless a test
 	// lowers them. preAuth counts connections between accept and a completed
-	// hello, guarded by sessMu.
+	// hello, and admissions numbers every connection admitted, so the one that
+	// has waited longest can be told apart (T61); both guarded by sessMu.
 	maxPreAuth   int
 	helloTimeout time.Duration
 	preAuth      int
+	admissions   int64
 
 	// maxBatchBytes and maxFetchBytes are the wire constants unless a test
 	// lowers them. One field each for advertising and enforcing, for the same
@@ -343,20 +347,46 @@ type Server struct {
 var errShuttingDown = errors.New("this server is shutting down, reconnect in a moment")
 
 // errTooManyPreAuth is the reason a connection is refused when too many others
-// have connected and not yet said hello (S19).
+// have connected and not yet said hello, and every one of them has at least
+// sent it (S19, T61).
 var errTooManyPreAuth = errors.New("too many connections are waiting to authenticate, try again in a moment")
 
-// admit registers a session, unless the server is shutting down or too many
-// sessions are still waiting to say hello. The reason is returned so the
-// refusal can say which.
-func (s *Server) admit(sess *Session) error {
+// errMadeRoom is what a connection is told when it is closed to make room for
+// a newer one, having sent nothing since it connected (T61).
+var errMadeRoom = errors.New("too many connections are waiting to authenticate, and this one " +
+	"had sent nothing for longest; reconnect and send hello at once")
+
+// admit registers a session, unless the server is shutting down. The reason is
+// returned so the refusal can say which.
+//
+// Past the pre-auth cap it makes room rather than refusing (T61): the session
+// that has waited longest without its first frame arriving leaves the count,
+// and is returned for the caller to close. Refusing the newcomer let anybody
+// holding MaxPreAuth sockets open in silence, each reopened when its hello
+// deadline closed it, keep every device out for as long as they cared to. A
+// device sends its hello the moment it connects, so the one that has said
+// nothing for longest is the one least likely to be a device. A connection
+// whose hello has arrived is being answered and is never chosen; when every
+// waiting connection is one of those, the newcomer is refused as before.
+func (s *Server) admit(sess *Session) (victim *Session, err error) {
 	s.sessMu.Lock()
 	defer s.sessMu.Unlock()
 	if s.closing {
-		return errShuttingDown
+		return nil, errShuttingDown
 	}
 	if s.preAuth >= s.maxPreAuth {
-		return errTooManyPreAuth
+		for other := range s.sessions {
+			if other.counted && !other.heard.Load() && (victim == nil || other.admission < victim.admission) {
+				victim = other
+			}
+		}
+		if victim == nil {
+			return nil, errTooManyPreAuth
+		}
+		// Out of the count now, so the slot is the newcomer's at once, and the
+		// victim's own forget has nothing left to release.
+		victim.counted = false
+		s.preAuth--
 	}
 	if s.sessions == nil {
 		s.sessions = make(map[*Session]struct{})
@@ -365,9 +395,11 @@ func (s *Server) admit(sess *Session) error {
 		s.sessionsDone = make(chan struct{})
 	}
 	s.sessions[sess] = struct{}{}
+	s.admissions++
+	sess.admission = s.admissions
 	sess.counted = true
 	s.preAuth++
-	return nil
+	return victim, nil
 }
 
 // authenticated moves a session out of the pre-auth count. Called once, when

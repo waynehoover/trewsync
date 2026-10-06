@@ -103,8 +103,13 @@ type Session struct {
 	saidSkewed bool
 
 	// counted is true while this session is in the server's pre-auth count,
-	// guarded by Server.sessMu (S19).
-	counted bool
+	// and admission is its place in the order sessions were admitted, both
+	// guarded by Server.sessMu (S19). heard is set once its first frame has
+	// arrived, which is what keeps it from being closed to make room for a
+	// newer connection (T61); see Server.admit.
+	counted   bool
+	admission int64
+	heard     atomic.Bool
 
 	// Guards the catch-up handover. Live changes buffer in pending until the
 	// backlog is on the wire; see handleHello for why the order matters.
@@ -162,17 +167,24 @@ func (s *Server) Handle(ctx context.Context, conn *websocket.Conn, remote string
 	// refusal carries no id, because it answers no request; a client reads an
 	// error before `ready` as the reason the connection is closing, and `busy`
 	// is the code.
-	if err := s.admit(sess); err != nil {
+	victim, err := s.admit(sess)
+	if err != nil {
 		s.log.Info("session refused", "remote", remote, "why", err)
 		_ = sess.fatalWith(wire.CodeBusy, err, ShutdownRetryAfter)
 		sess.drain(2 * time.Second)
 		sess.kill(nil)
 		return
 	}
+	if victim != nil {
+		// Closed on its own goroutine, since it is given a moment to read why,
+		// and this connection's hello should not wait on that (T61).
+		s.log.Info("closing a silent connection to make room", "remote", victim.remote, "for", remote)
+		go victim.makeRoom()
+	}
 	defer s.forget(sess)
 	go sess.keepalive()
 
-	err := sess.run()
+	err = sess.run()
 	if err != nil {
 		s.log.Info("session ended", "remote", remote, "vault", sess.vaultID, "err", err)
 	}
@@ -569,6 +581,17 @@ func (s *Session) shutdown() {
 	s.kill(nil)
 }
 
+// makeRoom closes this session, which has sent nothing since it connected, so
+// a newer connection can have its pre-auth slot (T61). It is told why, as
+// `busy`, in case it is a device on a link slow enough to try again.
+func (s *Session) makeRoom() {
+	if b, err := json.Marshal(s.errFrame(0, wire.CodeBusy, errMadeRoom.Error(), ShutdownRetryAfter)); err == nil {
+		s.trySend(websocket.MessageText, b)
+	}
+	s.drain(time.Second)
+	s.kill(errors.New("closed to make room for a newer connection"))
+}
+
 // evict closes this session from another goroutine because the device it
 // authenticated as was revoked.
 //
@@ -610,6 +633,9 @@ func (s *Session) run() error {
 	if err != nil {
 		return err
 	}
+	// Whatever it turns out to be, this connection has spoken, and is being
+	// answered rather than holding a slot in silence (T61).
+	s.heard.Store(true)
 	if typ != websocket.MessageText {
 		return s.fatal(wire.CodeProtoState,
 			fmt.Errorf("first frame must be text hello, got %v", typ))
