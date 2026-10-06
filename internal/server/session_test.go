@@ -988,6 +988,46 @@ func TestEveryEntryOnTheWireCarriesAChunkArray(t *testing.T) {
 	}
 }
 
+// The same on the live path, for a writer that sent no chunk list at all (T59).
+//
+// A deletion and a folder need none, and the server accepts one that is null
+// or missing. The entry used to be relayed exactly as it was decoded, so the
+// other devices' live batch said "chunks":null, which the client's batch check
+// refuses as a protocol error: one device leaving the field out dropped every
+// other device, and each reconnected to a catch-up that said [] for the very
+// same entry. Sent both ways, null on a put and absent from a batched one.
+func TestALiveBatchCarriesAChunkArrayWhenTheWriterSentNone(t *testing.T) {
+	r := newRig(t)
+	r.seed("gone.md", "soon deleted")
+	a := r.dial("a")
+	a.hello(0)
+	b := r.dial("b")
+	b.hello(0)
+
+	// wire.In has no omitempty on chunks, so this sends "chunks":null.
+	a.sendJSON(wire.In{Op: "put", Path: "gone.md", Base: a.head("gone.md"),
+		Meta: wire.PutMeta{MTime: 9, Deleted: true}})
+	a.recvInto("have", nil)
+	a.nextID++
+	a.sendRaw(map[string]any{"op": "putmany", "id": a.nextID, "entries": []any{
+		map[string]any{"path": "folder", "meta": map[string]any{"mtime": 9, "folder": true}},
+	}})
+	a.pending = append(a.pending, a.nextID)
+	var acks wire.Acks
+	a.recvInto("acks", &acks)
+	if len(acks.Results) != 1 || acks.Results[0].UID == 0 {
+		t.Fatalf("the folder was not committed: %+v", acks)
+	}
+
+	for _, what := range []string{"deletion", "folder"} {
+		raw := b.recvRaw()
+		if !strings.Contains(raw, `"op":"batch"`) || !strings.Contains(raw, `"chunks":[]`) ||
+			strings.Contains(raw, `"chunks":null`) {
+			t.Fatalf("the %s reached the other device as %s", what, raw)
+		}
+	}
+}
+
 // A zero-byte file has one shape, and the other is refused with a message that
 // says which. Both were legal, which made an empty note two different things.
 func TestAZeroByteFileWithChunksIsRefused(t *testing.T) {
