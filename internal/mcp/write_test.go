@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/waynehoover/trewsync/internal/notes"
 	"github.com/waynehoover/trewsync/internal/store"
 )
 
@@ -789,6 +792,36 @@ func TestACallOutOfTimeIsBusyNeverInternal(t *testing.T) {
 	}
 	if w := wrote(t, invoke(t, a.cs, "create_note", map[string]any{"path": "new.md", "content": "x"})); w.OpID == "" {
 		t.Fatal("a write committed past the deadline")
+	}
+}
+
+// A plan reads note after note through its call's view, and stops at the next
+// one once the call has ended: a move's or a deletion's preview that ran out
+// of time went on reading the vault, holding one of the eight calls its token
+// may have in flight, to produce a reply nobody would get (T50).
+func TestAPlanStopsReadingWhenItsCallEnds(t *testing.T) {
+	r := newRig(t, withoutIndex())
+	r.write("hub.md", "# hub\n")
+	for i := 0; i < 5; i++ {
+		r.write(fmt.Sprintf("n%d.md", i), "see [[hub]]\n")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &call{ctx: ctx, h: r.h, now: time.Now()}
+	v, err := c.viewAt(r.head("n4.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, err := notes.PlanMove(v, "hub.md", "moved.md", true); err != nil || len(p.Changes) != 6 {
+		t.Fatalf("the plan while the call lasts: %+v %v", p.Changes, err)
+	}
+	cancel()
+	for _, plan := range []func() (notes.Plan, error){
+		func() (notes.Plan, error) { return notes.PlanMove(v, "hub.md", "moved.md", true) },
+		func() (notes.Plan, error) { return notes.PlanDelete(v, "hub.md", true) },
+	} {
+		if p, err := plan(); !errors.Is(err, context.Canceled) {
+			t.Fatalf("a plan through an ended call's view: %+v %v", p.Changes, err)
+		}
 	}
 }
 

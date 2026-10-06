@@ -256,23 +256,51 @@ type LinkChange struct {
 // several notes. A rewrite that would leave a link naming a different note
 // than intended is ambiguous_link, and nothing is edited.
 func ChangeLinks(source string, change LinkChange) ([]SourceEdit, int, error) {
-	spans, err := linkSpans(source)
-	if err != nil {
-		return nil, 0, err
-	}
+	return newLinkChanger(change).change(source, change.Path)
+}
+
+// linkChanger is ChangeLinks for one move or deletion, made once and asked
+// about every note a plan reads. Its two resolvers, over every live file as
+// the vault is and as the change leaves it, are what costs, and they depend
+// on the change alone: built again for each note, they were 27 ms of every
+// note's read in a vault of ten thousand, and a move's preview that read 300
+// backlinks took eight seconds (T50).
+type linkChanger struct {
+	to             string
+	deletion       bool
+	canonical      func(string) string
+	fromKey        string
+	resolve, after *LinkResolver
+}
+
+// newLinkChanger is the changer for change. Its Path is not used: each note
+// is named when it is asked about.
+func newLinkChanger(change LinkChange) *linkChanger {
 	canonical := change.Canonical
-	resolve := NewLinkResolver(change.Inventory, canonical)
+	l := &linkChanger{to: change.To, deletion: change.Delete, canonical: canonical,
+		fromKey: canonical(change.From)}
 	afterInventory := change.Inventory
 	if !change.Delete {
 		afterInventory = nil
 		for _, p := range change.Inventory {
-			if canonical(p) != canonical(change.From) {
+			if canonical(p) != l.fromKey {
 				afterInventory = append(afterInventory, p)
 			}
 		}
 		afterInventory = append(afterInventory, change.To)
 	}
-	after := NewLinkResolver(afterInventory, canonical)
+	l.resolve = NewLinkResolver(change.Inventory, canonical)
+	l.after = NewLinkResolver(afterInventory, canonical)
+	return l
+}
+
+// change is ChangeLinks for the note at path, whose text is source.
+func (l *linkChanger) change(source, path string) ([]SourceEdit, int, error) {
+	spans, err := linkSpans(source)
+	if err != nil {
+		return nil, 0, err
+	}
+	canonical, resolve, after := l.canonical, l.resolve, l.after
 	sorted := append([]linkSpan(nil), spans...)
 	for i := 1; i < len(sorted); i++ {
 		for j := i; j > 0 && sorted[j].start < sorted[j-1].start; j-- {
@@ -285,22 +313,22 @@ func ChangeLinks(source string, change LinkChange) ([]SourceEdit, int, error) {
 	}
 	var edits []SourceEdit
 	ambiguous := 0
-	outbound := !change.Delete && canonical(change.Path) == canonical(change.From)
+	outbound := !l.deletion && canonical(path) == l.fromKey
 	for _, span := range sorted {
 		name, hash, ok := span.name()
 		if !ok {
 			continue
 		}
-		candidates := resolve.Resolve(name, span.wiki, change.Path)
+		candidates := resolve.Resolve(name, span.wiki, path)
 		wasMissing := len(candidates) == 0
 		sourceMatch := false
 		for _, p := range candidates {
-			if canonical(p) == canonical(change.From) {
+			if canonical(p) == l.fromKey {
 				sourceMatch = true
 			}
 		}
 		if wasMissing && outbound && !span.wiki && name != "" && !hasScheme(name) && !strings.HasPrefix(name, "/") {
-			previous := posixNormalize(posixJoin(posixDirname(change.Path), name))
+			previous := posixNormalize(posixJoin(posixDirname(path), name))
 			if previous != ".." && !strings.HasPrefix(previous, "../") {
 				candidates = append(candidates, previous)
 			}
@@ -314,18 +342,18 @@ func ChangeLinks(source string, change LinkChange) ([]SourceEdit, int, error) {
 			}
 			continue
 		}
-		if sourceMatch && change.Delete {
+		if sourceMatch && l.deletion {
 			whole := source[span.wholeStart:span.wholeEnd]
 			edits = append(edits, edit(span.wholeStart, span.wholeEnd, "~~"+whole+"~~"))
 			continue
 		}
 		destination := candidates[0]
 		if sourceMatch {
-			destination = change.To
+			destination = l.to
 		}
-		owner := change.Path
+		owner := path
 		if outbound {
-			owner = change.To
+			owner = l.to
 		}
 		reference := func(target string) string {
 			switch {

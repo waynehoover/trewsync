@@ -703,7 +703,16 @@ func (c *call) viewAt(head int64) (*storeView, error) {
 
 func (v *storeView) Files() ([]string, error) { return v.files, nil }
 
+// Read is the live file at path, the version the view's head holds. Every
+// plan and vault-health page reads its notes here, one after another, so here
+// is where one stops once its call has ended: the context's error, which the
+// call reports as busy. A preview that ran out of time went on reading the
+// vault, holding one of the eight calls its token may have in flight, to
+// produce a reply nobody would get (T50).
 func (v *storeView) Read(path string) (notes.Version, error) {
+	if err := v.c.ctx.Err(); err != nil {
+		return notes.Version{}, err
+	}
 	e, ok := v.live[path]
 	if !ok {
 		return notes.Version{}, &notes.Refusal{Code: "not_found", Message: "no note is at that path now"}
