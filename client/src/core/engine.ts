@@ -3771,8 +3771,8 @@ export class Engine {
   private identity(path: string): string {
     const known = this.identityOf.get(path);
     if (known !== undefined) return known;
-    const canonical = this.opts.vault.canonical;
-    const id = canonical ? canonical.call(this.opts.vault, path) : foldPath(path);
+    const vault = this.opts.vault;
+    const id = vault.canonical ? vault.canonical(path) : foldPath(path);
     this.identityOf.set(path, id);
     return id;
   }
@@ -3783,7 +3783,7 @@ export class Engine {
 
   /** Forgets every remembered identity if the vault's way of filing names has changed. */
   private checkIdentityProbe(): void {
-    const probe = this.opts.vault.canonical?.call(this.opts.vault, "Aa");
+    const probe = this.opts.vault.canonical?.("Aa");
     if (probe === this.identityProbe) return;
     this.identityProbe = probe;
     this.identityOf.clear();
