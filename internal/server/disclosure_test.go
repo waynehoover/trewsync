@@ -421,6 +421,50 @@ func TestNoPreAuthRefusalDependsOnWhetherTheVaultExists(t *testing.T) {
 	}
 }
 
+// A store fault before a credential has matched is refused with a fixed
+// message, and its detail goes to the log (T60).
+//
+// The two lookups a hello makes before anything has authenticated, the
+// device's row and the invite's, sent the store's own error to whoever was on
+// the port: "no such table", a locked or unreadable database, whatever SQLite
+// said. That was the one pre-auth answer that was a function of the server's
+// state rather than of the request. A table renamed out from under the store
+// stands in for the fault, which no healthy disk produces on demand.
+func TestAStoreFaultBeforeAuthenticationIsNotDescribedToTheCaller(t *testing.T) {
+	for _, tc := range []struct {
+		what, table string
+		hello       func(r *rig) wire.In
+	}{
+		{"a device connecting", "devices", func(r *rig) wire.In {
+			id, key := r.device("laptop")
+			return wire.In{Op: "hello", Vault: testVault, Device: "laptop", DeviceID: id, Token: key}
+		}},
+		{"a device redeeming an invite", "invites", func(r *rig) wire.In {
+			return redeemHello(r.invite(time.Hour).Token, "newcomer")
+		}},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			r, logged := newRigLogging(t)
+			hello := tc.hello(r)
+			if err := r.st.ExecForTest("ALTER TABLE " + tc.table + " RENAME TO " + tc.table + "_gone"); err != nil {
+				t.Fatal(err)
+			}
+			cl := r.dial("prober")
+			cl.sendJSON(hello)
+			f := rawFields(t, cl.recvRaw())
+			if f["code"] != wire.CodeInternal || f["retryable"] != true {
+				t.Fatalf("the fault was answered %v, want a retryable internal", f)
+			}
+			if msg, _ := f["msg"].(string); strings.Contains(msg, "no such table") || strings.Contains(msg, tc.table) {
+				t.Fatalf("the caller was told what the store said: %q", msg)
+			}
+			if !strings.Contains(logged.String(), "no such table: "+tc.table) {
+				t.Fatalf("the log does not say what failed:\n%s", logged.String())
+			}
+		})
+	}
+}
+
 // An invalid invite reveals nothing about the registered devices.
 func TestInvalidInviteDoesNotDiscloseDeviceCount(t *testing.T) {
 	populated := newRig(t)

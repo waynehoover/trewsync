@@ -810,6 +810,19 @@ func (s *Session) handleHello(m wire.In) error {
 // yesterday. The log says which, for the operator.
 var errNotAuthorised = errors.New("not authorised for this vault")
 
+// errCredentialUnchecked is what a hello is told when the store failed while
+// its credential was being looked up: a device's row, or an invite being
+// redeemed (T60).
+//
+// Fixed, like errNotAuthorised, because nothing has authenticated yet. The
+// refusal used to carry the store's own error, "SQL logic error: no such
+// table: devices" or whatever else SQLite said about a database in trouble,
+// to anyone on the port, which made it the one pre-auth answer that described
+// the server rather than the request. The detail is logged for the operator.
+// It is `internal`, so a client retries, and a redemption that did commit is
+// recognised on the retry (plan/protocol.md, "Invite redemption", step 2).
+var errCredentialUnchecked = errors.New("the server could not check this credential; try again in a moment")
+
 // refuseUnserved is the served-vault check (F19), made on both routes once
 // the request's own shape has been judged and before anything is looked up by
 // the name the caller sent, so an invite for an unserved vault is refused
@@ -865,7 +878,8 @@ func (s *Session) helloAsDevice(m wire.In) error {
 	}
 	_, stored, ok, err := s.srv.st.DeviceByID(m.Vault, m.DeviceID)
 	if err != nil {
-		return s.fatal(wire.CodeInternal, err)
+		s.srv.log.Error("device lookup failed", "remote", s.remote, "vault", m.Vault, "err", err)
+		return s.fatal(wire.CodeInternal, errCredentialUnchecked)
 	}
 	// The token is the device's 32 random bytes in unpadded base64url, and
 	// anything else is refused (plan/protocol.md, "Device session"). The
@@ -1061,8 +1075,8 @@ func (s *Session) helloAsInvite(m wire.In) error {
 	case errors.Is(err, store.ErrBadEntry):
 		return s.fatal(wire.CodeBadEntry, err)
 	default:
-		s.srv.log.Error("redeem failed", "vault", m.Vault, "err", err)
-		return s.fatal(wire.CodeInternal, errors.New("the invite could not be redeemed: "+err.Error()))
+		s.srv.log.Error("redeem failed", "remote", s.remote, "vault", m.Vault, "err", err)
+		return s.fatal(wire.CodeInternal, errCredentialUnchecked)
 	}
 
 	s.srv.log.Info("invite redeemed", "remote", s.remote, "vault", m.Vault,
