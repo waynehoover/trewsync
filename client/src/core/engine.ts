@@ -1991,7 +1991,7 @@ export class Engine {
         this.skipped.delete(path);
         this.log("written-off file is gone, and the server never had it", path);
       } else if (skip) {
-        if (fingerprintOf(this.entries.get(path)) === skip.fingerprint) {
+        if (fingerprintOf(this.entries.get(path), this.remote.get(path)) === skip.fingerprint) {
           noteSkipped(report, path);
           continue;
         }
@@ -2550,7 +2550,7 @@ export class Engine {
         // does.
         this.skipped.set(path, {
           why: `${action.why}. Rename one of them, and it will sync.`,
-          fingerprint: fingerprintOf(entry),
+          fingerprint: fingerprintOf(entry, remote),
         });
         noteSkipped(report, path);
         this.log("cannot be both", path, action.why);
@@ -4310,12 +4310,16 @@ export class Engine {
   /**
    * Fetches a list of chunks in as many asks as the server's caps require.
    *
-   * One `fetch` may carry at most `maxFetchBytes` of summed budget and at
-   * most 65536 names, and the server refuses more with `toolarge` and no
-   * bodies. This device does not know the size of a chunk it has not got, so
-   * it costs each at its share of the file's declared size, which for a whole
-   * file adds up to exactly what the server counts. The bodies come back in
-   * the order asked, across every ask.
+   * One `fetch` may carry at most `maxFetchBytes` of the chunks' real sizes
+   * and at most 65536 names, and the server refuses more with `toolarge`, no
+   * bodies, and the session kept. This device does not know the size of a
+   * chunk it has not got, so it costs each at its share of the file's declared
+   * size. Over a whole file that adds up to what the server counts, and over
+   * part of one it need not: a large file split across asks whose first chunks
+   * are bigger than its average put more than the cap in one ask. So an ask
+   * the server refuses is asked again in halves, which is one more round trip
+   * where the plan missed, and a single chunk always fits (T02). The bodies
+   * come back in the order asked, across every ask.
    */
   private async fetchAll(
     names: readonly string[],
@@ -4340,20 +4344,50 @@ export class Engine {
         // frame and a raw one a marker byte longer, so adding raw lengths
         // mixed two units and stepped the progress back at every boundary.
         let received = 0;
-        for (const ask of planFetches(names, budgetOf, cap, MAX_FETCH_NAMES)) {
+        const fetchInHalves = async (ask: readonly string[]): Promise<void> => {
           let inThis = 0;
-          const bodies = await transport.fetch(
-            ask,
-            onBytes === undefined
-              ? undefined
-              : (n) => {
-                  inThis = n;
-                  onBytes(received + n);
-                },
-            interleave,
-          );
+          let bodies: Uint8Array[];
+          try {
+            bodies = await transport.fetch(
+              ask,
+              onBytes === undefined
+                ? undefined
+                : (n) => {
+                    inThis = n;
+                    onBytes(received + n);
+                  },
+              interleave,
+            );
+          } catch (err) {
+            if (!(err instanceof ProtocolError) || err.code !== "toolarge") throw err;
+            // A refusal of the plan, not of a file (T02). It was written off
+            // as `toolarge` against every file in the batch, the small ones
+            // included, with "make it smaller" as the remedy, and the batch
+            // formed the same way after every reconnect. The server refuses
+            // before sending anything and keeps the session, so the halves can
+            // simply be asked for.
+            if (ask.length > 1 && !transport.isClosed) {
+              const half = Math.ceil(ask.length / 2);
+              await fetchInHalves(ask.slice(0, half));
+              await fetchInHalves(ask.slice(half));
+              return;
+            }
+            // One chunk over the limit is a server whose fetch limit is below
+            // its own chunk size, which a TrewSync server refuses to start
+            // with, and an ended session is a server that sent more than it
+            // said. Neither is about the file, so neither code reaches
+            // `recordFailure`, which would write the file off for good.
+            throw new Error(
+              transport.isClosed
+                ? `the download ended: ${err.message}`
+                : `the server will not send even one chunk of this file in a fetch: ${err.message}`,
+            );
+          }
           for (const b of bodies) out.push(b);
           received += inThis;
+        };
+        for (const ask of planFetches(names, budgetOf, cap, MAX_FETCH_NAMES)) {
+          await fetchInHalves(ask);
         }
         return out;
       };
@@ -5394,7 +5428,7 @@ export class Engine {
         // Two sentences, so the server's reason and the remedy do not run
         // into each other: "... a control character. Rename it ...".
         why: next === "" ? message : `${/[.!?]$/.test(message) ? message : `${message}.`} ${next}`,
-        fingerprint: fingerprintOf(this.entries.get(path)),
+        fingerprint: fingerprintOf(this.entries.get(path), this.remote.get(path)),
         code,
       });
       noteSkipped(report, path);
@@ -5869,9 +5903,15 @@ const INBOUND_REFUSALS: Record<PathReason, string> = {
  * A path with nothing on disk is not observed, so its entry keeps whatever it
  * had and a refusal that was never about a local file stays put, which is
  * right: nothing here changed.
+ *
+ * And the server's version, because a refusal of a download is about that
+ * version (T02). A file not yet downloaded has no local shape, so its stat
+ * half is the same for every version of it, and a download written off once
+ * stayed written off for the session however many new versions arrived.
  */
-function fingerprintOf(entry: IndexEntry | undefined): string {
-  return entry ? `${entry.mtime}:${entry.size}` : "gone";
+function fingerprintOf(entry: IndexEntry | undefined, remote: RemoteState | undefined): string {
+  const version = remote?.uid ?? 0;
+  return entry ? `${entry.mtime}:${entry.size}:${version}` : `gone:${version}`;
 }
 
 /**
@@ -5937,7 +5977,9 @@ const INBOX_BYTES = 8 * 1024 * 1024;
  * What one chunk of a file is costed at when only the file's size is known:
  * its share of the declared size, rounded up. Over a whole file the shares add
  * up to at least the declared size, which is the sum of the chunks' raw
- * lengths and exactly what the server's fetch budget counts.
+ * lengths and exactly what the server's fetch budget counts. Over part of a
+ * file they need not, because chunks are not all one size, and `fetchAll`
+ * asks again in halves when the server says so (T02).
  */
 function perChunkBudget(size: number, chunks: number): number {
   return entryBudget(Math.ceil(size / Math.max(1, chunks)));
@@ -5948,8 +5990,12 @@ function perChunkBudget(size: number, chunks: number): number {
  *
  * Greedy and in order, so the bodies come back in the order the names were
  * given when the asks are made in sequence. A single name over the byte
- * budget goes on its own: the budget is a guess that is never too small, so
- * a chunk the server holds is one the server will serve alone.
+ * budget goes on its own, and a single chunk is what the server always serves.
+ *
+ * The budget is an estimate, not a bound: a chunk's real size is known only
+ * once it has arrived, and an ask holding part of a large file can be over the
+ * server's cap by whatever that part's chunks are over the file's average.
+ * `fetchAll` answers that refusal by halving the ask (T02).
  *
  * Exported because the property worth testing is that nothing in any ask is
  * over either bound and that every name is asked for exactly once.
