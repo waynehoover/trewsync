@@ -443,7 +443,7 @@ func ReadBackupMeta(dir string) (BackupMeta, error) {
 func (r BackupReport) String() string {
 	return fmt.Sprintf(
 		"%s: %d vaults, %d chunk references, %d bodies copied (%d bytes), "+
-			"%d bodies at source and %d in the backup (%d retained history), %d references verified",
+			"%d bodies at source and %d in the backup (%d left from purged versions), %d references verified",
 		r.Dir, r.Vaults, r.Refs, r.Copied, r.Bytes,
 		r.SourceBodies, r.DestBodies, r.Retained, r.Verified)
 }

@@ -1633,17 +1633,19 @@ func backupPlaintext(st *store.Store, dataDir, to string, deep bool, out io.Writ
 		fmt.Fprintf(out, "  (%d source bodies are referenced by no entry and were not copied)\n",
 			rep.SourceBodies-rep.DestBodies)
 	case rep.DestBodies > rep.SourceBodies:
-		// The other direction, and it is the backup working: a purge dropped
-		// old versions at the source, and their bodies stay here.
-		fmt.Fprintf(out, "  (the backup holds %d bodies the source no longer has, which is history it kept)\n",
+		// The other direction: a purge dropped old versions at the source,
+		// and their bodies stay here. Said for what they are, and not as
+		// "history it kept" (docs review): the snapshot just published no
+		// longer records those versions, so this directory cannot give them
+		// back; a backup taken before the purge and kept apart can.
+		fmt.Fprintf(out, "  (the backup holds %d bodies the source no longer has, left from versions a purge took;\n"+
+			"  the snapshot here no longer records those versions, so it cannot give them back)\n",
 			rep.DestBodies-rep.SourceBodies)
 	}
 	if rep.Retained > 0 {
-		// The backup holds history the newest snapshot no longer references,
-		// because the source purged it. This is a backup doing its job, not a
-		// discrepancy, so it is named rather than left to look like one.
-		fmt.Fprintf(out, "  (%d bodies are retained history the source has since purged)\n",
-			rep.Retained)
+		// Bodies the newest snapshot no longer references, because the source
+		// purged their versions: named, so they do not look like a fault.
+		fmt.Fprintf(out, "  (%d bodies are left from versions the source has since purged)\n", rep.Retained)
 	}
 
 	// Which devices may connect is in the database, so a restore needs no

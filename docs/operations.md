@@ -288,8 +288,11 @@ then it is still there, in the clear, beside the store; if a purge has to take
 effect at once, remove `backup-staging/` while no backup runs (the next backup
 makes it again, copying every body). A backup that cannot drop them says so
 with a `WARNING` line and still counts as taken, since its archive is good.
-A plaintext backup directory is different: it keeps purged history on purpose,
-because it is the one copy of it.
+A plaintext backup directory keeps the bodies of purged versions too, but each
+backup into it replaces its database with the new snapshot, which no longer
+records those versions, so from the next backup on it cannot give them back.
+The history a purge removes is kept by a separate backup taken before it and
+left alone ([Preserve history before a purge](server-operations.md#preserve-history-before-a-purge)).
 
 The window a restore would lose is the time since the last backup: with one a
 night, up to a day, plus however long the backup takes. Devices shrink it in
