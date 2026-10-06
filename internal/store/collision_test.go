@@ -152,7 +152,8 @@ func TestTheFixtureCollisionsThroughTheAppendPath(t *testing.T) {
 			}
 			sort.Slice(live, func(i, j int) bool { return live[i].Path < live[j].Path })
 			op := paths.Op{Path: sc.Op.Path, Prev: sc.Op.Prev, Move: sc.Op.Type == "move", Folder: sc.Op.Folder}
-			if want := sc.Expect == "collision"; paths.Collides(live, op) != want {
+			stale := paths.FolderNotEmpty(live, op)
+			if stale != (sc.Expect == "stale") || (!stale && paths.Collides(live, op) != (sc.Expect == "collision")) {
 				t.Fatalf("the reference disagrees with the fixture, so the fixture or the reference moved")
 			}
 
@@ -182,6 +183,14 @@ func TestTheFixtureCollisionsThroughTheAppendPath(t *testing.T) {
 				case "collision":
 					if !errors.Is(err, ErrCollision) {
 						t.Fatalf("batched=%v: %v, want ErrCollision", batched, err)
+					}
+					if got := liveNow(t, h); fmt.Sprint(got) != fmt.Sprint(live) {
+						t.Fatalf("batched=%v: a refused op changed the live set to %v", batched, got)
+					}
+				case "stale":
+					// A folder made a file while something is in it (T58).
+					if !errors.Is(err, ErrFolderNotEmpty) {
+						t.Fatalf("batched=%v: %v, want ErrFolderNotEmpty", batched, err)
 					}
 					if got := liveNow(t, h); fmt.Sprint(got) != fmt.Sprint(live) {
 						t.Fatalf("batched=%v: a refused op changed the live set to %v", batched, got)
@@ -268,16 +277,21 @@ func agreeOnRandomHistory(t *testing.T, seed int64, randomPath func(*rand.Rand) 
 		default:
 			continue
 		}
-		want := paths.Collides(live, op)
+		// A folder made a file while something is in it is refused first, as
+		// stale (T58), and the collision rule is asked only of the rest.
+		stale := paths.FolderNotEmpty(live, op)
+		want := !stale && paths.Collides(live, op)
 		err := h.writeAt(t, op.Path, op.Prev, op.Folder)
 		switch {
+		case stale && errors.Is(err, ErrFolderNotEmpty):
+			refused++
 		case want && errors.Is(err, ErrCollision):
 			refused++
-		case !want && err == nil:
+		case !stale && !want && err == nil:
 			agreed++
 		default:
-			t.Fatalf("seed %d step %d: %+v against %v: the reference says collides=%v and the store said %v",
-				seed, step, op, live, want, err)
+			t.Fatalf("seed %d step %d: %+v against %v: the reference says stale=%v collides=%v and the store said %v",
+				seed, step, op, live, stale, want, err)
 		}
 	}
 	if diff, err := liveDifference(h.db, "v1"); err != nil || diff != "" {

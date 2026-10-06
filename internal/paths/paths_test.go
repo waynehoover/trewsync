@@ -170,22 +170,62 @@ func TestEveryPathGetsTheReferenceVerdictAndReason(t *testing.T) {
 	}
 }
 
-func collides(s scenario) bool {
+func liveAndOp(s scenario) ([]Live, Op) {
 	live := make([]Live, len(s.Live))
 	for i, e := range s.Live {
 		live[i] = Live{Path: e.Path, Folder: e.Folder}
 	}
-	return Collides(live, Op{Path: s.Op.Path, Prev: s.Op.Prev, Move: s.Op.Type == "move", Folder: s.Op.Folder})
+	return live, Op{Path: s.Op.Path, Prev: s.Op.Prev, Move: s.Op.Type == "move", Folder: s.Op.Folder}
 }
 
+func collides(s scenario) bool { return Collides(liveAndOp(s)) }
+
+// Each scenario's verdict is one of three, and the two references between them
+// give exactly one: `stale` for a folder made a file while something is in it
+// (T58), judged first, and otherwise `collision` or `ok`.
 func TestEveryCollisionScenarioGetsTheReferenceVerdict(t *testing.T) {
+	stale := 0
 	for _, s := range load(t).Collisions.Scenarios {
 		if s.Op.Type != "create" && s.Op.Type != "move" {
 			t.Fatalf("%s: unknown op type %q", s.Name, s.Op.Type)
 		}
-		want := s.Expect == "collision"
-		if got := collides(s); got != want {
+		switch s.Expect {
+		case "ok", "collision":
+		case "stale":
+			stale++
+		default:
+			t.Fatalf("%s: unknown verdict %q", s.Name, s.Expect)
+		}
+		if got := FolderNotEmpty(liveAndOp(s)); got != (s.Expect == "stale") {
+			t.Errorf("%s: FolderNotEmpty = %v, the reference says %s", s.Name, got, s.Expect)
+		}
+		if got := collides(s); s.Expect != "stale" && got != (s.Expect == "collision") {
 			t.Errorf("%s: Collides = %v, the reference says %s", s.Name, got, s.Expect)
+		}
+	}
+	if stale == 0 {
+		t.Fatal("no scenario says stale, so FolderNotEmpty was held to nothing")
+	}
+}
+
+// What the fixtures leave out of FolderNotEmpty: a note under another spelling
+// of the folder keeps it a folder on a disk that folds case, a move to another
+// name leaves the folder where it was and is the collision rule's to judge,
+// and writing a folder as a folder, or a file as a file, changes no kind.
+func TestFolderNotEmptyFollowsTheFold(t *testing.T) {
+	live := []Live{{Path: "x", Folder: true}, {Path: "X/a.md"}}
+	for _, c := range []struct {
+		op   Op
+		want bool
+	}{
+		{Op{Path: "x"}, true},
+		{Op{Path: "X", Prev: "x", Move: true}, true},
+		{Op{Path: "y", Prev: "x", Move: true}, false},
+		{Op{Path: "x", Folder: true}, false},
+		{Op{Path: "X/a.md"}, false},
+	} {
+		if got := FolderNotEmpty(live, c.op); got != c.want {
+			t.Errorf("FolderNotEmpty(%+v) = %v, want %v", c.op, got, c.want)
 		}
 	}
 }

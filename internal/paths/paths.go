@@ -227,6 +227,40 @@ func Collides(live []Live, op Op) bool {
 	return false
 }
 
+// FolderNotEmpty reports whether op would make a live folder entry a file while
+// a live path is still in it, under any spelling that folds alike: by an
+// update of the folder's own path, which rule 2 lets past Collides, or by a
+// move that changes only its case, which rule 1 does (T58). The server refuses
+// it as `stale`, as it refuses deleting that folder, and judges it before the
+// collision rule (plan/protocol.md, "Paths"). Like Collides, it is the
+// reference the store's check is tested against.
+func FolderNotEmpty(live []Live, op Op) bool {
+	if op.Folder {
+		return false
+	}
+	folder := op.Path
+	if op.Move {
+		if Fold(op.Prev) != Fold(op.Path) {
+			return false
+		}
+		folder = op.Prev
+	}
+	isFolder := false
+	for _, e := range live {
+		isFolder = isFolder || (e.Path == folder && e.Folder)
+	}
+	if !isFolder {
+		return false
+	}
+	inside := Fold(folder) + "/"
+	for _, e := range live {
+		if strings.HasPrefix(e.Path, folder+"/") || strings.HasPrefix(Fold(e.Path), inside) {
+			return true
+		}
+	}
+	return false
+}
+
 // TextExtensions are the extensions whose files are chunked as text. It only
 // picks chunk sizes: a wrong answer costs efficiency, never correctness.
 var TextExtensions = []string{
