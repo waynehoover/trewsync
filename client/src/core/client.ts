@@ -1660,10 +1660,22 @@ export function isFatal(cause: Error): boolean {
  * go away first; one refused for a shutdown is told five, because the server
  * is about to be back. Neither is a reason to wait less than the backoff
  * already would, so the longer of the two wins.
+ *
+ * And a hint that wins is spread, over half as long again (T06). The backoff
+ * carries its own jitter, and a hint taken as it stands threw it away: the
+ * first backoff after a settled session is 2.5 to 5 seconds, a shutdown says
+ * 5, so every device came back at exactly 5,000 ms, together, which is the
+ * herd the jitter exists to break up. Spread above the hint and never below
+ * it, because the server said when it would be back.
  */
-export function retryWait(cause: Error, backoffMs: number): number {
-  const hint = cause instanceof ProtocolError ? cause.retryAfterMs : undefined;
-  return Math.max(backoffMs, hint ?? 0);
+export function retryWait(
+  cause: Error,
+  backoffMs: number,
+  random: () => number = Math.random,
+): number {
+  const hint = cause instanceof ProtocolError ? (cause.retryAfterMs ?? 0) : 0;
+  if (backoffMs >= hint) return backoffMs;
+  return Math.floor(hint * (1 + 0.5 * random()));
 }
 
 /* ---------------------------------------------------------------- *
