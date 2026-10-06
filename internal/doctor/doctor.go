@@ -689,7 +689,17 @@ func countsOf(m map[string]int) string {
 // bodies already quarantined.
 func (r *run) chunks() {
 	c := r.st.Chunks()
-	fp, err := c.Measure()
+	// Quick mode, every five minutes in the server's own alerts, counts the
+	// tree without a stat of every body and samples without reading every
+	// reference (docs review, performance): at a hundred thousand bodies it
+	// was 0.3 s of the two each time, growing with the vault. The tree is
+	// still listed, since that is what finds a quarantined body, a note some
+	// device has to send again, for the alert.
+	measure := c.Measure
+	if r.opt.Quick {
+		measure = c.Tally
+	}
+	fp, err := measure()
 	if err != nil {
 		r.bad(Fail, CheckChunks, fmt.Sprintf("the chunk tree cannot be walked: %v", err),
 			"Check the chunk directory is mounted and readable by the server's account.")
@@ -705,8 +715,16 @@ func (r *run) chunks() {
 
 	var sample []struct{ vault, name string }
 	seen := 0
-	if !r.opt.Deep {
-		if err := r.st.ChunkRefs(func(vault, name string) error {
+	var err2 error
+	switch {
+	case r.opt.Deep:
+	case r.opt.Quick:
+		err2 = r.st.SampleChunkRefs(r.opt.Sample, func(vault, name string) error {
+			sample = append(sample, struct{ vault, name string }{vault, name})
+			return nil
+		})
+	default:
+		err2 = r.st.ChunkRefs(func(vault, name string) error {
 			seen++
 			if len(sample) < r.opt.Sample {
 				sample = append(sample, struct{ vault, name string }{vault, name})
@@ -714,11 +732,12 @@ func (r *run) chunks() {
 				sample[j] = struct{ vault, name string }{vault, name}
 			}
 			return nil
-		}); err != nil {
-			r.bad(Fail, CheckChunks, fmt.Sprintf("the chunk references cannot be read: %v", err),
-				"Run `trewd verify -deep` with the server stopped.")
-			return
-		}
+		})
+	}
+	if err2 != nil {
+		r.bad(Fail, CheckChunks, fmt.Sprintf("the chunk references cannot be read: %v", err2),
+			"Run `trewd verify -deep` with the server stopped.")
+		return
 	}
 	var missing, corrupt []string
 	for _, s := range sample {
@@ -731,8 +750,12 @@ func (r *run) chunks() {
 		}
 	}
 	checked := fmt.Sprintf("%d of %d chunk references read and hashed", len(sample), seen)
-	if r.opt.Deep {
+	switch {
+	case r.opt.Deep:
 		checked = "every chunk reference read and hashed by the deep pass above"
+	case r.opt.Quick:
+		// No total: counting the references is the scan quick mode leaves out.
+		checked = fmt.Sprintf("%d chunk references chosen at random read and hashed", len(sample))
 	}
 	switch {
 	case len(missing)+len(corrupt) > 0:

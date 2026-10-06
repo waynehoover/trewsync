@@ -1,8 +1,10 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -498,6 +500,45 @@ func (s *Store) ChunkRefs(fn func(vaultID, name string) error) error {
 		}
 	}
 	return rows.Err()
+}
+
+// SampleChunkRefs calls fn for n chunk references chosen at random, or for
+// every one when the table has no more rows than that, without reading the
+// rest: a random row id, and the first row at or after it, n times.
+//
+// For doctor's quick mode, which the server's alerts run every five minutes,
+// and which read every reference to choose 32 of them (ChunkRefs into a
+// reservoir): a scan of the whole table each time, 25 ms over a hundred
+// thousand references and growing with them. This is n lookups of the row id
+// whatever the size. Rows just after a gap a purge left are a little likelier
+// to be chosen and a row can be chosen twice, which a sample for rot does not
+// mind; a uniform sample is ChunkRefs into a reservoir.
+func (s *Store) SampleChunkRefs(n int, fn func(vaultID, name string) error) error {
+	var top sql.NullInt64
+	if err := s.db.QueryRow(`SELECT MAX(rowid) FROM entry_chunks`).Scan(&top); err != nil {
+		return err
+	}
+	if !top.Valid || n <= 0 {
+		return nil
+	}
+	if top.Int64 <= int64(n) {
+		return s.ChunkRefs(fn)
+	}
+	for i := 0; i < n; i++ {
+		var vaultID, name string
+		err := s.db.QueryRow(`SELECT vault_id, name FROM entry_chunks WHERE rowid >= ? ORDER BY rowid LIMIT 1`,
+			1+rand.Int64N(top.Int64)).Scan(&vaultID, &name)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := fn(vaultID, name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // stagedPrefix names a snapshot being written but not yet published. Every
