@@ -356,8 +356,24 @@ func cmdInvite(args []string, out io.Writer) error {
 		when = "expires at " + time.UnixMilli(*inv.ExpiresAt).UTC().Format(time.RFC3339)
 	}
 	if *outFile != "" {
+		// The invite is live from the moment the server minted it, so a file
+		// that cannot be written would leave a credential that adds a device
+		// held by nobody, for an hour or, with -ttl 0, for ever (T48). It is
+		// cancelled at once, as mcp-token revokes a token whose key file
+		// failed; only when that fails too is it left, and the error says so
+		// and how to end it.
 		if err := writeSecretFile(*outFile, strings.Join(inv.Strings, "\n")+"\n"); err != nil {
-			return err
+			reply, cerr := administer(*dataDir, *vault, "uninvite", control.Request{Op: "uninvite", Invite: inv.Invite})
+			if cerr == nil {
+				cerr = refused(reply)
+			}
+			if cerr != nil {
+				return fmt.Errorf("could not write the invite to %s: %v.\nCANCELLING IT FAILED TOO: %v.\n"+
+					"Invite %s IS STILL OUTSTANDING, AND NOTHING HOLDS IT. Cancel it now:\n\n  trewd uninvite -data %s %s\n",
+					*outFile, err, cerr, inv.Invite, shellQuote(*dataDir), inv.Invite)
+			}
+			return fmt.Errorf("could not write the invite to %s: %w. The invite, %s, was cancelled, so nothing "+
+				"usable was left; make another", *outFile, err, inv.Invite)
 		}
 		fmt.Fprintf(out, "Wrote an invite for vault %q to %s. It works once, and %s.\n", inv.Vault, *outFile, when)
 		return nil
