@@ -432,6 +432,19 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	defer st.Close()
+	// Before anything reads the store (store.GoLive): WAL mode, which a
+	// restored store was never in (T26). A switch a long reader in another
+	// process held off is said, and the store is served anyway, correctly,
+	// only more slowly beside such a reader.
+	live, err := st.GoLive()
+	if err != nil {
+		return err
+	}
+	if live.JournalErr != nil {
+		log.Warn("the store could not be put in WAL mode, so a long backup or verify can hold up commits",
+			"mode", live.Journal, "err", live.JournalErr,
+			"hint", "restart the server when no backup or verify is running, and it switches")
+	}
 
 	if ephemeral {
 		empty, err := storeIsEmpty(st)

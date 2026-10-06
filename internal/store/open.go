@@ -507,6 +507,49 @@ func (p pinned) Exec(q string, args ...any) (sql.Result, error) {
 	return p.c.ExecContext(p.ctx, q, args...)
 }
 
+// Live is what GoLive did to a store about to be served.
+type Live struct {
+	// Journal is the journal mode the store is in now, "wal" unless the
+	// switch could not be made, and JournalErr why it could not.
+	Journal    string
+	JournalErr error
+}
+
+// GoLive readies a store `serve` is about to serve, before anything reads it.
+//
+// WAL mode (T26). Only a store created empty was ever put in it: a backup's
+// database is what `VACUUM INTO` writes, a rollback-journal file, so every
+// restored store, unpacked, copied back or served where the backup put it,
+// ran in rollback-journal mode. There a reader holding a read transaction
+// blocks every commit, and one held past the busy timeout fails it, and the
+// readers are exactly the commands that run beside a server: a backup's
+// snapshot, a verify walking every reference, doctor. Measured on a restored
+// store: a device's commit under a six-second reader failed with `database is
+// locked` after 5.1 s where the original committed in 0.3 ms, and an agent's
+// operation was answered "unknown" when it had not committed. `immediate`'s
+// reasoning about busy waits assumes WAL too.
+//
+// The mode is a property of the file, so it is set once and stays, and
+// setting it again does nothing. Not in Open: Backup opens its staged snapshot
+// with Open, writes the new epoch into it and publishes the file by renaming
+// it, and in WAL mode those writes would sit in a log beside the staged name
+// that the rename leaves behind. A switch that cannot be made, because a
+// reader in another process held on past the busy timeout, leaves the mode as
+// it was and is returned in Live for the caller to say: the store serves
+// correctly in either mode, only more slowly beside a long reader.
+func (s *Store) GoLive() (Live, error) {
+	var live Live
+	if err := s.db.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&live.Journal); err != nil {
+		live.JournalErr = err
+		if qerr := s.db.QueryRow(`PRAGMA journal_mode`).Scan(&live.Journal); qerr != nil {
+			return live, qerr
+		}
+	} else if live.Journal != "wal" {
+		live.JournalErr = fmt.Errorf("SQLite left the store in %s mode", live.Journal)
+	}
+	return live, nil
+}
+
 // Identity is what this store says about itself, as read when it was opened.
 func (s *Store) Identity() Identity { return s.identity }
 
