@@ -354,6 +354,11 @@ type Server struct {
 	h    Handler
 	wg   sync.WaitGroup
 
+	// stop ends every request's context, so Close can tell the requests in
+	// flight to finish (T46).
+	ctx  context.Context
+	stop context.CancelFunc
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -392,6 +397,7 @@ func Listen(dataDir string, h Handler, log *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("the control socket at %s is %v, not a private socket", path, info.Mode())
 	}
 	s := &Server{ln: ln, path: path, log: log, h: h}
+	s.ctx, s.stop = context.WithCancel(context.Background())
 	s.wg.Add(1)
 	go s.serve()
 	return s, nil
@@ -400,7 +406,15 @@ func Listen(dataDir string, h Handler, log *slog.Logger) (*Server, error) {
 // Path is where the socket is.
 func (s *Server) Path() string { return s.path }
 
-// Close stops accepting, waits for requests in flight, and removes the socket.
+// Close stops accepting, cancels the requests in flight and waits for them to
+// answer, and removes the socket.
+//
+// Cancelled rather than only waited for (T46): a `git-export adopt` fetches a
+// branch's whole history for up to twenty minutes, the systemd unit gives the
+// whole stop thirty seconds, and a stop that waits it out is killed part way,
+// recorded as a crash, with the store still open. Each request sees its
+// context end and answers; one that holds no context, a commit for instance,
+// finishes as it would have, since it is bounded by its own work.
 func (s *Server) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -409,6 +423,7 @@ func (s *Server) Close() error {
 	}
 	s.closed = true
 	s.mu.Unlock()
+	s.stop()
 	err := s.ln.Close()
 	s.wg.Wait()
 	if rerr := os.Remove(s.path); rerr != nil && !errors.Is(rerr, os.ErrNotExist) && err == nil {
@@ -464,7 +479,7 @@ func (s *Server) answer(conn net.Conn) {
 		}
 		t := Timeout(req)
 		_ = conn.SetDeadline(time.Now().Add(t))
-		ctx, cancel := context.WithTimeout(context.Background(), t)
+		ctx, cancel := context.WithTimeout(s.ctx, t)
 		reply = s.h.Handle(ctx, req)
 		cancel()
 		s.log.Info("control request", "op", req.Op, "refused", reply.Error != nil)

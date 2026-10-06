@@ -153,6 +153,46 @@ func TestAPeerOfAnotherAccountIsRefused(t *testing.T) {
 	}
 }
 
+// blocking holds every request until its context ends, as an adopt fetching
+// a large history for twenty minutes does.
+type blocking struct{ entered chan struct{} }
+
+func (b blocking) Handle(ctx context.Context, _ Request) Reply {
+	b.entered <- struct{}{}
+	<-ctx.Done()
+	return Refused(CodeInternal, "stopped: "+ctx.Err().Error())
+}
+
+// T46. Closing the socket waited for every request in flight, and nothing
+// could tell one to stop: a `git-export adopt` may run for twenty minutes,
+// and the unit gives the whole stop thirty seconds before it kills the
+// process. Closing now cancels what is in flight, and waits only for it to
+// answer.
+func TestClosingTheSocketCancelsARequestInFlight(t *testing.T) {
+	dir := t.TempDir()
+	h := blocking{entered: make(chan struct{}, 1)}
+	srv, err := Listen(dir, h, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = Call(context.Background(), dir, Request{Op: "git-export", Action: "adopt"}) }()
+	select {
+	case <-h.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never reached the handler")
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- srv.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("closing the socket waited on a request it could have cancelled")
+	}
+}
+
 // A request that is not JSON, or longer than any request, is refused with a
 // reply rather than a dropped connection.
 func TestAMalformedRequestIsRefusedInWords(t *testing.T) {
