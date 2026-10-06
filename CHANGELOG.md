@@ -15,6 +15,36 @@ TrewSync's first release, forked from Basalt Sync 0.10.0 (protocol 7). It is a
 fresh start rather than an upgrade: a Basalt device, invite or recovery key
 does not work with a TrewSync server, and moving a vault is a new pairing.
 
+### Fixed in the 2026-10-06 review
+
+A full review of the server, the sync engine, the plugin and the headless
+client; the IDs are in [docs/findings.md](docs/findings.md).
+
+- **A restored or renamed-back note is no longer deleted again** on every
+  device after a deletion both sides had made, or a rename whose
+  acknowledgement was lost (T01).
+- **A text update cut short on a phone puts the note back** instead of
+  uploading the truncated note to every device (T09).
+- **A large download batch is no longer written off** as too large when the
+  server refuses one ask: the ask is split and sent again (T02).
+- **A file dated before 1970 no longer breaks every device's index** (T03).
+- **A download is no longer cut off by another device's save** (T55), and a
+  slow upload is no longer taken for a dead connection (T56).
+- **A phone's first sync is faster** (about 40% fewer filesystem calls per
+  note, and the plugin's own writes no longer trigger a second round), and an
+  interrupted first sync resumes without asking for the review again (T12).
+- **The headless client refuses** a vault folder that was swapped for another
+  (an unmounted disk, T16), a filesystem without hard links (T18), and
+  compares ignored names case-folded where the disk does (T17); it keeps a
+  note's permissions and escapes what it prints to the terminal (T20, T23).
+- **Backups and restores:** `trewd backup` no longer overwrites a stopped
+  server's data or the age key (T35), every restore starts a new epoch (T27),
+  a restored store runs in WAL mode (T26), and a restore keeps the server's
+  settings (T38).
+- **Agents:** a template note's text can no longer reach an agent as the
+  server's own words (T49), and move and delete previews of a well-linked
+  note take about 0.1 s instead of seconds (T50).
+
 ### Changed from Basalt Sync
 
 - **No end-to-end encryption.** The server stores notes, their history and

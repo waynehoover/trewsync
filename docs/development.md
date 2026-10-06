@@ -1222,10 +1222,15 @@ folds. A note with a link that could resolve to a path always shares one of
 counts it in the generation's counters and the cheap check, verifies it in the
 deep check, and records a note whose links it could not parse as a link
 failure, which every plan reads. `IndexVersion` is 2, and an index without the
-table is rebuilt. `Index.Backlinks(head, keys)` narrows only when the trusted
-generation has indexed exactly `head`, checked in the read that takes the
-keys; `Index.Await` lets the tool give the worker two seconds to get there.
-Otherwise the plan reads every editable note, as Basalt did.
+table is rebuilt. `Index.Backlinks(keys)` narrows whenever the trusted
+generation is `Usable`, at any head: each index row is the exact content of
+one `(path, uid)` version, written in the same transaction as the indexed
+head, and the index is dropped when the epoch changes, so a note changed or
+created since the index's head has a different uid or no row and is read
+(T51; it used to narrow only at exactly the plan's head, which stranded
+every continuation after a write). `Index.Await` lets the tool give the
+worker two seconds to catch up. Otherwise the plan reads every editable note,
+as Basalt did.
 `notes.LinkIndex` is how a View rules a note out; the moved note and every
 note read are read from the store. `TestTheLinkKeysNeverOmitABacklink` plans
 every move and deletion of forty generated vaults with and without the
@@ -2305,3 +2310,105 @@ docs/history-map.txt`.
 
 The benchmarks still refuse the real names, from `client/bench-refuse.local`,
 one per line, which is gitignored (`client/bench-refuse.ts`).
+
+## The 2026-10-06 review
+
+Nine reviewers read the whole project; the findings are the T series in
+[findings.md](findings.md), and the deliberate leftovers are in
+[open work](open-work.md#follow-ups-from-the-2026-10-06-review). Seven fix
+branches, one per area, were merged as `review-fixes`. What changed in how
+things work, for whoever touches these parts next:
+
+**Engine (client/src/core).** A path gone here and deleted on the server
+drops its index entry, and `decide` deletes on the server only the version
+this device synced (`remote.uid === syncuid`); the same bytes under a newer
+uid are restored (T01). Keeping both after a mid-fetch edit clears the
+entry's hash and chunks first, so the upload reads the disk (T04). Fetches
+are still planned by average chunk size, but `fetchAll` halves any ask the
+server refuses as too large and never records a fetch-level `toolarge` as a
+fact about a file; write-off fingerprints include the server's version
+(T02). Index times are any safe integer, and `checkEntryShape` type-checks
+size, times and flags where entries arrive (T03). The journal spends its
+sequence number before appending (T05). A retry hint is spread over 1 to 1.5
+times its value (T06). The text-frame ceiling after the handshake is
+2 x `LOCAL_MAX_BATCH_BYTES` (T07). Names made beside a note are cut on
+grapheme boundaries to fit 255 bytes (`nameBeside`, `clipped`; T63). A
+download to an empty path is one exclusive `create`; anything that took the
+name sends it down the old preserving path. A long pass checkpoints the
+index (flush, then save) after every 256 files or 30 seconds, and the
+first-sync review is skipped when nothing local is at stake (T12). Pass
+writes are keyed by fold then upper case, so a deletion asks `sameFile` only
+about writes under its own key.
+
+**Plugin (client/src/plugin).** A failed in-place `process()` write puts the
+note back while it still holds a strict prefix of either text, and a note
+whose put-back is also cut short is refused by reads, replace and removal
+until a listing retries it (T09). `onunload` chains its closing onto a
+symbol on the App and `onload` waits for it (T10). The displaced log is
+emptied, inside `process()`, once every record is dead; the ledger
+remembers records it has seen dead for a session, and unreadable lines
+survive compaction (T08, T11). Renames with no client are queued for the
+next one (T14). `saveOpenEditors()` serves Sync now and Undo (T15). Staging
+names are 128 random bits, trimmed to 255 bytes, with no existence probe;
+the exclusive `create` leaves the destination check to the rename on
+Obsidian 1.13.7 and later; `verify` is the full read-back without a stat in
+front; `ensureParents` trusts Obsidian's index for folders it holds. Files
+the plugin renamed into place are matched by size and time when the watcher
+reports them, and a marker covers its own in-place writes, removals and
+folder creations, so its own writes never ask for another round.
+
+**Headless client (client/src/node).** The vault remembers its root's device
+and inode, and a paired vault must still hold `.trew/config.json`; a scan
+checks before and after its walk (T16). Ignore names are compared
+case-folded on a case-folding disk, when writing, scanning and watching
+(T17). The first writing scan on a filesystem probes once for hard links and
+refuses a sync without them (T18). `stat` returns undefined only for ENOENT
+and ENOTDIR (T19). Everything `run()` prints goes through one escaping
+function that lets only search's colours through, and every `--json` output
+uses `safeJson` (T20). `unlock --force` clears a record whose running pid
+does not hold the kernel lock, and SIGINT and SIGTERM release the lock
+before the process ends by the same signal (T21). The per-download fsync of
+the staging folder is gone (the note's own folder is still flushed before
+the index is saved), and `matchCase` returns at once on a case-sensitive
+disk.
+
+**Store and protocol (internal/store, internal/server).** Device writes run
+in `immediate()`, so the write lock is taken at BEGIN where the busy timeout
+applies, and the health probe takes the commit lock; `/health` serves every
+request from at most one probe a second (T29, T62). `immediate`,
+`rebuilding` and `operationTx` defer `unwound`, which rolls back, discards
+the connection and re-panics (T34). `writeEntry` is `checkEntry` (every
+refusal, read-only) then `applyEntry` (no refusals), so `AppendMany` needs no
+savepoints: a new refusal must go in the check phase. The send queue has two
+budgets: a session's own frames stop at `SendQueueDepth`/`SendQueueBytes`,
+and other devices' batches are limited by `FanoutQueueBytes` with one batch
+of channel room always free, so a fetch can no longer get its peer evicted
+by somebody else's save (T55). Liveness counts bytes read, so an upload on a
+slow link is not taken for a dead peer (T56). The catch-up replay uses
+`NextBatchWithin(..., maxBatchBytes)` (T57). `checkEmptied` also refuses, as
+`stale`, a live folder made a file while anything is live beneath it (T58).
+Flate compressors are pooled, `Writer.Add` no longer hashes (`place` does),
+and a fetched body is framed in the buffer it was read into.
+
+**Backup and restore (cmd/trewd, internal/archive).** Serve calls
+`store.GoLive`, which sets WAL mode and, for a snapshot that has never been
+served, renews the epoch in one transaction; Backup marks its staged copy
+unserved (T26, T27). The backup's source is opened in the `Source` mode: no
+migration, and an older schema is refused (T37). `unpack` and `rehearse`
+upgrade the copy they made before verifying it (T28). A plaintext backup
+refuses a destination holding any file only serve leaves; an existing
+encrypted `-to` must be an age archive (T35). `BackupRecord.LastArchive`
+survives failed and plaintext runs, and an explicit `-record` that cannot
+answer is refused (T36). `trewd.json` travels in both kinds of backup, and is
+held aside as `trewd.json.from-backup` when the archive's origin could not
+be checked (T38). A deep backup quarantines and re-copies a rotted body
+(T33). The control socket admits only the server's account or root (T45).
+
+**MCP (internal/mcp, internal/notes, internal/search).** `RenderTemplate`
+refuses a bad placeholder by its line, and `TestNoRefusalMessageCarriesNoteText`
+holds every `Refusal` message to text that is not the note's (T49). A
+`linkChanger` builds one pair of resolvers per plan, and a plan stops reading
+once it cannot fit a batch or its call has ended (T50). `viewAt` lists from
+`store.EachLive` when it wants the latest head (T50 follow-up). An
+internal-class error met after the call's own context has ended is `busy`
+(T53); `read_note` decides its base and its head from one read (T52).

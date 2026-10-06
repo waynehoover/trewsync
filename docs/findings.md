@@ -312,3 +312,76 @@ the hash is the Basalt commit, whose message has the full account.
 - **F26** `rebase --json` returned zero unconditionally while the text branch called `exitCodeFor`, so an incomplete replay was a failure interactively and a success in automation: exactly the difference a cron job cannot see. (`ff4a514`)
 - **F27** `status` read the index and the server's cursor. (`72d1edf`)
 - **F28** Two things a server could make a device do without limit. (`d55d7ab`)
+
+## T: the 2026-10-06 full review
+
+TrewSync's own first review, after the cutover: nine reviewers read the
+server, the sync engine, the plugin and the headless client end to end, and
+every finding below was reproduced before it was fixed. Each fix has a
+regression test that fails without it; the merge is `review-fixes`.
+
+- **T01** A path deleted on both sides kept its synced entry, so a later restore of the same bytes elsewhere, or a rename back after a lost acknowledgement, was deleted again on every device.
+- **T02** Fetches were planned by average chunk size; the server counted real bytes, refused the ask as too large, and the refusal wrote off every file in the batch for good.
+- **T03** A modification time before 1970 made every device's saved index refuse to load.
+- **T04** A note edited during its own download was uploaded as its old synced content, publishing a revert.
+- **T05** A journal append that landed but reported failure was replayed over a newer snapshot.
+- **T06** Taking the larger of the backoff and the server's retry hint cancelled the jitter, so devices reconnected together.
+- **T07** The client's frame ceiling assumed catch-up batches were bounded by bytes; the server bounded them by count.
+- **T08** Compacting the displaced log dropped a torn line, so an incomplete inventory reported itself complete.
+- **T09** A text update cut short by a failed write left a truncated note that the next pass uploaded to every device.
+- **T10** Reloading the plugin mid-pass (a toggle or a BRAT update) ran two engines on one vault.
+- **T11** The plugin's displaced log never compacted, so every pass checked every deletion the device had ever applied.
+- **T12** An interrupted first sync asked for the first-sync review again and re-read every file it had landed.
+- **T13** A save racing a text update left a duplicate conflict copy named for the wrong device.
+- **T14** A rename made while no client was connected was sent as a deletion plus a new file.
+- **T15** Undo did not save open editors first.
+- **T16** A vault folder replaced by an empty one (an unmounted volume) during a watch session read as a vault whose every note was deleted.
+- **T17** On a case-folding disk, `--ignore` compared names exactly, so a peer's case variant landed inside the ignored folder and was then deleted everywhere.
+- **T18** On a filesystem without hard links, nothing downloaded and an updated note was left at a hidden name.
+- **T19** The headless client's `stat` reported any error as absence, which became a deletion.
+- **T20** File, path and device names reached the terminal with their escape sequences.
+- **T21** A lock record naming a reused pid locked the vault for good, and `trew unlock` could not clear it.
+- **T22** A folder at a note's target name was parked aside with the note's move.
+- **T23** A download reset a note's permissions.
+- **T24** A file in `.trash` with a folder's name made a remote deletion fail on every pass.
+- **T25** The block and range reads followed symlinks that the whole-file read refused.
+- **T26** A store restored from a backup ran in rollback-journal mode, so a reader blocked every commit.
+- **T27** Restoring one snapshot twice reused its epoch, so a device past the snapshot skipped versions.
+- **T28** Read-only inspection, and so unpack's own verify, failed on a store from an older schema.
+- **T29** The health probe took SQLite's write lock outside the commit lock, and deferred device writes failed at once against it.
+- **T30** `verify` against a live server compared two snapshots and reported drift that was never there.
+- **T31** After a purge, deleted folders appeared in the deleted-notes list.
+- **T32** Undo of a move failed once a purge had taken the move's output.
+- **T33** A body that rotted in a backup directory was never replaced.
+- **T34** A panic inside a transaction returned the connection to the pool with the transaction still open.
+- **T35** `trewd backup -to` could overwrite a stopped server's database or the age identity.
+- **T36** The archive-origin check failed open after a failed backup or a mistyped `-record`.
+- **T37** `trewd backup` migrated the live store under a running older server.
+- **T38** A restore dropped the server's configuration file (the Git export and daily-note settings).
+- **T39** An interrupted rehearsal left a plaintext copy of the store in the data directory.
+- **T40** `history -limit` above 500 silently listed 100.
+- **T41** A stray positional argument silently dropped every flag after it.
+- **T42** An encrypted backup beside the data directory was refused, in purge's words.
+- **T43** Doctor mistook a reused pid for a hung server.
+- **T44** Stopping the Git export killed git and left its lock files behind.
+- **T45** The control socket was bound, then made private, and never checked who connected.
+- **T46** Shutdown waited on control requests it could not cancel.
+- **T47** A write landing as the export's quiet window closed could split a run differently from a rebuild.
+- **T48** `invite -out` left a live invite behind when the file could not be written.
+- **T49** A template note's text reached the agent under `trusted`, as the server's own error message.
+- **T50** Every note a move or delete plan read rebuilt two whole-vault link resolvers.
+- **T51** A health-tool continuation lost the link index after any write, and `orphans` could never finish.
+- **T52** `read_note` with a base could answer a newer version without `stale`.
+- **T53** A call that ran out of time was reported as `internal`.
+- **T54** `Normalize` missed an envelope key with a line break before its colon.
+- **T55** A save on any device evicted a peer that was downloading.
+- **T56** The keepalive killed healthy uploads on slow uplinks.
+- **T57** Catch-up batches were not bounded by bytes. History pages still are not: see open work.
+- **T58** An update or a case-only move could turn a live folder into a file while notes lived inside it.
+- **T59** A live batch could carry `"chunks":null`.
+- **T60** A store error reached a caller before its credential was checked.
+- **T61** Thirty-two silent connections refused every device.
+- **T62** Every unauthenticated `/health` request ran the full probe.
+- **T63** A note whose name was near 255 bytes could never sync: temporary and conflict-copy names went past the limit.
+- **T64** The timing wrapper dropped optional vault methods, so measured runs did not run the shipped code.
+- **T65** A rule-4 test passed with the byte comparison it was meant to test deleted.

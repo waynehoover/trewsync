@@ -191,3 +191,50 @@ directory walk the plugin does not do. What changed is the harness. The phone
 run the threshold waits on is now `bun run bench:phone`, which holds the
 phone awake and in front for the whole run and records any moment it was
 not, the confound that voided the last attempt.
+
+## Follow-ups from the 2026-10-06 review
+
+Each was found by the review (docs/findings.md, the T series) and left on
+purpose, because closing it costs something the review could not decide alone.
+
+**History pages are bounded by count, not bytes (T57).** Catch-up batches now
+stop at the advertised `maxBatchBytes`; history pages do not, because every
+client reads a page shorter than its limit as the end of a note's history, so
+a page cut by bytes would quietly hide older versions. The fix is a `more`
+flag on the history reply that all three clients page on, then a byte bound.
+Until then the client's fixed 32 MiB text-frame ceiling (T07) covers default
+settings; a server with a lowered `-max-batch-bytes` and very large files can
+still produce a page a client refuses, loudly.
+
+**A crash during an in-place text update (T09).** A failed write now puts the
+note back, but a crash or power loss in the middle of the write leaves no
+record, so after a restart the cut note reads as an edit. Its original content
+survives in the backup conflict copy. Closing it needs a durable intent record
+per incoming text edit: one append and one clear each.
+
+**A crash during the headless client's replace.** If a crash keeps the note's
+move aside but loses the link back, the next pass reads the note as deleted.
+The parked copy is reported as stranded, but the deletion is still sent.
+
+**A stale lock after a reboot (T21).** `trew unlock --force` now clears a
+record whose pid is running but holds nothing, which is what a pid reused
+after a reboot looks like, but it still takes a person. Treating any record
+written before the current boot as stale would make it automatic, at the cost
+of trusting the boot time.
+
+**Replacing the read-back after the landing rename with a stat (rule 4).** It
+would save about 10 ms per new file on a phone. Declined for now: the staging
+copy is read back in full, but a same-size write into the name in the same
+instant would go unnoticed.
+
+**Skipping the index stats on a quiet pass.** Declined: it would let an index
+overwritten from outside go unrewritten until the next change (R3).
+
+**Linux `fs.protected_hardlinks`.** A note owned by another user that holds an
+unexpected edit cannot be linked to its conflict-copy name; it stays at a
+hidden name, recorded in the ledger and reported by `status`. Nothing is lost.
+
+**The dotless i on NTFS.** The protocol's fold keeps `ı` (U+0131) apart from
+`i` and `I`, which NTFS treats as one name. The engine's pass keys now fold
+then upper-case, which covers deletions, but two server paths could still be
+one file on Windows, which is unsupported.
