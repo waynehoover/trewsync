@@ -244,7 +244,31 @@ func isBusy(err error) bool {
 // the real question: SQLite takes the write lock and refuses here if it
 // cannot, and nothing is committed, so the store is not touched. It costs no
 // page writes and does not grow the write-ahead log.
+//
+// Under writeMu, which every commit in this process holds across its
+// transaction, so the probe never takes SQLite's write lock beside a device's
+// commit (T29). /health needs no credential, and the probe took that lock with
+// nothing ordering it against the commits: a put that met it failed. The
+// mutex is tried rather than waited on, so a probe never queues ahead of a
+// device's commit, and it keeps trying until the probe's deadline, or for as
+// long as SQLite's own busy timeout (dsn) would have waited for its lock when
+// the caller set none, before it answers busy. A commit holds the mutex for
+// milliseconds, so an ordinary busy moment still answers ok, which is what the
+// reference promises: busy is contention that outlasted the check's wait.
 func (s *Store) probeWrite(ctx context.Context, h *Health) bool {
+	wait, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for !s.writeMu.TryLock() {
+		select {
+		case <-wait.Done():
+			h.CanPersist = false
+			h.Why = HealthBusy
+			return true
+		case <-time.After(time.Millisecond):
+		}
+	}
+	defer s.writeMu.Unlock()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		h.CanPersist = false

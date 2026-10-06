@@ -750,50 +750,51 @@ func (s *Store) AppendMany(vaultID string, entries []Entry, bases, prevBases []i
 		s.betweenCheckAndCommit()
 	}
 
-	tx, err := s.db.Begin()
+	// Begun IMMEDIATE, as a single put is and for the same reason (T29): every
+	// entry reads its path's head before it writes.
+	committed := 0
+	err := immediate(s.db, func(q execer) error {
+		at := s.clock().UnixMilli()
+		for _, i := range pending {
+			name := fmt.Sprintf("%s_entry_%d", Product, i)
+			if _, err := q.Exec("SAVEPOINT " + name); err != nil {
+				return err
+			}
+			uid, err := writeEntry(q, vaultID, entries[i], &bases[i], prevBases[i], at)
+			if err == nil {
+				if _, err := q.Exec("RELEASE SAVEPOINT " + name); err != nil {
+					return err
+				}
+				out[i] = ManyResult{UID: uid}
+				committed++
+				continue
+			}
+			// A refusal this entry earned, rolled back on its own. Anything
+			// else is the database itself, and a batch that cannot talk to its
+			// database has no per-entry answer to give.
+			if !errors.Is(err, ErrStale) && !errors.Is(err, ErrBadEntry) && !errors.Is(err, ErrUnknownVault) &&
+				!errors.Is(err, ErrCollision) {
+				return err
+			}
+			if _, rerr := q.Exec("ROLLBACK TO SAVEPOINT " + name); rerr != nil {
+				return rerr
+			}
+			if _, rerr := q.Exec("RELEASE SAVEPOINT " + name); rerr != nil {
+				return rerr
+			}
+			out[i] = ManyResult{Err: err}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
-
-	committed := 0
-	at := s.clock().UnixMilli()
-	for _, i := range pending {
-		name := fmt.Sprintf("%s_entry_%d", Product, i)
-		if _, err := tx.Exec("SAVEPOINT " + name); err != nil {
-			return nil, err
-		}
-		uid, err := writeEntry(tx, vaultID, entries[i], &bases[i], prevBases[i], at)
-		if err == nil {
-			if _, err := tx.Exec("RELEASE SAVEPOINT " + name); err != nil {
-				return nil, err
-			}
-			out[i] = ManyResult{UID: uid}
-			committed++
-			continue
-		}
-		// A refusal this entry earned, rolled back on its own. Anything else is
-		// the database itself, and a batch that cannot talk to its database has
-		// no per-entry answer to give.
-		if !errors.Is(err, ErrStale) && !errors.Is(err, ErrBadEntry) && !errors.Is(err, ErrUnknownVault) &&
-			!errors.Is(err, ErrCollision) {
-			return nil, err
-		}
-		if _, rerr := tx.Exec("ROLLBACK TO SAVEPOINT " + name); rerr != nil {
-			return nil, rerr
-		}
-		if _, rerr := tx.Exec("RELEASE SAVEPOINT " + name); rerr != nil {
-			return nil, rerr
-		}
-		out[i] = ManyResult{Err: err}
-	}
-
-	// The one fsync. Nothing above has been acknowledged and nothing has been
-	// broadcast: the caller does both from the results, after this returns.
+	// The one fsync was immediate's commit. A batch whose every entry was
+	// refused committed a transaction that wrote nothing, and SQLite writes no
+	// frame for that, so it cost no fsync either. Nothing above has been
+	// acknowledged and nothing has been broadcast: the caller does both from
+	// the results, after this returns.
 	if committed > 0 {
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
 		s.notifyCommitted()
 	}
 	return out, nil
@@ -958,21 +959,24 @@ func (s *Store) appendEntry(vaultID string, e Entry, base *int64, prevBase int64
 		s.betweenCheckAndCommit()
 	}
 
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
+	// Begun IMMEDIATE, because writeEntry reads the path's head and the live
+	// set before it writes (T29). A deferred transaction that had read could
+	// not wait for the write lock: SQLite answers SQLITE_BUSY at once to a
+	// transaction upgrading past a lock someone else holds, so a put that met
+	// another writer, the health probe that nobody authenticates for among
+	// them, failed in microseconds instead of waiting out the busy timeout.
+	// writeMu orders the commits of this process; this is what makes one of
+	// them wait for a writer outside it.
+	//
 	// The same function `AppendMany` runs inside a savepoint, so a single put
 	// and one entry of a batch cannot come to different conclusions about the
 	// same write.
-	uid, err := writeEntry(tx, vaultID, e, base, prevBase, s.clock().UnixMilli())
-	if err != nil {
-		return 0, err
-	}
-
-	if err := tx.Commit(); err != nil {
+	var uid int64
+	if err := immediate(s.db, func(q execer) error {
+		var err error
+		uid, err = writeEntry(q, vaultID, e, base, prevBase, s.clock().UnixMilli())
+		return err
+	}); err != nil {
 		return 0, err
 	}
 	s.notifyCommitted()

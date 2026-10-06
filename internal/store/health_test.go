@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/waynehoover/trewsync/internal/chunks"
 )
@@ -271,5 +273,118 @@ func TestHealthLeavesNoProbeFileBehind(t *testing.T) {
 		if strings.Contains(e.Name(), "health") {
 			t.Errorf("the health probe left %s behind", e.Name())
 		}
+	}
+}
+
+/*
+ * A probe that nobody has to authenticate for must not make a device's write
+ * fail (T29).
+ *
+ * The probe takes SQLite's write lock, and a device's put and batch began a
+ * deferred transaction that read the path's head before it wrote. SQLite does
+ * not wait for a lock a transaction that has already read wants to upgrade to,
+ * so a put that met the probe's lock failed at once with SQLITE_BUSY instead
+ * of waiting out the busy timeout: 10 to 47 of 300 puts failed while /health
+ * was asked in a loop. Clients retry, so nothing acknowledged was lost, and an
+ * anonymous request could still make a vault's sync fail on demand.
+ */
+
+// holdWriteLock takes the database's write lock from a connection of its own,
+// as the probe or another process does, and gives it back after d. The
+// channel closes once it has.
+func (h *harness) holdWriteLock(t *testing.T, d time.Duration) <-chan struct{} {
+	t.Helper()
+	other, err := sql.Open("sqlite", dsn(filepath.Join(h.dir, "trew.db"), SyncFull, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = other.Close() })
+	ctx := context.Background()
+	conn, err := other.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		defer close(released)
+		time.Sleep(d)
+		_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		_ = conn.Close()
+	}()
+	return released
+}
+
+// A put and a batch wait for another writer's lock, as the busy timeout says
+// they may, rather than failing the moment they meet it, and what they wrote
+// is what the path then holds.
+func TestADeviceWriteWaitsOutAnotherWritersLock(t *testing.T) {
+	h := newTestStore(t)
+	note := h.file(t, "note.md", "one")
+	const held = 300 * time.Millisecond
+	for _, w := range []struct {
+		name, body string
+		write      func(body string) (int64, error)
+	}{
+		{"a put", "two", func(body string) (int64, error) {
+			return h.AppendCurrent("v1", h.entryFor(t, "note.md", body), note.UID, 0)
+		}},
+		{"a batch", "three", func(body string) (int64, error) {
+			res, err := h.AppendMany("v1", []Entry{h.entryFor(t, "note.md", body)}, []int64{note.UID}, []int64{0})
+			if err != nil {
+				return 0, err
+			}
+			return res[0].UID, res[0].Err
+		}},
+	} {
+		released := h.holdWriteLock(t, held)
+		start := time.Now()
+		uid, err := w.write(w.body)
+		took := time.Since(start)
+		<-released
+		if err != nil {
+			t.Errorf("%s against a write lock held for %v failed after %v: %v", w.name, held, took, err)
+			continue
+		}
+		note.UID = uid
+		if got, _ := h.headBytes(t, "note.md"); got != w.body {
+			t.Errorf("after %s note.md reads %q, want %q", w.name, got, w.body)
+		}
+	}
+}
+
+// And the probe itself waits for the commit lock instead of taking SQLite's
+// write lock beside a commit: asked while a put holds writeMu, it answers once
+// the put has committed, and a lock held past its deadline is busy, answered at
+// the deadline.
+func TestTheHealthProbeWaitsForACommitRatherThanContendingWithIt(t *testing.T) {
+	h := newTestStore(t)
+	probed := make(chan Health, 1)
+	h.betweenCheckAndCommit = func() {
+		go func() { probed <- h.CheckHealth(context.Background()) }()
+		select {
+		case got := <-probed:
+			t.Errorf("the probe answered %v %q while a put held the commit lock", got.CanPersist, got.Why)
+			probed <- got
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	h.file(t, "note.md", "committed while the probe waited")
+	h.betweenCheckAndCommit = nil
+	if got := <-probed; !got.CanPersist {
+		t.Fatalf("the probe, once the put had committed, answered %q", got.Why)
+	}
+
+	h.writeMu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	got := h.CheckHealth(ctx)
+	took := time.Since(start)
+	h.writeMu.Unlock()
+	if got.CanPersist || got.Why != HealthBusy || took > 2*time.Second {
+		t.Fatalf("with the commit lock held past its deadline the probe answered %v %q after %v", got.CanPersist, got.Why, took)
 	}
 }
