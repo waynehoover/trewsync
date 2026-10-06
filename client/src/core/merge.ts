@@ -174,8 +174,8 @@
 import { diff_match_patch, type Diff } from "diff-match-patch";
 
 import { regions } from "./merge-regions.ts";
-import { MAX_PATH_BYTES, MAX_SEGMENT_BYTES, STAGING_MARK } from "./path-policy.ts";
-import { splitName } from "./paths.ts";
+import { STAGING_MARK } from "./path-policy.ts";
+import { byteLength, clipped, nameBeside, roomBeside, splitName } from "./paths.ts";
 
 /**
  * The largest text a merge will diff exactly, in UTF-16 code units.
@@ -1143,53 +1143,29 @@ export function conflictCopyPath(path: string, author: string, at: Date): string
     `${at.getFullYear()}${p(at.getMonth() + 1)}${p(at.getDate())}` +
     `${p(at.getHours())}${p(at.getMinutes())}`;
 
-  return fitted(stem, sanitiseAuthor(author) || "device", ` ${stamp})${ext}`);
+  return fitted(stem, sanitiseAuthor(author) || "device", ` ${stamp})`, ext);
 }
 
 const COPY_OPEN = " (Conflicted copy ";
-/** What `firstFreeName` may add after the parenthesis: " 2" up to " 999". */
-const COPY_NUMBER_BYTES = 4;
 /** The longest author a copy's name carries, in whole characters. */
 const AUTHOR_CHARS = 32;
 
-const utf8 = new TextEncoder();
-const byteLength = (s: string): number => utf8.encode(s).length;
-
-/** `<stem> (Conflicted copy <author><tail>`, cut to fit as `conflictCopyPath` says. */
-function fitted(stem: string, author: string, tail: string): string {
-  const cut = stem.lastIndexOf("/") + 1;
-  const dir = stem.slice(0, cut);
-  let name = stem.slice(cut);
-  // The last segment's budget is the tighter of the two limits: its own, and
-  // what the folders in front of it leave of the path's.
-  const room = Math.min(MAX_SEGMENT_BYTES, MAX_PATH_BYTES - byteLength(dir));
-  const fixed = byteLength(COPY_OPEN) + byteLength(tail) + COPY_NUMBER_BYTES;
-  const over = (): number => byteLength(name) + byteLength(author) + fixed - room;
-  if (over() > 0) author = clipped(author, byteLength(author) - over());
-  if (over() > 0) name = clipped(name, byteLength(name) - over());
-  return `${dir}${name}${COPY_OPEN}${author}${tail}`;
-}
-
 /**
- * The longest prefix of `s` within `limit` UTF-8 bytes, in whole characters,
- * without trailing spaces, dots or hyphens, and never empty.
- *
- * Never empty because an empty author is not a name `conflictOriginal` reads
- * as a copy, and a copy nobody can find is the failure a copy exists to
- * prevent. Whole characters because half of one is a lone surrogate, which is
- * not UTF-8 and which the server refuses in a path.
+ * `<stem> (Conflicted copy <author><stamp><ext>`, cut to fit as
+ * `conflictCopyPath` says: the author first, down to one character, and then
+ * the note's own name (`nameBeside`).
  */
-function clipped(s: string, limit: number): string {
-  let out = "";
-  let used = 0;
-  for (const ch of s) {
-    const n = byteLength(ch);
-    if (out !== "" && used + n > limit) break;
-    out += ch;
-    used += n;
-  }
-  const trimmed = out.replace(/[\s.-]+$/u, "");
-  return trimmed === "" ? out : trimmed;
+function fitted(stem: string, author: string, stamp: string, ext: string): string {
+  const dir = stem.slice(0, stem.lastIndexOf("/") + 1);
+  const words = (by: string): string => `${COPY_OPEN}${by}${stamp}`;
+  const over =
+    byteLength(stem) -
+    byteLength(dir) +
+    byteLength(words(author)) +
+    byteLength(ext) -
+    roomBeside(dir);
+  if (over > 0) author = clipped(author, byteLength(author) - over);
+  return nameBeside(stem, words(author), ext);
 }
 
 /**

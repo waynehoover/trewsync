@@ -61,7 +61,7 @@ import {
   type DeviceConfig,
   type PendingPairing,
 } from "./pairing.ts";
-import { firstFreeName, splitName } from "./paths.ts";
+import { firstFreeName, nameBeside, splitName } from "./paths.ts";
 
 export interface ClientOptions {
   readonly vault: Vault;
@@ -1414,10 +1414,14 @@ export interface Version {
  * is never overwritten by something arriving from elsewhere. Somebody restoring
  * a note from last week onto a note they have been editing today should end up
  * with both.
+ *
+ * Within the limits on a name and a path, as a conflict copy is (T63): a note
+ * whose name was near the 255 bytes a name may hold got a copy name no disk
+ * would create, and the restore failed.
  */
 export function restoredCopyPath(path: string, version: Version): string {
   const { stem, ext } = splitName(path);
-  return `${stem} (restored ${version.uid})${ext}`;
+  return nameBeside(stem, ` (restored ${version.uid})`, ext);
 }
 
 /** What a long-running client tells whoever is watching it. */
