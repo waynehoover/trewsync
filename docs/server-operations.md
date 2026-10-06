@@ -131,8 +131,10 @@ rebuilds the search index, and prints how long it all took and how old the
 backup is. Before it decrypts anything it compares the archive's SHA-256 with
 the last backup the data directory recorded, and refuses any other archive
 unless `-not-last-backup` says it is meant to be another (an older backup,
-say), which it then warns about. The work directory is removed afterwards; the
-backup is never touched. The result is recorded for `trewd doctor`, which warns when no
+say), which it then warns about. The work directory is removed afterwards, by
+a rehearsal stopped with Ctrl-C or SIGTERM too, which records nothing; one a
+rehearsal killed outright leaves is removed by the next. The backup is never
+touched. The result is recorded for `trewd doctor`, which warns when no
 rehearsal has passed in 90 days.
 
 [Operating TrewSync](operations.md#rehearse-a-restore) has the steps to do it

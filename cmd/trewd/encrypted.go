@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -228,7 +229,7 @@ func cmdUnpack(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	rep, err := unpackArchive(*from, *identity, *to)
+	rep, err := unpackArchive(context.Background(), *from, *identity, *to)
 	if err != nil {
 		return err
 	}
@@ -403,8 +404,9 @@ func (o archiveOrigin) after(rep archive.Report, out io.Writer) error {
 	return nil
 }
 
-// unpackArchive is unpack without the printing, for the rehearsal.
-func unpackArchive(from, identity, to string) (archive.Report, error) {
+// unpackArchive is unpack without the printing, for the rehearsal too, which
+// stops it part way when ctx ends (T39).
+func unpackArchive(ctx context.Context, from, identity, to string) (archive.Report, error) {
 	ids, err := archive.ParseIdentities(identity)
 	if err != nil {
 		return archive.Report{}, err
@@ -414,9 +416,22 @@ func unpackArchive(from, identity, to string) (archive.Report, error) {
 		return archive.Report{}, err
 	}
 	defer f.Close()
-	rep, err := archive.Unpack(f, ids, to)
+	rep, err := archive.Unpack(ctxReader{ctx, f}, ids, to)
 	if err != nil {
 		return rep, fmt.Errorf("unpacking %s: %w", from, err)
 	}
 	return rep, nil
+}
+
+// ctxReader reads from r until ctx ends, and then reports why.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }

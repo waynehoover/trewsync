@@ -337,8 +337,52 @@ func (r *run) dataDir() bool {
 			fmt.Sprintf("chmod 700 %s. The store holds every note in the clear.", dir))
 		return true
 	}
+	// A rehearsal's work directory is a whole backup restored in the clear,
+	// and one that outlives its rehearsal (killed part way, or kept with
+	// -keep) is out of every purge's reach and was mentioned by nothing (T39).
+	if copies := rehearsalCopies(dir); len(copies) > 0 {
+		r.bad(Warn, CheckDataDir, fmt.Sprintf("%s holds %d restore rehearsal copies, each a whole backup in the clear "+
+			"that no purge reaches: %s", dir, len(copies), strings.Join(copies, ", ")),
+			"Remove each once you no longer need it, with no rehearsal running (rm -rf). A rehearsal that was killed "+
+				"left it, or -keep kept it; the next `trewd rehearse` removes one a killed rehearsal left.")
+		return true
+	}
 	r.ok(CheckDataDir, fmt.Sprintf("%s is a trewd data directory, private to its owner", dir))
 	return true
+}
+
+// rehearsalCopies are the rehearsal work directories in the data directory
+// that no rehearsal is using now, by name.
+func rehearsalCopies(dir string) []string {
+	found, err := filepath.Glob(filepath.Join(dir, "rehearsal-*"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, d := range found {
+		if info, err := os.Lstat(d); err == nil && info.IsDir() && !lockHeld(d, dirlock.Data) {
+			out = append(out, filepath.Base(d))
+		}
+	}
+	return out
+}
+
+// lockHeld reports whether some process holds the named lock in dir now, by
+// asking the lock itself for a share of it and letting go at once, which a
+// pid in its record cannot say: the process that wrote it may be long gone and
+// its pid another's. It creates nothing; a lock file that is not there is a
+// lock nobody holds.
+func lockHeld(dir, name string) bool {
+	f, err := os.Open(filepath.Join(dir, name))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		return errors.Is(err, syscall.EWOULDBLOCK)
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false
 }
 
 // storage checks the directory is not on storage a restart or a container

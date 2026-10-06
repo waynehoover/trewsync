@@ -43,7 +43,7 @@ What each check means, and what to do:
 
 | Check | A `WARN` or `FAIL` means | Do this |
 |---|---|---|
-| `data-dir` | The directory is missing, is another product's, was written by a newer `trewd`, or other accounts can read into it. | Check `-data`. A newer schema needs the newer `trewd`. `chmod 700` the directory. |
+| `data-dir` | The directory is missing, is another product's, was written by a newer `trewd`, or other accounts can read into it; or a restore rehearsal's copy, every note in the clear, was left in it. | Check `-data`. A newer schema needs the newer `trewd`. `chmod 700` the directory. Remove a `rehearsal-*` copy once you no longer need it. |
 | `storage` | The data is on a tmpfs or a container's own layer: gone at the next restart or upgrade. | Mount a persistent volume at the data directory and move the store onto it with the server stopped. `serve` refuses to start an empty store there without `-allow-ephemeral`. |
 | `encryption` | Always a note: doctor can see a LUKS volume by its device name and nothing else. | See [Encryption at rest](#encryption-at-rest). |
 | `server` | A server holds the directory and does not answer, or it answers and cannot take a note (`disk-full`, `store-read-only`, `chunks-read-only`, `chunks-unreachable`). | Read the remedy for the word it gives; a hung server is restarted after reading its log. |
@@ -404,6 +404,7 @@ token, or a model provider reading what the agent reads.
 | `trewd.json` | The [configuration file](server-reference.md#configuration-file): the Git export's and the daily-note tools' settings. | Yes; every setting returns to its default. |
 | `git-export/` | The [Git export](git-export.md)'s bare repository (`repo.git`, with its LFS objects), its state, and the known_hosts it wrote. | With the server stopped; it is exported again from the store, and a remote it pushed to keeps its history. |
 | `backup-staging/` | The plaintext copy an encrypted backup is packed from, pruned to what the last archive holds. | Whenever no backup is running; the next one makes it again. |
+| `rehearsal-*/` | A restore rehearsal's work directory, a whole backup in the clear. Removed when the rehearsal ends, interrupted or not; one a killed rehearsal left is removed by the next, and `doctor` names any. | Whenever no rehearsal is running. |
 | `last-backup.json`, `last-rehearsal.json`, `runtime.json` | What the last backup, rehearsal and starts did, for `doctor`. | Yes; `doctor` then says nothing is recorded. |
 | `first-invite` | The first device's invite, mode 0600. | Once the first device is paired. |
 | `control.sock`, `server.lock`, `data.lock` | The operator's socket and the locks. | Never while a server runs; a stale socket is replaced at start. |
