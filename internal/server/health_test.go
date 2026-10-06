@@ -1,14 +1,18 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/waynehoover/trewsync/internal/store"
 )
@@ -142,6 +146,83 @@ func TestHealthNamesNothingAboutThisServer(t *testing.T) {
 				t.Errorf("/health said %q, which is not one of the reasons", body)
 			}
 		}
+	}
+}
+
+// A flood of /health asks the store once (T62). The endpoint needs no
+// credential, and every request ran the whole probe: the database's write
+// lock, a statfs, and a file created, written and removed in the chunk root.
+// Requests that arrive together now share one probe, and its failure is
+// logged once rather than once per request.
+func TestAFloodOfHealthChecksProbesTheStoreOnce(t *testing.T) {
+	r := newRig(t)
+	var logged bytes.Buffer
+	hs := httptest.NewServer(HTTPHandler(r.srv, slog.New(slog.NewTextHandler(&logged, nil))))
+	t.Cleanup(hs.Close)
+	// A fault, so that every probe that runs says so in the log.
+	if err := os.RemoveAll(r.st.Chunks().Root()); err != nil {
+		t.Fatalf("removing the chunk directory: %v", err)
+	}
+
+	const flood = 16
+	start := make(chan struct{})
+	answers := make(chan string, flood)
+	var wg sync.WaitGroup
+	for range flood {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			res, err := http.Get(hs.URL + "/health")
+			if err != nil {
+				answers <- err.Error()
+				return
+			}
+			defer func() { _ = res.Body.Close() }()
+			body, _ := io.ReadAll(res.Body)
+			answers <- res.Status + " " + strings.TrimSpace(string(body))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(answers)
+
+	want := "503 Service Unavailable " + string(store.HealthNoChunkDir)
+	for got := range answers {
+		if got != want {
+			t.Errorf("a request in the flood was answered %q, want %q", got, want)
+		}
+	}
+	if probes := strings.Count(logged.String(), "health check failed"); probes != 1 {
+		t.Fatalf("%d requests at once probed the store %d times, want once:\n%s", flood, probes, logged.String())
+	}
+}
+
+// And a shared answer is never older than healthFresh: a fault that appears
+// after one probe is what the first request after that window hears.
+func TestASharedHealthAnswerExpires(t *testing.T) {
+	r := newRig(t)
+	hs := httptest.NewServer(HTTPHandler(r.srv, testLogger()))
+	t.Cleanup(hs.Close)
+	get := func() string {
+		t.Helper()
+		res, err := http.Get(hs.URL + "/health")
+		if err != nil {
+			t.Fatalf("GET /health: %v", err)
+		}
+		defer func() { _ = res.Body.Close() }()
+		body, _ := io.ReadAll(res.Body)
+		return strings.TrimSpace(string(body))
+	}
+	if got := get(); got != "ok" {
+		t.Fatalf("a working server answered %q", got)
+	}
+	if err := os.RemoveAll(r.st.Chunks().Root()); err != nil {
+		t.Fatalf("removing the chunk directory: %v", err)
+	}
+	time.Sleep(healthFresh + 100*time.Millisecond)
+	if got := get(); got != string(store.HealthNoChunkDir) {
+		t.Fatalf("%v after the fault /health answered %q, want %q", healthFresh, got, store.HealthNoChunkDir)
 	}
 }
 

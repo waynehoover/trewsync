@@ -537,6 +537,63 @@ func TestACreateOverADeletionUndoesAfterThePurgeTookTheDeletion(t *testing.T) {
 	h.gone(t, "gone.md")
 }
 
+// A move's two halves are paired by the paths the log recorded, not by reading
+// the move's output back (T32). A purge can take that output once the
+// destination has been edited and the source's name used again, since it is
+// then neither a head nor a rename any path still needs, and the pairing
+// failed as internal: the copy refused although the before-image it needs is
+// pinned and present, and the undo in place answered failed, which invites a
+// retry, instead of stale.
+func TestAMovesUndoPairsItsHalvesAfterAPurgeTookItsOutput(t *testing.T) {
+	h := newTestStore(t)
+	a := h.writer(t, "agent")
+	source := h.file(t, "S.md", "the words before the move")
+	mv := h.change(t, a, "D.md", 0, "the words before the move")
+	mv.Entry.Prev, mv.PrevBase = "S.md", source.UID
+	move, err := h.CommitOperation(h.op(a, "move", mv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.file(t, "D.md", "a device edited the moved note")
+	h.file(t, "S.md", "a new note under the old name")
+	if _, err := h.Purge("v1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := h.EntryByUID("v1", move.Entries[0].Entry.UID); err != nil || ok {
+		t.Fatalf("the purge kept the move's output (%v), and the case this test is about is not reached", err)
+	}
+
+	before := h.footprint(t)
+	_, _, err = h.undo(t, move.OpID, false)
+	if oe := h.refusedWith(t, err, OpCodeStale, before); !errors.Is(err, ErrChangedSince) {
+		t.Fatalf("the undo in place was refused %v", oe)
+	}
+
+	plan, _, err := h.undo(t, move.OpID, true)
+	if err != nil {
+		t.Fatalf("the copy: %v", err)
+	}
+	copyPath := "S (restored " + fmtUID(source.UID) + ").md"
+	var copied []string
+	for _, s := range plan.Steps {
+		if s.Action == UndoCopy {
+			copied = append(copied, s.Path+" -> "+s.Copy)
+		}
+	}
+	if strings.Join(copied, ",") != "S.md -> "+copyPath {
+		t.Fatalf("the copy wrote %v, want the before-image of S.md beside it", copied)
+	}
+	if got, _ := h.headBytes(t, copyPath); got != "the words before the move" {
+		t.Fatalf("the copy reads %q", got)
+	}
+	for p, want := range map[string]string{"S.md": "a new note under the old name", "D.md": "a device edited the moved note"} {
+		if got, _ := h.headBytes(t, p); got != want {
+			t.Fatalf("%s reads %q after the copy, and a copy changes nothing already there", p, got)
+		}
+	}
+	h.verified(t)
+}
+
 // Undo is for the operation's actor only when the caller says so: an MCP
 // token's undo finds another token's operation not there, and an unknown or
 // malformed id is not found either.

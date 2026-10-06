@@ -218,6 +218,71 @@ func TestTheDeletedListLeavesOutFolders(t *testing.T) {
 	}
 }
 
+// And still after a purge (T31). A folder's deletion is told from a note's
+// only by the version before it, and the purge kept the deletion, which is the
+// head, and dropped that version, so every emptied folder came back as a
+// deleted note with nothing to restore. The purge keeps the folder entry a
+// deleted head follows, a row with no body; its preview counts the same, a
+// second purge finds nothing more to drop, and a note deleted where a folder
+// once was is still a note.
+func TestThePurgeKeepsWhatTellsAFolderDeletionFromANote(t *testing.T) {
+	h := newTestStore(t)
+	if err := h.writeAt(t, "Old", "", true); err != nil {
+		t.Fatal(err)
+	}
+	h.file(t, "Old/note.md", "note")
+	for _, p := range []string{"Old/note.md", "Old"} {
+		if err := h.deleteAt(t, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.writeAt(t, "Was a folder", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.deleteAt(t, "Was a folder"); err != nil {
+		t.Fatal(err)
+	}
+	h.file(t, "Was a folder", "now a note")
+	if err := h.deleteAt(t, "Was a folder"); err != nil {
+		t.Fatal(err)
+	}
+	listed := func(when string) {
+		t.Helper()
+		for _, suppress := range []bool{true, false} {
+			got, _, err := h.Deleted("v1", suppress, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var paths []string
+			for _, d := range got {
+				paths = append(paths, d.Path)
+			}
+			if strings.Join(paths, ",") != "Was a folder,Old/note.md" {
+				t.Fatalf("%s, suppressRenames=%v listed %v, want the two notes and no folder", when, suppress, paths)
+			}
+		}
+	}
+	listed("before the purge")
+
+	predicted, err := h.Reclaimable("v1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := h.Purge("v1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.VersionsRemoved == 0 || rep.VersionsRemoved != predicted.Versions {
+		t.Fatalf("the purge removed %d versions and its preview said %d", rep.VersionsRemoved, predicted.Versions)
+	}
+	listed("after the purge")
+	if again, err := h.Purge("v1", 0); err != nil || again.VersionsRemoved != 0 {
+		t.Fatalf("a second purge removed %d versions (%v)", again.VersionsRemoved, err)
+	}
+	listed("after a second purge")
+	h.verified(t)
+}
+
 // A case-only folder rename moves the folder entry and its files one move at
 // a time, so between the moves the folder's new spelling is live while its
 // files are still live under the old one. Those files are in the folder all

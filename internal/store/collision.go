@@ -36,8 +36,8 @@ var ErrCollision = errors.New("collision")
 //     positive; the row goes when it reaches zero.
 //
 // They are written in the same transaction as the entry that changes them,
-// by writeEntry and nowhere else, so they cannot be ahead of or behind the
-// entries: a refused entry's savepoint rolls its table changes back with it,
+// by applyEntry and nowhere else, so they cannot be ahead of or behind the
+// entries: a refused entry is refused by checkEntry before it changes them,
 // and a batch's later entries see what its earlier ones left, which is the
 // order the protocol specifies.
 //
@@ -534,7 +534,7 @@ func (s *Store) RepairLive() (map[string]string, error) {
 	}
 	repaired := map[string]string{}
 	for _, v := range vaults {
-		diff, err := liveDifference(s.db, v)
+		diff, err := s.liveDrift(v)
 		if err != nil {
 			return repaired, err
 		}
@@ -636,12 +636,25 @@ func liveFromTables(q querier, vaultID string) (map[string]bool, map[string]int,
 	return live, dirs, rows.Err()
 }
 
+// betweenLiveReads runs inside liveDifference, after the live set is read from
+// the entries and before it is read from the tables, and is nil in every build
+// but a test's. A commit there is what verify met on a live server (T30), and
+// the window is a few microseconds wide: a test that tried to commit inside it
+// by timing would be a test that passes when the machine is busy.
+// TestVerifyReadsTheLiveSetInOneSnapshot.
+var betweenLiveReads func()
+
 // liveDifference describes how the tables differ from the entries, or "" when
-// they agree, naming at most a few paths so a fault stays readable.
+// they agree, naming at most a few paths so a fault stays readable. Both reads
+// are q's, so q must be one snapshot (Store.liveDrift) for the answer to be
+// about one moment.
 func liveDifference(q querier, vaultID string) (string, error) {
 	wantLive, wantDirs, err := liveFromEntries(q, vaultID)
 	if err != nil {
 		return "", err
+	}
+	if betweenLiveReads != nil {
+		betweenLiveReads()
 	}
 	gotLive, gotDirs, err := liveFromTables(q, vaultID)
 	if err != nil {

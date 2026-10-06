@@ -1437,8 +1437,8 @@ type preparedEntry struct {
 // One fsync for the batch rather than one per entry, which is what a folder
 // rename or a bulk delete is made of: those batches carry no bodies, so the
 // syncs were the whole cost of them. The per-entry answers are unchanged,
-// because the store rolls back a savepoint for a stale or malformed entry and
-// leaves the rest of the batch committed.
+// because the store refuses a stale or malformed entry before writing any of
+// it and leaves the rest of the batch committed.
 //
 // The broadcast moves to the end, after the transaction is durable. It used to
 // go out as each entry committed, which meant a peer could be told about entry

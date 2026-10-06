@@ -2,6 +2,8 @@ package store
 
 import (
 	"errors"
+	"fmt"
+	"path/filepath"
 	"testing"
 )
 
@@ -328,19 +330,33 @@ func TestARestoreRefusesAPathPurgedAtThePointAndDeletedSince(t *testing.T) {
 			h := newTestStore(t)
 			h.file(t, "other.md", "another note") // uid 1
 			if folder {
+				// Made, deleted, made again and deleted again: a purge keeps
+				// the folder entry a deleted head follows (T31), here uid 4,
+				// and takes the one that was live at the point.
 				if err := h.writeAt(t, "gone", "", true); err != nil { // uid 2, purged
 					t.Fatal(err)
 				}
-				h.remove(t, "gone") // uid 3
+				h.remove(t, "gone")                                    // uid 3, purged
+				if err := h.writeAt(t, "gone", "", true); err != nil { // uid 4
+					t.Fatal(err)
+				}
+				h.remove(t, "gone") // uid 5
 			} else {
 				h.file(t, "gone.md", "a note at the point") // uid 2, purged
 				h.remove(t, "gone.md")                      // uid 3
 			}
+			reached, err := h.LatestUID("v1")
+			if err != nil {
+				t.Fatal(err)
+			}
 			if _, err := h.Purge("v1", 0); err != nil {
 				t.Fatal(err)
 			}
-			if mark, err := h.PurgedThrough("v1"); err != nil || mark != 3 {
-				t.Fatalf("the purge mark is %d (%v), and the purge reached uid 3", mark, err)
+			if mark, err := h.PurgedThrough("v1"); err != nil || mark != reached {
+				t.Fatalf("the purge mark is %d (%v), and the purge reached uid %d", mark, err, reached)
+			}
+			if _, ok, err := h.EntryByUID("v1", 2); err != nil || ok {
+				t.Fatalf("uid 2 survived the purge (%v), and the case this test is about is not reached", err)
 			}
 
 			plan, err := h.PlanRestore(RestoreRequest{Vault: "v1", ToUID: 2, Now: 7000})
@@ -354,5 +370,87 @@ func TestARestoreRefusesAPathPurgedAtThePointAndDeletedSince(t *testing.T) {
 				t.Fatalf("the refusal names %q and %+v, want %q", oe.Path, plan.Gone, want)
 			}
 		})
+	}
+}
+
+// newestGap, which exactAt measures every path against, reads down from the
+// point and stops at the first uid missing: the newest one at or below it,
+// wherever the others are, and zero when none is.
+func TestNewestGapIsTheNewestMissingUID(t *testing.T) {
+	h := newTestStore(t)
+	for i := 1; i <= 10; i++ {
+		h.appendAs(t, Entry{Path: fmt.Sprintf("note %d.md", i)})
+	}
+	if got, err := h.newestGap("v1", 10); err != nil || got != 0 {
+		t.Fatalf("with every uid there the newest gap is %d (%v)", got, err)
+	}
+	if err := h.ExecForTest(`DELETE FROM entries WHERE vault_id = 'v1' AND uid IN (1, 4, 7)`); err != nil {
+		t.Fatal(err)
+	}
+	for to, want := range map[int64]int64{10: 7, 8: 7, 7: 7, 6: 4, 5: 4, 4: 4, 3: 1, 2: 1, 1: 1} {
+		if got, err := h.newestGap("v1", to); err != nil || got != want {
+			t.Errorf("the newest gap at or below uid %d is %d (%v), want %d", to, got, err, want)
+		}
+	}
+}
+
+// BenchmarkARestoreBelowThePurgeMark plans a restore one uid below the purge
+// mark of a vault whose every path has a version on each side of it, so every
+// changed path's state at the point is checked against the purged range
+// before the plan is refused for the one path the purge made unreadable.
+// Reading that range once per path made this quadratic: 45 s at 40,000 paths.
+//
+//	go test -run XXX -bench BenchmarkARestoreBelowThePurgeMark ./internal/store/
+func BenchmarkARestoreBelowThePurgeMark(b *testing.B) {
+	const paths = 4000
+	dir := b.TempDir()
+	st, err := OpenWithSync(filepath.Join(dir, "trew.db"), filepath.Join(dir, "chunks"), SyncNormal)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.EnsureVault("v1", 1); err != nil {
+		b.Fatal(err)
+	}
+	heads := map[string]int64{}
+	round := func(r int) {
+		for start := 0; start < paths; start += 256 {
+			var entries []Entry
+			var bases []int64
+			for i := start; i < min(start+256, paths); i++ {
+				p := fmt.Sprintf("area-%d/notes/note-%05d.md", i%17, i)
+				entries = append(entries, Entry{Path: p, MTime: int64(r), Device: "d1", Chunks: []string{}})
+				bases = append(bases, heads[p])
+			}
+			res, err := st.AppendMany("v1", entries, bases, make([]int64, len(entries)))
+			if err != nil {
+				b.Fatal(err)
+			}
+			for k, got := range res {
+				if got.Err != nil {
+					b.Fatal(got.Err)
+				}
+				heads[entries[k].Path] = got.UID
+			}
+		}
+	}
+	round(0)
+	round(1)
+	if _, err := st.Purge("v1", 0); err != nil {
+		b.Fatal(err)
+	}
+	round(2)
+	mark, err := st.PurgedThrough("v1")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for range b.N {
+		plan, err := st.PlanRestore(RestoreRequest{Vault: "v1", ToUID: mark - 1, Now: 1})
+		var oe *OpError
+		if !errors.As(err, &oe) || oe.Code != OpCodeGone || len(plan.Gone) != 1 {
+			b.Fatalf("planned %d entries with %d gone: %v", len(plan.Entries), len(plan.Gone), err)
+		}
 	}
 }

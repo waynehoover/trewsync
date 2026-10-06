@@ -384,6 +384,45 @@ func TestADriftedLiveSetIsReportedAndHealed(t *testing.T) {
 	}
 }
 
+// Verify and RepairLive read the live set from the entries and from its tables
+// in one snapshot, so a device's commit landing between the two reads is in
+// both or in neither (T30). They were separate reads, each its own snapshot,
+// and `trewd verify`, which runs against a live server, reported 9 of 30
+// passes as livekeys faults while a device wrote and none once it stopped:
+// drift for an operator to chase that was never there.
+func TestVerifyReadsTheLiveSetInOneSnapshot(t *testing.T) {
+	h := newTestStore(t)
+	if err := h.writeAt(t, "notes/a.md", "", false); err != nil {
+		t.Fatal(err)
+	}
+	landed := 0
+	betweenLiveReads = func() {
+		landed++
+		if err := h.push(fmt.Sprintf("notes/landed %d.md", landed), "written while the live set was read"); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { betweenLiveReads = nil })
+
+	v, err := h.Verify(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range v.Faults {
+		t.Errorf("verify reported %v about a live set that never drifted", f)
+	}
+	if got, err := h.RepairLive(); err != nil || len(got) != 0 {
+		t.Errorf("RepairLive rebuilt %v (%v) for a live set that never drifted", got, err)
+	}
+	betweenLiveReads = nil
+	if landed != 2 {
+		t.Fatalf("%d commits landed between the reads, and verify and RepairLive each read once", landed)
+	}
+	if diff, err := liveDifference(h.db, "v1"); err != nil || diff != "" {
+		t.Fatalf("with the commits in, the live set and the entries disagree: %s %v", diff, err)
+	}
+}
+
 // Drift a write never meets is repaired at the next start: RepairLive, which
 // serve runs, finds the disagreement and rebuilds the vault's live set, and
 // leaves a vault that agrees alone.

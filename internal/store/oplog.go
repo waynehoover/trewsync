@@ -1082,6 +1082,9 @@ func (s *Store) operationTx(fn func(q execer) error) (done bool, err error) {
 			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		}
 	}
+	// The renderer runs in here (commitOperationTx), and it is the caller's
+	// code: a panic in it unwinds through the transaction, not past it (T34).
+	defer unwound(conn, abandon)
 	if err := fn(pinned{conn, ctx}); err != nil {
 		abandon()
 		return false, err

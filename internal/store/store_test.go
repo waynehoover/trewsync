@@ -1671,9 +1671,9 @@ func (h *harness) entryFor(t *testing.T, path string, bodies ...string) Entry {
 	return Entry{Path: path, Size: int64(size), MTime: 42, Device: "d1", Chunks: names}
 }
 
-// The property the savepoints exist for: one fsync for the batch must not mean
-// one verdict for the batch. A stale entry is refused by itself, and the
-// entries around it commit.
+// The property checking each entry before writing it exists for: one fsync
+// for the batch must not mean one verdict for the batch. A stale entry is
+// refused by itself, and the entries around it commit.
 func TestAppendManyRefusesOneEntryAndCommitsTheRest(t *testing.T) {
 	h := newTestStore(t)
 	live := h.file(t, "taken.md", "first")
@@ -1711,8 +1711,8 @@ func TestAppendManyRefusesOneEntryAndCommitsTheRest(t *testing.T) {
 	}
 
 	// The refused entries left nothing behind, and the committed ones are
-	// readable: a rolled-back savepoint must give back its uid as well as its
-	// rows, or the cursor a client saves would name a gap.
+	// readable: a refused entry must take no uid as well as write no rows, or
+	// the cursor a client saves would name a gap.
 	if out[2].UID != out[0].UID+1 {
 		t.Errorf("uids %d and %d are not consecutive; a refusal consumed one",
 			out[0].UID, out[2].UID)

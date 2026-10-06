@@ -5,9 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/waynehoover/trewsync/internal/store"
 )
 
 // AllowedOrigins lists the browser origins permitted to open a session.
@@ -40,6 +43,10 @@ var AllowedOrigins = []string{
 
 const healthTimeout = 5 * time.Second
 
+// healthFresh is how long one probe's answer stands for every /health request
+// (T62): one probe a second, however many arrive.
+const healthFresh = time.Second
+
 // HTTPHandler is everything the server exposes: a health check and the
 // websocket endpoint.
 //
@@ -56,6 +63,7 @@ const healthTimeout = 5 * time.Second
 func HTTPHandler(srv *Server, log *slog.Logger, extraOrigins ...string) http.Handler {
 	origins := append(append([]string{}, AllowedOrigins...), extraOrigins...)
 	mux := http.NewServeMux()
+	health := sharedHealth(srv, log)
 
 	// Whether this server could take a note, not whether the process answered
 	// (I17).
@@ -79,14 +87,8 @@ func HTTPHandler(srv *Server, log *slog.Logger, extraOrigins ...string) http.Han
 	// a container runtime or an uptime checker that reads the status code and
 	// nothing else, and telling those "ok" while notes are being refused is the
 	// failure this replaces.
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		// Bounded, because a disk that has stopped answering hangs rather than
-		// failing, and a probe that hangs reads as a network problem. Shorter
-		// than any sensible probe timeout so the answer is this server's.
-		ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
-		defer cancel()
-
-		h := srv.Health(ctx)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		h := health()
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		// So a proxy does not serve a cached "ok" from before the disk filled.
 		w.Header().Set("Cache-Control", "no-store")
@@ -95,11 +97,6 @@ func HTTPHandler(srv *Server, log *slog.Logger, extraOrigins ...string) http.Han
 			_, _ = w.Write([]byte("ok\n"))
 			return
 		}
-		// Logged as well as answered. A probe's 503 is a number on somebody
-		// else's dashboard; the log is where the operator looks, and a health
-		// check that fails silently in the server's own log is one more thing
-		// to correlate by hand.
-		log.Warn("health check failed", "reason", string(h.Why), "took", h.Took)
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte(string(h.Why) + "\n"))
 	})
@@ -134,4 +131,50 @@ func HTTPHandler(srv *Server, log *slog.Logger, extraOrigins ...string) http.Han
 	})
 
 	return mux
+}
+
+// sharedHealth is what /health answers: the server's own probe, run at most
+// once every healthFresh, with every request in that window given its answer
+// (T62).
+//
+// /health needs no credential, and every request ran the whole probe: the
+// database's write lock, a statfs, and a file created, written and removed in
+// the chunk root. A flood of them was that much work for each, from anybody
+// who could reach the port. Requests that arrive while a probe runs wait for
+// it and share its answer, and the ones after it reuse that answer until it is
+// healthFresh old, so a fault is heard within a second of the probe that
+// finds it. A drain is too: an "ok" probed just before Shutdown can stand for
+// the rest of its second.
+//
+// The probe's deadline is its own rather than a request's. Bounded, because a
+// disk that has stopped answering hangs rather than failing, and a probe that
+// hangs reads as a network problem; shorter than any sensible probe timeout so
+// the answer is this server's. Not the request's context, because a client
+// that hung up mid-probe would cancel it, and the failure that made would be
+// every other request's answer for the rest of the second.
+func sharedHealth(srv *Server, log *slog.Logger) func() store.Health {
+	var (
+		mu       sync.Mutex
+		probedAt time.Time
+		last     store.Health
+	)
+	return func() store.Health {
+		mu.Lock()
+		defer mu.Unlock()
+		if !probedAt.IsZero() && time.Since(probedAt) < healthFresh {
+			return last
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), healthTimeout)
+		defer cancel()
+		last, probedAt = srv.Health(ctx), time.Now()
+		if !last.CanPersist {
+			// Logged as well as answered, once per probe rather than per
+			// request. A probe's 503 is a number on somebody else's
+			// dashboard; the log is where the operator looks, and a health
+			// check that fails silently in the server's own log is one more
+			// thing to correlate by hand.
+			log.Warn("health check failed", "reason", string(last.Why), "took", last.Took)
+		}
+		return last
+	}
 }

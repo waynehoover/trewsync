@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -908,5 +909,103 @@ func TestRetentionHasFloorsAndAppliesToNewOperations(t *testing.T) {
 	if rec.Pins[0].ExpiresAt != res.CommittedAt+(90*24*time.Hour).Milliseconds() ||
 		rec.ResultExpiresAt != res.CommittedAt+(2*time.Hour).Milliseconds() {
 		t.Fatalf("recorded %+v", rec)
+	}
+}
+
+/* ---------------------------------------------------------------- *
+ * A panic inside a transaction (T34)
+ * ---------------------------------------------------------------- */
+
+// A panic inside an operation's transaction, here in the renderer it calls
+// with the real uids, unwinds through the transaction rather than past it.
+// MCP runs under net/http, which recovers a handler's panic and goes on
+// serving, so the store is still in use afterwards: the pinned connection
+// used to go back to the pool still inside BEGIN IMMEDIATE, every reader it
+// was handed to saw the uncommitted entry, and the next device write on it
+// was refused with "cannot start a transaction within a transaction".
+func TestAPanicInsideAnOperationLeavesNoTransactionOpen(t *testing.T) {
+	h := newTestStore(t)
+	a := h.writer(t, "agent")
+	before := h.footprint(t)
+	op := h.op(a, "create", h.change(t, a, "agent.md", 0, "never committed"))
+	renders := 0
+	op.Render = func(r OpResult) ([]byte, error) {
+		// The first call sizes the reply before the lock, and the second
+		// renders it from the real uids inside the transaction.
+		if renders++; renders == 2 {
+			panic("a bug in a renderer")
+		}
+		return renderJSON(r)
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the renderer's panic did not reach the caller")
+			}
+		}()
+		_, _ = h.CommitOperation(op)
+	}()
+
+	// Several reads, because the pool hands back the connection returned
+	// last, and that was the one the panic left behind.
+	for range 4 {
+		if uid, _, err := h.Head("v1", "agent.md"); err != nil || uid != 0 {
+			t.Fatalf("a reader sees agent.md at uid %d (%v), and it was never committed", uid, err)
+		}
+	}
+	if after := h.footprint(t); after != before {
+		t.Fatalf("the abandoned operation is visible: before %+v, after %+v", before, after)
+	}
+	if _, err := h.AppendCurrent("v1", h.entryFor(t, "device.md", "a device's note"), 0, 0); err != nil {
+		t.Fatalf("a device write after the panic: %v", err)
+	}
+}
+
+// And every other helper that opens a transaction for the store: each one
+// rolls back on a panic and gives its connection up rather than leaving a
+// write open in the pool (immediate, rebuilding, the operation's) or holding
+// the write lock for as long as the process lives (inTx, which had no
+// deferred rollback at all).
+func TestAPanicInsideAnyTransactionHelperRollsItBack(t *testing.T) {
+	for name, run := range map[string]func(h *harness, fn func(q execer) error) error{
+		"immediate":  func(h *harness, fn func(q execer) error) error { return immediate(h.db, fn) },
+		"rebuilding": func(h *harness, fn func(q execer) error) error { return rebuilding(h.db, fn) },
+		"operationTx": func(h *harness, fn func(q execer) error) error {
+			_, err := h.operationTx(fn)
+			return err
+		},
+		"inTx": func(h *harness, fn func(q execer) error) error {
+			return h.inTx(func(tx *sql.Tx) error { return fn(tx) })
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newTestStore(t)
+			latest, err := h.LatestUID("v1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("the panic did not reach the caller")
+					}
+				}()
+				_ = run(h, func(q execer) error {
+					if _, err := q.Exec(`INSERT INTO entries (vault_id, uid, path, n_chunks) VALUES ('v1', 99, 'half.md', 0)`); err != nil {
+						return err
+					}
+					panic("a bug inside the transaction")
+				})
+			}()
+			for range 4 {
+				if got, err := h.LatestUID("v1"); err != nil || got != latest {
+					t.Fatalf("a reader sees uid %d (%v), and the write that made it was never committed", got, err)
+				}
+			}
+			start := time.Now()
+			if _, err := h.AppendCurrent("v1", h.entryFor(t, "device.md", "a device's note"), 0, 0); err != nil {
+				t.Fatalf("a device write after the panic, %v later: %v", time.Since(start), err)
+			}
+		})
 	}
 }

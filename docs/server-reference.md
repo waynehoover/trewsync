@@ -593,7 +593,9 @@ needed before starting it again.
 Inspect logs, capacity, mounts, and permissions according to the result. Do not
 restart repeatedly just because the store is busy. Use `verify -deep` for
 integrity checks. Health responses are unauthenticated and intentionally omit
-vault names, paths, and detailed storage figures.
+vault names, paths, and detailed storage figures. The server runs the checks
+at most once a second and gives every request in that second the same answer,
+so a fault shows up within a second and a flood of requests costs one check.
 
 ## update
 
