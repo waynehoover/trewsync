@@ -1,7 +1,7 @@
 {
 	"id": "trew-sync",
 	"name": "TrewSync",
-	"version": "0.11.0",
+	"version": "0.11.1",
 	"minAppVersion": "1.7.2",
 	"description": "Self-hosted vault sync with full version history, on a server you run.",
 	"author": "Wayne Hoover",
