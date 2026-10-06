@@ -1879,15 +1879,21 @@ func affected(res sql.Result, err error) (int64, error) {
 // inTx runs fn in a transaction, committing if it returns nil and rolling back
 // otherwise. It is the shape a purge needs: an irreversible delete and the
 // checks that prove it right have to stand or fall together.
+//
+// The rollback is deferred, so a panic in fn rolls back too (T34). It was
+// called only when fn returned an error, so a panic left the transaction open
+// for the life of the process, holding the write lock once it had written:
+// every later write waited out the busy timeout and failed.
 func (s *Store) inTx(fn func(*sql.Tx) error) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
+	// Rollback's own error is not worth returning over fn's: fn's is why the
+	// purge is being abandoned, and it is the one a caller can act on. After
+	// a commit it is ErrTxDone and changes nothing.
+	defer func() { _ = tx.Rollback() }()
 	if err := fn(tx); err != nil {
-		// Rollback's own error is not worth returning over fn's: fn's is why
-		// the purge is being abandoned, and it is the one a caller can act on.
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()

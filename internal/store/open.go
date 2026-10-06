@@ -342,7 +342,8 @@ func migrate(db *sql.DB, dbPath string, id Identity) (Identity, error) {
 //
 // database/sql has no way to ask for it, so the statements are sent by hand on
 // a pinned connection. A connection whose rollback failed is discarded rather
-// than returned to the pool with a transaction still open on it.
+// than returned to the pool with a transaction still open on it, and so is
+// one a panic went through (unwound).
 func immediate(db *sql.DB, fn func(q execer) error) error {
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
@@ -358,6 +359,7 @@ func immediate(db *sql.DB, fn func(q execer) error) error {
 			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		}
 	}
+	defer unwound(conn, abandon)
 	if err := fn(pinned{conn, ctx}); err != nil {
 		abandon()
 		return err
@@ -367,6 +369,29 @@ func immediate(db *sql.DB, fn func(q execer) error) error {
 		return err
 	}
 	return nil
+}
+
+// unwound is deferred by every helper that holds a transaction open on a
+// pinned connection, and does nothing unless a panic is passing through: then
+// it rolls the transaction back, discards the connection, and lets the panic
+// go on (T34).
+//
+// Without it the deferred Close returned the connection to the pool still
+// inside BEGIN IMMEDIATE. The driver checks nothing when a pooled connection
+// is reused, so every reader it was handed to next saw the uncommitted writes
+// as though they had committed, and the next transaction begun on it failed
+// with "cannot start a transaction within a transaction". A panic reaches here
+// from inside the store's own transactions when something the caller handed
+// in panics, an operation's Render above all, and MCP runs under net/http,
+// which recovers a handler's panic and goes on serving with the same pool.
+// The connection is discarded even when the rollback worked, because a panic
+// can leave a statement half-run on it and nothing here can tell.
+func unwound(conn *sql.Conn, abandon func()) {
+	if p := recover(); p != nil {
+		abandon()
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		panic(p)
+	}
 }
 
 // rebuilding is immediate for a migration step that rebuilds a table other
@@ -402,6 +427,7 @@ func rebuilding(db *sql.DB, fn func(q execer) error) error {
 			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		}
 	}
+	defer unwound(conn, abandon)
 	q := pinned{conn, ctx}
 	if err := fn(q); err != nil {
 		abandon()
