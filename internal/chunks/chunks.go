@@ -789,15 +789,19 @@ func (w *Writer) failed() bool {
 // The error it returns is a failure from an *earlier* body, reported here so a
 // caller reading frames off a socket can stop early. Add returning nil is not a
 // promise about this body; only Close is.
+//
+// It does not hash the body. place does, on the writer that stores it, and a
+// body that is not what its name says fails the batch there and is never
+// filed under the name. Add hashed it too, on the caller's goroutine, which
+// for an upload is the one reading frames off the socket and had hashed every
+// body already to know its name: three SHA-256 passes over each body where
+// two do.
 func (w *Writer) Add(name string, body []byte) error {
 	if !ValidName(name) {
 		return fmt.Errorf("%w: %q", ErrBadName, name)
 	}
 	if int64(len(body)) > w.store.max {
 		return fmt.Errorf("%w: %d > %d", ErrTooLarge, len(body), w.store.max)
-	}
-	if got := Name(body); got != name {
-		return fmt.Errorf("%w: claimed %s, computed %s", ErrCorrupt, name, got)
 	}
 	w.mu.Lock()
 	err := w.err

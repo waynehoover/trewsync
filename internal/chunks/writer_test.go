@@ -50,17 +50,22 @@ func TestABatchStoresEveryBodyItWasGiven(t *testing.T) {
 // The name is a hash of the body, so a claim that does not match is either a
 // broken client or a corrupted one. Storing it under either name corrupts the
 // vault, and the batch must refuse it exactly as Put does.
+//
+// The writer that stores the body is what checks it, so the refusal is
+// Close's, which is the batch's answer; Add used to check it as well, a second
+// SHA-256 on the goroutine reading the upload, whose caller had just hashed
+// the body to learn its name.
 func TestABatchRefusesABodyThatDoesNotMatchItsName(t *testing.T) {
 	s := newTestStore(t)
 	w := s.NewWriter("v1")
 
 	honest := []byte("what it says it is")
 	name := Name(honest)
-	if err := w.Add(name, []byte("something else entirely")); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("err = %v, want ErrCorrupt", err)
+	if err := w.Add(name, []byte("something else entirely")); err != nil && !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("add: %v", err)
 	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("close: %v", err)
+	if err := w.Close(); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("close = %v, want ErrCorrupt", err)
 	}
 	if s.Has("v1", name) {
 		t.Fatal("a body that did not match its name was stored anyway")
