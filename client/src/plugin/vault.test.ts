@@ -203,6 +203,49 @@ describe("reading and writing", () => {
   });
 
   /**
+   * P-1d. Obsidian has its folders in memory, so a folder its index holds is
+   * not asked about level by level for every file written into it.
+   */
+  it("asks the disk nothing about folders Obsidian's index already holds", async () => {
+    adapter.seed("a/b/old.md", "already here");
+    await vault.write("a/b/new.md", enc.encode("new"), { mtime: 1000, ctime: 1000 });
+    expect(adapter.text("a/b/new.md")).toBe("new");
+    const asked = adapter.calls.filter(
+      (c) => (c.op === "exists" || c.op === "mkdir") && (c.path === "a" || c.path === "a/b"),
+    );
+    expect(asked).toEqual([]);
+  });
+
+  it("fails a write into a folder the index still shows and the disk has lost, and lands it later", async () => {
+    // The index behind the disk: the folder went outside Obsidian and the
+    // watcher has not said so. The write has nowhere to go and must say so,
+    // not land somewhere else; the next pass finds the index caught up.
+    adapter.seed("gone/old.md", "already here");
+    await adapter.rmdir("gone", true);
+    const index = new FakeVaultIndex(adapter);
+    const stale = { path: "gone", name: "gone" };
+    index.getAbstractFileByPath = (p: string) => (p === "gone" ? (stale as never) : null);
+    const v = new ObsidianVault(asVault(index), ".obsidian");
+    // A disk, unlike the fake, refuses a file in a folder that is not there.
+    adapter.fault = (op, path) => {
+      const cut = path.lastIndexOf("/");
+      const folder = cut === -1 ? "" : path.slice(0, cut);
+      return op === "writeBinary" && folder !== "" && !adapter.everything().includes(folder)
+        ? new Error(`ENOENT: no such file or directory, open '${path}'`)
+        : undefined;
+    };
+    await expect(v.write("gone/new.md", enc.encode("new"), { mtime: 1, ctime: 1 })).rejects.toThrow(
+      /ENOENT/,
+    );
+    expect(adapter.filePaths()).toEqual([]);
+
+    // The watcher has reported the folder gone.
+    index.getAbstractFileByPath = () => null;
+    await v.write("gone/new.md", enc.encode("new"), { mtime: 1, ctime: 1 });
+    expect(adapter.text("gone/new.md")).toBe("new");
+  });
+
+  /**
    * The engine's decision table compares mtimes. A downloaded file stamped
    * with the moment it landed looks locally edited on the next pass, so the
    * device would upload back what it just received, forever.

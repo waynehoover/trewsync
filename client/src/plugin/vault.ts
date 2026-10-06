@@ -2024,8 +2024,21 @@ export class ObsidianVault implements Vault {
    *
    * `writeBinary` does not, and a note arriving in a folder this device has
    * never seen is the common case on a first sync.
+   *
+   * Nothing is asked of the disk when Obsidian's index already holds the
+   * parent as a folder, and then every folder above it too (P-1d). The look
+   * was an `exists` per level for every file written, about 2 ms each on a
+   * phone, mostly to find folders the index had in memory all along. An
+   * index behind the disk the other way, a folder removed outside Obsidian
+   * and not yet reported, leaves the staging write with no folder to go into:
+   * it fails, the pass retries it once the index has caught up, and a failed
+   * write lands nowhere, least of all on somebody else's file.
    */
   private async ensureParents(normalizedPath: string): Promise<void> {
+    const cut = normalizedPath.lastIndexOf("/");
+    if (cut === -1) return;
+    const parent = this.vault.getAbstractFileByPath(normalizedPath.slice(0, cut));
+    if (parent !== null && statOf(parent) === undefined) return;
     const parts = normalizedPath.split("/");
     parts.pop();
     let at = "";
