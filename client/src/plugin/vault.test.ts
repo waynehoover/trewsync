@@ -2054,6 +2054,8 @@ describe("writing over a file the pass did not decide about", () => {
 
   it("retains a complete local backup if an in-place text write is cut short", async () => {
     adapter.seed("note.md", "unsent local text\n", 1000);
+    // A disk that stays full: the update is cut short, and so is every
+    // attempt to put back what the note held.
     adapter.fault = (op, path) => (op === "write" && path === "note.md" ? 3 : undefined);
     await expect(
       vault.replace(
@@ -2063,15 +2065,165 @@ describe("writing over a file the pass did not decide about", () => {
         { mtime: 2000, ctime: 1000 },
         "note (kept).md",
       ),
-    ).rejects.toThrow("The previous content is at note (kept).md");
-    expect(adapter.text("note.md")).toBe("inc");
+    ).rejects.toThrow(/could not be put back yet.*what it held is at note \(kept\)\.md/);
+    expect(adapter.text("note.md")?.length).toBe(3);
+    // The cut note is not handed to the engine, which would send it as an
+    // edit (T09), and it is still listed, which a deletion would not be.
+    await expect(vault.read("note.md")).rejects.toThrow(/cut short/);
+    const listed = (await vault.list()).map((f) => f.path);
+    expect(listed).toContain("note.md");
     // Listed before Obsidian's index has it, or it never syncs.
-    expect((await vault.list()).map((f) => f.path)).toContain("note (kept).md");
+    expect(listed).toContain("note (kept).md");
     // Obsidian lists the whole disk as it opens a vault again.
     adapter.reopen();
     const restarted = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian");
     expect((await restarted.list()).map((f) => f.path)).toContain("note (kept).md");
     expect(dec.decode(await restarted.read("note (kept).md"))).toBe("unsent local text\n");
+  });
+
+  /**
+   * T09. `process` truncates and then writes, so a write that stops part way
+   * leaves the start of the incoming text at the note's name. Read as an edit
+   * by the next pass, it was sent to every device as the note's newest
+   * version. What the note held goes back instead, with its own times, so the
+   * next pass finds it unchanged and fetches the update again.
+   */
+  it("puts the note back when its in-place update is cut short", async () => {
+    adapter.seed("note.md", "the synced text\n", 1000);
+    let armed = true;
+    adapter.fault = (op, path) => {
+      if (armed && op === "write" && path === "note.md") {
+        armed = false;
+        return 3;
+      }
+      return undefined;
+    };
+    await expect(
+      vault.replace(
+        "note.md",
+        { contentId: await plainDigest(enc.encode("the synced text\n")), idOf: plainDigest },
+        enc.encode("the incoming text\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow(/ENOSPC.*What the note held was put back$/);
+    expect(adapter.text("note.md")).toBe("the synced text\n");
+    expect((await adapter.stat("note.md"))?.mtime).toBe(1000);
+    // The server has that version, so its backup is a duplicate and goes.
+    expect(adapter.text("note (kept).md")).toBeUndefined();
+    expect(dec.decode(await vault.read("note.md"))).toBe("the synced text\n");
+
+    // And the update lands when it is tried again.
+    const out = await vault.replace(
+      "note.md",
+      { contentId: await plainDigest(enc.encode("the synced text\n")), idOf: plainDigest },
+      enc.encode("the incoming text\n"),
+      { mtime: 2000, ctime: 1000 },
+      "note (kept).md",
+    );
+    expect(out).toEqual({ landed: true });
+    expect(adapter.text("note.md")).toBe("the incoming text\n");
+  });
+
+  it("keeps the backup of what it put back when the server may not have it", async () => {
+    adapter.seed("note.md", "an unsent edit\n", 1000);
+    let armed = true;
+    adapter.fault = (op, path) => {
+      if (armed && op === "write" && path === "note.md") {
+        armed = false;
+        return 0;
+      }
+      return undefined;
+    };
+    await expect(
+      vault.replace(
+        "note.md",
+        undefined,
+        enc.encode("the incoming text\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow(/was put back, and is also at note \(kept\)\.md/);
+    expect(adapter.text("note.md")).toBe("an unsent edit\n");
+    expect(adapter.text("note (kept).md")).toBe("an unsent edit\n");
+  });
+
+  it("puts back a note cut inside a character", async () => {
+    const before = "日本語のノート\n";
+    adapter.seed("note.md", before, 1000);
+    let armed = true;
+    adapter.fault = (op, path) => {
+      if (armed && op === "write" && path === "note.md") {
+        armed = false;
+        // Inside the second character: the adapter reads U+FFFD there.
+        return 4;
+      }
+      return undefined;
+    };
+    await expect(
+      vault.replace(
+        "note.md",
+        { contentId: await plainDigest(enc.encode(before)), idOf: plainDigest },
+        enc.encode("日本語のノートと続き\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow(/was put back/);
+    expect(adapter.text("note.md")).toBe(before);
+  });
+
+  it("leaves alone a save made after the cut, which is nobody's cut text", async () => {
+    adapter.seed("note.md", "the synced text\n", 1000);
+    let cut = false;
+    adapter.fault = (op, path) => {
+      if (!cut && op === "write" && path === "note.md") {
+        cut = true;
+        return 3;
+      }
+      // The editor saves between the cut and the put-back.
+      if (cut && op === "read" && path === "note.md") {
+        adapter.seed("note.md", "typed after the cut\n", 3000);
+        adapter.fault = undefined;
+      }
+      return undefined;
+    };
+    await expect(
+      vault.replace(
+        "note.md",
+        undefined,
+        enc.encode("the incoming text\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow(/The previous content is at note \(kept\)\.md/);
+    expect(adapter.text("note.md")).toBe("typed after the cut\n");
+    expect(adapter.text("note (kept).md")).toBe("the synced text\n");
+    // Not on record as cut short: the save is read and syncs.
+    expect(dec.decode(await vault.read("note.md"))).toBe("typed after the cut\n");
+  });
+
+  it("puts the note back at the next listing when it cannot be at once, and reads it only then", async () => {
+    adapter.seed("note.md", "the synced text\n", 1000);
+    let cuts = 2;
+    adapter.fault = (op, path) =>
+      op === "write" && path === "note.md" && cuts-- > 0 ? 3 : undefined;
+    await expect(
+      vault.replace(
+        "note.md",
+        { contentId: await plainDigest(enc.encode("the synced text\n")), idOf: plainDigest },
+        enc.encode("the incoming text\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow(/could not be put back yet/);
+    await expect(vault.read("note.md")).rejects.toThrow(/cut short/);
+    await expect(vault.contentDigest("note.md")).rejects.toThrow(/cut short/);
+
+    // The disk has room again by the next pass.
+    const listed = await vault.list();
+    expect(listed.find((f) => f.path === "note.md")).toMatchObject({ size: 16, mtime: 1000 });
+    expect(dec.decode(await vault.read("note.md"))).toBe("the synced text\n");
+    expect(adapter.text("note (kept).md")).toBe("the synced text\n");
   });
 
   it("flushes the backup before truncation and the new note before removing the backup", async () => {

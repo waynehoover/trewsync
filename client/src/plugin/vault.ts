@@ -590,6 +590,7 @@ export class ObsidianVault implements Vault {
    * file whole.
    */
   async *readBlocks(path: string, blockSize = 1024 * 1024): AsyncGenerator<Uint8Array> {
+    this.refuseCutShort(this.resolve(path));
     const res = await fetch(this.resourceUrl(path));
     if (!res.ok || !res.body) {
       throw new Error(`cannot stream ${path}: the vault answered ${res.status}`);
@@ -631,6 +632,7 @@ export class ObsidianVault implements Vault {
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    this.refuseCutShort(this.resolve(path));
     const res = await fetch(this.resourceUrl(path), {
       headers: { Range: `bytes=${start}-${end - 1}` },
     });
@@ -712,6 +714,10 @@ export class ObsidianVault implements Vault {
     // Resolved before the spellings are forgotten below, so a name the disk
     // spells differently is read under its own spelling.
     for (const path of options.present ?? []) this.unlisted.add(this.resolve(path));
+    // A note an update was cut short in is put back before it is listed, so
+    // the listing describes it whole and the pass fetches the update again
+    // rather than reading the cut text as an edit (T09).
+    for (const [normalized, held] of [...this.cutShort]) await this.putBack(normalized, held);
     this.actualName.clear();
     this.ambiguousPaths = [];
     const items = this.vault.getAllLoadedFiles();
@@ -1028,7 +1034,9 @@ export class ObsidianVault implements Vault {
   private readonly normalised = new Map<string, string>();
 
   async read(path: string): Promise<Uint8Array> {
-    return new Uint8Array(await this.adapter.readBinary(this.resolve(path)));
+    const normalized = this.resolve(path);
+    this.refuseCutShort(normalized);
+    return new Uint8Array(await this.adapter.readBinary(normalized));
   }
 
   /**
@@ -1123,6 +1131,7 @@ export class ObsidianVault implements Vault {
   ): Promise<Replaced> {
     const from = this.resolve(path);
     const kept = this.resolve(keepAt);
+    await this.wholeBeforeTouching(from);
 
     // Whether this is a text update is decided from the name and from the
     // bytes that have already been fetched, before anything on disk is read
@@ -1238,10 +1247,12 @@ export class ObsidianVault implements Vault {
     expect: ExpectedContent | undefined,
     times: Times,
   ): Promise<Replaced> {
+    let was: Times;
     try {
       const stat = await this.adapter.stat(normalized);
       if (stat?.type !== "file") return { landed: false };
-      if (!(await this.create(keepAt, before, { mtime: stat.mtime, ctime: stat.ctime }))) {
+      was = { mtime: stat.mtime, ctime: stat.ctime };
+      if (!(await this.create(keepAt, before, was))) {
         return { landed: false };
       }
     } catch (error) {
@@ -1273,9 +1284,31 @@ export class ObsidianVault implements Vault {
       await this.flush();
     } catch (error) {
       if (error === changed) return { keptAt: keepAt, landed: false };
-      throw new Error(
-        `writing ${path} failed: ${String(error)}. The previous content is at ${keepAt}`,
-      );
+      // `process` truncates the note and then writes it, so a write that
+      // stopped part way (a full disk, an I/O error) left the start of the
+      // incoming version at the note's name, and nothing said it was this
+      // device's own failed write. The next pass read it as an edit, kept it
+      // at the name and sent it to every device as the newest version: a
+      // 410-byte note was fifteen bytes everywhere (T09). So what it held is
+      // put back, here and now, unless something else has been saved there.
+      const whole = await this.putBack(normalized, { previous, next, before, was });
+      const why = `writing ${path} failed: ${String(error)}`;
+      if (!whole) {
+        throw new Error(
+          this.cutShort.has(normalized)
+            ? `${why}. It was cut short and could not be put back yet, so it will not sync ` +
+                `until it is; what it held is at ${keepAt}`
+            : `${why}. The previous content is at ${keepAt}`,
+        );
+      }
+      if (expect !== undefined && (await expect.idOf(before)) === expect.contentId) {
+        // The note holds the version this was decided about, which the server
+        // has, so the backup is a duplicate, as it is after a write that lands.
+        await this.adapter.remove(this.resolve(keepAt)).catch(() => undefined);
+        this.entryChanged(this.resolve(keepAt));
+        throw new Error(`${why}. What the note held was put back`);
+      }
+      throw new Error(`${why}. What the note held was put back, and is also at ${keepAt}`);
     }
 
     if (expect !== undefined && (await expect.idOf(before)) === expect.contentId) {
@@ -1284,6 +1317,91 @@ export class ObsidianVault implements Vault {
       return { landed: true };
     }
     return { keptAt: keepAt, landed: true };
+  }
+
+  /**
+   * Notes whose in-place update was cut short and could not be put back whole
+   * yet, with what puts them back (T09).
+   *
+   * While one is here it is not read for the engine (`refuseCutShort`), so
+   * its start-of-another-version is never taken for an edit and sent, and
+   * every listing tries to put it back before anything reads it. Kept in
+   * memory: the backup beside the note is what survives a restart, and a
+   * note still cut short after one is read as it stands.
+   */
+  private readonly cutShort = new Map<string, CutShort>();
+
+  /**
+   * Puts back what a note held before its in-place update was cut short, and
+   * says whether the note now holds it, verified.
+   *
+   * Inside `process`, so it is decided in the same turn of the adapter's
+   * queue as the write: a note is put back only while it holds a strict
+   * prefix of the incoming text or of what it held, which is all a write cut
+   * short can leave, and anything else at the name (somebody's save in
+   * between) is left alone and the record dropped. Overwriting such a prefix
+   * loses no text: every byte of it is in the incoming version, which the
+   * server has, or in what is being put back. The note's own times go back
+   * with it, so the next pass sees it unchanged and fetches the incoming
+   * version again.
+   *
+   * A put-back that is cut short too, or cannot be verified, keeps the note
+   * on record and is tried again by the next listing; a note that has gone
+   * is not on record any more.
+   */
+  private async putBack(normalized: string, held: CutShort): Promise<boolean> {
+    let restoring = false;
+    try {
+      await this.adapter.process(
+        normalized,
+        (current) => {
+          restoring = cutShortOf(current, held.next) || cutShortOf(current, held.previous);
+          return restoring ? held.previous : current;
+        },
+        writeOptions(held.was),
+      );
+      if (restoring) {
+        this.wrote(normalized);
+        await verify(this.adapter, normalized, held.before);
+      }
+      this.cutShort.delete(normalized);
+      return restoring;
+    } catch (err) {
+      if (!(await this.stillThere(normalized))) {
+        this.cutShort.delete(normalized);
+        return false;
+      }
+      this.cutShort.set(normalized, held);
+      this.log(
+        `${normalized} was cut short while it was being updated and could not be put back yet`,
+        (err as Error).message,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Refuses to read a note whose update was cut short and is not whole yet
+   * (see `cutShort`), on every path the engine reads by.
+   */
+  private refuseCutShort(normalized: string): void {
+    if (!this.cutShort.has(normalized)) return;
+    throw new Error(
+      `${normalized} was cut short while an update was being written into it, and is not ` +
+        `read until what it held has been put back`,
+    );
+  }
+
+  /**
+   * Puts a note on record as cut short back before a write or a removal
+   * touches it, and refuses to touch it while it cannot be (T09): a backup or
+   * a kept copy of it would carry the cut text to every device instead.
+   */
+  private async wholeBeforeTouching(normalized: string): Promise<void> {
+    const held = this.cutShort.get(normalized);
+    if (held === undefined) return;
+    await this.putBack(normalized, held);
+    this.refuseCutShort(normalized);
   }
 
   /**
@@ -1316,6 +1434,7 @@ export class ObsidianVault implements Vault {
   ): Promise<Replaced> {
     const from = this.resolve(path);
     const kept = this.resolve(keepAt);
+    await this.wholeBeforeTouching(from);
     if (!(await this.adapter.exists(from))) {
       await this.remove(path);
       return { landed: true };
@@ -1424,6 +1543,7 @@ export class ObsidianVault implements Vault {
    * one copy and no more. The headless vault hashes as it reads.
    */
   contentDigest = async (path: string): Promise<string | undefined> => {
+    this.refuseCutShort(this.resolve(path));
     const bytes = await this.readIfThere(path);
     return bytes === undefined ? undefined : plainDigest(bytes);
   };
@@ -2094,6 +2214,33 @@ function writeOptions(times: Times): {
     ...(times.mtime > 0 ? { mtime: times.mtime } : {}),
     ...(times.ctime > 0 ? { ctime: times.ctime } : {}),
   };
+}
+
+/**
+ * What puts back a note whose in-place update was cut short (T09): the text
+ * it held, its bytes, its times, and the incoming text the write was cutting.
+ */
+interface CutShort {
+  readonly previous: string;
+  readonly next: string;
+  readonly before: Uint8Array;
+  readonly was: Times;
+}
+
+/**
+ * Whether `text` is what a write of `of` leaves when it stops part way: a
+ * strict prefix of it, as the adapter reads one back.
+ *
+ * A cut that fell inside a character leaves bytes that are not UTF-8, which
+ * the adapter's text read turns into U+FFFD, one or several depending on the
+ * platform's decoder, so those are not counted against the prefix. Nothing
+ * else is forgiven: a note holding one character that `of` does not have
+ * there is not a write of `of` cut short.
+ */
+function cutShortOf(text: string, of: string): boolean {
+  let start = text;
+  while (!of.startsWith(start) && start.endsWith("\uFFFD")) start = start.slice(0, -1);
+  return start.length < of.length && of.startsWith(start);
 }
 
 /** The same path with the case of its first cased letter flipped, or itself. */

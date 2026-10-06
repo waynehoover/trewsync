@@ -879,6 +879,57 @@ describe("an edit its stat could not see, under an incoming version", () => {
 });
 
 /**
+ * T09. A text update is written in place, through `process`, which truncates
+ * the note and then writes it. A disk that fills in between leaves the note
+ * cut short, and nothing said the short note was this device's own failed
+ * write: the next pass took it for an edit, kept it at the note's name and
+ * sent it to every device as the note's newest version (a 410-byte note was
+ * fifteen bytes everywhere). The full text survived only in history and in
+ * conflict copies.
+ */
+describe("an incoming update cut short as it is written in place", () => {
+  it("never sends the cut note anywhere, and keeps the note whole on both devices", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    const lines =
+      Array.from({ length: 20 }, (_, i) => `line ${i + 1} of the note`).join("\n") + "\n";
+    a.adapter.seed("n.md", lines, 1_700_000_000_000);
+    await converge(a, b);
+    expect(b.text("n.md")).toBe(lines);
+
+    const next = `${lines}line 21 added on a\n`;
+    a.adapter.seed("n.md", next, 1_700_000_100_000);
+    let armed = true;
+    b.adapter.fault = (op, path) => {
+      if (armed && op === "write" && path === "n.md") {
+        armed = false;
+        // Fifteen bytes land, then the disk is full.
+        return 15;
+      }
+      return undefined;
+    };
+    await converge(a, b);
+    expect(armed, "the update was never written").toBe(false);
+    // The note as it was, never the fifteen bytes.
+    expect(b.text("n.md")).toBe(lines);
+
+    // The incoming version is tried again, and lands.
+    await b.client.settle({ retryFailures: true });
+    await converge(a, b);
+    expect(b.text("n.md")).toBe(next);
+    expect(a.text("n.md")).toBe(next);
+    const history = await a.client.history("n.md");
+    expect(
+      history.filter((v) => v.device === "b").map((v) => `${v.uid}:${v.size}B`),
+      "b sent a version of a note it never edited",
+    ).toEqual([]);
+    expect(a.notes()).toEqual(["n.md"]);
+    expect(b.notes()).toEqual(["n.md"]);
+  }, 300_000);
+});
+
+/**
  * T63, through the server: names the server accepts, on a disk that holds
  * nothing longer than 255 bytes.
  *
