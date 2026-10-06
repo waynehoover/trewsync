@@ -722,6 +722,30 @@ describe("reading a file in blocks and in ranges", () => {
       await removeTree(dir);
     }
   });
+
+  /**
+   * T25. A file over 8 MiB is read in blocks and ranges rather than whole, and
+   * those reads followed a link where `read` refuses one. An attachment
+   * swapped for a link to this device's credential after the scan was read
+   * through it, and what came back would have been uploaded as the
+   * attachment.
+   */
+  it("refuses a note that has become a link, as reading it whole does (T25)", async () => {
+    await mkdir(join(root, ".trew"));
+    await writeFile(join(root, ".trew", "config.json"), '{"token":"this device"}');
+    await writeFile(join(root, "big.pdf"), body(10));
+    const vault = new NodeVault(root);
+    expect((await vault.list()).map((f) => f.path)).toEqual(["big.pdf"]);
+    await rm(join(root, "big.pdf"));
+    await symlink(join(root, ".trew", "config.json"), join(root, "big.pdf"));
+
+    await expect(vault.read("big.pdf")).rejects.toThrow(/through a link/);
+    const blocks = async () => {
+      for await (const b of vault.readBlocks("big.pdf")) void b;
+    };
+    await expect(blocks()).rejects.toThrow(/through a link/);
+    await expect(vault.readRange("big.pdf", 0, 16)).rejects.toThrow(/through a link/);
+  });
 });
 
 /**

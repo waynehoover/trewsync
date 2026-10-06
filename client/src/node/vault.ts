@@ -1816,11 +1816,29 @@ export class NodeVault implements Vault {
    * deciding and opening for the path to become a link.
    */
   async read(path: string): Promise<Uint8Array> {
+    const handle = await this.openNote(path);
+    try {
+      return new Uint8Array(await handle.readFile());
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /**
+   * Opens a note for reading, refusing a link at its name or above it (F24).
+   *
+   * One door for every read of a note's bytes (T25). `readBlocks` and
+   * `readRange` opened the path plainly, so a file over 8 MiB, which the
+   * engine reads in blocks rather than whole, was read through a link that
+   * `read` would have refused: an attachment swapped for a link to
+   * `.trew/config.json` after the scan handed over the device credential to be
+   * uploaded as the attachment.
+   */
+  private async openNote(path: string): Promise<Awaited<ReturnType<typeof open>>> {
     const full = await this.absolute(path);
     await this.readableDir(full);
-    let handle;
     try {
-      handle = await open(full, constants.O_RDONLY | constants.O_NOFOLLOW);
+      return await open(full, constants.O_RDONLY | constants.O_NOFOLLOW);
     } catch (err) {
       // ELOOP is what both kernels raise for a link under O_NOFOLLOW. macOS
       // has also been seen to answer EMLINK, which means nothing else here.
@@ -1829,11 +1847,6 @@ export class NodeVault implements Vault {
         throw new Error(`refusing a path that leaves the vault through a link: ${full}`);
       }
       throw err;
-    }
-    try {
-      return new Uint8Array(await handle.readFile());
-    } finally {
-      await handle.close();
     }
   }
 
@@ -1880,7 +1893,7 @@ export class NodeVault implements Vault {
    * small enough that peak memory is bounded by something other than the file.
    */
   async *readBlocks(path: string, blockSize = 1024 * 1024): AsyncGenerator<Uint8Array> {
-    const handle = await open(await this.absolute(path), "r");
+    const handle = await this.openNote(path);
     try {
       const buf = new Uint8Array(blockSize);
       for (;;) {
@@ -1897,7 +1910,7 @@ export class NodeVault implements Vault {
   }
 
   async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
-    const handle = await open(await this.absolute(path), "r");
+    const handle = await this.openNote(path);
     try {
       const out = new Uint8Array(end - start);
       let at = 0;

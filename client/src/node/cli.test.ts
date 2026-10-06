@@ -12,17 +12,7 @@
  */
 
 import { execFile } from "node:child_process";
-import {
-  chmod,
-  mkdtemp,
-  readFile,
-  readdir,
-  rename,
-  rm,
-  stat,
-  writeFile,
-  mkdir,
-} from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
