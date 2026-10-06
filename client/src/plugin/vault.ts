@@ -134,9 +134,9 @@ const STAGING_MARK = ".trew-tmp-";
  * rather than in one folder, so the rename that lands it never crosses a
  * mount and the copy a failure leaves behind is next to the note it was for.
  *
- * With a random part, and looked for before use. A fixed name was a name a
- * person could have given a real dotfile, which the listing never shows and
- * a sync of the note beside it would have overwritten without a word.
+ * With a random part (see `newStagingPath`). A fixed name was a name a person
+ * could have given a real dotfile, which the listing never shows and a sync
+ * of the note beside it would have overwritten without a word.
  *
  * Never longer than a disk holds (T63). The mark and the random part go in
  * front of the note's own name, and a note named within that many bytes of
@@ -182,17 +182,21 @@ function cutToBytes(name: string, budget: number): string {
 }
 
 /**
- * A staging name beside `normalized` that nothing occupies.
+ * A staging name beside `normalized` that nothing can already be using.
  *
- * The same search as the conflict copy and the trash, with a fresh nonce for
- * each try rather than a number: the name is random by design, and a numbered
- * second try would be exactly as guessable as the first. `stagingPath` puts
- * the dot prefix back on every candidate, which is what keeps the temporary
- * out of Obsidian's listing.
+ * Sixteen random bytes from the platform's cryptographic generator, and
+ * nothing asked of the disk (P-1e). It used to be four bytes and an `exists`
+ * before every staged write, with a fresh guess for each name found taken,
+ * and on a phone that look was a turn of the adapter's one queue, about 2 ms
+ * of every new file. What the look guarded against is a name somebody else
+ * could have used: a fixed one, or four bytes an older build's leftover
+ * could repeat. Nobody chooses a 128-bit name in advance, a dot-prefixed
+ * name never syncs so no other device can put one here, and a leftover of
+ * this plugin's carries a guess of its own: the chance of meeting one is
+ * one in 2^128 per write, far below what a disk can be trusted to.
  */
-async function freeStagingPath(adapter: Writer, normalized: string): Promise<string> {
-  const named = () => stagingPath(normalized, nonce());
-  return firstFreeName(named(), (path) => adapter.exists(path), named);
+function newStagingPath(normalized: string): string {
+  return stagingPath(normalized, nonce(16));
 }
 
 /**
@@ -290,8 +294,8 @@ async function removeOwnEmptyFolder(
   }
 }
 
-function nonce(): string {
-  const bytes = new Uint8Array(4);
+function nonce(size = 4): string {
+  const bytes = new Uint8Array(size);
   crypto.getRandomValues(bytes);
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -1567,7 +1571,7 @@ export class ObsidianVault implements Vault {
     bytes: Uint8Array,
     options: { mtime?: number; ctime?: number },
   ): Promise<void> {
-    const temp = await freeStagingPath(this.adapter, normalized);
+    const temp = newStagingPath(normalized);
     await stage(this.adapter, temp, bytes, options);
 
     if (!(await this.adapter.exists(normalized))) {
@@ -1637,7 +1641,7 @@ export class ObsidianVault implements Vault {
     const looks = !requireApiVersion("1.13.7");
     if (looks && (await this.adapter.exists(normalized))) return false;
     await this.ensureParents(normalized);
-    const temp = await freeStagingPath(this.adapter, normalized);
+    const temp = newStagingPath(normalized);
     await stage(this.adapter, temp, bytes.slice(), writeOptions(times));
 
     if (looks && (await this.adapter.exists(normalized))) {

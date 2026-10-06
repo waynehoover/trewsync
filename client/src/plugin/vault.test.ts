@@ -676,7 +676,7 @@ describe("writing a name that differs only by case", () => {
  */
 /** Whether a path is a staging copy beside `note`, whatever its random part. */
 const isStaging = (path: string, note = "note.md") =>
-  new RegExp(`^\\.trew-tmp-[0-9a-f]{8}-${note.replace(".", "\\.")}$`).test(path);
+  new RegExp(`^\\.trew-tmp-[0-9a-f]{32}-${note.replace(".", "\\.")}$`).test(path);
 /** The staging copies present, by name. */
 const stagingCopies = (a: FakeAdapter) => a.filePaths().filter((p) => p.includes(".trew-tmp-"));
 
@@ -748,7 +748,7 @@ describe("landing a note without a moment where it is half written", () => {
     adapter.seed("note.md", "old");
     adapter.fault = (op, path) => (op === "writeBinary" && path === "note.md" ? 1 : undefined);
     await expect(vault.write("note.md", enc.encode("new content"), times)).rejects.toThrow(
-      /complete new content is beside it at \.trew-tmp-[0-9a-f]{8}-note\.md/,
+      /complete new content is beside it at \.trew-tmp-[0-9a-f]{32}-note\.md/,
     );
     // The destination is what the adapter left, which is the failure this
     // API cannot prevent; the new version is whole beside it, and the old one
@@ -1418,15 +1418,21 @@ describe("a note whose name is near the filesystem's limit", () => {
  * A staging copy under a fixed name was a name a person
  * could have given a real dotfile, which no listing shows and a sync of the
  * note beside it would have overwritten.
+ *
+ * The four random bytes that replaced it were looked for on the disk before
+ * every staged write. Sixteen are not (P-1e): no name a person, a peer or an
+ * older build could have given a file is one of them, which is what this
+ * checks. A generator pinned to repeat a name a file already has is no longer
+ * caught by a look; the chance of meeting one from a working generator is one
+ * in 2^128 per write.
  */
 describe("a dotfile of the user's where a staging copy would go", () => {
   it("is never written over", async () => {
-    // Every name the staging could pick is taken by a file of the user's:
-    // pin the random part so the collision is certain rather than lucky.
+    // Pinned, so the random part repeats what an older build's four bytes
+    // could have left beside the note, and the user's file has that name.
     const realRandom = crypto.getRandomValues.bind(crypto);
-    let calls = 0;
     crypto.getRandomValues = ((arr: Uint8Array) => {
-      arr.fill(calls++ < 1 ? 0xab : 0xcd);
+      arr.fill(0xab);
       return arr;
     }) as typeof crypto.getRandomValues;
     try {
@@ -1438,6 +1444,21 @@ describe("a dotfile of the user's where a staging copy would go", () => {
     } finally {
       crypto.getRandomValues = realRandom;
     }
+  });
+
+  it("carries 128 random bits, a fresh draw for every write, and asks the disk nothing", async () => {
+    await vault.write("a.md", enc.encode("a"), { mtime: 1, ctime: 1 });
+    await vault.write("b.md", enc.encode("b"), { mtime: 1, ctime: 1 });
+    const names = adapter.calls
+      .filter((c) => c.op === "writeBinary" && c.path.includes(".trew-tmp-"))
+      .map((c) => c.path);
+    expect(names).toHaveLength(2);
+    const parts = names.map((p) => /^\.trew-tmp-([0-9a-f]{32})-[ab]\.md$/.exec(p)?.[1]);
+    expect(parts.every((p) => p !== undefined)).toBe(true);
+    expect(parts[0]).not.toBe(parts[1]);
+    expect(adapter.calls.filter((c) => c.op === "exists" && c.path.includes(".trew-tmp-"))).toEqual(
+      [],
+    );
   });
 });
 
