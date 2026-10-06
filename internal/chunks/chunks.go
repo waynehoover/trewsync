@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1018,6 +1019,50 @@ func (s *Store) Get(vaultID, name string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: stored as %s, hashes to %s", ErrCorrupt, name, got)
 	}
 	return body, nil
+}
+
+// GetWithHeadroom is Get with one spare byte, zero, in front of the body: it
+// returns buf with the verified body at buf[1:]. A fetch frames every body it
+// sends, and a raw frame is one marker byte and then the body, so reading the
+// body one byte in lets the marker go in front of it where it already is
+// (frame.EncodeWithHeadroom) rather than copying a megabyte to make room.
+func (s *Store) GetWithHeadroom(vaultID, name string) ([]byte, error) {
+	if !ValidName(name) {
+		return nil, fmt.Errorf("%w: %q", ErrBadName, name)
+	}
+	f, err := os.Open(s.path(vaultID, name))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	// The size the file has, read to its end, as os.ReadFile reads it: a body
+	// that has grown or shrunk on the disk is found by its hash below, exactly
+	// as Get finds it.
+	buf := make([]byte, 1, 1+info.Size()+1)
+	for {
+		n, err := f.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+n]
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(buf) == cap(buf) {
+			buf = append(buf, 0)[:len(buf)]
+		}
+	}
+	if got := Name(buf[1:]); got != name {
+		return nil, fmt.Errorf("%w: stored as %s, hashes to %s", ErrCorrupt, name, got)
+	}
+	return buf, nil
 }
 
 // Check verifies a stored chunk without returning it. Used by the store's

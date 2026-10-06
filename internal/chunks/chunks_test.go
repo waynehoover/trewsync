@@ -168,6 +168,35 @@ func TestGetDetectsCorruptionOnDisk(t *testing.T) {
 	}
 }
 
+// GetWithHeadroom is Get with one spare byte in front: the same body, the same
+// verification, and the same answers for a body that is missing or has rotted
+// on the disk, including one longer or shorter than it should be.
+func TestGetWithHeadroomIsGetWithASpareByte(t *testing.T) {
+	s := newTestStore(t)
+	body := []byte("a body a fetch will frame")
+	name := Name(body)
+	if err := s.Put("v1", name, body); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	buf, err := s.GetWithHeadroom("v1", name)
+	if err != nil || len(buf) != len(body)+1 || buf[0] != 0 || string(buf[1:]) != string(body) {
+		t.Fatalf("read %q (%v), want a zero and then %q", buf, err, body)
+	}
+
+	if _, err := s.GetWithHeadroom("v1", Name([]byte("never uploaded"))); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an absent body: err = %v, want ErrNotFound", err)
+	}
+	p, _ := s.Path("v1", name)
+	for _, rot := range []string{"a body a fetch will frame, and then some", "a body", ""} {
+		if err := os.WriteFile(p, []byte(rot), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.GetWithHeadroom("v1", name); !errors.Is(err, ErrCorrupt) || got != nil {
+			t.Fatalf("a body rotted to %q read as %q, err = %v, want ErrCorrupt", rot, got, err)
+		}
+	}
+}
+
 func TestGetDistinguishesAbsentFromCorrupt(t *testing.T) {
 	s := newTestStore(t)
 	name := Name([]byte("never uploaded"))

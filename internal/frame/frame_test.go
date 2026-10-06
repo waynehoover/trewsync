@@ -237,6 +237,32 @@ func TestPooledFramingKeepsEveryBodyItsOwn(t *testing.T) {
 	wg.Wait()
 }
 
+// A body read with a spare byte in front frames as Encode frames it, and a
+// raw frame of it is the buffer it was read into, not a copy. The spare byte is
+// never written: a buffer whose first byte is not the raw marker is framed by
+// copying instead, and left as it was.
+func TestEncodeWithHeadroomFramesInPlace(t *testing.T) {
+	for _, raw := range [][]byte{prose(1 << 10), sha256CTR("headroom", 300<<10), []byte("x")} {
+		buf := append([]byte{MarkerRaw}, raw...)
+		framed := EncodeWithHeadroom(buf)
+		if want := Encode(raw); !bytes.Equal(framed, want) {
+			t.Errorf("a %d-byte body framed differently with headroom than without", len(raw))
+		}
+		if framed[0] == MarkerRaw && &framed[0] != &buf[0] {
+			t.Errorf("a %d-byte raw frame was copied rather than framed in place", len(raw))
+		}
+		if out, err := Decode(framed, 1<<20); err != nil || !bytes.Equal(out, raw) {
+			t.Errorf("a %d-byte body did not come back as itself: %v", len(raw), err)
+		}
+	}
+	noise := sha256CTR("not zero", 64<<10)
+	buf := append([]byte{7}, noise...)
+	framed := EncodeWithHeadroom(buf)
+	if buf[0] != 7 || &framed[0] == &buf[0] || !bytes.Equal(framed[1:], noise) || framed[0] != MarkerRaw {
+		t.Fatal("a buffer whose spare byte was not the raw marker was written to or sent as it was")
+	}
+}
+
 // What framing a body costs, which is what the pools are for.
 //
 //	go test ./internal/frame -run '^$' -bench . -benchmem

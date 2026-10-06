@@ -47,15 +47,42 @@ const probeBytes = 4096
 // megabyte of JPEG to learn that costs CPU on every fetch for nothing. The probe
 // is an optimisation only; the output rule above still decides.
 func Encode(raw []byte) []byte {
+	if framed, ok := deflated(raw); ok {
+		return framed
+	}
+	return rawFrame(raw)
+}
+
+// EncodeWithHeadroom is Encode for a chunk read with one spare byte in front of
+// it, buf[1:], as chunks.Store.GetWithHeadroom reads one. A raw frame is then
+// buf itself, the spare byte its marker, so a body that does not deflate,
+// which is most of an attachment, goes out without being copied to make room
+// for one byte. The spare byte must be MarkerRaw, zero, as a fresh buffer
+// already is, and it is never written: the same buffer may be framed again
+// while an earlier frame of it is still being sent.
+func EncodeWithHeadroom(buf []byte) []byte {
+	raw := buf[1:]
+	if buf[0] != MarkerRaw {
+		return Encode(raw)
+	}
+	if framed, ok := deflated(raw); ok {
+		return framed
+	}
+	return buf
+}
+
+// deflated is raw's deflate frame, when deflating makes it shorter; see Encode
+// for the probe.
+func deflated(raw []byte) ([]byte, bool) {
 	if len(raw) > 2*probeBytes && !deflates(raw[:probeBytes]) {
-		return rawFrame(raw)
+		return nil, false
 	}
 	var buf bytes.Buffer
 	buf.WriteByte(MarkerDeflate)
 	if deflate(&buf, raw) == nil && buf.Len()-1 < len(raw) {
-		return buf.Bytes()
+		return buf.Bytes(), true
 	}
-	return rawFrame(raw)
+	return nil, false
 }
 
 func rawFrame(raw []byte) []byte {

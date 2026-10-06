@@ -2318,7 +2318,7 @@ func kindOf(e store.Entry) string {
 }
 
 // handleFetch streams the requested chunk bodies as binary frames, in the order
-// requested, each one framed by frame.Encode.
+// requested, each one framed by frame.EncodeWithHeadroom.
 //
 // Every chunk is checked to be present, and then read and checked against its
 // own name, before any frame is sent. Discovering the third of five is missing
@@ -2383,10 +2383,15 @@ func (s *Session) handleFetch(m wire.In) error {
 	// merely held. The guarantee is untouched either way: every body is
 	// verified before the header, and nothing here decides whether to verify,
 	// only whether to remember.
+	//
+	// Each body is read with a spare byte in front of it, where a raw frame's
+	// marker goes, so one that does not deflate, most of an attachment, is
+	// sent as it was read rather than copied a megabyte at a time to make room
+	// for one byte (frame.EncodeWithHeadroom).
 	kept := make(map[string][]byte, len(m.Chunks))
 	var keptBytes int64
 	for i, n := range m.Chunks {
-		body, err := s.srv.st.Chunks().Get(s.vaultID, n)
+		body, err := s.srv.st.Chunks().GetWithHeadroom(s.vaultID, n)
 		if err != nil {
 			s.quarantineIfCorrupt(n, err)
 			return s.reject(wire.CodeNoChunk,
@@ -2413,7 +2418,7 @@ func (s *Session) handleFetch(m wire.In) error {
 			// disk is reported here rather than shipped to a device that would
 			// refuse it for reasons it cannot diagnose.
 			var err error
-			body, err = s.srv.st.Chunks().Get(s.vaultID, n)
+			body, err = s.srv.st.Chunks().GetWithHeadroom(s.vaultID, n)
 			if err != nil {
 				s.quarantineIfCorrupt(n, err)
 				// It verified a moment ago and cannot be read now, so the disk
@@ -2428,7 +2433,7 @@ func (s *Session) handleFetch(m wire.In) error {
 		// Framed here and nowhere else, at the transport boundary: deflated
 		// when that is shorter, raw otherwise, so every frame is at most one
 		// byte longer than the chunk it carries.
-		if err := s.writeBinary(frame.Encode(body)); err != nil {
+		if err := s.writeBinary(frame.EncodeWithHeadroom(body)); err != nil {
 			return err
 		}
 	}
