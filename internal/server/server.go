@@ -100,12 +100,35 @@ const (
 	// treated as gone.
 	PongWait = 15 * time.Second
 
-	// SendQueueDepth is buffered frames per peer before it is dropped as too
-	// slow. Sized for a burst of fan-out, not for a catch-up: catch-up runs on
-	// the session's own goroutine and blocks rather than buffering.
+	// SendQueueDepth is how many of a session's own frames, its replies,
+	// catch-up and fetch bodies, may be queued before it waits for room.
+	// Catch-up and fetches run on the session's own goroutine and wait rather
+	// than buffering.
 	SendQueueDepth = 256
 
-	// SendQueueBytes bounds what one peer may have waiting in memory.
+	// FanoutQueueDepth and FanoutQueueBytes are room kept apart for what other
+	// sessions' commits send a peer, live batches and notices, which cannot
+	// wait and drop the peer when there is none (T55).
+	//
+	// The two used to share one budget, which a fetch keeps full on purpose:
+	// send waits for room, and that is the backpressure. Small chunks fill the
+	// frames long before the bytes, so a fetch longer than the socket buffers
+	// kept the queue full from end to end, and one save on any other device
+	// dropped a phone in the middle of its first sync; in a vault somebody
+	// kept typing into, the phone never finished. The queue now holds both,
+	// and a session's own frames stop at their own limits, so a broadcast
+	// always finds this much room however full a fetch keeps the rest.
+	//
+	// A whole batch's worth of frames, because one putmany of that many
+	// entries is that many broadcasts in a row, faster than any peer reads
+	// them. The bytes match SendQueueBytes, so a peer that has stopped reading
+	// altogether holds at most twice that, and is dropped once a burst of that
+	// size is waiting.
+	FanoutQueueDepth = wire.MaxBatchEntries
+	FanoutQueueBytes = SendQueueBytes
+
+	// SendQueueBytes bounds what a session's own frames may have waiting in
+	// memory; FanoutQueueBytes, above, bounds the rest.
 	//
 	// The depth above bounds frames, and a frame carrying a chunk body can be a
 	// megabyte, so a peer that stopped reading held 256 of them: measured at

@@ -37,10 +37,12 @@ type Session struct {
 	// the count, so the writer's decrements drove it negative and the byte bound
 	// switched itself off). Both are reserved before the frame goes on the
 	// channel and released after the write returns, so a zero means every frame
-	// has reached the socket. drained wakes a waiter when the writer has taken
-	// some away.
+	// has reached the socket. fanQueued is the share of queued that other
+	// goroutines put there, which has a budget of its own (FanoutQueueBytes,
+	// T55). drained wakes a waiter when the writer has taken some away.
 	queued    atomic.Int64
 	inflight  atomic.Int64
+	fanQueued atomic.Int64
 	drained   chan struct{}
 	dead      chan struct{}
 	closeOnce sync.Once
@@ -136,6 +138,10 @@ type outFrame struct {
 	// final marks the one frame a revoked session is still sent: the notice
 	// that it was revoked. See writeLoop.
 	final bool
+	// fanout marks a frame another goroutine queued without waiting, a live
+	// batch or a notice, which counts against the fan-out budget rather than
+	// the session's own (T55). See trySendFrame.
+	fanout bool
 }
 
 // pendingChange is a live batch held back during catch-up, already marshalled.
@@ -154,7 +160,7 @@ func (s *Server) Handle(ctx context.Context, conn *websocket.Conn, remote string
 	conn.SetReadLimit(HelloReadLimit)
 	sess := &Session{
 		srv: s, conn: conn, ctx: ctx, remote: remote,
-		out:     make(chan outFrame, SendQueueDepth),
+		out:     make(chan outFrame, SendQueueDepth+FanoutQueueDepth),
 		drained: make(chan struct{}, 1),
 		dead:    make(chan struct{}),
 	}
@@ -220,8 +226,7 @@ func (s *Session) writeLoop() {
 			// Released only now, after the write returned, so a zero on either
 			// counter means the frame has reached the socket rather than merely
 			// left the channel. drain relies on that (S10).
-			s.queued.Add(-int64(len(f.data)))
-			s.inflight.Add(-1)
+			s.release(f)
 			// Non-blocking, and one pending wake is enough: a waiter rechecks
 			// the counter rather than trusting the signal.
 			select {
@@ -293,6 +298,14 @@ func (s *Session) drain(timeout time.Duration) {
 //
 // The bytes are reserved before the frame is offered and given back if it is
 // refused, so the counter is never below what the writer will subtract.
+//
+// The session's own frames and the fan-out have a budget each (T55). The
+// own frames stop at SendQueueDepth frames and SendQueueBytes, counting
+// whatever else is queued, so they can never take the room the queue keeps
+// for a broadcast, FanoutQueueDepth frames and FanoutQueueBytes. A fan-out
+// frame is held to its own bytes alone, so however full the session's own
+// frames keep the queue, a broadcast is refused only when the fan-out itself
+// has piled up, which is a peer that has stopped reading.
 func (s *Session) enqueue(typ websocket.MessageType, data []byte) bool {
 	return s.enqueueFrame(outFrame{typ: typ, data: data})
 }
@@ -301,19 +314,42 @@ func (s *Session) enqueue(typ websocket.MessageType, data []byte) bool {
 // frame marked final reaches the queue.
 func (s *Session) enqueueFrame(f outFrame) bool {
 	n := int64(len(f.data))
-	if after := s.queued.Add(n); after > SendQueueBytes && after != n {
-		s.queued.Add(-n)
-		return false
+	if f.fanout {
+		if after := s.fanQueued.Add(n); after > FanoutQueueBytes && after != n {
+			s.fanQueued.Add(-n)
+			return false
+		}
+		s.queued.Add(n)
+	} else {
+		// Only the session's own goroutine queues its own frames, so nothing
+		// else can add one between this look and the reservation below.
+		if s.inflight.Load() >= SendQueueDepth {
+			return false
+		}
+		if after := s.queued.Add(n); after > SendQueueBytes && after != n {
+			s.queued.Add(-n)
+			return false
+		}
 	}
 	s.inflight.Add(1)
 	select {
 	case s.out <- f:
 		return true
 	default:
-		s.queued.Add(-n)
-		s.inflight.Add(-1)
+		s.release(f)
 		return false
 	}
+}
+
+// release gives back what a frame held of the budgets, once the writer has
+// written it or the queue has refused it.
+func (s *Session) release(f outFrame) {
+	n := int64(len(f.data))
+	s.queued.Add(-n)
+	if f.fanout {
+		s.fanQueued.Add(-n)
+	}
+	s.inflight.Add(-1)
 }
 
 // send blocks until the frame is queued.
@@ -347,13 +383,16 @@ func (s *Session) trySend(typ websocket.MessageType, data []byte) bool {
 	return s.trySendFrame(outFrame{typ: typ, data: data})
 }
 
-// trySendFrame is trySend for a frame already built.
+// trySendFrame is trySend for a frame already built. Everything sent this way
+// comes from another goroutine, or a timer, and counts against the fan-out's
+// budget rather than the session's own (T55).
 func (s *Session) trySendFrame(f outFrame) bool {
 	select {
 	case <-s.dead:
 		return false
 	default:
 	}
+	f.fanout = true
 	if !s.enqueueFrame(f) {
 		s.srv.metrics.Evicted()
 		s.kill(errors.New("send queue overflow, peer too slow"))

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,6 +177,79 @@ func TestS1APeerThatStopsReadingMidFetchIsStillReaped(t *testing.T) {
 	waitFor(t, "the stalled peer to be reaped", func() bool {
 		return r.srv.hub.peerCount(testVault) == 0
 	})
+}
+
+// A commit on another device does not drop a peer that is downloading (T55).
+//
+// A fetch keeps its peer's send queue full on purpose: send waits for room,
+// and that is the backpressure. A live batch from another device's commit goes
+// through trySend instead, which drops a peer it finds no room for, and small
+// chunks fill the queue's frames long before its bytes, so a fetch larger than
+// the socket buffers kept it full from end to end. A save anywhere else then
+// cut a phone off in the middle of its first sync, and a vault somebody kept
+// typing into could keep it from ever finishing. Modelled by not reading until
+// the fetch has filled the queue, the steady state of any fetch over a link
+// slower than the disk, and then committing the largest batch an exchange may
+// carry, every entry of it a broadcast to the phone at once.
+func TestACommitElsewhereDoesNotDropAPeerMidFetch(t *testing.T) {
+	r := newRig(t)
+	const n = 800
+	names := make([]string, n)
+	bodies := make([][]byte, n)
+	for i := range names {
+		bodies[i] = incompressible(1000+i, 8<<10)
+		names[i] = chunks.Name(bodies[i])
+	}
+	if err := r.st.Chunks().PutAll(testVault, bodies); err != nil {
+		t.Fatal(err)
+	}
+
+	phone := r.dial("phone")
+	phone.hello(0)
+	peer := r.onlyPeer()
+	laptop := r.dial("laptop")
+	laptop.hello(0)
+
+	phone.sendJSON(wire.In{Op: "fetch", Chunks: names})
+	phone.expectBodies(n)
+	waitFor(t, "the phone's queue to fill with its own fetch", func() bool {
+		return peer.inflight.Load() >= SendQueueDepth
+	})
+
+	entries := make([]wire.PutEntry, 0, wire.MaxBatchEntries)
+	saved := map[string]string{}
+	for i := 0; i < wire.MaxBatchEntries; i++ {
+		e, b := entryFor(fmt.Sprintf("saved/%d.md", i), fmt.Sprintf("a line typed on the laptop, %d", i))
+		entries = append(entries, e)
+		for k, v := range b {
+			saved[k] = v
+		}
+	}
+	for i, res := range laptop.putMany(entries, saved).Results {
+		if res.UID == 0 {
+			t.Fatalf("entry %d of the laptop's batch: %+v", i, res)
+		}
+	}
+
+	got, batches := 0, 0
+	for got < n || batches < wire.MaxBatchEntries {
+		typ, data, err := phone.read()
+		if err != nil {
+			t.Fatalf("the phone was cut off after %d of %d bodies and %d of %d batches, %d peers evicted: %v",
+				got, n, batches, wire.MaxBatchEntries, r.srv.Metrics().Snapshot().EvictedPeers, err)
+		}
+		if typ == websocket.MessageBinary {
+			got++
+			continue
+		}
+		if !strings.Contains(string(data), `"op":"batch"`) {
+			t.Fatalf("an unexpected text frame mid-fetch: %s", data)
+		}
+		batches++
+	}
+	if ev := r.srv.Metrics().Snapshot().EvictedPeers; ev != 0 {
+		t.Fatalf("%d peers were evicted", ev)
+	}
 }
 
 // S2: the handover from catch-up to live delivery waits for room in the queue
