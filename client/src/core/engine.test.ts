@@ -1022,6 +1022,78 @@ describe("concurrent edits, which is where notes get lost", () => {
  * (plan/protocol.md, "Paths"). A rename nobody reported is the describe after
  * this one.
  */
+/**
+ * The deletions a received folder rename brings (P-b).
+ *
+ * Every deletion asks whether it would remove a file this pass wrote, and it
+ * asked about every file the pass wrote: a folder of two thousand notes renamed
+ * elsewhere is two thousand of each, four million questions, 4.5 s in memory
+ * and about 50 s where `sameFile` is two stats. Only names that can be one file
+ * need asking, and the answer for those must not change.
+ */
+describe("the deletions a folder renamed elsewhere brings (P-b)", () => {
+  /** A vault that says what one file is by upper case, the way NTFS does, and counts asking. */
+  class UpperCaseDisk extends MemoryVault {
+    asked = 0;
+    async sameFile(a: string, b: string): Promise<boolean> {
+      this.asked++;
+      return a.toUpperCase() === b.toUpperCase();
+    }
+  }
+
+  async function synced(vault: UpperCaseDisk, paths: string[]) {
+    const rig = await engineOnFakeSocket({}, { vault });
+    const server = new CommittingServer(rig.socket);
+    const entries = [];
+    for (const [i, path] of paths.entries()) {
+      entries.push(await server.version(i + 1, path, `body of ${path}\n`));
+    }
+    rig.socket.raw({ op: "batch", from: 1, to: paths.length, entries });
+    await settleUntil("the notes to be taken", () => rig.engine.status().pending === paths.length);
+    await rig.engine.sync({ coalesceWrites: false });
+    return { ...rig, server };
+  }
+
+  it("asks whether two names are one file only where they can be", async () => {
+    const n = 200;
+    const old = Array.from({ length: n }, (_, i) => `Old Folder/note ${i}.md`);
+    const vault = new UpperCaseDisk();
+    const { engine, socket, server } = await synced(vault, old);
+    const moves = [];
+    for (const [i, path] of old.entries()) {
+      const to = path.replace("Old Folder", "New Folder");
+      moves.push(await server.version(n + i + 1, to, `body of ${path}\n`, { prev: path }));
+    }
+    socket.raw({ op: "batch", from: n + 1, to: 2 * n, entries: moves });
+    await settleUntil("the moves to be taken", () => engine.status().pending === 2 * n);
+    vault.asked = 0;
+    const report = await engine.sync({ coalesceWrites: false });
+
+    expect(report.downloaded).toBe(n);
+    expect(report.deletedLocally).toBe(n);
+    expect(vault.paths().every((p) => p.startsWith("New Folder/"))).toBe(true);
+    expect(vault.asked, "every deletion asked about every write").toBeLessThanOrEqual(n);
+  });
+
+  it("still refuses a deletion that would remove the file it just wrote", async () => {
+    // `ı` and `i` are one name to a disk that compares in upper case and two
+    // to the protocol's fold, so the key the writes are kept under has to be
+    // wider than the fold or this deletion goes ahead and takes the note.
+    const vault = new UpperCaseDisk();
+    const { engine, socket, server } = await synced(vault, ["ı.md"]);
+    const moved = await server.version(2, "i.md", "body of ı.md\n", { prev: "ı.md" });
+    socket.raw({ op: "batch", from: 2, to: 2, entries: [moved] });
+    await settleUntil("the move to be taken", () => engine.status().pending === 2);
+    const report = await engine.sync({ coalesceWrites: false });
+
+    expect(vault.text("i.md")).toBe("body of ı.md\n");
+    expect(vault.text("ı.md"), "the deletion removed the file the pass had written").toBe(
+      "body of ı.md\n",
+    );
+    expect(report.deletedLocally).toBe(0);
+  });
+});
+
 describe("a case-only rename on a receiving device", () => {
   async function scenario(others: number): Promise<{ b: Device; report: SyncReport }> {
     await fresh();

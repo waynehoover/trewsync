@@ -2103,7 +2103,7 @@ export class Engine {
     into("decideMs");
     await this.fill(report);
     await this.applyDeletes(report);
-    this.wroteThisPass = [];
+    this.wroteThisPass = new Map();
     await this.flush(report);
     // Folders last, once every file this pass moves has moved: a folder's
     // deletion goes to the server after the deletions of what was in it have
@@ -3817,7 +3817,17 @@ export class Engine {
    * the pass when it would describe whatever the editor had done since.
    */
   private deleteBaseline = new Map<string, string>();
-  private wroteThisPass: string[] = [];
+  /**
+   * What this pass wrote, by `sameFileKey`, in the order it wrote them.
+   *
+   * By key because every deletion asks whether it would remove one of these
+   * (P-b), and it asked about every one of them: a folder of two thousand
+   * notes renamed on another device is two thousand writes and two thousand
+   * deletions, four million questions, 4.5 s in memory and about 50 s on the
+   * headless client, whose `sameFile` is two stats. Two names that can be one
+   * file always share a key, so only those are asked.
+   */
+  private wroteThisPass = new Map<string, string[]>();
 
   /**
    * Whether removing `path` would remove something this pass wrote.
@@ -3835,7 +3845,7 @@ export class Engine {
     path: string,
   ): Promise<{ wrote: string; sure: boolean } | undefined> {
     const vault = this.opts.vault;
-    for (const wrote of this.wroteThisPass) {
+    for (const wrote of this.wroteThisPass.get(sameFileKey(path)) ?? []) {
       if (wrote === path) continue;
       if (vault.sameFile) {
         if (await vault.sameFile(wrote, path)) return { wrote, sure: true };
@@ -4259,7 +4269,10 @@ export class Engine {
    * way" of anything and landed over it.
    */
   private landed(path: string): void {
-    this.wroteThisPass.push(path);
+    const key = sameFileKey(path);
+    const same = this.wroteThisPass.get(key);
+    if (same) same.push(path);
+    else this.wroteThisPass.set(key, [path]);
     this.localByIdentity.set(this.identity(path), path);
   }
 
@@ -6266,6 +6279,20 @@ type PutFacts = Pick<BatchEntry, "path" | "meta" | "names">;
 interface UploadPlan {
   readonly names: string[];
   readonly bodyOf: (name: string) => Promise<Uint8Array>;
+}
+
+/**
+ * A key that two names of one file share on every disk this runs on (P-b).
+ *
+ * The protocol's fold, and then upper case over it, because a disk folds by
+ * its own table and some tables join names the fold keeps apart: NTFS and
+ * exFAT upper-case to compare, and `ı` and `i` both upper-case to `I`. Only
+ * ever wider than the fold, since it is computed from it, so it can put two
+ * names under one key that are two files (the vault is then asked, and says
+ * so) and never puts one file's two names under two keys.
+ */
+function sameFileKey(path: string): string {
+  return foldPath(path).toUpperCase();
 }
 
 /** Paths once each, those with more segments first, then in order. */
