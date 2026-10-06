@@ -161,9 +161,10 @@ it can make an archive your identity opens, holding whatever notes they
 choose. Check the archive is the backup you took before restoring from it:
 pass `-record /var/lib/trew.before-restore` (the preserved directory, or a
 copy of its `last-backup.json`) and unpack refuses an archive whose digest is
-not the one recorded there, unless `-not-last-backup` is given. Without a
-record, unpack prints the archive's SHA-256: compare it with the one `trewd
-backup` printed, or with a copy of `last-backup.json` kept offsite.
+not the last good one recorded there, unless `-not-last-backup` is given, and
+refuses a `-record` that names no record. Without a record, unpack prints the
+archive's SHA-256: compare it with the one `trewd backup` printed, or with a
+copy of `last-backup.json` kept offsite.
 
 Use a new preservation path if `trew.before-restore` already exists. Run the
 commands one at a time and stop on an error. **Only after verification succeeds:**

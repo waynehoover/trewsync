@@ -78,7 +78,7 @@ func cmdRehearse(ctx context.Context, args []string, out io.Writer) error {
 	// wrong archive named by mistake does not record a failed rehearsal.
 	var origin archiveOrigin
 	if encrypted {
-		if origin, err = checkArchiveOrigin(*backup, live, *other, out); err != nil {
+		if origin, err = checkArchiveOrigin(*backup, live, false, *other, out); err != nil {
 			return err
 		}
 	}

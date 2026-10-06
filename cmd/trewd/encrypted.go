@@ -115,6 +115,14 @@ func recordBackup(dataDir string, rec doctor.BackupRecord, err error, out io.Wri
 	} else {
 		rec.LastOK = rec.At
 	}
+	// The last good archive: this run's, when it wrote one, and otherwise the
+	// one before it, whatever this run was (T36). A failed run or a plaintext
+	// one used to leave no digest to compare with, and unpack and rehearse
+	// then took any archive the identity opens.
+	rec.LastArchive = prev.Archive()
+	if rec.OK && rec.Encrypted && rec.SHA256 != "" {
+		rec.LastArchive = &doctor.ArchiveRecord{SHA256: rec.SHA256, TakenAt: rec.TakenAt, To: rec.To, At: rec.At}
+	}
 	if werr := doctor.WriteRecord(dataDir, doctor.BackupRecordFile, rec); werr != nil {
 		fmt.Fprintf(out, "(the backup record in %s could not be written, so `trewd doctor` will not see this run: %v)\n",
 			dataDir, werr)
@@ -207,7 +215,7 @@ func cmdUnpack(args []string, out io.Writer) error {
 	if *from == "" || *identity == "" || *to == "" {
 		return errors.New("unpack needs -from FILE, -identity KEY and -to NEW_DIRECTORY")
 	}
-	origin, err := checkArchiveOrigin(*from, *record, *other, out)
+	origin, err := checkArchiveOrigin(*from, *record, true, *other, out)
 	if err != nil {
 		return err
 	}
@@ -251,9 +259,8 @@ func upgradeCopy(dir string) error {
 // it was decrypted, for after to finish once the manifest can be read.
 type archiveOrigin struct {
 	digest  string
-	rec     doctor.BackupRecord
-	known   bool // there was an encrypted backup on record to compare with
-	matched bool // and the archive is it
+	last    *doctor.ArchiveRecord // the last good archive recorded, when there is one
+	matched bool                  // and the archive is it
 }
 
 // checkArchiveOrigin compares an archive with the backup a data directory
@@ -262,12 +269,20 @@ type archiveOrigin struct {
 // The recipient an archive is encrypted to is public by design, and sits on
 // the server, so an archive that opens with the identity may have been made
 // by anyone who could read it, holding whatever store they chose. The backup
-// record holds the digest and snapshot time of the archive this server did
-// write. The same digest is that archive. Another is refused unless other
-// says it is meant (an older backup, say), and then warned about; no record
-// to compare with is said, since a restore after a disaster may have lost the
-// directory the record was in.
-func checkArchiveOrigin(from, recordAt string, other bool, out io.Writer) (archiveOrigin, error) {
+// record holds the digest and snapshot time of the last archive this server
+// did write. The same digest is that archive. Another is refused unless other
+// says it is meant (an older backup, say), and then warned about.
+//
+// With no record to compare with, required says what happens. `unpack
+// -record` names one, and a record that cannot answer, because there is none
+// where it points (a typo) or it records no encrypted backup, is refused
+// (T36): read as "no record", it unpacked any archive with a NOTE, which is
+// the check failing open exactly when somebody asked for it. Without -record
+// unpack goes on and says the archive is unchecked, since a restore after a
+// disaster may have lost the directory the record was in. `rehearse` is not
+// required to find one, and says so: it also compares the restore with every
+// version the live store holds.
+func checkArchiveOrigin(from, recordAt string, required, other bool, out io.Writer) (archiveOrigin, error) {
 	var o archiveOrigin
 	digest, err := archive.FileSHA256(from)
 	if err != nil {
@@ -287,24 +302,34 @@ func checkArchiveOrigin(from, recordAt string, other bool, out io.Writer) (archi
 	if info, err := os.Stat(recordAt); err == nil && !info.IsDir() {
 		dir, name = filepath.Dir(recordAt), filepath.Base(recordAt)
 	}
-	found, err := doctor.ReadRecord(dir, name, &o.rec)
+	var rec doctor.BackupRecord
+	found, err := doctor.ReadRecord(dir, name, &rec)
 	if err != nil {
 		return o, fmt.Errorf("the backup record in %s: %w", dir, err)
 	}
-	if !found || !o.rec.Encrypted || o.rec.SHA256 == "" {
-		unchecked(": " + dir + " records no encrypted backup")
+	o.last = rec.Archive()
+	if o.last == nil {
+		why := dir + " records no encrypted backup"
+		if !found {
+			why = "there is no " + name + " in " + dir
+		}
+		if required {
+			return o, fmt.Errorf("-record %s cannot be compared with: %s, so nothing says this archive is one this "+
+				"server wrote. Check the path, or leave -record off and compare the SHA-256 unpack prints with the "+
+				"one `trewd backup` printed; nothing was unpacked", recordAt, why)
+		}
+		unchecked(": " + why)
 		return o, nil
 	}
-	o.known = true
-	if digest == o.rec.SHA256 {
+	if digest == o.last.SHA256 {
 		o.matched = true
 		fmt.Fprintf(out, "%s is the backup this data directory last recorded (sha256 %s, snapshot taken %s)\n",
-			from, digest, o.rec.TakenAt)
+			from, digest, o.last.TakenAt)
 		return o, nil
 	}
 	why := fmt.Sprintf("%s is not the backup this data directory last recorded: its sha256 is %s, and %s records "+
 		"%s, written to %s, snapshot taken %s. Anyone holding the recipient can make an archive the identity opens",
-		from, digest, dir, o.rec.SHA256, o.rec.To, o.rec.TakenAt)
+		from, digest, dir, o.last.SHA256, o.last.To, o.last.TakenAt)
 	if !other {
 		return o, errors.New(why + ". If it is another backup of this server you mean to use (an older one, say), " +
 			"pass -not-last-backup")
@@ -321,12 +346,12 @@ func (o archiveOrigin) after(rep archive.Report, out io.Writer) error {
 		return fmt.Errorf("the archive changed while it was being read: sha256 %s before, %s as unpacked", o.digest, rep.SHA256)
 	}
 	switch {
-	case o.matched && o.rec.TakenAt != "" && rep.Manifest.TakenAt != o.rec.TakenAt:
+	case o.matched && o.last.TakenAt != "" && rep.Manifest.TakenAt != o.last.TakenAt:
 		return fmt.Errorf("the archive has the recorded digest, and its manifest says the snapshot was taken %s "+
-			"where the record says %s: the record does not describe it", rep.Manifest.TakenAt, o.rec.TakenAt)
-	case o.known && !o.matched:
+			"where the record says %s: the record does not describe it", rep.Manifest.TakenAt, o.last.TakenAt)
+	case o.last != nil && !o.matched:
 		fmt.Fprintf(out, "WARNING: this archive's snapshot was taken %s; the recorded backup's was taken %s\n",
-			rep.Manifest.TakenAt, o.rec.TakenAt)
+			rep.Manifest.TakenAt, o.last.TakenAt)
 	}
 	return nil
 }

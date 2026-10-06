@@ -471,11 +471,14 @@ the database against the archive's manifest, writes the database last, brings
 a store an older `trewd` wrote up to this build's schema, and then runs
 `verify -deep` on the result. A damaged or truncated archive never
 becomes a data directory. `-record DIR` (a data directory, or a copy of its
-`last-backup.json`) compares the archive's SHA-256 with the last backup
-recorded there before decrypting, and refuses another archive unless
-`-not-last-backup` is given; without `-record` it prints the digest and says
-it was not compared. Anyone holding the recipient can make an archive the
-identity opens, so an archive that decrypts is not proof the server wrote it.
+`last-backup.json`) compares the archive's SHA-256 with the last encrypted
+archive a backup wrote whole from there, which a failed or plaintext backup
+since does not change, before decrypting, and refuses another archive unless
+`-not-last-backup` is given; a `-record` with no record there, or one that
+records no encrypted backup, is refused rather than ignored. Without `-record`
+it prints the digest and says it was not compared. Anyone holding the
+recipient can make an archive the identity opens, so an archive that decrypts
+is not proof the server wrote it.
 
 `trewd rehearse -backup PATH [-identity KEY]` rehearses a restore of an
 encrypted archive or a plaintext backup directory: into a work directory of

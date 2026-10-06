@@ -63,6 +63,36 @@ type BackupRecord struct {
 	// LastOK is when the last backup that succeeded finished, kept across a
 	// failure so doctor can say how old the good copy is.
 	LastOK int64 `json:"lastOk,omitempty"`
+	// LastArchive is the last encrypted archive a backup from here wrote
+	// whole, kept across failed and plaintext runs, which write none: it is
+	// what `unpack -record` and `rehearse` compare an archive with (T36).
+	// SHA256 and TakenAt above describe this run only, and a failed run or a
+	// plaintext one left them empty, which the comparison read as "no
+	// encrypted backup recorded" and let any archive through.
+	LastArchive *ArchiveRecord `json:"lastArchive,omitempty"`
+}
+
+// ArchiveRecord is one encrypted archive a backup wrote: its digest, its
+// snapshot time as its manifest says it, where it went, and when the backup
+// that wrote it finished.
+type ArchiveRecord struct {
+	SHA256  string `json:"sha256"`
+	TakenAt string `json:"takenAt"`
+	To      string `json:"to"`
+	At      int64  `json:"at"`
+}
+
+// Archive is the last good encrypted archive the record knows of, or nil. A
+// record written before LastArchive existed has it only in the run's own
+// fields, when that run was an encrypted backup that succeeded.
+func (r BackupRecord) Archive() *ArchiveRecord {
+	if r.LastArchive != nil && r.LastArchive.SHA256 != "" {
+		return r.LastArchive
+	}
+	if r.OK && r.Encrypted && r.SHA256 != "" {
+		return &ArchiveRecord{SHA256: r.SHA256, TakenAt: r.TakenAt, To: r.To, At: r.At}
+	}
+	return nil
 }
 
 // RehearsalRecord is what `trewd rehearse` last did with a backup of this

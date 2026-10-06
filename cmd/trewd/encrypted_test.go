@@ -312,3 +312,75 @@ func TestUnpackAndRehearseCompareTheArchiveWithTheLastRecordedBackup(t *testing.
 		t.Fatalf("unpack without a record does not say the archive is unchecked:\n%s", out)
 	}
 }
+
+// forgedArchive is what anyone holding the public recipient can make: an
+// archive of another store, encrypted to the same recipient, which the
+// identity opens.
+func forgedArchive(t *testing.T, recipients string) string {
+	t.Helper()
+	other := t.TempDir()
+	withStore(t, other, func(st *store.Store) {
+		if err := st.EnsureVault("default", 1); err != nil {
+			t.Fatal(err)
+		}
+	})
+	appendOne(t, other, "planted.md", "words the owner never wrote")
+	forged := filepath.Join(t.TempDir(), "forged.tar.age")
+	mustRun(t, "backup", "-data", other, "-to", forged, "-recipients-file", recipients)
+	return forged
+}
+
+// T36. The comparison with the recorded backup failed open. A failed backup
+// rewrote the record keeping only when the last good one finished, so its
+// digest and snapshot time were gone, and a plaintext backup did the same;
+// the comparison then found "no encrypted backup" and unpacked anything with
+// a NOTE. Anyone who can write the backup destination can make the next
+// backup fail and then plant an archive. A -record that named nothing, a typo
+// for instance, read as no record and did the same. The last good archive is
+// now kept across failed and plaintext runs and compared with, and a -record
+// that cannot answer is refused.
+func TestTheArchiveComparisonDoesNotFailOpen(t *testing.T) {
+	dir := seeded(t)
+	key := filepath.Join(t.TempDir(), "key")
+	mustRun(t, "backup-key", "-x25519", "-out", key)
+	good := filepath.Join(t.TempDir(), "trew.tar.age")
+	mustRun(t, "backup", "-data", dir, "-to", good, "-recipients-file", key+".pub")
+	forged := forgedArchive(t, key+".pub")
+	refused := func(why string, args ...string) {
+		t.Helper()
+		to := filepath.Join(t.TempDir(), "restored")
+		out, err := trew(t, append([]string{"unpack", "-from", forged, "-identity", key, "-to", to}, args...)...)
+		if err == nil {
+			t.Fatalf("%s: the forged archive was unpacked:\n%s", why, out)
+		}
+		if _, statErr := os.Stat(to); !os.IsNotExist(statErr) {
+			t.Fatalf("%s: the refused unpack wrote %s", why, to)
+		}
+	}
+	refused("the record names the good archive", "-record", dir)
+	refused("a -record that names nothing", "-record", dir+"-typo")
+
+	// A backup that fails, and a plaintext one, leave the last good archive
+	// as the one compared with.
+	if _, err := trew(t, "backup", "-data", dir, "-to", t.TempDir(), "-recipients-file", key+".pub"); err == nil {
+		t.Fatal("a backup to a directory succeeded")
+	}
+	refused("after a failed backup", "-record", dir)
+	mustRun(t, "backup", "-plaintext-ok", "-data", dir, "-to", filepath.Join(t.TempDir(), "plain"))
+	refused("after a plaintext backup", "-record", dir)
+	out, err := trew(t, "rehearse", "-data", dir, "-backup", forged, "-identity", key)
+	if err == nil || !strings.Contains(err.Error(), "is not the backup this data directory last recorded") {
+		t.Fatalf("a rehearsal of the forged archive was not refused before decrypting: %v\n%s", err, out)
+	}
+
+	// The good archive is still the recorded one.
+	out = mustRun(t, "unpack", "-from", good, "-identity", key, "-to", filepath.Join(t.TempDir(), "r"), "-record", dir)
+	if !strings.Contains(out, "is the backup this data directory last recorded") {
+		t.Fatalf("the last good archive is not recognised:\n%s", out)
+	}
+
+	// A record with no encrypted backup in it cannot answer either.
+	plainOnly := seeded(t)
+	mustRun(t, "backup", "-plaintext-ok", "-data", plainOnly, "-to", filepath.Join(t.TempDir(), "plain"))
+	refused("a record of plaintext backups only", "-record", plainOnly)
+}
