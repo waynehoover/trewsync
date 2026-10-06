@@ -1719,6 +1719,40 @@ describe("folders and renames", () => {
  * them: the refused note stays on its disk, is named with the server's
  * reason, and goes through once somebody renames it.
  */
+/**
+ * What the disk files a name under is remembered between passes (P-c), and
+ * forgotten the moment the vault learns its disk keeps case apart: both
+ * vaults start on the safe answer that it folds and find out later, and a name
+ * remembered folded would go on blocking a second note the disk can hold.
+ */
+describe("what the disk files a name under, remembered", () => {
+  it("is asked afresh once the vault finds its disk keeps case apart", async () => {
+    class LearnsItsDisk extends MemoryVault {
+      folds = true;
+      canonical(path: string): string {
+        return this.folds ? path.toLowerCase() : path;
+      }
+    }
+    const vault = new LearnsItsDisk();
+    await vault.edit("Note.md", "this device's note\n", 1000);
+    const { engine, socket } = await engineOnFakeSocket({}, { vault });
+    const server = new CommittingServer(socket);
+    await engine.sync({ coalesceWrites: false });
+
+    vault.folds = false;
+    const other = await server.version(1, "note.md", "another device's note\n");
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [other] });
+    await settleUntil("the version to be taken", () => engine.status().pending === 1);
+    const report = await engine.sync({ coalesceWrites: false });
+
+    expect(report.blocked, JSON.stringify(report.inTheWay)).toBe(0);
+    expect(vault.snapshot()).toEqual({
+      "Note.md": "this device's note\n",
+      "note.md": "another device's note\n",
+    });
+  });
+});
+
 describe("two notes the receiving disk cannot hold apart", () => {
   it("refuses the second of two names that differ only by case, and keeps both", async () => {
     await fresh();

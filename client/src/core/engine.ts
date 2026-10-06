@@ -1886,6 +1886,7 @@ export class Engine {
     // What the disk will file each local path under, for the collision
     // check in `fill`. Worked out here, once per pass, from the same listing
     // the decisions are made from.
+    this.checkIdentityProbe();
     this.localByIdentity = new Map();
     for (const path of onDisk.keys()) this.localByIdentity.set(this.identity(path), path);
     this.deletingThisPass = new Set();
@@ -1895,12 +1896,10 @@ export class Engine {
     //    neither side, and left out of this set it would be refused in
     //    silence, which is the one thing a refusal that waits on a person
     //    must not be.
-    const paths = new Set<string>([
-      ...onDisk.keys(),
-      ...this.entries.keys(),
-      ...this.remote.keys(),
-      ...ambiguous.keys(),
-    ]);
+    const paths = new Set<string>(onDisk.keys());
+    for (const path of this.entries.keys()) paths.add(path);
+    for (const path of this.remote.keys()) paths.add(path);
+    for (const path of ambiguous.keys()) paths.add(path);
 
     const active = this.opts.activePath?.();
     const priority = (path: string) =>
@@ -1911,9 +1910,16 @@ export class Engine {
             ? 1
             : 2
           : 3;
-    const ordered = [...paths]
-      .map((path) => ({ path, priority: priority(path) }))
-      .sort((a, b) => a.priority - b.priority || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    // By priority, then by path in UTF-16 code units, which is what `<`
+    // compares and what a sort with no comparator does (P-c). Sorting each
+    // priority on its own natively is the same order without a comparator
+    // called a hundred thousand times on a vault of ten thousand.
+    const byPriority: string[][] = [[], [], [], []];
+    for (const path of paths) byPriority[priority(path)]!.push(path);
+    const ordered: { path: string; priority: number }[] = [];
+    byPriority.forEach((group, at) => {
+      for (const path of group.sort()) ordered.push({ path, priority: at });
+    });
     let previousPriority = 0;
     let visitedActive = false;
     let activeRemoteUid: number | undefined;
@@ -2039,9 +2045,17 @@ export class Engine {
       // notes. Worked out fresh every pass, like the clash below and for the
       // same reason: the moment one of them is renamed there is nothing here
       // to notice, so a remembered refusal would never clear.
-      const claimed = ambiguous.has(path)
-        ? path
-        : parents(path).find((ancestor) => ambiguous.has(ancestor));
+      //
+      // The folders above are walked only when some name is claimed twice,
+      // which on almost every pass none is (P-c): building them for every path
+      // of a settled vault was 3.7 ms of a pass at ten thousand, to find
+      // nothing.
+      const claimed =
+        ambiguous.size === 0
+          ? undefined
+          : ambiguous.has(path)
+            ? path
+            : parents(path).find((ancestor) => ambiguous.has(ancestor));
       if (claimed !== undefined) {
         const why = ambiguous.get(claimed)!;
         nowBlocked.add(path);
@@ -2053,8 +2067,12 @@ export class Engine {
         continue;
       }
 
-      const blockedBy = parents(path).find((ancestor) => filePaths.has(ancestor));
-      if (blockedBy !== undefined && !onDisk.has(path)) {
+      // Only for a path not on this disk, which is the only one it can block,
+      // so a settled vault walks no folders here either (P-c).
+      const blockedBy = onDisk.has(path)
+        ? undefined
+        : parents(path).find((ancestor) => filePaths.has(ancestor));
+      if (blockedBy !== undefined) {
         // Something upstream is a file where this path needs a folder.
         // Nothing can be written here until somebody renames one of
         // them, and a real filesystem answers ENOTDIR, which does not
@@ -3738,9 +3756,37 @@ export class Engine {
   /** Paths this pass has decided to delete locally, which cannot collide with a write. */
   private deletingThisPass = new Set<string>();
 
-  /** What the disk will file a path under. The vault knows; otherwise the safe guess. */
+  /**
+   * What the disk will file a path under. The vault knows; otherwise the safe
+   * guess.
+   *
+   * Remembered per path (P-c). Every pass asks it of every path on the disk,
+   * and the plugin's answer normalises the path and lower-cases it: 4.8 ms of a
+   * settled pass at ten thousand notes, every pass, for answers that do not
+   * change. The one thing that changes them is the vault learning whether its
+   * disk folds case, which both vaults find out once, after starting on the
+   * safe answer that it does; `identityProbe` notices that and starts the
+   * memory afresh. Pruned with the refusal memo, in `prune`.
+   */
   private identity(path: string): string {
-    return this.opts.vault.canonical ? this.opts.vault.canonical(path) : foldPath(path);
+    const known = this.identityOf.get(path);
+    if (known !== undefined) return known;
+    const canonical = this.opts.vault.canonical;
+    const id = canonical ? canonical.call(this.opts.vault, path) : foldPath(path);
+    this.identityOf.set(path, id);
+    return id;
+  }
+
+  private readonly identityOf = new Map<string, string>();
+  /** The vault's answer for a name with both cases in it, when `identityOf` was begun. */
+  private identityProbe: string | undefined;
+
+  /** Forgets every remembered identity if the vault's way of filing names has changed. */
+  private checkIdentityProbe(): void {
+    const probe = this.opts.vault.canonical?.call(this.opts.vault, "Aa");
+    if (probe === this.identityProbe) return;
+    this.identityProbe = probe;
+    this.identityOf.clear();
   }
 
   /**
@@ -5635,14 +5681,18 @@ export class Engine {
     // keyed by every path a pass walks, which includes the ones on disk, so a
     // vault that churns through names would otherwise keep an answer about
     // each of them for the life of the process.
-    if (this.refusalOf.size > onDisk.size + this.entries.size + this.remote.size) {
+    // The identity memo the same way and for the same reason (P-c).
+    const bound = onDisk.size + this.entries.size + this.remote.size;
+    if (this.refusalOf.size > bound || this.identityOf.size > bound) {
       const live = new Set<string>([
         ...onDisk.keys(),
         ...this.entries.keys(),
         ...this.remote.keys(),
       ]);
-      for (const path of this.refusalOf.keys()) {
-        if (!live.has(path)) this.refusalOf.delete(path);
+      for (const memo of [this.refusalOf, this.identityOf]) {
+        for (const path of memo.keys()) {
+          if (!live.has(path)) memo.delete(path);
+        }
       }
     }
   }
