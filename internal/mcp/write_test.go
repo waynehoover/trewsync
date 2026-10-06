@@ -825,6 +825,49 @@ func TestAPlanStopsReadingWhenItsCallEnds(t *testing.T) {
 	}
 }
 
+// A plan's or a page's view is the vault at its head, whichever way it was
+// listed: from the live set at the latest head, and as of the head at any
+// other, a continuation's.
+func TestAViewIsTheVaultAtItsHead(t *testing.T) {
+	r := newRig(t, withoutIndex())
+	r.write("a.md", "a\n")
+	r.write("dir/b.md", "b\n")
+	early := r.write("c.md", "c\n")
+	r.rename("a.md", "moved/a.md", "a\n")
+	r.remove("c.md")
+	r.write("dir/b.md", "b again\n")
+	if _, err := writeEntry(r.st, store.Entry{Path: "empty", Folder: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := r.st.LatestUID(testVault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &call{ctx: context.Background(), h: r.h, now: time.Now()}
+	for _, head := range []int64{early, latest} {
+		v, err := c.viewAt(head)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want []string
+		if err := r.st.EachAsOf(testVault, head, store.AsOfRange{}, func(e store.Entry) (bool, error) {
+			if !e.Folder && !e.Deleted {
+				want = append(want, fmt.Sprintf("%s@%d", e.Path, e.UID))
+			}
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, p := range v.files {
+			got = append(got, fmt.Sprintf("%s@%d", p, v.live[p].UID))
+		}
+		if strings.Join(got, " ") != strings.Join(want, " ") || v.head != head {
+			t.Fatalf("the view at %d lists %v, and the vault there is %v", head, got, want)
+		}
+	}
+}
+
 // A write that commits after the tool's deadline has passed is still
 // committed, and its reply says so, with the opId: the deadline bounds how
 // long a tool works, and it cannot take back a commit. Replaced by busy, the

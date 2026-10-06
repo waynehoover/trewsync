@@ -686,15 +686,38 @@ type storeView struct {
 	live  map[string]store.Entry
 }
 
+// viewAt is the vault at head. The vault's latest head is listed from its
+// live set (store.EachLive), in time that grows with the vault and not with
+// its history: the as-of listing behind every move, deletion, tag change and
+// vault-health page took 24 ms over ten thousand notes of one version each
+// and 240 ms over twenty versions each, and this takes 30 (the review of
+// 2026-10-06). Any other head, a continuation's, and the latest one when a
+// commit lands before the live set is read, is listed as of that head
+// (store.EachAsOf), so the view is always exactly the vault at head.
 func (c *call) viewAt(head int64) (*storeView, error) {
-	v := &storeView{c: c, head: head, live: map[string]store.Entry{}}
-	err := c.h.st.EachAsOf(c.h.vault, head, store.AsOfRange{}, func(e store.Entry) (bool, error) {
+	var v *storeView
+	keep := func(e store.Entry) (bool, error) {
 		if !e.Folder && !e.Deleted {
 			v.files = append(v.files, e.Path)
 			v.live[e.Path] = e
 		}
 		return c.ctx.Err() == nil, nil
-	})
+	}
+	latest, err := c.h.st.LatestUID(c.h.vault)
+	if err != nil {
+		return nil, err
+	}
+	listed := int64(-1)
+	if latest == head {
+		v = &storeView{c: c, head: head, live: map[string]store.Entry{}}
+		if listed, err = c.h.st.EachLive(c.h.vault, keep); err != nil {
+			return nil, err
+		}
+	}
+	if listed != head {
+		v = &storeView{c: c, head: head, live: map[string]store.Entry{}}
+		err = c.h.st.EachAsOf(c.h.vault, head, store.AsOfRange{}, keep)
+	}
 	if err == nil {
 		err = c.ctx.Err()
 	}
