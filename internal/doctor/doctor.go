@@ -485,8 +485,15 @@ func remedyForHealth(reason string) string {
 	return "Read the server's log for the error, and run `trewd verify -deep` with the server stopped."
 }
 
-// liveHolder is who holds a lock exclusively, by the record it wrote, when
-// that process is still alive. Read without taking the lock.
+// liveHolder is who holds a lock exclusively, by the record it wrote, when a
+// process holds the lock now.
+//
+// The record outlives a server killed outright, and a pid alive now is not
+// proof it is that server: pids are reused, and in a container trewd is pid
+// 1, so `docker compose run ... doctor` after an unclean stop found itself
+// at the recorded pid and reported a hung server for one that was not
+// running (T43). The lock is asked, and only when the recorded pid is alive,
+// since a dead one settles it and asking takes the lock, for an instant.
 func liveHolder(dataDir, name string) (string, bool) {
 	holder := dirlock.Holder(dataDir, name)
 	if holder == "" {
@@ -501,8 +508,10 @@ func liveHolder(dataDir, name string) (string, bool) {
 		return holder, false
 	}
 	// Signal 0 asks whether the process exists without touching it.
-	err = syscall.Kill(pid, 0)
-	return holder, err == nil || errors.Is(err, syscall.EPERM)
+	if err := syscall.Kill(pid, 0); err != nil && !errors.Is(err, syscall.EPERM) {
+		return holder, false
+	}
+	return holder, lockHeld(dataDir, name)
 }
 
 // restarts reads how the server has been starting: a restart loop, or a run

@@ -357,6 +357,26 @@ func TestDoctorReportsEveryInjectedFault(t *testing.T) {
 	}
 }
 
+// T43. A server killed outright leaves its lock's record, "serve pid N",
+// and doctor took the process at that pid being alive for the server being
+// alive. In a container trewd is pid 1, so `docker compose run ... doctor`
+// after an unclean stop found itself at pid 1 and reported a hung server, a
+// Fail, for a server that was not running at all. The lock itself is asked
+// now: nothing holds it, so nothing is serving.
+func TestDoctorAsksTheLockAndNotAReusedPid(t *testing.T) {
+	dir := healthy(t)
+	// The record of a server killed outright, naming a pid that is alive:
+	// this one's, as pid 1 is the container's own.
+	if err := os.WriteFile(filepath.Join(dir, dirlock.Server), []byte(fmt.Sprintf("serve pid %d\n", os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep, failed := doctorOn(t, dir)
+	expect(t, rep, doctor.CheckServer, doctor.Note, "no server is running")
+	if failed {
+		t.Fatalf("doctor failed a directory no server holds: %+v", rep.Findings)
+	}
+}
+
 // swap replaces a seam for the length of a test.
 func swap[T any](t *testing.T, seam *T, with T) {
 	t.Helper()
