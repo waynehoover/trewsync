@@ -1331,6 +1331,90 @@ describe("a large staged copy with the right length and the wrong bytes", () => 
 });
 
 /**
+ * T63. The server takes a name of up to 255 bytes, which is what ext4, f2fs
+ * and APFS hold, and the staging copy's name is the note's name with the
+ * staging mark in front: nineteen bytes more. A note whose name was within
+ * nineteen bytes of the limit never landed here, and an incoming edit failed
+ * once its conflict copy's name, plus those bytes, passed it. Every pass
+ * tried again and failed the same way, which threat model D1 says a name the
+ * server accepted must never be.
+ */
+describe("a note whose name is near the filesystem's limit", () => {
+  const times = { mtime: 1000, ctime: 1000 };
+  const bytesIn = (s: string) => enc.encode(s).length;
+  /**
+   * A disk that refuses to make a name longer than 255 bytes, as ext4, f2fs
+   * and APFS do. Asking about one is not refused: nothing can be there.
+   */
+  const nameMax = (a: FakeAdapter) => {
+    const tooLong = (p: string) => p.split("/").some((part) => bytesIn(part) > 255);
+    const makes = new Set(["write", "writeBinary", "append", "mkdir", "rename", "copy"]);
+    a.fault = (op, path, to) =>
+      makes.has(op) && (tooLong(path) || (to !== undefined && tooLong(to)))
+        ? new Error(`ENAMETOOLONG: name too long, ${op} '${to ?? path}'`)
+        : undefined;
+  };
+  /** The staging names this test's writes used, by the calls that wrote them. */
+  const staged = (a: FakeAdapter) =>
+    a.calls
+      .filter((c) => c.op === "writeBinary" && c.path.includes(".trew-tmp-"))
+      .map((c) => c.path);
+  const unpaired = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  it("lands a new note whose name is 250 bytes", async () => {
+    nameMax(adapter);
+    const name = `Notes/${"n".repeat(247)}.md`;
+    expect(bytesIn(name.slice("Notes/".length))).toBe(250);
+    await vault.write(name, enc.encode("a note with a long name\n"), times);
+    expect(adapter.text(name)).toBe("a note with a long name\n");
+    expect(stagingCopies(adapter)).toEqual([]);
+    for (const p of staged(adapter)) {
+      const last = p.slice(p.lastIndexOf("/") + 1);
+      expect(bytesIn(last)).toBeLessThanOrEqual(255);
+      expect(last.startsWith(".trew-tmp-")).toBe(true);
+    }
+  });
+
+  it("cuts a name of three- and four-byte characters between characters, never inside one", async () => {
+    nameMax(adapter);
+    // 78 three-byte characters and an emoji of four bytes, 238 bytes, then the
+    // extension: the cut lands inside the emoji's surrogate pair or a
+    // character's bytes unless it is made between characters.
+    for (const name of [
+      `${"ノ".repeat(79)}.md`,
+      `${"ノ".repeat(78)}🪨🪨.md`,
+      `${"🪨".repeat(62)}.md`,
+    ]) {
+      expect(bytesIn(name)).toBeLessThanOrEqual(255);
+      await vault.write(name, enc.encode(name), times);
+      expect(adapter.text(name)).toBe(name);
+    }
+    expect(staged(adapter)).toHaveLength(3);
+    for (const p of staged(adapter)) {
+      expect(bytesIn(p)).toBeLessThanOrEqual(255);
+      expect(unpaired.test(p), `a surrogate was split in ${p}`).toBe(false);
+      expect(p.startsWith(".trew-tmp-")).toBe(true);
+    }
+  });
+
+  it("keeps the backup of an edited note whose conflict copy's name is 250 bytes", async () => {
+    nameMax(adapter);
+    adapter.seed("note.md", "the note as it was\n", 1000);
+    const keepAt = `${"k".repeat(247)}.md`;
+    const out = await vault.replace(
+      "note.md",
+      { contentId: "not-what-is-there", idOf: async () => "something-else" },
+      enc.encode("the incoming edit\n"),
+      { mtime: 2000, ctime: 1000 },
+      keepAt,
+    );
+    expect(out).toEqual({ keptAt: keepAt, landed: true });
+    expect(adapter.text(keepAt)).toBe("the note as it was\n");
+    expect(adapter.text("note.md")).toBe("the incoming edit\n");
+  });
+});
+
+/**
  * A staging copy under a fixed name was a name a person
  * could have given a real dotfile, which no listing shows and a sync of the
  * note beside it would have overwritten.

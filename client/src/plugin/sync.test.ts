@@ -877,3 +877,48 @@ describe("an edit its stat could not see, under an incoming version", () => {
     expect(b.adapter.trashedLocally).toEqual([]);
   }, 300_000);
 });
+
+/**
+ * T63, through the server: names the server accepts, on a disk that holds
+ * nothing longer than 255 bytes.
+ *
+ * The plugin's staging name put nineteen bytes in front of the note's own, so
+ * a new note named within that of the limit never arrived, and an edit to a
+ * note whose conflict copy's name came within it never landed: the backup of
+ * what was there could not be staged. Both failed the same way on every pass.
+ */
+describe("a note whose name is near the filesystem's limit", () => {
+  const bytesIn = (s: string) => new TextEncoder().encode(s).length;
+  function nameMax(d: Device): void {
+    const tooLong = (p: string) => p.split("/").some((part) => bytesIn(part) > 255);
+    const makes = new Set(["write", "writeBinary", "append", "mkdir", "rename", "copy"]);
+    d.adapter.fault = (op, path, to) =>
+      makes.has(op) && (tooLong(path) || (to !== undefined && tooLong(to)))
+        ? new Error(`ENAMETOOLONG: name too long, ${op} '${to ?? path}'`)
+        : undefined;
+  }
+
+  it("arrives, and so do the edits made to it afterwards", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    nameMax(b);
+    // 250 bytes: within the staging mark's nineteen of the limit.
+    const long = `${"n".repeat(247)}.md`;
+    // 220 bytes, so the conflict copy of an edit, " (Conflicted copy b
+    // <stamp>)" more, fits in 255 and its staging copy used not to.
+    const edited = `${"e".repeat(217)}.md`;
+    expect([bytesIn(long), bytesIn(edited)]).toEqual([250, 220]);
+    a.adapter.seed(long, "a note with a long name\n", 1000);
+    a.adapter.seed(edited, "the first version\n", 1000);
+    await converge(a, b);
+    expect(b.text(long)).toBe("a note with a long name\n");
+    expect(b.text(edited)).toBe("the first version\n");
+
+    a.adapter.seed(edited, "the second version\n", 2_000_000);
+    await converge(a, b);
+    expect(b.text(edited)).toBe("the second version\n");
+    expect(b.notes().sort()).toEqual([edited, long].sort());
+    expect(b.adapter.filePaths().filter((p) => p.includes(".trew-tmp-"))).toEqual([]);
+  }, 300_000);
+});

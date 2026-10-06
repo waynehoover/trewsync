@@ -137,12 +137,48 @@ const STAGING_MARK = ".trew-tmp-";
  * With a random part, and looked for before use. A fixed name was a name a
  * person could have given a real dotfile, which the listing never shows and
  * a sync of the note beside it would have overwritten without a word.
+ *
+ * Never longer than a disk holds (T63). The mark and the random part go in
+ * front of the note's own name, and a note named within that many bytes of
+ * the limit, which the server accepts, never landed here: the staging write
+ * was refused on every pass, for good. The note's name is cut from the end
+ * to fit, between characters; the mark and the random part are what make a
+ * staging copy one, and they are kept whole.
  */
 function stagingPath(normalized: string, nonce: string): string {
   const cut = normalized.lastIndexOf("/");
   const dir = cut === -1 ? "" : normalized.slice(0, cut + 1);
   const name = cut === -1 ? normalized : normalized.slice(cut + 1);
-  return `${dir}${STAGING_MARK}${nonce}-${name}`;
+  const mark = `${STAGING_MARK}${nonce}-`;
+  return `${dir}${mark}${cutToBytes(name, NAME_MAX - mark.length)}`;
+}
+
+/**
+ * The longest name one file can have, in bytes of UTF-8, on the disks a vault
+ * lives on: ext4 and f2fs on Android and Linux, and APFS. The server refuses
+ * a longer one (`segmenttoolong`), so a note's own name always fits.
+ */
+const NAME_MAX = 255;
+
+/**
+ * `name`, cut from the end to at most `budget` bytes of UTF-8.
+ *
+ * Between characters, never inside one: `for...of` walks code points, so a
+ * surrogate pair is a single step, and each step is counted at the width
+ * UTF-8 gives it. A cut inside a character is a name the adapter would encode
+ * with U+FFFD in it, which is not a name anybody gave a file.
+ */
+function cutToBytes(name: string, budget: number): string {
+  let used = 0;
+  let end = 0;
+  for (const ch of name) {
+    const code = ch.codePointAt(0)!;
+    const width = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    if (used + width > budget) break;
+    used += width;
+    end += ch.length;
+  }
+  return name.slice(0, end);
 }
 
 /**
