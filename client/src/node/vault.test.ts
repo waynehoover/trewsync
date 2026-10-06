@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { JsonIndexStore, NodeVault, TEMP_MARK, isTemporary, writeDurably } from "./vault.ts";
 import { removeTree } from "../core/test-server.ts";
 import { deferred, within } from "../core/test-async.ts";
+import { plainDigest } from "../core/digest.ts";
 
 let root: string;
 
@@ -262,6 +263,47 @@ describe("reading and writing", () => {
     expect(await v.exists("dir2")).toBe(true);
     await v.remove("dir2");
     expect(await v.exists("dir2")).toBe(false);
+  });
+
+  /**
+   * T23. A download lands as a new file, staged with the default mode, so a
+   * diary somebody had made readable only by themselves came back readable by
+   * everyone on the machine after the next edit from another device.
+   */
+  it("keeps a note's permissions when a new version replaces it (T23)", async () => {
+    const v = new NodeVault(root);
+    const mode = async (name: string) => (await stat(join(root, name))).mode & 0o7777;
+    for (const [name, before] of [
+      ["diary.md", 0o600],
+      ["tool.sh", 0o750],
+    ] as const) {
+      await writeFile(join(root, name), "version one\n");
+      await chmod(join(root, name), before);
+      const digest = await plainDigest(enc.encode("version one\n"));
+      const out = await v.replace(
+        name,
+        { contentId: digest, idOf: plainDigest },
+        enc.encode("version two, from another device\n"),
+        { mtime: 1_700_000_000_000, ctime: 1_700_000_000_000 },
+        `${name} (kept)`,
+      );
+      expect(out).toEqual({ landed: true });
+      expect(await readFile(join(root, name), "utf8")).toBe("version two, from another device\n");
+      expect((await mode(name)).toString(8), name).toBe(before.toString(8));
+    }
+    // Only the permissions, never set-id: a peer's bytes do not get to run as
+    // this file's owner because the file they replaced could.
+    await writeFile(join(root, "odd.sh"), "version one\n");
+    await chmod(join(root, "odd.sh"), 0o4755);
+    const digest = await plainDigest(enc.encode("version one\n"));
+    await v.replace(
+      "odd.sh",
+      { contentId: digest, idOf: plainDigest },
+      enc.encode("version two\n"),
+      { mtime: 1_700_000_000_000, ctime: 1_700_000_000_000 },
+      "odd (kept).sh",
+    );
+    expect((await mode("odd.sh")).toString(8)).toBe("755");
   });
 });
 

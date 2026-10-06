@@ -2202,9 +2202,17 @@ export class NodeVault implements Vault {
     const failure = (error: unknown): unknown =>
       retained === undefined ? error : new PreservationError(error, [retained]);
     try {
+      // With the note's own permissions (T23). The new version is a new file,
+      // and staged with the default mode a note somebody had made readable
+      // only by themselves came back readable by everyone on the machine
+      // after the next edit from another device. The permission bits only:
+      // a peer's bytes do not get to run as this file's owner because the
+      // file they replace could.
+      const mode = await permissionsOf(full);
+      const stage = { mtime: times.mtime, ...(mode === undefined ? {} : { mode }) };
       // Durable before anything is moved: a crash after the rename below must
       // not leave the path empty and the new content only in memory.
-      await writeDurably(staged, bytes, true, { mtime: times.mtime, stageIn: this.staging });
+      await writeDurably(staged, bytes, true, { ...stage, stageIn: this.staging });
 
       // On the destination's filesystem, decided before the original moves
       // (R37).
@@ -2218,7 +2226,7 @@ export class NodeVault implements Vault {
       // reaches.
       if (!(await sameFilesystem(staged, dirname(full)))) {
         const near = `${full}.${TEMP_MARK}near${randomBytes(4).toString("hex")}`;
-        await writeDurably(near, bytes, true, { mtime: times.mtime });
+        await writeDurably(near, bytes, true, stage);
         await rm(staged, { force: true });
         staged = near;
       }
@@ -3321,6 +3329,18 @@ async function sameFilesystem(a: string, b: string): Promise<boolean> {
     lstat(b).catch(() => undefined),
   ]);
   return one !== undefined && two !== undefined && one.dev === two.dev;
+}
+
+/**
+ * A file's permission bits, for the version about to replace it (T23), or
+ * undefined where there is no file. Read without the set-id and sticky bits.
+ * A path that cannot be looked at reads as no file: the new version gets the
+ * default mode, and the move aside that follows says why the path cannot be
+ * used, if it cannot.
+ */
+async function permissionsOf(path: string): Promise<number | undefined> {
+  const st = await lstat(path).catch(() => undefined);
+  return st?.isFile() ? st.mode & 0o777 : undefined;
 }
 
 /**
