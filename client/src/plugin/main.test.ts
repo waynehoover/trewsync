@@ -928,6 +928,38 @@ describe("syncing while it runs", () => {
     expect(review.isOpen).toBe(true);
     expect(review.titleEl.allText()).toBe("Review conflicts");
   }, 300_000);
+
+  /**
+   * Android pauses Obsidian when the screen turns off, and the sync socket
+   * goes with it: a first sync longer than the screen timeout was cut off
+   * again and again (Pixel 9a, 2026-10-06). On a phone every pass tells the
+   * screen lock it is running, and tells it again when it ends.
+   */
+  it("keeps a phone's screen on while a pass runs, and only a phone's", async () => {
+    await fresh();
+    const desk = await load();
+    expect((desk.plugin as unknown as { awake?: unknown }).awake).toBeUndefined();
+
+    Platform.isMobileApp = true;
+    try {
+      const { plugin, app } = await load();
+      const awake = (plugin as unknown as { awake?: { set(busy: boolean): void } }).awake;
+      expect(awake).toBeDefined();
+      const said: boolean[] = [];
+      const set = awake!.set.bind(awake);
+      awake!.set = (busy) => {
+        said.push(busy);
+        set(busy);
+      };
+      app.vault.adapter.seed("note.md", "# Note\n");
+      await startVault(plugin, "phone");
+      await synced(plugin);
+      expect(said).toContain(true);
+      expect(said.at(-1)).toBe(false);
+    } finally {
+      Platform.isMobileApp = false;
+    }
+  }, 120_000);
 });
 
 describe("when things go wrong", () => {

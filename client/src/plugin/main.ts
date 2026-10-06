@@ -58,6 +58,7 @@ import {
 } from "../core/client.ts";
 import { watchResume } from "./resume.ts";
 import { watchDelivery } from "./delivery.ts";
+import { ScreenAwake } from "./screen-awake.ts";
 import type { TransferActivity } from "../core/transfer.ts";
 import { describeTransfer } from "./transfer.ts";
 import { SUPPORT_TABLE, platformStanding } from "./platform-notice.ts";
@@ -360,6 +361,8 @@ export default class TrewPlugin extends Plugin {
   private wakeLoop: (() => void) | undefined;
   private stopResume: (() => void) | undefined;
   private resuming: Promise<void> | undefined;
+  /** Phones only: the screen stays on while a long pass runs. */
+  private awake: ScreenAwake | undefined;
   private readonly panelClosers = new Set<() => void>();
 
   watchUnload(close: () => void): () => void {
@@ -371,6 +374,11 @@ export default class TrewPlugin extends Plugin {
 
   override async onload(): Promise<void> {
     this.stopResume = watchResume(() => this.resume());
+    // Android pauses Obsidian when the screen turns off, and the sync socket
+    // goes with it, so a first sync longer than the screen timeout was cut
+    // off again and again (screen-awake.ts).
+    if (Platform.isMobileApp)
+      this.awake = new ScreenAwake(globalThis.navigator?.wakeLock, globalThis.document);
     // Obsidian mobile has no status bar, and the declaration says so:
     // addStatusBarItem is "not available on mobile". The ribbon is on both,
     // so the state goes there too: its tooltip is the same sentence, and it
@@ -603,6 +611,8 @@ export default class TrewPlugin extends Plugin {
     this.stoppedNotice = undefined;
     this.stopResume?.();
     this.stopResume = undefined;
+    this.awake?.dispose();
+    this.awake = undefined;
     this.running = false;
     this.generation++;
     this.clearTimers();
@@ -3260,6 +3270,7 @@ export default class TrewPlugin extends Plugin {
 
   private setState(state: State): void {
     this.state = state;
+    this.awake?.set(state.kind === "loading" || state.kind === "syncing");
     // A notice saying TrewSync has stopped is true until the state says otherwise,
     // and no longer: pairing again, unlinking and every recovery leave through
     // here.

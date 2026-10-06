@@ -336,8 +336,12 @@ included. Large attachments need more memory, particularly on phones.
 ## Phones
 
 Android sync runs while Obsidian is **open in the foreground**. There is no
-background service or push notification to wake it. Keep the screen on for a
-large first sync, and let changes finish before closing the app.
+background service or push notification to wake it. Turning the screen off
+pauses Obsidian and drops its connection within seconds, so while a sync runs
+for more than a couple of seconds TrewSync keeps the screen on, and lets it
+sleep again when the sync finishes. Switching to another app or pressing the
+power button still pauses it; an interrupted sync carries on where it stopped
+when Obsidian is open again. Let changes finish before closing the app.
 
 iOS has not been tested. If a first connection is rejected because of its
 browser origin, the panel shows an origin hint for the server operator; see
