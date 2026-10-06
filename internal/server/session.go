@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strings"
@@ -54,6 +55,11 @@ type Session struct {
 	// twice: it pings only when this is set, and it treats a ping that went
 	// unanswered while this was clear as no verdict. See keepalive.
 	reading atomic.Bool
+	// received counts the message bytes read off the connection, as they
+	// arrive rather than a message at a time, so keepalive can tell a peer
+	// whose pong is late behind what it is sending from one that has gone
+	// (T56). See readMsg.
+	received atomic.Int64
 
 	vaultID string
 	device  string
@@ -498,6 +504,12 @@ func (s *Session) takeID(m wire.In) error {
 // A client that answers pings and sends nothing else holds a session open. That
 // is a slow-loris in a system built for one person's own devices behind a
 // tunnel. Per-session queues and frame sizes are bounded.
+//
+// The message is read readStep bytes at a time, as conn.Read would read it
+// whole, so that received moves while a large body is still arriving (T56).
+// Each read returns only once its whole step has arrived, so the step is the
+// grain of the liveness keepalive judges by: at 16 KiB, any uplink faster than
+// about 9 kbit/s shows progress within a pong's fifteen seconds.
 func (s *Session) readMsg() (websocket.MessageType, []byte, error) {
 	// A pong is processed only inside this Read, so keepalive may ping only
 	// while it is running. The flag is cleared on the way out because the
@@ -505,8 +517,29 @@ func (s *Session) readMsg() (websocket.MessageType, []byte, error) {
 	// be seen.
 	s.reading.Store(true)
 	defer s.reading.Store(false)
-	return s.conn.Read(s.ctx)
+	typ, r, err := s.conn.Reader(s.ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	b := make([]byte, 0, 512)
+	for {
+		n, err := r.Read(b[len(b):min(cap(b), len(b)+readStep)])
+		b = b[:len(b)+n]
+		s.received.Add(int64(n))
+		if errors.Is(err, io.EOF) {
+			return typ, b, nil
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		if len(b) == cap(b) {
+			b = append(b, 0)[:len(b)]
+		}
+	}
 }
+
+// readStep is the most readMsg asks of the connection at once; see there.
+const readStep = 16 << 10
 
 // keepalive asks a quiet connection whether it is still there.
 //
@@ -539,6 +572,7 @@ func (s *Session) keepalive() {
 			if hook := s.srv.beforePing.Load(); hook != nil {
 				(*hook)()
 			}
+			before := s.received.Load()
 			ctx, cancel := context.WithTimeout(s.ctx, s.srv.pongWait)
 			err := s.conn.Ping(ctx)
 			cancel()
@@ -551,6 +585,18 @@ func (s *Session) keepalive() {
 				// and the pong is sitting unprocessed behind it. That is not a
 				// verdict on the connection. The next tick asks again once the
 				// session is back in a read.
+				continue
+			}
+			if s.received.Load() != before {
+				// Bytes kept arriving while the pong did not (T56). A device
+				// uploading over a slow link writes its pong behind the bodies
+				// it has already handed its socket, and Node's WebSocket queues
+				// up to megabytes there, so below about 2.2 Mbit/s the pong
+				// came after PongWait and the upload was cut off a minute into
+				// every connection; below about 150 kbit/s a 1 MiB body could
+				// not arrive inside one, and that file never uploaded. A peer
+				// whose bytes are arriving has not gone; one whose bytes stop
+				// is judged at the next tick.
 				continue
 			}
 			// Closing the connection ends the read this session is parked on,
