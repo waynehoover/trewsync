@@ -282,12 +282,19 @@ async function claimUnder(
     // that and this is what happens if it did not. Refusing costs a false stop
     // where a pid was recycled onto an unrelated process, which `trew
     // unlock` clears; not refusing costs two writers.
+    //
+    // The way out has to work, though (T21). This said to run `trew unlock`,
+    // which refused every live pid on this machine, `--force` included, so a
+    // record left by a trew stopped by a reboot, whose pid then went to some
+    // other process, could only be cleared by deleting the file by hand.
     if (who.pid !== process.pid && alive(who.pid)) {
       throw new Error(
         `this vault is locked by ${who.command} (pid ${who.pid} on ${who.host}), which is ` +
-          `still running, but the ${kernel.how} exclusion for it was free. Something is wrong ` +
-          `with locking on this filesystem, so nothing was changed. Stop that process, or run ` +
-          `trew unlock if it is not really trew.`,
+          `still running, but the ${kernel.how} exclusion for it was free. Either that ` +
+          `process is not a trew, which is what a process id reused after a restart looks ` +
+          `like, or something is wrong with locking on this filesystem; nothing was changed. ` +
+          `If pid ${who.pid} is not a trew, trew unlock --force clears the record; if it is, ` +
+          `stop it.`,
       );
     }
   }
@@ -450,7 +457,7 @@ export async function unlockVault(vault: string, force = false): Promise<Unlocke
     };
   }
   try {
-    return await breakLock(path, force);
+    return await breakLock(path, force, await nobodyHolds(vault));
   } finally {
     // Ours by token, like every other release here. Not recovery data: a
     // mutex, and one that must not outlive the process holding it.
@@ -459,11 +466,36 @@ export async function unlockVault(vault: string, force = false): Promise<Unlocke
   }
 }
 
-async function breakLock(path: string, force: boolean): Promise<Unlocked> {
+/**
+ * Whether the kernel says no trew on this machine holds the vault right now:
+ * true, false, or undefined where there is no exclusion to ask (T21).
+ *
+ * Taken and let go at once. Holding it through the break would turn away the
+ * very `trew sync` the break is for, and nothing can take the vault meanwhile
+ * anyway: an acquirer that gets the exclusion meets the same record, with the
+ * same running pid in it, and refuses.
+ */
+async function nobodyHolds(vault: string): Promise<boolean | undefined> {
+  const kernel = await takeLocally(vault);
+  if (kernel === undefined) return undefined;
+  if (kernel === BUSY) return false;
+  await kernel.release();
+  return true;
+}
+
+async function breakLock(
+  path: string,
+  force: boolean,
+  free: boolean | undefined,
+): Promise<Unlocked> {
   const before = await lockState(path);
   if (before.state === "absent") {
     return { did: "nothing", why: "nothing is holding this vault" };
   }
+  // The exclusion's answer is about the record read here and no other, so a
+  // record that changed before the break gets no benefit of it.
+  const freeFor = (who: LockHolder): boolean | undefined =>
+    before.state === "held" && who.token === before.holder.token ? free : undefined;
 
   // Refused without touching anything, and this is the whole reason the read
   // happens before the taking-aside rather than after it.
@@ -474,8 +506,8 @@ async function breakLock(path: string, force: boolean): Promise<Unlocked> {
   // is two writers on one vault caused by the command that exists to prevent
   // them. Every ordinary refusal -- somebody's watcher is running, the lock is
   // on another machine -- now ends here, with no window at all.
-  if (before.state === "held" && !mayBreak(before.holder, force)) {
-    return { did: "refused", was: before.holder, why: whyKept(before.holder) };
+  if (before.state === "held" && !mayBreak(before.holder, force, free)) {
+    return { did: "refused", was: before.holder, why: whyKept(before.holder, free) };
   }
   await midBreak.beforeTaking(path);
 
@@ -511,7 +543,7 @@ async function breakLock(path: string, force: boolean): Promise<Unlocked> {
   }
 
   const who = at.holder;
-  if (mayBreak(who, force)) {
+  if (mayBreak(who, force, freeFor(who))) {
     await rm(aside, { force: true });
     return { did: "removed", was: who, why: describeGone(who) };
   }
@@ -530,7 +562,7 @@ async function breakLock(path: string, force: boolean): Promise<Unlocked> {
     restored = false;
   }
   await rm(aside, { force: true });
-  if (restored) return { did: "refused", was: who, why: whyKept(who) };
+  if (restored) return { did: "refused", was: who, why: whyKept(who, freeFor(who)) };
   return {
     did: "contested",
     was: who,
@@ -550,18 +582,41 @@ async function breakLock(path: string, force: boolean): Promise<Unlocked> {
  * to assert about it and no reason to let them. The first version of this let
  * `--force` break a running local process, which its own documentation did not
  * say and which reopened the release race in `lockVault`.
+ *
+ * And one case on this machine, which is the same kind of question (T21): a
+ * running pid in a record whose kernel exclusion nobody holds (`free`). That
+ * pid is not inside the vault, since a trew inside holds the exclusion, so it
+ * is either a process id reused since the trew that wrote the record died,
+ * which a reboot makes likely, or a trew on a filesystem where the exclusion
+ * did not prove itself and it fell back to the record alone. Only a person
+ * can tell those apart, by looking at the process, so it takes `--force`, as
+ * a holder on another machine does. Without this a reused pid locked the vault
+ * until somebody deleted the file by hand. A pid that holds the exclusion is
+ * still never broken, `--force` or not.
  */
-function mayBreak(who: LockHolder, force: boolean): boolean {
-  if (who.host === hostname()) return !alive(who.pid);
-  return force;
+function mayBreak(who: LockHolder, force: boolean, free: boolean | undefined): boolean {
+  if (who.host !== hostname()) return force;
+  return !alive(who.pid) || (force && free === true);
 }
 
-function whyKept(who: LockHolder): string {
-  return who.host !== hostname()
-    ? `it is held on ${who.host}, and this machine cannot tell whether that process is ` +
-        `still running. Use --force if you know it is not.`
-    : `pid ${who.pid} is still running, and --force does not break a lock this machine ` +
-        `can see is held. Stop it instead.`;
+function whyKept(who: LockHolder, free: boolean | undefined): string {
+  if (who.host !== hostname()) {
+    return (
+      `it is held on ${who.host}, and this machine cannot tell whether that process is ` +
+      `still running. Use --force if you know it is not.`
+    );
+  }
+  if (free === true) {
+    return (
+      `pid ${who.pid} is running, but it holds nothing: this machine's lock for the vault ` +
+      `is free, which is what a process id reused after a restart looks like. Check what ` +
+      `pid ${who.pid} is, and if it is not a trew, run trew unlock --force`
+    );
+  }
+  return (
+    `pid ${who.pid} is still running, and --force does not break a lock this machine ` +
+    `can see is held. Stop it instead.`
+  );
 }
 
 function describeGone(who: LockHolder): string {

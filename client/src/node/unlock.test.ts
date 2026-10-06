@@ -12,6 +12,7 @@
  * it was deciding.
  */
 
+import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -165,6 +166,53 @@ describe("unlock", () => {
     const still = JSON.parse(await readFile(lockPath(dir), "utf8")) as { command: string };
     expect(still.command).toBe("sync --watch");
     await release();
+  });
+
+  /**
+   * T21. A trew stopped by Ctrl-C, SIGTERM or a reboot leaves its record, and
+   * after a reboot the pid in it can belong to anything. Taking the vault then
+   * refused, because a live pid in a record whose kernel lock is free is a
+   * contradiction, and said to run `trew unlock`; and unlock, with or without
+   * --force, refused any live pid on this machine. The only way out was to
+   * delete the file by hand.
+   */
+  it("clears, when told to, a record whose running pid holds nothing (T21)", async () => {
+    const dir = await vault();
+    // Stands in for whatever process was given the dead trew's pid.
+    const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    try {
+      await put(dir, {
+        pid: other.pid,
+        host: hostname(),
+        command: "sync --watch",
+        since: Date.now() - 86_400_000,
+        token: "a watcher that did not get to release",
+      });
+      const refusal = await lockVault(dir, "sync").then(
+        () => undefined,
+        (err: Error) => err,
+      );
+      expect(refusal, "a vault with a live pid in its record was taken").toBeDefined();
+
+      // Asked plainly it still refuses, because a pid is running, and says
+      // what the person has to check before saying otherwise.
+      const asked = await unlockVault(dir);
+      expect(asked.did).toBe("refused");
+      const forced = await unlockVault(dir, true);
+      expect(forced.did, forced.why).toBe("removed");
+      await (
+        await lockVault(dir, "sync")
+      )();
+
+      // And both refusals name the way out.
+      expect(refusal!.message).toMatch(/trew unlock --force/);
+      expect(asked.why).toMatch(/holds nothing/);
+      expect(asked.why).toMatch(/--force/);
+    } finally {
+      other.kill("SIGKILL");
+    }
   });
 
   it("clears something at the path that names nobody", async () => {

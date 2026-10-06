@@ -253,9 +253,12 @@ vault. On supported local macOS and Linux setups, process exit releases the
 lock automatically, including after a crash.
 
 If TrewSync reports that manual recovery is required, run `trew unlock` after
-confirming the previous process has stopped. It refuses a live local holder.
-`--force` is only for a holder recorded on another machine and requires you to
-verify that it is stopped. Shared network vaults remain unsupported.
+confirming the previous process has stopped. It refuses a TrewSync on this
+machine that still holds the vault, `--force` or not. `--force` is for what
+this machine cannot check: a holder recorded on another machine, which you
+must verify has stopped, or a running process here that holds nothing, which is
+what a process id reused after a restart looks like; check what that process
+is first. Shared network vaults remain unsupported.
 
 ## Preview and verify
 

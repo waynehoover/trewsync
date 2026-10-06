@@ -147,9 +147,10 @@ Options
                    everyone else sees. This client declining to write, not the server refusing
                    it. Recorded in the config by pair, so a cron job cannot lose it by
                    forgetting the flag
-  --force          for unlock: clear a lock held on another machine. This one cannot tell whether
-                   that process is still running, so saying it is not is your assertion. It will
-                   not break a lock held by a process on this machine that is still running
+  --force          for unlock: clear a lock this machine cannot check: one held on another machine,
+                   or one naming a process here that holds nothing, such as a process id reused
+                   after a restart. Saying it is not a running trew is your assertion. It will
+                   not break a lock a trew on this machine is holding
   --ttl DURATION   how long an invite lasts, like 10m or 1h (default: 1h, at most 1h)
   --uid N          restore one exact version, from trew history
   --to PATH        restore somewhere other than where it came from
