@@ -266,6 +266,25 @@ describe("reading and writing", () => {
     await vault.write("note.md", view, { mtime: 1, ctime: 1 });
     expect([...(await vault.read("note.md"))]).toEqual([1, 2, 3]);
   });
+
+  it("hands bytes that fill their buffer to the adapter without copying them", async () => {
+    // Every copy is a whole file more in memory, and a 64 MiB attachment
+    // used to hold four at once on its way through `create` and `stage`.
+    const handed: ArrayBuffer[] = [];
+    const realWrite = adapter.writeBinary.bind(adapter);
+    adapter.writeBinary = async (path, data, options) => {
+      handed.push(data);
+      return realWrite(path, data, options);
+    };
+    const whole = new Uint8Array([1, 2, 3, 4]);
+    expect(await vault.create("whole.bin", whole, { mtime: 1, ctime: 1 })).toBe(true);
+    adapter.seed("old.bin", "x");
+    await vault.write("old.bin", whole, { mtime: 1, ctime: 1 });
+    expect(handed).toHaveLength(3);
+    expect(handed.every((data) => data === whole.buffer)).toBe(true);
+    expect([...(await vault.read("whole.bin"))]).toEqual([1, 2, 3, 4]);
+    expect([...(await vault.read("old.bin"))]).toEqual([1, 2, 3, 4]);
+  });
 });
 
 describe("deleting", () => {

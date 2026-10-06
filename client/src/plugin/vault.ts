@@ -307,6 +307,26 @@ type Writer = Pick<
 >;
 
 /**
+ * The bytes as an `ArrayBuffer` that holds exactly them, for `writeBinary`.
+ *
+ * A view into a larger buffer would hand over its neighbours as well, and
+ * chunk reassembly produces exactly such views, so a view is copied. Bytes
+ * that already fill their whole buffer are handed over as they are. They
+ * used to be copied on the way into `create`, again in `stage`, and again for
+ * a write in place: a whole file more in memory each time, so a 64 MiB
+ * attachment held about four copies at once on its way to the disk. Neither
+ * adapter writes into the buffer it is given (desktop wraps it in a Node
+ * `Buffer`, mobile reads it into base64).
+ */
+function standalone(bytes: Uint8Array): ArrayBuffer {
+  const whole =
+    bytes.byteOffset === 0 &&
+    bytes.buffer instanceof ArrayBuffer &&
+    bytes.byteLength === bytes.buffer.byteLength;
+  return whole ? (bytes.buffer as ArrayBuffer) : bytes.slice().buffer;
+}
+
+/**
  * Puts a staged copy of `bytes` at `temp` and proves it is all there.
  *
  * A failure leaves nothing behind: a short or refused staging copy is removed
@@ -320,7 +340,7 @@ async function stage(
   options: { mtime?: number; ctime?: number },
 ): Promise<void> {
   try {
-    await adapter.writeBinary(temp, bytes.slice().buffer, options);
+    await adapter.writeBinary(temp, standalone(bytes), options);
     await verify(adapter, temp, bytes);
   } catch (err) {
     await adapter.remove(temp).catch(() => undefined);
@@ -1051,10 +1071,10 @@ export class ObsidianVault implements Vault {
     const normalized = this.resolve(path);
     await this.ensureParents(normalized);
     await this.matchCase(normalized);
-    // Copied into its own buffer. A Uint8Array that is a view into a larger
-    // one would hand over neighbouring bytes, and chunk reassembly produces
-    // exactly that kind of view.
-    await this.writeThroughStaging(normalized, bytes.slice(), writeOptions(times));
+    // Not copied here: a view into a larger buffer would hand over its
+    // neighbouring bytes, and chunk reassembly produces exactly that kind of
+    // view, but `standalone` copies one where the bytes meet the adapter.
+    await this.writeThroughStaging(normalized, bytes, writeOptions(times));
     this.wrote(normalized);
   }
 
@@ -1586,7 +1606,7 @@ export class ObsidianVault implements Vault {
     }
 
     try {
-      await this.adapter.writeBinary(normalized, bytes.slice().buffer, options);
+      await this.adapter.writeBinary(normalized, standalone(bytes), options);
       await verify(this.adapter, normalized, bytes);
     } catch (err) {
       // The staged copy stays. It is the only complete copy of the new
@@ -1642,7 +1662,7 @@ export class ObsidianVault implements Vault {
     if (looks && (await this.adapter.exists(normalized))) return false;
     await this.ensureParents(normalized);
     const temp = newStagingPath(normalized);
-    await stage(this.adapter, temp, bytes.slice(), writeOptions(times));
+    await stage(this.adapter, temp, bytes, writeOptions(times));
 
     if (looks && (await this.adapter.exists(normalized))) {
       await this.discardStaging(temp);
