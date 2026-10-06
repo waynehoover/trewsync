@@ -1782,15 +1782,27 @@ export class ObsidianVault implements Vault {
    * is sitting in a hidden folder at the time, and `resolve` refuses those.
    */
   private async intoTrash(normalized: string): Promise<void> {
-    try {
-      if (await this.adapter.trashSystem(normalized)) return;
-    } catch {
-      // No system trash here, or it refused. The local one is next, and a
-      // failure to reach the recycle bin is not a reason to give up on the
-      // deletion.
+    if (this.systemTrash) {
+      try {
+        if (await this.adapter.trashSystem(normalized)) return;
+        // Refused, which is the platform's answer and not this file's: the
+        // Capacitor adapter catches whatever its trash throws and answers
+        // false, every time, on a phone that has none. Asked again, it was
+        // one more turn of the adapter's queue on every deletion (P-9). Both
+        // trashes keep the note recoverable, so this decides only which one
+        // the rest of this session's deletions go to.
+        this.systemTrash = false;
+      } catch {
+        // This file could not go to the recycle bin, which says nothing
+        // about the next one. The local trash is next, and a failure to reach
+        // the recycle bin is not a reason to give up on the deletion.
+      }
     }
     await this.adapter.trashLocal(normalized);
   }
+
+  /** Whether to offer a deletion to the system trash first (see `intoTrash`). */
+  private systemTrash = true;
 
   /**
    * Records a path that has left the vault.

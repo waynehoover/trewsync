@@ -320,6 +320,35 @@ describe("deleting", () => {
     expect(adapter.trashedLocally).toEqual(["doomed.md"]);
   });
 
+  /**
+   * P-9. A phone has no system trash, and the Capacitor adapter answers
+   * false every time it is asked: one more turn of the adapter's queue for
+   * every deletion. A refusal is remembered for the session; a throw, which
+   * is one file that could not go, is not.
+   */
+  it("asks for the system trash once a session where the platform has none", async () => {
+    adapter.systemTrashWorks = false;
+    for (const name of ["a.md", "b.md", "c.md"]) adapter.seed(name, name);
+    for (const name of ["a.md", "b.md", "c.md"]) await vault.remove(name);
+    expect(adapter.calls.filter((c) => c.op === "trashSystem")).toHaveLength(1);
+    expect(adapter.trashedLocally).toEqual(["a.md", "b.md", "c.md"]);
+    expect(adapter.text(".trash/c.md")).toBe("c.md");
+  });
+
+  it("keeps asking a system trash that throws, and one that works", async () => {
+    adapter.systemTrashThrows = true;
+    for (const name of ["a.md", "b.md"]) adapter.seed(name, name);
+    for (const name of ["a.md", "b.md"]) await vault.remove(name);
+    expect(adapter.calls.filter((c) => c.op === "trashSystem")).toHaveLength(2);
+    expect(adapter.trashedLocally).toEqual(["a.md", "b.md"]);
+
+    adapter.systemTrashThrows = false;
+    adapter.systemTrashWorks = true;
+    for (const name of ["c.md", "d.md"]) adapter.seed(name, name);
+    for (const name of ["c.md", "d.md"]) await vault.remove(name);
+    expect(adapter.trashedToSystem).toEqual(["c.md", "d.md"]);
+  });
+
   it("removing something already gone is not an error", async () => {
     // Two devices deleting the same file produces this routinely.
     await expect(vault.remove("never-existed.md")).resolves.toBeUndefined();
