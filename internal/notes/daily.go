@@ -281,14 +281,16 @@ func ReservedVariable(name string) bool {
 // another plugin's syntax survives. A format FormatDate refuses is
 // invalid_template, and nothing is written.
 func RenderTemplate(text string, t Template) (string, error) {
-	var failed error
-	out := placeholder.ReplaceAllStringFunc(text, func(m string) string {
-		if failed != nil {
-			return m
+	var b strings.Builder
+	last := 0
+	for _, at := range placeholder.FindAllStringSubmatchIndex(text, -1) {
+		m := text[at[0]:at[1]]
+		name, format := text[at[2]:at[3]], ""
+		if at[4] >= 0 {
+			format = text[at[4]:at[5]]
 		}
-		sub := placeholder.FindStringSubmatch(m)
-		name, format := sub[1], sub[2]
 		hasFormat := strings.Contains(m, ":")
+		value := m
 		switch strings.ToLower(name) {
 		case "date", "time":
 			when, def := t.Date, t.DateFormat
@@ -300,26 +302,32 @@ func RenderTemplate(text string, t Template) (string, error) {
 			}
 			s, err := FormatDate(when, strings.TrimSpace(format))
 			if err != nil {
-				failed = refuse("invalid_template", "the template's "+m+" has a date format this server does not write: "+
-					err.(*Refusal).Message)
-				return m
+				// Named by its line, never by its text. A template is a note
+				// anyone with a device can write, and this message reaches
+				// the agent under trusted, as the server's own words: quoting
+				// the placeholder put the template's sentence there,
+				// unnormalized and uncapped (T49). The agent can read the
+				// template, under untrusted_content, to see the line.
+				return "", refuse("invalid_template", "the template's placeholder on line "+
+					strconv.Itoa(1+strings.Count(text[:at[0]], "\n"))+" has a date format this server does not "+
+					"write; see the supported tokens in docs/agent.md")
 			}
-			return s
+			value = s
 		case "title":
-			if hasFormat {
-				return m
+			if !hasFormat {
+				value = t.Title
 			}
-			return t.Title
+		default:
+			if v, ok := t.Variables[name]; ok && !hasFormat {
+				value = v
+			}
 		}
-		if v, ok := t.Variables[name]; ok && !hasFormat {
-			return v
-		}
-		return m
-	})
-	if failed != nil {
-		return "", failed
+		b.WriteString(text[last:at[0]])
+		b.WriteString(value)
+		last = at[1]
 	}
-	return out, nil
+	b.WriteString(text[last:])
+	return b.String(), nil
 }
 
 // Title is a note's {{title}}: its file name without the .md or .txt
