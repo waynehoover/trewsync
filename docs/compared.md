@@ -17,7 +17,7 @@ The biggest choice is how much you want to manage yourself.
 | Setup | Run the server, install the plugin manually, pair devices | Subscribe and set up Sync in Obsidian | Install the plugin and configure a supported backend |
 | File scope | Notes and attachments | Notes, attachments, and configurable vault settings | Notes and attachments, with options for settings, themes, and plugins |
 | End-to-end encryption | **None.** Your server holds notes and their history in plaintext; TLS protects them in transit | Available, and on by default for new vaults | Available |
-| Built-in agent | An MCP endpoint in the server: read tools with any token; exact edits, moves and tag changes with a write token, each recorded and undoable | None built in | None built in |
+| MCP endpoint for agents | Built into the server: read tools with any token; exact edits, moves and tag changes with a write token, each recorded and undoable | None built in | None built in |
 | Cost model | Free MIT software; you cover hosting and maintenance | Subscription | Open-source software; hosting costs depend on your setup |
 
 Obsidian's [Sync overview](https://obsidian.md/sync),
@@ -25,7 +25,7 @@ Obsidian's [Sync overview](https://obsidian.md/sync),
 [settings guide](https://obsidian.md/help/sync/settings), and the
 [LiveSync documentation](https://github.com/vrtmrz/obsidian-livesync) describe
 those options. Comparison checked September 10, 2026; see their documentation
-for current plans and features. The built-in agent row was added on
+for current plans and features. The MCP endpoint row was added on
 September 24, 2026 without re-checking those pages; check them before relying
 on it.
 

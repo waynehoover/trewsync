@@ -1,6 +1,6 @@
 # TrewSync
 
-> Self-hosted Obsidian sync with full version history and a built-in agent endpoint, on a server you run.
+> Self-hosted sync for Obsidian with full version history and a built-in MCP endpoint for agents, on a server you run.
 
 TrewSync syncs notes and attachments through a server the user controls. The
 server holds notes and their history in plaintext; there is no end-to-end

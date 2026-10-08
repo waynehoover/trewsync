@@ -429,11 +429,11 @@ one versions.json already names:
 
   scripts/release.sh --prepare X.Y.Z
 
-To publish the plugin, tagged bare because the community directory requires the
-tag to be exactly the manifest version:
+To publish the plugin, tagged and titled bare because the community directory
+requires the tag, and asks the release name, to be exactly the manifest version:
 
   git tag -a @PLUGIN@ -m "TrewSync @PLUGIN@" && git push origin @PLUGIN@
-  gh release create @PLUGIN@ --draft --title "TrewSync @PLUGIN@" \
+  gh release create @PLUGIN@ --draft --title "@PLUGIN@" \
     --notes-file /tmp/trew-plugin-@PLUGIN@-notes.md \
     release/plugin/main.js release/plugin/manifest.json release/plugin/styles.css \
     release/plugin/SHA256SUMS

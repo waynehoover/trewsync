@@ -1,6 +1,6 @@
 # <img src="docs/assets/logo.svg" width="40" height="40" align="top" alt=""> TrewSync
 
-**Self-hosted sync for Obsidian, with an agent inside it.**
+**Self-hosted sync for Obsidian, with an MCP endpoint for your agents.**
 
 TrewSync syncs your vault through a server you run, keeps every earlier
 version of every note, and lets an agent such as Claude Code read and edit the
@@ -71,9 +71,10 @@ Docker, is [server setup](docs/server.md).
 
 ## What you get
 
-- **An agent inside your sync.** The server has an MCP endpoint built in. An
-  agent reads, searches and compares versions over the same store your
-  devices sync, with no second copy of the vault to keep in step.
+- **An MCP endpoint in your sync server.** An agent you run, such as Claude
+  Code, connects with a token and reads, searches and compares versions over
+  the same store your devices sync, with no second copy of the vault to keep
+  in step.
 - **Agent edits you can undo.** An agent changes notes only by exact edits
   against the version it read, never by overwriting a whole note. Every write
   is recorded, keeps what it replaced for at least 30 days, and can be undone
@@ -130,7 +131,7 @@ end-to-end encryption.
 
 **The server reads your notes.** TrewSync has no end-to-end encryption. The
 server holds every note, every earlier version and every filename in
-plaintext, and that is what makes the built-in agent possible: it reads and
+plaintext, and that is what makes the MCP endpoint possible: it reads and
 edits the store directly. It also means:
 
 - **Anyone who can read the server's disk can read your vault.** Put the data

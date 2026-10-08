@@ -6,7 +6,7 @@ TrewSync is designed for one person's trusted devices and a server they control.
 **The server can read your notes.** It stores their contents, their filenames
 and every earlier version in plaintext. That is deliberate: it is what lets the
 server check everything it holds, hand a note back with nothing but the server
-itself (`trewd cat`), and host the built-in agent endpoint that reads and
+itself (`trewd cat`), and host the built-in MCP endpoint that reads and
 edits the same notes. There is no end-to-end encryption. If you need a server that
 cannot read what it stores, TrewSync is the wrong tool.
 

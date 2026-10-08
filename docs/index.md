@@ -1,6 +1,6 @@
 # TrewSync documentation
 
-**Self-hosted sync for Obsidian, with an agent inside it.**
+**Self-hosted sync for Obsidian, with an MCP endpoint for your agents.**
 
 [Back to TrewSync](../README.md)
 

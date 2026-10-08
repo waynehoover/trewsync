@@ -1,4 +1,4 @@
-# TrewSync: self-hosted Obsidian sync with a built-in agent
+# TrewSync: self-hosted Obsidian sync with a built-in MCP endpoint
 
 *Trew*, said TROO, is an old spelling of *true* (Middle English *trewe*: faithful, trustworthy), which is what a sync tool owes the notes it carries. Chosen by the owner on 2026-09-22, who judged its one objection, a typo tax (people type "true"), not worth avoiding. It replaced Telimus, which had replaced Lyell earlier the same day. On 2026-09-23 the owner settled how it is written: **TrewSync**, one word, wherever a person reads the product's name; `trewd` for the server's command; `trew` for the headless client's. [§10](#10-the-name) records all of it, with the candidates that did not survive. The on-disk identity (`trew1i_` invite strings, `.trew` state directories, the store's product identifier) derives from *trew* and did not change, so it is settled, not a placeholder.
 
@@ -12,7 +12,7 @@ Source of truth for what exists today: `/Users/wayne/code/basalt` at commit `664
 
 ## 1. What this is
 
-One person's Obsidian vault, synced through a server they run, with an MCP server built into that server so agents read and edit the same notes the devices sync. No end-to-end encryption: the server holds the notes in the clear, which is what makes the built-in agent possible.
+One person's Obsidian vault, synced through a server they run, with an MCP server built into that server so agents read and edit the same notes the devices sync. No end-to-end encryption: the server holds the notes in the clear, which is what makes the built-in MCP endpoint possible.
 
 Three roles, one static Go binary:
 
