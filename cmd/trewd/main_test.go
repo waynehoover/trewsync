@@ -982,6 +982,27 @@ func TestServiceTellsYouHowToInstallIt(t *testing.T) {
 	if strings.Contains(out, "systemctl stop trew && ") && !strings.Contains(out, "Backups do not need the server stopped") {
 		t.Fatalf("the notes do not say backup does not:\n%s", out)
 	}
+	// And what they say to run works as printed. A backup has to say which
+	// kind it is, and the notes' named neither; an invite with no -url names
+	// this machine's own addresses as wss://, where nothing speaks TLS; and
+	// both run as the service user, so nothing in the data directory ends up
+	// owned by root.
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.Contains(line, " backup -data "):
+			if !strings.Contains(line, " -recipients-file ") && !strings.Contains(line, " -plaintext-ok") {
+				t.Errorf("the notes' backup would be refused: %s", line)
+			}
+		case strings.Contains(line, " invite -data "):
+			if !strings.Contains(line, " -url ") {
+				t.Errorf("the notes' invite names no address a device behind a proxy can reach: %s", line)
+			}
+		}
+		if (strings.Contains(line, " backup -data ") || strings.Contains(line, " purge -data ")) &&
+			!strings.Contains(line, "sudo -u ") {
+			t.Errorf("the notes run this as root, in the service's data directory: %s", line)
+		}
+	}
 }
 
 /* ---------------------------------------------------------------- *
