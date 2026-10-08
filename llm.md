@@ -58,7 +58,7 @@ the user requested a development build. Release channels have different tags:
 | Component | Tag / artifact |
 |---|---|
 | Obsidian plugin | Bare `X.Y.Z`; `main.js`, `manifest.json`, `styles.css`, and `SHA256SUMS`. |
-| Server | `server/vX.Y.Z`; container image or `trewd-OS-ARCH` binary. |
+| Server | `server/vX.Y.Z`, titled `trewd X.Y.Z`; the container image `ghcr.io/waynehoover/trewsync:X.Y.Z` or a `trewd-OS-ARCH` binary, with `SHA256SUMS`. |
 | CLI, if requested | `trew-sync` on npm; source tags use `cli/vX.Y.Z`. |
 
 List releases and choose the newest compatible stable plugin and server. Do not
@@ -125,9 +125,13 @@ loopback, persistent storage, and the 30-second stop allowance. Do not use
 ### Binary alternative
 
 Use this route when Docker is unsuitable. Download the matching published
-server binary: Linux or Darwin, amd64 or arm64. Verify its exact checksum entry
+server binary: `trewd-linux-amd64`, `-arm64` or `-riscv64`,
+`trewd-darwin-amd64` or `-arm64`, or `trewd-freebsd-amd64` or `-arm64`.
+Verify its exact checksum entry
 from that release's `SHA256SUMS` before running it. Use a dedicated writable
-local data directory and bind `127.0.0.1:3003`.
+local data directory, given to `-data` as an absolute path, and bind
+`127.0.0.1:3003`. Download with `curl` or `gh release download` rather than a
+browser on macOS, which refuses to run a quarantined binary.
 
 For Linux persistence, follow [binary installation](docs/server.md#a-binary):
 create the service account and data directory, then use `trewd service` to
@@ -328,14 +332,18 @@ in plain words, that a token reads the whole vault and that everything the
 agent reads reaches its model provider; record that they agreed. Follow
 [Connect an agent](docs/agent.md).
 
-1. Start the server with `-mcp`. Under Compose, add
-   `command: ["serve", "-addr", "0.0.0.0:3003", "-mcp"]` to the service,
-   preserving any flags already there (the file-size limit in particular),
-   and run `docker compose up -d`. Check the log says it is serving MCP.
+1. Start the server with `-mcp`. The repository's `compose.yaml` already
+   passes it on its `command:` line; a compose file without it needs
+   `command: ["serve", "-addr", "0.0.0.0:3003", "-mcp"]`, preserving any flags
+   already there (the file-size limit in particular), then
+   `docker compose up -d`. For a systemd unit, regenerate it with
+   `trewd service -mcp` and the same flags. Check the log says it is serving
+   MCP.
 2. Make a **read** token into a private file, never the conversation:
-   `trewd mcp-token -label "NAME" -key-out /private/path/agent.key` on a binary
-   installation, or under Compose
-   `(umask 077 && docker compose exec -T trew /trewd mcp-token -label "NAME" > /private/path/agent-token.txt)`.
+   `trewd mcp-token -data /path/to/trew-data -label "NAME" -key-out /private/path/agent.key`
+   as the service account on a binary installation, or under Compose
+   `(umask 077 && docker compose exec -T trew /trewd mcp-token -label "NAME" > /private/path/agent-token.txt)`,
+   whose token is the line `awk 'NF == 1 {print $1}'` prints from that file.
    The label is the author name devices will see on the agent's versions and
    conflict copies, and cannot be changed. Make a write token (`-scope write`)
    only when the user explicitly authorizes edits, as a separate token.
@@ -345,7 +353,9 @@ agent reads reaches its model provider; record that they agreed. Follow
    http NAME URL --header "Authorization: Bearer TOKEN"`, reading the token from
    the file rather than pasting it.
 4. Verify with `vault_status`, then `list_notes` and `read_note` on the test
-   note from section 7. For a write token, append a line to that test note
+   note from section 7, through the client or with `curl` as
+   [Check it from a shell](docs/agent.md#check-it-from-a-shell) shows, the
+   token read from its file. For a write token, append a line to that test note
    with `append_note` using the `uid` and `epoch` `read_note` returned, check
    the line arrives on a device, then undo it with `undo_operation` and check
    it is gone there too.
