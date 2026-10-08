@@ -47,18 +47,22 @@ it.
 
 4. **Install the plugin and pair.** Download `main.js`, `manifest.json` and
    `styles.css` from the newest plugin
-   [release](https://github.com/waynehoover/trewsync/releases) into
+   [release](https://github.com/waynehoover/trewsync/releases/latest) (tagged
+   `X.Y.Z`; the `server/v…` releases are the server's) into
    `<vault>/.obsidian/plugins/trew-sync/`, reload Obsidian and enable
-   **TrewSync**. Paste the invite, check the server it names, and press
-   **Pair**. Keep Obsidian open until the first sync finishes; on Android it
-   has to stay in the foreground.
+   **TrewSync** under **Settings → Community plugins**, turning community
+   plugins on first if they are off. Paste the invite, check the server it
+   names, and press **Pair**. Keep Obsidian open until the first sync
+   finishes; on Android it has to stay in the foreground.
 
 5. **Add your other devices.** On the paired device choose **Add another device
    → Create invite**, then scan the QR code with the next one.
 
-To let an agent in, start the server with `-mcp`, make a token with
-`trewd mcp-token -label "Claude on Mac"`, and give the client
-`https://homelab.example.ts.net/mcp` with that token as a bearer.
+To let an agent in, make a token with
+`docker compose exec trew /trewd mcp-token -label "Claude on Mac"` and give
+the client `https://homelab.example.ts.net/mcp` with that token as a bearer.
+The included `compose.yaml` already serves that endpoint (`-mcp`), which
+refuses every request until a token exists.
 [Connect an agent](docs/agent.md) has the details, and why to start read-only.
 
 Prefer to have your agent do the setup? Give it [llm.md](llm.md). The full

@@ -154,8 +154,7 @@ func cmdService(args []string, out io.Writer) error {
 	// The examples are shell, not systemd, so their paths are shell-quoted. A
 	// path with a space, pasted unquoted, would run `backup -data /my` against a
 	// directory that is not the one meant.
-	qExe, qData := shellQuote(exe), shellQuote(data)
-	qInvite, qUser := shellQuote(filepath.Join(data, firstInviteFile)), shellQuote(who)
+	qExe, qData, qUser := shellQuote(exe), shellQuote(data), shellQuote(who)
 	fmt.Fprintf(out, `
 # Save this output as trew.service and review it. Then install it as root:
 #
@@ -165,27 +164,27 @@ func cmdService(args []string, out io.Writer) error {
 #   systemctl status trew
 #   journalctl -u trew -f
 #
-# On its first run it writes the first device's invite to a file only the
-# service user can read, and logs where, never the invite itself:
+# On its first run it writes an invite to first-invite in the data directory,
+# and logs where, never the invite itself. That one names this machine's own
+# addresses, where nothing speaks TLS, so ask the running server for the first
+# device's invite as the service user, naming the address devices reach
+# through Tailscale Serve or your proxy, and the same for any later device:
 #
-#   cat %s
+#   sudo -u %s %s invite -data %s -url wss://your-host
 #
-# Every later device gets an invite from the running server, asked as the
-# service user:
+# Backups do not need the server stopped, so this is a cron or timer away,
+# encrypted to the recipient trewd backup-key made on another machine:
 #
-#   sudo -u %s %s invite -data %s
-#
-# Backups do not need the server stopped, so this is a cron or timer away:
-#
-#   %s backup -data %s -to /somewhere/else
+#   sudo -u %s %s backup -data %s -to /somewhere/else/trew.tar.age -recipients-file /etc/trew/backup-key.pub
 #
 # Purge does need it stopped, because it deletes chunk bodies, and it wants the
-# vault's name twice and the backup that holds what it is about to drop. Twice
-# because -vault says which one and -confirm is the typing-it-out that a
-# command destroying history should ask for (I13):
+# vault's name twice and a plaintext backup (-plaintext-ok) that holds what it
+# is about to drop. Twice because -vault says which one and -confirm is the
+# typing-it-out that a command destroying history should ask for (I13). The
+# whole procedure is in docs/server-operations.md, "Purge":
 #
-#   systemctl stop trew && %s purge -data %s -vault %s -confirm %s -backup /somewhere/else && systemctl start trew
-`, qInvite, qUser, qExe, qData, qExe, qData, qExe, qData, shellQuote(*vault), shellQuote(*vault))
+#   systemctl stop trew && sudo -u %s %s purge -data %s -vault %s -confirm %s -backup /somewhere/else/before-purge && systemctl start trew
+`, qUser, qExe, qData, qUser, qExe, qData, qUser, qExe, qData, shellQuote(*vault), shellQuote(*vault))
 	return nil
 }
 

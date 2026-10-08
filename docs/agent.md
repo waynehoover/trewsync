@@ -22,8 +22,11 @@ devices, so it sits behind the same Tailscale Serve or HTTPS proxy:
 trewd serve -mcp -data /var/lib/trew -addr 127.0.0.1:3003
 ```
 
-With Compose, add a `command:` to the service in `compose.yaml` (the image's
-default command has no `-mcp`) and recreate it with `docker compose up -d`:
+The repository's `compose.yaml` already has it, on its `command:` line. A
+compose file of your own needs that line, since the image's default command
+has no `-mcp` (with `docker run`, put `serve -addr 0.0.0.0:3003 -mcp` after
+the image's name); recreate the container with `docker compose up -d` after
+adding it:
 
 ```yaml
 command: ["serve", "-addr", "0.0.0.0:3003", "-mcp"]
@@ -33,15 +36,14 @@ Keep any flag the service already has on that line, `-max-file` in
 particular: a server refuses to start with a file limit below a file the vault
 already holds.
 
-For a systemd service, `trewd service` has no flag for the endpoint: add
-` -mcp` to the end of the `ExecStart=` line of the unit it prints before you
-install it, then `systemctl daemon-reload` and restart the service.
+For a systemd service, make the unit with `trewd service -mcp` and the flags
+you gave it before, install it in place of the old one, then
+`systemctl daemon-reload` and `systemctl restart trew`.
 
 Without `-mcp`, `/mcp` is refused like any other path that is not a WebSocket.
 With it and no token yet, the server logs a hint and refuses every request.
-When the server listens on every
-interface (`-addr 0.0.0.0:3003`, or the default `:3003`) it logs a warning that
-the endpoint is exposed there too. Inside a container that is expected; keep
+When the server listens on every interface (`-addr 0.0.0.0:3003`, or the
+default `:3003`) it logs a warning that the endpoint is exposed there too. Inside a container that is expected; keep
 the published port on loopback, as the included `compose.yaml` does, and keep
 `/mcp` behind Tailscale or an identity-aware proxy.
 
@@ -51,14 +53,16 @@ the MCP address is `https://homelab.example.ts.net/mcp`. Note that it is
 
 ## Make a token
 
-On the server host:
+On the server host, as the account that runs the server (or root), naming its
+data directory:
 
 ```bash
-trewd mcp-token -label "Claude on Mac" -key-out /private/path/claude.key
+trewd mcp-token -data /var/lib/trew -label "Claude on Mac" -key-out /private/path/claude.key
 ```
 
 With Compose, run it inside the container and send the output to a private
-file; the token is the indented line among lines describing it:
+file; the token is the indented line among lines describing it, and
+`awk 'NF == 1 {print $1}' /private/path/claude-token.txt` prints it alone:
 
 ```bash
 (umask 077 && docker compose exec -T trew /trewd mcp-token -label "Claude on Mac" \
@@ -138,6 +142,30 @@ The client must be able to reach the address. Behind Tailscale, that means a
 machine on your tailnet: a hosted agent in someone else's cloud cannot reach
 it, and putting `/mcp` on the public internet means the token is the only
 thing between the internet and your vault.
+
+### Check it from a shell
+
+`curl` can make the same calls, which tells a token or address problem apart
+from a client one. Every request after `initialize` must carry the
+`MCP-Protocol-Version` header, which MCP clients send themselves; without it
+the answer is `the MCP-Protocol-Version header is required on every request
+after initialize`. There is no session to keep: each request stands alone.
+This reads the token from its file into the header, so it never appears on a
+command line:
+
+```bash
+mcp() {
+  printf 'Authorization: Bearer %s\n' "$(cat /private/path/claude.key)" |
+    curl -s https://homelab.example.ts.net/mcp -H @- \
+      -H 'Content-Type: application/json' -H 'MCP-Protocol-Version: 2025-06-18' -d "$1"
+}
+mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'
+mcp '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+mcp '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vault_status","arguments":{}}}'
+```
+
+`tools/list` lists the tools this token may call: the read tools for a read
+token, and the write tools too for a write token.
 
 ## What an agent can do
 
@@ -436,6 +464,7 @@ passes through the endpoint, so a busy agent cannot slow it.
 | 401 | The header must be exactly `Authorization: Bearer ` and the 43-character token. Check `trewd mcp-token -list` for expiry or revocation. |
 | 403 | A browser-based client sent an `Origin` the server does not allow; see `-allow-origin`. |
 | 429 | A rate limit; the client should wait for `Retry-After`. |
+| `the MCP-Protocol-Version header is required on every request after initialize` | The client sent no `MCP-Protocol-Version` header; with `curl`, add one as [above](#check-it-from-a-shell). |
 | The client cannot connect at all | It must reach the address: on the tailnet, over `https://`, with the `/mcp` path. |
 | `read_only` | A read token called a write tool, or the token was revoked or lost write scope during the call. |
 | `busy` | The call ran out of its 30 seconds, or the client cancelled it, and nothing was written. Try again, or ask for a smaller page. |

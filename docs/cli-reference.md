@@ -147,8 +147,9 @@ tag and its nested tags, and `--mode filename` matches file names. Only
 Markdown and text notes are searched. A query that starts with `-` goes after
 `--`: `trew search -- -draft`.
 
-Matches go to standard output, one line each, as `path:line:column: line`;
-context lines are `path-line- text`, with `--` between groups. The match is
+Matches go to standard output, one line each, as `path:line:column: line`,
+or `path  (the file name matches)` for a file name; context lines are
+`path-line- text`, with `--` between groups. The match is
 highlighted only when standard output is a terminal and `NO_COLOR` is not set.
 Note text is untrusted, so every control character in it, escape sequences
 included, is printed spelled out (`\u{1b}`) and never reaches the terminal as

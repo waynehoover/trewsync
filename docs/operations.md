@@ -33,10 +33,10 @@ again if it changes, once a day while it stands, and `msg="alert cleared"`
 when it is fixed.
 
 A condition you have decided to live with can be accepted by name, so it stops
-failing the run and stays printed:
+failing the run and stays printed, such as backups you take another way:
 
 ```bash
-trewd doctor -data /var/lib/trew -accept encryption -accept backup
+trewd doctor -data /var/lib/trew -accept backup
 ```
 
 What each check means, and what to do:
@@ -298,10 +298,9 @@ The window a restore would lose is the time since the last backup: with one a
 night, up to a day, plus however long the backup takes. Devices shrink it in
 practice: each keeps its own copy, and after a restore every device sends back
 what the restored server lacks when it next connects, so what is lost is what
-was written on a device that has since been lost too. The owner deferred
-choosing an offsite destination on 2026-09-22; until there is one, a backup on
-the same machine protects against a damaged store and not against losing the
-machine.
+was written on a device that has since been lost too. Copy each archive off
+the machine as well: a backup on the same machine protects against a damaged
+store and not against losing the machine.
 
 ## Rehearse a restore
 
@@ -391,11 +390,11 @@ separate storage, a passphrase typed at boot), because a server that cannot
 unlock itself after a power cut is down until someone arrives.
 
 `doctor` recognises a LUKS volume by its device name and cannot see the rest,
-so it reports a note either way. The owner's homelab volume is not encrypted,
-an accepted risk recorded as S1 in the [threat model](threat-model.md); accept
-the check (`-accept encryption`) only once that decision is made. Encryption
-at rest does nothing against a compromised running server, an agent holding a
-token, or a model provider reading what the agent reads.
+so it reports a note either way, which does not fail the run. If you decide to
+run without encryption at rest, the risk recorded as S1 in the
+[threat model](threat-model.md), write that decision down. Encryption at rest
+does nothing against a compromised running server, an agent holding a token,
+or a model provider reading what the agent reads.
 
 ## What is in the data directory
 

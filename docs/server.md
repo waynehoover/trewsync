@@ -30,20 +30,23 @@ docker compose up -d --build
 docker compose logs trew
 ```
 
-The included [compose.yaml](../compose.yaml) builds the server image from the
-checkout until the first server release is published, and from then on pins
-that release's image and its digest. It preserves data in a named volume,
-serves sync and the MCP endpoint (`-mcp`) on the one port 3003, and exposes
-that port only on the host's loopback interface.
+The included [compose.yaml](../compose.yaml) runs the server release it pins,
+`ghcr.io/waynehoover/trewsync` by tag and digest. It preserves data in a named
+volume, serves sync and the MCP endpoint (`-mcp`) on the one port 3003, and
+exposes that port only on the host's loopback interface. The MCP endpoint
+answers nobody until you make a token for it ([Connect an agent](agent.md)).
 
 For a quick trial without cloning:
 
 ```bash
 docker run -d --name trew --restart unless-stopped --stop-timeout 30 \
   -p 127.0.0.1:3003:3003 -v trew-data:/data \
-  ghcr.io/waynehoover/trew:latest
+  ghcr.io/waynehoover/trewsync:latest
 docker logs trew
 ```
+
+Its commands are then `docker exec trew /trewd ...` rather than
+`docker compose exec trew /trewd ...`.
 
 Use the pinned Compose setup for a server you keep. Next, configure
 [secure access](#secure-access) before pairing devices.
@@ -62,19 +65,41 @@ flags for them.
 
 ### A binary
 
-Download the matching binary from a
-[server release](https://github.com/waynehoover/trewsync/releases?q=server):
-Linux amd64/arm64/riscv64, macOS amd64/arm64 or FreeBSD amd64/arm64. Make it
-executable and run it with a writable data directory:
+Download the matching binary from the newest server
+[release](https://github.com/waynehoover/trewsync/releases), the one tagged
+`server/vX.Y.Z` and titled **trewd X.Y.Z** (the bare `X.Y.Z` releases are the
+plugin's): `trewd-linux-amd64`, `-arm64` or `-riscv64`, `trewd-darwin-amd64`
+or `-arm64` for macOS, or `trewd-freebsd-amd64` or `-arm64`. Check it against
+the release's `SHA256SUMS`, make it executable, and run it with a writable
+data directory, given as an absolute path:
 
 ```bash
+V=0.12.0   # the newest server release
+curl -fLO https://github.com/waynehoover/trewsync/releases/download/server/v$V/trewd-linux-amd64
+curl -fLO https://github.com/waynehoover/trewsync/releases/download/server/v$V/SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing
 chmod +x trewd-linux-amd64
-./trewd-linux-amd64 serve -data ./trew-data -addr 127.0.0.1:3003
+./trewd-linux-amd64 serve -data ~/trew-data -addr 127.0.0.1:3003
 ```
 
-Use your downloaded filename on macOS. For a persistent Linux service, install
-the binary as `/usr/local/bin/trewd`, create a dedicated `trew` account and
-writable `/var/lib/trew` directory, then run:
+On macOS use `trewd-darwin-arm64` (or `-amd64`). macOS refuses to run a binary
+a browser downloaded until you clear its quarantine
+(`xattr -d com.apple.quarantine trewd-darwin-arm64`); `curl`, as above, sets
+none. If another program already holds port 3003, the server says
+`address already in use`: choose another port with `-addr 127.0.0.1:PORT`,
+and use that port in `tailscale serve` or your proxy, and in
+`trewd health -addr 127.0.0.1:PORT`.
+
+The invite this trial writes to `first-invite` names `wss://127.0.0.1:3003`,
+which no device can use: make the first device's invite with `-url`, as
+[the first device](#the-first-device) shows, once secure access works. To try
+TrewSync on this one machine first, with no TLS, start it with `-localhost`
+instead: its invites name `ws://127.0.0.1:3003`, and
+`trewd invite -data ~/trew-data` makes one.
+
+For a persistent Linux service, install the binary as `/usr/local/bin/trewd`,
+create a dedicated `trew` account and writable `/var/lib/trew` directory, then
+run:
 
 ```bash
 trewd service -data /var/lib/trew -addr 127.0.0.1:3003 \
@@ -83,17 +108,21 @@ trewd service -data /var/lib/trew -addr 127.0.0.1:3003 \
 
 This prints a systemd unit and installation commands; review and follow them.
 It does not install the service itself. The generated unit includes restart
-handling and a 30-second shutdown allowance.
+handling and a 30-second shutdown allowance. Add `-mcp` to have the unit serve
+the [MCP endpoint](agent.md) too.
 
 ### Homebrew, mise or Nix
-
-Once the first server release is published:
 
 ```bash
 brew install waynehoover/tap/trewd                   # macOS or Linux
 mise use -g packslip:github.com/waynehoover/trewsync/server   # verified from the signed manifest
 nix run github:waynehoover/trewsync -- version           # built from source by the flake
 ```
+
+`brew services start trewd` runs it as a service on `127.0.0.1:3003`, without
+the MCP endpoint, with its data in `$(brew --prefix)/var/trewd`. Give that
+directory to every command (`trewd invite -data "$(brew --prefix)/var/trewd" ...`),
+or set `TREW_DATA` to it, since the default is `~/.trew`.
 
 A binary downloaded by hand is upgraded with `trewd update`, which verifies the
 release before replacing anything ([reference](server-reference.md#update)).
@@ -185,9 +214,11 @@ file, mode 0600, instead. The command goes through the running server.
 When the vault has no devices yet, `trewd serve` also writes an invite for the
 first one to `first-invite` in its data directory, mode 0600, and logs that
 path and when it expires, never the invite itself. It names the right address
-only when `serve` was started with `-url wss://homelab.example.ts.net`;
-otherwise it names this machine's own addresses, one per line, at the server's
-own port, which no device can use while the proxy in front terminates TLS.
+only when `serve` was started with `-url wss://homelab.example.ts.net` (or
+`-localhost`, for a trial on one machine). Otherwise it names this machine's
+own addresses at the server's own port, one per line, as `wss://`, and nothing
+there speaks TLS, so no device can use it even though the startup message
+says to paste a line from it: make one with `trewd invite -url` instead.
 
 1. [Install the plugin](plugin.md#install) on your first device.
 2. Open TrewSync, paste the invite into **Invite**, check the server it names, and
@@ -250,10 +281,11 @@ server refuse each other at the handshake, naming both numbers; moving from
 Basalt is a fresh pairing, not an upgrade. For source builds, use the same
 revision for the server and clients.
 
-For Compose, update both the image tag and digest from the chosen server
-release, then run `docker compose pull` and `docker compose up -d`. Preserve
-the data volume and any customized flags, especially the file-size limit.
-Never use `docker compose down -v` to upgrade.
+For Compose, take the `image:` line, tag and digest, from the repository's
+`compose.yaml` at the chosen server release (`git pull` in your clone brings
+the newest), then run `docker compose pull` and `docker compose up -d`.
+Preserve the data volume and any customized flags, especially the file-size
+limit. Never use `docker compose down -v` to upgrade.
 
 Use `trewd version` to check the server build and the plugin panel to check
 what each device connected to. The [protocol reference](protocol.md) describes

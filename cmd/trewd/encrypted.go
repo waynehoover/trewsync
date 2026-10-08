@@ -214,7 +214,7 @@ func writeNewKeyFile(path, content string) error {
 // rehearsal. It writes only into a directory that is new or empty.
 func cmdUnpack(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("unpack", flag.ContinueOnError)
-	from := fs.String("from", "", "the encrypted backup, as `trewd backup -encrypt-to` wrote it")
+	from := fs.String("from", "", "the encrypted backup, as trewd backup -encrypt-to wrote it")
 	identity := fs.String("identity", "", "the age identity file the backup is read with")
 	to := fs.String("to", "", "a new or empty directory to write the data directory into")
 	record := fs.String("record", "", "a data directory (or its last-backup.json) whose last backup this archive must be")

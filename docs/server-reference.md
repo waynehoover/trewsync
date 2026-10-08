@@ -4,9 +4,11 @@
 
 `trewd` runs the server and its maintenance commands. Commands that use a
 store, plus `service`, accept `-data DIR`; the default is `$TREW_DATA`, then
-`~/.trew`. `health` uses an address instead, and `version` needs neither.
-Only `serve` creates a new server data directory. Use each subcommand's `-h`
-for installed usage.
+`~/.trew`. When the server's data directory is anywhere else, give it to every
+command, or set `TREW_DATA` to it. `health` uses an address instead, and
+`version` needs neither. Only `serve` creates a new server data directory.
+`trewd -h` shows `serve`'s flags, the default command; `trewd COMMAND -h`
+shows another command's.
 
 ## Commands
 
@@ -18,8 +20,8 @@ for installed usage.
 | `revoke ID` | Stop a device syncing and cancel the invites it made. | Yes; it goes through the running server. |
 | `uninvite ID` | Cancel an outstanding invite. | Yes; it goes through the running server. |
 | `cat -path P [-uid N]` | Print a note, or one version of it, straight from the store. | Yes. |
-| `history -path P` | List a note's versions, newest first, with the uid `cat` takes. | Yes. |
-| `deleted` | List deleted notes and the version to restore each from. | Yes. |
+| `history -path P [-limit N] [-before UID]` | List a note's versions, newest first, with the uid `cat` takes; 50 a page by default, `-before` for the next. | Yes. |
+| `deleted [-limit N] [-before UID]` | List deleted notes and the version to restore each from; 100 a page by default. | Yes. |
 | `export -uid N -to FILE` | Write one version to a new file. | Yes. |
 | `doctor [-json]` | Diagnose the data directory and a running server; changes nothing. | Yes. |
 | `backup -to FILE -encrypt-to KEY` | Take a verified backup, encrypted to an age recipient. `-plaintext-ok` writes a plaintext directory instead. | Yes. |
@@ -45,8 +47,8 @@ for installed usage.
 | Flag | Default | Meaning |
 |---|---|---|
 | `-addr` | `:3003` | Listen address. Use `127.0.0.1:3003` behind a local proxy. |
-| `-url` | This machine's addresses | The `ws://` or `wss://` address devices reach, which invites carry. Give the proxy's address. |
-| `-localhost` | Off | Bind to loopback and put a `ws://` address in invites. |
+| `-url` | This machine's addresses, as `wss://` at the server's own port | The `ws://` or `wss://` address devices reach, which invites carry. Give the proxy's address: nothing at the server's own port speaks TLS, so the default works for no device. |
+| `-localhost` | Off | Bind to loopback and put a `ws://` address in invites, for a trial on one machine. |
 | `-invite-out` | `first-invite` in the data directory | Where to write the first device's invite when the vault has no devices. |
 | `-vault` | `default` | The vault this server serves. |
 | `-max-file` | `67108864` | Maximum file size in bytes: 64 MiB; maximum 256 MiB. |
@@ -453,8 +455,8 @@ finding is `warn` or `fail`, so a timer or a monitor can run it.
 | `-vault NAME` | The vault the server serves; default `default`. |
 
 The checks, in order: `data-dir`, `storage`, `encryption`, `server`,
-`restarts`, `identity`, `store`, `chunks`, `space`, `index`, `tokens`,
-`devices`, `commits`, `backup`, `rehearsal`, `origin`. [Operating
+`restarts`, `identity`, `store`, `chunks`, `space`, `index`, `git-export`,
+`tokens`, `devices`, `commits`, `backup`, `rehearsal`, `origin`. [Operating
 TrewSync](operations.md) says what each finding means and what to do.
 
 ## backup-key, unpack, rehearse
@@ -496,15 +498,16 @@ directory recorded, compared by its SHA-256 before it is decrypted;
 These administer the vault's devices. While `serve` runs they go through its
 control socket, a private socket in the data directory, so a revoke takes
 effect in the running server at once; with no server running they open the
-store directly. All take `-data DIR` and `-vault NAME`, which go before an ID:
-`trewd revoke -data /var/lib/trew DEVICE_ID`.
+store directly. The socket answers only the account that runs the server, and
+root, so run them as that account. All take `-data DIR` and `-vault NAME`,
+which go before an ID: `trewd revoke -data /var/lib/trew DEVICE_ID`.
 
 | Flag | Command | Meaning |
 |---|---|---|
 | `-ttl DURATION` | invite | How long the invite works, such as `30m`; default `1h`. `0` makes one that never expires. |
 | `-label TEXT` | invite | A name shown in the device list until the invite is used. |
 | `-out FILE` | invite | Write the invite to this file, mode 0600, instead of printing it. |
-| `-url URL` | invite | The address the invite names; default the server's own. |
+| `-url URL` | invite | The address the invite names. Default: the running server's, which is right only when it was started with `-url` or `-localhost`; with no server running, this machine's addresses as `wss://` at port 3003, one line each. Give the proxy's address. |
 | `-json` | devices | Structured output. |
 
 An invite works once and expires after one hour by default. Anyone holding it
