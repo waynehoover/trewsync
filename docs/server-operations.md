@@ -16,8 +16,13 @@ server and its backups are not:
 
 ```bash
 trewd backup-key -out ~/trew-backup-key     # on your own machine, not the server
-scp ~/trew-backup-key.pub server:/etc/trew/backup-key.pub
+scp ~/trew-backup-key.pub server:
+ssh -t server sudo install -D -m 644 trew-backup-key.pub /etc/trew/backup-key.pub
 ```
+
+`backup-key` writes both files mode 0600. The recipient is public, and the
+account that runs backups (the server's, or the container's 65532) has to read
+it, hence mode 644 on the server; the identity stays 0600 and off the server.
 
 Then back up the server while it is running:
 
@@ -318,7 +323,7 @@ remedy when something needs attention.
 | A device stays behind | Check its connection and status; compare the positions shown on devices. |
 | Unrecognized device or invite | Review the device list and revoke or cancel it. |
 | Service repeatedly fails | Read `journalctl -u trew`. After fixing the cause, use `systemctl reset-failed trew` if required. |
-| `batch commit failed` in the log | The server refused a device's work and the device will keep retrying. On 0.8.4 this could repeat forever; 0.8.5 falls back to committing one entry at a time and logs `batch commit failed, committing one at a time` instead. Either line means something is wrong with the store: check disk space and permissions on the data directory. |
+| `batch commit failed, committing one at a time` or `commit failed` in the log | The server could not commit a device's work. It falls back to one entry at a time, and the device keeps what it could not send and retries. Either line means something is wrong with the store: check disk space and permissions on the data directory. |
 
 Use `trewd stats -json` for storage automation. Check `reclaimComplete` before
 using the reclaim estimates; a partial scan cannot give a reliable total.
