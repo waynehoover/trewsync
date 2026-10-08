@@ -521,8 +521,10 @@ first checked by `scripts/verify-release.sh --server` on the first release.
   `scripts/homebrew-formula.sh VERSION SHA256SUMS` renders it from the
   published sums and refuses sums that miss a platform;
   `scripts/homebrew-formula.test.sh` evaluates the result against a stand-in
-  for Homebrew's DSL. The tap repository does not exist yet. `brew style`
-  passes on the file; `brew audit`, which needs a tap, has not been run.
+  for Homebrew's DSL. Each server release renders it and puts it in the tap by
+  hand (`Formula/trewd.rb`; 0.12.0 was the first, 2026-10-08): `brew style`
+  passes, and `brew fetch --formula waynehoover/tap/trewd` downloads and
+  checks the binary. `brew audit` has not been run.
 - **mise.** `mise use -g packslip:github.com/waynehoover/trewsync/server` installs
   trewd from the signed manifest, verified against the repository's identity.
 - **Nix.** [flake.nix](../flake.nix) builds trewd from source with the release
