@@ -20,7 +20,8 @@ services for that vault. Each device should have its own local copy.
 2. Create `<vault>/.obsidian/plugins/trew-sync/` and put the three files there.
    If you use a custom Obsidian configuration folder, use that folder instead
    of `.obsidian`.
-3. Reload Obsidian and enable **TrewSync** under **Settings → Community plugins**.
+3. Reload Obsidian. Under **Settings → Community plugins**, turn community plugins on if they are
+   off, then enable **TrewSync**.
 4. Open the TrewSync ribbon icon and choose **Sync settings**, or run
    **TrewSync: Show status** from the command palette.
 

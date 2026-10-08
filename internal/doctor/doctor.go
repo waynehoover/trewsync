@@ -1071,11 +1071,11 @@ func (r *run) rehearsal() {
 	found, err := ReadRecord(r.opt.DataDir, RehearsalRecordFile, &rec)
 	switch {
 	case err != nil:
-		r.bad(Warn, CheckRehearsal, err.Error(), "Rehearse a restore: `trewd rehearse -backup DIR` writes the record again.")
+		r.bad(Warn, CheckRehearsal, err.Error(), "Rehearse a restore: `trewd rehearse -backup BACKUP` writes the record again, with `-identity KEY` for an encrypted backup.")
 		return
 	case !found:
 		r.bad(Warn, CheckRehearsal, "no restore of a backup of this data directory has been rehearsed",
-			"Rehearse one: `trewd rehearse -data "+r.opt.DataDir+" -backup DIR`, and the steps in docs/operations.md, "+
+			"Rehearse one: `trewd rehearse -data "+r.opt.DataDir+" -backup BACKUP` (with `-identity KEY` for an encrypted backup), and the steps in docs/operations.md, "+
 				"\"Rehearse a restore\". A recovery path tested only in docs is a rumour (rule 11).")
 		return
 	case !rec.OK:

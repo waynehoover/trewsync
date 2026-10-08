@@ -1,6 +1,6 @@
 # TrewSync documentation
 
-**Your own Obsidian sync, with an agent inside it.**
+**Self-hosted sync for Obsidian, with an agent inside it.**
 
 [Back to TrewSync](../README.md)
 

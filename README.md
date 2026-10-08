@@ -1,6 +1,6 @@
 # <img src="docs/assets/logo.svg" width="40" height="40" align="top" alt=""> TrewSync
 
-**Your own Obsidian sync, with an agent inside it.**
+**Self-hosted sync for Obsidian, with an agent inside it.**
 
 TrewSync syncs your vault through a server you run, keeps every earlier
 version of every note, and lets an agent such as Claude Code read and edit the
