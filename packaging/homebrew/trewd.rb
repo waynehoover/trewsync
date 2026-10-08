@@ -60,7 +60,9 @@ class Trewd < Formula
       The service below serves the vault in #{var}/trewd on 127.0.0.1:3003,
       without the MCP endpoint. Put TLS in front of it (tailscale serve, Caddy)
       before any device outside this machine connects. The first device's
-      invite is written to #{var}/trewd/first-invite on the first start.
+      invite in #{var}/trewd/first-invite names this machine at port 3003, which
+      no device behind TLS can use: make the first one with
+      `trewd invite -data #{var}/trewd -url wss://NAME`, the name your devices reach.
     EOS
   end
 

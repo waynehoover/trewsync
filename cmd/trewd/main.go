@@ -643,6 +643,10 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		ln.Close()
 		return err
 	}
+	// Without -url or -localhost the addresses are this machine's own at the
+	// server's port, where nothing speaks TLS, so the startup message must not
+	// present them as the thing to paste (found by the newcomer walkthrough).
+	first.Guessed = first.Written && *publicURL == "" && !*local
 	// The operator's socket, before "listening on" is printed, so `trewd
 	// invite` and the rest work from the moment anybody is told the server is
 	// up. Closed before the store is, by the order of the defers.

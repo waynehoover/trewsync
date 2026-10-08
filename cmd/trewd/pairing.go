@@ -120,6 +120,11 @@ type firstInvite struct {
 	// NoAddress is true when there was nothing to mint for: no -url, and no
 	// address of this machine a device could dial.
 	NoAddress bool
+	// Guessed is true when the invite was written without -url or -localhost,
+	// so its addresses are this machine's own at the server's own port, which
+	// a device can use only if something terminates TLS at exactly that name
+	// and port. Behind tailscale serve or a proxy, none of them works.
+	Guessed bool
 }
 
 // mintFirstInvite gives a store with no devices a way to get its first one
@@ -184,7 +189,14 @@ func printPairing(out io.Writer, addr, vault string, first firstInvite) {
 		fmt.Fprintf(out, "  %s\n", first.Path)
 		fmt.Fprintf(out, "and works once, until %s. Paste a line from it into TrewSync on that device.\n",
 			first.ExpiresAt.UTC().Format(time.RFC3339))
-		fmt.Fprintln(out, "Each line names one address of this server; use the one the device can reach.")
+		if first.Guessed {
+			fmt.Fprintln(out, "It was started without -url, so each line names this machine at the server's own")
+			fmt.Fprintln(out, "port, where nothing speaks TLS. Behind tailscale serve or a proxy no device can use")
+			fmt.Fprintln(out, "them: make the first device's invite with `trewd invite -url wss://NAME`, the name")
+			fmt.Fprintln(out, "your devices reach, instead.")
+		} else {
+			fmt.Fprintln(out, "Each line names one address of this server; use the one the device can reach.")
+		}
 	case first.Outstanding:
 		fmt.Fprintln(out, "No device is paired with this vault yet, and an invite for one is still outstanding.")
 		fmt.Fprintf(out, "If this server wrote it, it is in %s. `trewd invite` makes another.\n", first.Path)

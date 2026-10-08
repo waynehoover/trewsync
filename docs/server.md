@@ -216,9 +216,10 @@ first one to `first-invite` in its data directory, mode 0600, and logs that
 path and when it expires, never the invite itself. It names the right address
 only when `serve` was started with `-url wss://homelab.example.ts.net` (or
 `-localhost`, for a trial on one machine). Otherwise it names this machine's
-own addresses at the server's own port, one per line, as `wss://`, and nothing
-there speaks TLS, so no device can use it even though the startup message
-says to paste a line from it: make one with `trewd invite -url` instead.
+own addresses at the server's own port, one per line, as `wss://`, where
+nothing speaks TLS, so no device behind tailscale serve or a proxy can use it,
+and the startup message says so: make the first device's invite with
+`trewd invite -url` instead.
 
 1. [Install the plugin](plugin.md#install) on your first device.
 2. Open TrewSync, paste the invite into **Invite**, check the server it names, and

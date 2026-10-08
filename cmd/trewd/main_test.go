@@ -848,8 +848,25 @@ func TestServeCreatesADataDirectoryOnItsFirstRun(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, firstInviteFile)); err != nil {
 		t.Fatalf("a first run wrote no invite for its first device: %v", err)
 	}
+	// Started without -url, the invite's addresses are guesses no device behind
+	// a proxy can use, and the message says so instead of telling a newcomer to
+	// paste one (found by the newcomer walkthrough of 2026-10-08).
+	if !strings.Contains(out, "started without -url") || !strings.Contains(out, "trewd invite -url wss://NAME") ||
+		strings.Contains(out, "use the one the device can reach") {
+		t.Fatalf("a first run without -url presented its guessed addresses as the ones to paste:\n%s", out)
+	}
 	if _, err := os.Stat(filepath.Join(dir, "trew.db")); err != nil {
 		t.Fatalf("serve did not create the database: %v", err)
+	}
+}
+
+// With -url the server knows the name devices reach, so the message points at
+// the invite it wrote as the one to paste.
+func TestAFirstInviteWithAKnownAddressIsTheOneToPaste(t *testing.T) {
+	var out strings.Builder
+	printPairing(&out, "127.0.0.1:3003", "default", firstInvite{Written: true, Path: "/data/first-invite", ExpiresAt: time.Now()})
+	if !strings.Contains(out.String(), "use the one the device can reach") || strings.Contains(out.String(), "started without -url") {
+		t.Fatalf("an invite made with -url was not offered as the one to paste:\n%s", out.String())
 	}
 }
 
