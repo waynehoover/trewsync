@@ -36,6 +36,14 @@ const stagingDirName = "backup-staging"
 // it as one age archive at to.
 func backupEncrypted(st *store.Store, dataDir, to string, deep bool, recipients []age.Recipient, out io.Writer) (doctor.BackupRecord, error) {
 	rec := doctor.BackupRecord{To: to, Deep: deep, Encrypted: true}
+	// Absolute before anything is joined to it. The staging folder is named
+	// from dataDir and the pack walks the store's chunk paths, which are
+	// absolute, so a relative `-data ./trew-data` failed after staging with
+	// "Rel: can't make ... relative to trew-data/backup-staging".
+	dataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		return rec, err
+	}
 	// Nothing but an earlier archive is written over (T35), and that is asked
 	// before anything is staged.
 	if err := archive.CheckDestination(to); err != nil {

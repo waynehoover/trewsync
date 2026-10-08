@@ -127,3 +127,24 @@ func TestAnEncryptedBackupBesideTheDataDirectoryIsTaken(t *testing.T) {
 		t.Fatalf("a plaintext backup into the data directory's parent: %v", err)
 	}
 }
+
+// An encrypted backup of a data directory named relatively, as `-data
+// ./trew-data` from the directory beside it. The staging folder was joined to
+// the relative name while the archive walked absolute chunk paths, and the
+// pack failed after staging with "Rel: can't make ... relative to
+// trew-data/backup-staging", found by the newcomer walkthrough of 2026-10-08.
+func TestAnEncryptedBackupOfARelativeDataDirectory(t *testing.T) {
+	dir := seeded(t)
+	key := filepath.Join(t.TempDir(), "key")
+	mustRun(t, "backup-key", "-x25519", "-out", key)
+
+	t.Chdir(filepath.Dir(dir))
+	rel := filepath.Base(dir)
+	out, err := trew(t, "backup", "-data", rel, "-to", "relative.tar.age", "-recipients-file", key+".pub")
+	if err != nil {
+		t.Fatalf("an encrypted backup of a relative data directory failed: %v\n%s", err, out)
+	}
+	if info, err := os.Stat(filepath.Join(filepath.Dir(dir), "relative.tar.age")); err != nil || info.Size() == 0 {
+		t.Fatalf("no archive was written (%v)", err)
+	}
+}
