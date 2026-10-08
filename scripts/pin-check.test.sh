@@ -18,7 +18,7 @@ set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 fails=0
-image=ghcr.io/waynehoover/trew
+image=ghcr.io/waynehoover/trewsync
 
 mkdir -p "$work/scripts" "$work/docs"
 cp "$here/pin-check.sh" "$work/scripts/"

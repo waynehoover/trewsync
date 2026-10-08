@@ -17,7 +17,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-image=ghcr.io/waynehoover/trew
+image=ghcr.io/waynehoover/trewsync
 
 pinned=$(sed -n "s|.*image: $image:\([0-9][^@]*\)@sha256:.*|\1|p" compose.yaml)
 newest=$(git tag --list 'server/v*' | sed 's|server/v||' | sort -V | tail -1)

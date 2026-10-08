@@ -631,9 +631,11 @@ repository: the release signer `trewd update` and `scripts/verify-release.sh`
 pin, the packslip project `github.com/waynehoover/trewsync/server`, the
 Homebrew formula's release URLs (the tap stays `waynehoover/homebrew-tap`),
 the flake, the package metadata, and the documentation links. Nothing else
-moved: `trewd`, `trew`, `trew-sync`, `TREW_DATA`, `.trew`, `trew1i_`, the MCP
-server name and the image `ghcr.io/waynehoover/trew` keep their names. The
-records above keep the module path they were written with.
+moved: `trewd`, `trew`, `trew-sync`, `TREW_DATA`, `.trew`, `trew1i_` and the
+MCP server name keep their names. The container image followed the repository,
+because the release workflow names it after `GITHUB_REPOSITORY`: the first
+server release, 0.12.0, is `ghcr.io/waynehoover/trewsync`. The records above
+keep the module path they were written with.
 
 ### Inventory at the fork
 

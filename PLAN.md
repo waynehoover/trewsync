@@ -284,7 +284,7 @@ Version 1 of a new wire protocol, derived from Basalt's protocol 7 by deletion. 
 ```yaml
 services:
   trew:
-    image: ghcr.io/waynehoover/trew:X.Y.Z@sha256:…
+    image: ghcr.io/waynehoover/trewsync:X.Y.Z@sha256:…
     ports: ["127.0.0.1:3003:3003"]
     volumes: ["./trew/data:/data"]
     command: ["serve", "-addr", "0.0.0.0:3003", "--mcp"]
@@ -799,5 +799,5 @@ Settled now, before the invite format and on-disk identity freeze:
 | Invite prefix | `trew1i_` |
 | npm package | `trew-sync` |
 | Auth realm | `WWW-Authenticate: Bearer realm="trew"` |
-| Docker image | `ghcr.io/waynehoover/trew` |
+| Docker image | `ghcr.io/waynehoover/trewsync` (named after the repository by the release workflow) |
 | Store product id | `trew` (§2.8) |

@@ -23,7 +23,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-image=ghcr.io/waynehoover/trew
+image=ghcr.io/waynehoover/trewsync
 
 version=${1:-}
 if [ -z "$version" ]; then

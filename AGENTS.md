@@ -10,9 +10,10 @@ MCP endpoint built into it so agents read and edit the same notes devices sync.
 
 **The name.** People read **TrewSync**, one word. The server's command is
 `trewd` and the headless client's is `trew`. The repository is
-`github.com/waynehoover/trewsync`, and so is the Go module path; every other
-identifier (`TREW_DATA`, `.trew`, `trew1i_`, `obsidian://trew`, the plugin id
-and npm package `trew-sync`, the image `ghcr.io/waynehoover/trew`) stays
+`github.com/waynehoover/trewsync`, and so are the Go module path and the
+container image `ghcr.io/waynehoover/trewsync`, which the release workflow
+names after the repository; every other identifier (`TREW_DATA`, `.trew`,
+`trew1i_`, `obsidian://trew`, the plugin id and npm package `trew-sync`) stays
 lowercase `trew` (PLAN §10).
 
 **Where the code is today.** The Go server speaks protocol 1: plaintext,
