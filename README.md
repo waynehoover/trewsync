@@ -210,17 +210,29 @@ issue. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 In the terms of Obsidian's developer policies:
 
 - **Payment:** none. TrewSync is free, open-source software.
-- **Account:** none. You run the server; no third-party account is needed.
+- **Account:** none for TrewSync, but the plugin needs a TrewSync server,
+  which you run yourself. The quickstart reaches that server over Tailscale,
+  which has accounts of its own; [server setup](docs/server.md) also shows
+  Caddy instead.
 - **Network use:** the plugin connects only to the TrewSync server you pair it
-  with, to sync your notes and attachments. It contacts no other service.
+  with, at the address the invite names or one you set later, to sync your
+  notes and attachments, show their history, and manage this vault's devices
+  and invites. It contacts no other service.
 - **Your notes on that server:** the server stores notes, their history and
   their names in plaintext. With its MCP endpoint turned on, an agent holding
   a token can read every note, and what it reads reaches that agent's model
   provider.
 - **Files outside the vault:** the plugin reads and writes only inside the
   vault. A note deleted on another device goes to the system trash, or the
-  vault's `.trash` if that fails, as a deletion in Obsidian does.
-- **Telemetry:** none, in the plugin or the server. Neither sends anything to
-  the author or anyone else.
+  vault's `.trash` if that fails. On Obsidian 1.11.4 and later the device's
+  token is kept in Obsidian's keychain, which belongs to Obsidian on that
+  device rather than to the vault.
+- **Telemetry:** none, in the plugin or the server. Neither reports anything
+  to the author or anyone else. The server contacts another service only when
+  its operator asks it to: pushing to the Git remote they name, or downloading
+  a release from GitHub with `trewd update`.
 - **Ads:** none.
 - **Closed source:** none. Everything is in this repository.
+- **Fork:** TrewSync is a fork of
+  [Basalt Sync](https://github.com/waynehoover/basalt-sync), made by its own
+  author, Wayne Hoover, from the same GitHub account.

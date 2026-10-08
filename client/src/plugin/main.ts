@@ -6,6 +6,16 @@ import { ConflictsModal } from "./conflicts.ts";
 import { conflictOriginal, reviewConflict, type ConflictPair } from "../core/conflicts.ts";
 /** Obsidian plugin: lifecycle, platform adapter, and sync/recovery interfaces. */
 
+/*!
+ * Bundled dependency: fflate
+ * Copyright (c) 2026 Arjun Barrett, https://github.com/101arrowz/fflate
+ * Licensed under the MIT license: http://www.opensource.org/licenses/mit-license.php
+ *
+ * Bundled dependency: diff-match-patch
+ * Copyright 2018 The diff-match-patch Authors, https://github.com/google/diff-match-patch
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
+ */
+
 import {
   Modal,
   Menu,
@@ -435,7 +445,10 @@ export default class TrewPlugin extends Plugin {
     // goes with it, so a first sync longer than the screen timeout was cut
     // off again and again (screen-awake.ts).
     if (Platform.isMobileApp)
-      this.awake = new ScreenAwake(globalThis.navigator?.wakeLock, globalThis.document);
+      this.awake = new ScreenAwake(
+        typeof navigator === "undefined" ? undefined : navigator.wakeLock,
+        typeof document === "undefined" ? undefined : document,
+      );
     // Obsidian mobile has no status bar, and the declaration says so:
     // addStatusBarItem is "not available on mobile". The ribbon is on both,
     // so the state goes there too: its tooltip is the same sentence, and it
@@ -3156,8 +3169,8 @@ export default class TrewPlugin extends Plugin {
     this.toldKeychainRefused = true;
     new Notice(
       `TrewSync: this device's token stays in ${this.dataPath}, because ${why}. It syncs as ` +
-        "before; a copy of this vault's .obsidian folder carries the token with it until the " +
-        "keychain works.",
+        `before; a copy of this vault's ${this.app.vault.configDir} folder carries the token ` +
+        "with it until the keychain works.",
       15_000,
     );
   }
@@ -3507,9 +3520,8 @@ export default class TrewPlugin extends Plugin {
  * always is.
  */
 async function copyToClipboard(text: string, said: string): Promise<void> {
-  const clipboard = (
-    globalThis as { navigator?: { clipboard?: { writeText(text: string): Promise<void> } } }
-  ).navigator?.clipboard;
+  const clipboard: Clipboard | undefined =
+    typeof navigator === "undefined" ? undefined : navigator.clipboard;
   try {
     if (!clipboard) throw new Error("no clipboard here");
     await clipboard.writeText(text);
@@ -4472,9 +4484,8 @@ class TrewPanel {
       (message) => {
         if (line.textContent !== message) say(line, message);
       },
-      typeof line.ownerDocument?.addEventListener === "function"
-        ? line.ownerDocument
-        : globalThis.document,
+      // Undefined is watchDelivery's default, the global document.
+      typeof line.ownerDocument?.addEventListener === "function" ? line.ownerDocument : undefined,
     );
   }
 
@@ -5635,8 +5646,7 @@ function originAdvice(state: State): string {
  * wrong.
  */
 function origin(): string {
-  const l = (globalThis as { location?: { origin?: string } }).location;
-  return l?.origin ?? "unknown";
+  return (typeof location === "undefined" ? undefined : location.origin) ?? "unknown";
 }
 
 /**

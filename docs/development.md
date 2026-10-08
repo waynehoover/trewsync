@@ -240,11 +240,11 @@ runs the same config, unchanged, and fails on any error. It is a step of
 `scripts/check.sh` and of CI's client job, both named `lint`.
 
 The versions are pinned: eslint 9.39.5 and eslint-plugin-obsidianmd 0.4.2, the
-newest release when the gate landed (2026-09-23). A newer plugin release can
-add rules, so move the pin deliberately and read what it finds before
-releasing on it.
+newest release when the gate landed (2026-09-23) and still the newest on
+2026-10-08. A newer plugin release can add rules, so move the pin deliberately
+and read what it finds before releasing on it.
 
-It reads the plugin bundle's source: the 43 files under `client/src/plugin`
+It reads the plugin bundle's source: the 46 files under `client/src/plugin`
 and `client/src/core` that `src/plugin/main.ts` reaches, type-only imports
 included. Tests are left out by name, and the fourteen other files of those
 folders are listed in [client/eslint.config.mjs](../client/eslint.config.mjs)
@@ -252,7 +252,9 @@ with the reason each exists: test scaffolding, the fuzzers, the headless
 client's outcomes and fault seams, and the platform probe, which `main.ts` does
 not import yet. The config walks the imports from `main.ts` every run and
 refuses to lint when a listed file has joined the bundle, when a listed file
-is gone, or when a file of those folders is neither reached nor listed.
+is gone, or when a file of those folders is neither reached nor listed. The
+directory's own scanner is documented to choose its files differently; see
+[what it reads](#what-the-directorys-scanner-reads).
 
 It runs from the repository root, which `bun run lint` changes to, because the
 plugin reads `manifest.json` from the working directory. Without the
@@ -277,27 +279,38 @@ added or removed, change this table in the same commit.
 | Rule | Count | Where | Why it stays |
 |---|---|---|---|
 | `obsidianmd/prefer-window-timers` | 20 | `core/client.ts` (12), `core/transport.ts` (8) | `core` is also the headless client's engine, and Node has no `window`. |
-| `obsidianmd/prefer-window-timers` | 9 | `plugin/main.ts` (6), `plugin/visible-poll.ts` (3) | The plugin's tests run in Node, where there is no `window`; they drive these timers with fake timers on the globals, and some replace `window` with a bare `EventTarget`. The plugin's code runs in Obsidian's main window, so a bare timer is already that window's. `main.ts` records the choice where the save-to-sync timer is set. |
+| `obsidianmd/prefer-window-timers` | 11 | `plugin/main.ts` (6), `plugin/visible-poll.ts` (3), `plugin/screen-awake.ts` (2) | The plugin's tests run in Node, where there is no `window`; they drive these timers with fake timers on the globals, and some replace `window` with a bare `EventTarget`. The plugin's code runs in Obsidian's main window, so a bare timer is already that window's, and closing a popout cancels none of them. `main.ts` records the choice where the save-to-sync timer is set. |
 | `obsidianmd/no-global-this` | 3 | `core/digest.ts` (2, `crypto`), `core/transport.ts` (1, `WebSocket`) | Shared with the headless client. The global object is the one place both runtimes keep WebCrypto and WebSocket. |
-| `obsidianmd/no-global-this` | 9 | `plugin/activity.ts` (2), `plugin/delivery.ts` (1), `plugin/main.ts` (3), `plugin/resume.ts` (2), `plugin/visible-poll.ts` (1) | Each reads `document`, `window`, `navigator` or `location` so that a missing one is `undefined` rather than a thrown error, because the tests run in Node and supply them with `vi.stubGlobal`. Where an element is at hand the panel already uses its `ownerDocument` and that document's window, which is what keeps it right in a popout; the global is the fallback. |
-| `obsidianmd/no-global-this` | 1 | `electronFs` in `plugin/vault.ts` | Node's `fs` for the durable fsync on desktop, through the `require` Electron provides as a global. Written as `require("fs")` the bundler would resolve it and the plugin would name a Node module, which the build test refuses. |
+| `obsidianmd/no-global-this` | 2 | `plugin/activity.ts` (1), `plugin/main-window.ts` (1) | Each wants the global object itself, not a name on it. In `activity.ts` it stands in for the panel's window when the panel's element has none, which is where the test that counts animation frames supplies `requestAnimationFrame`; where an element is at hand the panel uses its `ownerDocument` and that document's window, which is what keeps it right in a popout. In `main-window.ts` it is where Obsidian keeps `activeWindow` and `activeDocument`, which it points at the main window for the length of a modal's `open`, so the first-sync review opens there and not in a Settings popout; Obsidian has no API for choosing a modal's window. The plugin reads `document`, `window`, `navigator` and `location` by name behind a `typeof` guard, so a missing one is `undefined` rather than a thrown error in the tests, which run in Node and supply them with `vi.stubGlobal`. |
+| `obsidianmd/no-global-this` | 1 | `electronFs` in `plugin/vault.ts` | Node's `fs` for the durable fsync on desktop, through the `require` Electron provides as a global. Written as `require("fs")` the bundler would resolve it and the plugin would name a Node module, which the build test refuses. Only a desktop `FileSystemAdapter` asks for it, and a phone has no such global, so it gets none. That is the self-critique checklist's advice for a Node module in a plugin that also runs on mobile (gate it to desktop and `require()` it at run time), and why `isDesktopOnly` stays `false`. |
 | `no-restricted-globals` (`fetch`) | 2 | `readBlocks` and `readRange` in `plugin/vault.ts` | They fetch the vault's own resource URL, not the network, to read a large attachment as a stream and by range. `requestUrl` returns whole bodies and does not read resource URLs. |
 | `@typescript-eslint/no-deprecated` (`setWarning`) | 5 | `plugin/main.ts` | Its replacement, `setDestructive`, arrived in 1.13.0 and the manifest admits 1.7.2, so using it would be a `no-unsupported-api` error. |
-| `obsidianmd/ui/sentence-case` | 15 | `plugin/main.ts` | Twelve are the product's name, TrewSync, whose capital S the rule reads as a second word to lowercase: the plugin's name on the ribbon and in the panel's title, "Which platforms TrewSync supports", the file menu's "TrewSync: version history", and eight notices that name it. One is the literal invite prefix `trew1i_...`, and two are the example device name `laptop` in a placeholder, spelled as device names are everywhere else. |
-| `obsidianmd/settings-tab/prefer-setting-definitions` | 1 | the settings tab in `plugin/main.ts` | `getSettingDefinitions` is the declarative settings API of 1.13.0. Until it is adopted, the tab's settings do not appear in Obsidian's settings search on 1.13 or later. |
+| `obsidianmd/ui/sentence-case` | 15 | `plugin/main.ts` | Twelve are the product's name, TrewSync, whose capital S the rule reads as a second word to lowercase: the plugin's name on the ribbon and in the panel's title, "Which platforms TrewSync supports", the file menu's "TrewSync: version history", and eight notices that name it. One is the literal invite prefix `trew1i_...`, and two are the example device name `laptop` in a placeholder, spelled as device names are everywhere else. The guideline itself capitalizes proper nouns, and the rule keeps the casing of the brands on its own list, GitHub and macOS among them; TrewSync is not on it. |
+| `obsidianmd/settings-tab/prefer-setting-definitions` | 1 | the settings tab in `plugin/main.ts` | `getSettingDefinitions` is the declarative settings API of 1.13.0. Until it is adopted, the tab's settings do not appear in Obsidian's settings search on 1.13 or later. The tab is the sync panel, drawn from live state (status, pairing, devices, invites), which a fixed list of setting definitions does not describe. |
 
 That was 56 warnings, and no errors, at the commit that added the gate. Writing
-the name TrewSync added nine of the sentence-case kind, so it is 65.
+the name TrewSync added nine of the sentence-case kind, so it was 65. The table
+then fell behind: by 0.12.0 the review printed 71, adding the two timers of
+`screen-awake.ts`, the global of `main-window.ts`, two more in `main.ts`, and a
+notice that named `.obsidian` for a configuration folder a vault may call
+something else (`obsidianmd/hardcoded-config-path`). That notice now names
+`configDir`, so it is 70. Reading `document`, `window`, `navigator` and
+`location` behind a `typeof` guard rather than off `globalThis` cleared ten
+more, so it is 60.
 
 ### Submitting to the community directory
 
-The plugin is installed by hand until it is listed. The directory no longer
-takes pull requests to `obsidianmd/obsidian-releases` (that repository is now a
-mirror the directory's bot updates); a plugin is added at
+The plugin is installed by hand until it is listed. A plugin is added at
 [community.obsidian.md](https://community.obsidian.md), and the directory
 reviews it automatically from the repository (plan/research/obsyncian.md,
-section 5). This is the flow, written from that investigation and not yet
-walked for TrewSync:
+section 5). `obsidianmd/obsidian-releases` takes no pull request for it: its
+plugin pull request template and the workflow that validated a new entry were
+removed on 2026-05-15 (`d4f0694`, "remove PR templates & validation actions"),
+and its `community-plugins.json` is a mirror a workflow refreshes from the
+directory every hour. This is the flow as Obsidian's developer docs gave it on
+2026-10-08 (Submit your plugin, Developer policies, Submission requirements
+for plugins, Plugin guidelines, and the directory's FAQ), not yet walked for
+TrewSync:
 
 1. **Settle what is permanent.** The id `trew-sync` cannot change once listed,
    and the display name TrewSync is what the directory's fuzzy trademark check
@@ -313,28 +326,108 @@ walked for TrewSync:
    bump `manifest.json` and `versions.json` only in the commit that is
    released, and publish the release before the bump reaches the default
    branch. `versions.json` maps each plugin version to its `minAppVersion`.
-3. **Pass the review locally.** `bun run lint` is the directory's own
-   `recommended` config ([above](#the-community-directory-review)), and fails
-   on any error. An error makes that release uninstallable; warnings pass,
-   and each accepted one has its reason in the ledger.
+3. **Pass the review locally, then preview it there.** `bun run lint` is the
+   directory's own `recommended` config
+   ([above](#the-community-directory-review)), and fails on any error. An
+   error makes that release uninstallable; warnings pass, and each accepted
+   one has its reason in the ledger. The lint reads only the bundle's files,
+   and the directory's scanner may read more
+   ([below](#what-the-directorys-scanner-reads)), so before publishing the
+   entry run its **Review branch**, which scans a branch, tag or commit
+   without a release, and read every section of the result.
 4. **Keep the README's [Disclosures](../README.md#disclosures) current.** The
-   developer policies require disclosing payment, accounts, network use,
-   access to files outside the vault, ads, server-side telemetry and closed
-   source. Ours says there is none of those but network use, which is only the
-   server the user pairs with, and says in the same block that the server
-   stores notes in plaintext and that the MCP endpoint exposes them to an
-   agent's model provider. Client-side telemetry and a plugin that updates
-   itself are forbidden outright, and TrewSync has neither.
-5. **Submit.** Sign in at community.obsidian.md, link the GitHub account that
-   owns the repository, and add the plugin by repository. Read the automated
-   review's findings for the first release before announcing it.
+   developer policies allow these only where the README says so: payment or
+   an account for full access, network use (which remote services, and why),
+   access to files outside the vault, static ads in the plugin's own
+   interface, server-side telemetry (with a privacy policy), and closed
+   source. Ours answers each: no payment and no account, though the plugin
+   needs a server the user runs; network use only to that server; the system
+   trash and Obsidian's keychain as the only places outside the vault; and in
+   the same block, that the server stores notes in plaintext and that the MCP
+   endpoint exposes them to an agent's model provider. Obfuscated code,
+   dynamic ads, client-side telemetry and a plugin that installs or updates
+   itself are forbidden outright, and TrewSync has none of them. The release's
+   `main.js` is minified, which the self-critique checklist asks for, and
+   rebuilds byte for byte from its tag (below).
+5. **Submit.** Sign in at community.obsidian.md with an Obsidian account and,
+   under **Profile**, connect the GitHub account that owns the repository.
+   Then **Plugins → New plugin**, with the repository URL and the owner,
+   agreeing to the developer policies and to keep supporting the plugin or
+   hand it on. **Edit listing** sets the icon, the short and long description,
+   the categories, the payment type (Free) and up to five screenshots each for
+   desktop (1200 by 800) and mobile (900 by 1600). Read the automated review's
+   findings for the first release before announcing it.
 6. **Every release is reviewed again.** A later release can be refused for an
    error a new version of the rules finds, so the lint pin moves deliberately.
+   The entry's menu has **Check for new releases** and **Request review** for
+   when the periodic check has not run yet.
 
-What is not settled: whether the directory's review reads the repository at
-the tag or at the default branch for anything beyond `manifest.json`, and what
-a human reviewer asks about the adapter-level preserving writes. Record both
-here when the first submission answers them.
+#### The forks policy
+
+The developer policies refuse a fork unless the original author approved it
+in writing, publicly, or has been unreachable and silent for six months;
+either way the original author is credited as a contributor. TrewSync is a
+fork of Basalt Sync, and both are Wayne Hoover's, from the same GitHub
+account; the README's Disclosures say so, which is the public record. The
+same policy prefers fewer projects to many, which counts against listing
+Basalt Sync beside it.
+
+#### What the directory's scanner reads
+
+The review has four sections, each result an error, a warning, a
+recommendation or a pass: **Manifest**, **Releases**, **Source code** and
+**Build verification**. Two of them fit this repository less well than a
+plugin-only one:
+
+- **Source code.** The FAQ describes a fixed list of ignored names rather
+  than a walk of the imports: `node_modules`, `dist`, `build`, `test`,
+  `tests`, `scripts`, `docs`, `*.test.*`, `*.spec.*`, `*.mjs`, `*.cjs`,
+  `esbuild.config.mjs` and a few more. Nothing on it matches
+  `client/src/node`, `client/src/stress`, `client/bench*.ts`, the vitest
+  configs or the fourteen files `eslint.config.mjs` leaves out, so a scan by
+  that list reads 119 files here, the bundle's 46 among them. The same config
+  over all 119, run by hand on 2026-10-08, found 190 errors and 480 warnings.
+  None of the errors is in the bundle. 132 are `console.log` and
+  `console.info` calls, which `no-console` refuses in a plugin, 127 of them in
+  the benchmarks and the stress suite. If the scanner reads those files,
+  every release is uninstallable until they are fixed, moved under ignored
+  names, or the plugin is published from a repository of its own.
+- **Build verification.** The scanner runs the first of the `build`,
+  `build:plugin` and `compile` scripts and checks that the build matches what
+  is committed. This repository has no `package.json` at its root: the
+  plugin's is `client/package.json`, whose `build` also builds the headless
+  client and writes `client/dist/plugin/main.js`, and its lock file is
+  `bun.lock`, which the self-critique checklist does not name (it lists
+  npm's, pnpm's and Yarn's). The build itself reproduces: `main.js` built
+  from the `0.12.0` tag on 2026-10-08 is byte for byte the release's (SHA-256
+  `57d1b4725e209472...`).
+
+#### Guidelines the plugin departs from
+
+The plugin guidelines are recommendations, and a reviewer may still insist
+on one. Three are departed from on purpose:
+
+- **The Adapter API rather than the Vault API.** The Vault API works on the
+  files in Obsidian's index. Sync stages a new file or a changed attachment
+  under a hidden name (`.trew-tmp-...`), which the index never holds, reads it
+  back, and renames it into place, relying on the adapter's rename refusing an
+  occupied destination; and it lists files the index does not have yet, such
+  as one just renamed into place. A changed note is written in place with
+  `DataAdapter.process`, inside Obsidian's save queue, after a verified
+  backup ([file replacement](design.md#file-replacement)).
+- **Its own trash rather than `FileManager.trashFile`.** A deletion from
+  another device goes to the system trash, or the vault's `.trash`, and never
+  further. `trashFile` follows the "Deleted files" setting, which can delete
+  permanently, and a note another device deleted has to stay recoverable here.
+- **Node's `fs` with `isDesktopOnly` false.** Only to fsync on desktop, and
+  gated at run time ([the ledger](#accepted-warnings)).
+
+What is not settled: which files the source-code scan reads, and at which
+ref; whether build verification finds `client/package.json` and accepts
+`bun.lock`; and whether a person reviews the plugin at all, since most
+entries the directory has published carry "This plugin has not been manually
+reviewed by Obsidian staff." in their description. The first **Review
+branch** run answers the first two. Record them here.
 
 ## The docs site
 

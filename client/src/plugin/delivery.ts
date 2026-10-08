@@ -16,7 +16,7 @@ const monitors = new WeakMap<Source, DeliveryMonitor>();
 export function watchDelivery(
   source: Source,
   listener: (message: string) => void,
-  doc = globalThis.document,
+  doc = typeof document === "undefined" ? undefined : document,
 ): () => void {
   let monitor = monitors.get(source);
   if (!monitor) {

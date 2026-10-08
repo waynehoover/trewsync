@@ -6,7 +6,7 @@ export function pollWhileVisible(
   intervalMs: number | (() => number | undefined),
   isVisible?: () => boolean,
 ): VisiblePoll {
-  const doc = globalThis.document;
+  const doc = typeof document === "undefined" ? undefined : document;
   let stopped = false;
   let running = false;
   let again = false;
