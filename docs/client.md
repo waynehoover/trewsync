@@ -54,8 +54,9 @@ expired or cancelled) leaves nothing saved; ask for a new one.
 The first device pairs from an invite too. Make one on the server host with
 `trewd invite -url wss://your-host`, naming the address devices reach, or use
 the one a server with no devices writes to `first-invite` in its data
-directory. Copy it to this machine privately, then pair, without `--read-only`
-if this device should write:
+directory, which names that address only when `serve` was started with `-url`
+(or `-localhost`, for a trial on one machine). Copy it to this machine
+privately, then pair, without `--read-only` if this device should write:
 
 ```bash
 mkdir -p ~/vault
@@ -111,7 +112,8 @@ trew search harbour --folder Journal --context 2
 trew search harbour --all --json      # every page, for a script
 ```
 
-Each match prints as `path:line:column: the line`, highlighted on a terminal.
+Each match prints as `path:line:column: the line`, highlighted on a terminal,
+and a file-name match as `path  (the file name matches)`.
 Anything a note holds that a terminal would act on, such as an escape
 sequence, is shown spelled out instead, so a note cannot change what your
 terminal displays. When more matches follow the first page the command says
@@ -224,7 +226,9 @@ trew pair - --read-only < /private/path/invite.txt
 TrewSync stores this device's credential and the sync index in `.trew/`, which
 never syncs. Protect this directory: a copy of it can connect as this device
 until you revoke the device. Unlink through the command rather than deleting
-state files by hand.
+state files by hand. To move a vault, move the whole folder: `.trew/` copied
+into a folder without the notes reads every note it does not find as deleted
+here, and sends the deletions to every device.
 
 The CLI excludes dot-prefixed files and folders, `node_modules`, and the
 Obsidian configuration folder. Use `--config-dir NAME` if yours differs from
