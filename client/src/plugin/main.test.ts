@@ -6490,6 +6490,18 @@ describe("where the device token is kept", () => {
     expect(trewSecrets()).toEqual([]);
   }, 300_000);
 
+  it("names the vault's own configuration folder when the token stays in data.json", async () => {
+    // A vault may keep its configuration somewhere other than .obsidian, and
+    // the notice named .obsidian whatever the folder was.
+    await fresh();
+    keychain.unavailable = true;
+    const { plugin } = await load(null, { id: "trew", dir: "Settings/plugins/trew" }, "Settings");
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    expect(told()).toMatch(/a copy of this vault's Settings folder carries the token/);
+    expect(told()).not.toMatch(/\.obsidian/);
+  }, 300_000);
+
   it("keeps two tokens for two vaults on one device, and unlinking one leaves the other", async () => {
     await fresh();
     // One keychain for both, which is a phone.

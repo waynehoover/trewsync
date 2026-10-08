@@ -3156,8 +3156,8 @@ export default class TrewPlugin extends Plugin {
     this.toldKeychainRefused = true;
     new Notice(
       `TrewSync: this device's token stays in ${this.dataPath}, because ${why}. It syncs as ` +
-        "before; a copy of this vault's .obsidian folder carries the token with it until the " +
-        "keychain works.",
+        `before; a copy of this vault's ${this.app.vault.configDir} folder carries the token ` +
+        "with it until the keychain works.",
       15_000,
     );
   }
