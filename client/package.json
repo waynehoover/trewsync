@@ -1,6 +1,6 @@
 {
   "name": "trew-sync",
-  "version": "0.10.0",
+  "version": "0.12.0",
   "description": "Self-hosted vault sync with full version history, on a server you run.",
   "keywords": [
     "obsidian",
