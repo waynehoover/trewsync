@@ -27,7 +27,7 @@ import (
 func cmdRestore(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	dataDir, vault := adminFlags(fs)
-	toUID := fs.Int64("to-uid", 0, "the uid to put the vault back to; `trewd audit` and a note's history name uids")
+	toUID := fs.Int64("to-uid", 0, "the uid to put the vault back to; trewd audit and a note's history name uids")
 	head := fs.Int64("head", 0, "refuse unless the vault is still at this uid, the head a dry run printed")
 	apply := fs.Bool("apply", false, "commit the restore; without it, nothing is written")
 	asJSON := fs.Bool("json", false, "print the plan, or what was done, or why not, as JSON")

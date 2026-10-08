@@ -348,7 +348,7 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	inviteOut := fs.String("invite-out", "",
 		"where to write the first device's invite when the vault has none (default: first-invite in the data directory)")
 	serveMCP := fs.Bool("mcp", false,
-		"also serve the MCP endpoint at /mcp, for agents holding a token from `trewd mcp-token`")
+		"also serve the MCP endpoint at /mcp, for agents holding a token from trewd mcp-token")
 	verbose := fs.Bool("v", false, "verbose logging")
 	allowEphemeral := fs.Bool("allow-ephemeral", false,
 		"start an empty store on storage a restart or a container replacement erases (tmpfs, a container's own layer)")
@@ -1479,7 +1479,7 @@ func cmdBackup(args []string, out io.Writer) error {
 	deep := fs.Bool("deep", false,
 		"re-read every body already in the backup, to catch bit rot in an old one")
 	var encryptTo, recipientsFiles stringList
-	fs.Var(&encryptTo, "encrypt-to", "an age recipient to encrypt the backup to, repeatable (`trewd backup-key` makes one)")
+	fs.Var(&encryptTo, "encrypt-to", "an age recipient to encrypt the backup to, repeatable (trewd backup-key makes one)")
 	fs.Var(&recipientsFiles, "recipients-file", "a file of age recipients, one per line, repeatable")
 	plaintextOK := fs.Bool("plaintext-ok", false,
 		"write a plaintext data directory: every note readable by whoever can read -to")

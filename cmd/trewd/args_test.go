@@ -53,3 +53,32 @@ func TestAStrayArgumentIsRefusedRatherThanDroppingTheFlagsAfterIt(t *testing.T) 
 		t.Fatalf("a refused command wrote %v", entries)
 	}
 }
+
+// Go's flag package reads a backquoted name in a flag's usage as the name of
+// the flag's argument, so a usage that quoted a command printed it as one:
+// `trewd -h` listed "-mcp trewd mcp-token", a switch shown taking two words,
+// and restore listed "-to-uid trewd audit". A flag's line in every command's
+// help names one argument at most.
+func TestHelpShowsNoFlagTakingAQuotedCommand(t *testing.T) {
+	for _, args := range [][]string{
+		{"serve"}, {"invite"}, {"devices"}, {"revoke"}, {"uninvite"}, {"mcp-token"}, {"audit"},
+		{"undo"}, {"restore"}, {"cat"}, {"history"}, {"deleted"}, {"export"}, {"backup"},
+		{"backup-key"}, {"unpack"}, {"rehearse"}, {"verify"}, {"purge"}, {"stats"}, {"doctor"},
+		{"config", "show"}, {"service"}, {"health"}, {"update"}, {"git-export", "set"},
+	} {
+		stderr, restore := captureStderr(t)
+		_, err := trew(t, append(args, "-h")...)
+		restore()
+		if err == nil || !strings.Contains(err.Error(), "help requested") {
+			t.Fatalf("trewd %s -h: %v", strings.Join(args, " "), err)
+		}
+		for _, line := range strings.Split(stderr.String(), "\n") {
+			// "  -name" and the argument's name, if it takes one; a
+			// one-letter flag's usage follows on the same line after a tab.
+			head, _, _ := strings.Cut(line, "\t")
+			if strings.HasPrefix(head, "  -") && len(strings.Fields(head)) > 2 {
+				t.Errorf("trewd %s -h: %q", strings.Join(args, " "), head)
+			}
+		}
+	}
+}

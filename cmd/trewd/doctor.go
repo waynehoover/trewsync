@@ -32,7 +32,7 @@ func cmdDoctor(ctx context.Context, args []string, out io.Writer) error {
 	url := fs.String("url", "", "the address devices reach the server at, whose /health doctor asks "+
 		"(default: the running server's own addresses)")
 	sample := fs.Int("sample", doctor.DefaultSample, "how many chunk references to read and hash")
-	deep := fs.Bool("deep", false, "read and hash every chunk reference, as `trewd verify -deep` does")
+	deep := fs.Bool("deep", false, "read and hash every chunk reference, as trewd verify -deep does")
 	var accept stringList
 	fs.Var(&accept, "accept", "a check whose warning the operator has accepted, repeatable ("+
 		strings.Join(doctor.Checks, ", ")+")")
