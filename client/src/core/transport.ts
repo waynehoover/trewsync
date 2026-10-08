@@ -513,11 +513,13 @@ function errorFrom(frame: Reply): ProtocolError {
  *
  * Cost an hour the first time it was hit, against a server on localhost. The
  * address is in the message already; this adds the one word that turns it into
- * something to try.
+ * something to try. The address comes from an invite, so that is what changes:
+ * an invite naming ws://, which the server makes.
  */
 function plainTextHint(url: string): string {
   if (!url.startsWith("wss://")) return "";
-  return `. If that server has no TLS in front of it, pair with ws://${url.slice("wss://".length)} instead`;
+  const plain = `ws://${url.slice("wss://".length)}`;
+  return `. If that server has no TLS in front of it, pair from an invite naming ${plain} instead, made on the server with trewd invite -url ${plain}`;
 }
 
 /** Raised when the connection went away rather than answering. */

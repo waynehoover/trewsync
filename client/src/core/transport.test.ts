@@ -1345,6 +1345,25 @@ describe("a connection that never opens", () => {
       vi.useRealTimers();
     }
   });
+
+  // A device reaches whatever address its invite names, and nothing takes an
+  // address in its place, so the advice for a wss:// address with no TLS in
+  // front is an invite naming ws://, which the server makes: the hint used to
+  // say to "pair with ws://...", which no command or panel field can do.
+  it("says to make an invite naming ws:// when wss:// cannot connect", async () => {
+    const socket = new FakeSocket();
+    const t = new Transport("wss://127.0.0.1:3003", {
+      onBatch: () => {},
+      socketFactory: () => socket,
+      timeoutMs: 1000,
+    });
+    const connecting = t.connect();
+    socket.onerror?.(undefined);
+    const message = ((await connecting.catch((err: Error) => err)) as Error).message;
+    expect(message).toContain("could not connect to wss://127.0.0.1:3003");
+    expect(message).toContain("trewd invite -url ws://127.0.0.1:3003");
+    expect(message).not.toContain("pair with ws://");
+  });
 });
 
 describe("bodies", () => {
