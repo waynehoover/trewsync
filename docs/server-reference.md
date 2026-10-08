@@ -7,14 +7,15 @@ store, plus `service`, accept `-data DIR`; the default is `$TREW_DATA`, then
 `~/.trew`. When the server's data directory is anywhere else, give it to every
 command, or set `TREW_DATA` to it. `health` uses an address instead, and
 `version` needs neither. Only `serve` creates a new server data directory.
-`trewd -h` shows `serve`'s flags, the default command; `trewd COMMAND -h`
-shows another command's.
+`trewd` with no command, or `trewd -h`, lists the commands, and serves
+nothing; `trewd COMMAND -h` shows a command's flags. Serving is always
+`trewd serve`.
 
 ## Commands
 
 | Command | Purpose | Can the server remain running? |
 |---|---|---|
-| `serve` | Serve one vault; also the default command. | One server per data directory. |
+| `serve` | Serve one vault. | One server per data directory. |
 | `invite` | Print an invite that adds one device. | Yes; it goes through the running server. |
 | `devices [-json]` | List devices and outstanding invites. | Yes; it goes through the running server. |
 | `revoke ID` | Stop a device syncing and cancel the invites it made. | Yes; it goes through the running server. |

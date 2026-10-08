@@ -88,9 +88,26 @@ func main() {
 // list smaller prints its arithmetic, and backup and purge both do; an
 // untestable print is an untestable promise.
 func run(ctx context.Context, args []string, out io.Writer) error {
+	// No command is a request for help, never for a server. A bare `trewd`
+	// used to mean `trewd serve`, so somebody typing it to see what it did, or
+	// `trewd -h` to read its help, started a server on every interface with a
+	// data directory in ~/.trew (2026-10-08). Serving is asked for by name.
+	if len(args) == 0 {
+		fmt.Fprint(out, usage)
+		return nil
+	}
+	switch args[0] {
+	case "-h", "-help", "--help", "help":
+		fmt.Fprint(out, usage)
+		return nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return fmt.Errorf("%s needs a command: `trewd serve %s` serves, and `trewd` alone lists the commands",
+			args[0], strings.Join(args, " "))
+	}
 	// Subcommands come before flag parsing so `trewd verify -deep` reads the
 	// way it looks.
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+	{
 		cmd, rest := args[0], args[1:]
 		switch cmd {
 		case "verify":
@@ -149,14 +166,61 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			fmt.Fprintf(out, "trewd %s %s/%s %s\n", resolveVersion(version, moduleVersion()), runtime.GOOS, runtime.GOARCH, runtime.Version())
 			return nil
 		default:
-			return fmt.Errorf("unknown command %q (try serve, invite, devices, revoke, uninvite, mcp-token, audit, "+
-				"undo, restore, cat, history, deleted, export, backup, backup-key, unpack, rehearse, verify, purge, stats, "+
-				"doctor, config, git-export, "+
-				"service, health, update, version)", cmd)
+			return fmt.Errorf("unknown command %q: `trewd` alone lists the commands", cmd)
 		}
 	}
-	return cmdServe(ctx, args, out)
 }
+
+// usage is what `trewd` prints with no command, and with -h or help: every
+// command, grouped by what a person came to do, with the line from
+// docs/server-reference.md that says what it is for.
+const usage = `trewd is the TrewSync server.
+
+Usage: trewd COMMAND [flags]      trewd COMMAND -h lists a command's flags
+
+Running the server
+  serve        serve one vault to its devices, and to agents with -mcp
+  service      print a systemd unit for serve, with the steps to install it
+  health       check a running server
+  doctor       diagnose the data directory and a running server; changes nothing
+  update       replace this binary with the newest verified release
+  version      print version, platform and toolchain
+
+Devices
+  invite       print an invite that adds one device
+  devices      list devices and outstanding invites
+  revoke       stop a device syncing and cancel the invites it made
+  uninvite     cancel an outstanding invite
+
+Agents
+  mcp-token    mint, list or revoke a token for the MCP endpoint
+  audit        list what agents' write operations changed
+  undo         undo one operation from the audit, or copy what it replaced
+
+Notes and history
+  cat          print a note, or one version of it, straight from the store
+  history      list a note's versions, newest first
+  deleted      list deleted notes and the version to restore each from
+  export       write one version to a new file
+  restore      put the whole vault back as it was at a uid, as one undoable operation
+
+Backups and storage
+  backup       take a verified backup, encrypted to an age recipient
+  backup-key   make the age identity backups are encrypted to
+  unpack       decrypt a backup into a new data directory and verify it
+  rehearse     restore a backup where nothing can reach it, and prove it
+  verify       check stored entries and content
+  stats        inspect storage and the space a purge could reclaim
+  purge        remove old versions and unused content, with the server stopped
+
+Settings
+  config       read and change the configuration file
+  git-export   keep a Git history of the vault and push it to a remote
+
+To start: trewd serve -data DIR -url wss://NAME, where NAME is the address
+your devices reach (docs/server.md). Every command and flag:
+https://github.com/waynehoover/trewsync/blob/main/docs/server-reference.md
+`
 
 // parseFlags parses a command's flags and refuses anything left over, for every
 // command that takes no arguments (T41).

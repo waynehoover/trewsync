@@ -15,6 +15,14 @@ TrewSync's first release, forked from Basalt Sync 0.10.0 (protocol 7). It is a
 fresh start rather than an upgrade: a Basalt device, invite or recovery key
 does not work with a TrewSync server, and moving a vault is a new pairing.
 
+### Changed after 0.12.0
+
+- **`trewd` with no command lists the commands** instead of starting a
+  server. Serving is always `trewd serve`; flags with no command are refused
+  and point at it. Every shipped way of running the server (the container
+  image, the unit `trewd service` prints, the Homebrew service) already says
+  `serve`, so nothing deployed changes.
+
 ### Fixed in the 2026-10-06 review
 
 A full review of the server, the sync engine, the plugin and the headless
