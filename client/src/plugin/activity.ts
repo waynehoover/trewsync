@@ -203,7 +203,9 @@ export class ActivityModal extends Modal {
     const doc =
       typeof this.contentEl.ownerDocument?.addEventListener === "function"
         ? this.contentEl.ownerDocument
-        : globalThis.document;
+        : typeof document === "undefined"
+          ? undefined
+          : document;
     const view = doc?.defaultView ?? globalThis;
     const schedule = () => {
       dirty = true;
