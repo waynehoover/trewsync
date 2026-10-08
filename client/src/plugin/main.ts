@@ -6,6 +6,16 @@ import { ConflictsModal } from "./conflicts.ts";
 import { conflictOriginal, reviewConflict, type ConflictPair } from "../core/conflicts.ts";
 /** Obsidian plugin: lifecycle, platform adapter, and sync/recovery interfaces. */
 
+/*!
+ * Bundled dependency: fflate
+ * Copyright (c) 2026 Arjun Barrett, https://github.com/101arrowz/fflate
+ * Licensed under the MIT license: http://www.opensource.org/licenses/mit-license.php
+ *
+ * Bundled dependency: diff-match-patch
+ * Copyright 2018 The diff-match-patch Authors, https://github.com/google/diff-match-patch
+ * Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
+ */
+
 import {
   Modal,
   Menu,
