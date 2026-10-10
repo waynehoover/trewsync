@@ -121,6 +121,37 @@ describe("an inbound path that never syncs", () => {
 });
 
 /**
+ * A settings JSON version another device sent that does not parse is never
+ * written, even by Apply (plan/settings-sync.md, section 1): Obsidian would
+ * start without it and save its defaults, which would reach every device. It
+ * is written off by name, and the rest of the batch lands.
+ */
+describe("a settings version that is not JSON", () => {
+  it("is not applied, is named, and the notes beside it land", async () => {
+    const { engine, socket, vault } = await engineOnFakeSocket({}, { settings: { root: ".obsidian" } });
+    const bodies = new Map<string, Uint8Array>();
+    serving(socket, bodies);
+    socket.raw({
+      op: "batch",
+      from: 1,
+      to: 2,
+      entries: [
+        await entryFor(1, ".obsidian/app.json", '{\n  "th', bodies),
+        await entryFor(2, "ok.md", "fine", bodies),
+      ],
+    });
+    await accepted(engine, 2);
+    const held = await engine.sync();
+    expect(held.settingsHeld).toBe(1);
+    const applied = await engine.sync({ applySettings: true });
+    expect(vault.text(".obsidian/app.json")).toBeUndefined();
+    expect(vault.text("ok.md")).toBe("fine");
+    expect(applied.needsAttention.map((n) => n.path)).toEqual([".obsidian/app.json"]);
+    expect(applied.needsAttention[0]!.why).toMatch(/not valid JSON/);
+  });
+});
+
+/**
  * `a//b`, `a/./b` and `a/b/` are not the paths they look
  * like: a filesystem collapses them onto `a/b`, and the engine keyed its
  * whole idea of a file on the string as it arrived. Two spellings of one file

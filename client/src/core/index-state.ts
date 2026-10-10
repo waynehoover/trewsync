@@ -71,7 +71,7 @@ export interface IndexEntry {
    * not the applied version is decided against this base instead, so the
    * old values are what get replaced and not what get sent.
    */
-  unconfirmed?: { hash: string; uid: number };
+  unconfirmed?: { hash: string; uid: number; load?: string };
 }
 
 export function newEntry(path: string): IndexEntry {

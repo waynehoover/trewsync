@@ -117,6 +117,20 @@ function checkEntry(path: string, entry: unknown, refuse: (what: string) => Erro
       throw refuse(`${at}.chunks is not a list of chunk names`);
     }
   }
+  // The base an applied setting replaced (plan/settings-sync.md), which the
+  // engine writes back as synchash and syncuid: unchecked, a bad one would be
+  // saved as a base the next load then refuses, with this field long gone.
+  if ("unconfirmed" in entry) {
+    const u = entry["unconfirmed"];
+    if (
+      !isObject(u) ||
+      typeof u["hash"] !== "string" ||
+      !isCount(u["uid"]) ||
+      ("load" in u && typeof u["load"] !== "string")
+    ) {
+      throw refuse(`${at}.unconfirmed is ${describe(u)}, not a hash, a uid and a load`);
+    }
+  }
   // A synced file names the chunks that make it. An entry claiming a sync
   // with a content hash and no chunk list is one whose content this device
   // cannot produce or compare, and it would read as already synced.

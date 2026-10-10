@@ -416,6 +416,22 @@ export interface EngineOptions {
    * another profile, decides from it.
    */
   readonly settings?: SettingsScope | undefined;
+  /**
+   * Which load of the app this engine runs in. The plugin makes one per
+   * load of itself, which an Apply ends with a reload, so a setting applied
+   * in this load is checked against the disk by an engine of the next one,
+   * after Obsidian has read it, and never by an engine that only reconnected
+   * (plan/settings-sync.md, section 4). Undefined makes every engine its own
+   * load.
+   */
+  readonly loadId?: string;
+  /**
+   * Ask the server for its whole history once, from uid 1, rather than from
+   * this device's cursor. For the first start after settings sync is turned
+   * on: a device that spoke protocol 1 or 2 was never sent the settings
+   * committed meanwhile, and its cursor has moved past them.
+   */
+  readonly replayAll?: boolean;
 }
 
 /** What a device syncs of its settings (`EngineOptions.settings`). */
@@ -426,6 +442,11 @@ export interface SettingsScope {
    * Whose settings win where this device has never synced a file and its copy
    * differs from the server's, which is the first time settings sync is
    * turned on here. Undefined keeps both, as a first sync of notes does.
+   *
+   * For the first time only: the engine stops honouring it after its first
+   * pass that ends with nothing held, and after a replaced history, where a
+   * setting with no base is one synced before and is kept both ways, as a
+   * note is. The plugin forgets it at the same point.
    */
   readonly firstChoice?: "server" | "device" | undefined;
 }
@@ -1056,6 +1077,24 @@ export class Engine {
    * reload that follows it, never in the pass that wrote it.
    */
   private readonly toConfirm = new Set<string>();
+  /** A load of its own, for an engine not told which one it runs in. */
+  private readonly ownLoad = crypto.randomUUID();
+  /** This engine's load (`EngineOptions.loadId`). */
+  private get loadId(): string {
+    return this.opts.loadId ?? this.ownLoad;
+  }
+  /** Whether `firstChoice` has done its work (see there). */
+  private firstChoiceSpent = false;
+  /** `heldSettings` as the last pass to finish left it, for `status`. */
+  private settingsHeldLast = 0;
+  /**
+   * Since when each settings JSON file has not parsed, with the content it
+   * had, so a write in progress gets a moment and a broken file is named
+   * rather than waited on for ever.
+   */
+  private readonly unparsable = new Map<string, { since: number; hash: string }>();
+  /** Settings JSON files given up on in this pass: named, owed nothing, never sent. */
+  private settingsUnsendable = new Set<string>();
 
   /**
    * Paths a file is standing in the way of, as of the last pass.
@@ -1256,7 +1295,7 @@ export class Engine {
       retrying: this.retries.size,
       skipped: this.skipped.size + this.refusedInbound.size,
       ignored: this.ignoredPaths.size,
-      settingsHeld: this.heldSettings.size,
+      settingsHeld: this.settingsHeldLast,
       syncing: this.syncing,
     };
   }
@@ -1287,7 +1326,9 @@ export class Engine {
       }
       for (const path of stored.pending) this.pending.add(path);
       for (const [path, entry] of this.entries) {
-        if (entry.unconfirmed !== undefined) this.toConfirm.add(path);
+        if (entry.unconfirmed !== undefined && entry.unconfirmed.load !== this.loadId) {
+          this.toConfirm.add(path);
+        }
       }
       this.log("index loaded", {
         cursor: this.cursor,
@@ -1296,6 +1337,10 @@ export class Engine {
       });
     }
 
+    // From uid 1 when asked: everything the server holds is sent again, and
+    // a path already settled reconciles as unchanged, so what this costs is
+    // one read of the history and nothing written.
+    if (this.opts.replayAll === true) this.cursor = 0;
     const limits = await this.opts.transport.hello({
       vault: this.opts.vaultId,
       deviceId: this.opts.deviceId,
@@ -1378,7 +1423,13 @@ export class Engine {
       entry.synchash = "";
       entry.syncuid = 0;
       entry.synctime = 0;
+      // Its base was in the history just replaced.
+      delete entry.unconfirmed;
     }
+    this.toConfirm.clear();
+    // A setting with no base now is one synced before, kept both ways as a
+    // note is, never settled by the choice made for the first time.
+    this.firstChoiceSpent = true;
   }
 
   /**
@@ -1577,6 +1628,11 @@ export class Engine {
     return root === undefined || !path.startsWith(root + "/") || configPathReason(path) !== undefined;
   }
 
+  /** Whether a path never syncs on this device: the dot rule, less the settings it syncs. */
+  private neverSyncsHere(path: string): boolean {
+    return isNeverSynced(path, new Set()) && (!isConfigPath(path) || this.outOfScope(path));
+  }
+
   private refusedName(path: string): string | undefined {
     const known = this.refusalOf.get(path);
     if (known !== undefined) return known.why;
@@ -1679,7 +1735,7 @@ export class Engine {
       ),
     );
     for (const path of new Set([...disk.keys(), ...remote.keys(), ...this.entries.keys()])) {
-      if (moving.has(path)) continue;
+      if (moving.has(path) || this.outOfScope(path)) continue;
       const stat = disk.get(path);
       const other = remote.get(path);
       if (stat?.folder || other?.folder || this.entries.get(path)?.folder) continue;
@@ -1810,6 +1866,7 @@ export class Engine {
   private async pass(opts: SyncOptions = {}): Promise<SyncReport> {
     const report = emptyReport();
     this.heldSettings = new Set();
+    this.settingsUnsendable = new Set();
     this.applyingSettings = opts.applySettings === true;
     // A checkpoint's half minute is counted from here, so a short pass never
     // takes one however long ago the last save was (T12).
@@ -2249,7 +2306,7 @@ export class Engine {
     if (
       // Held settings stay pending, so they are decided again every pass,
       // and are owed nothing: they wait on a person on purpose.
-      [...this.pending].every((path) => this.heldSettings.has(path)) &&
+      [...this.pending].every((path) => this.heldSettings.has(path) || this.settingsUnsendable.has(path)) &&
       report.waiting === 0 &&
       report.retrying === 0 &&
       report.skipped === 0 &&
@@ -2277,11 +2334,14 @@ export class Engine {
           this.ignoredPaths.has(path) ||
           this.outOfScope(path) ||
           this.heldSettings.has(path) ||
+          this.settingsUnsendable.has(path) ||
           (this.entries.get(path)?.syncuid ?? -1) >= remote.uid,
       )
     ) {
       report.appliedCursor = this.cursor;
     }
+    this.settingsHeldLast = this.heldSettings.size;
+    if (this.opts.settings !== undefined && this.heldSettings.size === 0) this.firstChoiceSpent = true;
     report.needsAttention = this.attentionList(report);
     if (phases !== undefined) {
       into("saveMs");
@@ -2333,6 +2393,12 @@ export class Engine {
       const why =
         this.skipped.get(path)?.why ?? this.refusedInbound.get(path) ?? this.refusedName(path);
       if (why !== undefined) add(path, why);
+    }
+    for (const path of this.settingsUnsendable) {
+      add(
+        path,
+        "This setting is not valid JSON, so it is not sent. It is sent once it is; fix the file, or remove it.",
+      );
     }
     return out;
   }
@@ -2483,7 +2549,7 @@ export class Engine {
 
     if (isConfigPath(path)) {
       // In scope here, or the pass would not have reached it.
-      const settings = await this.settingsAction(path, action, entry, local, report, now);
+      const settings = await this.settingsAction(path, action, entry, local, scanned, report, now);
       if (settings === undefined) return;
       action = settings;
     }
@@ -2527,29 +2593,38 @@ export class Engine {
     action: Action,
     entry: IndexEntry,
     local: LocalState | undefined,
+    scanned: Scanned | undefined,
     report: SyncReport,
     now: number,
   ): Promise<Action | undefined> {
+    const choice = this.firstChoiceSpent ? undefined : this.opts.settings?.firstChoice;
     if (action.kind === "conflict" && entry.synchash === "" && local !== undefined) {
-      const choice = this.opts.settings?.firstChoice;
       if (choice === "server") {
         action = { kind: "download", why: "the server's settings were chosen for this device" };
       } else if (choice === "device") {
         action = { kind: "upload", why: "this device's settings were chosen over the server's" };
       }
     }
-    if (action.kind === "upload" && local !== undefined && looksLikeJson(path)) {
-      let whole = false;
-      try {
-        whole = parsesAsJson(new TextDecoder("utf-8", { fatal: true }).decode(await this.opts.vault.read(path)));
-      } catch {
-        whole = false;
-      }
-      if (!whole) {
-        report.waiting++;
-        report.nextUploadAt = Math.min(report.nextUploadAt ?? Infinity, now + SETTINGS_WRITE_WAIT_MS);
+    // Every decision that sends this device's copy, a merge and a kept-both
+    // conflict included, sends it only if it is JSON: the very bytes that go,
+    // which a pass that just read the file holds, and otherwise the file as it
+    // is, unchanged since it was hashed or the pass would have read it.
+    const sendsLocal =
+      action.kind === "upload" || action.kind === "merge" || action.kind === "conflict";
+    if (sendsLocal && local !== undefined && looksLikeJson(path)) {
+      if (!(await this.parsesHere(path, scanned))) {
+        const seen = this.unparsable.get(path);
+        const since = seen !== undefined && seen.hash === entry.hash ? seen.since : now;
+        this.unparsable.set(path, { since, hash: entry.hash });
+        if (now - since < SETTINGS_UNPARSABLE_GRACE_MS) {
+          report.waiting++;
+          report.nextUploadAt = Math.min(report.nextUploadAt ?? Infinity, now + SETTINGS_WRITE_WAIT_MS);
+        } else {
+          this.settingsUnsendable.add(path);
+        }
         return undefined;
       }
+      this.unparsable.delete(path);
     }
     const writesHere =
       action.kind === "download" ||
@@ -2557,8 +2632,11 @@ export class Engine {
       action.kind === "deleteLocal" ||
       action.kind === "merge" ||
       action.kind === "conflict";
-    if (!writesHere) return action;
-    if (!this.applyingSettings) {
+    // A setting applied in this load is one Obsidian has not read yet: what it
+    // writes before the reload is its old value, so nothing of it is sent
+    // until an engine of the next load has checked it.
+    const unreadByObsidian = entry.unconfirmed !== undefined && entry.unconfirmed.load === this.loadId;
+    if (writesHere ? !this.applyingSettings : unreadByObsidian && action.kind !== "nothing") {
       this.heldSettings.add(path);
       report.settingsHeld++;
       if (report.settingsHeldPaths.length < LISTED_PATHS) report.settingsHeldPaths.push(path);
@@ -2566,8 +2644,18 @@ export class Engine {
     }
     // The oldest base wins: a second apply before a reload has checked the
     // first must still be checked against what was there before either.
-    entry.unconfirmed ??= { hash: entry.synchash, uid: entry.syncuid };
+    if (writesHere) entry.unconfirmed ??= { hash: entry.synchash, uid: entry.syncuid, load: this.loadId };
     return action;
+  }
+
+  /** Whether a settings JSON file parses, as `settingsAction` asks it. */
+  private async parsesHere(path: string, scanned: Scanned | undefined): Promise<boolean> {
+    try {
+      const bytes = scanned?.bytes ?? (await this.opts.vault.read(path));
+      return parsesAsJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -2583,6 +2671,16 @@ export class Engine {
     delete entry.unconfirmed;
     if (applied === undefined || local?.hash === entry.synchash) return;
     this.log("a setting changed after it was applied, deciding against the base it replaced", path);
+    if (applied.hash === "") {
+      // The apply made this file, so there is no base to go back to, and with
+      // none the two sides would be kept both ways or settled by the first
+      // choice, each of which sends Obsidian's own copy. What is here is what
+      // Obsidian held instead, read as the base: the applied version is then
+      // simply newer, and is offered again.
+      entry.synchash = local?.hash ?? "";
+      entry.syncuid = 0;
+      return;
+    }
     entry.synchash = applied.hash;
     entry.syncuid = applied.uid;
   }
@@ -5214,6 +5312,17 @@ export class Engine {
       bodies,
       d.remote.size,
     );
+    // A setting Obsidian cannot read is one it starts without and saves its
+    // defaults over, which then reach every device (plan/settings-sync.md,
+    // section 1). So a settings JSON version that does not parse is not
+    // written, and is written off by name until another version replaces it.
+    if (isConfigPath(d.path) && looksLikeJson(d.path) && !decodesAsJson(content)) {
+      const err = new Error(
+        "the version another device sent is not valid JSON, so it was not applied",
+      ) as Error & { code: string };
+      err.code = "badentry";
+      throw err;
+    }
 
     // A name nothing held when the pass looked takes one exclusive create,
     // which is all the checks below would establish about it (P-a).
@@ -5974,7 +6083,7 @@ export class Engine {
       if (here.length !== 1 || there.length !== 1) continue;
       const to = here[0]!;
       const from = there[0]!;
-      if (sources.has(from) || isNeverSynced(to, new Set())) continue;
+      if (sources.has(from) || this.neverSyncsHere(to)) continue;
       if (onDisk.get(to)!.folder !== this.entries.get(from)!.folder) continue;
       this.log("a rename that changed only case, found by the scan", from, to);
       // A write-off or a retry held against the new name was against a create
@@ -6007,7 +6116,7 @@ export class Engine {
    * entry that is never listed reconciles as a deletion.
    */
   noteRename(from: string, to: string): void {
-    if (isNeverSynced(to, new Set())) {
+    if (this.neverSyncsHere(to)) {
       this.log("rename into a path that never syncs, not recorded", from, to);
       return;
     }
@@ -6565,6 +6674,23 @@ function ancestorIsGone(err: unknown): boolean {
  * second after a change, and short enough that nobody notices.
  */
 const SETTINGS_WRITE_WAIT_MS = 1_000;
+
+/**
+ * How long a settings JSON file with the same content may go on not parsing
+ * before it is named as broken rather than waited on: ten seconds, the quiet
+ * period plan/settings-sync.md gives a settings edit, and far longer than the
+ * second Obsidian takes to write one.
+ */
+const SETTINGS_UNPARSABLE_GRACE_MS = 10_000;
+
+/** Whether bytes are UTF-8 that parses as JSON. */
+function decodesAsJson(bytes: Uint8Array): boolean {
+  try {
+    return parsesAsJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return false;
+  }
+}
 
 /** Whether text is still JSON, for the formats where that is what it means to be usable. */
 function parsesAsJson(text: string): boolean {

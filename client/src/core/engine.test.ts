@@ -40,6 +40,9 @@ import { conflictCopyPath } from "./merge.ts";
 import { firstFreeName, ignoredHereError, neverSync } from "./paths.ts";
 import type { IndexEntry } from "./index-state.ts";
 import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
+import { cp, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 beforeAll(async () => {
   await serverBinary();
@@ -56,6 +59,10 @@ class Device {
   engine!: Engine;
   /** What it syncs of its settings, read at each `connect`. */
   settings: SettingsScope | undefined;
+  /** Which load of the app it runs in, read at each `connect` (`EngineOptions.loadId`). */
+  loadId: string | undefined;
+  /** Whether the next `connect` asks for the whole history (`EngineOptions.replayAll`). */
+  replayAll = false;
   /** Every batch this device has been handed, for asserting on the wire. */
   readonly batches: { from: number; to: number; entries: unknown[] }[] = [];
   caughtUp = false;
@@ -100,6 +107,8 @@ class Device {
       device: this.name,
       vaultId: "default",
       ...(this.settings !== undefined ? { settings: this.settings } : {}),
+      ...(this.loadId !== undefined ? { loadId: this.loadId } : {}),
+      ...(this.replayAll ? { replayAll: true } : {}),
       ...(await server.deviceCredentials(this.name)),
       // A clock the test advances, so the size-scaled write debounce does
       // not decide when a sync may happen.
@@ -4314,6 +4323,22 @@ describe("settings", () => {
     await d.connect(server);
     return d;
   }
+  /**
+   * `settle`, counting every upload of every round: `settle` reports its last
+   * round only, and an upload in the first is exactly what these tests are
+   * about.
+   */
+  async function settleCounting(d: Device): Promise<{ uploaded: number; settingsHeld: number }> {
+    let last = await d.engine.sync();
+    let uploaded = last.uploaded;
+    for (let i = 1; i < 4; i++) {
+      await receiveCommitted(d.transport);
+      last = await d.engine.sync();
+      uploaded += last.uploaded;
+    }
+    return { uploaded, settingsHeld: last.settingsHeld };
+  }
+
   /** Whether the server's word about path reached d's index. */
   async function knows(d: Device, path: string): Promise<boolean> {
     const state = await d.store.load();
@@ -4386,7 +4411,7 @@ describe("settings", () => {
     desk.close();
     await desk.vault.write(".obsidian/app.json", json({ theme: "light" }), { mtime: 3_000, ctime: 1_000 });
     await desk.connect(server);
-    const after = await desk.settle();
+    const after = await settleCounting(desk);
 
     expect(after.uploaded, "the old setting was sent").toBe(0);
     expect(after.settingsHeld, "the applied setting is not offered again").toBe(1);
@@ -4451,5 +4476,227 @@ describe("settings", () => {
       await server.cleanup();
       while (devices.length) devices.pop()!.close();
     }
+  });
+
+  it("takes the first choice the first time only, and keeps both of a setting two devices made later", async () => {
+    await fresh();
+    const mac = await deviceWith("mac", { root: ".obsidian" });
+    await mac.vault.write(".obsidian/app.json", json({ from: "mac" }), times);
+    await mac.settle();
+    const desk = await deviceWith("desk", { root: ".obsidian", firstChoice: "server" });
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    await desk.settle();
+    // Weeks later: one new setting made on both, before either sent it.
+    await mac.vault.write(".obsidian/daily-notes.json", json({ folder: "Journal" }), { mtime: 5_000, ctime: 5_000 });
+    await mac.settle();
+    await desk.vault.write(".obsidian/daily-notes.json", json({ folder: "Daily" }), { mtime: 5_000, ctime: 5_000 });
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    const here = Object.values(desk.vault.snapshot()).join("\n");
+    expect(here, "the server's copy").toContain("Journal");
+    expect(here, "this device's copy, replaced with nothing beside it").toContain("Daily");
+  });
+
+  it("keeps both of a setting after the server is restored, whatever was chosen the first time", async () => {
+    await fresh();
+    const desk = await deviceWith("desk", { root: ".obsidian", firstChoice: "server" });
+    await desk.vault.write(".obsidian/app.json", json({ v: "in the backup" }), times);
+    await desk.settle();
+    const offsite = join(await mkdtemp(join(tmpdir(), "trew-settings-")), "offsite");
+    desk.close();
+    await server.whileStopped(async () => {
+      await server.cli("backup", "-plaintext-ok", "-to", offsite);
+    });
+    await desk.connect(server);
+    await desk.vault.write(".obsidian/app.json", json({ v: "newer" }), { mtime: 3_000, ctime: 1_000 });
+    await desk.settle();
+    desk.close();
+    await server.whileStopped(async () => {
+      await rm(server.dataDir, { recursive: true, force: true });
+      await cp(offsite, server.dataDir, { recursive: true });
+    });
+    await desk.connect(server);
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    await desk.settle();
+    expect(Object.values(desk.vault.snapshot()).join("\n")).toContain("newer");
+  });
+
+  it("puts back a setting the apply created when Obsidian writes its defaults over it", async () => {
+    await fresh();
+    const mac = await deviceWith("mac", { root: ".obsidian" });
+    await mac.vault.write(".obsidian/app.json", json({}), times);
+    await mac.settle();
+    const desk = new Device("desk");
+    desk.settings = { root: ".obsidian", firstChoice: "server" };
+    desk.loadId = "load 1";
+    devices.push(desk);
+    await desk.connect(server);
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    await mac.vault.write(".obsidian/daily-notes.json", json({ folder: "Journal" }), { mtime: 5_000, ctime: 5_000 });
+    await mac.settle();
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    expect(desk.vault.snapshot()[".obsidian/daily-notes.json"]).toContain("Journal");
+
+    // The reload, and Obsidian writing the defaults it held for the file. The
+    // first choice is long forgotten by now, as the plugin forgets it.
+    desk.close();
+    await desk.vault.write(".obsidian/daily-notes.json", json({ folder: "" }), { mtime: 9_000, ctime: 9_000 });
+    desk.settings = { root: ".obsidian" };
+    desk.loadId = "load 2";
+    await desk.connect(server);
+    const after = await settleCounting(desk);
+    expect(after.uploaded, "Obsidian's defaults were sent").toBe(0);
+    expect(after.settingsHeld).toBe(1);
+    await desk.engine.sync({ applySettings: true });
+    await desk.settle();
+    expect(desk.vault.snapshot()[".obsidian/daily-notes.json"]).toContain("Journal");
+    expect((await mac.settle()).settingsHeld, "the defaults reached the other device").toBe(0);
+    expect(mac.vault.snapshot()[".obsidian/daily-notes.json"]).toContain("Journal");
+  });
+
+  /** mac's theme changed to dark, held on desk and applied there in "load 1". */
+  async function appliedDark(): Promise<{ mac: Device; desk: Device }> {
+    await fresh();
+    const mac = await deviceWith("mac", { root: ".obsidian" });
+    await mac.vault.write(".obsidian/app.json", json({ theme: "light" }), times);
+    await mac.settle();
+    const desk = new Device("desk");
+    desk.settings = { root: ".obsidian", firstChoice: "server" };
+    desk.loadId = "load 1";
+    devices.push(desk);
+    await desk.connect(server);
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    await mac.vault.write(".obsidian/app.json", json({ theme: "dark" }), { mtime: 2_000, ctime: 1_000 });
+    await mac.settle();
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    return { mac, desk };
+  }
+
+  it("sends nothing of an applied setting before the reload, and checks it after", async () => {
+    const { mac, desk } = await appliedDark();
+    // Obsidian, still running, writes what it holds.
+    await desk.vault.write(".obsidian/app.json", json({ theme: "light" }), { mtime: 3_000, ctime: 1_000 });
+    expect((await settleCounting(desk)).uploaded, "sent before the reload").toBe(0);
+    expect((await mac.settle()).settingsHeld, "the old value reached the other device").toBe(0);
+
+    // The reload: the next load checks it, and offers the applied version again.
+    desk.close();
+    desk.loadId = "load 2";
+    await desk.connect(server);
+    const after = await settleCounting(desk);
+    expect(after.uploaded).toBe(0);
+    expect(after.settingsHeld).toBe(1);
+    await desk.engine.sync({ applySettings: true });
+    expect(desk.vault.snapshot()[".obsidian/app.json"]).toContain("dark");
+  });
+
+  it("does not take a reconnect for the reload, so a later write-back is not sent", async () => {
+    const { mac, desk } = await appliedDark();
+    desk.close();
+    await desk.connect(server);
+    await desk.settle();
+    // Only now does Obsidian write what it held: the same load, unchecked.
+    await desk.vault.write(".obsidian/app.json", json({ theme: "light" }), { mtime: 3_000, ctime: 1_000 });
+    expect((await settleCounting(desk)).uploaded, "sent after a reconnect").toBe(0);
+    expect((await mac.settle()).settingsHeld, "the old value reached the other device").toBe(0);
+  });
+
+  it("names a settings JSON file that stays broken, owes nothing for it, and stops waiting on it", async () => {
+    await fresh();
+    const mac = await deviceWith("mac", { root: ".obsidian" });
+    await mac.vault.write(".obsidian/broken.json", new TextEncoder().encode("{ not json"), times);
+    await mac.vault.write("note.md", new TextEncoder().encode("a note\n"), times);
+    const first = await mac.engine.sync();
+    expect(first.waiting, "a write in progress gets a moment").toBe(1);
+    // The clock moves a minute a reading, so the next pass is past the moment.
+    const later = await mac.engine.sync();
+    expect(later.waiting).toBe(0);
+    expect(later.uploaded).toBe(0);
+    expect(later.appliedCursor).toBeDefined();
+    expect(later.needsAttention.map((n) => n.path)).toEqual([".obsidian/broken.json"]);
+    expect(later.nextUploadAt).toBeUndefined();
+  });
+
+  it("sends a settings JSON file only as the bytes it read, never a second read that parsed", async () => {
+    class TornOnce extends MemoryVault {
+      torn = "";
+      override async read(path: string): Promise<Uint8Array> {
+        if (path === this.torn) {
+          this.torn = "";
+          return new TextEncoder().encode('{\n  "th');
+        }
+        return super.read(path);
+      }
+    }
+    await fresh();
+    const vault = new TornOnce();
+    const mac = new Device("mac", vault);
+    mac.settings = { root: ".obsidian" };
+    mac.step = 0;
+    devices.push(mac);
+    await mac.connect(server);
+    await vault.write(".obsidian/app.json", json({ theme: "dark" }), times);
+    vault.torn = ".obsidian/app.json";
+    expect((await mac.engine.sync()).uploaded, "the torn read was sent").toBe(0);
+    await vault.write(".obsidian/app.json", json({ theme: "dark" }), { mtime: 2_000, ctime: 1_000 });
+    expect((await mac.engine.sync()).uploaded).toBe(1);
+  });
+
+  it("sends a rename within the settings it syncs as a rename", async () => {
+    await fresh();
+    const mac = await deviceWith("mac", { root: ".obsidian" });
+    await mac.vault.write(".obsidian/snippets/a.css", new TextEncoder().encode("body {}"), times);
+    await mac.settle();
+    const desk = await deviceWith("desk", { root: ".obsidian", firstChoice: "server" });
+    await desk.settle();
+    await mac.vault.write(".obsidian/snippets/b.css", await mac.vault.read(".obsidian/snippets/a.css"), times);
+    await mac.vault.remove(".obsidian/snippets/a.css");
+    mac.engine.noteRename(".obsidian/snippets/a.css", ".obsidian/snippets/b.css");
+    await mac.settle();
+    await desk.settle();
+    const moved = desk.batches
+      .flatMap((b) => b.entries as { path: string; prev?: string }[])
+      .find((e) => e.path === ".obsidian/snippets/b.css");
+    expect(moved?.prev).toBe(".obsidian/snippets/a.css");
+  });
+
+  it("leaves the settings a device does not sync out of its first-sync review", async () => {
+    await fresh();
+    const mac = await deviceWith("mac", { root: ".obsidian" });
+    await mac.vault.write(".obsidian/app.json", json({}), times);
+    await mac.vault.write("note.md", new TextEncoder().encode("a note\n"), times);
+    await mac.settle();
+    const laptop = await deviceWith("laptop", undefined);
+    const preview = await laptop.engine.preview();
+    expect(preview.files.map((f) => f.path)).toEqual(["note.md"]);
+  });
+
+  it("asks for the whole history when told to, and learns the settings its cursor had passed", async () => {
+    await fresh();
+    const mac = await deviceWith("mac", { root: ".obsidian" });
+    await mac.vault.write(".obsidian/app.json", json({ from: "mac" }), times);
+    await mac.settle();
+    const desk = await deviceWith("desk", undefined);
+    await desk.settle();
+    // As a device of protocol 2 is left: past the setting, never told of it.
+    desk.close();
+    const state = (await desk.store.load())!;
+    delete state.remote[".obsidian/app.json"];
+    await desk.store.save(state);
+    desk.settings = { root: ".obsidian", firstChoice: "server" };
+    await desk.connect(server);
+    expect((await desk.settle()).settingsHeld, "learnt without asking").toBe(0);
+    desk.close();
+    desk.replayAll = true;
+    await desk.connect(server);
+    expect((await desk.settle()).settingsHeld).toBe(1);
+    await desk.engine.sync({ applySettings: true });
+    expect(desk.vault.snapshot()[".obsidian/app.json"]).toContain("mac");
   });
 });
