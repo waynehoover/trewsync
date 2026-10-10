@@ -119,7 +119,7 @@ is not supported.
 
 Obsidian's own settings, themes and CSS snippets sync on the devices where you
 turn [settings sync](docs/plugin.md#settings-sync) on, and a phone can keep a
-settings profile of its own. Plugins and other hidden files do not sync:
+settings profile of its own. Community plugins and other hidden files do not sync:
 nothing else whose name starts with a dot does, so an `.attachments` folder
 stays on the device that has it. Attachments elsewhere are included, with a default limit of
 **64 MiB per file**.
