@@ -707,7 +707,9 @@ export class ObsidianVault implements Vault {
       }
       for (const file of here.files) {
         const raw = trimLeadingSlash(file);
-        const path = this.fromDisk(this.normalOf(raw));
+        // Mapped before it is normalized: the walk lists the folder by the
+        // name Obsidian runs it under, which normalizing may change.
+        const path = this.normalOf(this.fromDisk(raw));
         if (!this.inSettings(path)) continue;
         const stat = await this.adapter.stat(raw);
         if (stat?.type !== "file") continue;
@@ -988,7 +990,7 @@ export class ObsidianVault implements Vault {
   ): Promise<void> {
     let folded: Set<string> | undefined;
     for (const raw of [...this.unlisted]) {
-      const path = this.fromDisk(this.normalOf(raw));
+      const path = this.normalOf(this.fromDisk(raw));
       if (indexed.has(path) || settings.has(path)) {
         this.unlisted.delete(raw);
         continue;

@@ -4345,6 +4345,56 @@ describe("settings", () => {
     return state !== undefined && path in state.remote;
   }
 
+  it("decides a return to a group as a first time, with no pass between to forget the last stay", async () => {
+    await fresh();
+    const phone = await deviceWith("phone", { root: ".obsidian-mobile", firstChoice: "device" });
+    await phone.vault.write(".obsidian-mobile/app.json", json({ theme: "light" }), times);
+    expect((await settleCounting(phone)).uploaded).toBe(1);
+
+    // Into another group and back, with no pass ended in between to save the
+    // forgetting, while the theme changed here.
+    phone.close();
+    await phone.vault.write(".obsidian-mobile/app.json", json({ theme: "dark" }), {
+      mtime: 9_000,
+      ctime: 1_000,
+    });
+    phone.settings = { root: ".obsidian-mobile", firstChoice: "server" };
+    phone.replayAll = true;
+    await phone.connect(server);
+    const back = await settleCounting(phone);
+    expect(back.uploaded, "the dark this device moved to went to the group").toBe(0);
+    expect(back.settingsHeld, "the group's light does not wait here").toBe(1);
+  });
+
+  it("takes the group's deletion of a setting it never synced, when the server's were chosen", async () => {
+    await fresh();
+    const phone = await deviceWith("phone", { root: ".obsidian-mobile", firstChoice: "device" });
+    const css = new TextEncoder().encode(".wide {}");
+    await phone.vault.write(".obsidian-mobile/snippets/wide.css", css, times);
+    await phone.settle();
+    await phone.vault.remove(".obsidian-mobile/snippets/wide.css");
+    await phone.settle();
+
+    const tablet = new Device("tablet");
+    tablet.settings = { root: ".obsidian-mobile", firstChoice: "server" };
+    await tablet.vault.write(".obsidian-mobile/snippets/wide.css", css, times);
+    devices.push(tablet);
+    await tablet.connect(server);
+    const joined = await settleCounting(tablet);
+    expect(joined.uploaded, "the group's deleted snippet was sent back to it").toBe(0);
+    expect(joined.settingsHeld, "the deletion does not wait for Apply").toBe(1);
+    await tablet.engine.sync({ applySettings: true });
+    expect(tablet.vault.snapshot()).toEqual({});
+
+    // Keeping this device's settings sends it back, as it always has.
+    const other = new Device("other");
+    other.settings = { root: ".obsidian-mobile", firstChoice: "device" };
+    await other.vault.write(".obsidian-mobile/snippets/wide.css", css, times);
+    devices.push(other);
+    await other.connect(server);
+    expect((await settleCounting(other)).uploaded).toBe(1);
+  });
+
   it("owes nothing for settings a device does not sync", async () => {
     await fresh();
     const mac = await deviceWith("mac", { root: ".obsidian" });

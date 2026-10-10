@@ -4948,7 +4948,9 @@ class TrewPanel {
       d.onChange(async (value) => {
         if (isSettingsGroup(value)) {
           this.dismiss();
-          new SettingsSyncModal(this.plugin, value).open();
+          // Drawn again once the question closes, answered or not, so the row
+          // says what is saved: in the settings tab nothing else redraws it.
+          new SettingsSyncModal(this.plugin, value, () => this.render()).open();
           return;
         }
         d.setDisabled(true);
@@ -5814,6 +5816,7 @@ class SettingsSyncModal extends Modal {
   constructor(
     private readonly plugin: TrewPlugin,
     private readonly group: SettingsGroup,
+    private readonly closed: () => void,
   ) {
     super(plugin.app);
   }
@@ -5863,6 +5866,7 @@ class SettingsSyncModal extends Modal {
 
   override onClose(): void {
     this.contentEl.empty();
+    this.closed();
   }
 }
 

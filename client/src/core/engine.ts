@@ -406,14 +406,14 @@ export interface EngineOptions {
    */
   readonly windows?: boolean;
   /**
-   * Settings sync (plan/settings-sync.md): the profile root this device runs
-   * Obsidian from, whose settings it syncs, or undefined when it syncs none.
+   * Settings sync (plan/settings-sync.md): the group this device syncs its
+   * settings with, or undefined when it syncs none.
    *
    * Every other path in a profile root is out of scope here, in both
-   * directions: another device's profile, a file settings sync does not
-   * carry, and every settings path while this is undefined. The server's word
-   * about them is kept, so a device that turns settings sync on, or runs
-   * another profile, decides from it.
+   * directions: another group's folder, a file settings sync does not carry,
+   * and every settings path while this is undefined. The server's word about
+   * them is kept, so a device that turns settings sync on, or changes group,
+   * decides from it.
    */
   readonly settings?: SettingsScope | undefined;
   /**
@@ -427,16 +427,21 @@ export interface EngineOptions {
   readonly loadId?: string;
   /**
    * Ask the server for its whole history once, from uid 1, rather than from
-   * this device's cursor. For the first start after settings sync is turned
-   * on: a device that spoke protocol 1 or 2 was never sent the settings
-   * committed meanwhile, and its cursor has moved past them.
+   * this device's cursor. For the first start in a group, after settings sync
+   * is turned on or the group changes: a device that spoke protocol 1 or 2
+   * was never sent the settings committed meanwhile, and its cursor has moved
+   * past them. Every setting is then decided as a first time (see `start`).
    */
   readonly replayAll?: boolean;
 }
 
 /** What a device syncs of its settings (`EngineOptions.settings`). */
 export interface SettingsScope {
-  /** The profile root Obsidian runs from here, such as `.obsidian`. */
+  /**
+   * The group's folder on the server, such as `.obsidian-mobile`. The plugin
+   * maps the folder Obsidian runs onto it, so every settings path this engine
+   * is told of or asks for is under it.
+   */
   readonly root: string;
   /**
    * Whose settings win where this device has never synced a file and its copy
@@ -1325,8 +1330,12 @@ export class Engine {
         // device's next first time in that group against a copy it has since
         // moved past, over the person's answer to the first-time question.
         // Without one it is decided as a first time is, which never reads as
-        // a deletion; what the server holds for it is in `remote`, kept.
-        if (this.outOfScope(path)) continue;
+        // a deletion; what the server holds for it is in `remote`, kept. And
+        // at the first start in a group none is: settings sync has just been
+        // turned on, or the group changed, possibly there and back with no
+        // pass in between to save the forgetting above, so a record from an
+        // earlier stay can still be here.
+        if (this.outOfScope(path) || (this.opts.replayAll === true && isConfigPath(path))) continue;
         this.entries.set(path, unpacked(path, raw as Record<string, unknown>));
       }
       for (const [path, raw] of Object.entries(stored.remote)) {
@@ -2598,8 +2607,8 @@ export class Engine {
    * running app is one it can silently undo. A JSON file that does not parse
    * is one being written, and waits a second rather than reaching every
    * device half written. And a file this device has never synced, which
-   * differs from the server's, takes the side the person chose when they
-   * turned settings sync on.
+   * differs from the server's or the server has deleted, takes the side the
+   * person chose when they turned settings sync on.
    */
   private async settingsAction(
     path: string,
@@ -2617,6 +2626,23 @@ export class Engine {
       } else if (choice === "device") {
         action = { kind: "upload", why: "this device's settings were chosen over the server's" };
       }
+    }
+    // A setting this device never synced, which the group has deleted, is not
+    // the group's. With the server's settings chosen it goes from here too,
+    // held for Apply like every change written here, with the copy kept
+    // before the first sync as its backup. Keeping this device's sends it
+    // back, as an upload always did.
+    if (
+      choice === "server" &&
+      action.kind === "upload" &&
+      entry.synchash === "" &&
+      local !== undefined &&
+      this.remote.get(path)?.deleted === true
+    ) {
+      action = {
+        kind: "deleteLocal",
+        why: "the server's settings were chosen for this device, and the server deleted this one",
+      };
     }
     // Every decision that sends this device's copy, a merge and a kept-both
     // conflict included, sends it only if it is JSON: the very bytes that go,

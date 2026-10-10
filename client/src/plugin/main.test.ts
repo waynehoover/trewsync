@@ -7055,6 +7055,27 @@ describe("settings sync", () => {
     expect(other.app.vault.adapter.text(".obsidian/app.json")).toContain("light");
   }, 300_000);
 
+  it("draws the settings tab's row again from what is saved, answered or not", async () => {
+    await fresh();
+    const { plugin } = await load();
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    built.length = 0;
+    (plugin as unknown as { settingTabs: { display(): void }[] }).settingTabs[0]!.display();
+    const newest = () => built.filter((s) => s.name === "Sync settings").at(-1)!;
+
+    newest().dropdowns[0]!.choose(".obsidian-desktop");
+    modals.at(-1)!.close();
+    expect(plugin.settingsGroup).toBeUndefined();
+    expect(newest().dropdowns[0]!.getValue(), "it shows a group nobody saved").toBe("off");
+
+    newest().dropdowns[0]!.choose(".obsidian-desktop");
+    await modalButton("Keep this device's").click();
+    await until("the group to be saved", () => plugin.settingsGroup === ".obsidian-desktop");
+    expect(newest().dropdowns[0]!.getValue()).toBe(".obsidian-desktop");
+    expect(String(newest().desc)).toMatch(/^Syncing with your other desktops/);
+  }, 300_000);
+
   it("offers one choice, and saves a group only once the first-time question is answered", async () => {
     await fresh();
     const { plugin } = await load();

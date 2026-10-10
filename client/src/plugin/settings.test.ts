@@ -191,6 +191,105 @@ describe("the vault, syncing the folder Obsidian runs as its group's", () => {
   });
 });
 
+describe("the vault, with a config folder whose name normalizing changes", () => {
+  // Option-space on a Mac types a no-break space, and Obsidian's override
+  // takes any name that starts with a dot.
+  const disk = `.my${String.fromCharCode(0xa0)}config`;
+
+  it("lists the folder's settings under the group's name", async () => {
+    const adapter = new FakeAdapter();
+    await write(adapter, `${disk}/app.json`, `{"spellcheck": true}`);
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), disk, undefined, {
+      settings: ".obsidian",
+    });
+    const files = (await vault.list()).filter((f) => !f.folder).map((f) => f.path);
+    expect(files).toEqual([".obsidian/app.json"]);
+  });
+
+  it("names a setting the engine found there under the group's name, not the disk's", async () => {
+    const adapter = new FakeAdapter();
+    await write(adapter, `${disk}/app.json`, `{"spellcheck": true}`);
+    const list = adapter.list.bind(adapter);
+    adapter.list = async (path) => {
+      if (path === disk) throw new Error("EIO: i/o error, scandir");
+      return list(path);
+    };
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), disk, undefined, {
+      settings: ".obsidian",
+    });
+    const files = (await vault.list({ present: [".obsidian/app.json"] })).map((f) => f.path);
+    expect(files).toEqual([".obsidian/app.json"]);
+  });
+});
+
+describe("the vault, mapping onto a group, keeps everything it writes in the folder it runs", () => {
+  it("never touches a folder on the disk spelled like the group", async () => {
+    const adapter = new FakeAdapter();
+    // This device runs .obsidian-mobile, and an old .obsidian is on the disk.
+    await write(adapter, ".obsidian-mobile/app.json", `{"from": "running"}`);
+    await write(adapter, ".obsidian/app.json", `{"from": "stale"}`);
+    const vault = new ObsidianVault(
+      asVault(new FakeVaultIndex(adapter)),
+      ".obsidian-mobile",
+      undefined,
+      { settings: ".obsidian" },
+    );
+    const files = (await vault.list()).filter((f) => !f.folder).map((f) => f.path);
+    expect(files).toEqual([".obsidian/app.json"]);
+    expect(dec.decode(await vault.read(".obsidian/app.json"))).toContain("running");
+    await vault.write(".obsidian/app.json", enc.encode(`{"from": "server"}`), times);
+    expect(await adapter.read(".obsidian-mobile/app.json")).toContain("server");
+    expect(await adapter.read(".obsidian/app.json")).toContain("stale");
+    await expect(
+      vault.write(".obsidian-mobile/app.json", enc.encode("{}"), times),
+    ).rejects.toMatchObject({ code: "neversync" });
+  });
+
+  it("keeps a conflict copy beside the setting", async () => {
+    const adapter = new FakeAdapter();
+    await write(adapter, ".obsidian/app.json", `{"mine": true}`);
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian", undefined, {
+      settings: ".obsidian-mobile",
+    });
+    await vault.list();
+    const out = await vault.replace(
+      ".obsidian-mobile/app.json",
+      undefined,
+      enc.encode(`{"theirs": true}`),
+      times,
+      ".obsidian-mobile/app (conflict).json",
+    );
+    expect(out.landed).toBe(true);
+    expect(await adapter.read(".obsidian/app.json")).toContain("theirs");
+    expect(await adapter.read(".obsidian/app (conflict).json")).toContain("mine");
+    expect(await adapter.exists(".obsidian-mobile")).toBe(false);
+    const files = (await vault.list())
+      .filter((f) => !f.folder)
+      .map((f) => f.path)
+      .sort();
+    expect(files).toEqual([".obsidian-mobile/app (conflict).json", ".obsidian-mobile/app.json"]);
+  });
+
+  it("keeps a setting it cannot match beside, rather than removing it", async () => {
+    const adapter = new FakeAdapter();
+    await write(adapter, ".obsidian/snippets/wide.css", ".wide {}");
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian", undefined, {
+      settings: ".obsidian-mobile",
+    });
+    await vault.list();
+    const out = await vault.removeExpecting(
+      ".obsidian-mobile/snippets/wide.css",
+      undefined,
+      ".obsidian-mobile/snippets/wide (kept).css",
+    );
+    expect(out.landed).toBe(true);
+    expect(await adapter.exists(".obsidian-mobile")).toBe(false);
+    expect(await adapter.read(".obsidian/snippets/wide (kept).css")).toBe(".wide {}");
+    const files = (await vault.list()).filter((f) => !f.folder).map((f) => f.path);
+    expect(files).toEqual([".obsidian-mobile/snippets/wide (kept).css"]);
+  });
+});
+
 describe("the vault's settings walk", () => {
   it("keeps the notes' listing when part of the settings folder cannot be read", async () => {
     const adapter = new FakeAdapter();

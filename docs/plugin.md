@@ -343,8 +343,9 @@ question again, and the group you leave keeps its settings on the server.
 
 **The first time.** When you turn it on, TrewSync asks which settings to use
 where the server already has some from the group's other devices and this
-device's differ: the server's, or this device's. The answer is for that first
-time only; later, a setting changed on two devices before either synced it
+device's differ: the server's, or this device's. With the server's, a setting
+the group has deleted goes from this device too, after you apply it. The
+answer is for that first time only; later, a setting changed on two devices before either synced it
 keeps both copies, as a note does. Either way TrewSync first keeps a copy of
 this device's settings as they were, in a `settings-before-sync-` folder inside
 the plugin's own folder, and says where. Uninstalling the plugin removes that
