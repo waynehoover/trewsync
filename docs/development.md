@@ -498,7 +498,7 @@ real release is the first run of the publishing half.
 | Release | Tag | Assets | Built by | Installed by |
 |---|---|---|---|---|
 | Plugin | `X.Y.Z` | `main.js`, `manifest.json`, `styles.css`, `SHA256SUMS` | `bun run build`, rebuilt and attested by `attest.yml` | Obsidian, from the community directory |
-| Server | `server/vX.Y.Z` | `trewd-<os>-<arch>` for seven platforms, `SHA256SUMS`, `packslip.server.sigstore.json`; the container image | goreleaser through `scripts/build-server.sh`, rebuilt, attested and signed by `attest.yml`; the image by `release.yml` | hand, `trewd update`, Homebrew, mise, Nix, Docker |
+| Server | `server/vX.Y.Z` | `trewd-<os>-<arch>` for four platforms, `SHA256SUMS`, `packslip.server.sigstore.json`; the container image | goreleaser through `scripts/build-server.sh`, rebuilt, attested and signed by `attest.yml`; the image by `release.yml` | hand, `trewd update`, Homebrew, mise, Nix, Docker |
 | Headless client | `cli/vX.Y.Z` | the `trew-sync` npm package | `npm-publish.yml` | npm |
 
 **The plugin version step.** `scripts/release.sh --prepare X.Y.Z` sets the
@@ -512,14 +512,15 @@ the tag, that the manifest and `versions.json` agree.
 `scripts/release-prepare.test.sh` holds the cases.
 
 **The server binaries.** [.goreleaser.yml](../.goreleaser.yml) builds
-Linux amd64, arm64 and riscv64, macOS amd64 and arm64, and FreeBSD amd64 and
-arm64: every platform trewd compiles for with CGO off and 64-bit integers.
-Refused, with the reason in the config: Windows (the data-directory lock is
-flock(2)), 32-bit targets (the note functions use integers past 2^31), and
-OpenBSD and NetBSD (free-space reporting reads a statfs field they spell
-differently). The Linux binaries are started in the release workflow, arm64
-and riscv64 under QEMU; the macOS and FreeBSD ones are built and never started
-by CI. goreleaser always runs as a snapshot, with the version from the tag in
+Linux and macOS, each on amd64 and arm64: the four Homebrew installs. trewd
+also compiles for FreeBSD and Linux riscv64 with CGO off, and 0.13.0 shipped
+them, but no CI ran the FreeBSD binaries and riscv64 ran only under QEMU, so
+after 0.13.0 they are built from source. Refused outright, with the reason in
+the config: Windows (the data-directory lock is flock(2)), 32-bit targets (the
+note functions use integers past 2^31), and OpenBSD and NetBSD (free-space
+reporting reads a statfs field they spell differently). The Linux binaries are
+started in the release workflow, arm64 under QEMU; the macOS ones are built and
+never started by CI. goreleaser always runs as a snapshot, with the version from the tag in
 `TREWD_VERSION`, because it parses one tag line as semver and cannot read
 `server/vX.Y.Z` without its paid monorepo feature. Its output is byte-identical
 to `go build -trimpath -ldflags "-s -w -X main.version=V"`, which

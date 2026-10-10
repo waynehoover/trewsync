@@ -1,4 +1,4 @@
-# The trewd binaries, for every platform the server builds and runs on.
+# The trewd binaries a release ships: Linux and macOS, each on amd64 and arm64.
 #
 # goreleaser builds and checksums; it does not tag, publish or upload. The
 # release is still a draft made by hand and finished by
@@ -17,13 +17,18 @@
 # which the caller takes from the tag, and a run without it fails rather than
 # stamping something invented.
 #
-# The platforms are the ones trewd compiles for with CGO_ENABLED=0 and 64-bit
-# integers. Windows is not here because the data-directory lock is flock(2),
-# which Windows does not have, and a server that cannot lock its store is one
-# that can be run twice against it. 32-bit targets are not here because the
-# note functions use integers past 2^31. OpenBSD and NetBSD are not here
-# because free-space reporting uses a statfs field they spell differently.
-# Each is refused rather than shipped half-working; see docs/development.md.
+# trewd is built with CGO_ENABLED=0 and needs 64-bit integers, and some
+# platforms are out for good. Windows is not here because the data-directory
+# lock is flock(2), which Windows does not have, and a server that cannot lock
+# its store is one that can be run twice against it. 32-bit targets are not
+# here because the note functions use integers past 2^31. OpenBSD and NetBSD
+# are not here because free-space reporting uses a statfs field they spell
+# differently. Each is refused rather than shipped half-working; see
+# docs/development.md.
+#
+# FreeBSD and Linux riscv64 compile, and 0.13.0 shipped them, but no CI ran
+# the FreeBSD binaries and riscv64 ran only under emulation, so they are built
+# from source by whoever runs them. These four are the ones Homebrew installs.
 version: 2
 
 project_name: trewd
@@ -56,16 +61,9 @@ builds:
     goos:
       - linux
       - darwin
-      - freebsd
     goarch:
       - amd64
       - arm64
-      - riscv64
-    ignore:
-      - goos: darwin
-        goarch: riscv64
-      - goos: freebsd
-        goarch: riscv64
 
 # Bare executables, named the way every earlier release named them and the way
 # `trewd update`, the Homebrew formula and scripts/verify-release.sh look for

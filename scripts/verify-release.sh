@@ -61,8 +61,7 @@ check_release() { # check_release <tag> <what>
     # Every platform .goreleaser.yml builds (scripts/goreleaser-check.sh holds
     # the list), because `trewd update` on a machine whose binary is missing
     # is told there is no build for it.
-    server) required=(trewd-linux-amd64 trewd-linux-arm64 trewd-linux-riscv64
-                      trewd-darwin-amd64 trewd-darwin-arm64 trewd-freebsd-amd64 trewd-freebsd-arm64) ;;
+    server) required=(trewd-linux-amd64 trewd-linux-arm64 trewd-darwin-amd64 trewd-darwin-arm64) ;;
   esac
   printf '\n== %s, from the %s release\n' "$what" "$tag"
   mkdir -p "$dir"

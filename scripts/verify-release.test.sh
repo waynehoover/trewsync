@@ -94,8 +94,7 @@ releases() { local IFS=,; printf '[%s]\n' "$*" > "$scratch/releases.json"; }
 releases "$(release 1.2.3 false false manifest.json)" "$(release server/v1.2.3 false false trewd-linux-amd64)"
 
 plugin_assets=(main.js manifest.json styles.css)
-server_assets=(trewd-linux-amd64 trewd-linux-arm64 trewd-linux-riscv64 trewd-darwin-amd64
-  trewd-darwin-arm64 trewd-freebsd-amd64 trewd-freebsd-arm64)
+server_assets=(trewd-linux-amd64 trewd-linux-arm64 trewd-darwin-amd64 trewd-darwin-arm64)
 fixture() {
   local asset
   rm -f "$scratch/assets/"*

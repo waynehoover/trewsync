@@ -68,13 +68,13 @@ flags for them.
 Download the matching binary from the newest server
 [release](https://github.com/waynehoover/trewsync/releases), the one tagged
 `server/vX.Y.Z` and titled **trewd X.Y.Z** (the bare `X.Y.Z` releases are the
-plugin's): `trewd-linux-amd64`, `-arm64` or `-riscv64`, `trewd-darwin-amd64`
-or `-arm64` for macOS, or `trewd-freebsd-amd64` or `-arm64`. Check it against
-the release's `SHA256SUMS`, make it executable, and run it with a writable
-data directory, given as an absolute path:
+plugin's): `trewd-linux-amd64` or `-arm64` for Linux, or `trewd-darwin-amd64`
+or `-arm64` for macOS. Check it against the release's `SHA256SUMS`, make it
+executable, and run it with a writable data directory, given as an absolute
+path:
 
 ```bash
-V=0.12.0   # the newest server release
+V=0.13.0   # the newest server release
 curl -fLO https://github.com/waynehoover/trewsync/releases/download/server/v$V/trewd-linux-amd64
 curl -fLO https://github.com/waynehoover/trewsync/releases/download/server/v$V/SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing
@@ -89,6 +89,15 @@ none. If another program already holds port 3003, the server says
 `address already in use`: choose another port with `-addr 127.0.0.1:PORT`,
 and use that port in `tailscale serve` or your proxy, and in
 `trewd health -addr 127.0.0.1:PORT`.
+
+On another platform Go builds for, FreeBSD or Linux on riscv64 for example,
+build trewd from the release's tag with Go 1.27 or later, the way a release
+is built:
+
+```bash
+git clone --branch server/v$V https://github.com/waynehoover/trewsync && cd trewsync
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$V" -o trewd ./cmd/trewd
+```
 
 The invite this trial writes to `first-invite` names `wss://127.0.0.1:3003`,
 which no device can use: make the first device's invite with `-url`, as

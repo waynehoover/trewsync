@@ -163,7 +163,7 @@ run "every action is pinned to a commit" "" \
 # What a release is built and signed with. goreleaser and packslip are fetched
 # at the versions scripts/release-tools.sh pins, into a cache of its own, so
 # these need the network the first time and nothing installed.
-run "goreleaser builds every platform" "" \
+run "goreleaser builds every platform a release ships" "" \
   bash "$root/scripts/goreleaser-check.sh"
 run "the release manifest signs and verifies, and trewd update installs only what it names" "" \
   bash "$root/scripts/packslip-check.sh"

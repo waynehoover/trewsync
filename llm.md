@@ -125,8 +125,8 @@ loopback, persistent storage, and the 30-second stop allowance. Do not use
 ### Binary alternative
 
 Use this route when Docker is unsuitable. Download the matching published
-server binary: `trewd-linux-amd64`, `-arm64` or `-riscv64`,
-`trewd-darwin-amd64` or `-arm64`, or `trewd-freebsd-amd64` or `-arm64`.
+server binary: `trewd-linux-amd64` or `-arm64`, or `trewd-darwin-amd64` or
+`-arm64`.
 Verify its exact checksum entry
 from that release's `SHA256SUMS` before running it. Use a dedicated writable
 local data directory, given to `-data` as an absolute path, and bind

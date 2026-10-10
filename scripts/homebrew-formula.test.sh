@@ -21,7 +21,8 @@ command -v ruby >/dev/null || { echo "ruby is needed to evaluate the formula" >&
 ruby -c "$root/packaging/homebrew/trewd.rb" >/dev/null && ok "the formula in the repository parses" \
   || bad "packaging/homebrew/trewd.rb is not valid Ruby"
 
-# A release's sums, with more platforms than Homebrew installs, as a real one has.
+# A release's sums, with more platforms than Homebrew installs, as 0.13.0 and
+# earlier have: the formula takes its four and leaves the rest.
 for p in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64 linux-riscv64 freebsd-amd64 freebsd-arm64; do
   printf '%s  trewd-%s\n' "$(printf '%s' "$p" | shasum -a 256 | awk '{print $1}')" "$p"
 done > "$work/SHA256SUMS"

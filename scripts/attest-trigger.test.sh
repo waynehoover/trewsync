@@ -201,7 +201,7 @@ if [[ ! -s "$scratch/build.sh" ]] || ! (
   fail "the extracted server build did not execute successfully"
   cat "$scratch/build.log" >&2
 else
-  for target in linux-amd64 linux-arm64 linux-riscv64 darwin-arm64 darwin-amd64 freebsd-amd64 freebsd-arm64; do
+  for target in linux-amd64 linux-arm64 darwin-arm64 darwin-amd64; do
     binary="$fixture/attested/trewd-$target"
     if ! go version -m "$binary" > "$scratch/metadata" 2>&1; then
       fail "$target has no readable Go build metadata"

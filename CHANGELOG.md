@@ -11,7 +11,14 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Server
+
+- Releases carry four binaries, the ones Homebrew installs: Linux and macOS,
+  each on amd64 and arm64. The FreeBSD and Linux riscv64 builds stop after
+  0.13.0, because no test ever ran on FreeBSD and riscv64 ran only under
+  emulation. On those, build trewd from source
+  ([server setup](docs/server.md#a-binary)); `trewd update` there says the
+  release has no build for the machine.
 
 ## 0.13.0, server and plugin (2026-10-10)
 

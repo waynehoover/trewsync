@@ -169,7 +169,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: goreleaser builds every platform
+      - name: goreleaser builds every platform a release ships
         run: scripts/goreleaser-check.sh
 
       # packslip signs a snapshot with a throwaway key and `trewd update` is

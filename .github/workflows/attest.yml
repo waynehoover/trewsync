@@ -297,12 +297,12 @@ jobs:
           cat SHA256SUMS
           shasum -a 256 -c SHA256SUMS
 
-      # For the check below. The arm64 and riscv64 binaries are the ones no
-      # runner here can start without an emulator, which is exactly why they
-      # would otherwise be the ones never started.
+      # For the check below. The arm64 binary is the one no runner here can
+      # start without an emulator, which is exactly why it would otherwise be
+      # the one never started.
       - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
         with:
-          platforms: arm64,riscv64
+          platforms: arm64
 
       # A binary that reports a version other than the tag it ships under is
       # the same lie the plugin's manifest check refuses. Every Linux binary,
@@ -314,7 +314,7 @@ jobs:
         run: |
           set -euo pipefail
           want="${TAG#server/v}"
-          for arch in amd64 arm64 riscv64; do
+          for arch in amd64 arm64; do
             got=$(./attested/trewd-linux-$arch version | awk '{print $2}')
             echo "linux/$arch: $got"
             if [ "$want" != "$got" ]; then

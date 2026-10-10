@@ -83,8 +83,8 @@ for line in open(sys.argv[2]):
     digest, name = line.split()
     sums[name] = digest
 project, version = sys.argv[3], sys.argv[4]
-os_names = {"linux": "linux", "darwin": "darwin", "freebsd": "freebsd"}
-arch_names = {"amd64": "x86_64", "arm64": "aarch64", "riscv64": "riscv64"}
+os_names = {"linux": "linux", "darwin": "darwin"}
+arch_names = {"amd64": "x86_64", "arm64": "aarch64"}
 bad = []
 p = st["predicate"]
 if st["predicateType"] != "https://packslip.dev/release/v1":
