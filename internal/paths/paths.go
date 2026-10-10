@@ -57,13 +57,42 @@ const (
 	ReasonDotSegment   Reason = "dotsegment"
 	ReasonDotPrefix    Reason = "dotprefix"
 	ReasonStaging      Reason = "staging"
+	// Protocol 3's, for a path inside a profile root (CheckConfig): one
+	// device's own state, which never syncs, and a file settings sync does not
+	// carry.
+	ReasonDeviceLocal Reason = "devicelocal"
+	ReasonConfigScope Reason = "configscope"
 )
 
-// Check returns why the server refuses p, or "" when it accepts it.
+// SyncPluginID is the plugin's id, so the name of its folder in a profile
+// root. That folder holds one device's pairing and index and never syncs.
+const SyncPluginID = "trew-sync"
+
+// configRoot is a profile root: Obsidian's configuration folder, or one a
+// device chose with Obsidian's "Override config folder" as .obsidian-<name>
+// (plan/settings-sync.md, section 1). A fixed pattern keeps .git, .trash and
+// .trew out without a list of them.
+var configRoot = regexp.MustCompile(`^\.obsidian(?:-[a-z0-9][a-z0-9-]{0,31})?$`)
+
+// IsConfig reports whether p begins with a profile root, whatever follows it.
+func IsConfig(p string) bool {
+	first, _, _ := strings.Cut(p, "/")
+	return configRoot.MatchString(first)
+}
+
+// Check returns why the server refuses p as a note, or "" when it accepts it.
+// It is the rule for notes, for MCP, and for every session of protocol 1 or 2.
 //
 // Go's utf8.ValidString refuses the encoded surrogates U+D800 to U+DFFF as
 // well as malformed sequences, which is what the fixture's "utf8" means.
-func Check(p string) Reason {
+func Check(p string) Reason { return check(p, false) }
+
+// CheckConfig is protocol 3's rule: Check, except that a profile root may
+// begin the path, and then what follows it must be what settings sync carries
+// (configScope). A path outside every profile root gets Check's answer.
+func CheckConfig(p string) Reason { return check(p, true) }
+
+func check(p string, config bool) Reason {
 	if !utf8.ValidString(p) {
 		return ReasonUTF8
 	}
@@ -106,7 +135,12 @@ func Check(p string) Reason {
 			return ReasonDotSegment
 		}
 	}
-	for _, s := range segments {
+	root := config && IsConfig(p)
+	inner := segments
+	if root {
+		inner = segments[1:]
+	}
+	for _, s := range inner {
 		if strings.HasPrefix(s, ".") {
 			return ReasonDotPrefix
 		}
@@ -114,7 +148,37 @@ func Check(p string) Reason {
 	if strings.Contains(p, StagingMark) {
 		return ReasonStaging
 	}
+	if root {
+		return configScope(segments[1:])
+	}
 	return ""
+}
+
+// configScope says why a path inside a profile root does not sync, given its
+// segments after the root, or "" when it does. Settings sync carries
+// Obsidian's own settings, every JSON file at the top of the root, and themes
+// and CSS snippets. Community plugins wait for a later phase, so their list
+// and the plugins folder are out of scope; the sync plugin's folder and the
+// workspace files never sync. Compared in ASCII lower case, so a case-folding
+// disk cannot spell its way past the device-local rule.
+func configScope(rest []string) Reason {
+	lower := make([]string, len(rest))
+	for i, s := range rest {
+		lower[i] = asciiLower(s)
+	}
+	switch {
+	case len(lower) >= 2 && lower[0] == "plugins" && lower[1] == SyncPluginID:
+		return ReasonDeviceLocal
+	case len(lower) == 1 && (lower[0] == "workspace.json" || lower[0] == "workspace-mobile.json"):
+		return ReasonDeviceLocal
+	case len(lower) == 1 && strings.HasSuffix(lower[0], ".json") && lower[0] != "community-plugins.json":
+		return ""
+	case len(lower) == 3 && lower[0] == "themes":
+		return ""
+	case len(lower) == 2 && lower[0] == "snippets" && strings.HasSuffix(lower[1], ".css"):
+		return ""
+	}
+	return ReasonConfigScope
 }
 
 // Fold returns the key two paths share when a case-folding disk would hold

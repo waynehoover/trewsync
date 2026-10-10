@@ -273,6 +273,9 @@ func TestARestoreIsOneMarkedCommit(t *testing.T) {
 	r := newRig(t)
 	out := t.TempDir()
 	r.put("Laptop", "kept.md", []byte("in the backup\n"))
+	// Settings in the backup stay out of the restore's commit as they stay
+	// out of every other (TestSettingsAreLeftOutOfTheExportQuietly).
+	r.put("Laptop", ".obsidian/app.json", []byte("{}\n"))
 	backup := filepath.Join(t.TempDir(), "backup")
 	if _, err := r.st.Backup(backup, false); err != nil {
 		t.Fatal(err)
@@ -402,6 +405,27 @@ func TestAPathGitCannotHoldIsLeftOutAndSaid(t *testing.T) {
 		t.Fatalf("the path is not reported:\n%s", statusJSON(s))
 	}
 	if files := git(t, repo(out), "ls-tree", "-r", "--name-only", "main"); files != "fine.md" {
+		t.Fatalf("the tree holds %q", files)
+	}
+}
+
+// Settings are a device's, not the vault's history (plan/settings-sync.md,
+// section 7), and the store holds them from protocol 3. The export leaves them
+// out without calling them excluded, because nothing is wrong with them: the
+// export's report of excluded paths is for a path Git cannot hold.
+func TestSettingsAreLeftOutOfTheExportQuietly(t *testing.T) {
+	r := newRig(t)
+	out := t.TempDir()
+	r.put("Laptop", ".obsidian/app.json", []byte("{}\n"))
+	r.put("Phone", ".obsidian-mobile/snippets/wide.css", []byte("body {}\n"))
+	r.put("Laptop", "note.md", []byte("y\n"))
+	r.clock.advance(10 * time.Minute)
+	x := r.exporter(out, settings(t, out, ""))
+	x.sync(t)
+	if s := x.Status(); s.Excluded != 0 {
+		t.Fatalf("settings are reported as excluded:\n%s", statusJSON(s))
+	}
+	if files := git(t, repo(out), "ls-tree", "-r", "--name-only", "main"); files != "note.md" {
 		t.Fatalf("the tree holds %q", files)
 	}
 }

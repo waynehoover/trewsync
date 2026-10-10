@@ -393,8 +393,9 @@ never adopt a commit they have not looked at.
 
 ## Working from development source
 
-This source tree's server speaks protocols 1 and 2, and its plugin and CLI
-speak protocol 2 (protocol 1 with undo); upgrade the server first. Basalt's
+This source tree's server speaks protocols 1 to 3, and its plugin and CLI
+speak protocol 3 (protocol 2, which added undo and search, with settings);
+upgrade the server first. Basalt's
 releases speak its protocol 7, and Basalt and TrewSync refuse each other at
 the handshake, naming both numbers. For source builds, build the server and clients from the same
 checkout. Keep existing data and credentials, and verify the reported protocol

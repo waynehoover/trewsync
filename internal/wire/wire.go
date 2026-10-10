@@ -44,13 +44,20 @@ import (
 // `undo`, which is an unknown op there, and history entries as they were. The
 // upgrade order is the server first (docs/server.md, "Upgrade order"), so
 // every device on protocol 1 keeps syncing through the upgrade.
+//
+// Version 3 is protocol 2 and settings (plan/settings-sync.md): a session of 3
+// may write and is sent paths inside a profile root that paths.CheckConfig
+// accepts. A session of 1 or 2 is held to paths.Check, as before, and never
+// sees a settings entry: each is left out of its batches, whose ranges still
+// cover it, the way a device's own echo is.
 const (
-	Proto    = 2
+	Proto    = 3
 	MinProto = 1
-	// ProtoUndo is the first version with undo, and ProtoSearch the first
-	// with search.
+	// ProtoUndo is the first version with undo, ProtoSearch the first with
+	// search, and ProtoConfig the first with settings.
 	ProtoUndo   = 2
 	ProtoSearch = 2
+	ProtoConfig = 3
 )
 
 // MaxRequestID bounds a client-chosen request id: an integer from 1 to 2^32-1.

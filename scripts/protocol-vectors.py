@@ -32,6 +32,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import sys
 import unicodedata
 import zlib
@@ -47,9 +48,22 @@ STAGING_MARK = ".trew-tmp-"
 PRODUCT = "trew"
 
 # Protocol 2 is protocol 1 and undo (plan/protocol.md, "Undo"); the server
-# still answers a hello of protocol 1, as protocol 1.
-PROTO = 2
+# still answers a hello of protocol 1, as protocol 1. Protocol 3 is protocol 2
+# and settings: paths inside a profile root (CONFIG_ROOT) that the config rule
+# below accepts, which a session of 1 or 2 never sends or sees
+# (plan/settings-sync.md).
+PROTO = 3
 MIN_PROTO = 1
+
+# A profile root is Obsidian's configuration folder, `.obsidian`, or one a
+# device chose with Obsidian's "Override config folder" under the name
+# `.obsidian-<name>`. A fixed pattern keeps `.git`, `.trash` and `.trew` out
+# without a list of them.
+CONFIG_ROOT = re.compile(r"\.obsidian(?:-[a-z0-9][a-z0-9-]{0,31})?")
+# Inside a root, what is one device's and never syncs: its open panes, and the
+# sync plugin's own folder, which holds that device's pairing and index.
+DEVICE_LOCAL_FILES = ("workspace.json", "workspace-mobile.json")
+SYNC_PLUGIN_ID = PRODUCT + "-sync"
 INVITE_VERSION = 1
 INVITE_TOKEN_BYTES = 16
 DEVICE_TOKEN_BYTES = 32
@@ -59,7 +73,7 @@ MAX_SEGMENT_BYTES = 255
 MAX_NAME_BYTES = 64
 CHUNK_MAX = 1 << 20
 
-SECTIONS = ("constants", "invite", "frames", "fold", "paths", "collisions", "formats", "windows")
+SECTIONS = ("constants", "invite", "frames", "fold", "paths", "config", "collisions", "formats", "windows")
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +178,12 @@ def ts_table(table: dict[int, str], digest: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def path_reason(raw: bytes) -> str | None:
-    """The first rule a path breaks, in the order plan/protocol.md lists them."""
+def path_reason(raw: bytes, config: bool = False) -> str | None:
+    """The first rule a path breaks, in the order plan/protocol.md lists them.
+
+    With config, which is protocol 3's rule, a profile root may begin the path,
+    and what follows it must be what settings sync carries (config_scope).
+    """
     try:
         text = raw.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
@@ -193,11 +211,100 @@ def path_reason(raw: bytes) -> str | None:
         return "emptysegment"
     if any(s in (".", "..") for s in segments):
         return "dotsegment"
-    if any(s.startswith(".") for s in segments):
+    root = config and is_config(text)
+    if any(s.startswith(".") for s in (segments[1:] if root else segments)):
         return "dotprefix"
     if STAGING_MARK in text:
         return "staging"
+    if root:
+        return config_scope(segments[1:])
     return None
+
+
+def is_config(text: str) -> bool:
+    """Whether a path begins with a profile root, whatever follows it."""
+    return CONFIG_ROOT.fullmatch(text.split("/", 1)[0]) is not None
+
+
+def config_scope(rest: list[str]) -> str | None:
+    """Why a path inside a profile root does not sync, or None when it does.
+
+    rest is the path's segments after the root. Settings sync carries Obsidian's
+    own settings files (any JSON file at the top of the root), themes and CSS
+    snippets. Community plugins are a later phase, so the plugin list and the
+    plugins folder are out of scope for now; the sync plugin's own folder and
+    the workspace files never sync. Names are compared in ASCII lower case, so
+    a case-folding disk cannot spell its way past the device-local rule.
+    """
+    lower = [ascii_lower(s) for s in rest]
+    if len(lower) >= 2 and lower[0] == "plugins" and lower[1] == SYNC_PLUGIN_ID:
+        return "devicelocal"
+    if len(lower) == 1 and lower[0] in DEVICE_LOCAL_FILES:
+        return "devicelocal"
+    if len(lower) == 1 and lower[0].endswith(".json") and lower[0] != "community-plugins.json":
+        return None
+    if len(lower) == 3 and lower[0] == "themes":
+        return None
+    if len(lower) == 2 and lower[0] == "snippets" and lower[1].endswith(".css"):
+        return None
+    return "configscope"
+
+
+def config_vectors() -> list[dict]:
+    cases: list[tuple[str, str]] = [
+        ("Obsidian's main settings", ".obsidian/app.json"),
+        ("appearance", ".obsidian/appearance.json"),
+        ("hotkeys", ".obsidian/hotkeys.json"),
+        ("the core plugin list", ".obsidian/core-plugins.json"),
+        ("a core plugin's settings", ".obsidian/daily-notes.json"),
+        ("a JSON name in upper case", ".obsidian/Graph.JSON"),
+        ("a phone's profile", ".obsidian-mobile/app.json"),
+        ("a profile with digits and a dash", ".obsidian-linux-2/hotkeys.json"),
+        ("a profile name of 32 characters", ".obsidian-" + "a" * 32 + "/app.json"),
+        ("a theme's stylesheet", ".obsidian/themes/Tela/theme.css"),
+        ("a theme's manifest", ".obsidian-mobile/themes/Minimal Theme/manifest.json"),
+        ("a snippet", ".obsidian/snippets/wide tables.css"),
+        ("a snippet in upper case", ".obsidian/snippets/WIDE.CSS"),
+        ("the workspace", ".obsidian/workspace.json"),
+        ("the phone's workspace", ".obsidian-mobile/workspace-mobile.json"),
+        ("the workspace, spelt in capitals", ".obsidian/Workspace.json"),
+        ("the sync plugin's pairing", ".obsidian/plugins/trew-sync/data.json"),
+        ("the sync plugin's code", ".obsidian/plugins/trew-sync/main.js"),
+        ("the sync plugin's folder", ".obsidian/plugins/trew-sync"),
+        ("the sync plugin's folder, spelt in capitals", ".obsidian/plugins/Trew-Sync/index.json"),
+        ("the community plugin list, a later phase", ".obsidian/community-plugins.json"),
+        ("a community plugin's code, a later phase", ".obsidian/plugins/dataview/main.js"),
+        ("a community plugin's settings, a later phase", ".obsidian/plugins/dataview/data.json"),
+        ("the root itself", ".obsidian"),
+        ("the themes folder", ".obsidian/themes"),
+        ("a theme's folder", ".obsidian/themes/Tela"),
+        ("deeper inside a theme", ".obsidian/themes/Tela/fonts/a.woff2"),
+        ("a snippet that is not CSS", ".obsidian/snippets/readme.md"),
+        ("a folder settings sync does not carry", ".obsidian/icons/x.svg"),
+        ("a note in the root", ".obsidian/notes.md"),
+        ("a dotfile in the root", ".obsidian/.hidden.json"),
+        ("a dotted snippet", ".obsidian/snippets/.wide.css"),
+        ("the staging mark", ".obsidian/app.json" + STAGING_MARK + "keep3f9c"),
+        ("a profile name in capitals", ".obsidian-Mobile/app.json"),
+        ("a profile with no name", ".obsidian-/app.json"),
+        ("a profile name of 33 characters", ".obsidian-" + "a" * 33 + "/app.json"),
+        ("a profile name starting with a dash", ".obsidian--x/app.json"),
+        ("Obsidian in capitals", ".Obsidian/app.json"),
+        ("a root that is not first", "notes/.obsidian/app.json"),
+        ("the trash", ".trash/x.md"),
+        ("a note", "Folder/Note.md"),
+        ("a dot-dot segment inside a root", ".obsidian/../a.md"),
+        ("a backslash inside a root", ".obsidian/a\\b.json"),
+        ("a trailing slash", ".obsidian/app.json/"),
+    ]
+    out = []
+    for name, value in cases:
+        raw = value.encode("utf-8")
+        notes = path_reason(raw)
+        config = path_reason(raw, config=True)
+        out.append({"name": name, "hex": raw.hex(), "isConfig": is_config(value),
+                    "notes": notes, "config": config})
+    return out
 
 
 def path_vectors() -> list[dict]:
@@ -774,6 +881,18 @@ def main() -> None:
             "and both implementations must report the same reason, not just refuse.",
         ],
         "cases": path_vectors(),
+    }
+    fixtures["config"] = {
+        "note": [
+            "Protocol 3's rule for settings (plan/settings-sync.md). isConfig: the first segment is a profile root,",
+            "'.obsidian' or '.obsidian-' and 1 to 32 of a-z, 0-9 and '-', not starting with '-'. notes is the reason",
+            "the notes rule above gives, which is what a session of protocol 1 or 2 is held to. config is protocol 3's:",
+            "the root may begin the path, nothing after it may begin with a dot, and what follows the root must be a",
+            "JSON file at its top, themes/<theme>/<file> or snippets/<name>.css, compared in ASCII lower case.",
+            "devicelocal: the workspace files and plugins/trew-sync/, which are one device's and never sync.",
+            "configscope: anything else inside a root, community plugins included until their phase.",
+        ],
+        "cases": config_vectors(),
     }
     fixtures["collisions"] = {
         "note": [

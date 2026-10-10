@@ -697,7 +697,9 @@ type storeView struct {
 func (c *call) viewAt(head int64) (*storeView, error) {
 	var v *storeView
 	keep := func(e store.Entry) (bool, error) {
-		if !e.Folder && !e.Deleted {
+		// Settings are a device's, not the vault's notes, and no tool sees them
+		// (plan/settings-sync.md, section 7).
+		if !e.Folder && !e.Deleted && !e.IsConfig() {
 			v.files = append(v.files, e.Path)
 			v.live[e.Path] = e
 		}

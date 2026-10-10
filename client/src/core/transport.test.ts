@@ -503,7 +503,7 @@ describe("the handshake", () => {
       device: "d",
       cursor: 7,
     });
-    expect(PROTO).toBe(2);
+    expect(PROTO).toBe(3);
     expect("crypto" in socket.sentText[0]!).toBe(false);
   });
 

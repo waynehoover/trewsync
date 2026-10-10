@@ -100,8 +100,10 @@ type Session struct {
 	// proto is the protocol version this session speaks: the one its hello
 	// asked for, within the server's range, and what its ready is answered in.
 	// A session of protocol 1 is answered exactly as protocol 1 was, with no
-	// undo and history entries without their operation (wire.Proto). Written
-	// at hello and read only by the session goroutine.
+	// undo and history entries without their operation (wire.Proto), and one
+	// of 1 or 2 is never sent a settings entry. Written at hello, before the
+	// session joins the hub; read by the session goroutine, and by the hub's
+	// broadcast under the lock joining takes.
 	proto int
 
 	// saidSkewed is set once this session has reported a device writing
@@ -1242,9 +1244,14 @@ func (s *Session) replay(vaultID string, cursor int64) (int64, int, error) {
 			return cursor, sent, s.fatal(wire.CodeInternal, fmt.Errorf(
 				"batch from %d does not continue cursor %d", b.From, cursor))
 		}
-		entries := b.Entries
-		if entries == nil {
-			entries = []store.Entry{}
+		// A session of protocol 1 or 2 never sees a settings entry. The batch
+		// still covers its uid, so the cursor moves past it as past an echo.
+		entries := make([]store.Entry, 0, len(b.Entries))
+		for _, e := range b.Entries {
+			if s.proto < wire.ProtoConfig && e.IsConfig() {
+				continue
+			}
+			entries = append(entries, e)
 		}
 		if err := s.writeJSON(wire.Batch{
 			Op: "batch", From: b.From, To: b.To, Entries: entries,
@@ -1252,7 +1259,7 @@ func (s *Session) replay(vaultID string, cursor int64) (int64, int, error) {
 			return cursor, sent, err
 		}
 		cursor = b.To
-		sent += len(b.Entries)
+		sent += len(entries)
 		if s.srv.afterReplayBatch != nil {
 			s.srv.afterReplayBatch(sent)
 		}
@@ -1404,6 +1411,14 @@ func (s *Session) flushPendingOnce(cursor int64) (bool, int64) {
 // against a client that sends a path Obsidian would never hold (PLAN.md
 // section 4.1). The reason code leads the message.
 func (s *Session) checkEntry(e store.Entry) *wire.Err {
+	// Settings are protocol 3's (plan/settings-sync.md). Earlier sessions are
+	// held to the notes rule they always were, with the reason they always got.
+	if s.proto < wire.ProtoConfig {
+		if err := e.CheckNotePaths(); err != nil {
+			refusal := wire.Error(wire.CodeBadPath, err.Error())
+			return &refusal
+		}
+	}
 	if err := e.CheckPaths(); err != nil {
 		refusal := wire.Error(wire.CodeBadPath, err.Error())
 		return &refusal

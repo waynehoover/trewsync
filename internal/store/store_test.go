@@ -1400,7 +1400,7 @@ func TestVerifyNoticesAnEntryNoDeviceWouldAccept(t *testing.T) {
 	e := h.file(t, "note.md", "content")
 	if _, err := h.db.Exec(
 		`INSERT INTO entries (vault_id, uid, path, size, ctime, mtime, folder, deleted, device, prev_path, n_chunks)
-		 VALUES ('v1', ?, '.obsidian', 0, 1, 1, 1, 0, 'test', '', 0)`, e.UID+2000); err != nil {
+		 VALUES ('v1', ?, '.trash', 0, 1, 1, 1, 0, 'test', '', 0)`, e.UID+2000); err != nil {
 		t.Fatalf("seed folder: %v", err)
 	}
 

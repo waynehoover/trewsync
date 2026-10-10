@@ -81,9 +81,14 @@ func expectBadPath(t *testing.T, c *client, v pathVector, field string) {
 // decoder would quietly turn them into U+FFFD, which is a different path. So
 // they go on the wire as the raw bytes a hostile client would send, and the
 // frame is refused before it is decoded.
+//
+// At protocol 2, because these are the notes rule's verdicts, which every
+// session of 1 or 2 is held to. Protocol 3 admits settings inside a profile
+// root, and its matrix is TestTheSettingsMatrixThroughASession.
 func TestTheBadpathMatrixThroughASession(t *testing.T) {
 	r := newRig(t)
 	cl := r.dial("a")
+	cl.proto = wire.ProtoConfig - 1
 	cl.hello(0)
 	body := "a body"
 	names, size := chunkNames([]string{body})

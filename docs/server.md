@@ -272,11 +272,12 @@ Server, plugin, and CLI release numbers are separate; protocol compatibility
 determines whether they can connect. An incompatible client stops with a
 protocol error instead of syncing partially.
 
-This source tree's server speaks protocols 1 and 2, and its plugin and CLI
-speak protocol 2, which is protocol 1 with undo. A server of this tree keeps
-serving a plugin or CLI of protocol 1 exactly as before, which is what makes
-the server-first order work; a plugin or CLI of protocol 2 meeting an older
-server of protocol 1 stops at the handshake and says to upgrade the server.
+This source tree's server speaks protocols 1 to 3, and its plugin and CLI
+speak protocol 3, which is protocol 2 with settings sync (protocol 2 added
+undo and search). A server of this tree keeps serving a plugin or CLI of
+protocol 1 or 2 exactly as before, which is what makes the server-first order
+work; a plugin or CLI of protocol 3 meeting an older server stops at the
+handshake and says to upgrade the server.
 Basalt Sync's releases speak protocol 7, and a Basalt client and a TrewSync
 server refuse each other at the handshake, naming both numbers; moving from
 Basalt is a fresh pairing, not an upgrade. For source builds, use the same

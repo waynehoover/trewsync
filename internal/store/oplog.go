@@ -1250,6 +1250,17 @@ func (op Operation) validate(opID string) *OpError {
 		if err := e.Validate(); err != nil {
 			return refusalOf(opID, e, err)
 		}
+		// An agent never writes a settings path (plan/settings-sync.md,
+		// section 7). The tools refuse one before it gets here; this is the
+		// store refusing it too, so no route a tool's own check missed can
+		// put a file in a profile root, where plugin code will one day live.
+		// The operator's restore and an undo of it are not held to it: they
+		// put back what devices wrote, settings included.
+		if op.kind() == AuthorKindMCP {
+			if err := e.CheckNotePaths(); err != nil {
+				return refusalOf(opID, e, err)
+			}
+		}
 		if e.Device != op.ActorLabel {
 			return bad("the entry for %q is recorded as %q, and the operation's actor is %q", e.Path, e.Device, op.ActorLabel)
 		}

@@ -43,7 +43,37 @@ export type PathReason =
   | "emptysegment"
   | "dotsegment"
   | "dotprefix"
-  | "staging";
+  | "staging"
+  // Protocol 3's, for a path inside a profile root (`configPathReason`): one
+  // device's own state, which never syncs, and a file settings sync does not
+  // carry.
+  | "devicelocal"
+  | "configscope";
+
+/**
+ * The plugin's id, so the name of its folder in a profile root. That folder
+ * holds one device's pairing and index and never syncs.
+ */
+export const SYNC_PLUGIN_ID = "trew-sync";
+
+/**
+ * A profile root: Obsidian's configuration folder, or one a device chose with
+ * Obsidian's "Override config folder" as `.obsidian-<name>`
+ * (plan/settings-sync.md, section 1). A fixed pattern keeps `.git`, `.trash`
+ * and `.trew` out without a list of them.
+ */
+const CONFIG_ROOT = /^\.obsidian(?:-[a-z0-9][a-z0-9-]{0,31})?$/u;
+
+/** Whether `path` begins with a profile root, whatever follows it. */
+export function isConfigPath(path: string): boolean {
+  const slash = path.indexOf("/");
+  return CONFIG_ROOT.test(slash < 0 ? path : path.slice(0, slash));
+}
+
+/** Whether `name`, a single folder name, is a profile root. */
+export function isProfileRoot(name: string): boolean {
+  return CONFIG_ROOT.test(name);
+}
 
 const utf8 = new TextEncoder();
 
@@ -62,8 +92,47 @@ function wellFormed(s: string): boolean {
   return true;
 }
 
-/** Why the server refuses `path`, or `undefined` when it accepts it. */
+/**
+ * Why the server refuses `path` as a note, or `undefined` when it accepts it.
+ * The rule for notes, and for every session of protocol 1 or 2.
+ */
 export function pathReason(path: string): PathReason | undefined {
+  return reason(path, false);
+}
+
+/**
+ * Protocol 3's rule: `pathReason`, except that a profile root may begin the
+ * path, and then what follows it must be what settings sync carries
+ * (`configScope`). A path outside every profile root gets `pathReason`'s
+ * answer.
+ */
+export function configPathReason(path: string): PathReason | undefined {
+  return reason(path, true);
+}
+
+/**
+ * Why a path inside a profile root does not sync, given its segments after the
+ * root, or `undefined` when it does. Settings sync carries Obsidian's own
+ * settings, every JSON file at the top of the root, and themes and CSS
+ * snippets. Community plugins wait for a later phase, so their list and the
+ * plugins folder are out of scope; the sync plugin's folder and the workspace
+ * files never sync. Compared in ASCII lower case, so a case-folding disk cannot
+ * spell its way past the device-local rule.
+ */
+function configScope(rest: readonly string[]): PathReason | undefined {
+  const lower = rest.map(asciiLower);
+  const [first, second] = lower;
+  if (lower.length >= 2 && first === "plugins" && second === SYNC_PLUGIN_ID) return "devicelocal";
+  if (lower.length === 1 && (first === "workspace.json" || first === "workspace-mobile.json"))
+    return "devicelocal";
+  if (lower.length === 1 && first?.endsWith(".json") && first !== "community-plugins.json")
+    return undefined;
+  if (lower.length === 3 && first === "themes") return undefined;
+  if (lower.length === 2 && first === "snippets" && second?.endsWith(".css")) return undefined;
+  return "configscope";
+}
+
+function reason(path: string, config: boolean): PathReason | undefined {
   if (!wellFormed(path)) return "utf8";
   if (path === "") return "empty";
   if (utf8.encode(path).length > MAX_PATH_BYTES) return "toolong";
@@ -78,8 +147,10 @@ export function pathReason(path: string): PathReason | undefined {
   const segments = path.split("/");
   if (segments.some((s) => s === "")) return "emptysegment";
   if (segments.some((s) => s === "." || s === "..")) return "dotsegment";
-  if (segments.some((s) => s.startsWith("."))) return "dotprefix";
+  const root = config && isConfigPath(path);
+  if ((root ? segments.slice(1) : segments).some((s) => s.startsWith("."))) return "dotprefix";
   if (path.includes(STAGING_MARK)) return "staging";
+  if (root) return configScope(segments.slice(1));
   return undefined;
 }
 

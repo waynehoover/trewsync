@@ -277,7 +277,7 @@ func TestI2ErrorsCarryRetryablePerTheTable(t *testing.T) {
 			{wire.CodeNoUID, wire.In{Op: "get", UID: 999}},
 			{wire.CodeBadChunk, wire.In{Op: "fetch", Chunks: []string{"nope"}}},
 			{wire.CodeBadPath, wire.In{Op: "put"}},
-			{wire.CodeBadPath, wire.In{Op: "put", Path: ".obsidian/app.json"}},
+			{wire.CodeBadPath, wire.In{Op: "put", Path: ".trash/app.json"}},
 			{wire.CodeBadName, wire.In{Op: "rename", Name: "a\nb"}},
 			{wire.CodeBadEntry, wire.In{Op: "putmany"}},
 			{wire.CodeToolarge, wire.In{Op: "put", Path: "x",
@@ -511,7 +511,7 @@ func TestADeviceIDIsBoundedAndBase64URL(t *testing.T) {
 // field and a bootstrap token, so a Basalt device meeting a TrewSync server is
 // refused as `proto`, naming both numbers, and not as `auth`.
 func TestAHelloOutsideTheRangeIsRefusedNamingBothNumbers(t *testing.T) {
-	for _, proto := range []int{7, 3, 0} {
+	for _, proto := range []int{7, wire.Proto + 1, 0} {
 		r := newRig(t)
 		r.srv.SetVersion("4.5.6")
 		cl := r.dial("old-phone")

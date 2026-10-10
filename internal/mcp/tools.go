@@ -305,6 +305,8 @@ func vaultStatus(c *call, a *args) outcome {
 	}{Vault: c.h.vault, Observed: obs, ServerVersion: c.h.version}
 	err = c.h.st.EachAsOf(c.h.vault, obs.Head, store.AsOfRange{}, func(e store.Entry) (bool, error) {
 		switch {
+		case e.IsConfig():
+			// Settings are not notes or attachments, and no tool sees them.
 		case e.Deleted:
 			out.Deleted++
 		case e.Folder:
@@ -451,7 +453,7 @@ func listNotes(c *call, a *args) outcome {
 	rows := []row{}
 	used, more, last := 0, false, ""
 	err = c.h.st.EachAsOf(c.h.vault, head, store.AsOfRange{After: from, Folder: folder}, func(e store.Entry) (bool, error) {
-		if e.Deleted && !includeDeleted {
+		if e.Deleted && !includeDeleted || e.IsConfig() {
 			return true, nil
 		}
 		if nameContains != "" && !strings.Contains(e.Path[strings.LastIndexByte(e.Path, '/')+1:], nameContains) {

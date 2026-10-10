@@ -52,6 +52,7 @@ import (
 	"time"
 
 	"github.com/waynehoover/trewsync/internal/fsync"
+	"github.com/waynehoover/trewsync/internal/paths"
 	"github.com/waynehoover/trewsync/internal/store"
 )
 
@@ -875,6 +876,9 @@ func (w *importer) group(g *group) error {
 	lfsChanged := false
 	for _, p := range order {
 		f := fs[p]
+		if paths.IsConfig(p) {
+			continue // a device's settings, never the vault's history (docs/git-export.md)
+		}
 		if !gitSafe(p) {
 			w.x.excludedPath(p)
 			continue
@@ -1034,7 +1038,7 @@ func (w *importer) restore(head int64, from, to string, now int64) error {
 	w.lfs = 0
 	var mods []modify
 	err := w.x.st.EachAsOf(w.x.vault, head, store.AsOfRange{}, func(e store.Entry) (bool, error) {
-		if e.Deleted || e.Folder {
+		if e.Deleted || e.Folder || paths.IsConfig(e.Path) {
 			return true, nil
 		}
 		if !gitSafe(e.Path) {

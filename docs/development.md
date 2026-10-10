@@ -651,8 +651,8 @@ gh attestation verify main.js --repo waynehoover/trewsync
 An attestation identifies the build source. It is not a security audit or proof
 that the application is defect-free.
 
-The current server speaks protocols 1 and 2, TrewSync's own, and its clients
-speak 2; Basalt's releases speak protocol 7, and Basalt and TrewSync refuse
+The current server speaks protocols 1 to 3, TrewSync's own, and its clients
+speak 3; Basalt's releases speak protocol 7, and Basalt and TrewSync refuse
 each other at hello, naming both numbers. Build
 the server and clients together for local testing. No compatibility fallback is
 provided. Tests exercise preserved bytes across concurrent writers, not just

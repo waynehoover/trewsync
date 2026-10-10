@@ -1,4 +1,4 @@
-# Wire protocol, versions 1 and 2
+# Wire protocol, versions 1 to 3
 
 [Developer documentation](development.md) · [Design and threat model](design.md)
 
@@ -28,6 +28,11 @@ Nothing else changed. Search joined protocol 2 before protocol 2 was released,
 so it is not a version of its own. The server speaks both and answers each
 session in the version its hello asks for, so a device on protocol 1 is
 answered exactly as before.
+
+Protocol 3 is protocol 2 and [settings](#settings-protocol-3): paths inside a
+profile root such as `.obsidian` may be written and are sent. Nothing else
+changed, and a session of 1 or 2 is answered as before and never sees a
+settings path.
 
 The client normally uses one connection. Large uploads can use a temporary
 second connection with the same device credential, leaving the main connection
@@ -124,10 +129,10 @@ and a token that is not 32 bytes is `badentry`.
 
 ### Validation and compatibility
 
-The server speaks **protocols 1 and 2**, and answers a hello in the version
-it asks for; this source tree's clients speak 2. Upgrade the server first: a
-client of protocol 2 meeting a server of protocol 1 is refused at hello, and
-says to. A refusal names supported protocol numbers, not the server release; `serverVersion` is disclosed only after a credential
+The server speaks **protocols 1 to 3**, and answers a hello in the version
+it asks for; this source tree's clients speak 3. Upgrade the server first: a
+client meeting a server of an older protocol is refused at hello, and says
+to. A refusal names supported protocol numbers, not the server release; `serverVersion` is disclosed only after a credential
 matches. Vault and device names are bounded at 64 bytes and reject control
 characters. Device IDs are base64url, up to 64 characters. The order in which
 a hello's refusals are checked, so that nothing before the credential depends
@@ -212,6 +217,33 @@ including directory prefixes and batches, is in
 
 A client shows either refusal as a stranded path with its reason, and keeps the
 file.
+
+### Settings (protocol 3)
+
+A session of protocol 3 may also write, and is sent, a path whose first segment
+is a profile root: `.obsidian`, or `.obsidian-` followed by 1 to 32 of `a-z`,
+`0-9` and `-`, not starting with `-`, which is how a device names its own
+settings folder with Obsidian's "Override config folder". What follows the
+root must be what settings sync carries: a JSON file at the top of the root,
+`themes/<theme>/<file>`, or `snippets/<name>.css`, with no segment beginning
+with a dot. The server refuses, with `badpath`:
+
+- `devicelocal`: `workspace.json`, `workspace-mobile.json` and anything under
+  `plugins/trew-sync/`, which are one device's open panes and the sync
+  plugin's pairing and index, and never sync;
+- `configscope`: anything else inside a root, community plugins included until
+  a later phase;
+- `configmove`: a rename with one end in a profile root and the other in the
+  vault.
+
+The rule is `CheckConfig` in `internal/paths` and `configPathReason` in
+`path-policy.ts`, held to the `config` section of the fixtures. A session of
+protocol 1 or 2 is held to the notes rule as before, so it refuses every
+settings path as `dotprefix`, and it is never sent a settings entry: its
+batches leave each one out while their ranges still cover its uid, as a
+device's own write comes back. No MCP tool, the device search, the deleted
+list or the Git export shows a settings path. What syncs and how a device
+applies it is [plan/settings-sync.md](../plan/settings-sync.md).
 
 ## Writing a file
 

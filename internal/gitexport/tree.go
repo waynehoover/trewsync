@@ -183,10 +183,11 @@ func lfsPointer(oid string, size int64) []byte {
 }
 
 // gitSafe reports whether Git can hold p as a path. The store's own rules
-// already refuse a segment starting with a dot, so .git and every name
-// derived from it never arrive; what is left is git~1, the short name
-// Windows gives .git, which git fsck refuses in any tree and GitHub refuses
-// on push.
+// already refuse a segment starting with a dot outside a profile root, so .git
+// and every name derived from it never arrive, and the export skips the
+// profile roots themselves (paths.IsConfig) before asking; what is left is
+// git~1, the short name Windows gives .git, which git fsck refuses in any
+// tree and GitHub refuses on push.
 func gitSafe(p string) bool {
 	for _, seg := range strings.Split(p, "/") {
 		s := strings.ToLower(strings.TrimRight(seg, ". "))

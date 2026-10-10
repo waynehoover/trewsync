@@ -52,8 +52,14 @@ import { FrameError, decodeFrame, encodeFrame } from "./frame.ts";
  * protocol 2 still answers
  * a client of protocol 1, so the upgrade order is the server first; this
  * client meeting a server of protocol 1 is refused at hello, and says so.
+ *
+ * Version 3 is version 2 and settings (plan/settings-sync.md): paths inside a
+ * profile root that `configPathReason` accepts may be written and are sent,
+ * whether or not this device syncs its settings. A server of protocol 3 still
+ * answers 1 and 2 and keeps settings from them, so the order is the same: the
+ * server first.
  */
-export const PROTO = 2;
+export const PROTO = 3;
 
 /** How long a request may go unanswered before the connection is considered dead. */
 export const REQUEST_TIMEOUT_MS = 60_000;

@@ -113,7 +113,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -126,7 +126,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -215,7 +215,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -228,7 +228,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -252,7 +252,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "phone",
             "token": "7-9Gc1q0Oygg54LeE0hmTYzAUcYEA-UWIEgSPXZtkJs",
@@ -265,7 +265,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -412,7 +412,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -425,7 +425,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -479,7 +479,7 @@
                 "base": 0
               },
               {
-                "path": ".obsidian/app.json",
+                "path": ".trash/app.json",
                 "meta": {
                   "size": 12,
                   "ctime": 0,
@@ -574,7 +574,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -587,7 +587,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -706,7 +706,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -719,7 +719,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -812,7 +812,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -825,7 +825,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -899,7 +899,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -912,7 +912,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -959,7 +959,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "phone",
             "token": "7-9Gc1q0Oygg54LeE0hmTYzAUcYEA-UWIEgSPXZtkJs",
@@ -972,7 +972,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1091,7 +1091,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -1104,7 +1104,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1209,7 +1209,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -1222,7 +1222,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1387,7 +1387,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -1400,7 +1400,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1460,7 +1460,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "phone",
             "token": "7-9Gc1q0Oygg54LeE0hmTYzAUcYEA-UWIEgSPXZtkJs",
@@ -1473,7 +1473,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1718,7 +1718,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -1731,7 +1731,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1839,7 +1839,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -1852,7 +1852,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 2,
+            "proto": 3,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",

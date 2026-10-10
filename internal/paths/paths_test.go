@@ -33,6 +33,15 @@ type contract struct {
 	Paths struct {
 		Cases []pathCase `json:"cases"`
 	} `json:"paths"`
+	Config struct {
+		Cases []struct {
+			Name     string  `json:"name"`
+			Hex      string  `json:"hex"`
+			IsConfig bool    `json:"isConfig"`
+			Notes    *string `json:"notes"`
+			Config   *string `json:"config"`
+		} `json:"cases"`
+	} `json:"config"`
 	Collisions struct {
 		Scenarios []scenario `json:"scenarios"`
 	} `json:"collisions"`
@@ -166,6 +175,38 @@ func TestEveryPathGetsTheReferenceVerdictAndReason(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("%s: Check gives %q, the reference %q", c.Name, got, want)
+		}
+	}
+}
+
+// Protocol 3's settings rule, and the notes rule beside it on the same paths:
+// a session of protocol 1 or 2 is held to the second, so a settings path has
+// to keep failing it for the reason it always did.
+func TestEveryConfigPathGetsTheReferenceVerdicts(t *testing.T) {
+	cases := load(t).Config.Cases
+	if len(cases) < 30 {
+		t.Fatalf("only %d settings cases; regenerate with scripts/protocol-vectors.py", len(cases))
+	}
+	reason := func(r *string) Reason {
+		if r == nil {
+			return ""
+		}
+		return Reason(*r)
+	}
+	for _, c := range cases {
+		raw, err := hex.DecodeString(c.Hex)
+		if err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		p := string(raw)
+		if got := IsConfig(p); got != c.IsConfig {
+			t.Errorf("%s: IsConfig(%q) is %v, the reference %v", c.Name, p, got, c.IsConfig)
+		}
+		if got, want := Check(p), reason(c.Notes); got != want {
+			t.Errorf("%s: Check(%q) gives %q, the reference %q", c.Name, p, got, want)
+		}
+		if got, want := CheckConfig(p), reason(c.Config); got != want {
+			t.Errorf("%s: CheckConfig(%q) gives %q, the reference %q", c.Name, p, got, want)
 		}
 	}
 }

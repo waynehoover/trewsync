@@ -294,6 +294,9 @@ type client struct {
 	batches []wire.Batch
 	nextID  int64
 	pending []int64
+	// proto is the protocol this client's hello asks for, or zero for
+	// wire.Proto.
+	proto int
 }
 
 func (r *rig) dial(name string) *client { return r.dialWith(name, nil) }
@@ -340,6 +343,9 @@ func (c *client) sendJSON(v any) {
 		}
 		if in.Proto == 0 && in.Op == "hello" {
 			in.Proto = wire.Proto
+			if c.proto != 0 {
+				in.Proto = c.proto
+			}
 		}
 		if in.ID != 0 {
 			c.pending = append(c.pending, in.ID)

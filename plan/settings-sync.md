@@ -74,7 +74,7 @@ How others do it:
 
 What makes (a) safe:
 
-- **A device uploads only the root it runs.** Other roots are receive-only there: the read-only gate (engine.ts:1133-1140) applied per path. This covers the phone's leftover `.obsidian`, and a phone whose override was lost with its app data, which would otherwise push mobile defaults into the desktop profile. A local edit in a receive-only root is kept, counted and named, never sent.
+- **A device syncs only the root it runs** (decided while building, 2026-10-10, replacing receive-only copies of the others). Every other root is out of scope there, in both directions, and the engine keeps the server's newest word for those paths without writing them, so a device that later runs another root decides from what it already knows. That covers the phone's leftover `.obsidian` without a conflict over it, and a phone whose override was lost with its app data runs `.obsidian` again, joins the desktop profile, and is asked first (§4) before anything uploads. The server holds every root with its history, which is the backup the receive-only copies were for.
 - **A root no device runs is never uploaded.** It is reported, not synced.
 - **Switching a device carries TrewSync with it.** Its pairing and index live in the running root, and Obsidian's help warns that a new profile needs sync set up again. The command "Create a settings profile for this device" pauses sync, copies the running root, TrewSync's folder included, to `.obsidian-<name>`, verifies the copy, and asks the person to set Settings → Files and links → Override config folder and relaunch (on Android, copying a dot folder otherwise needs a file manager that shows hidden files). After the relaunch it removes `index.json` from the old copy, so that folder can never resume from a stale index; the verified copy exists first (rule 3).
 - **Within a class**, a device that needs its own settings (a Linux desktop's fonts) gets another root, `.obsidian-linux`.
@@ -85,20 +85,18 @@ Obsidian's index (`getAllLoadedFiles`, vault.ts:666-723) leaves config files out
 
 - **Desktop:** at plugin load, on Sync now, and on every periodic pass (30 s, client.ts:665; design.md:315).
 - **Android:** the same while Obsidian is open, which is the only time it syncs (docs/compared.md:71-72), plus on resume (visible or online, resume.ts:2-14). The MVP walk is a few dozen stats; time it on the Pixel before fixing the cadence (rule 8). Phase 2's plugin folders may need a slower full walk there.
-- **Receive-only roots** are walked only at load and on Sync now; nothing on the device should edit them.
 - **Quiet period:** 10 s without change before an upload, through the existing deferred-upload deadline (design.md:306-314). Obsidian saves its own config about a second after a change, and plugin settings tabs often save on every keystroke; history should not keep each one.
 - **Later, desktop only:** Obsidian's undocumented vault `raw` event, which its own hotkey, property and plugin managers use in 1.14.4, as a nudge and never as the record.
 
 ## 4. Applying an incoming change
 
-- **Receive-only root:** written at once with the preserving write (design.md:76-110), read back and parsed. Nothing holds it in memory.
 - **Running root, hold:** the adapter stores the bytes in TrewSync's own folder (device-local), verified, and reports `held`; the engine keeps the path pending with its base unchanged. A local edit to a held path waits too, since finishing it means writing a merge into place. The panel and one notice say "N settings from <device> wait for a reload" (rule 7).
 - **Apply and reload:**
   1. Save open editors with `TextFileView.save()`. `requestSave` waits 2 s (obsidian.d.ts:7054-7059, :7077-7081), and a reload must not drop the last words typed.
   2. One engine pass in apply mode merges each held file with any local edit against the base, writes it in place, reads it back and parses it (rule 4). The index marks it applied-unconfirmed and keeps the previous base.
   3. `window.location.reload()`, which is all Obsidian's own "Reload app without saving" command does in 1.14.4.
 - **Confirm after the reload.** If the disk holds the applied value (parsed, for JSON, since the app re-saves at start), the base advances. Otherwise the app wrote back during unload, and the engine merges against the previous base: stale values equal that base, so the incoming values win, real edits merge, and a key changed two ways keeps both (§5). This is the answer to basalt-lessons.md:83, and its test must fail without the confirmation step (rule 9).
-- **First enable on a device:** snapshot every local root into TrewSync's folder and verify it (rule 3). Receive-only roots then take the server's copy. The running root uploads when the server has none, and otherwise asks once ("Use <device>'s settings, or this device's?"), like joining a populated vault (design.md:398).
+- **First enable on a device:** snapshot the running root into TrewSync's folder and verify it (rule 3). The running root uploads when the server has none, and otherwise asks once ("Use <device>'s settings, or this device's?"), like joining a populated vault (design.md:398).
 - **Why no hot reload in the MVP.** Obsidian 1.14.4's desktop watcher already reloads `app.json`, `appearance.json`, `hotkeys.json`, `types.json` and enabled core plugins' files, and calls `onExternalSettingsChange` (obsidian.d.ts:5075-5085, since 1.5.7) when a plugin's `data.json` is newer than its last save. It reloads no plugin list, no CSS and no plugin without that hook, and Android is unverified. Obsidian Sync's help says as much: "Reload or restart the app to apply the synced settings. On mobile or tablet, a force-quit may be required." Applying the reloadable files at once on desktops is a later optimization.
 
 ## 5. Conflicts
@@ -107,7 +105,7 @@ Obsidian's index (`getAllLoadedFiles`, vault.ts:666-723) leaves config files out
 - **Keep both** when one key changed two ways: a conflict copy beside the file (merge.ts:1138), uploaded and listed in Review conflicts (conflicts.ts). Obsidian reads fixed names, so the copy is inert; a copied snippet shows as one more snippet, disabled.
 - **Not Obsidian Sync's rule.** Applying local keys over remote ones drops the other value without a trace (rule 5).
 - **Last writer, with history,** only for vendor files in phase 2 (`main.js`, theme files): they can be fetched again from the directory, the older version stays in history, and no conflict copy of code is written.
-- **The durability rules:** 1 unchanged. 2: an unreadable root or a failed walk stops config reconciliation, and never reads as an empty profile. 3: the first-enable snapshot; displaced local bytes become a copy or a version before any overwrite. 4: read back and parse. 5: the merge's existing checks. 6: removing a snippet is a deletion entry within its root. 7: status counts config apart from notes: synced, held, receive-only edits, refused. 8: measure the walk. 9: every fix lands with a test that failed first. 10: assert that setting values survived, not that two devices agree. 11: restore a profile from history in the rehearsal.
+- **The durability rules:** 1 unchanged. 2: an unreadable root or a failed walk stops config reconciliation, and never reads as an empty profile. 3: the first-enable snapshot; displaced local bytes become a copy or a version before any overwrite. 4: read back and parse. 5: the merge's existing checks. 6: removing a snippet is a deletion entry within its root. 7: status counts config apart from notes: synced, held, refused. 8: measure the walk. 9: every fix lands with a test that failed first. 10: assert that setting values survived, not that two devices agree. 11: restore a profile from history in the rehearsal.
 
 ## 6. Plugin code, and the sync plugin itself
 
@@ -154,7 +152,7 @@ Obsidian's index (`getAllLoadedFiles`, vault.ts:666-723) leaves config files out
 
 **Still open, each with the default the MVP builds unless the owner says otherwise:**
 
-3. Should every device carry every root (a backup on each), or only its own? Default: every root, receive-only where it is not the running one (§2).
+3. Should every device carry every root (a backup on each), or only its own? Decided while building, 2026-10-10: only its own (§2). Receive-only copies would have met the phone's leftover `.obsidian` as a conflict on every first enable, and the server already keeps every root with history.
 4. Bookmarks and property types: per profile, or the same everywhere? Default: per profile; copying across roots is deferred.
 5. Should `trewd restore -to-uid` roll settings back along with notes? Default: yes, as one undoable operation, which is what it does to every path today.
 7. The denylist, including obsidian-git and Local REST API on the Mac. Default: as listed in §6. It matters from phase 2, when plugins move.

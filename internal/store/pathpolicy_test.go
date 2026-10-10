@@ -4,12 +4,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/waynehoover/trewsync/internal/chunks"
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // Every path vector in protocol-fixtures.json, through Entry.Validate, as a
@@ -50,6 +52,11 @@ func TestValidateRefusesExactlyTheFixturesPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 		p := string(b)
+		if paths.IsConfig(p) {
+			// The store holds protocol 3's settings, and a profile root's
+			// verdicts are TestValidateHoldsSettingsToProtocol3sRule's.
+			continue
+		}
 		kinds := []struct {
 			entry Entry
 			field string
@@ -93,6 +100,78 @@ func TestValidateRefusesExactlyTheFixturesPaths(t *testing.T) {
 	}
 	if accepted == 0 || refused == 0 {
 		t.Fatalf("the vectors cover one verdict only: %d accepted, %d refused", accepted, refused)
+	}
+}
+
+// The settings vectors through Entry.Validate, which is protocol 3's rule
+// because the store holds what a session of 3 may write, and through
+// CheckNotePaths, the notes rule a session of 1 or 2 and every MCP operation
+// are held to. A rename's source is renamed within its own side of the
+// boundary, so the boundary rule (configmove) is not what answers it.
+func TestValidateHoldsSettingsToProtocol3sRule(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "protocol-fixtures.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Config struct {
+			Cases []struct {
+				Name   string  `json:"name"`
+				Hex    string  `json:"hex"`
+				Notes  *string `json:"notes"`
+				Config *string `json:"config"`
+			} `json:"cases"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Config.Cases) < 30 {
+		t.Fatalf("only %d vectors", len(f.Config.Cases))
+	}
+	reason := func(err error) string {
+		var pe *PathError
+		if err == nil || !errors.As(err, &pe) {
+			return fmt.Sprint(err)
+		}
+		if strings.HasSuffix(pe.Error(), " is refused") {
+			t.Errorf("%q explains nothing about %s", pe.Error(), pe.Reason)
+		}
+		return string(pe.Reason)
+	}
+	want := func(r *string) string {
+		if r == nil {
+			return "<nil>"
+		}
+		return *r
+	}
+	chunk := chunks.Name([]byte("x"))
+	for _, c := range f.Config.Cases {
+		b, err := hex.DecodeString(c.Hex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := string(b)
+		dest := "dest.md"
+		if paths.IsConfig(p) {
+			dest = ".obsidian/dest.json"
+		}
+		for i, e := range []Entry{
+			{Path: p, Size: 1, Chunks: []string{chunk}},
+			{Path: p, Deleted: true},
+			{Path: dest, Prev: p},
+		} {
+			if got := reason(e.Validate()); got != want(c.Config) {
+				t.Errorf("%s: Validate gives %s for %+v, the reference %s", c.Name, got, e, want(c.Config))
+			}
+			// The notes rule refuses a settings destination before it reads
+			// the source, so the rename is Validate's alone.
+			if i < 2 {
+				if got := reason(e.CheckNotePaths()); got != want(c.Notes) {
+					t.Errorf("%s: CheckNotePaths gives %s for %+v, the reference %s", c.Name, got, e, want(c.Notes))
+				}
+			}
+		}
 	}
 }
 

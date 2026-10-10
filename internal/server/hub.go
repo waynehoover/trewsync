@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/waynehoover/trewsync/internal/store"
+	"github.com/waynehoover/trewsync/internal/wire"
 )
 
 // Hub fans committed entries out to every device on a vault.
@@ -66,15 +67,23 @@ func (h *Hub) broadcast(vaultID string, e store.Entry, origin *Session) {
 	// Encoded frames are immutable. Each peer accounts for its own queue even
 	// when the backing bytes are shared with other live or catching-up peers.
 	// Encode lazily: an origin-only update does not need the full entry at all.
+	//
+	// A session of protocol 1 or 2 is sent a settings entry the way the origin
+	// is sent its own: the range, with no entry in it, so its cursor moves
+	// past a path it never sees. Reading s.proto here is safe for the reason
+	// reading deviceID in detach is: it is written at hello, before the
+	// session joins, and joining takes the lock the peer list was read under.
+	settings := e.IsConfig()
 	var full, own []byte
 	for _, s := range peers {
+		elide := s == origin || (settings && s.proto < wire.ProtoConfig)
 		frame := &full
-		if s == origin {
+		if elide {
 			frame = &own
 		}
 		if *frame == nil {
 			var err error
-			*frame, err = json.Marshal(liveBatch(e, s == origin))
+			*frame, err = json.Marshal(liveBatch(e, elide))
 			if err != nil {
 				return
 			}

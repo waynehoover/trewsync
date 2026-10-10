@@ -555,10 +555,19 @@ func (e *PathError) Error() string {
 	case paths.ReasonDotSegment:
 		why = "has a segment that is . or .."
 	case paths.ReasonDotPrefix:
-		why = "has a segment that begins with a dot, and such a path never syncs: it is where " +
-			".obsidian, .trash and a client's own state live"
+		why = "has a segment that begins with a dot, and such a path never syncs as a note: it is where " +
+			".trash and a client's own state live, and only settings sync, from protocol 3, carries " +
+			"what is inside a profile root such as .obsidian"
 	case paths.ReasonStaging:
 		why = "contains " + paths.StagingMark + ", which only a client's half-written file carries"
+	case paths.ReasonDeviceLocal:
+		why = "is one device's own state in a settings folder (its open panes, or the sync plugin's " +
+			"pairing and index), which never syncs"
+	case paths.ReasonConfigScope:
+		why = "is in a settings folder but is not something settings sync carries: Obsidian's own " +
+			"settings files, themes and CSS snippets"
+	case reasonConfigMove:
+		why = "moves a file between a settings folder and the vault, which settings sync never does"
 	default:
 		why = "is refused"
 	}
@@ -568,10 +577,39 @@ func (e *PathError) Error() string {
 // Unwrap makes a PathError an ErrBadPath.
 func (e *PathError) Unwrap() error { return ErrBadPath }
 
+// reasonConfigMove refuses a rename with one end in a settings folder and the
+// other in the vault. Not a fixture reason, because no single path breaks it:
+// each end may be fine alone. A session of protocol 1 or 2 would see such a
+// move as a note appearing from, or vanishing into, a path it is never sent.
+const reasonConfigMove paths.Reason = "configmove"
+
 // CheckPaths applies the path policy to an entry's path and, on a rename, to
 // the path it came from: the rules of plan/protocol.md, "Paths", through
 // internal/paths, which is where they are written down once for the server.
+//
+// It is protocol 3's rule, paths.CheckConfig, because the store holds what a
+// session of protocol 3 may write: settings inside a profile root
+// (plan/settings-sync.md). A session of protocol 1 or 2 is held to the notes
+// rule first (CheckNotePaths), and so is every MCP tool, by paths.Check.
 func (e Entry) CheckPaths() error {
+	if r := paths.CheckConfig(e.Path); r != "" {
+		return pathError("path", e.Path, r)
+	}
+	if e.Prev != "" {
+		if r := paths.CheckConfig(e.Prev); r != "" {
+			return pathError("prev", e.Prev, r)
+		}
+		if paths.IsConfig(e.Path) != paths.IsConfig(e.Prev) {
+			return &PathError{Field: "prev", Reason: reasonConfigMove, Len: len(e.Prev)}
+		}
+	}
+	return nil
+}
+
+// CheckNotePaths is CheckPaths under the notes rule, paths.Check, which is
+// what a session of protocol 1 or 2 was always held to: a settings path is
+// refused there for the reason it always was.
+func (e Entry) CheckNotePaths() error {
 	if r := paths.Check(e.Path); r != "" {
 		return pathError("path", e.Path, r)
 	}
@@ -581,6 +619,13 @@ func (e Entry) CheckPaths() error {
 		}
 	}
 	return nil
+}
+
+// IsConfig reports whether an entry touches a settings folder, at either end
+// of a rename: a settings entry, which a session of protocol 1 or 2 is never
+// sent and which no MCP tool, search or Git export shows.
+func (e Entry) IsConfig() bool {
+	return paths.IsConfig(e.Path) || (e.Prev != "" && paths.IsConfig(e.Prev))
 }
 
 // Validate checks an entry's shape. Exported so the session can reject a put
@@ -1270,6 +1315,13 @@ type Deletion struct {
 // what the rows are ordered by, so a page is stable even while deletions are
 // still arriving: a newer one changes what the first page holds and never
 // what comes after a given uid.
+//
+// Settings are left out (plan/settings-sync.md): this is the list somebody
+// reads for a lost note, and a deleted snippet is found by its history. The
+// test is a leading dot, which is exact because the path policy keeps every
+// note's path from starting with one and admits a dot only as a profile root.
+// It is in the query rather than after it, so a page is never emptied of rows
+// that were counted against its limit.
 func (s *Store) Deleted(
 	vaultID string,
 	suppressRenames bool,
@@ -1283,7 +1335,7 @@ func (s *Store) Deleted(
 	        FROM entries e
 	        JOIN (SELECT path, MAX(uid) AS uid FROM entries WHERE vault_id = ? GROUP BY path) latest
 	          ON e.path = latest.path AND e.uid = latest.uid
-	       WHERE e.vault_id = ? AND e.deleted = 1
+	       WHERE e.vault_id = ? AND e.deleted = 1 AND substr(e.path, 1, 1) <> '.'
 	         AND COALESCE((SELECT p.folder FROM entries p
 	                        WHERE p.vault_id = e.vault_id AND p.path = e.path AND p.uid < e.uid
 	                        ORDER BY p.uid DESC LIMIT 1), 0) = 0`

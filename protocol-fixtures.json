@@ -256,7 +256,7 @@
     "note": [
       "Name-derived strings and wire numbers both implementations assert they hold."
     ],
-    "proto": 2,
+    "proto": 3,
     "minProto": 1,
     "product": "trew",
     "invitePrefix": "trew1i_",
@@ -1608,6 +1608,327 @@
         "name": "a superscript digit elsewhere",
         "path": "E=mc\u00b2.md",
         "reason": null
+      }
+    ]
+  },
+  "config": {
+    "note": [
+      "Protocol 3's rule for settings (plan/settings-sync.md). isConfig: the first segment is a profile root,",
+      "'.obsidian' or '.obsidian-' and 1 to 32 of a-z, 0-9 and '-', not starting with '-'. notes is the reason",
+      "the notes rule above gives, which is what a session of protocol 1 or 2 is held to. config is protocol 3's:",
+      "the root may begin the path, nothing after it may begin with a dot, and what follows the root must be a",
+      "JSON file at its top, themes/<theme>/<file> or snippets/<name>.css, compared in ASCII lower case.",
+      "devicelocal: the workspace files and plugins/trew-sync/, which are one device's and never sync.",
+      "configscope: anything else inside a root, community plugins included until their phase."
+    ],
+    "cases": [
+      {
+        "name": "Obsidian's main settings",
+        "hex": "2e6f6273696469616e2f6170702e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "appearance",
+        "hex": "2e6f6273696469616e2f617070656172616e63652e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "hotkeys",
+        "hex": "2e6f6273696469616e2f686f746b6579732e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "the core plugin list",
+        "hex": "2e6f6273696469616e2f636f72652d706c7567696e732e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "a core plugin's settings",
+        "hex": "2e6f6273696469616e2f6461696c792d6e6f7465732e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "a JSON name in upper case",
+        "hex": "2e6f6273696469616e2f47726170682e4a534f4e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "a phone's profile",
+        "hex": "2e6f6273696469616e2d6d6f62696c652f6170702e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "a profile with digits and a dash",
+        "hex": "2e6f6273696469616e2d6c696e75782d322f686f746b6579732e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "a profile name of 32 characters",
+        "hex": "2e6f6273696469616e2d61616161616161616161616161616161616161616161616161616161616161612f6170702e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "a theme's stylesheet",
+        "hex": "2e6f6273696469616e2f7468656d65732f54656c612f7468656d652e637373",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "a theme's manifest",
+        "hex": "2e6f6273696469616e2d6d6f62696c652f7468656d65732f4d696e696d616c205468656d652f6d616e69666573742e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "a snippet",
+        "hex": "2e6f6273696469616e2f736e6970706574732f77696465207461626c65732e637373",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "a snippet in upper case",
+        "hex": "2e6f6273696469616e2f736e6970706574732f574944452e435353",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "the workspace",
+        "hex": "2e6f6273696469616e2f776f726b73706163652e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "devicelocal"
+      },
+      {
+        "name": "the phone's workspace",
+        "hex": "2e6f6273696469616e2d6d6f62696c652f776f726b73706163652d6d6f62696c652e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "devicelocal"
+      },
+      {
+        "name": "the workspace, spelt in capitals",
+        "hex": "2e6f6273696469616e2f576f726b73706163652e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "devicelocal"
+      },
+      {
+        "name": "the sync plugin's pairing",
+        "hex": "2e6f6273696469616e2f706c7567696e732f747265772d73796e632f646174612e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "devicelocal"
+      },
+      {
+        "name": "the sync plugin's code",
+        "hex": "2e6f6273696469616e2f706c7567696e732f747265772d73796e632f6d61696e2e6a73",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "devicelocal"
+      },
+      {
+        "name": "the sync plugin's folder",
+        "hex": "2e6f6273696469616e2f706c7567696e732f747265772d73796e63",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "devicelocal"
+      },
+      {
+        "name": "the sync plugin's folder, spelt in capitals",
+        "hex": "2e6f6273696469616e2f706c7567696e732f547265772d53796e632f696e6465782e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "devicelocal"
+      },
+      {
+        "name": "the community plugin list, a later phase",
+        "hex": "2e6f6273696469616e2f636f6d6d756e6974792d706c7567696e732e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "a community plugin's code, a later phase",
+        "hex": "2e6f6273696469616e2f706c7567696e732f64617461766965772f6d61696e2e6a73",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "a community plugin's settings, a later phase",
+        "hex": "2e6f6273696469616e2f706c7567696e732f64617461766965772f646174612e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "the root itself",
+        "hex": "2e6f6273696469616e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "the themes folder",
+        "hex": "2e6f6273696469616e2f7468656d6573",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "a theme's folder",
+        "hex": "2e6f6273696469616e2f7468656d65732f54656c61",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "deeper inside a theme",
+        "hex": "2e6f6273696469616e2f7468656d65732f54656c612f666f6e74732f612e776f666632",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "a snippet that is not CSS",
+        "hex": "2e6f6273696469616e2f736e6970706574732f726561646d652e6d64",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "a folder settings sync does not carry",
+        "hex": "2e6f6273696469616e2f69636f6e732f782e737667",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "a note in the root",
+        "hex": "2e6f6273696469616e2f6e6f7465732e6d64",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "a dotfile in the root",
+        "hex": "2e6f6273696469616e2f2e68696464656e2e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "dotprefix"
+      },
+      {
+        "name": "a dotted snippet",
+        "hex": "2e6f6273696469616e2f736e6970706574732f2e776964652e637373",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "dotprefix"
+      },
+      {
+        "name": "the staging mark",
+        "hex": "2e6f6273696469616e2f6170702e6a736f6e2e747265772d746d702d6b65657033663963",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "staging"
+      },
+      {
+        "name": "a profile name in capitals",
+        "hex": "2e6f6273696469616e2d4d6f62696c652f6170702e6a736f6e",
+        "isConfig": false,
+        "notes": "dotprefix",
+        "config": "dotprefix"
+      },
+      {
+        "name": "a profile with no name",
+        "hex": "2e6f6273696469616e2d2f6170702e6a736f6e",
+        "isConfig": false,
+        "notes": "dotprefix",
+        "config": "dotprefix"
+      },
+      {
+        "name": "a profile name of 33 characters",
+        "hex": "2e6f6273696469616e2d6161616161616161616161616161616161616161616161616161616161616161612f6170702e6a736f6e",
+        "isConfig": false,
+        "notes": "dotprefix",
+        "config": "dotprefix"
+      },
+      {
+        "name": "a profile name starting with a dash",
+        "hex": "2e6f6273696469616e2d2d782f6170702e6a736f6e",
+        "isConfig": false,
+        "notes": "dotprefix",
+        "config": "dotprefix"
+      },
+      {
+        "name": "Obsidian in capitals",
+        "hex": "2e4f6273696469616e2f6170702e6a736f6e",
+        "isConfig": false,
+        "notes": "dotprefix",
+        "config": "dotprefix"
+      },
+      {
+        "name": "a root that is not first",
+        "hex": "6e6f7465732f2e6f6273696469616e2f6170702e6a736f6e",
+        "isConfig": false,
+        "notes": "dotprefix",
+        "config": "dotprefix"
+      },
+      {
+        "name": "the trash",
+        "hex": "2e74726173682f782e6d64",
+        "isConfig": false,
+        "notes": "dotprefix",
+        "config": "dotprefix"
+      },
+      {
+        "name": "a note",
+        "hex": "466f6c6465722f4e6f74652e6d64",
+        "isConfig": false,
+        "notes": null,
+        "config": null
+      },
+      {
+        "name": "a dot-dot segment inside a root",
+        "hex": "2e6f6273696469616e2f2e2e2f612e6d64",
+        "isConfig": true,
+        "notes": "dotsegment",
+        "config": "dotsegment"
+      },
+      {
+        "name": "a backslash inside a root",
+        "hex": "2e6f6273696469616e2f615c622e6a736f6e",
+        "isConfig": true,
+        "notes": "backslash",
+        "config": "backslash"
+      },
+      {
+        "name": "a trailing slash",
+        "hex": "2e6f6273696469616e2f6170702e6a736f6e2f",
+        "isConfig": true,
+        "notes": "slash",
+        "config": "slash"
       }
     ]
   }

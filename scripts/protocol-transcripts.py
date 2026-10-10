@@ -59,10 +59,11 @@ DEVICES = {
 }
 
 
-# The protocol a transcript speaks unless it says otherwise: 2, which is 1 and
-# undo (plan/protocol.md, "Undo (protocol 2)"). The server answers a hello in
-# the version it asks for, and one transcript holds it to answering 1.
-PROTO = 2
+# The protocol a transcript speaks unless it says otherwise: 3, which is 2 and
+# settings (plan/settings-sync.md); 2 is 1 and undo (plan/protocol.md, "Undo
+# (protocol 2)"). The server answers a hello in the version it asks for, and
+# one transcript holds it to answering 1.
+PROTO = 3
 MIN_PROTO = 1
 
 
@@ -201,7 +202,7 @@ TRANSCRIPTS = [
             c("laptop", send={"op": "putmany", "id": 2, "entries": [
                 {k: v for k, v in put(0, "new.md", [D], 6, 0).items() if k not in ("op", "id")},
                 {k: v for k, v in put(0, "kept.md", [B], 6, 0).items() if k not in ("op", "id")},
-                {k: v for k, v in put(0, ".obsidian/app.json", [C], 6, 0).items() if k not in ("op", "id")},
+                {k: v for k, v in put(0, ".trash/app.json", [C], 6, 0).items() if k not in ("op", "id")},
             ]}),
             # The stale write's body is asked for too: a base is judged at the
             # commit, against the head as it stands then, not before the upload.
