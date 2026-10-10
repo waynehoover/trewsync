@@ -11,17 +11,50 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-TrewSync's first release, forked from Basalt Sync 0.10.0 (protocol 7). It is a
-fresh start rather than an upgrade: a Basalt device, invite or recovery key
-does not work with a TrewSync server, and moving a vault is a new pairing.
+Nothing yet.
 
-### Changed after 0.12.0
+## 0.12.1, server and plugin (2026-10-09)
+
+Released together, so that BRAT installs the plugin again.
+
+### Plugin
+
+- **BRAT installs and updates the plugin again.** BRAT installs from the
+  release with the highest version in its tag name, server releases included,
+  so from server/v0.12.0 on it tried to install the plugin from the server's
+  release, found no manifest.json, and failed with "This does not seem to be an
+  obsidian plugin". 0.12.1 is the plugin's own release again. If BRAT showed
+  that error, check for updates once more.
+- When a `wss://` address does not connect, the hint says to pair from an
+  invite naming `ws://HOST`, made with `trewd invite -url`, instead of to type
+  an address that nothing takes.
+- The notice shown when Obsidian's keychain refuses the device token names the
+  vault's own configuration folder, not always `.obsidian`.
+- main.js carries the copyright notices of fflate and diff-match-patch, which
+  it bundles.
+
+### Server
 
 - **`trewd` with no command lists the commands** instead of starting a
   server. Serving is always `trewd serve`; flags with no command are refused
   and point at it. Every shipped way of running the server (the container
   image, the unit `trewd service` prints, the Homebrew service) already says
   `serve`, so nothing deployed changes.
+- An encrypted backup (`trewd backup -recipients`) of a data directory given
+  as a relative path, `-data ./trew-data`, works. It failed after staging.
+- The invite a server prints at its first start says when the addresses in it
+  are guesses, because the server was started without `-url`, and how to make
+  the one to paste: `trewd invite -url wss://NAME`.
+- `trewd doctor`'s advice on rehearsing a restore mentions `-identity` for an
+  encrypted backup, `trewd service` prints notes whose commands work as
+  printed, and `trewd`'s help no longer shows a quoted command as a flag's
+  argument.
+
+## 0.12.0 and earlier
+
+TrewSync's first release, forked from Basalt Sync 0.10.0 (protocol 7). It is a
+fresh start rather than an upgrade: a Basalt device, invite or recovery key
+does not work with a TrewSync server, and moving a vault is a new pairing.
 
 ### Fixed in the 2026-10-06 review
 
