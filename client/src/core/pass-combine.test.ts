@@ -31,6 +31,8 @@ function report(over: Partial<SyncReport>): SyncReport {
     retryingPaths: [],
     heldBack: 0,
     heldBackPaths: [],
+    settingsHeld: 0,
+    settingsHeldPaths: [],
     ignored: 0,
     blocked: 0,
     inTheWay: [],

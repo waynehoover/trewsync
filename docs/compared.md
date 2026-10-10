@@ -15,7 +15,7 @@ The biggest choice is how much you want to manage yourself.
 |---|---|---|---|
 | Hosting | Your TrewSync server | Managed by Obsidian | Your chosen backend, including CouchDB or S3-compatible storage |
 | Setup | Run the server, install the plugin manually, pair devices | Subscribe and set up Sync in Obsidian | Install the plugin and configure a supported backend |
-| File scope | Notes and attachments | Notes, attachments, and configurable vault settings | Notes and attachments, with options for settings, themes, and plugins |
+| File scope | Notes and attachments; Obsidian's own settings, themes and snippets per device when turned on | Notes, attachments, and configurable vault settings | Notes and attachments, with options for settings, themes, and plugins |
 | End-to-end encryption | **None.** Your server holds notes and their history in plaintext; TLS protects them in transit | Available, and on by default for new vaults | Available |
 | MCP endpoint for agents | Built into the server: read tools with any token; exact edits, moves and tag changes with a write token, each recorded and undoable | None built in | None built in |
 | Cost model | Free MIT software; you cover hosting and maintenance | Subscription | Open-source software; hosting costs depend on your setup |
@@ -59,8 +59,8 @@ sync and recovery. There is no database service to install alongside TrewSync.
 
 - **Choose Obsidian Sync if you want someone else to run the service.** It also
   supports iOS and Windows, which are outside TrewSync's supported setup.
-- **Consider LiveSync if you want storage choices or configuration sync.** It
-  offers a broader set of backends and plugin features.
+- **Consider LiveSync if you want storage choices or plugin sync.** It offers
+  a broader set of backends and plugin features.
 - **Choose either of those if the server must not read your notes.** Both
   offer end-to-end encryption; TrewSync does not, and its agent endpoint,
   once a token exists, sends what the agent reads to the agent's model
@@ -70,8 +70,9 @@ sync and recovery. There is no database service to install alongside TrewSync.
 
 TrewSync is early. Its supported devices are macOS and Linux desktops and Android;
 Android sync runs while Obsidian is open. iOS is untested. The command-line
-client is experimental. Obsidian settings, themes, plugins, and hidden files do
-not sync, and files are limited to 64 MiB by default.
+client is experimental. Obsidian's own settings, themes and snippets sync only
+where you turn settings sync on; plugins and other hidden files do not sync,
+and files are limited to 64 MiB by default.
 
 This page makes no speed ranking between products. Historical performance
 measurements and implementation credits are in the

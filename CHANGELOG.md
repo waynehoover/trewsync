@@ -11,7 +11,23 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Added
+
+- **Settings sync**, off until you turn it on, on each device. Obsidian's own
+  settings, themes and CSS snippets sync with every device that runs the same
+  settings folder, so desktops can share `.obsidian` while a phone keeps
+  `.obsidian-mobile`; **Create a settings profile for this device** makes one.
+  A change from another device waits for **Apply synced settings and reload**,
+  and a copy of the device's settings is kept before the first sync. Plugins
+  and the workspace layout do not sync. See the
+  [plugin guide](docs/plugin.md#settings-sync).
+
+### Changed
+
+- **Protocol 3**, which carries settings. Upgrade the server first: it still
+  serves plugins and `trew` of protocols 1 and 2 as before, and never sends
+  them a settings file, while a plugin or `trew` from this release meeting an
+  older server stops at the handshake and says to upgrade it.
 
 ## 0.12.1, server and plugin (2026-10-09)
 

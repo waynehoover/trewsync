@@ -139,6 +139,20 @@ export interface DeviceConfig {
    * implements. Absent and empty are the same thing.
    */
   readonly ignore?: readonly string[];
+  /**
+   * Whether this device syncs its Obsidian settings (plan/settings-sync.md):
+   * those of the config folder Obsidian runs from here, with every device
+   * that runs a folder of the same name. Per device, and off unless a person
+   * turns it on here.
+   */
+  readonly settings?: boolean;
+  /**
+   * Whose copy wins, the first time, for a setting this device has never
+   * synced and holds differently from the server: the server's, which
+   * another device sent, or this device's. Asked when settings sync is turned
+   * on; absent keeps both, as a first sync of notes does.
+   */
+  readonly settingsFirstChoice?: "server" | "device";
 }
 
 /**
@@ -260,6 +274,8 @@ export function encodeConfig(config: DeviceConfig): Record<string, string> {
     // and a separator is a character a folder is allowed to contain. Written
     // only when there is something to write, for the reason above.
     ...(config.ignore?.length ? { ignore: JSON.stringify(config.ignore) } : {}),
+    ...(config.settings === true ? { settings: "true" } : {}),
+    ...(config.settingsFirstChoice ? { settingsFirstChoice: config.settingsFirstChoice } : {}),
   };
 }
 
@@ -334,6 +350,11 @@ export function decodeConfig(raw: unknown, where: string): DeviceConfig {
     // device with nothing to send (I29).
     ...(record["readOnly"] === "true" ? { readOnly: true } : {}),
     ...ignoreList(record),
+    // The same rule as readOnly: only the string this writes turns it on.
+    ...(record["settings"] === "true" ? { settings: true } : {}),
+    ...(record["settingsFirstChoice"] === "server" || record["settingsFirstChoice"] === "device"
+      ? { settingsFirstChoice: record["settingsFirstChoice"] }
+      : {}),
   } as DeviceConfig & { invite?: string };
   if (config.deviceId === undefined) {
     // Not a state anything here writes: a pairing is saved with its id and

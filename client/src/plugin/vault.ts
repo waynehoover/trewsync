@@ -89,6 +89,7 @@ import {
   isNeverSynced,
   neverSync,
 } from "../core/paths.ts";
+import { configPathReason } from "../core/path-policy.ts";
 import {
   JournalIndexStore,
   indexLogPath,
@@ -544,13 +545,21 @@ export class ObsidianVault implements Vault {
    * @param opts.displacedLog Where the record of versions this client took off
    *   a name and could not put back is kept. Inside the plugin's own folder,
    *   because it is this device's bookkeeping and must not sync.
+   * @param opts.settings Whether this device syncs its settings: the config
+   *   folder's settings are then listed and written like notes, and nothing
+   *   else in it is (plan/settings-sync.md).
    */
   constructor(
     private readonly vault: ObsidianVaultApi,
     configDir: string,
     log: (message: string, ...rest: unknown[]) => void = () => undefined,
     /** A stand-in for Node's fs, for tests. Never set in the plugin. */
-    opts: { fs?: FsyncFs; displacedLog?: string; ignore?: readonly string[] } = {},
+    opts: {
+      fs?: FsyncFs;
+      displacedLog?: string;
+      ignore?: readonly string[];
+      settings?: boolean;
+    } = {},
   ) {
     this.adapter = vault.adapter;
     this.log = log;
@@ -572,6 +581,55 @@ export class ObsidianVault implements Vault {
     // The same shape the CLI's `--ignore` has: one name, matched against every
     // segment, so `Attachments` skips it wherever it is.
     this.ignore = new Set([configFolderName(configDir), ...(opts.ignore ?? [])]);
+    this.settingsRoot = opts.settings === true ? configFolderName(configDir) : undefined;
+  }
+
+  /**
+   * The config folder, when this device syncs its settings; undefined when
+   * it does not. Only the folder Obsidian runs from here: another device's
+   * profile is not this device's to write (plan/settings-sync.md, section 2).
+   */
+  private readonly settingsRoot: string | undefined;
+
+  /** Whether a path is a setting this device syncs. */
+  private inSettings(path: string): boolean {
+    const root = this.settingsRoot;
+    return root !== undefined && path.startsWith(root + "/") && configPathReason(path) === undefined;
+  }
+
+  /**
+   * The settings this device syncs, from the disk. Obsidian's index never
+   * lists a dot folder, so the config folder is walked with the adapter: into
+   * `themes` and `snippets` only, because nothing else under it is a setting
+   * settings sync carries, and `plugins` is most of the folder. A few dozen
+   * stats, about 120 ms for the whole of a phone's folder on a Pixel 9a
+   * (plan/settings-sync.md, spike results). A failed read fails the listing
+   * (rule 2): a setting left out would be reported deleted.
+   */
+  private async listSettings(out: FileStat[]): Promise<Set<string>> {
+    const listed = new Set<string>();
+    const root = this.settingsRoot;
+    if (root === undefined || !(await this.adapter.exists(root))) return listed;
+    const folders = [root];
+    while (folders.length > 0) {
+      const here = await this.adapter.list(folders.pop()!);
+      for (const raw of here.folders) {
+        const rel = trimLeadingSlash(raw).slice(root.length + 1);
+        const theme = rel.startsWith("themes/") && !rel.slice("themes/".length).includes("/");
+        if (rel === "themes" || rel === "snippets" || theme) folders.push(trimLeadingSlash(raw));
+      }
+      for (const file of here.files) {
+        const raw = trimLeadingSlash(file);
+        const path = this.normalOf(raw);
+        if (!this.inSettings(path)) continue;
+        const stat = await this.adapter.stat(raw);
+        if (stat?.type !== "file") continue;
+        if (path !== raw) this.actualName.set(path, raw);
+        out.push({ path, folder: false, mtime: stat.mtime, ctime: stat.ctime, size: stat.size });
+        listed.add(path);
+      }
+    }
+    return listed;
   }
 
   /**
@@ -785,7 +843,11 @@ export class ObsidianVault implements Vault {
       });
     }
 
-    if (this.unlisted.size > 0) await this.addUnlisted(byPath, out);
+    // A setting this client wrote into place is in `unlisted` too, and the
+    // walk has listed it: Obsidian's index never will, so without this it
+    // would be listed twice and kept in `unlisted` for good.
+    const settings = await this.listSettings(out);
+    if (this.unlisted.size > 0) await this.addUnlisted(byPath, out, settings);
     // A landing the index now has has been reported, and one with nothing on
     // the disk never will be: neither is waited for any longer (P-3).
     for (const path of this.landing.keys()) {
@@ -829,11 +891,15 @@ export class ObsidianVault implements Vault {
    * (rule 2): leaving the name out instead is the deletion this exists to
    * prevent.
    */
-  private async addUnlisted(indexed: ReadonlyMap<string, unknown>, out: FileStat[]): Promise<void> {
+  private async addUnlisted(
+    indexed: ReadonlyMap<string, unknown>,
+    out: FileStat[],
+    settings: ReadonlySet<string>,
+  ): Promise<void> {
     let folded: Set<string> | undefined;
     for (const raw of [...this.unlisted]) {
       const path = this.normalOf(raw);
-      if (indexed.has(path)) {
+      if (indexed.has(path) || settings.has(path)) {
         this.unlisted.delete(raw);
         continue;
       }
@@ -1069,7 +1135,7 @@ export class ObsidianVault implements Vault {
    * the rest, and a file written and never listed is reported deleted.
    */
   private ignored(path: string): boolean {
-    return isNeverSynced(path, this.ignore);
+    return !this.inSettings(path) && isNeverSynced(path, this.ignore);
   }
 
   /**

@@ -63,6 +63,15 @@ export interface IndexEntry {
   syncuid: number;
   /** When the last sync of this path completed, in milliseconds. */
   synctime: number;
+  /**
+   * A setting written by Apply and reload, and the base it replaced, until
+   * the engine that starts after the reload has checked the disk still holds
+   * it (plan/settings-sync.md, section 4). Obsidian holds its settings in
+   * memory and may write them back as it unloads; a path whose content is
+   * not the applied version is decided against this base instead, so the
+   * old values are what get replaced and not what get sent.
+   */
+  unconfirmed?: { hash: string; uid: number };
 }
 
 export function newEntry(path: string): IndexEntry {

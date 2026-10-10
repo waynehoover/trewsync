@@ -314,10 +314,46 @@ preserved there.
 Successful merges and ordinary downloads can update the original note. Keeping
 both versions on a conflict is not a promise that sync never changes an open file.
 
+## Settings sync
+
+Off until you turn it on, on each device: **Manage this vault**, **Sync
+settings**, **Turn on**. It syncs Obsidian's own settings, themes and CSS
+snippets from the settings folder this device runs, with every device that
+runs a folder of the same name. Plugins, their settings and the workspace
+layout do not sync. It needs a server from this release on, which speaks
+protocol 3; upgrade the server first.
+
+**Keeping a phone's settings apart.** Devices share settings by folder, and
+desktops usually all run `.obsidian`. To give a phone its own, run **Create a
+settings profile for this device** on it (also under **Manage this vault**,
+**Settings profile**). That copies the phone's settings folder, plugins
+included, to `.obsidian-mobile` or a name you choose. Then open Obsidian's
+**Settings**, **Files and links**, **Override config folder**, enter
+`.obsidian-mobile` and tap **Relaunch**. Do this before turning settings sync
+on, so the phone joins the phone settings rather than the desktops'. Another
+phone that does the same shares them.
+
+**The first time.** When you turn it on, TrewSync asks which settings to use
+where the server already has some for this folder from another device and this
+device's differ: the server's, or this device's. Either way it first keeps a
+copy of this device's settings as they were, in a `settings-before-sync-` folder
+inside the plugin's own folder, and says where.
+
+**Applying a change.** Obsidian reads its settings when it starts and holds
+them in memory, so a setting changed on another device waits until you apply
+it. TrewSync says how many are waiting. Tap the notice, or run **Apply synced
+settings and reload**: it saves open notes, writes the settings and reloads
+Obsidian. If Obsidian writes its old setting back as it reloads, TrewSync
+notices and offers the change again, rather than sending the old value to your
+other devices.
+
+The server keeps every version of a setting, as it does for a note. Agents
+connected over MCP never see settings, and the Git export leaves them out.
+
 ## What is not synced
 
-- Obsidian's configuration folder: settings, plugins, themes, snippets, and
-  workspace layout.
+- Obsidian's configuration folder, unless settings sync is on; with it on, its
+  plugins, their settings and the workspace layout still do not sync.
 - Files or folders whose names start with a dot, at any depth, including
   `.git`, `.trash`, and `.trew`. An `.attachments` folder is one of these, so
   attachments kept there stay on the device that has them.

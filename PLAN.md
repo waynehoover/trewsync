@@ -323,7 +323,7 @@ What is gained: the server can verify every chunk name and every declared size f
 
 ### 4.1 Path policy on the server
 
-Plaintext paths make the server the last line of defence against a bad client. Refuse at `put`: empty, longer than 1024 bytes, invalid UTF-8, not NFC, control characters, a leading or trailing `/`, an empty segment, `.` or `..` segments, any segment starting with `.` (this covers `.obsidian`, `.trash`, `.trew` state folders, and conflicts with the plugin's `isNeverSynced` rule), and the names the adapters reserve for staging (`.trew-tmp-` prefix). Return `badpath`. The engine keeps validating inbound paths too (`refusedName` in `engine.ts`); two checks are cheaper than one recovery.
+Plaintext paths make the server the last line of defence against a bad client. Refuse at `put`: empty, longer than 1024 bytes, invalid UTF-8, not NFC, control characters, a leading or trailing `/`, an empty segment, `.` or `..` segments, any segment starting with `.` (this covers `.obsidian`, `.trash`, `.trew` state folders, and conflicts with the plugin's `isNeverSynced` rule; protocol 3 admits settings inside a profile root, M11), and the names the adapters reserve for staging (`.trew-tmp-` prefix). Return `badpath`. The engine keeps validating inbound paths too (`refusedName` in `engine.ts`); two checks are cheaper than one recovery.
 
 **The server's keyspace is Obsidian's** (decided 2026-09-22). Two further rules, because an MCP write has no filesystem to stop it and the two production clients disagreed:
 

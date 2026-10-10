@@ -304,6 +304,8 @@ describe("loading", () => {
     const { plugin, app } = await load();
     expect(plugin.commands.map((c) => c.id).sort()).toEqual([
       "activity",
+      "apply-settings",
+      "create-settings-profile",
       "pause-resume",
       "preview-sync",
       "recover-deleted",
@@ -4442,6 +4444,8 @@ describe("an older Obsidian", () => {
 
     expect(plugin.commands.map((c) => c.id).sort()).toEqual([
       "activity",
+      "apply-settings",
+      "create-settings-profile",
       "pause-resume",
       "preview-sync",
       "recover-deleted",
@@ -6162,6 +6166,8 @@ describe("what a restore is allowed to claim", () => {
       reusedChunks: 0,
       heldBack: 0,
       heldBackPaths: [],
+      settingsHeld: 0,
+      settingsHeldPaths: [],
     };
     const client = held.client as unknown as { settle: () => Promise<SyncReport> };
     client.settle = async () => report;
@@ -6811,5 +6817,54 @@ describe("where the device token is kept", () => {
     } finally {
       Platform.isMobileApp = false;
     }
+  }, 300_000);
+});
+
+/**
+ * Settings sync between two plugin devices (plan/settings-sync.md): turned on
+ * per device, with a copy of the device's settings kept first; a change from
+ * the other device waits, is announced, and is written by Apply and reload,
+ * which saves open notes first and then reloads Obsidian.
+ */
+describe("settings sync", () => {
+  it("syncs a setting, holds it on the other device, and applies it there with a reload", async () => {
+    await fresh();
+    const laptop = await load();
+    laptop.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "dark"\n}');
+    laptop.app.vault.adapter.seed("note.md", "a note\n");
+    await startVault(laptop.plugin, "laptop");
+    await synced(laptop.plugin);
+    const phone = await load();
+    phone.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "light"\n}');
+    await phone.plugin.pair((await laptop.plugin.createInvite()).invite, "phone");
+    await synced(phone.plugin);
+    // Off by default: the phone's own setting is untouched.
+    expect(phone.app.vault.adapter.text(".obsidian/app.json")).toContain("light");
+
+    expect(await laptop.plugin.setSettingsSync(true, "device")).toMatch(
+      /^\.obsidian\/plugins\/trew\/settings-before-sync-/,
+    );
+    await synced(laptop.plugin);
+    await laptop.plugin.syncNow();
+
+    const kept = await phone.plugin.setSettingsSync(true, "server");
+    expect(kept).toBeDefined();
+    expect(phone.app.vault.adapter.text(`${kept!}/app.json`)).toContain("light");
+    await synced(phone.plugin);
+    await until("the laptop's setting to wait on the phone", () => phone.plugin.settingsHeld === 1);
+    expect(phone.app.vault.adapter.text(".obsidian/app.json"), "written before Apply").toContain("light");
+    expect(notices.map((n) => n.message).join(" ")).toMatch(/1 setting from another device is waiting/);
+
+    const reload = vi.fn();
+    vi.stubGlobal("window", { location: { reload } });
+    try {
+      await phone.plugin.applySettings();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(phone.app.vault.adapter.text(".obsidian/app.json")).toContain("dark");
+    // The laptop's own settings were never touched by the phone's.
+    expect(laptop.app.vault.adapter.text(".obsidian/app.json")).toContain("dark");
   }, 300_000);
 });

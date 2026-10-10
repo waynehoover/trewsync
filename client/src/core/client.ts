@@ -32,6 +32,7 @@ import {
   contentId,
   placeBeside,
   type RepairReport,
+  type SettingsScope,
   type SyncOptions,
   type SyncReport,
 } from "./engine.ts";
@@ -90,6 +91,8 @@ export interface ClientOptions {
   readonly readOnly?: boolean;
   /** Whether this device files notes on Windows. See EngineOptions. */
   readonly windows?: boolean;
+  /** What this device syncs of its settings. See EngineOptions. */
+  readonly settings?: SettingsScope | undefined;
   readonly log?: (message: string, ...rest: unknown[]) => void;
   readonly onActivity?: (activity: Activity) => void;
   readonly confirmFirstSync?: (preview: SyncPreview) => Promise<boolean>;
@@ -259,6 +262,7 @@ export class Client {
       ...(opts.merge !== undefined ? { merge: opts.merge } : {}),
       ...(opts.readOnly !== undefined ? { readOnly: opts.readOnly } : {}),
       ...(opts.windows !== undefined ? { windows: opts.windows } : {}),
+      ...(opts.settings !== undefined ? { settings: opts.settings } : {}),
       ...(opts.log !== undefined ? { log: opts.log } : {}),
       ...(opts.confirmFirstSync ? { confirmFirstSync: opts.confirmFirstSync } : {}),
       ...(opts.confirmDeletions ? { confirmDeletions: opts.confirmDeletions } : {}),

@@ -402,9 +402,13 @@ a lasting merge preference: paired devices use normal two-way sync.
 ## Refusals
 
 Current scope excludes a second server backend, peer-to-peer sync, teams/shared
-vaults, and a server web interface. Obsidian configuration sync is also absent:
-settings and workspace files have different ownership and failure consequences
-from notes, and the configuration folder contains device credentials.
+vaults, and a server web interface. Obsidian configuration sync is limited to
+settings sync ([plan/settings-sync.md](../plan/settings-sync.md)): Obsidian's
+own settings, themes and snippets, per device and off until turned on, with a
+change held until a person applies it and reloads. Settings and workspace
+files have different ownership and failure consequences from notes, and the
+configuration folder contains device credentials, so the sync plugin's folder
+and the workspace files never sync, and plugins wait for a phase of their own.
 
 The server's `/mcp` endpoint is an agent API, not a web interface: it serves
 no pages and has no browser login. It has no OAuth, no per-note or per-folder

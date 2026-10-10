@@ -286,6 +286,7 @@ added or removed, change this table in the same commit.
 | `no-restricted-globals` (`fetch`) | 2 | `readBlocks` and `readRange` in `plugin/vault.ts` | They fetch the vault's own resource URL, not the network, to read a large attachment as a stream and by range. `requestUrl` returns whole bodies and does not read resource URLs. |
 | `@typescript-eslint/no-deprecated` (`setWarning`) | 5 | `plugin/main.ts` | Its replacement, `setDestructive`, arrived in 1.13.0 and the manifest admits 1.7.2, so using it would be a `no-unsupported-api` error. |
 | `obsidianmd/ui/sentence-case` | 15 | `plugin/main.ts` | Twelve are the product's name, TrewSync, whose capital S the rule reads as a second word to lowercase: the plugin's name on the ribbon and in the panel's title, "Which platforms TrewSync supports", the file menu's "TrewSync: version history", and eight notices that name it. One is the literal invite prefix `trew1i_...`, and two are the example device name `laptop` in a placeholder, spelled as device names are everywhere else. The guideline itself capitalizes proper nouns, and the rule keeps the casing of the brands on its own list, GitHub and macOS among them; TrewSync is not on it. |
+| `obsidianmd/hardcoded-config-path` | 1 | `setSettingsSync` in `plugin/main.ts` | Settings sync names its profile folders `.obsidian` and `.obsidian-<name>` by design ([plan/settings-sync.md](../plan/settings-sync.md)), and this message tells a person that rule when their device's folder is named otherwise. The folder a device runs is still read from `configDir`. |
 | `obsidianmd/settings-tab/prefer-setting-definitions` | 1 | the settings tab in `plugin/main.ts` | `getSettingDefinitions` is the declarative settings API of 1.13.0. Until it is adopted, the tab's settings do not appear in Obsidian's settings search on 1.13 or later. The tab is the sync panel, drawn from live state (status, pairing, devices, invites), which a fixed list of setting definitions does not describe. |
 
 That was 56 warnings, and no errors, at the commit that added the gate. Writing
@@ -296,7 +297,7 @@ notice that named `.obsidian` for a configuration folder a vault may call
 something else (`obsidianmd/hardcoded-config-path`). That notice now names
 `configDir`, so it is 70. Reading `document`, `window`, `navigator` and
 `location` behind a `typeof` guard rather than off `globalThis` cleared ten
-more, so it is 60.
+more, so it is 60. Settings sync's message stating its folder rule made it 61.
 
 ### Submitting to the community directory
 

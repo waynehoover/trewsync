@@ -57,7 +57,7 @@ import { parsesAsYaml } from "./yaml.ts";
 import { drawingGate, looksLikeExcalidraw } from "./excalidraw.ts";
 import { looksLikeMarkupPath, wellFormedMarkup } from "./markup.ts";
 import { chunkName, chunkNames, plainDigest } from "./digest.ts";
-import { pathReason, type PathReason } from "./path-policy.ts";
+import { configPathReason, isConfigPath, pathReason, type PathReason } from "./path-policy.ts";
 import { describeWindowsRefusal, windowsRefusal } from "./windows-names.ts";
 import { conflictCopyPath, mergeText, sanitiseAuthor } from "./merge.ts";
 import {
@@ -405,6 +405,29 @@ export interface EngineOptions {
    * device is the only place the refusal can be made.
    */
   readonly windows?: boolean;
+  /**
+   * Settings sync (plan/settings-sync.md): the profile root this device runs
+   * Obsidian from, whose settings it syncs, or undefined when it syncs none.
+   *
+   * Every other path in a profile root is out of scope here, in both
+   * directions: another device's profile, a file settings sync does not
+   * carry, and every settings path while this is undefined. The server's word
+   * about them is kept, so a device that turns settings sync on, or runs
+   * another profile, decides from it.
+   */
+  readonly settings?: SettingsScope | undefined;
+}
+
+/** What a device syncs of its settings (`EngineOptions.settings`). */
+export interface SettingsScope {
+  /** The profile root Obsidian runs from here, such as `.obsidian`. */
+  readonly root: string;
+  /**
+   * Whose settings win where this device has never synced a file and its copy
+   * differs from the server's, which is the first time settings sync is
+   * turned on here. Undefined keeps both, as a first sync of notes does.
+   */
+  readonly firstChoice?: "server" | "device" | undefined;
 }
 
 /** Overrides for a single pass. */
@@ -435,6 +458,13 @@ export interface SyncOptions {
    * is to say it may (I29).
    */
   readonly readOnly?: boolean;
+  /**
+   * Write the settings changes held for the profile this device runs
+   * (`settingsHeld`). The caller reloads Obsidian straight after: Obsidian
+   * reads its settings at startup and holds them in memory, so a change
+   * written under a running app is one it can write back over.
+   */
+  readonly applySettings?: boolean;
 }
 
 /**
@@ -563,6 +593,17 @@ export interface SyncReport {
   heldBack: number;
   /** Which ones, so the line names them rather than counting them. */
   heldBackPaths: string[];
+  /**
+   * Changes from another device to the settings this device runs, waiting
+   * for a person to apply them and reload (plan/settings-sync.md, section 4).
+   *
+   * Its own count and out of the exit code, like `heldBack`: nothing is
+   * wrong, a person is being asked. Not owed, either, for the applied cursor:
+   * the server's version is known here and waits on purpose.
+   */
+  settingsHeld: number;
+  /** Which ones, so the prompt can name them. */
+  settingsHeldPaths: string[];
   /**
    * Paths a file is standing in the way of.
    *
@@ -848,6 +889,8 @@ function emptyReport(): SyncReport {
     retryingPaths: [],
     heldBack: 0,
     heldBackPaths: [],
+    settingsHeld: 0,
+    settingsHeldPaths: [],
     ignored: 0,
     blocked: 0,
     inTheWay: [],
@@ -1003,6 +1046,16 @@ export class Engine {
    * file again to be told the same thing by the same vault.
    */
   private readonly ignoredPaths = new Map<string, string>();
+  /** Settings held in the pass running now, or the last one (`settingsHeld`). */
+  private heldSettings = new Set<string>();
+  /** Whether the pass running now applies held settings (`applySettings`). */
+  private applyingSettings = false;
+  /**
+   * Settings applied before the engine last started, not yet checked against
+   * the disk. Filled once at `start`: an applied setting is checked after the
+   * reload that follows it, never in the pass that wrote it.
+   */
+  private readonly toConfirm = new Set<string>();
 
   /**
    * Paths a file is standing in the way of, as of the last pass.
@@ -1190,6 +1243,8 @@ export class Engine {
      * apart at all.
      */
     ignored: number;
+    /** Settings changes waiting for Apply and reload, as of the last pass. */
+    settingsHeld: number;
     syncing: boolean;
   } {
     let files = 0;
@@ -1201,6 +1256,7 @@ export class Engine {
       retrying: this.retries.size,
       skipped: this.skipped.size + this.refusedInbound.size,
       ignored: this.ignoredPaths.size,
+      settingsHeld: this.heldSettings.size,
       syncing: this.syncing,
     };
   }
@@ -1230,6 +1286,9 @@ export class Engine {
         this.remote.set(path, raw as Remote);
       }
       for (const path of stored.pending) this.pending.add(path);
+      for (const [path, entry] of this.entries) {
+        if (entry.unconfirmed !== undefined) this.toConfirm.add(path);
+      }
       this.log("index loaded", {
         cursor: this.cursor,
         entries: this.entries.size,
@@ -1506,6 +1565,18 @@ export class Engine {
    * Pruned against the sets the index keeps, so a vault that churns through
    * names does not accumulate answers about paths nothing refers to any more.
    */
+  /**
+   * Whether a path is settings this device does not sync: a path in a profile
+   * root while settings sync is off, in another profile than the one this
+   * device runs, or one settings sync does not carry. Every other path, notes
+   * included, is in scope.
+   */
+  private outOfScope(path: string): boolean {
+    if (!isConfigPath(path)) return false;
+    const root = this.opts.settings?.root;
+    return root === undefined || !path.startsWith(root + "/") || configPathReason(path) !== undefined;
+  }
+
   private refusedName(path: string): string | undefined {
     const known = this.refusalOf.get(path);
     if (known !== undefined) return known.why;
@@ -1738,6 +1809,8 @@ export class Engine {
 
   private async pass(opts: SyncOptions = {}): Promise<SyncReport> {
     const report = emptyReport();
+    this.heldSettings = new Set();
+    this.applyingSettings = opts.applySettings === true;
     // A checkpoint's half minute is counted from here, so a short pass never
     // takes one however long ago the last save was (T12).
     this.checkpointedAt = Date.now();
@@ -1808,6 +1881,8 @@ export class Engine {
     const present: string[] = [];
     for (const [path, entry] of this.entries) {
       if (onDisk.has(path) || (entry.synchash === "" && entry.synctime <= 0)) continue;
+      // Not this device's to look for: see `outOfScope`.
+      if (this.outOfScope(path)) continue;
       try {
         if (await this.opts.vault.exists(path)) present.push(path);
       } catch (err) {
@@ -1959,6 +2034,21 @@ export class Engine {
         activeRemoteUid = this.remote.get(path)?.uid;
       }
       if (moving.has(path)) continue; // the conditional rename retires its source
+      if (
+        this.outOfScope(path) &&
+        // A settings path no rule admits, which a server holding to protocol
+        // 3 never sends, is refused by its name below like any other, so
+        // somebody sees that a peer wrote one: plugin code in a profile root
+        // is the case that matters.
+        (onDisk.has(path) || !this.remote.has(path) || configPathReason(path) === undefined)
+      ) {
+        // Settings this device does not sync. Not fetched, not written and
+        // not counted, and owed nothing, like an ignored path: the server's
+        // word stays in `remote`, so a device that turns settings sync on, or
+        // runs another profile, decides from it with no rewind.
+        this.pending.delete(path);
+        continue;
+      }
       // Refused for what the name is, not for anything that happened to it,
       // so it is decided here from the name rather than remembered from the
       // batch that carried it (R083-04). The version stays in `remote` and
@@ -2157,7 +2247,9 @@ export class Engine {
     await this.opts.vault.flush?.();
     await this.save();
     if (
-      this.pending.size === 0 &&
+      // Held settings stay pending, so they are decided again every pass,
+      // and are owed nothing: they wait on a person on purpose.
+      [...this.pending].every((path) => this.heldSettings.has(path)) &&
       report.waiting === 0 &&
       report.retrying === 0 &&
       report.skipped === 0 &&
@@ -2182,7 +2274,10 @@ export class Engine {
           // so measuring it against one is asking whether a decision has
           // finished happening (Codex-10). It is counted and named as ignored
           // on this device's own screen, which is where it belongs.
-          this.ignoredPaths.has(path) || (this.entries.get(path)?.syncuid ?? -1) >= remote.uid,
+          this.ignoredPaths.has(path) ||
+          this.outOfScope(path) ||
+          this.heldSettings.has(path) ||
+          (this.entries.get(path)?.syncuid ?? -1) >= remote.uid,
       )
     ) {
       report.appliedCursor = this.cursor;
@@ -2311,6 +2406,8 @@ export class Engine {
         local = { folder: stat.folder, mtime: entry.mtime, size: entry.size, hash: entry.hash };
     }
 
+    if (this.toConfirm.delete(path)) this.confirmApplied(path, entry, local);
+
     let action = decide({ local, remote, index: entry, mergeable: this.mergeable(path) });
 
     // A folder whose name changed only in case is one folder under two
@@ -2384,6 +2481,13 @@ export class Engine {
       }
     }
 
+    if (isConfigPath(path)) {
+      // In scope here, or the pass would not have reached it.
+      const settings = await this.settingsAction(path, action, entry, local, report, now);
+      if (settings === undefined) return;
+      action = settings;
+    }
+
     if (
       coalesce &&
       action.kind === "upload" &&
@@ -2404,6 +2508,83 @@ export class Engine {
 
     await this.act(path, action, entry, local, remote, report, now, scanned);
     this.pending.delete(path);
+  }
+
+  /**
+   * What happens to a decision about a setting of the profile this device
+   * runs, or undefined when it waits (plan/settings-sync.md, section 4).
+   *
+   * A change that would write here waits for Apply and reload: Obsidian holds
+   * its settings in memory and writes them back, so a setting written under a
+   * running app is one it can silently undo. A JSON file that does not parse
+   * is one being written, and waits a second rather than reaching every
+   * device half written. And a file this device has never synced, which
+   * differs from the server's, takes the side the person chose when they
+   * turned settings sync on.
+   */
+  private async settingsAction(
+    path: string,
+    action: Action,
+    entry: IndexEntry,
+    local: LocalState | undefined,
+    report: SyncReport,
+    now: number,
+  ): Promise<Action | undefined> {
+    if (action.kind === "conflict" && entry.synchash === "" && local !== undefined) {
+      const choice = this.opts.settings?.firstChoice;
+      if (choice === "server") {
+        action = { kind: "download", why: "the server's settings were chosen for this device" };
+      } else if (choice === "device") {
+        action = { kind: "upload", why: "this device's settings were chosen over the server's" };
+      }
+    }
+    if (action.kind === "upload" && local !== undefined && looksLikeJson(path)) {
+      let whole = false;
+      try {
+        whole = parsesAsJson(new TextDecoder("utf-8", { fatal: true }).decode(await this.opts.vault.read(path)));
+      } catch {
+        whole = false;
+      }
+      if (!whole) {
+        report.waiting++;
+        report.nextUploadAt = Math.min(report.nextUploadAt ?? Infinity, now + SETTINGS_WRITE_WAIT_MS);
+        return undefined;
+      }
+    }
+    const writesHere =
+      action.kind === "download" ||
+      action.kind === "restoreLocal" ||
+      action.kind === "deleteLocal" ||
+      action.kind === "merge" ||
+      action.kind === "conflict";
+    if (!writesHere) return action;
+    if (!this.applyingSettings) {
+      this.heldSettings.add(path);
+      report.settingsHeld++;
+      if (report.settingsHeldPaths.length < LISTED_PATHS) report.settingsHeldPaths.push(path);
+      return undefined;
+    }
+    // The oldest base wins: a second apply before a reload has checked the
+    // first must still be checked against what was there before either.
+    entry.unconfirmed ??= { hash: entry.synchash, uid: entry.syncuid };
+    return action;
+  }
+
+  /**
+   * Checks a setting written by Apply and reload, in the engine that started
+   * after the reload. The disk holding the applied version confirms it. Any
+   * other content is Obsidian's own copy written back over it, or an edit
+   * made since, and is decided against the base the apply replaced: the old
+   * values then read as unchanged here, so the applied version is put back
+   * (held for another Apply) rather than the old one sent to every device.
+   */
+  private confirmApplied(path: string, entry: IndexEntry, local: LocalState | undefined): void {
+    const applied = entry.unconfirmed;
+    delete entry.unconfirmed;
+    if (applied === undefined || local?.hash === entry.synchash) return;
+    this.log("a setting changed after it was applied, deciding against the base it replaced", path);
+    entry.synchash = applied.hash;
+    entry.syncuid = applied.uid;
   }
 
   /**
@@ -5924,6 +6105,8 @@ export function combinePasses(a: SyncReport, b: SyncReport): SyncReport {
     // report one held-back note in two passes as two.
     heldBack: b.heldBack,
     heldBackPaths: b.heldBackPaths,
+    settingsHeld: b.settingsHeld,
+    settingsHeldPaths: b.settingsHeldPaths,
     ignored: b.ignored,
     blocked: b.blocked,
     inTheWay: b.inTheWay,
@@ -6021,7 +6204,9 @@ export function validityGateFor(
  * one; written instead, it fails, and a write that fails is retried for ever.
  */
 export function refusedInboundPath(path: string, windows = false): string | undefined {
-  const reason = pathReason(path);
+  // A settings path is held to protocol 3's rule, and reaches here only when
+  // this device syncs it; the rest of a profile root never gets this far.
+  const reason = isConfigPath(path) ? configPathReason(path) : pathReason(path);
   if (reason === undefined) {
     const onWindows = windows ? windowsRefusal(path) : undefined;
     return onWindows === undefined ? undefined : describeWindowsRefusal(onWindows);
@@ -6053,6 +6238,8 @@ const INBOUND_REFUSALS: Record<PathReason, string> = {
   dotsegment: "a path with a . or .. segment is not canonical",
   dotprefix: "a path under a dot-prefixed name never syncs",
   staging: "a path carrying the name the vaults give files they are staging",
+  devicelocal: "a path holding one device's own state in its settings, which never syncs",
+  configscope: "a path in a settings folder that settings sync does not carry",
 };
 
 /**
@@ -6371,6 +6558,13 @@ function ancestorIsGone(err: unknown): boolean {
   // never should. If it does, there is equally nothing to merge against.
   return code === "nouid" || code === "nochunk" || code === "nocontent";
 }
+
+/**
+ * How long a settings JSON file that does not parse waits before it is read
+ * again: long enough for Obsidian to finish writing it, which takes it about a
+ * second after a change, and short enough that nobody notices.
+ */
+const SETTINGS_WRITE_WAIT_MS = 1_000;
 
 /** Whether text is still JSON, for the formats where that is what it means to be usable. */
 function parsesAsJson(text: string): boolean {
