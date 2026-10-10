@@ -118,8 +118,9 @@ is not supported.
 | Windows | Not supported | No test runs on Windows. The plugin pairs, and says so in its panel and status bar for as long as it runs. A note whose name Windows cannot hold (a device name such as `CON` or `COM1`, one of the characters Windows forbids, or a name ending in a dot or a space) is listed as needing attention instead of syncing, and stays on your other devices. |
 
 Obsidian's own settings, themes and CSS snippets sync on the devices where you
-turn [settings sync](docs/plugin.md#settings-sync) on, and a phone can keep a
-settings profile of its own. Community plugins and other hidden files do not sync:
+turn [settings sync](docs/plugin.md#settings-sync) on, shared among your phones
+and tablets, among your desktops, or by all of them, as each device chooses.
+Community plugins and other hidden files do not sync:
 nothing else whose name starts with a dot does, so an `.attachments` folder
 stays on the device that has it. Attachments elsewhere are included, with a default limit of
 **64 MiB per file**.

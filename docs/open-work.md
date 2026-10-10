@@ -242,12 +242,6 @@ purpose, each with what would change the answer:
   parsed values needs the applied bytes after the reload. The plan's ten
   second quiet period before an upload is not built either; every settings
   save is a version, which costs history and nothing else.
-- **A profile is copied as it is read.** A settings file Obsidian or a plugin
-  is writing at that moment is copied torn, and the new profile starts with
-  that plugin's defaults; a large folder copies behind a "Copying" button with
-  no count. Reading again a copied JSON file that does not parse, and a count
-  as it goes, would do. The copy already leaves out `node_modules` and `.git`,
-  which are most of a plugin developer's folder.
 
 ## Follow-ups from the 2026-10-06 review
 

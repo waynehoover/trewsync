@@ -222,8 +222,10 @@ file.
 
 A session of protocol 3 may also write, and is sent, a path whose first segment
 is a profile root: `.obsidian`, or `.obsidian-` followed by 1 to 32 of `a-z`,
-`0-9` and `-`, not starting with `-`, which is how a device names its own
-settings folder with Obsidian's "Override config folder". What follows the
+`0-9` and `-`, not starting with `-`. The plugin uses three of them, one per
+group of devices that share settings (`.obsidian`, `.obsidian-mobile` and
+`.obsidian-desktop`), and maps each device's own settings folder onto its
+group's; the server holds whatever root it is sent. What follows the
 root must be what settings sync carries: a JSON file at the top of the root,
 `themes/<theme>/<file>`, or `snippets/<name>.css`, with no segment beginning
 with a dot. The server refuses, with `badpath`:

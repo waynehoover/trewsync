@@ -306,7 +306,6 @@ describe("loading", () => {
     expect(plugin.commands.map((c) => c.id).sort()).toEqual([
       "activity",
       "apply-settings",
-      "create-settings-profile",
       "pause-resume",
       "preview-sync",
       "recover-deleted",
@@ -4446,7 +4445,6 @@ describe("an older Obsidian", () => {
     expect(plugin.commands.map((c) => c.id).sort()).toEqual([
       "activity",
       "apply-settings",
-      "create-settings-profile",
       "pause-resume",
       "preview-sync",
       "recover-deleted",
@@ -6822,10 +6820,11 @@ describe("where the device token is kept", () => {
 });
 
 /**
- * Settings sync between two plugin devices (plan/settings-sync.md): turned on
- * per device, with a copy of the device's settings kept first; a change from
- * the other device waits, is announced, and is applied only once a person has
- * said so, which saves every open view and reloads Obsidian.
+ * Settings sync between plugin devices (plan/settings-sync.md): turned on per
+ * device, with a group, and a copy of the device's settings kept first; a
+ * change from another device in the group waits, is announced, and is applied
+ * only once a person has said so, which saves every open view and reloads
+ * Obsidian.
  */
 describe("settings sync", () => {
   /** The laptop's dark theme, held on the phone, whose own setting said light. */
@@ -6843,13 +6842,13 @@ describe("settings sync", () => {
     // Off by default: the phone's own setting is untouched.
     expect(phone.app.vault.adapter.text(".obsidian/app.json")).toContain("light");
 
-    expect(await laptop.plugin.setSettingsSync(true, "device")).toMatch(
+    expect(await laptop.plugin.setSettingsSync(".obsidian", "device")).toMatch(
       /^\.obsidian\/plugins\/trew\/settings-before-sync-/,
     );
     await synced(laptop.plugin);
     await laptop.plugin.syncNow();
 
-    const kept = await phone.plugin.setSettingsSync(true, "server");
+    const kept = await phone.plugin.setSettingsSync(".obsidian", "server");
     expect(phone.app.vault.adapter.text(`${kept!}/app.json`)).toContain("light");
     await synced(phone.plugin);
     await until("the laptop's setting to wait on the phone", () => phone.plugin.settingsHeld === 1);
@@ -6966,52 +6965,130 @@ describe("settings sync", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   }, 300_000);
 
-  it("stops sync for a profile made here until Obsidian runs it, and the copy finishes the switch", async () => {
+  it("keeps the phones' settings apart from the desktops', in the folder every device runs", async () => {
+    await fresh();
+    const laptop = await load();
+    laptop.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "dark"\n}');
+    laptop.app.vault.adapter.seed("note.md", "a note\n");
+    await startVault(laptop.plugin, "laptop");
+    await synced(laptop.plugin);
+    await laptop.plugin.setSettingsSync(".obsidian-desktop", "device");
+    await synced(laptop.plugin);
+
+    const phone = await load();
+    phone.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "light"\n}');
+    await phone.plugin.pair((await laptop.plugin.createInvite()).invite, "phone");
+    await synced(phone.plugin);
+    await phone.plugin.setSettingsSync(".obsidian-mobile", "device");
+    await synced(phone.plugin);
+
+    const tablet = await load();
+    tablet.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "system"\n}');
+    await tablet.plugin.pair((await laptop.plugin.createInvite()).invite, "tablet");
+    await synced(tablet.plugin);
+    await tablet.plugin.setSettingsSync(".obsidian-mobile", "server");
+    await synced(tablet.plugin);
+    await until(
+      "the phone's setting to wait on the tablet",
+      () => tablet.plugin.settingsHeld === 1,
+    );
+    await laptop.plugin.syncNow();
+    expect(laptop.plugin.settingsHeld, "a phone's setting reached a desktop").toBe(0);
+
+    const reload = vi.fn();
+    vi.stubGlobal("window", { location: { reload } });
+    try {
+      await tablet.plugin.applySettings();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(tablet.app.vault.adapter.text(".obsidian/app.json")).toContain("light");
+    expect(laptop.app.vault.adapter.text(".obsidian/app.json")).toContain("dark");
+    for (const device of [laptop, phone, tablet]) {
+      expect(
+        device.app.vault.adapter.filePaths().filter((path) => path.startsWith(".obsidian-")),
+        "a group's folder was made on a device",
+      ).toEqual([]);
+    }
+  }, 300_000);
+
+  it("starts a group's first time again when a device comes back to it", async () => {
     await fresh();
     const phone = await load();
-    phone.app.vault.adapter.seed("note.md", "a note\n");
     phone.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "light"\n}');
+    phone.app.vault.adapter.seed("note.md", "a note\n");
     await startVault(phone.plugin, "phone");
     await synced(phone.plugin);
-    await phone.plugin.setSettingsSync(true, "device");
+    await phone.plugin.setSettingsSync(".obsidian-mobile", "device");
     await synced(phone.plugin);
-    const adapter = phone.app.vault.adapter;
-    const oldIndex = ".obsidian/plugins/trew/index.json";
-    expect(adapter.filePaths()).toContain(oldIndex);
 
-    // Obsidian keeps a plugin's data in its folder; the stub keeps it in memory.
-    adapter.seed(".obsidian/plugins/trew/data.json", JSON.stringify(phone.plugin.savedData));
-    expect(await phone.plugin.createSettingsProfile("mobile")).toBe(".obsidian-mobile");
-    expect(phone.plugin.currentState.kind).toBe("stopped");
-    // Nothing here starts sync in this folder again: not turning settings
-    // sync off and on, not pausing and resuming.
-    await phone.plugin.setSettingsSync(false);
-    expect(phone.plugin.currentState.kind).toBe("stopped");
-    expect(adapter.filePaths(), "the running folder's index went before the relaunch").toContain(
-      oldIndex,
-    );
-    const copy = JSON.parse(adapter.text(".obsidian-mobile/plugins/trew/data.json")!) as Record<
-      string,
-      string
-    >;
-    expect(copy["settings"], "the copy still syncs settings without being asked").toBeUndefined();
-    expect(copy["deviceId"]).toBe((phone.plugin.savedData as Record<string, string>)["deviceId"]);
+    // Away in the shared group, where the theme changes.
+    await phone.plugin.setSettingsSync(".obsidian", "device");
+    await synced(phone.plugin);
+    await phone.app.vault.adapter.write(".obsidian/app.json", '{\n  "theme": "dark"\n}', {
+      mtime: 9_000,
+    });
+    await phone.plugin.syncNow();
 
-    // The relaunch into the copy.
-    phone.plugin.onunload();
-    await phone.plugin.closing;
-    const relaunched = await load(
-      copy,
-      { id: "trew", dir: ".obsidian-mobile/plugins/trew" },
-      ".obsidian-mobile",
-      undefined,
-      phone.app,
+    // Back with the phones, keeping theirs: the phones' light waits here, and
+    // the dark this device moved to does not go to them.
+    await phone.plugin.setSettingsSync(".obsidian-mobile", "server");
+    await synced(phone.plugin);
+    await until("the phones' setting to wait", () => phone.plugin.settingsHeld === 1);
+    const other = await load();
+    other.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "system"\n}');
+    await other.plugin.pair((await phone.plugin.createInvite()).invite, "other");
+    await synced(other.plugin);
+    await other.plugin.setSettingsSync(".obsidian-mobile", "server");
+    await synced(other.plugin);
+    await until(
+      "the phones' setting to wait on the other phone",
+      () => other.plugin.settingsHeld === 1,
     );
-    expect(
-      adapter.filePaths(),
-      "the old folder keeps an index the copy has moved past",
-    ).not.toContain(oldIndex);
-    expect(adapter.filePaths()).not.toContain(".obsidian-mobile/plugins/trew/profile-from.json");
-    await synced(relaunched.plugin);
+    const reload = vi.fn();
+    vi.stubGlobal("window", { location: { reload } });
+    try {
+      await other.plugin.applySettings();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(other.app.vault.adapter.text(".obsidian/app.json")).toContain("light");
+  }, 300_000);
+
+  it("offers one choice, and saves a group only once the first-time question is answered", async () => {
+    await fresh();
+    const { plugin } = await load();
+    await startVault(plugin, "phone");
+    await synced(plugin);
+    const choiceIn = () => {
+      built.length = 0;
+      plugin.commands.find((c) => c.id === "show-status")!.callback!();
+      return built.find((s) => s.name === "Sync settings")!.dropdowns[0]!;
+    };
+    Platform.isMobile = true;
+    try {
+      const choice = choiceIn();
+      expect([...choice.options.values()]).toEqual(["Off", "Mobile only", "Mobile and desktop"]);
+      expect(choice.getValue()).toBe("off");
+
+      // Closing the question keeps what was.
+      choice.choose(".obsidian-mobile");
+      modals.at(-1)!.close();
+      expect(plugin.settingsGroup).toBeUndefined();
+
+      choiceIn().choose(".obsidian-mobile");
+      await modalButton("Keep this device's").click();
+      await until("the group to be saved", () => plugin.settingsGroup === ".obsidian-mobile");
+      expect((plugin.savedData as Record<string, string>)["settings"]).toBe(".obsidian-mobile");
+
+      // Off, from the same choice, is saved at once.
+      const again = choiceIn();
+      expect(again.getValue()).toBe(".obsidian-mobile");
+      again.choose("off");
+      await until("settings sync to be off", () => plugin.settingsGroup === undefined);
+      expect((plugin.savedData as Record<string, string>)["settings"]).toBeUndefined();
+    } finally {
+      Platform.isMobile = false;
+    }
   }, 300_000);
 });

@@ -82,6 +82,7 @@ import {
 } from "../core/engine.ts";
 import {
   DEFAULT_VAULT,
+  EVERY_DEVICE,
   decodeConfig,
   deviceCredential,
   encodeConfig,
@@ -93,20 +94,14 @@ import {
   startPairing,
   type DeviceConfig,
   type PendingPairing,
+  isSettingsGroup,
+  type SettingsGroup,
 } from "../core/pairing.ts";
 import { Backoff, ProtocolError, Transport } from "../core/transport.ts";
 import { DISPLACED_LOG, type Displaced, type Inventory } from "../core/displaced.ts";
-import { firstFreeName } from "../core/paths.ts";
+import { configFolderName, firstFreeName } from "../core/paths.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
-import {
-  backUpSettings,
-  createProfile,
-  isProfileName,
-  keepSettingsBeforeApply,
-  profileRootOf,
-  stampOf,
-} from "./settings.ts";
-import { indexLogPath } from "../core/index-journal-store.ts";
+import { backUpSettings, keepSettingsBeforeApply } from "./settings.ts";
 import { timedVault } from "../core/vault.ts";
 import type { JournalSaveCost, JournalStoreOptions } from "../core/index-journal-store.ts";
 import { INVITE_ACTION, inviteQrImage } from "./invite-qr.ts";
@@ -412,12 +407,6 @@ export default class TrewPlugin extends Plugin {
    */
   private readonly loadId = crypto.randomUUID();
   /**
-   * The settings profile just made for this device, while Obsidian has not
-   * been pointed at it yet. Sync stays stopped until then: the copy carries
-   * this folder's index on, and syncing here meanwhile would leave it behind.
-   */
-  private relaunchInto: string | undefined;
-  /**
    * The notice `stop` put up, which has no timeout, and the reason it gave.
    *
    * Taken down by `setState` once the state is no longer that stop. It used
@@ -548,11 +537,6 @@ export default class TrewPlugin extends Plugin {
         if (!checking) this.applySettingsNow();
         return true;
       },
-    });
-    this.addCommand({
-      id: "create-settings-profile",
-      name: "Create a settings profile for this device",
-      callback: () => new ProfileModal(this).open(),
     });
     this.addCommand({
       id: "version-history",
@@ -721,16 +705,6 @@ export default class TrewPlugin extends Plugin {
     });
 
     if (this.unreadable !== undefined) return;
-    try {
-      await this.finishProfileSwitch();
-    } catch (err) {
-      // Not knowing which index to trust is no reason to guess: stopped, with why.
-      this.setState({
-        kind: "stopped",
-        why: `the settings profile this device now runs could not be finished: ${(err as Error).message}`,
-      });
-      return;
-    }
     // A pending pairing starts too: the run loop finishes it before anything
     // connects as the device it names.
     if (this.config) this.start();
@@ -1069,10 +1043,6 @@ export default class TrewPlugin extends Plugin {
   private start(): void {
     const config = this.config;
     if (!config || this.running || this.paused || this.pausing) return;
-    if (this.relaunchInto !== undefined) {
-      this.setState({ kind: "stopped", why: this.relaunchAdvice(this.relaunchInto) });
-      return;
-    }
     this.running = true;
     this.everConnected = false;
     this.announced = { attention: "", waiting: "", unknown: "", settings: 0 };
@@ -1444,7 +1414,7 @@ export default class TrewPlugin extends Plugin {
     const vault = new ObsidianVault(this.app.vault, configDir, log, {
       displacedLog: `${this.pluginDir()}/${DISPLACED_LOG}`,
       ...(config.ignore?.length ? { ignore: config.ignore } : {}),
-      ...(settings !== undefined ? { settings: true } : {}),
+      ...(settings !== undefined ? { settings: settings.root } : {}),
     });
     // Whether this run is being measured, asked once. See `timingLog`.
     const timingLog = this.timingLog();
@@ -1869,26 +1839,30 @@ export default class TrewPlugin extends Plugin {
 
   /**
    * What this device syncs of its settings (plan/settings-sync.md): nothing
-   * unless turned on here, and nothing from a settings folder whose name
-   * settings sync cannot use.
+   * unless turned on here, and then its group's folder on the server, which
+   * the vault maps the config folder Obsidian runs onto.
    */
   private settingsScope(config: DeviceConfig): SettingsScope | undefined {
-    const root = this.settingsRoot;
-    if (config.settings !== true || root === undefined) return undefined;
+    if (config.settings === undefined) return undefined;
     return {
-      root,
+      root: config.settings,
       ...(config.settingsFirstChoice ? { firstChoice: config.settingsFirstChoice } : {}),
     };
   }
 
   /** Whether this device syncs its Obsidian settings, as saved. */
   get syncsSettings(): boolean {
-    return this.config?.settings === true;
+    return this.config?.settings !== undefined;
   }
 
-  /** The settings folder this device runs, when settings sync can use it. */
-  get settingsRoot(): string | undefined {
-    return profileRootOf(this.app.vault.configDir);
+  /** The group this device syncs its settings with, as saved, or undefined when it does not. */
+  get settingsGroup(): SettingsGroup | undefined {
+    return this.config?.settings;
+  }
+
+  /** The config folder Obsidian runs here, where this device's settings are. */
+  private get configRoot(): string {
+    return configFolderName(this.app.vault.configDir);
   }
 
   /** Settings changes from other devices waiting for Apply and reload, as of the last pass. */
@@ -1896,23 +1870,20 @@ export default class TrewPlugin extends Plugin {
     return this.announced.settings;
   }
 
-  /** A settings profile made here and not yet run (`createSettingsProfile`). */
-  get pendingProfile(): string | undefined {
-    return this.relaunchInto;
-  }
-
   /**
-   * Turns settings sync on or off for this device, and restarts sync under
-   * it, as `setIgnoredNames` does for what this device skips: the vault
-   * adapter is built knowing whether it lists the settings folder.
+   * Sets the group this device syncs its settings with, or turns settings
+   * sync off with none, and restarts sync under it, as `setIgnoredNames` does
+   * for what this device skips: the vault adapter is built knowing the
+   * group's folder. A new group starts as settings sync turned on does, with
+   * the first-time question asked again and nothing of the last one's kept.
    *
-   * Turning it on keeps a copy of this device's settings first, read back
-   * before anything else happens (rule 3): where the server's settings are
-   * chosen, they replace these with no copy beside them, and the person who
-   * chose that may still want one setting back. Returns where the copy is.
+   * Any group keeps a copy of this device's settings first, read back before
+   * anything else happens (rule 3): where the server's settings are chosen,
+   * they replace these with no copy beside them, and the person who chose
+   * that may still want one setting back. Returns where the copy is.
    */
   async setSettingsSync(
-    on: boolean,
+    group: SettingsGroup | undefined,
     firstChoice?: "server" | "device",
   ): Promise<string | undefined> {
     if (this.unlinking) throw new Error("This vault is being unlinked.");
@@ -1921,38 +1892,35 @@ export default class TrewPlugin extends Plugin {
     try {
       const config = this.config;
       if (!config || !this.paired) throw new Error("this vault is not paired yet.");
-      const root = this.settingsRoot;
-      if (on && root === undefined) {
-        throw new Error(
-          `settings sync cannot use this device's settings folder, ${this.app.vault.configDir}. ` +
-            "It syncs .obsidian, or .obsidian- and a name in lower case letters, digits and dashes.",
-        );
-      }
-      const next: DeviceConfig = on
-        ? {
-            ...config,
-            settings: true,
-            settingsReplay: true,
-            ...(firstChoice ? { settingsFirstChoice: firstChoice } : {}),
-          }
-        : { ...config, settings: false };
       if (
-        (config.settings === true) === on &&
-        (!on || firstChoice === undefined || firstChoice === config.settingsFirstChoice)
+        config.settings === group &&
+        (group === undefined ||
+          firstChoice === undefined ||
+          firstChoice === config.settingsFirstChoice)
       ) {
         return undefined;
       }
+      const next: DeviceConfig =
+        group === undefined
+          ? withoutSettingsSync(config)
+          : {
+              ...withoutSettingsSync(config),
+              settings: group,
+              settingsReplay: true,
+              ...(firstChoice ? { settingsFirstChoice: firstChoice } : {}),
+            };
       const mine = this.generation + 1;
       await this.quiet();
       if (this.generation !== mine || this.config !== config) {
         throw new Error("the pairing changed while changing settings sync");
       }
       let backup: string | undefined;
-      if (on && root !== undefined) {
+      if (group !== undefined) {
         try {
           const kept = await backUpSettings(
             this.app.vault.adapter,
-            root,
+            this.configRoot,
+            group,
             this.pluginDir(),
             new Date(),
           );
@@ -2027,11 +1995,11 @@ export default class TrewPlugin extends Plugin {
   async applySettings(): Promise<void> {
     const client = this.client;
     if (!client) throw new Error(this.whyNoClient());
-    const root = this.settingsRoot;
-    if (!this.syncsSettings || root === undefined || this.settingsHeld === 0) {
+    const group = this.settingsGroup;
+    if (group === undefined || this.settingsHeld === 0) {
       throw new Error("no settings are waiting to be applied");
     }
-    await keepSettingsBeforeApply(this.app.vault.adapter, root, this.pluginDir());
+    await keepSettingsBeforeApply(this.app.vault.adapter, this.configRoot, group, this.pluginDir());
     await this.saveOpenEditors();
     try {
       await client.sync({ applySettings: true, coalesceWrites: false });
@@ -2049,123 +2017,6 @@ export default class TrewPlugin extends Plugin {
       return;
     }
     new ApplySettingsModal(this).open();
-  }
-
-  /**
-   * Makes `.obsidian-<name>` a copy of the settings folder this device runs,
-   * plugins and this plugin included, for this device to run instead, which
-   * is how a phone keeps settings apart from the desktops'
-   * (plan/settings-sync.md, section 2).
-   *
-   * Sync stops first, so the index copied is still, and stays stopped until
-   * Obsidian runs the copy: until then the copy carries on from this folder's
-   * index, and syncing here would leave it behind. The copy's pairing is
-   * taken with settings sync off, so turning it on there asks again, and
-   * beside it goes a note of this folder's index as it was, which the copy
-   * reads once it runs (`finishProfileSwitch`).
-   */
-  async createSettingsProfile(name: string): Promise<string> {
-    if (!isProfileName(name)) {
-      throw new Error(
-        "a profile name is 1 to 32 lower case letters, digits and dashes, starting with a letter or digit",
-      );
-    }
-    if (this.unlinking) throw new Error("This vault is being unlinked.");
-    if (!this.config || !this.paired) throw new Error("this vault is not paired yet.");
-    if (this.relaunchInto !== undefined) throw new Error(this.relaunchAdvice(this.relaunchInto));
-    if (this.editingConnection) throw new Error("Another settings change is in progress.");
-    this.editingConnection = true;
-    try {
-      const from = this.app.vault.configDir.replace(/^\/+|\/+$/g, "");
-      const to = `.obsidian-${name}`;
-      if (from === to) throw new Error(`this device already runs ${to}`);
-      const adapter = this.app.vault.adapter;
-      const dir = this.pluginDir();
-      await this.quiet();
-      try {
-        const index = `${dir}/index.json`;
-        const marker: ProfileMarker = {
-          from,
-          index: await stampOf(adapter, index),
-          log: await stampOf(adapter, indexLogPath(index)),
-        };
-        await createProfile(adapter, from, to);
-        const copied = `${to}${dir.slice(from.length)}`;
-        await this.withoutSettingsSync(`${copied}/data.json`);
-        await adapter.write(`${copied}/${PROFILE_MARKER}`, JSON.stringify(marker));
-      } catch (err) {
-        this.start();
-        throw err;
-      }
-      this.relaunchInto = to;
-      this.setState({ kind: "stopped", why: this.relaunchAdvice(to) });
-      return to;
-    } finally {
-      this.editingConnection = false;
-    }
-  }
-
-  /** Takes settings sync out of a copied pairing, read back. */
-  private async withoutSettingsSync(dataJson: string): Promise<void> {
-    const adapter = this.app.vault.adapter;
-    if (!(await adapter.exists(dataJson))) return;
-    const saved = JSON.parse(await adapter.read(dataJson)) as Record<string, unknown>;
-    for (const key of ["settings", "settingsFirstChoice", "settingsReplay"]) delete saved[key];
-    const text = JSON.stringify(saved, null, 2);
-    await adapter.write(dataJson, text);
-    if ((await adapter.read(dataJson)) !== text) {
-      throw new Error(`the copy of this device's pairing at ${dataJson} did not read back`);
-    }
-  }
-
-  /** What to do about a profile made and not yet run. */
-  private relaunchAdvice(to: string): string {
-    return (
-      `sync is stopped until Obsidian runs ${to}. Open Settings, Files and links, ` +
-      `Override config folder, enter ${to} and relaunch Obsidian`
-    );
-  }
-
-  /** Takes back a profile made and not yet run, and syncs here again. */
-  async undoSettingsProfile(): Promise<void> {
-    const to = this.relaunchInto;
-    if (to === undefined) return;
-    const adapter = this.app.vault.adapter;
-    if (await adapter.exists(to)) await adapter.rmdir(to, true);
-    this.relaunchInto = undefined;
-    this.start();
-  }
-
-  /**
-   * The first load in a profile made by `createSettingsProfile`, before any
-   * sync: the folder it was copied from must not resume from an index this
-   * copy has moved past. If that folder's index is as the copy found it, it
-   * goes. If it has changed since, that folder synced after the copy was
-   * made, so it is this copy's index that is behind, and that one goes: the
-   * next sync then decides by content, which loses nothing.
-   */
-  private async finishProfileSwitch(): Promise<void> {
-    const adapter = this.app.vault.adapter;
-    const at = `${this.pluginDir()}/${PROFILE_MARKER}`;
-    if (!(await adapter.exists(at))) return;
-    const marker = JSON.parse(await adapter.read(at)) as ProfileMarker;
-    const here = this.app.vault.configDir.replace(/^\/+|\/+$/g, "");
-    const theirs = `${marker.from}${this.pluginDir().slice(here.length)}/index.json`;
-    const same = (a: ProfileMarker["index"], b: ProfileMarker["index"]) =>
-      (a === null && b === null) ||
-      (a !== null && b !== null && a.size === b.size && a.mtime === b.mtime);
-    const moved =
-      !same(marker.index, await stampOf(adapter, theirs)) ||
-      !same(marker.log, await stampOf(adapter, indexLogPath(theirs)));
-    if (moved) {
-      log(
-        `${marker.from} synced after this profile was copied from it, so this profile starts over by content`,
-      );
-      await this.indexStore().remove();
-    } else {
-      await new ObsidianIndexStore(adapter, theirs).remove();
-    }
-    await adapter.remove(at);
   }
 
   /** Syncs on demand, and says so, because a command with no feedback is a guess. */
@@ -5053,65 +4904,28 @@ class TrewPanel {
   }
 
   /**
-   * Settings sync, for this device (plan/settings-sync.md): off unless turned
-   * on here, with its folder named, because the folder is what decides which
-   * devices share settings. The profile comes first: on a phone it has to be
-   * made before settings sync is turned on, or the phone joins the desktops'.
+   * Settings sync, for this device (plan/settings-sync.md): one choice, off
+   * or a group. A phone or tablet offers the phones' group and every
+   * device's, a desktop the desktops' and every device's. A group is saved
+   * only once the first-time question is answered, so closing that question
+   * keeps what was; off is saved at once.
    */
   private renderSettingsSync(contentEl: HTMLElement): void {
-    const made = this.plugin.pendingProfile;
-    if (made !== undefined) {
-      row(
-        contentEl,
-        "Settings profile",
-        `Made ${made}. Open Settings, Files and links, Override config folder, enter ${made} and ` +
-          "relaunch Obsidian. Sync is stopped until then.",
-      ).addButton((b) =>
-        b.setButtonText("Undo").onClick(async () => {
-          b.setDisabled(true);
-          try {
-            await this.plugin.undoSettingsProfile();
-            this.render();
-          } catch (err) {
-            new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
-            b.setDisabled(false);
-          }
-        }),
-      );
-      return;
-    }
-    const root = this.plugin.settingsRoot;
-    const folder = this.plugin.app.vault.configDir;
-    row(
-      contentEl,
-      "Settings profile",
-      root === undefined
-        ? `This device's settings folder is ${folder}, which settings sync cannot use. A profile copies ` +
-            "it to one it can."
-        : root.includes("-")
-          ? `This device uses ${root}, and shares settings with every device that uses ${root}.`
-          : `This device uses ${root}, the settings folder desktops usually share. To keep this device's ` +
-            "settings apart, a phone's for example, give it a profile of its own before turning on settings sync.",
-    ).addButton((b) =>
-      b.setButtonText("Create a profile").onClick(() => {
-        this.dismiss();
-        new ProfileModal(this.plugin).open();
-      }),
-    );
-    if (root === undefined) return;
-    const on = this.plugin.syncsSettings;
+    const group = this.plugin.settingsGroup;
     const held = this.plugin.settingsHeld;
+    const own: SettingsGroup = Platform.isMobile ? ".obsidian-mobile" : ".obsidian-desktop";
     const setting = row(
       contentEl,
       "Sync settings",
-      on
-        ? `On. Obsidian's settings, themes and CSS snippets in ${root} sync with every device that uses ${root}. ` +
-            "Changes from them wait until you apply them, which reloads Obsidian." +
-            (held > 0 ? ` ${held} waiting now.` : "")
-        : `Off. Turn on to sync Obsidian's settings, themes and CSS snippets in ${root} with every device ` +
-            "that uses the same folder. Community plugins do not sync yet.",
+      group === undefined
+        ? "Off. Obsidian's settings, themes and CSS snippets can sync with " +
+            `${Platform.isMobile ? "your other phones and tablets" : "your other desktops"}, or with ` +
+            "every device. Community plugins do not sync yet."
+        : `Syncing with ${sharedWith(group)}. Changes from them wait until you apply them, which ` +
+            "reloads Obsidian." +
+            (held > 0 ? ` ${held} waiting now.` : ""),
     );
-    if (on && held > 0) {
+    if (group !== undefined && held > 0) {
       setting.addButton((b) =>
         b
           .setButtonText("Apply and reload")
@@ -5122,23 +4936,30 @@ class TrewPanel {
           }),
       );
     }
-    setting.addButton((b) =>
-      b.setButtonText(on ? "Turn off" : "Turn on").onClick(async () => {
-        if (!on) {
+    setting.addDropdown((d) => {
+      d.addOption("off", "Off");
+      // The saved group is offered even when it is not one of these two, so
+      // the dropdown never shows a choice this device has not made.
+      for (const g of new Set<SettingsGroup>([own, EVERY_DEVICE, ...(group ? [group] : [])])) {
+        d.addOption(g, GROUP_LABELS[g]);
+      }
+      d.setValue(group ?? "off");
+      d.selectEl.setAttribute("aria-label", "Sync settings");
+      d.onChange(async (value) => {
+        if (isSettingsGroup(value)) {
           this.dismiss();
-          new SettingsSyncModal(this.plugin).open();
+          new SettingsSyncModal(this.plugin, value).open();
           return;
         }
-        b.setDisabled(true).setButtonText("Saving");
+        d.setDisabled(true);
         try {
-          await this.plugin.setSettingsSync(false);
-          this.render();
+          await this.plugin.setSettingsSync(undefined);
         } catch (err) {
           new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
-          b.setDisabled(false).setButtonText("Turn off");
         }
-      }),
-    );
+        this.render();
+      });
+    });
   }
 
   /**
@@ -5985,47 +5806,35 @@ class RecoverModal extends Modal {
 }
 
 /**
- * Turning settings sync on: what it does, and whose settings win the first
- * time, which is the one decision it needs (plan/settings-sync.md, section 4).
- * A phone still running the folder desktops share is told to make its own
- * first, which is the order that keeps the two apart.
+ * Turning settings sync on with a group, or moving to another: what it does,
+ * and whose settings win the first time in that group, which is the one
+ * decision it needs (plan/settings-sync.md, section 4).
  */
 class SettingsSyncModal extends Modal {
-  constructor(private readonly plugin: TrewPlugin) {
+  constructor(
+    private readonly plugin: TrewPlugin,
+    private readonly group: SettingsGroup,
+  ) {
     super(plugin.app);
   }
 
   override onOpen(): void {
-    const root = this.plugin.settingsRoot ?? this.plugin.app.vault.configDir;
     this.setTitle("Sync settings");
     this.modalEl.addClass("mod-trew-panel");
     const { contentEl } = this;
     contentEl.addClass("trew-panel");
-    if (Platform.isMobile && !root.includes("-")) {
-      contentEl.createEl("p", {
-        text:
-          `This phone uses ${root}, the settings folder desktops usually share, so turning on here joins ` +
-          "the desktops' settings. To keep the phone's apart, give it a profile of its own first.",
-      });
-      new Setting(contentEl).addButton((b) =>
-        b.setButtonText("Create a profile first").onClick(() => {
-          this.close();
-          new ProfileModal(this.plugin).open();
-        }),
-      );
-    }
     contentEl.createEl("p", {
       text:
-        `Obsidian's settings, themes and CSS snippets in ${root} will sync with every device whose ` +
-        `settings folder is also ${root}. Community plugins do not sync yet.`,
+        `This device's settings, themes and CSS snippets will sync with ${sharedWith(this.group)}. ` +
+        "Community plugins do not sync yet.",
     });
     contentEl.createEl("p", {
       text: "When another device changes a setting, this one waits for you to apply it, which reloads Obsidian.",
     });
     contentEl.createEl("p", {
       text:
-        "If the server already has settings for this folder from another device, which should this device " +
-        "use the first time? A copy of this device's settings as they are now is kept either way.",
+        "If the server already has settings from those devices, which should this device use the first " +
+        "time? A copy of this device's settings as they are now is kept either way.",
     });
     const choices = new Setting(contentEl);
     choices.addButton((b) =>
@@ -6041,7 +5850,7 @@ class SettingsSyncModal extends Modal {
 
   private async choose(choice: "server" | "device"): Promise<void> {
     try {
-      const backup = await this.plugin.setSettingsSync(true, choice);
+      const backup = await this.plugin.setSettingsSync(this.group, choice);
       new Notice(
         `TrewSync: settings sync is on.${backup ? ` This device's settings as they were are kept in ${backup}.` : ""}`,
         10_000,
@@ -6111,77 +5920,31 @@ class ApplySettingsModal extends Modal {
   }
 }
 
-/**
- * A settings profile of this device's own, made from the one it runs, and
- * then the one step only a person can take: pointing Obsidian at it.
- */
-class ProfileModal extends Modal {
-  constructor(private readonly plugin: TrewPlugin) {
-    super(plugin.app);
-  }
+/** The dropdown's name for each group. */
+const GROUP_LABELS: Record<SettingsGroup, string> = {
+  ".obsidian-mobile": "Mobile only",
+  ".obsidian-desktop": "Desktop only",
+  [EVERY_DEVICE]: "Mobile and desktop",
+};
 
-  override onOpen(): void {
-    this.setTitle("Create a settings profile");
-    this.modalEl.addClass("mod-trew-panel");
-    const { contentEl } = this;
-    contentEl.addClass("trew-panel");
-    contentEl.createEl("p", {
-      text:
-        "A profile is a settings folder of its own. Devices that use the same profile share settings when " +
-        "settings sync is on; a phone usually gets one apart from the desktops. The new profile starts as a " +
-        "copy of this device's settings and plugins, with settings sync off until you turn it on there.",
-    });
-    // A phone's is the usual one. A desktop usually shares the folder it has,
-    // so it gets no name it might take without thinking.
-    let name = Platform.isMobile ? "mobile" : "";
-    new Setting(contentEl)
-      .setName("Name")
-      .setDesc("Use lower case letters, digits and dashes.")
-      .addText((t) => {
-        t.setValue(name).onChange((value) => {
-          name = value.trim();
-        });
-        t.inputEl.setAttribute("aria-label", "Profile name");
-      });
-    new Setting(contentEl).addButton((b) =>
-      b
-        .setButtonText("Create")
-        .setCta()
-        .onClick(async () => {
-          b.setDisabled(true).setButtonText("Copying");
-          try {
-            const folder = await this.plugin.createSettingsProfile(name);
-            contentEl.empty();
-            contentEl.createEl("p", {
-              text:
-                `Created ${folder}. Now open Settings, Files and links, Override config folder, enter ${folder} ` +
-                "and relaunch Obsidian. Sync is stopped until it runs there.",
-            });
-          } catch (err) {
-            new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
-            b.setDisabled(false).setButtonText("Create");
-          }
-        }),
-    );
-  }
-
-  override onClose(): void {
-    this.contentEl.empty();
+/** Whom a device in `group` shares its settings with, for a sentence. */
+function sharedWith(group: SettingsGroup): string {
+  switch (group) {
+    case ".obsidian-mobile":
+      return "your other phones and tablets set to Mobile only";
+    case ".obsidian-desktop":
+      return "your other desktops set to Desktop only";
+    case EVERY_DEVICE:
+      return "every device set to Mobile and desktop";
   }
 }
 
-/**
- * The note a profile copy carries of the folder it came from, read once it
- * runs (`finishProfileSwitch`): that folder's index as the copy found it.
- */
-interface ProfileMarker {
-  readonly from: string;
-  readonly index: { size: number; mtime: number } | null;
-  readonly log: { size: number; mtime: number } | null;
+/** A device's saved pairing with nothing of settings sync left in it. */
+function withoutSettingsSync(config: DeviceConfig): DeviceConfig {
+  const next: Record<string, unknown> = { ...config };
+  for (const key of ["settings", "settingsFirstChoice", "settingsReplay"]) delete next[key];
+  return next as unknown as DeviceConfig;
 }
-
-/** Where the copy keeps it, in the plugin's folder, which never syncs. */
-const PROFILE_MARKER = "profile-from.json";
 
 /**
  * Obsidian's own "Reload app without saving", which is all it does

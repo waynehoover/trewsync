@@ -83,6 +83,25 @@ export function generateDeviceToken(): string {
   return base64urlEncode(randomBytes(DEVICE_TOKEN_BYTES));
 }
 
+/** The group every device can join, whatever kind it is: Obsidian's own folder name. */
+export const EVERY_DEVICE = ".obsidian";
+
+/**
+ * The folders on the server a device can sync its settings with
+ * (plan/settings-sync.md): every device's, the phones' and tablets', and the
+ * desktops'. A device picks one, and its own config folder is mapped onto it.
+ * The names are the server's, the same for every device, and never the name
+ * of the folder any one device runs, which is read from `Vault#configDir`.
+ */
+export const SETTINGS_GROUPS = [EVERY_DEVICE, ".obsidian-mobile", ".obsidian-desktop"] as const;
+
+export type SettingsGroup = (typeof SETTINGS_GROUPS)[number];
+
+/** Whether a stored value names one of the groups, exactly. */
+export function isSettingsGroup(value: unknown): value is SettingsGroup {
+  return (SETTINGS_GROUPS as readonly unknown[]).includes(value);
+}
+
 /**
  * What a paired device stores.
  *
@@ -140,12 +159,12 @@ export interface DeviceConfig {
    */
   readonly ignore?: readonly string[];
   /**
-   * Whether this device syncs its Obsidian settings (plan/settings-sync.md):
-   * those of the config folder Obsidian runs from here, with every device
-   * that runs a folder of the same name. Per device, and off unless a person
-   * turns it on here.
+   * The group this device syncs its Obsidian settings with
+   * (plan/settings-sync.md): the folder on the server they go to, whatever
+   * the folder Obsidian runs here is called. Per device, and off, absent,
+   * unless a person turns it on here.
    */
-  readonly settings?: boolean;
+  readonly settings?: SettingsGroup;
   /**
    * Whose copy wins, the first time, for a setting this device has never
    * synced and holds differently from the server: the server's, which
@@ -281,7 +300,7 @@ export function encodeConfig(config: DeviceConfig): Record<string, string> {
     // and a separator is a character a folder is allowed to contain. Written
     // only when there is something to write, for the reason above.
     ...(config.ignore?.length ? { ignore: JSON.stringify(config.ignore) } : {}),
-    ...(config.settings === true ? { settings: "true" } : {}),
+    ...(config.settings !== undefined ? { settings: config.settings } : {}),
     ...(config.settingsFirstChoice ? { settingsFirstChoice: config.settingsFirstChoice } : {}),
     ...(config.settingsReplay === true ? { settingsReplay: "true" } : {}),
   };
@@ -359,7 +378,7 @@ export function decodeConfig(raw: unknown, where: string): DeviceConfig {
     ...(record["readOnly"] === "true" ? { readOnly: true } : {}),
     ...ignoreList(record),
     // The same rule as readOnly: only the string this writes turns it on.
-    ...(record["settings"] === "true" ? { settings: true } : {}),
+    ...(isSettingsGroup(record["settings"]) ? { settings: record["settings"] } : {}),
     ...(record["settingsFirstChoice"] === "server" || record["settingsFirstChoice"] === "device"
       ? { settingsFirstChoice: record["settingsFirstChoice"] }
       : {}),

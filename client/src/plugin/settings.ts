@@ -1,47 +1,30 @@
 /**
  * Settings sync's work on the config folder itself (plan/settings-sync.md):
- * which folder a device runs, the copy of its settings taken before the first
- * sync can replace any, and a new settings profile made from the one running.
+ * the copies of a device's settings kept before the first sync and before
+ * every Apply can replace any.
  *
  * Everything here goes through the adapter, because Obsidian's index never
  * lists a dot folder, and every copy is read back before it counts: a backup
- * nobody checked is a hope, and a profile copied short is a device that
- * relaunches without the plugin that would have noticed.
+ * nobody checked is a hope.
  */
 
 import type { DataAdapter } from "obsidian";
 
-import { configPathReason, isProfileRoot } from "../core/path-policy.ts";
-import { configFolderName } from "../core/paths.ts";
+import { configPathReason } from "../core/path-policy.ts";
 
 type Adapter = Pick<
   DataAdapter,
-  "list" | "exists" | "mkdir" | "readBinary" | "writeBinary" | "remove" | "stat" | "rmdir"
+  "list" | "exists" | "mkdir" | "readBinary" | "writeBinary" | "rmdir"
 >;
 
 /**
- * The profile root a device runs, or undefined when its config folder is not
- * one settings sync can use: `.obsidian`, or `.obsidian-` and a name of 1 to
- * 32 lower-case letters, digits and dashes. Another name cannot be told apart
- * from `.git` or `.trash` by its shape, so it is not guessed at.
+ * Every setting settings sync carries in `root`, the config folder this
+ * device runs, as vault paths, walked as the vault lists them: the JSON files
+ * at its top, `themes/<theme>/<file>` and `snippets/<name>.css`. Judged as
+ * the paths they sync as, under `group` and in NFC, and returned under the
+ * name the disk has, which is the one to copy.
  */
-export function profileRootOf(configDir: string): string | undefined {
-  const name = configFolderName(configDir);
-  return isProfileRoot(name) ? name : undefined;
-}
-
-/** Whether `name` makes a profile root as `.obsidian-<name>`. */
-export function isProfileName(name: string): boolean {
-  return isProfileRoot(`.obsidian-${name}`);
-}
-
-/**
- * Every setting settings sync carries in `root`, as vault paths, walked as
- * the vault lists them: the JSON files at its top, `themes/<theme>/<file>`
- * and `snippets/<name>.css`. Judged under the name the vault syncs, in NFC,
- * and returned under the name the disk has, which is the one to copy.
- */
-export async function settingsIn(adapter: Adapter, root: string): Promise<string[]> {
+export async function settingsIn(adapter: Adapter, root: string, group: string): Promise<string[]> {
   if (!(await adapter.exists(root))) return [];
   const out: string[] = [];
   const folders = [root];
@@ -53,29 +36,9 @@ export async function settingsIn(adapter: Adapter, root: string): Promise<string
       if (rel === "themes" || rel === "snippets" || theme) folders.push(folder);
     }
     for (const file of here.files) {
-      if (configPathReason(file.normalize("NFC")) === undefined) out.push(file);
+      const synced = `${group}${file.slice(root.length)}`.normalize("NFC");
+      if (configPathReason(synced) === undefined) out.push(file);
     }
-  }
-  return out.sort();
-}
-
-/**
- * Folders a profile copy leaves out: a plugin developer's dependencies and
- * repository, which can be most of a desktop's config folder and are no part
- * of a plugin Obsidian loads.
- */
-const NOT_COPIED = new Set(["node_modules", ".git"]);
-
-/** Every file in `root` and everything under it, as vault paths. */
-async function everythingIn(adapter: Adapter, root: string): Promise<string[]> {
-  const out: string[] = [];
-  const folders = [root];
-  while (folders.length > 0) {
-    const here = await adapter.list(folders.pop()!);
-    for (const folder of here.folders) {
-      if (!NOT_COPIED.has(folder.slice(folder.lastIndexOf("/") + 1))) folders.push(folder);
-    }
-    out.push(...here.files);
   }
   return out.sort();
 }
@@ -120,21 +83,27 @@ async function ensureFolder(adapter: Adapter, folder: string): Promise<void> {
 
 /**
  * Keeps this device's settings, as they are, before settings sync first runs
- * here (rule 3). The server's version of a setting this device has never
- * synced replaces it without a copy beside it, because the replacement is
+ * here with `group` (rule 3), whether it was off or syncing with another
+ * group. The server's version of a setting this device has never synced in
+ * that group replaces it without a copy beside it, because the replacement is
  * what the person chose, so this is the copy. In a new folder each time,
- * under the plugin's own, which never syncs.
+ * under the plugin's own, which never syncs: one made in the same second as
+ * the last, by changing group twice, takes the next free name rather than
+ * refusing the change or filling the earlier copy.
  */
 export async function backUpSettings(
   adapter: Adapter,
   root: string,
+  group: string,
   pluginDir: string,
   now: Date,
 ): Promise<{ folder: string; files: number }> {
   const stamp = now.toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
-  const folder = `${pluginDir}/settings-before-sync-${stamp}`;
-  if (await adapter.exists(folder)) throw new Error(`${folder} is already there`);
-  const files = await copyVerified(adapter, await settingsIn(adapter, root), root, folder);
+  let folder = `${pluginDir}/settings-before-sync-${stamp}`;
+  for (let n = 2; await adapter.exists(folder); n++) {
+    folder = `${pluginDir}/settings-before-sync-${stamp}-${n}`;
+  }
+  const files = await copyVerified(adapter, await settingsIn(adapter, root, group), root, folder);
   return { folder, files };
 }
 
@@ -148,41 +117,10 @@ export async function backUpSettings(
 export async function keepSettingsBeforeApply(
   adapter: Adapter,
   root: string,
+  group: string,
   pluginDir: string,
 ): Promise<number> {
   const folder = `${pluginDir}/settings-before-apply`;
   if (await adapter.exists(folder)) await adapter.rmdir(folder, true);
-  return copyVerified(adapter, await settingsIn(adapter, root), root, folder);
-}
-
-/**
- * A new settings profile, `to`, as a verified copy of everything in `from`:
- * settings, plugins and this plugin with its pairing and index, so the device
- * that relaunches into it syncs on from where it was. Refused when `to` is
- * already there, because copying into a profile another device has filled
- * would mix two devices' settings in one folder.
- *
- * A copy that fails part way is removed, because a profile without every
- * plugin in it is one Obsidian relaunches into without this one: `to` was
- * not there before, and nothing else writes a folder no device runs.
- */
-export async function createProfile(adapter: Adapter, from: string, to: string): Promise<number> {
-  if (await adapter.exists(to)) {
-    throw new Error(`${to} already exists. Choose another name.`);
-  }
-  try {
-    return await copyVerified(adapter, await everythingIn(adapter, from), from, to);
-  } catch (err) {
-    if (await adapter.exists(to)) await adapter.rmdir(to, true);
-    throw err;
-  }
-}
-
-/** Size and time of a file, or null when it is not there. */
-export async function stampOf(
-  adapter: Adapter,
-  path: string,
-): Promise<{ size: number; mtime: number } | null> {
-  const stat = await adapter.stat(path);
-  return stat === null ? null : { size: stat.size, mtime: stat.mtime };
+  return copyVerified(adapter, await settingsIn(adapter, root, group), root, folder);
 }

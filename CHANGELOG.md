@@ -11,6 +11,16 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Plugin
+
+- **Settings sync is one choice on each device:** Off, Mobile only (Desktop
+  only on a desktop), or Mobile and desktop, under **Manage this vault**,
+  **Sync settings**. Every device keeps its own settings folder, and TrewSync
+  maps it onto the group's folder on the server, so there is no settings
+  profile to create, no Override config folder to set and no relaunch.
+  **Create a settings profile for this device** is gone. A device that turned
+  settings sync on in 0.13.0 has it off again until you choose a group.
+
 ### Server
 
 - Releases carry four binaries, the ones Homebrew installs: Linux and macOS,

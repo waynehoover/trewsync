@@ -4,7 +4,7 @@ Drafted 2026-10-09 against commit `38c7604`; line references are at that commit.
 
 **Decided by the owner, 2026-10-09.** Reverse the refusal for Obsidian's own settings, and sync community plugins later (§6, phase 2). Phones share their settings with phones and desktops with desktops: one profile per device class, through Obsidian's own override, which is (a) in §2. A change arriving for the profile a device runs waits for Apply and reload (§4); applying the files Obsidian already reloads live on desktops is deferred. The remaining questions in §8 have defaults and do not block the MVP.
 
-**Summary.** Sync Obsidian's configuration folders as versioned data. Each device class runs its own folder, chosen with Obsidian's own per-device "Override config folder": `.obsidian` on the desktops, `.obsidian-mobile` on the phone. A device syncs only the folder it runs, and the server keeps every folder with its history. A change to the folder it runs lands only through an explicit "Apply and reload". The MVP covers Obsidian's own settings, hotkeys, core plugins, snippets and themes; community plugins (code and settings together) are a second phase behind per-change confirmation. Agents never see any of it.
+**Summary.** Sync Obsidian's configuration folders as versioned data. Each device chooses a group, its own kind of device or every device, and the folder it runs syncs with that group's folder on the server: `.obsidian-mobile` for phones and tablets, `.obsidian-desktop` for desktops, `.obsidian` for every device ("Groups instead of profile folders", below, which replaced the override folders of §2 after 0.13.0). A device syncs only its group's folder, and the server keeps every folder with its history. A change to the folder it runs lands only through an explicit "Apply and reload". The MVP covers Obsidian's own settings, hotkeys, core plugins, snippets and themes; community plugins (code and settings together) are a second phase behind per-change confirmation. Agents never see any of it.
 
 ## 0. What this reverses, and where each reason is answered
 
@@ -157,6 +157,15 @@ Obsidian's index (`getAllLoadedFiles`, vault.ts:666-723) leaves config files out
 5. Should `trewd restore -to-uid` roll settings back along with notes? Default: yes, as one undoable operation, which is what it does to every path today.
 7. The denylist, including obsidian-git and Local REST API on the Mac. Default: as listed in §6. It matters from phase 2, when plugins move.
 8. In phase 2, accept other plugins' API keys in plaintext on the server and in its backups? Asked again before phase 2.
+
+## Groups instead of profile folders, 2026-10-10 (after 0.13.0)
+
+Decided by the owner after 0.13.0 shipped, before any device used a profile. §2's arrangement, a device class running its own folder through Obsidian's "Override config folder", gives way to one choice on each device:
+
+- **Off, Mobile only (Desktop only on a desktop), or Mobile and desktop**, one dropdown in the panel. The device's pairing saves the group's folder (`settings`), never the name of the folder it runs. 0.13.0's `settings: "true"` names no group and reads as off.
+- **Every device keeps the folder it runs.** The plugin's vault adapter maps it onto the group's folder on the server: the walk names what it finds under the group's folder, `resolve` writes the group's paths into the folder Obsidian runs, and every other group's paths, the one spelled like the folder it runs included, are refused as before. This is option (c) of §2, with the translation kept inside the adapter, so the server, the protocol and its fixtures are unchanged, and a config folder of any name works.
+- **Changing group is turning settings sync on again.** It keeps a copy of the device's settings and asks the first-time question for the new group; the group it leaves keeps its settings on the server, out of scope here as every other root is. The one change to the engine: at start it forgets its record of every setting outside the device's group, because a base kept from an earlier stay would decide the device's return against a copy it has moved past, over the answer it just gave. A missing record is decided as a first time, and never reads as a deletion.
+- **Gone:** "Create a settings profile for this device", the stop until Obsidian runs the copy, its marker and index handoff, and Undo, which held the most serious defects the plugin review found.
 
 ## Changed in review, 2026-10-10
 

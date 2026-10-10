@@ -1319,6 +1319,14 @@ export class Engine {
       this.cursor = stored.cursor;
       this.epoch = stored.epoch;
       for (const [path, raw] of Object.entries(stored.entries)) {
+        // A setting outside this device's group is not this device's to
+        // remember. It was synced while the device was in another group, or
+        // had settings sync on, and a base kept from then would decide the
+        // device's next first time in that group against a copy it has since
+        // moved past, over the person's answer to the first-time question.
+        // Without one it is decided as a first time is, which never reads as
+        // a deletion; what the server holds for it is in `remote`, kept.
+        if (this.outOfScope(path)) continue;
         this.entries.set(path, unpacked(path, raw as Record<string, unknown>));
       }
       for (const [path, raw] of Object.entries(stored.remote)) {

@@ -1,8 +1,8 @@
 /**
  * Settings sync on the plugin's side (plan/settings-sync.md): the config
- * folder the vault lists and writes when settings sync is on, the copy of a
- * device's settings kept before the first sync, and a profile made from the
- * one running.
+ * folder the vault lists and writes when settings sync is on, under the name
+ * of the group the device chose, and the copies of a device's settings kept
+ * before the first sync and before every Apply.
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
@@ -10,14 +10,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { decodeConfig, encodeConfig, type DeviceConfig } from "../core/pairing.ts";
 import { FakeAdapter, FakeVaultIndex, asVault } from "./fake.ts";
 import { resetStub } from "./stub.ts";
-import {
-  backUpSettings,
-  createProfile,
-  isProfileName,
-  keepSettingsBeforeApply,
-  profileRootOf,
-  settingsIn,
-} from "./settings.ts";
+import { backUpSettings, keepSettingsBeforeApply, settingsIn } from "./settings.ts";
 import { ObsidianVault } from "./vault.ts";
 
 const enc = new TextEncoder();
@@ -72,7 +65,7 @@ describe("the vault, with settings sync", () => {
     await configFolder(adapter, ".obsidian-mobile");
     await write(adapter, "note.md", "a note");
     const on = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian", undefined, {
-      settings: true,
+      settings: ".obsidian",
     });
     const off = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian");
     const files = async (v: ObsidianVault) =>
@@ -88,7 +81,7 @@ describe("the vault, with settings sync", () => {
     const adapter = new FakeAdapter();
     await configFolder(adapter);
     const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian", undefined, {
-      settings: true,
+      settings: ".obsidian",
     });
     await vault.write(".obsidian/snippets/new.css", enc.encode(".new {}"), times);
     expect(dec.decode(await adapter.readBinary(".obsidian/snippets/new.css"))).toBe(".new {}");
@@ -114,6 +107,90 @@ describe("the vault, with settings sync", () => {
   });
 });
 
+describe("the vault, syncing the folder Obsidian runs as its group's", () => {
+  const SETTINGS_IN_GROUP = SETTINGS.map(
+    (path) => `.obsidian-mobile${path.slice(".obsidian".length)}`,
+  );
+
+  it("lists the settings under the group's name, and writes them back into the folder it runs", async () => {
+    const adapter = new FakeAdapter();
+    await configFolder(adapter);
+    await write(adapter, "note.md", "a note");
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian", undefined, {
+      settings: ".obsidian-mobile",
+    });
+    const files = (await vault.list())
+      .filter((f) => !f.folder)
+      .map((f) => f.path)
+      .sort();
+    expect(files).toEqual([...SETTINGS_IN_GROUP, "note.md"].sort());
+    expect(dec.decode(await vault.read(".obsidian-mobile/app.json"))).toBe(`{"spellcheck": true}`);
+    expect(await vault.stat(".obsidian-mobile/app.json")).toMatchObject({
+      path: ".obsidian-mobile/app.json",
+    });
+
+    await vault.write(".obsidian-mobile/snippets/new.css", enc.encode(".new {}"), times);
+    expect(dec.decode(await adapter.readBinary(".obsidian/snippets/new.css"))).toBe(".new {}");
+    expect(await vault.exists(".obsidian-mobile/snippets/new.css")).toBe(true);
+    expect(await adapter.exists(".obsidian-mobile"), "a folder of the group's name was made").toBe(
+      false,
+    );
+  });
+
+  it("refuses every other group's settings, the one named like the folder it runs included", async () => {
+    const adapter = new FakeAdapter();
+    await configFolder(adapter);
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian", undefined, {
+      settings: ".obsidian-mobile",
+    });
+    await vault.list();
+    for (const path of [
+      ".obsidian/app.json",
+      ".obsidian-desktop/app.json",
+      ".obsidian-mobile/plugins/trew-sync/data.json",
+      ".obsidian-mobile/workspace.json",
+    ]) {
+      await expect(vault.write(path, enc.encode("{}"), times), path).rejects.toMatchObject({
+        code: "neversync",
+      });
+    }
+    expect(dec.decode(await adapter.readBinary(".obsidian/app.json"))).toBe(`{"spellcheck": true}`);
+    expect(dec.decode(await adapter.readBinary(".obsidian/plugins/trew-sync/data.json"))).toContain(
+      "secret",
+    );
+  });
+
+  it("syncs a config folder of any name", async () => {
+    const adapter = new FakeAdapter();
+    await configFolder(adapter, ".my-config");
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".my-config", undefined, {
+      settings: ".obsidian",
+    });
+    const files = (await vault.list()).filter((f) => !f.folder).map((f) => f.path);
+    expect(files.sort()).toEqual(SETTINGS);
+    await vault.write(".obsidian/snippets/new.css", enc.encode(".new {}"), times);
+    expect(dec.decode(await adapter.readBinary(".my-config/snippets/new.css"))).toBe(".new {}");
+  });
+
+  it("names a setting the walk missed, and the engine found there, under the group's name", async () => {
+    const adapter = new FakeAdapter();
+    await configFolder(adapter);
+    const list = adapter.list.bind(adapter);
+    adapter.list = async (path) => {
+      if (path === ".obsidian") throw new Error("EIO: i/o error, scandir");
+      return list(path);
+    };
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian", undefined, {
+      settings: ".obsidian-mobile",
+    });
+    const files = (await vault.list({ present: [".obsidian-mobile/app.json"] })).map((f) => f.path);
+    // Under the disk's name, the engine would read the setting it asked about
+    // as gone, and send its deletion.
+    expect(files).toContain(".obsidian-mobile/app.json");
+    expect(files).not.toContain(".obsidian/app.json");
+  });
+});
+
 describe("the vault's settings walk", () => {
   it("keeps the notes' listing when part of the settings folder cannot be read", async () => {
     const adapter = new FakeAdapter();
@@ -126,7 +203,7 @@ describe("the vault's settings walk", () => {
       return list(path);
     };
     const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian", undefined, {
-      settings: true,
+      settings: ".obsidian",
     });
     const files = (await vault.list()).filter((f) => !f.folder).map((f) => f.path);
     expect(files).toContain("note.md");
@@ -141,7 +218,7 @@ describe("the vault's settings walk", () => {
     await write(adapter, nfc, ".one {}");
     await write(adapter, nfd, ".other {}");
     const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian", undefined, {
-      settings: true,
+      settings: ".obsidian",
     });
     const files = (await vault.list()).filter((f) => !f.folder).map((f) => f.path);
     expect(files).toContain(".obsidian/app.json");
@@ -153,7 +230,7 @@ describe("the vault's settings walk", () => {
     const adapter = new FakeAdapter();
     await configFolder(adapter);
     const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian", undefined, {
-      settings: true,
+      settings: ".obsidian",
       ignore: ["wide.css", "themes"],
     });
     const files = (await vault.list())
@@ -171,22 +248,15 @@ describe("the vault's settings walk", () => {
 });
 
 describe("the settings folder", () => {
-  it("is a profile root only under a name settings sync can tell from any other dot folder", () => {
-    expect(profileRootOf(".obsidian")).toBe(".obsidian");
-    expect(profileRootOf("/.obsidian-mobile/")).toBe(".obsidian-mobile");
-    expect(profileRootOf(".my-config")).toBeUndefined();
-    expect(profileRootOf(".obsidian-Mobile")).toBeUndefined();
-    expect(isProfileName("mobile")).toBe(true);
-    expect(isProfileName("phone-2")).toBe(true);
-    for (const bad of ["", "Mobile", "-x", "a/b", "x".repeat(33)])
-      expect(isProfileName(bad), bad).toBe(false);
-  });
-
   it("holds the settings settings sync carries, found the way the vault lists them", async () => {
     const adapter = new FakeAdapter();
     await configFolder(adapter);
-    expect(await settingsIn(adapter, ".obsidian")).toEqual(SETTINGS);
-    expect(await settingsIn(adapter, ".obsidian-none")).toEqual([]);
+    expect(await settingsIn(adapter, ".obsidian", ".obsidian-desktop")).toEqual(SETTINGS);
+    expect(await settingsIn(adapter, ".obsidian-none", ".obsidian")).toEqual([]);
+    await configFolder(adapter, ".my-config");
+    expect(await settingsIn(adapter, ".my-config", ".obsidian")).toEqual(
+      SETTINGS.map((path) => `.my-config${path.slice(".obsidian".length)}`),
+    );
   });
 });
 
@@ -197,6 +267,7 @@ describe("the copy kept before the first sync", () => {
     const kept = await backUpSettings(
       adapter,
       ".obsidian",
+      ".obsidian-mobile",
       ".obsidian/plugins/trew-sync",
       new Date("2026-10-10T01:02:03Z"),
     );
@@ -212,69 +283,17 @@ describe("the copy kept before the first sync", () => {
     }
   });
 
-  it("refuses to fill a folder that is already there", async () => {
+  it("never fills an earlier copy, made in the same second or not", async () => {
     const adapter = new FakeAdapter();
     await configFolder(adapter);
     const at = new Date("2026-10-10T01:02:03Z");
-    await backUpSettings(adapter, ".obsidian", ".obsidian/plugins/trew-sync", at);
-    await expect(
-      backUpSettings(adapter, ".obsidian", ".obsidian/plugins/trew-sync", at),
-    ).rejects.toThrow("already there");
-  });
-});
-
-describe("a new settings profile", () => {
-  it("is a read-back copy of everything, plugins and pairing included, and leaves the old folder whole", async () => {
-    const adapter = new FakeAdapter();
-    await configFolder(adapter);
-    await write(adapter, ".obsidian/plugins/dev-plugin/node_modules/x/index.js", "a dependency");
-    await write(adapter, ".obsidian/plugins/dev-plugin/.git/HEAD", "ref: refs/heads/main");
-    await write(adapter, ".obsidian/plugins/dev-plugin/main.js", "module.exports = {}");
-    await createProfile(adapter, ".obsidian", ".obsidian-mobile");
-    for (const path of [
-      "app.json",
-      "workspace.json",
-      "community-plugins.json",
-      "themes/Tela/theme.css",
-      "plugins/trew-sync/data.json",
-      "plugins/trew-sync/index.json",
-      "plugins/dataview/main.js",
-      "plugins/dev-plugin/main.js",
-    ]) {
-      expect(await adapter.exists(`.obsidian-mobile/${path}`), path).toBe(true);
-    }
-    expect(await adapter.exists(".obsidian-mobile/plugins/dev-plugin/node_modules")).toBe(false);
-    expect(await adapter.exists(".obsidian-mobile/plugins/dev-plugin/.git")).toBe(false);
-    expect(
-      dec.decode(await adapter.readBinary(".obsidian-mobile/plugins/trew-sync/index.json")),
-    ).toBe(`{"cursor": 9}`);
-    // The folder still running keeps its index until the copy runs.
-    expect(await adapter.exists(".obsidian/plugins/trew-sync/index.json")).toBe(true);
-  });
-
-  it("is never made over a profile that is already there", async () => {
-    const adapter = new FakeAdapter();
-    await configFolder(adapter);
-    await write(adapter, ".obsidian-mobile/app.json", `{"from": "the phone"}`);
-    await expect(createProfile(adapter, ".obsidian", ".obsidian-mobile")).rejects.toThrow(
-      "already exists",
-    );
-    expect(dec.decode(await adapter.readBinary(".obsidian-mobile/app.json"))).toBe(
-      `{"from": "the phone"}`,
-    );
-  });
-
-  it("is removed when the copy fails part way, so nothing half made is left to relaunch into", async () => {
-    const adapter = new FakeAdapter();
-    await configFolder(adapter);
-    let writes = 0;
-    const writeBinary = adapter.writeBinary.bind(adapter);
-    adapter.writeBinary = async (path, data, options) => {
-      if (++writes === 3) throw new Error("ENOSPC: no space left on device");
-      return writeBinary(path, data, options);
-    };
-    await expect(createProfile(adapter, ".obsidian", ".obsidian-mobile")).rejects.toThrow("ENOSPC");
-    expect(await adapter.exists(".obsidian-mobile")).toBe(false);
+    const dir = ".obsidian/plugins/trew-sync";
+    const first = await backUpSettings(adapter, ".obsidian", ".obsidian", dir, at);
+    await adapter.write(".obsidian/app.json", `{"spellcheck": false}`);
+    const second = await backUpSettings(adapter, ".obsidian", ".obsidian", dir, at);
+    expect(second.folder).toBe(`${first.folder}-2`);
+    expect(dec.decode(await adapter.readBinary(`${first.folder}/app.json`))).toContain("true");
+    expect(dec.decode(await adapter.readBinary(`${second.folder}/app.json`))).toContain("false");
   });
 });
 
@@ -283,10 +302,14 @@ describe("the copy kept before an Apply", () => {
     const adapter = new FakeAdapter();
     await configFolder(adapter);
     const dir = ".obsidian/plugins/trew-sync";
-    expect(await keepSettingsBeforeApply(adapter, ".obsidian", dir)).toBe(SETTINGS.length);
+    expect(await keepSettingsBeforeApply(adapter, ".obsidian", ".obsidian", dir)).toBe(
+      SETTINGS.length,
+    );
     await adapter.remove(".obsidian/snippets/wide.css");
     await adapter.write(".obsidian/app.json", `{"spellcheck": false}`);
-    expect(await keepSettingsBeforeApply(adapter, ".obsidian", dir)).toBe(SETTINGS.length - 1);
+    expect(await keepSettingsBeforeApply(adapter, ".obsidian", ".obsidian", dir)).toBe(
+      SETTINGS.length - 1,
+    );
     expect(dec.decode(await adapter.readBinary(`${dir}/settings-before-apply/app.json`))).toContain(
       "false",
     );
@@ -298,7 +321,7 @@ describe("the copy kept before an Apply", () => {
     await configFolder(adapter);
     const nfd = ".obsidian/themes/Cafe\u0301/theme.css";
     await write(adapter, nfd, "body {}");
-    expect(await settingsIn(adapter, ".obsidian")).toContain(nfd);
+    expect(await settingsIn(adapter, ".obsidian", ".obsidian")).toContain(nfd);
   });
 });
 
@@ -311,19 +334,26 @@ describe("the device's settings switch", () => {
     deviceToken: "A".repeat(43),
   };
 
-  it("is saved and read back, and off unless it says exactly on", () => {
-    const on: DeviceConfig = { ...base, settings: true, settingsFirstChoice: "server" };
+  it("is saved and read back, and off unless it names a group exactly", () => {
+    const on: DeviceConfig = {
+      ...base,
+      settings: ".obsidian-mobile",
+      settingsFirstChoice: "server",
+    };
     expect(decodeConfig(encodeConfig(on), "data.json")).toMatchObject({
-      settings: true,
+      settings: ".obsidian-mobile",
       settingsFirstChoice: "server",
     });
-    const off = decodeConfig(encodeConfig({ ...base, settings: false }), "data.json");
-    expect(off.settings).toBeUndefined();
-    const odd = decodeConfig(
-      { ...encodeConfig(base), settings: "yes", settingsFirstChoice: "both" },
+    expect(decodeConfig(encodeConfig(base), "data.json").settings).toBeUndefined();
+    // 0.13.0 saved "true", which names no group, so it reads as off.
+    for (const odd of ["true", "yes", ".obsidian-linux", ".OBSIDIAN"]) {
+      const read = decodeConfig({ ...encodeConfig(base), settings: odd }, "data.json");
+      expect(read.settings, odd).toBeUndefined();
+    }
+    const choice = decodeConfig(
+      { ...encodeConfig(base), settingsFirstChoice: "both" },
       "data.json",
     );
-    expect(odd.settings).toBeUndefined();
-    expect(odd.settingsFirstChoice).toBeUndefined();
+    expect(choice.settingsFirstChoice).toBeUndefined();
   });
 });

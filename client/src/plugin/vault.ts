@@ -545,9 +545,10 @@ export class ObsidianVault implements Vault {
    * @param opts.displacedLog Where the record of versions this client took off
    *   a name and could not put back is kept. Inside the plugin's own folder,
    *   because it is this device's bookkeeping and must not sync.
-   * @param opts.settings Whether this device syncs its settings: the config
-   *   folder's settings are then listed and written like notes, and nothing
-   *   else in it is (plan/settings-sync.md).
+   * @param opts.settings The group this device syncs its settings with, the
+   *   folder on the server they go to, when it syncs them: the config
+   *   folder's settings are then listed and written like notes, under that
+   *   folder's name, and nothing else in it is (plan/settings-sync.md).
    */
   constructor(
     private readonly vault: ObsidianVaultApi,
@@ -558,7 +559,7 @@ export class ObsidianVault implements Vault {
       fs?: FsyncFs;
       displacedLog?: string;
       ignore?: readonly string[];
-      settings?: boolean;
+      settings?: string;
     } = {},
   ) {
     this.adapter = vault.adapter;
@@ -582,7 +583,8 @@ export class ObsidianVault implements Vault {
     // segment, so `Attachments` skips it wherever it is.
     this.ignore = new Set([configFolderName(configDir), ...(opts.ignore ?? [])]);
     this.skipHere = new Set(opts.ignore ?? []);
-    this.settingsRoot = opts.settings === true ? configFolderName(configDir) : undefined;
+    this.configRoot = configFolderName(configDir);
+    this.settingsRoot = opts.settings;
   }
 
   /** The names this device was told to leave alone, without the config folder's. */
@@ -604,11 +606,37 @@ export class ObsidianVault implements Vault {
   }
 
   /**
-   * The config folder, when this device syncs its settings; undefined when
-   * it does not. Only the folder Obsidian runs from here: another device's
-   * profile is not this device's to write (plan/settings-sync.md, section 2).
+   * The group's folder on the server, when this device syncs its settings;
+   * undefined when it does not. Every setting the engine is told of, and
+   * every one it asks for, is under it; another group's folder is not this
+   * device's to write (plan/settings-sync.md).
    */
   private readonly settingsRoot: string | undefined;
+
+  /** The config folder Obsidian runs here, which holds the settings on this disk. */
+  private readonly configRoot: string;
+
+  /**
+   * A path the engine knows, as this disk holds it: a setting under the
+   * group's folder is in the config folder Obsidian runs, whatever that is
+   * called. Everything else is where its path says.
+   */
+  private toDisk(path: string): string {
+    const group = this.settingsRoot;
+    return group !== undefined && group !== this.configRoot && path.startsWith(group + "/")
+      ? this.configRoot + path.slice(group.length)
+      : path;
+  }
+
+  /** A path on this disk, as the engine knows it: `toDisk` the other way. */
+  private fromDisk(path: string): string {
+    const group = this.settingsRoot;
+    return group !== undefined &&
+      group !== this.configRoot &&
+      path.startsWith(this.configRoot + "/")
+      ? group + path.slice(this.configRoot.length)
+      : path;
+  }
 
   /**
    * Whether a path is a setting this device syncs. The names this device was
@@ -641,11 +669,10 @@ export class ObsidianVault implements Vault {
    */
   private async listSettings(out: FileStat[]): Promise<Set<string>> {
     const listed = new Set<string>();
-    const root = this.settingsRoot;
-    if (root === undefined) return listed;
+    if (this.settingsRoot === undefined) return listed;
     const found = new Map<string, { raw: string; stat: FileStat }[]>();
     try {
-      await this.walkSettings(root, found);
+      await this.walkSettings(this.configRoot, found);
     } catch (err) {
       this.log(`the settings folder could not be listed in full: ${(err as Error).message}`);
     }
@@ -680,7 +707,7 @@ export class ObsidianVault implements Vault {
       }
       for (const file of here.files) {
         const raw = trimLeadingSlash(file);
-        const path = this.normalOf(raw);
+        const path = this.fromDisk(this.normalOf(raw));
         if (!this.inSettings(path)) continue;
         const stat = await this.adapter.stat(raw);
         if (stat?.type !== "file") continue;
@@ -961,7 +988,7 @@ export class ObsidianVault implements Vault {
   ): Promise<void> {
     let folded: Set<string> | undefined;
     for (const raw of [...this.unlisted]) {
-      const path = this.normalOf(raw);
+      const path = this.fromDisk(this.normalOf(raw));
       if (indexed.has(path) || settings.has(path)) {
         this.unlisted.delete(raw);
         continue;
@@ -1001,7 +1028,7 @@ export class ObsidianVault implements Vault {
     } finally {
       this.renaming.delete(from);
     }
-    if (!this.ignored(to)) this.unlisted.add(to);
+    if (!this.ignored(this.fromDisk(to))) this.unlisted.add(to);
   }
 
   /** Each rename in hand, from its source to its destination. */
@@ -1186,7 +1213,7 @@ export class ObsidianVault implements Vault {
         ? ignoredHereError(`not writing under a name this device does not sync: ${path}`)
         : neverSync(`refusing to write inside a folder that is never synced: ${path}`);
     }
-    return this.actualName.get(normalized) ?? normalized;
+    return this.actualName.get(normalized) ?? this.toDisk(normalized);
   }
 
   /**
@@ -2293,7 +2320,7 @@ export class ObsidianVault implements Vault {
    * is hidden, and what is in it is judged by where it came from.
    */
   private unsyncedIn(listed: string, home: string): (file: string) => boolean {
-    return (file) => this.ignored(`${home}${file.slice(listed.length)}`);
+    return (file) => this.ignored(this.fromDisk(`${home}${file.slice(listed.length)}`));
   }
 
   /**

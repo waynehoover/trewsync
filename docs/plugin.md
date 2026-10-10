@@ -317,28 +317,32 @@ both versions on a conflict is not a promise that sync never changes an open fil
 ## Settings sync
 
 Off until you turn it on, on each device: **Manage this vault**, **Sync
-settings**, **Turn on**. It syncs Obsidian's own settings, themes and CSS
-snippets from the settings folder this device runs, with every device that
-runs a folder of the same name. That includes core plugins and their settings,
-such as Daily notes and Templates. Community plugins, their settings and the
-workspace layout do not sync. Names you have told this device to skip are
-skipped in the settings folder too. It needs a server from this release on,
+settings**. It syncs Obsidian's own settings, themes and CSS snippets from the
+settings folder this device runs. That includes core plugins and their
+settings, such as Daily notes and Templates. Community plugins, their settings
+and the workspace layout do not sync. Names you have told this device to skip
+are skipped in the settings folder too. It needs a server of 0.13.0 or later,
 which speaks protocol 3; upgrade the server first.
 
-**Keeping a phone's settings apart.** Devices share settings by folder, and
-desktops usually all run `.obsidian`. To give a phone its own, run **Create a
-settings profile for this device** on it (also under **Manage this vault**,
-**Settings profile**), before turning settings sync on. That copies the phone's
-settings folder, plugins included, to `.obsidian-mobile` or a name you choose,
-with settings sync off in the copy. Sync then stops until Obsidian runs the
-copy: open Obsidian's **Settings**, **Files and links**, **Override config
-folder**, enter `.obsidian-mobile` and relaunch Obsidian. **Undo** in the same
-place removes the copy and syncs on as before. Once the phone runs the copy,
-turn settings sync on there. Another phone that does the same shares the phone
-settings.
+**Whom a device shares its settings with.** **Sync settings** is one choice,
+made on each device:
+
+- **Off**, the default.
+- **Mobile only**, on a phone or tablet: shared with your other phones and
+  tablets set to Mobile only. On a desktop the same choice is **Desktop
+  only**, shared with your other desktops set to Desktop only.
+- **Mobile and desktop**: shared with every device set to Mobile and desktop.
+
+Every device keeps its own settings folder, `.obsidian` or whatever Obsidian
+runs there, and nothing needs renaming, overriding or relaunching: TrewSync
+keeps each group's settings in a folder of its own on the server, `.obsidian`
+for Mobile and desktop, `.obsidian-mobile` and `.obsidian-desktop` for the
+others, and maps it onto the folder each device runs. Changing the choice
+later is the same as turning settings sync on: TrewSync asks the first-time
+question again, and the group you leave keeps its settings on the server.
 
 **The first time.** When you turn it on, TrewSync asks which settings to use
-where the server already has some for this folder from another device and this
+where the server already has some from the group's other devices and this
 device's differ: the server's, or this device's. The answer is for that first
 time only; later, a setting changed on two devices before either synced it
 keeps both copies, as a note does. Either way TrewSync first keeps a copy of
