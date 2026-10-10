@@ -160,6 +160,16 @@ Obsidian's index (`getAllLoadedFiles`, vault.ts:666-723) leaves config files out
 7. The denylist, including obsidian-git and Local REST API on the Mac. Default: as listed in §6. It matters from phase 2, when plugins move.
 8. In phase 2, accept other plugins' API keys in plaintext on the server and in its backups? Asked again before phase 2.
 
+## Spike results, 2026-10-09 (MVP step 0)
+
+On the owner's Pixel 9a, Obsidian 1.14.4 for Android, TrewSync 0.12.1, battery saver on, through the WebView's DevTools:
+
+- **The override exists on Android**, in Files and links: "Override config folder. Use a different config folder than the default one. Must start with a dot." Its Relaunch button stores the folder under `<appId>-config` in localStorage, where `appId` is the vault's path on Android (`/storage/emulated/0/Documents/PKB`), and in Capacitor's native preferences under the same key, then calls `window.location.reload()`. The plugin should send the person to that setting rather than write either store itself: it cannot reach the native half through a public API.
+- **`window.location.reload()` works on Android.** After saving the one open editor, the layout was ready and TrewSync loaded 2.3 s after the call, and TrewSync went straight back to connecting.
+- **Writes into the config folder raise `raw` on Android.** A file written and removed through the adapter raised `raw` within 20 ms of each. Obsidian's own hotkey manager listens for `raw` on `hotkeys.json` and reloads hotkeys from it, on Android as well, so hotkeys are a candidate for the deferred live apply.
+- **The walk is cheap.** The phone's `.obsidian` holds 19 files: listing took 55 ms and stat on all of them 63 ms. Five are in the MVP's scope (`app.json`, `appearance.json`, `core-plugins.json`, and a theme's `manifest.json` and `theme.css`); `workspace-mobile.json` never syncs and `community-plugins.json` is phase 2.
+- **A backgrounded Obsidian answers nothing.** With another app in front, even a trivial evaluation never returned: Android pauses the WebView. Nothing new for the design, since the plugin syncs only while Obsidian is open (docs/compared.md), but a spike or test on the phone has to keep Obsidian in front.
+
 ## Sources
 
 Repository facts cite paths and lines at `38c7604`; `obsidian.d.ts` is the `obsidian` 1.13.1 package in `client/node_modules`. External:
