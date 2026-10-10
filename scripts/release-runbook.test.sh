@@ -122,6 +122,19 @@ case $verify in
   *) bad "no verify-release command in the runbook" ;;
 esac
 
+# ---- the formula is rendered for the tap, not over its own template -------
+#
+# homebrew-formula.sh reads packaging/homebrew/trewd.rb, the template, and the
+# runbook sent its output into that same file, so the shell emptied the
+# template before the script could read it and the render failed. It did, at
+# 0.12.1. The rendered formula is the tap's.
+formula=$(printf '%s\n' "$with" | grep '^[[:space:]]*scripts/homebrew-formula.sh ' || true)
+case $formula in
+  "")                                bad "no formula command in the runbook" ;;
+  *'> packaging/homebrew/trewd.rb'*) bad "the formula is rendered over the template it reads: $formula" ;;
+  *)                                 ok "the formula is rendered beside its template, not over it" ;;
+esac
+
 # ---- and the ampersands in it are ampersands ------------------------------
 case $with in
   *"scripts/pin-compose.sh && git add -A && git commit -m 'compose: pin the 0.5.1 server image' && git push"*)

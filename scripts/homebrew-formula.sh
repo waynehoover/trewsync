@@ -2,10 +2,12 @@
 #
 # Prints the Homebrew formula for one server release:
 #
-#   scripts/homebrew-formula.sh 0.2.0 path/to/SHA256SUMS > packaging/homebrew/trewd.rb
+#   scripts/homebrew-formula.sh 0.2.0 path/to/SHA256SUMS > /tmp/trewd.rb
 #
 # from packaging/homebrew/trewd.rb, with its version and every sha256 replaced
-# by that release's. The SHA256SUMS is the one downloaded from the published
+# by that release's, for the tap's Formula/trewd.rb. Never redirected into
+# packaging/homebrew/trewd.rb: that is the template, and the shell empties it
+# before this reads it. The SHA256SUMS is the one downloaded from the published
 # release, not the one scripts/release.sh wrote locally: the attest workflow
 # rebuilds the binaries before publishing, and the formula has to name the
 # bytes a person downloads.

@@ -433,10 +433,13 @@ and client tags can go on the same commit without waiting for the image. It
 excuses that one commit only: the next thing to land has to carry the pin.
 
 Then render the Homebrew formula from the sums that were published, not the
-ones built here, and copy it into the tap (docs/development.md says where):
+ones built here, and copy it into the tap as Formula/trewd.rb
+(docs/development.md says where). Not over packaging/homebrew/trewd.rb, which
+is the template the script reads: the shell empties it before the script
+starts, and the render fails on an empty file.
 
   gh release download server/v@SERVER@ --repo waynehoover/trewsync --pattern SHA256SUMS --dir /tmp/trewd-@SERVER@
-  scripts/homebrew-formula.sh @SERVER@ /tmp/trewd-@SERVER@/SHA256SUMS > packaging/homebrew/trewd.rb
+  scripts/homebrew-formula.sh @SERVER@ /tmp/trewd-@SERVER@/SHA256SUMS > /tmp/trewd-@SERVER@/trewd.rb
 BLOCK
   )
   verifyserver=" --server @SERVER@"
