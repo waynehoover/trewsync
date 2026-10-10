@@ -181,6 +181,43 @@ if ! $runbookonly && [ -n "$untracked" ]; then
   exit 1
 fi
 
+# And no server release the plugin does not outrank.
+#
+# BRAT, which is how the plugin is installed until the community directory
+# lists it, does not ask GitHub which release is latest. It ranks every release
+# in the repository by the version it reads out of the tag name, server/v0.12.0
+# as 0.12.0, takes the later tag on a tie, and installs from the first. A server
+# release has no manifest.json, so one at the top fails every BRAT install and
+# update, as server/v0.12.0 did, tagged two days after plugin 0.12.0 (BRAT
+# 2.2.0, grabReleaseFromRepository in src/features/githubUtils.ts).
+#
+# So the server has to sit below the newest plugin tag, or at most at the
+# version this builds the plugin at, provided that plugin is not tagged yet and
+# is tagged after the server. verify-release.sh asks the same of what was
+# published. Both go when BRAT picks the newest release that has a
+# manifest.json (docs/open-work.md).
+if ! $runbookonly && [ -n "$serverversion" ]; then
+  byversion() { sort -t. -k1,1n -k2,2n -k3,3n; }
+  # The lower of two versions, or nothing when they are the same.
+  lower() { [ "$1" = "$2" ] || printf '%s\n%s\n' "$1" "$2" | byversion | head -1; }
+  # awk rather than grep, which fails on no match, and pipefail would end the
+  # script there in silence on a repository with no plugin tag yet.
+  newestplugin=$(git tag -l | awk '/^[0-9]+\.[0-9]+\.[0-9]+$/' | byversion | tail -1)
+  if [ -n "$newestplugin" ] && [ "$(lower "$serverversion" "$newestplugin")" = "$serverversion" ]; then
+    :
+  elif ! git rev-parse -q --verify "refs/tags/$pluginversion" >/dev/null \
+       && [ "$(lower "$serverversion" "$pluginversion")" != "$pluginversion" ]; then
+    :
+  else
+    echo "release: BRAT would install the plugin from server/v$serverversion, which has no manifest.json." >&2
+    echo "  It ranks every release by the version in its tag and takes the later tag on a tie." >&2
+    echo "  The newest plugin tag is ${newestplugin:-none}, and manifest.json says $pluginversion." >&2
+    echo "  Release the plugin with it, at $serverversion or later and newer than ${newestplugin:-none}:" >&2
+    echo "  scripts/release.sh --prepare X.Y.Z, commit, then tag the server first." >&2
+    exit 1
+  fi
+fi
+
 if ! $runbookonly; then
 
 rm -rf "$out"
@@ -403,6 +440,15 @@ ones built here, and copy it into the tap (docs/development.md says where):
 BLOCK
   )
   verifyserver=" --server @SERVER@"
+  # Before the plugin's commands, because it changes the order they run in.
+  order=$'\n\n'$(cat <<'BLOCK'
+With the server going out as well, tag and draft the server first and the
+plugin second, then run the plugin's attest, and the server's only once the
+plugin's has published. BRAT installs from the release whose tag has the
+highest version, takes the later tag on a tie, and cannot install from a server
+release, so the plugin must be the later tag and the first one published.
+BLOCK
+  )
 else
   serverblock=$(cat <<'BLOCK'
   Re-run with the version to print these:  scripts/release.sh 0.5.1
@@ -412,6 +458,7 @@ else
 BLOCK
   )
   verifyserver=""
+  order=""
 fi
 
 template=$(mktemp); trap 'rm -f "$template"' EXIT
@@ -427,7 +474,7 @@ The plugin's version is set, with its versions.json entry, by one committed
 step before any of this, and it refuses a version that is not newer than every
 one versions.json already names:
 
-  scripts/release.sh --prepare X.Y.Z
+  scripts/release.sh --prepare X.Y.Z@ORDER@
 
 To publish the plugin, tagged and titled bare because the community directory
 requires the tag, and asks the release name, to be exactly the manifest version:
@@ -490,10 +537,10 @@ RUNBOOK
 # put an unresolved @SERVER@ into the verify command; the guard below is what
 # said so, on its first run.
 runbook=$(python3 - "$template" \
-  "$serverblock" "$verifyserver" "$serverversion" "$version" "$pluginversion" "$cliversion" <<'PY'
+  "$serverblock" "$verifyserver" "$order" "$serverversion" "$version" "$pluginversion" "$cliversion" <<'PY'
 import sys
 
-names = ("@SERVERBLOCK@", "@VERIFYSERVER@", "@SERVER@", "@DESCRIBE@", "@PLUGIN@", "@CLI@")
+names = ("@SERVERBLOCK@", "@VERIFYSERVER@", "@ORDER@", "@SERVER@", "@DESCRIBE@", "@PLUGIN@", "@CLI@")
 text = open(sys.argv[1]).read()
 for name, value in zip(names, sys.argv[2:]):
     text = text.replace(name, value)

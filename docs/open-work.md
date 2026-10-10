@@ -192,6 +192,27 @@ run the threshold waits on is now `bun run bench:phone`, which holds the
 phone awake and in front for the whole run and records any moment it was
 not, the confound that voided the last attempt.
 
+## Server releases are held below the plugin's, for BRAT
+
+BRAT, which installs the plugin until the community directory lists it, does
+not ask GitHub which release is latest. It ranks every release in this
+repository by the version in its tag, server/v0.12.0 as 0.12.0, takes the
+later tag on a tie, and installs from the first. A server release at or above
+the newest plugin release is therefore the one it opens, and with no
+manifest.json in it every BRAT install and update fails, as they did from
+server/v0.12.0 until plugin 0.12.1 outranked it.
+
+So `scripts/release.sh` refuses a server version the plugin would not outrank,
+its runbook tags the server before a plugin at the same version, and
+`scripts/verify-release.sh` checks what BRAT would install from the published
+list. The cost is that the server cannot be released ahead of the plugin: a
+server fix at a new version takes a plugin release with it.
+
+The fix belongs in BRAT, which should take the newest release that has a
+manifest.json, and is proposed to it upstream. Once a BRAT release with that
+has been out long enough for installs to have it, remove the guard, the
+runbook's paragraph on order and the check.
+
 ## Follow-ups from the 2026-10-06 review
 
 Each was found by the review (docs/findings.md, the T series) and left on

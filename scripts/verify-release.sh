@@ -230,6 +230,55 @@ PY
   fi
 fi
 
+# ---- what BRAT installs ------------------------------------------------------
+#
+# BRAT, which is how the plugin is installed until the community directory
+# lists it, does not ask GitHub which release is latest. It ranks the
+# repository's releases by the version it reads out of each tag name, keeps
+# GitHub's order on a tie (the newest tag first), and installs from the first,
+# so any release can be the one it opens, the server's included. A server
+# release has no manifest.json, and every BRAT install and update then fails:
+# server/v0.12.0 did that, tagged two days after plugin 0.12.0 (BRAT 2.2.0,
+# grabReleaseFromRepository in src/features/githubUtils.ts). release.sh refuses
+# that before the tag; this is the same question asked of what was published.
+#
+# The first page only, because BRAT reads no further. Drafts are left out,
+# because BRAT asks without a token and never sees one, and prereleases are
+# kept, because its first look includes them.
+if [ -n "$plugin$server" ] && need gh; then
+  printf '\n== what BRAT installs\n'
+  if ! gh api "repos/$repo/releases?per_page=30" > "$work/releases.json" 2>"$work/releases.err"; then
+    wrong "cannot list the releases: $(tr -d '\n' < "$work/releases.err")"
+  else
+    pick=$(python3 - "$work/releases.json" <<'PY'
+import json, re, sys
+
+# semver.coerce, which BRAT ranks by: the first run of up to three dotted
+# numbers anywhere in the tag, a missing part read as 0.
+def version(tag):
+    m = re.search(r"(?<![0-9])([0-9]{1,16})(?:\.([0-9]{1,16}))?(?:\.([0-9]{1,16}))?(?![0-9])", tag)
+    return tuple(int(p or 0) for p in m.groups()) if m else None
+
+releases = [r for r in json.load(open(sys.argv[1])) if not r.get("draft")]
+# sorted() is stable, so a tie keeps GitHub's order, as BRAT's sort does.
+ranked = sorted(releases, key=lambda r: (version(r["tag_name"]) is None,
+                                         tuple(-p for p in version(r["tag_name"]) or ())))
+if not ranked:
+    print("-")
+else:
+    top = ranked[0]
+    print(top["tag_name"], "manifest" if any(a["name"] == "manifest.json" for a in top["assets"]) else "none")
+PY
+)
+    case $pick in
+      "")          wrong "cannot read the release list GitHub returned" ;;
+      -)           wrong "the repository has no published release for BRAT to install" ;;
+      *" manifest") note "BRAT installs from ${pick% manifest}, which has the plugin's manifest.json" ;;
+      *)           wrong "BRAT installs from ${pick% none}, which has no manifest.json, so every BRAT install and update fails. A plugin release has to outrank it" ;;
+    esac
+  fi
+fi
+
 # ---- the image: it runs, on both architectures, and says what it is --------
 if [ -n "$server" ]; then
   printf '\n== the container image\n'

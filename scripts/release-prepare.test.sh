@@ -122,6 +122,35 @@ else
   sed 's/^/       /' "$work/out" >&2
 fi
 
+# ---- the build's guard against a server release BRAT would install from ------
+#
+# BRAT installs the plugin from the release with the highest version in its
+# tag, a tie going to the later tag, and a server release has no manifest.json.
+# A build the guard lets through starts, says so, and fails here for want of
+# the server build script, which is fine: what counts is that it started. Only
+# not being refused is not enough, because the first version of this guard
+# ended the script in silence when there was no plugin tag, and passed.
+rm "$work/cmd/trewd/extra.go"
+server() { # server <expect ok|refuse> <what> <version>
+  local expect=$1 what=$2 rc=0 refused=no started=no
+  ( cd "$work" && bash scripts/release.sh "$3" ) > "$work/out" 2>&1 || rc=$?
+  grep -q "BRAT would install" "$work/out" && refused=yes
+  grep -q "^TrewSync $3 " "$work/out" && started=yes
+  if { [ "$expect" = refuse ] && [ $refused = yes ] && [ $rc -ne 0 ]; } \
+     || { [ "$expect" = ok ] && [ $refused = no ] && [ $started = yes ]; }; then
+    ok "$what"
+  else
+    bad "$what (exit $rc)"
+    sed 's/^/       /' "$work/out" >&2
+  fi
+}
+server ok     "a server at the version of the plugin about to be tagged after it" 0.10.0
+server refuse "a server above the plugin about to be tagged" 0.11.0
+git -C "$work" tag 0.10.0
+server refuse "a server at the plugin's version once the plugin is tagged, which BRAT ties to the server" 0.10.0
+server refuse "a server above the newest plugin tag" 0.10.1
+server ok     "a server below the newest plugin tag, compared as numbers: 0.9.10 is before 0.10.0" 0.9.10
+
 if [ "$fails" -ne 0 ]; then
   echo "$fails check(s) failed" >&2
   exit 1

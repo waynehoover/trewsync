@@ -30,7 +30,12 @@ case "$1 $2" in
     cp "$TREW_VERIFY_FIXTURE"/* "$destination/"
     ;;
   'attestation verify') exit 0 ;;
-  api*) printf '{"1.2.3":"1.7.2"}\n' ;;
+  api*)
+    case "$2" in
+      */releases*) cat "$TREW_VERIFY_FIXTURE/../releases.json" ;;
+      *) printf '{"1.2.3":"1.7.2"}\n' ;;
+    esac
+    ;;
   *) exit 2 ;;
 esac
 SH
@@ -80,6 +85,13 @@ printf '{"scheme":"sigstore-oidc","key_id":"%s","issuer":"https://token.actions.
 SH
 chmod +x "$scratch/bin/gh" "$scratch/bin/docker" "$scratch/bin/npm" "$scratch/bin/packslip"
 export PATH="$scratch/bin:$PATH"
+
+# The release list, as GitHub returns it: the newest tag first.
+release() { # release <tag> <draft> <prerelease> <asset>
+  printf '{"tag_name":"%s","draft":%s,"prerelease":%s,"assets":[{"name":"%s"}]}' "$@"
+}
+releases() { local IFS=,; printf '[%s]\n' "$*" > "$scratch/releases.json"; }
+releases "$(release 1.2.3 false false manifest.json)" "$(release server/v1.2.3 false false trewd-linux-amd64)"
 
 plugin_assets=(main.js manifest.json styles.css)
 server_assets=(trewd-linux-amd64 trewd-linux-arm64 trewd-linux-riscv64 trewd-darwin-amd64
@@ -160,6 +172,22 @@ rm "$scratch/assets/packslip.server.sigstore.json"
 check 1 server 'a server release without its manifest'
 check 0 cli 'the CLI reports the requested version'
 TREW_VERIFY_CLI_VERSION=1.2.30 check 1 cli 'the CLI reports a different version containing the requested version'
+
+# What BRAT installs: the release with the highest version in its tag, a tie
+# going to the newer tag. The plugin release itself is complete, so only the
+# list decides these.
+fixture plugin
+sums "${plugin_assets[@]}"
+releases "$(release server/v1.2.3 false false trewd-linux-amd64)" "$(release 1.2.3 false false manifest.json)"
+check 1 plugin 'BRAT: a server tagged after the plugin at its version, as server/v0.12.0 was'
+releases "$(release 1.2.3 false false manifest.json)" "$(release server/v1.2.4 false false trewd-linux-amd64)"
+check 1 plugin 'BRAT: a server above the plugin'
+releases "$(release server/v1.2.4 false true trewd-linux-amd64)" "$(release 1.2.3 false false manifest.json)"
+check 1 plugin 'BRAT: a server prerelease above the plugin, which BRAT looks at first'
+releases "$(release server/v1.2.4 true false trewd-linux-amd64)" "$(release 1.2.3 false false manifest.json)"
+check 0 plugin 'BRAT: a server draft above the plugin, which BRAT cannot see'
+releases "$(release 1.2.3 false false manifest.json)" "$(release server/v1.2.3 false false trewd-linux-amd64)"
+check 0 plugin 'BRAT: the plugin tagged after the server at its version'
 
 # Run the image workflow's actual version check against the same two replies.
 awk '
