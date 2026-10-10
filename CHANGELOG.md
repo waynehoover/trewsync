@@ -11,23 +11,50 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-### Added
+Nothing yet.
 
-- **Settings sync**, off until you turn it on, on each device. Obsidian's own
-  settings, themes and CSS snippets sync with every device that runs the same
-  settings folder, so desktops can share `.obsidian` while a phone keeps
-  `.obsidian-mobile`; **Create a settings profile for this device** makes one.
-  A change from another device waits for **Apply synced settings and reload**,
-  and a copy of the device's settings is kept before the first sync. Plugins
-  and the workspace layout do not sync. See the
-  [plugin guide](docs/plugin.md#settings-sync).
+## 0.13.0, server and plugin (2026-10-10)
 
-### Changed
+Settings sync. **Upgrade the server first**: the 0.13.0 plugin speaks protocol
+3, and meeting an older server it stops at the handshake and says to upgrade
+the server. The server still serves older plugins and `trew` as before. `trew`
+stays at 0.12.0, since nothing in it changed.
 
-- **Protocol 3**, which carries settings. Upgrade the server first: it still
-  serves plugins and `trew` of protocols 1 and 2 as before, and never sends
-  them a settings file, while a plugin or `trew` from this release meeting an
-  older server stops at the handshake and says to upgrade it.
+### Plugin
+
+- **Settings sync**, off until you turn it on, on each device: **Manage this
+  vault**, **Sync settings**, **Turn on**. Obsidian's own settings, core
+  plugins and hotkeys included, themes and CSS snippets sync with every device
+  that runs the same settings folder, so desktops can share `.obsidian` while
+  phones share `.obsidian-mobile`. **Create a settings profile for this
+  device** makes a phone's; do that before turning settings sync on there.
+  The first time, you choose whose settings to use where the server already
+  has some, and a copy of this device's settings is kept first. A change from
+  another device waits until you apply it: tap the notice, or run **Apply
+  synced settings and reload**, which keeps a copy of this device's settings,
+  saves open notes and reloads Obsidian. Names this device skips are skipped
+  in the settings folder too. Community plugins and the workspace layout do
+  not sync yet. See the [plugin guide](docs/plugin.md#settings-sync).
+
+### Server
+
+- **Protocol 3**, which carries settings: the files settings sync carries,
+  under `.obsidian` or `.obsidian-<name>`. Anything else there is refused with
+  its reason, and a device's pairing and workspace never sync. Plugins and
+  `trew` of protocols 1 and 2 are served as before and are never sent a
+  settings file. Agents over MCP never see settings, and the Git export leaves
+  them out.
+- `trewd restore -to-uid` keeps a setting first synced after that uid rather
+  than deleting it, and says how many it kept.
+
+### Known issues
+
+- An agent's preview expires whenever a device saves a setting, so the agent
+  previews again.
+- A deleted setting is in no deleted list; `trewd history -path` with its path
+  still lists every version.
+- Obsidian saving a setting again with the same values in another order can
+  ask for a second Apply.
 
 ## 0.12.1, server and plugin (2026-10-09)
 
