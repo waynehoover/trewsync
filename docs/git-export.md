@@ -55,8 +55,10 @@ of the server.
 - **The files as they are.** A deleted note is absent from the next commit; a
   rename is a deletion and an addition that Git shows as a rename. Conflict
   copies are included, like any other note. Empty folders are not, because Git
-  has no empty folders. Nothing whose name starts with a dot is ever synced,
-  so `.obsidian/` and other plugins' settings never reach the repository.
+  has no empty folders. Nothing whose name starts with a dot reaches the
+  repository: Obsidian's settings, which settings sync carries between
+  devices, are left out of the export, and nothing else in `.obsidian/` or
+  any other dot folder is synced at all.
 - **Large attachments in Git LFS.** A file over the threshold is an LFS pointer
   in the tree and its bytes are uploaded to the remote's LFS store. The export
   writes a `.gitattributes` at the root naming each one, so a clone with
@@ -252,7 +254,8 @@ committing `.obsidian/`. To move over:
    The export does not take over a branch it did not make unless you adopt it.
    Wait for `trewd git-export status` to show the first push.
 3. The plugin's `.git` folder in the vault is not synced by TrewSync (nothing
-   starting with a dot is) and is no longer needed. Its history stays on the
+   starting with a dot is, beyond the settings settings sync carries) and is
+   no longer needed. Its history stays on the
    old remote. Delete the folder with your file manager once you no longer
    want the local copy.
 4. From then on, read history in the export's branch, and change notes only in
@@ -273,9 +276,9 @@ What adoption does, and does not do:
   commit**, so every old commit stays in the branch's history beneath it, and
   the first push is a plain fast-forward. Nothing is force-pushed, and nothing
   in the old history is rewritten.
-- That first commit's tree is the vault as TrewSync holds it, as every commit's
-  is. Anything the old commits held that TrewSync never syncs, such as
-  `.obsidian/` and the plugin's own `.gitattributes`, is absent from it and
+- That first commit's tree is the vault as the export writes it, as every
+  commit's is. Anything the old commits held that the export leaves out, such
+  as `.obsidian/` and the plugin's own `.gitattributes`, is absent from it and
   stays in the old commits, so `git diff` across the boundary shows it removed.
   Its message starts `TrewSync continues the history from obsidian-git at
   SHA` and ends with a `Trew-Continues: SHA` trailer.

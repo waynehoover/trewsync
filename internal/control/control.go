@@ -155,10 +155,12 @@ type Restore struct {
 	ToUID int64  `json:"toUid"`
 	// Head is the vault head the plan was made at, which a dry run's
 	// `-head` names so the apply is refused if the vault moves.
-	Head      int64           `json:"head"`
-	Applied   bool            `json:"applied"`
-	Unchanged int             `json:"unchanged"`
-	Steps     json.RawMessage `json:"steps,omitempty"`
+	Head      int64 `json:"head"`
+	Applied   bool  `json:"applied"`
+	Unchanged int   `json:"unchanged"`
+	// SettingsKept counts settings first synced after ToUID, left alone.
+	SettingsKept int             `json:"settingsKept"`
+	Steps        json.RawMessage `json:"steps,omitempty"`
 
 	// Applied: the restore's operation id and commit time, and the versions
 	// it wrote.

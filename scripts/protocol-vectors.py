@@ -226,6 +226,17 @@ def is_config(text: str) -> bool:
     return CONFIG_ROOT.fullmatch(text.split("/", 1)[0]) is not None
 
 
+_CONFIG_FOLD: dict[int, str] | None = None
+
+
+def config_fold(s: str) -> str:
+    """The fold every implementation pins, which is how a case-folding disk names a file."""
+    global _CONFIG_FOLD
+    if _CONFIG_FOLD is None:
+        _CONFIG_FOLD = fold_table()
+    return fold(s, _CONFIG_FOLD)
+
+
 def config_scope(rest: list[str]) -> str | None:
     """Why a path inside a profile root does not sync, or None when it does.
 
@@ -233,10 +244,12 @@ def config_scope(rest: list[str]) -> str | None:
     own settings files (any JSON file at the top of the root), themes and CSS
     snippets. Community plugins are a later phase, so the plugin list and the
     plugins folder are out of scope for now; the sync plugin's own folder and
-    the workspace files never sync. Names are compared in ASCII lower case, so
-    a case-folding disk cannot spell its way past the device-local rule.
+    the workspace files never sync. Names are compared folded, with the fold
+    the collision rule uses, so a case-folding disk cannot spell its way past
+    the device-local rule: APFS holds workspace.json and workſpace.json (U+017F)
+    as one file, which ASCII lower case does not see.
     """
-    lower = [ascii_lower(s) for s in rest]
+    lower = [config_fold(s) for s in rest]
     if len(lower) >= 2 and lower[0] == "plugins" and lower[1] == SYNC_PLUGIN_ID:
         return "devicelocal"
     if len(lower) == 1 and lower[0] in DEVICE_LOCAL_FILES:
@@ -293,6 +306,15 @@ def config_vectors() -> list[dict]:
         ("a root that is not first", "notes/.obsidian/app.json"),
         ("the trash", ".trash/x.md"),
         ("a note", "Folder/Note.md"),
+        ("the workspace, spelt with a long s", ".obsidian/work\u017fpace.json"),
+        ("the community plugin list, spelt with a long s", ".obsidian/community-plugin\u017f.json"),
+        ("the community plugin list in capitals", ".obsidian/Community-Plugins.json"),
+        ("the sync plugin's folder, spelt with a long s", ".obsidian/plugins/trew-\u017fync/data.json"),
+        ("the phone's workspace in capitals", ".obsidian-mobile/WORKSPACE-MOBILE.JSON"),
+        ("the themes folder in capitals", ".obsidian/THEMES/Tela/theme.css"),
+        ("the snippets folder itself", ".obsidian/snippets"),
+        ("a profile name ending in a dash", ".obsidian-a-/app.json"),
+        ("a profile name that is not ASCII", ".obsidian-\u00fc/app.json"),
         ("a dot-dot segment inside a root", ".obsidian/../a.md"),
         ("a backslash inside a root", ".obsidian/a\\b.json"),
         ("a trailing slash", ".obsidian/app.json/"),

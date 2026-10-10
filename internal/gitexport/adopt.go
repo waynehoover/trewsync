@@ -241,7 +241,7 @@ func continuation(adopted, msg string) string {
 		"this branch before TrewSync, and are kept as they were. From this commit on,\n"+
 		"TrewSync's git export writes the branch from the notes its server stores.\n"+
 		"This commit's tree is the vault as TrewSync holds it, so its diff against\n"+
-		"%s also shows what TrewSync does not sync, such as .obsidian/.\n\n"+
+		"%s also shows what the export leaves out, such as .obsidian/.\n\n"+
 		"%sTrew-Continues: %s\n", short(adopted), short(adopted), msg, adopted)
 }
 

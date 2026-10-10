@@ -116,11 +116,13 @@ export function configPathReason(path: string): PathReason | undefined {
  * settings, every JSON file at the top of the root, and themes and CSS
  * snippets. Community plugins wait for a later phase, so their list and the
  * plugins folder are out of scope; the sync plugin's folder and the workspace
- * files never sync. Compared in ASCII lower case, so a case-folding disk cannot
- * spell its way past the device-local rule.
+ * files never sync. Compared folded, with the fold the collision rule uses, so
+ * a case-folding disk cannot spell its way past the device-local rule: APFS
+ * holds workspace.json and workspace.json spelt with U+017F as one file, which
+ * ASCII lower case does not see.
  */
 function configScope(rest: readonly string[]): PathReason | undefined {
-  const lower = rest.map(asciiLower);
+  const lower = rest.map(fold);
   const [first, second] = lower;
   if (lower.length >= 2 && first === "plugins" && second === SYNC_PLUGIN_ID) return "devicelocal";
   if (lower.length === 1 && (first === "workspace.json" || first === "workspace-mobile.json"))

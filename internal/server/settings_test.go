@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/waynehoover/trewsync/internal/store"
 	"github.com/waynehoover/trewsync/internal/wire"
 )
 
@@ -86,6 +87,12 @@ func TestTheSettingsMatrixThroughASession(t *testing.T) {
 				c.recvInto("ack", nil)
 			case m["res"] != "have":
 				t.Fatalf("%s: protocol %d answered a legal path with %v", v.Name, c.proto, m)
+			}
+			// Deleted again, so a later vector that folds onto this one is
+			// judged by the settings rule rather than the collision rule.
+			c.sendJSON(wire.In{Op: "put", Path: p, Base: c.head(p), Meta: wire.PutMeta{Deleted: true, MTime: 2}})
+			if m := c.recv(); m["res"] != "have" {
+				t.Fatalf("%s: deleting it again was answered %v", v.Name, m)
 			}
 			return
 		}
@@ -176,5 +183,130 @@ func TestAnOlderSessionNeverSeesASettingsEntry(t *testing.T) {
 		if b := c.nextBatch(); b.To != note || len(b.Entries) != 1 {
 			t.Fatalf("protocol %d: the note after it came as %+v", tc.proto, b)
 		}
+	}
+}
+
+// A session of protocol 1 or 2 is not sent a settings path by any other route
+// either: its history of one is refused as the notes rule refuses the path,
+// and a settings version's uid is no entry at all to it. A session of 3 gets
+// both.
+func TestAnOlderSessionCannotReadASettingsVersion(t *testing.T) {
+	r := newRig(t)
+	desk := r.dial("desk")
+	helloAt(desk, wire.ProtoConfig)
+	uid := desk.put(".obsidian/app.json", `{"secret":1}`)
+
+	old := r.dial("old")
+	helloAt(old, wire.ProtoConfig-1)
+	old.sendJSON(wire.In{Op: "history", Path: ".obsidian/app.json"})
+	if msg := old.expectErr(wire.CodeBadPath); !strings.HasPrefix(msg, "dotprefix: ") {
+		t.Fatalf("protocol 2's history of a setting was refused as %q", msg)
+	}
+	old.sendJSON(wire.In{Op: "get", UID: uid})
+	old.expectErr(wire.CodeNoUID)
+
+	desk.sendJSON(wire.In{Op: "history", Path: ".obsidian/app.json"})
+	var h wire.HistoryV2
+	desk.recvInto("history", &h)
+	if len(h.Entries) != 1 {
+		t.Fatalf("protocol 3's history of a setting has %d versions", len(h.Entries))
+	}
+	desk.sendJSON(wire.In{Op: "get", UID: uid})
+	desk.recvInto("chunks", nil)
+}
+
+// An operator's restore can put settings back. A device of protocol 1 or 2
+// cannot undo it, because that would write settings it never syncs; the
+// refusal names why, and nothing is written.
+func TestAnOlderSessionCannotUndoAnOperationThatChangedSettings(t *testing.T) {
+	r := newRig(t)
+	desk := r.dial("desk")
+	helloAt(desk, wire.ProtoConfig)
+	desk.put("note.md", "one")
+	at := desk.put(".obsidian/app.json", `{"v":1}`)
+	desk.put("note.md", "two")
+	desk.put(".obsidian/app.json", `{"v":2}`)
+	done, err := r.srv.OperatorRestore(testVault, at, 0, true)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	before := r.mustStats().Versions
+
+	old := r.dial("old")
+	helloAt(old, wire.ProtoConfig-1)
+	old.sendJSON(wire.In{Op: "undo", OpID: done.Result.OpID})
+	if msg := old.expectErr(wire.CodeNoUndo); !strings.Contains(msg, "changed settings") {
+		t.Fatalf("protocol 2's undo of a restore that changed settings was refused as %q", msg)
+	}
+	if got := r.mustStats().Versions; got != before {
+		t.Fatalf("a refused undo wrote %d versions", got-before)
+	}
+	desk.sendJSON(wire.In{Op: "undo", OpID: done.Result.OpID})
+	desk.recvInto("undone", nil)
+}
+
+// A restore that put a setting back can still be undone as a copy once the
+// in-place undo is stale: the copy leaves the setting to its own history, and
+// copies the notes, rather than refusing everything because a copy's name
+// beside a setting is no path a note can have.
+func TestARestoreThatTouchedSettingsCanBeUndoneAsACopy(t *testing.T) {
+	r := newRig(t)
+	desk := r.dial("desk")
+	helloAt(desk, wire.ProtoConfig)
+	desk.put("note.md", "one")
+	at := desk.put(".obsidian/app.json", `{"v":1}`)
+	desk.put("note.md", "two")
+	desk.put(".obsidian/app.json", `{"v":2}`)
+	done, err := r.srv.OperatorRestore(testVault, at, 0, true)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	laptop := r.dial("laptop")
+	helloAt(laptop, wire.ProtoConfig)
+	laptop.put("note.md", "the laptop's edit after the restore")
+
+	undone, err := r.srv.OperatorUndo(testVault, done.Result.OpID, true)
+	if err != nil {
+		t.Fatalf("the undo as a copy was refused: %v", err)
+	}
+	var copied, left []string
+	for _, step := range undone.Plan.Steps {
+		switch {
+		case step.Action == store.UndoCopy:
+			copied = append(copied, step.Path)
+		case step.Action == store.UndoNothing && step.Path == ".obsidian/app.json":
+			left = append(left, step.Path)
+		}
+	}
+	if strings.Join(copied, ",") != "note.md" || len(left) != 1 {
+		t.Fatalf("the copy copied %v and left %v alone", copied, left)
+	}
+}
+
+// A restore to a uid before a profile was first synced leaves its settings
+// alone, and says so: absent then meant not synced yet, not deleted.
+// A setting that had a version then, deleted or not, rolls back as before.
+func TestARestoreKeepsSettingsFirstSyncedAfterItsUID(t *testing.T) {
+	r := newRig(t)
+	desk := r.dial("desk")
+	helloAt(desk, wire.ProtoConfig)
+	desk.put(".obsidian/hotkeys.json", `{"v":1}`)
+	at := desk.put("note.md", "one")
+	desk.put(".obsidian/hotkeys.json", `{"v":2}`)
+	desk.put(".obsidian/app.json", `{"v":1}`)
+	desk.put(".obsidian/themes/Tela/theme.css", "body{}")
+	desk.put("note.md", "an agent's mess")
+
+	plan, err := r.srv.OperatorRestore(testVault, at, 0, false)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	var touched []string
+	for _, step := range plan.Plan.Steps {
+		touched = append(touched, step.Action+" "+step.Path)
+	}
+	want := "restore .obsidian/hotkeys.json,restore note.md"
+	if strings.Join(touched, ",") != want || plan.Plan.SettingsKept != 2 {
+		t.Fatalf("the restore would %v and keep %d settings; want %s and 2", touched, plan.Plan.SettingsKept, want)
 	}
 }

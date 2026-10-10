@@ -588,6 +588,15 @@ func (b *undoBuilder) copies() error {
 			b.plan.Steps = append(b.plan.Steps, UndoStep{Action: UndoNothing, Path: u.Path, After: u.AfterUID,
 				Why: "it was a folder before the operation, and a folder has no content to copy"})
 			continue
+		case paths.IsConfig(u.Path):
+			// The operator's restore can touch settings (plan/settings-sync.md).
+			// A copy beside a setting is no setting at all: inside a profile
+			// root it would sync to every device as one more settings file, and
+			// the notes rule refuses it anyway, which used to refuse the whole
+			// copy, notes and all. The setting's own history has the version.
+			b.plan.Steps = append(b.plan.Steps, UndoStep{Action: UndoNothing, Path: u.Path, After: u.AfterUID,
+				Why: "it is a setting, which is put back from its history rather than copied beside it"})
+			continue
 		}
 		to, err := b.freeCopy(u.Path, u.before.UID)
 		if err != nil {

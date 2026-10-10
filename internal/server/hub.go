@@ -70,9 +70,9 @@ func (h *Hub) broadcast(vaultID string, e store.Entry, origin *Session) {
 	//
 	// A session of protocol 1 or 2 is sent a settings entry the way the origin
 	// is sent its own: the range, with no entry in it, so its cursor moves
-	// past a path it never sees. Reading s.proto here is safe for the reason
-	// reading deviceID in detach is: it is written at hello, before the
-	// session joins, and joining takes the lock the peer list was read under.
+	// past a path it never sees. Reading s.proto here is safe: it is written
+	// at hello, before the session joins, and the peer list was read under the
+	// lock joining takes, so the write is ordered before this read.
 	settings := e.IsConfig()
 	var full, own []byte
 	for _, s := range peers {

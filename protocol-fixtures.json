@@ -1910,6 +1910,69 @@
         "config": null
       },
       {
+        "name": "the workspace, spelt with a long s",
+        "hex": "2e6f6273696469616e2f776f726bc5bf706163652e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "devicelocal"
+      },
+      {
+        "name": "the community plugin list, spelt with a long s",
+        "hex": "2e6f6273696469616e2f636f6d6d756e6974792d706c7567696ec5bf2e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "the community plugin list in capitals",
+        "hex": "2e6f6273696469616e2f436f6d6d756e6974792d506c7567696e732e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "the sync plugin's folder, spelt with a long s",
+        "hex": "2e6f6273696469616e2f706c7567696e732f747265772dc5bf796e632f646174612e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "devicelocal"
+      },
+      {
+        "name": "the phone's workspace in capitals",
+        "hex": "2e6f6273696469616e2d6d6f62696c652f574f524b53504143452d4d4f42494c452e4a534f4e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "devicelocal"
+      },
+      {
+        "name": "the themes folder in capitals",
+        "hex": "2e6f6273696469616e2f5448454d45532f54656c612f7468656d652e637373",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "the snippets folder itself",
+        "hex": "2e6f6273696469616e2f736e697070657473",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": "configscope"
+      },
+      {
+        "name": "a profile name ending in a dash",
+        "hex": "2e6f6273696469616e2d612d2f6170702e6a736f6e",
+        "isConfig": true,
+        "notes": "dotprefix",
+        "config": null
+      },
+      {
+        "name": "a profile name that is not ASCII",
+        "hex": "2e6f6273696469616e2dc3bc2f6170702e6a736f6e",
+        "isConfig": false,
+        "notes": "dotprefix",
+        "config": "dotprefix"
+      },
+      {
         "name": "a dot-dot segment inside a root",
         "hex": "2e6f6273696469616e2f2e2e2f612e6d64",
         "isConfig": true,

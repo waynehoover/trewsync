@@ -123,6 +123,9 @@ func writeRestore(out io.Writer, r *control.Restore) error {
 		fmt.Fprintf(out, "%d paths changed since uid %d already hold what they held then, and are left alone.\n",
 			r.Unchanged, r.ToUID)
 	}
+	if r.SettingsKept > 0 {
+		fmt.Fprintf(out, "%d settings first synced after uid %d are left as they are.\n", r.SettingsKept, r.ToUID)
+	}
 	if !r.Applied {
 		fmt.Fprintf(out, "Nothing was written. To apply exactly this, and nothing if the vault moves meanwhile:\n"+
 			"  trewd restore -to-uid %d -head %d -apply\n", r.ToUID, r.Head)
@@ -159,7 +162,8 @@ func (o *operator) restore(req control.Request) control.Reply {
 		return control.Refused(control.CodeBadRequest, "a restore names a uid to go back to, and a head that is a uid")
 	}
 	done, err := o.srv.OperatorRestore(o.vault, req.ToUID, req.Head, req.Apply)
-	r := &control.Restore{Vault: o.vault, ToUID: req.ToUID, Head: done.Plan.Head, Unchanged: done.Plan.Unchanged}
+	r := &control.Restore{Vault: o.vault, ToUID: req.ToUID, Head: done.Plan.Head, Unchanged: done.Plan.Unchanged,
+		SettingsKept: done.Plan.SettingsKept}
 	var oe *store.OpError
 	switch {
 	case errors.As(err, &oe) && oe.Outcome == store.OpUnknown:

@@ -159,12 +159,14 @@ func check(p string, config bool) Reason {
 // Obsidian's own settings, every JSON file at the top of the root, and themes
 // and CSS snippets. Community plugins wait for a later phase, so their list
 // and the plugins folder are out of scope; the sync plugin's folder and the
-// workspace files never sync. Compared in ASCII lower case, so a case-folding
-// disk cannot spell its way past the device-local rule.
+// workspace files never sync. Compared folded, with the fold the collision
+// rule uses, so a case-folding disk cannot spell its way past the device-local
+// rule: APFS holds workspace.json and workſpace.json (U+017F) as one file,
+// which ASCII lower case does not see.
 func configScope(rest []string) Reason {
 	lower := make([]string, len(rest))
 	for i, s := range rest {
-		lower[i] = asciiLower(s)
+		lower[i] = Fold(s)
 	}
 	switch {
 	case len(lower) >= 2 && lower[0] == "plugins" && lower[1] == SyncPluginID:

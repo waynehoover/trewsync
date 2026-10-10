@@ -63,6 +63,19 @@ func (s *Server) undo(vaultID, opID string, toCopy bool, origin *Session) (Undon
 	if err != nil {
 		return Undone{Plan: plan}, err
 	}
+	// A device of protocol 1 or 2 neither syncs settings nor is ever sent
+	// one, so its undo does not write one (plan/settings-sync.md): an
+	// operation that changed settings, which only the operator's restore
+	// does, is undone from a device that syncs them, or with trewd undo.
+	if origin != nil && origin.proto < wire.ProtoConfig {
+		for _, e := range plan.Entries {
+			if e.Entry.IsConfig() {
+				return Undone{Plan: plan}, &store.OpError{Outcome: store.OpRefused, Code: store.OpCodeBadPath,
+					Err: errors.New("this operation changed settings, which this device does not sync; " +
+						"undo it from a device that syncs settings, or on the server with trewd undo")}
+			}
+		}
+	}
 	op := plan.Operation()
 	op.Vault, op.Epoch = vaultID, epoch
 	op.ActorKind, op.ActorID, op.ActorHash, op.ActorLabel = kind, id, hash, label

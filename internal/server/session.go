@@ -19,6 +19,7 @@ import (
 
 	"github.com/waynehoover/trewsync/internal/chunks"
 	"github.com/waynehoover/trewsync/internal/frame"
+	"github.com/waynehoover/trewsync/internal/paths"
 	"github.com/waynehoover/trewsync/internal/store"
 	"github.com/waynehoover/trewsync/internal/wire"
 )
@@ -103,7 +104,8 @@ type Session struct {
 	// undo and history entries without their operation (wire.Proto), and one
 	// of 1 or 2 is never sent a settings entry. Written at hello, before the
 	// session joins the hub; read by the session goroutine, and by the hub's
-	// broadcast under the lock joining takes.
+	// broadcast, which found the session in the hub's set under the lock that
+	// joining takes, so the write is ordered before the read.
 	proto int
 
 	// saidSkewed is set once this session has reported a device writing
@@ -855,7 +857,7 @@ func (s *Session) dispatch(m wire.In, frameLen int) error {
 func (s *Session) handleHello(m wire.In) error {
 	// Version before credentials: refusing on proto is not a security answer
 	// and a client on the wrong version deserves to be told so plainly. The
-	// range is 1 to 2, and the session is answered in the version its hello
+	// range is 1 to 3, and the session is answered in the version its hello
 	// asked for; see wire.Proto.
 	//
 	// Both numbers and nothing else. Nothing has authenticated yet, so this
@@ -2145,6 +2147,12 @@ func (s *Session) handleHistory(m wire.In) error {
 	if m.Path == "" {
 		return s.reject(wire.CodeBadPath, errors.New("empty: history needs a path"))
 	}
+	// Except a settings path to a session of protocol 1 or 2, which is never
+	// sent one and is held to the notes rule (plan/settings-sync.md).
+	if s.proto < wire.ProtoConfig && paths.IsConfig(m.Path) {
+		return s.reject(wire.CodeBadPath, errors.New(string(paths.Check(m.Path))+
+			": a settings path, which this protocol does not sync"))
+	}
 	if m.Before < 0 {
 		return s.reject(wire.CodeProtoState, fmt.Errorf("negative before %d", m.Before))
 	}
@@ -2310,7 +2318,9 @@ func (s *Session) handleGet(m wire.In) error {
 	if err != nil {
 		return s.reject(wire.CodeInternal, err)
 	}
-	if !ok {
+	if !ok || (s.proto < wire.ProtoConfig && e.IsConfig()) {
+		// A settings version is no entry at all to a session that is never
+		// sent one, as in its history and its batches.
 		return s.reject(wire.CodeNoUID, fmt.Errorf("no entry %d in this vault", m.UID))
 	}
 	if !e.HasBody() {

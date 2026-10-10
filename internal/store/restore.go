@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // Restoring the vault to a uid (PLAN.md M5.5, decided 2026-09-22).
@@ -74,6 +76,11 @@ type RestorePlan struct {
 	// Unchanged is how many paths changed since ToUID already hold what they
 	// held then, and are left alone.
 	Unchanged int
+	// SettingsKept is how many settings with no version at all at ToUID are
+	// left alone: a setting first synced after ToUID was not synced yet then,
+	// which is not the same as absent (plan/settings-sync.md). Removed, every
+	// profile would lose its settings to a restore to before its first upload.
+	SettingsKept int
 	// Gone is every path whose state at ToUID the store can no longer give
 	// back exactly. Any refuses the restore.
 	Gone []GonePath
@@ -84,6 +91,12 @@ type RestorePlan struct {
 func (p RestorePlan) Operation() Operation {
 	head := p.Head
 	return Operation{Tool: RestoreTool, Entries: p.Entries, Checks: p.Checks, SnapshotHead: &head}
+}
+
+// settingNotYetSynced is a setting with no version at ToUID, deleted or not,
+// which a restore leaves as it is (RestorePlan.SettingsKept).
+func settingNotYetSynced(row restoreRow) bool {
+	return paths.IsConfig(row.path) && !row.hadThen
 }
 
 // restoreRow is one path as the planner reads it: its version at ToUID and
@@ -145,7 +158,7 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 	// folder created since can go.
 	final := map[string]bool{}
 	for _, row := range rows {
-		if (row.nowLive && !row.changed()) || row.thenLive {
+		if (row.nowLive && !row.changed()) || row.thenLive || settingNotYetSynced(row) {
 			final[row.path] = true
 		}
 	}
@@ -153,6 +166,10 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 	var fileRemovals, folderRemovals, folderRestores, fileRestores []restoreRow
 	for _, row := range rows {
 		if !row.changed() && !row.unseenAt(r.ToUID, marked) {
+			continue
+		}
+		if settingNotYetSynced(row) {
+			plan.SettingsKept++
 			continue
 		}
 		// Before anything is decided from the state at ToUID, including that
