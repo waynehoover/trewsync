@@ -16,7 +16,7 @@ import { configFolderName } from "../core/paths.ts";
 
 type Adapter = Pick<
   DataAdapter,
-  "list" | "exists" | "mkdir" | "readBinary" | "writeBinary" | "remove" | "stat"
+  "list" | "exists" | "mkdir" | "readBinary" | "writeBinary" | "remove" | "stat" | "rmdir"
 >;
 
 /**
@@ -38,7 +38,8 @@ export function isProfileName(name: string): boolean {
 /**
  * Every setting settings sync carries in `root`, as vault paths, walked as
  * the vault lists them: the JSON files at its top, `themes/<theme>/<file>`
- * and `snippets/<name>.css`.
+ * and `snippets/<name>.css`. Judged under the name the vault syncs, in NFC,
+ * and returned under the name the disk has, which is the one to copy.
  */
 export async function settingsIn(adapter: Adapter, root: string): Promise<string[]> {
   if (!(await adapter.exists(root))) return [];
@@ -52,11 +53,18 @@ export async function settingsIn(adapter: Adapter, root: string): Promise<string
       if (rel === "themes" || rel === "snippets" || theme) folders.push(folder);
     }
     for (const file of here.files) {
-      if (configPathReason(file) === undefined) out.push(file);
+      if (configPathReason(file.normalize("NFC")) === undefined) out.push(file);
     }
   }
   return out.sort();
 }
+
+/**
+ * Folders a profile copy leaves out: a plugin developer's dependencies and
+ * repository, which can be most of a desktop's config folder and are no part
+ * of a plugin Obsidian loads.
+ */
+const NOT_COPIED = new Set(["node_modules", ".git"]);
 
 /** Every file in `root` and everything under it, as vault paths. */
 async function everythingIn(adapter: Adapter, root: string): Promise<string[]> {
@@ -64,7 +72,9 @@ async function everythingIn(adapter: Adapter, root: string): Promise<string[]> {
   const folders = [root];
   while (folders.length > 0) {
     const here = await adapter.list(folders.pop()!);
-    folders.push(...here.folders);
+    for (const folder of here.folders) {
+      if (!NOT_COPIED.has(folder.slice(folder.lastIndexOf("/") + 1))) folders.push(folder);
+    }
     out.push(...here.files);
   }
   return out.sort();
@@ -129,29 +139,50 @@ export async function backUpSettings(
 }
 
 /**
+ * This device's settings as they are, kept in one folder the plugin owns
+ * before every Apply, replacing the last such copy (rule 3). An Apply writes
+ * the server's settings over this device's, and where the first choice
+ * settles a setting this device never synced, there is no copy of the one it
+ * replaces anywhere else.
+ */
+export async function keepSettingsBeforeApply(
+  adapter: Adapter,
+  root: string,
+  pluginDir: string,
+): Promise<number> {
+  const folder = `${pluginDir}/settings-before-apply`;
+  if (await adapter.exists(folder)) await adapter.rmdir(folder, true);
+  return copyVerified(adapter, await settingsIn(adapter, root), root, folder);
+}
+
+/**
  * A new settings profile, `to`, as a verified copy of everything in `from`:
  * settings, plugins and this plugin with its pairing and index, so the device
  * that relaunches into it syncs on from where it was. Refused when `to` is
  * already there, because copying into a profile another device has filled
  * would mix two devices' settings in one folder.
  *
- * Then the index the copy carries on with is removed from `from`, so that if
- * Obsidian is ever pointed back at `from`, this plugin there starts over and
- * decides by content rather than resuming from a record the copy has moved
- * past.
+ * A copy that fails part way is removed, because a profile without every
+ * plugin in it is one Obsidian relaunches into without this one: `to` was
+ * not there before, and nothing else writes a folder no device runs.
  */
-export async function createProfile(
-  adapter: Adapter,
-  from: string,
-  to: string,
-  indexFiles: readonly string[],
-): Promise<number> {
+export async function createProfile(adapter: Adapter, from: string, to: string): Promise<number> {
   if (await adapter.exists(to)) {
-    throw new Error(`${to} already exists. Point Obsidian at it instead, or choose another name.`);
+    throw new Error(`${to} already exists. Choose another name.`);
   }
-  const files = await copyVerified(adapter, await everythingIn(adapter, from), from, to);
-  for (const file of indexFiles) {
-    if (await adapter.exists(file)) await adapter.remove(file);
+  try {
+    return await copyVerified(adapter, await everythingIn(adapter, from), from, to);
+  } catch (err) {
+    if (await adapter.exists(to)) await adapter.rmdir(to, true);
+    throw err;
   }
-  return files;
+}
+
+/** Size and time of a file, or null when it is not there. */
+export async function stampOf(
+  adapter: Adapter,
+  path: string,
+): Promise<{ size: number; mtime: number } | null> {
+  const stat = await adapter.stat(path);
+  return stat === null ? null : { size: stat.size, mtime: stat.mtime };
 }

@@ -4387,7 +4387,9 @@ describe("settings", () => {
 
     const applied = await desk.engine.sync({ applySettings: true });
     expect(applied.settingsHeld).toBe(0);
-    expect(desk.vault.snapshot()).toEqual({ ".obsidian/app.json": JSON.stringify({ spellcheck: true }, null, 2) });
+    expect(desk.vault.snapshot()).toEqual({
+      ".obsidian/app.json": JSON.stringify({ spellcheck: true }, null, 2),
+    });
   });
 
   it("puts an applied setting back when Obsidian writes the old one over it, and never sends the old one", async () => {
@@ -4400,7 +4402,10 @@ describe("settings", () => {
     await desk.engine.sync({ applySettings: true });
     await desk.settle();
 
-    await mac.vault.write(".obsidian/app.json", json({ theme: "dark" }), { mtime: 2_000, ctime: 1_000 });
+    await mac.vault.write(".obsidian/app.json", json({ theme: "dark" }), {
+      mtime: 2_000,
+      ctime: 1_000,
+    });
     await mac.settle();
     await desk.settle();
     await desk.engine.sync({ applySettings: true });
@@ -4409,7 +4414,10 @@ describe("settings", () => {
     // The reload. Obsidian, unloading, writes the settings it still holds in
     // memory, which are the ones from before the apply.
     desk.close();
-    await desk.vault.write(".obsidian/app.json", json({ theme: "light" }), { mtime: 3_000, ctime: 1_000 });
+    await desk.vault.write(".obsidian/app.json", json({ theme: "light" }), {
+      mtime: 3_000,
+      ctime: 1_000,
+    });
     await desk.connect(server);
     const after = await settleCounting(desk);
 
@@ -4430,7 +4438,10 @@ describe("settings", () => {
     expect(torn.uploaded).toBe(0);
     expect(torn.waiting).toBe(1);
     expect(torn.nextUploadAt).toBeDefined();
-    await mac.vault.write(".obsidian/app.json", json({ theme: "dark" }), { mtime: 2_000, ctime: 1_000 });
+    await mac.vault.write(".obsidian/app.json", json({ theme: "dark" }), {
+      mtime: 2_000,
+      ctime: 1_000,
+    });
     expect((await mac.engine.sync()).uploaded).toBe(1);
   });
 
@@ -4488,9 +4499,15 @@ describe("settings", () => {
     await desk.engine.sync({ applySettings: true });
     await desk.settle();
     // Weeks later: one new setting made on both, before either sent it.
-    await mac.vault.write(".obsidian/daily-notes.json", json({ folder: "Journal" }), { mtime: 5_000, ctime: 5_000 });
+    await mac.vault.write(".obsidian/daily-notes.json", json({ folder: "Journal" }), {
+      mtime: 5_000,
+      ctime: 5_000,
+    });
     await mac.settle();
-    await desk.vault.write(".obsidian/daily-notes.json", json({ folder: "Daily" }), { mtime: 5_000, ctime: 5_000 });
+    await desk.vault.write(".obsidian/daily-notes.json", json({ folder: "Daily" }), {
+      mtime: 5_000,
+      ctime: 5_000,
+    });
     await desk.settle();
     await desk.engine.sync({ applySettings: true });
     const here = Object.values(desk.vault.snapshot()).join("\n");
@@ -4509,7 +4526,10 @@ describe("settings", () => {
       await server.cli("backup", "-plaintext-ok", "-to", offsite);
     });
     await desk.connect(server);
-    await desk.vault.write(".obsidian/app.json", json({ v: "newer" }), { mtime: 3_000, ctime: 1_000 });
+    await desk.vault.write(".obsidian/app.json", json({ v: "newer" }), {
+      mtime: 3_000,
+      ctime: 1_000,
+    });
     await desk.settle();
     desk.close();
     await server.whileStopped(async () => {
@@ -4535,7 +4555,10 @@ describe("settings", () => {
     await desk.connect(server);
     await desk.settle();
     await desk.engine.sync({ applySettings: true });
-    await mac.vault.write(".obsidian/daily-notes.json", json({ folder: "Journal" }), { mtime: 5_000, ctime: 5_000 });
+    await mac.vault.write(".obsidian/daily-notes.json", json({ folder: "Journal" }), {
+      mtime: 5_000,
+      ctime: 5_000,
+    });
     await mac.settle();
     await desk.settle();
     await desk.engine.sync({ applySettings: true });
@@ -4544,7 +4567,10 @@ describe("settings", () => {
     // The reload, and Obsidian writing the defaults it held for the file. The
     // first choice is long forgotten by now, as the plugin forgets it.
     desk.close();
-    await desk.vault.write(".obsidian/daily-notes.json", json({ folder: "" }), { mtime: 9_000, ctime: 9_000 });
+    await desk.vault.write(".obsidian/daily-notes.json", json({ folder: "" }), {
+      mtime: 9_000,
+      ctime: 9_000,
+    });
     desk.settings = { root: ".obsidian" };
     desk.loadId = "load 2";
     await desk.connect(server);
@@ -4571,7 +4597,10 @@ describe("settings", () => {
     await desk.connect(server);
     await desk.settle();
     await desk.engine.sync({ applySettings: true });
-    await mac.vault.write(".obsidian/app.json", json({ theme: "dark" }), { mtime: 2_000, ctime: 1_000 });
+    await mac.vault.write(".obsidian/app.json", json({ theme: "dark" }), {
+      mtime: 2_000,
+      ctime: 1_000,
+    });
     await mac.settle();
     await desk.settle();
     await desk.engine.sync({ applySettings: true });
@@ -4581,7 +4610,10 @@ describe("settings", () => {
   it("sends nothing of an applied setting before the reload, and checks it after", async () => {
     const { mac, desk } = await appliedDark();
     // Obsidian, still running, writes what it holds.
-    await desk.vault.write(".obsidian/app.json", json({ theme: "light" }), { mtime: 3_000, ctime: 1_000 });
+    await desk.vault.write(".obsidian/app.json", json({ theme: "light" }), {
+      mtime: 3_000,
+      ctime: 1_000,
+    });
     expect((await settleCounting(desk)).uploaded, "sent before the reload").toBe(0);
     expect((await mac.settle()).settingsHeld, "the old value reached the other device").toBe(0);
 
@@ -4602,7 +4634,10 @@ describe("settings", () => {
     await desk.connect(server);
     await desk.settle();
     // Only now does Obsidian write what it held: the same load, unchecked.
-    await desk.vault.write(".obsidian/app.json", json({ theme: "light" }), { mtime: 3_000, ctime: 1_000 });
+    await desk.vault.write(".obsidian/app.json", json({ theme: "light" }), {
+      mtime: 3_000,
+      ctime: 1_000,
+    });
     expect((await settleCounting(desk)).uploaded, "sent after a reconnect").toBe(0);
     expect((await mac.settle()).settingsHeld, "the old value reached the other device").toBe(0);
   });
@@ -4644,7 +4679,10 @@ describe("settings", () => {
     await vault.write(".obsidian/app.json", json({ theme: "dark" }), times);
     vault.torn = ".obsidian/app.json";
     expect((await mac.engine.sync()).uploaded, "the torn read was sent").toBe(0);
-    await vault.write(".obsidian/app.json", json({ theme: "dark" }), { mtime: 2_000, ctime: 1_000 });
+    await vault.write(".obsidian/app.json", json({ theme: "dark" }), {
+      mtime: 2_000,
+      ctime: 1_000,
+    });
     expect((await mac.engine.sync()).uploaded).toBe(1);
   });
 
@@ -4655,7 +4693,11 @@ describe("settings", () => {
     await mac.settle();
     const desk = await deviceWith("desk", { root: ".obsidian", firstChoice: "server" });
     await desk.settle();
-    await mac.vault.write(".obsidian/snippets/b.css", await mac.vault.read(".obsidian/snippets/a.css"), times);
+    await mac.vault.write(
+      ".obsidian/snippets/b.css",
+      await mac.vault.read(".obsidian/snippets/a.css"),
+      times,
+    );
     await mac.vault.remove(".obsidian/snippets/a.css");
     mac.engine.noteRename(".obsidian/snippets/a.css", ".obsidian/snippets/b.css");
     await mac.settle();

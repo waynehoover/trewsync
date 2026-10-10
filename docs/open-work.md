@@ -214,6 +214,41 @@ manifest.json, and is proposed to it upstream as
 Once a BRAT release with that has been out long enough for installs to have
 it, remove the guard, the runbook's paragraph on order and the check.
 
+## Settings sync, after its review
+
+Settings sync (M11) had three reviews on 2026-10-10, and these were left on
+purpose, each with what would change the answer:
+
+- **A settings save expires an agent's preview.** MCP previews are bound to
+  the vault's head, so any device saving a setting between an agent's preview
+  and its apply refuses the apply as `plan_changed`, and the agent previews
+  again. The fix is to bind previews to the newest uid of a path that is not a
+  setting, in the tool and in `CommitOperation`'s snapshot check, keeping the
+  exact head for the operator's restore. Worth it once agents meet it often.
+  `vault_status`'s store totals, `entries` and `bodies`, include settings
+  versions too, and say so in the threat model.
+- **No listing finds a deleted setting.** The deleted list, `deleted_notes`
+  and `trewd deleted` leave settings out, because they are where somebody
+  looks for a lost note; a deleted snippet is found by its history, which
+  needs its path. A `-settings` flag on `trewd deleted` would do.
+- **Settings shape the Git export's commit timing.** The export leaves their
+  content out, but they still go to its planner, so a setting saved between
+  two note edits can split one commit or move its time. Skipping them before
+  the planner needs the export's position to cover their uids all the same,
+  or `doctor` reports the export behind a settings write at the head.
+- **The check after a reload compares bytes, and there is no quiet period.**
+  Obsidian re-saving a setting with the same values in another byte order
+  reads as a change, which costs a second Apply and never a value. Comparing
+  parsed values needs the applied bytes after the reload. The plan's ten
+  second quiet period before an upload is not built either; every settings
+  save is a version, which costs history and nothing else.
+- **A profile is copied as it is read.** A settings file Obsidian or a plugin
+  is writing at that moment is copied torn, and the new profile starts with
+  that plugin's defaults; a large folder copies behind a "Copying" button with
+  no count. Reading again a copied JSON file that does not parse, and a count
+  as it goes, would do. The copy already leaves out `node_modules` and `.git`,
+  which are most of a plugin developer's folder.
+
 ## Follow-ups from the 2026-10-06 review
 
 Each was found by the review (docs/findings.md, the T series) and left on

@@ -670,6 +670,8 @@ Decided 2026-10-09: Obsidian's own settings sync, and community plugins later. P
 
 Done when: a theme and a hotkey changed on the Mac reach a second desktop vault after Apply and survive the reload; the phone's profile backs up and restores from history; and a stale write-back after Apply, a torn `app.json` and a protocol 2 client each have a test that failed first.
 
+**Status, 2026-10-10: built and reviewed, not yet accepted on devices.** The spike ran on the Pixel first (plan/settings-sync.md, "Spike results"). The server speaks protocol 3, admitting settings under a profile root by the fixtures' `config` rule and keeping them from older sessions, MCP and the Git export. The engine sends only the profile a device runs, holds what arrives for it until Apply, checks each applied setting after the reload, and never sends or writes settings JSON that does not parse. The plugin has the switch on each device, off by default, Apply and reload behind a confirmation, and "Create a settings profile for this device". Reviews of the server, the engine and the plugin each found defects, reproduced and fixed with tests that fail without their fix; what they changed in the design is in plan/settings-sync.md, "Changed in review", and what they left is in docs/open-work.md. The stale write-back, the torn `app.json` and the protocol 2 client each have their test. **Not done:** the acceptance on the Mac and the Pixel, which needs the server upgraded to protocol 3 first, and the release.
+
 ## 6. Sequence and dependencies
 
 ```

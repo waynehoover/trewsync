@@ -350,6 +350,11 @@ export class FakeWorkspace {
   getLeavesOfType(type: string) {
     return type === "markdown" ? this.markdownLeaves : [];
   }
+  /** Leaves of every other kind: a canvas, a drawing, an image. */
+  readonly otherLeaves: { view: unknown }[] = [];
+  iterateAllLeaves(callback: (leaf: { view: unknown }) => void): void {
+    for (const leaf of [...this.markdownLeaves, ...this.otherLeaves]) callback(leaf);
+  }
   /** Handlers registered per event name, so a test can fire one. */
   readonly handlers = new Map<string, ((...args: unknown[]) => unknown)[]>();
 
@@ -664,6 +669,11 @@ export abstract class PluginSettingTab {
 
 /** Every Modal built, newest last, so a test can read what it rendered. */
 export const modals: Modal[] = [];
+
+/** A view holding a file's text in memory, as a canvas or a drawing is. */
+export class TextFileView {
+  async save(): Promise<void> {}
+}
 
 export class Modal {
   readonly contentEl = new FakeEl("div", "modal-content");

@@ -319,33 +319,43 @@ both versions on a conflict is not a promise that sync never changes an open fil
 Off until you turn it on, on each device: **Manage this vault**, **Sync
 settings**, **Turn on**. It syncs Obsidian's own settings, themes and CSS
 snippets from the settings folder this device runs, with every device that
-runs a folder of the same name. Plugins, their settings and the workspace
-layout do not sync. It needs a server from this release on, which speaks
-protocol 3; upgrade the server first.
+runs a folder of the same name. That includes core plugins and their settings,
+such as Daily notes and Templates. Community plugins, their settings and the
+workspace layout do not sync. Names you have told this device to skip are
+skipped in the settings folder too. It needs a server from this release on,
+which speaks protocol 3; upgrade the server first.
 
 **Keeping a phone's settings apart.** Devices share settings by folder, and
 desktops usually all run `.obsidian`. To give a phone its own, run **Create a
 settings profile for this device** on it (also under **Manage this vault**,
-**Settings profile**). That copies the phone's settings folder, plugins
-included, to `.obsidian-mobile` or a name you choose. Then open Obsidian's
-**Settings**, **Files and links**, **Override config folder**, enter
-`.obsidian-mobile` and tap **Relaunch**. Do this before turning settings sync
-on, so the phone joins the phone settings rather than the desktops'. Another
-phone that does the same shares them.
+**Settings profile**), before turning settings sync on. That copies the phone's
+settings folder, plugins included, to `.obsidian-mobile` or a name you choose,
+with settings sync off in the copy. Sync then stops until Obsidian runs the
+copy: open Obsidian's **Settings**, **Files and links**, **Override config
+folder**, enter `.obsidian-mobile` and relaunch Obsidian. **Undo** in the same
+place removes the copy and syncs on as before. Once the phone runs the copy,
+turn settings sync on there. Another phone that does the same shares the phone
+settings.
 
 **The first time.** When you turn it on, TrewSync asks which settings to use
 where the server already has some for this folder from another device and this
-device's differ: the server's, or this device's. Either way it first keeps a
-copy of this device's settings as they were, in a `settings-before-sync-` folder
-inside the plugin's own folder, and says where.
+device's differ: the server's, or this device's. The answer is for that first
+time only; later, a setting changed on two devices before either synced it
+keeps both copies, as a note does. Either way TrewSync first keeps a copy of
+this device's settings as they were, in a `settings-before-sync-` folder inside
+the plugin's own folder, and says where. Uninstalling the plugin removes that
+folder with it.
 
 **Applying a change.** Obsidian reads its settings when it starts and holds
 them in memory, so a setting changed on another device waits until you apply
-it. TrewSync says how many are waiting. Tap the notice, or run **Apply synced
-settings and reload**: it saves open notes, writes the settings and reloads
-Obsidian. If Obsidian writes its old setting back as it reloads, TrewSync
-notices and offers the change again, rather than sending the old value to your
-other devices.
+it. TrewSync says how many are waiting, in a notice and in its status. Tap the
+notice, or run **Apply synced settings and reload**, and confirm: it keeps a
+copy of this device's settings as they are (in `settings-before-apply` inside
+the plugin's folder, replaced each time), saves your open notes, canvases and
+drawings, writes the settings and reloads Obsidian. If Obsidian writes its old
+setting back as it reloads, TrewSync notices and offers the change again,
+rather than sending the old value to your other devices. A settings file that
+is not valid JSON is never sent or applied, and is listed as needing attention.
 
 The server keeps every version of a setting, as it does for a note. Agents
 connected over MCP never see settings, and the Git export leaves them out.

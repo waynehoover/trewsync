@@ -581,7 +581,26 @@ export class ObsidianVault implements Vault {
     // The same shape the CLI's `--ignore` has: one name, matched against every
     // segment, so `Attachments` skips it wherever it is.
     this.ignore = new Set([configFolderName(configDir), ...(opts.ignore ?? [])]);
+    this.skipHere = new Set(opts.ignore ?? []);
     this.settingsRoot = opts.settings === true ? configFolderName(configDir) : undefined;
+  }
+
+  /** The names this device was told to leave alone, without the config folder's. */
+  private readonly skipHere: ReadonlySet<string>;
+
+  /**
+   * A setting this device would sync but for a name it was told to skip:
+   * refused as configuration, not as a failure, as a skipped folder of notes
+   * is (R2).
+   */
+  private skippedSetting(path: string): boolean {
+    const root = this.settingsRoot;
+    return (
+      root !== undefined &&
+      path.startsWith(root + "/") &&
+      configPathReason(path) === undefined &&
+      isNeverSynced(path.slice(root.length + 1), this.skipHere)
+    );
   }
 
   /**
@@ -591,10 +610,19 @@ export class ObsidianVault implements Vault {
    */
   private readonly settingsRoot: string | undefined;
 
-  /** Whether a path is a setting this device syncs. */
+  /**
+   * Whether a path is a setting this device syncs. The names this device was
+   * told to skip apply inside the settings folder as everywhere else, so a
+   * snippet can be kept to one device the way a folder of notes can.
+   */
   private inSettings(path: string): boolean {
     const root = this.settingsRoot;
-    return root !== undefined && path.startsWith(root + "/") && configPathReason(path) === undefined;
+    return (
+      root !== undefined &&
+      path.startsWith(root + "/") &&
+      configPathReason(path) === undefined &&
+      !isNeverSynced(path.slice(root.length + 1), this.skipHere)
+    );
   }
 
   /**
@@ -603,13 +631,45 @@ export class ObsidianVault implements Vault {
    * `themes` and `snippets` only, because nothing else under it is a setting
    * settings sync carries, and `plugins` is most of the folder. A few dozen
    * stats, about 120 ms for the whole of a phone's folder on a Pixel 9a
-   * (plan/settings-sync.md, spike results). A failed read fails the listing
-   * (rule 2): a setting left out would be reported deleted.
+   * (plan/settings-sync.md, spike results).
+   *
+   * A walk that fails part way keeps what it found and says so in the log,
+   * and the notes' listing goes on: a theme uninstalled mid-walk must not
+   * stop notes syncing (plan/settings-sync.md, section 7). A setting it did
+   * not reach is not read as deleted, because the engine asks the vault about
+   * every synced path the listing leaves out before it decides anything.
    */
   private async listSettings(out: FileStat[]): Promise<Set<string>> {
     const listed = new Set<string>();
     const root = this.settingsRoot;
-    if (root === undefined || !(await this.adapter.exists(root))) return listed;
+    if (root === undefined) return listed;
+    const found = new Map<string, { raw: string; stat: FileStat }[]>();
+    try {
+      await this.walkSettings(root, found);
+    } catch (err) {
+      this.log(`the settings folder could not be listed in full: ${(err as Error).message}`);
+    }
+    for (const [path, group] of found) {
+      listed.add(path);
+      if (group.length > 1) {
+        // Two names on this disk for one setting, as `list` treats two for
+        // one note: left out and named, never one of them picked.
+        this.ambiguousPaths.push({ path, spellings: group.map((g) => g.raw).sort() });
+        this.actualName.delete(path);
+        continue;
+      }
+      const { raw, stat } = group[0]!;
+      if (path !== raw) this.actualName.set(path, raw);
+      out.push(stat);
+    }
+    return listed;
+  }
+
+  private async walkSettings(
+    root: string,
+    found: Map<string, { raw: string; stat: FileStat }[]>,
+  ): Promise<void> {
+    if (!(await this.adapter.exists(root))) return;
     const folders = [root];
     while (folders.length > 0) {
       const here = await this.adapter.list(folders.pop()!);
@@ -624,12 +684,15 @@ export class ObsidianVault implements Vault {
         if (!this.inSettings(path)) continue;
         const stat = await this.adapter.stat(raw);
         if (stat?.type !== "file") continue;
-        if (path !== raw) this.actualName.set(path, raw);
-        out.push({ path, folder: false, mtime: stat.mtime, ctime: stat.ctime, size: stat.size });
-        listed.add(path);
+        const one = {
+          raw,
+          stat: { path, folder: false, mtime: stat.mtime, ctime: stat.ctime, size: stat.size },
+        };
+        const group = found.get(path);
+        if (group) group.push(one);
+        else found.set(path, [one]);
       }
     }
-    return listed;
   }
 
   /**
@@ -1119,7 +1182,7 @@ export class ObsidianVault implements Vault {
       // folder is this device's configuration: a peer whose config folder is
       // named something else uploads paths under it, and this device saying
       // no to those is the arrangement working, not a fault.
-      throw ignoredHere(normalized, this.ignore)
+      throw ignoredHere(normalized, this.ignore) || this.skippedSetting(normalized)
         ? ignoredHereError(`not writing under a name this device does not sync: ${path}`)
         : neverSync(`refusing to write inside a folder that is never synced: ${path}`);
     }

@@ -4,7 +4,7 @@ Drafted 2026-10-09 against commit `38c7604`; line references are at that commit.
 
 **Decided by the owner, 2026-10-09.** Reverse the refusal for Obsidian's own settings, and sync community plugins later (§6, phase 2). Phones share their settings with phones and desktops with desktops: one profile per device class, through Obsidian's own override, which is (a) in §2. A change arriving for the profile a device runs waits for Apply and reload (§4); applying the files Obsidian already reloads live on desktops is deferred. The remaining questions in §8 have defaults and do not block the MVP.
 
-**Summary.** Sync Obsidian's configuration folders as versioned data. Each device class runs its own folder, chosen with Obsidian's own per-device "Override config folder": `.obsidian` on the desktops, `.obsidian-mobile` on the phone. A device uploads only the folder it runs and receives all of them. A change to the folder it runs lands only through an explicit "Apply and reload". The MVP covers Obsidian's own settings, hotkeys, core plugins, snippets and themes; community plugins (code and settings together) are a second phase behind per-change confirmation. Agents never see any of it.
+**Summary.** Sync Obsidian's configuration folders as versioned data. Each device class runs its own folder, chosen with Obsidian's own per-device "Override config folder": `.obsidian` on the desktops, `.obsidian-mobile` on the phone. A device syncs only the folder it runs, and the server keeps every folder with its history. A change to the folder it runs lands only through an explicit "Apply and reload". The MVP covers Obsidian's own settings, hotkeys, core plugins, snippets and themes; community plugins (code and settings together) are a second phase behind per-change confirmation. Agents never see any of it.
 
 ## 0. What this reverses, and where each reason is answered
 
@@ -76,7 +76,7 @@ What makes (a) safe:
 
 - **A device syncs only the root it runs** (decided while building, 2026-10-10, replacing receive-only copies of the others). Every other root is out of scope there, in both directions, and the engine keeps the server's newest word for those paths without writing them, so a device that later runs another root decides from what it already knows. That covers the phone's leftover `.obsidian` without a conflict over it, and a phone whose override was lost with its app data runs `.obsidian` again, joins the desktop profile, and is asked first (§4) before anything uploads. The server holds every root with its history, which is the backup the receive-only copies were for.
 - **A root no device runs is never uploaded.** It is reported, not synced.
-- **Switching a device carries TrewSync with it.** Its pairing and index live in the running root, and Obsidian's help warns that a new profile needs sync set up again. The command "Create a settings profile for this device" pauses sync, copies the running root, TrewSync's folder included, to `.obsidian-<name>`, verifies the copy, and asks the person to set Settings → Files and links → Override config folder and relaunch (on Android, copying a dot folder otherwise needs a file manager that shows hidden files). After the relaunch it removes `index.json` from the old copy, so that folder can never resume from a stale index; the verified copy exists first (rule 3).
+- **Switching a device carries TrewSync with it.** Its pairing and index live in the running root, and Obsidian's help warns that a new profile needs sync set up again. The command "Create a settings profile for this device" pauses sync, copies the running root, TrewSync's folder included, to `.obsidian-<name>`, verifies the copy, and asks the person to set Settings → Files and links → Override config folder and relaunch (on Android, copying a dot folder otherwise needs a file manager that shows hidden files). The copy has settings sync off, and sync stays stopped until Obsidian runs it, with Undo to remove it. On the copy's first start it removes the old folder's index, so that folder can never resume from a stale index; if the old folder synced after the copy was made, the copy's own index goes instead and the next sync decides by content. The verified copy exists first (rule 3).
 - **Within a class**, a device that needs its own settings (a Linux desktop's fonts) gets another root, `.obsidian-linux`.
 
 ## 3. Detecting config edits
@@ -157,6 +157,20 @@ Obsidian's index (`getAllLoadedFiles`, vault.ts:666-723) leaves config files out
 5. Should `trewd restore -to-uid` roll settings back along with notes? Default: yes, as one undoable operation, which is what it does to every path today.
 7. The denylist, including obsidian-git and Local REST API on the Mac. Default: as listed in §6. It matters from phase 2, when plugins move.
 8. In phase 2, accept other plugins' API keys in plaintext on the server and in its backups? Asked again before phase 2.
+
+## Changed in review, 2026-10-10
+
+Three reviews, of the server, the engine and the plugin, changed these decisions. What they left is in docs/open-work.md, "Settings sync, after its review".
+
+- **The first choice is for the first time.** "Use the server's" or "Keep this device's" settles the settings the device already had, and is spent at the first pass that ends with nothing held, or at a replaced history. After that, a setting new on two devices keeps both copies, as a note does.
+- **An applied setting is checked by the next load only.** It records the load of the plugin that wrote it, so a reconnect before the reload neither confirms it nor sends Obsidian's write-back.
+- **Apply asks first.** It keeps a copy of the device's settings in `settings-before-apply`, replaced each time, saves every open text view, runs one pass rather than a settle, saves the views again and reloads, whatever the pass did once it began.
+- **Settings JSON that does not parse** gets ten seconds with the same content, then is listed as needing attention and never sent. A version from the server that does not parse is never written.
+- **A new profile** is copied with settings sync off in it, and the old folder's index is removed only once the copy runs (§2).
+- **The per-device ignore list applies in the settings folder**, so a snippet can be kept to one device.
+- **The walk** keeps the notes' listing when part of the settings folder cannot be read, and sets aside a setting the disk holds under two spellings, as the notes' listing does.
+- **A device that was on protocol 2** while settings were committed replays the whole history once, when settings sync is turned on.
+- **The server** compares names inside a profile root with the collision rule's fold, keeps settings first synced after a restore's uid, undoes an operation as copies of its notes while leaving settings to their history, and lets an older session neither read nor undo a setting.
 
 ## Spike results, 2026-10-09 (MVP step 0)
 

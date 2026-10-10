@@ -153,6 +153,13 @@ export interface DeviceConfig {
    * on; absent keeps both, as a first sync of notes does.
    */
   readonly settingsFirstChoice?: "server" | "device";
+  /**
+   * Ask the server for its whole history at the next start, once: set when
+   * settings sync is turned on, because a device that ran an older release
+   * was never sent the settings other devices committed meanwhile, and its
+   * cursor has moved past them. Forgotten after the first pass.
+   */
+  readonly settingsReplay?: boolean;
 }
 
 /**
@@ -276,6 +283,7 @@ export function encodeConfig(config: DeviceConfig): Record<string, string> {
     ...(config.ignore?.length ? { ignore: JSON.stringify(config.ignore) } : {}),
     ...(config.settings === true ? { settings: "true" } : {}),
     ...(config.settingsFirstChoice ? { settingsFirstChoice: config.settingsFirstChoice } : {}),
+    ...(config.settingsReplay === true ? { settingsReplay: "true" } : {}),
   };
 }
 
@@ -355,6 +363,7 @@ export function decodeConfig(raw: unknown, where: string): DeviceConfig {
     ...(record["settingsFirstChoice"] === "server" || record["settingsFirstChoice"] === "device"
       ? { settingsFirstChoice: record["settingsFirstChoice"] }
       : {}),
+    ...(record["settingsReplay"] === "true" ? { settingsReplay: true } : {}),
   } as DeviceConfig & { invite?: string };
   if (config.deviceId === undefined) {
     // Not a state anything here writes: a pairing is saved with its id and

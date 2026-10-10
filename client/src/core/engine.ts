@@ -1625,7 +1625,9 @@ export class Engine {
   private outOfScope(path: string): boolean {
     if (!isConfigPath(path)) return false;
     const root = this.opts.settings?.root;
-    return root === undefined || !path.startsWith(root + "/") || configPathReason(path) !== undefined;
+    return (
+      root === undefined || !path.startsWith(root + "/") || configPathReason(path) !== undefined
+    );
   }
 
   /** Whether a path never syncs on this device: the dot rule, less the settings it syncs. */
@@ -2306,7 +2308,9 @@ export class Engine {
     if (
       // Held settings stay pending, so they are decided again every pass,
       // and are owed nothing: they wait on a person on purpose.
-      [...this.pending].every((path) => this.heldSettings.has(path) || this.settingsUnsendable.has(path)) &&
+      [...this.pending].every(
+        (path) => this.heldSettings.has(path) || this.settingsUnsendable.has(path),
+      ) &&
       report.waiting === 0 &&
       report.retrying === 0 &&
       report.skipped === 0 &&
@@ -2341,7 +2345,8 @@ export class Engine {
       report.appliedCursor = this.cursor;
     }
     this.settingsHeldLast = this.heldSettings.size;
-    if (this.opts.settings !== undefined && this.heldSettings.size === 0) this.firstChoiceSpent = true;
+    if (this.opts.settings !== undefined && this.heldSettings.size === 0)
+      this.firstChoiceSpent = true;
     report.needsAttention = this.attentionList(report);
     if (phases !== undefined) {
       into("saveMs");
@@ -2618,7 +2623,10 @@ export class Engine {
         this.unparsable.set(path, { since, hash: entry.hash });
         if (now - since < SETTINGS_UNPARSABLE_GRACE_MS) {
           report.waiting++;
-          report.nextUploadAt = Math.min(report.nextUploadAt ?? Infinity, now + SETTINGS_WRITE_WAIT_MS);
+          report.nextUploadAt = Math.min(
+            report.nextUploadAt ?? Infinity,
+            now + SETTINGS_WRITE_WAIT_MS,
+          );
         } else {
           this.settingsUnsendable.add(path);
         }
@@ -2635,7 +2643,8 @@ export class Engine {
     // A setting applied in this load is one Obsidian has not read yet: what it
     // writes before the reload is its old value, so nothing of it is sent
     // until an engine of the next load has checked it.
-    const unreadByObsidian = entry.unconfirmed !== undefined && entry.unconfirmed.load === this.loadId;
+    const unreadByObsidian =
+      entry.unconfirmed !== undefined && entry.unconfirmed.load === this.loadId;
     if (writesHere ? !this.applyingSettings : unreadByObsidian && action.kind !== "nothing") {
       this.heldSettings.add(path);
       report.settingsHeld++;
@@ -2644,7 +2653,8 @@ export class Engine {
     }
     // The oldest base wins: a second apply before a reload has checked the
     // first must still be checked against what was there before either.
-    if (writesHere) entry.unconfirmed ??= { hash: entry.synchash, uid: entry.syncuid, load: this.loadId };
+    if (writesHere)
+      entry.unconfirmed ??= { hash: entry.synchash, uid: entry.syncuid, load: this.loadId };
     return action;
   }
 

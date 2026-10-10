@@ -128,7 +128,10 @@ describe("an inbound path that never syncs", () => {
  */
 describe("a settings version that is not JSON", () => {
   it("is not applied, is named, and the notes beside it land", async () => {
-    const { engine, socket, vault } = await engineOnFakeSocket({}, { settings: { root: ".obsidian" } });
+    const { engine, socket, vault } = await engineOnFakeSocket(
+      {},
+      { settings: { root: ".obsidian" } },
+    );
     const bodies = new Map<string, Uint8Array>();
     serving(socket, bodies);
     socket.raw({

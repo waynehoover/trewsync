@@ -28,6 +28,7 @@ import {
   type FakeEl,
   Platform,
   Plugin as StubPlugin,
+  TextFileView,
   built,
   modals,
   notices,
@@ -6823,11 +6824,12 @@ describe("where the device token is kept", () => {
 /**
  * Settings sync between two plugin devices (plan/settings-sync.md): turned on
  * per device, with a copy of the device's settings kept first; a change from
- * the other device waits, is announced, and is written by Apply and reload,
- * which saves open notes first and then reloads Obsidian.
+ * the other device waits, is announced, and is applied only once a person has
+ * said so, which saves every open view and reloads Obsidian.
  */
 describe("settings sync", () => {
-  it("syncs a setting, holds it on the other device, and applies it there with a reload", async () => {
+  /** The laptop's dark theme, held on the phone, whose own setting said light. */
+  async function heldOnThePhone() {
     await fresh();
     const laptop = await load();
     laptop.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "dark"\n}');
@@ -6848,23 +6850,168 @@ describe("settings sync", () => {
     await laptop.plugin.syncNow();
 
     const kept = await phone.plugin.setSettingsSync(true, "server");
-    expect(kept).toBeDefined();
     expect(phone.app.vault.adapter.text(`${kept!}/app.json`)).toContain("light");
     await synced(phone.plugin);
     await until("the laptop's setting to wait on the phone", () => phone.plugin.settingsHeld === 1);
-    expect(phone.app.vault.adapter.text(".obsidian/app.json"), "written before Apply").toContain("light");
-    expect(notices.map((n) => n.message).join(" ")).toMatch(/1 setting from another device is waiting/);
+    expect(phone.app.vault.adapter.text(".obsidian/app.json"), "written before Apply").toContain(
+      "light",
+    );
+    return { laptop, phone };
+  }
+
+  /** The newest modal's button, by its label. */
+  const modalButton = (label: string) => {
+    const modal = modals.at(-1)!;
+    const button = built
+      .filter((s) => containsElement(modal.contentEl, s.settingEl))
+      .flatMap((s) => s.buttons)
+      .find((b) => b.label === label);
+    if (!button) throw new Error(`the modal has no ${label} button`);
+    return button;
+  };
+
+  it("asks before applying, saves every open view once sync has stopped, and reloads", async () => {
+    const { laptop, phone } = await heldOnThePhone();
+    const notice = notices.find((n) =>
+      n.message.includes("1 setting from another device is waiting"),
+    )!;
+    expect(notice, notices.map((n) => n.message).join(" | ")).toBeDefined();
+    expect(
+      phone.plugin.currentState.kind === "synced" && phone.plugin.currentState.summary,
+    ).toMatch(/1 setting to apply/);
 
     const reload = vi.fn();
     vi.stubGlobal("window", { location: { reload } });
     try {
-      await phone.plugin.applySettings();
+      // Tapping the notice to dismiss it asks; it does not reload.
+      notice.el.fire("click");
+      const asking = modals.at(-1)!;
+      expect(asking.titleEl.allText()).toBe("Apply synced settings");
+      expect(reload).not.toHaveBeenCalled();
+
+      // A note open and being typed in, and a canvas, both TextFileViews.
+      const saved: string[] = [];
+      let typed = "first words";
+      phone.app.workspace.markdownLeaves.push({
+        view: { save: async () => void saved.push(`note: ${typed}`) },
+      });
+      class Canvas extends TextFileView {
+        override async save(): Promise<void> {
+          saved.push("canvas");
+        }
+      }
+      phone.app.workspace.otherLeaves.push({ view: new Canvas() });
+      // Typing goes on while the apply pass runs, after the first save.
+      const client = (
+        phone.plugin as unknown as { client: { sync: (o: unknown) => Promise<unknown> } }
+      ).client;
+      const sync = client.sync.bind(client);
+      client.sync = async (opts: unknown) => {
+        typed = "first words, and more typed while it applied";
+        return sync(opts);
+      };
+      await modalButton("Apply and reload").click();
+      await until("the reload", () => reload.mock.calls.length === 1);
+      expect(saved.at(-2), "the last save is after sync stopped").toBe(
+        "note: first words, and more typed while it applied",
+      );
+      expect(saved).toContain("canvas");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(phone.app.vault.adapter.text(".obsidian/app.json")).toContain("dark");
+    expect(
+      phone.app.vault.adapter.text(".obsidian/plugins/trew/settings-before-apply/app.json"),
+    ).toContain("light");
+    // The laptop's own settings were never touched by the phone's.
+    expect(laptop.app.vault.adapter.text(".obsidian/app.json")).toContain("dark");
+  }, 300_000);
+
+  it("reloads once the apply has begun, even when it fails", async () => {
+    const { phone } = await heldOnThePhone();
+    const client = (phone.plugin as unknown as { client: { sync: () => Promise<unknown> } }).client;
+    client.sync = async () => {
+      throw new Error("the connection dropped");
+    };
+    const reload = vi.fn();
+    vi.stubGlobal("window", { location: { reload } });
+    try {
+      await expect(phone.plugin.applySettings()).rejects.toThrow("the connection dropped");
     } finally {
       vi.unstubAllGlobals();
     }
     expect(reload).toHaveBeenCalledTimes(1);
-    expect(phone.app.vault.adapter.text(".obsidian/app.json")).toContain("dark");
-    // The laptop's own settings were never touched by the phone's.
-    expect(laptop.app.vault.adapter.text(".obsidian/app.json")).toContain("dark");
+  }, 300_000);
+
+  it("offers Apply only while something waits, and forgets the first time once it is done", async () => {
+    const { laptop, phone } = await heldOnThePhone();
+    const command = phone.plugin.commands.find((c) => c.id === "apply-settings")!;
+    expect(command.checkCallback!(true)).toBe(true);
+    const nothing = laptop.plugin.commands.find((c) => c.id === "apply-settings")!;
+    expect(nothing.checkCallback!(true), "offered with nothing to apply, and it reloads").toBe(
+      false,
+    );
+    const saved = phone.plugin.savedData as Record<string, string>;
+    expect(saved["settingsFirstChoice"], "forgotten while it is still deciding").toBe("server");
+    expect(saved["settingsReplay"], "the replay was not forgotten after a pass").toBeUndefined();
+
+    const fresh = await heldOnThePhone();
+    const reload = vi.fn();
+    vi.stubGlobal("window", { location: { reload } });
+    try {
+      await fresh.phone.plugin.applySettings();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(reload).toHaveBeenCalledTimes(1);
+  }, 300_000);
+
+  it("stops sync for a profile made here until Obsidian runs it, and the copy finishes the switch", async () => {
+    await fresh();
+    const phone = await load();
+    phone.app.vault.adapter.seed("note.md", "a note\n");
+    phone.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "light"\n}');
+    await startVault(phone.plugin, "phone");
+    await synced(phone.plugin);
+    await phone.plugin.setSettingsSync(true, "device");
+    await synced(phone.plugin);
+    const adapter = phone.app.vault.adapter;
+    const oldIndex = ".obsidian/plugins/trew/index.json";
+    expect(adapter.filePaths()).toContain(oldIndex);
+
+    // Obsidian keeps a plugin's data in its folder; the stub keeps it in memory.
+    adapter.seed(".obsidian/plugins/trew/data.json", JSON.stringify(phone.plugin.savedData));
+    expect(await phone.plugin.createSettingsProfile("mobile")).toBe(".obsidian-mobile");
+    expect(phone.plugin.currentState.kind).toBe("stopped");
+    // Nothing here starts sync in this folder again: not turning settings
+    // sync off and on, not pausing and resuming.
+    await phone.plugin.setSettingsSync(false);
+    expect(phone.plugin.currentState.kind).toBe("stopped");
+    expect(adapter.filePaths(), "the running folder's index went before the relaunch").toContain(
+      oldIndex,
+    );
+    const copy = JSON.parse(adapter.text(".obsidian-mobile/plugins/trew/data.json")!) as Record<
+      string,
+      string
+    >;
+    expect(copy["settings"], "the copy still syncs settings without being asked").toBeUndefined();
+    expect(copy["deviceId"]).toBe((phone.plugin.savedData as Record<string, string>)["deviceId"]);
+
+    // The relaunch into the copy.
+    phone.plugin.onunload();
+    await phone.plugin.closing;
+    const relaunched = await load(
+      copy,
+      { id: "trew", dir: ".obsidian-mobile/plugins/trew" },
+      ".obsidian-mobile",
+      undefined,
+      phone.app,
+    );
+    expect(
+      adapter.filePaths(),
+      "the old folder keeps an index the copy has moved past",
+    ).not.toContain(oldIndex);
+    expect(adapter.filePaths()).not.toContain(".obsidian-mobile/plugins/trew/profile-from.json");
+    await synced(relaunched.plugin);
   }, 300_000);
 });
