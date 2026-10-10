@@ -209,9 +209,10 @@ list. The cost is that the server cannot be released ahead of the plugin: a
 server fix at a new version takes a plugin release with it.
 
 The fix belongs in BRAT, which should take the newest release that has a
-manifest.json, and is proposed to it upstream. Once a BRAT release with that
-has been out long enough for installs to have it, remove the guard, the
-runbook's paragraph on order and the check.
+manifest.json, and is proposed to it upstream as
+[TfTHacker/obsidian42-brat#227](https://github.com/TfTHacker/obsidian42-brat/pull/227).
+Once a BRAT release with that has been out long enough for installs to have
+it, remove the guard, the runbook's paragraph on order and the check.
 
 ## Follow-ups from the 2026-10-06 review
 
