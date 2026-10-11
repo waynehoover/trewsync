@@ -690,6 +690,32 @@ func TestARestartKeepsTheFirstInviteItWrote(t *testing.T) {
 	}
 }
 
+// The startup message is one write. serveCapturing reads the output once
+// "listening on" appears, and the message's other lines used to follow in
+// writes of their own, so a read between them failed the test above.
+func TestTheStartupMessageIsOneWrite(t *testing.T) {
+	for _, first := range []firstInvite{
+		{Written: true, Path: "/data/first-invite", ExpiresAt: time.Now()},
+		{Written: true, Guessed: true, Path: "/data/first-invite", ExpiresAt: time.Now()},
+		{Outstanding: true, Path: "/data/first-invite"},
+		{NoAddress: true},
+		{},
+	} {
+		var w countingWriter
+		printPairing(&w, "127.0.0.1:3003", "default", first)
+		if w.writes != 1 {
+			t.Errorf("%+v: the message took %d writes, want 1", first, w.writes)
+		}
+	}
+}
+
+type countingWriter struct{ writes int }
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.writes++
+	return len(p), nil
+}
+
 /* helpers for running a server inside a test */
 
 // safeBuffer is written by the serving goroutine and read by the test.

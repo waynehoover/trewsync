@@ -179,35 +179,39 @@ func mintFirstInvite(st *store.Store, vault string, urls []string, path string, 
 }
 
 // printPairing says what the server is and how the next device joins it. It
-// names the file an invite is in and never prints the invite.
+// names the file an invite is in and never prints the invite. All of it in
+// one write, so whoever reads the output once "listening on" appears has the
+// rest too: a test that did failed whenever it read between the lines.
 func printPairing(out io.Writer, addr, vault string, first firstInvite) {
-	fmt.Fprintf(out, "trewd %s listening on %s, serving vault %q\n", resolveVersion(version, moduleVersion()), addr, vault)
-	fmt.Fprintln(out)
+	var b strings.Builder
+	fmt.Fprintf(&b, "trewd %s listening on %s, serving vault %q\n", resolveVersion(version, moduleVersion()), addr, vault)
+	fmt.Fprintln(&b)
 	switch {
 	case first.Written:
-		fmt.Fprintln(out, "No device is paired with this vault yet. The invite for the first one is in")
-		fmt.Fprintf(out, "  %s\n", first.Path)
-		fmt.Fprintf(out, "and works once, until %s. Paste a line from it into TrewSync on that device.\n",
+		fmt.Fprintln(&b, "No device is paired with this vault yet. The invite for the first one is in")
+		fmt.Fprintf(&b, "  %s\n", first.Path)
+		fmt.Fprintf(&b, "and works once, until %s. Paste a line from it into TrewSync on that device.\n",
 			first.ExpiresAt.UTC().Format(time.RFC3339))
 		if first.Guessed {
-			fmt.Fprintln(out, "It was started without -url, so each line names this machine at the server's own")
-			fmt.Fprintln(out, "port, where nothing speaks TLS. Behind tailscale serve or a proxy no device can use")
-			fmt.Fprintln(out, "them: make the first device's invite with `trewd invite -url wss://NAME`, the name")
-			fmt.Fprintln(out, "your devices reach, instead.")
+			fmt.Fprintln(&b, "It was started without -url, so each line names this machine at the server's own")
+			fmt.Fprintln(&b, "port, where nothing speaks TLS. Behind tailscale serve or a proxy no device can use")
+			fmt.Fprintln(&b, "them: make the first device's invite with `trewd invite -url wss://NAME`, the name")
+			fmt.Fprintln(&b, "your devices reach, instead.")
 		} else {
-			fmt.Fprintln(out, "Each line names one address of this server; use the one the device can reach.")
+			fmt.Fprintln(&b, "Each line names one address of this server; use the one the device can reach.")
 		}
 	case first.Outstanding:
-		fmt.Fprintln(out, "No device is paired with this vault yet, and an invite for one is still outstanding.")
-		fmt.Fprintf(out, "If this server wrote it, it is in %s. `trewd invite` makes another.\n", first.Path)
+		fmt.Fprintln(&b, "No device is paired with this vault yet, and an invite for one is still outstanding.")
+		fmt.Fprintf(&b, "If this server wrote it, it is in %s. `trewd invite` makes another.\n", first.Path)
 	case first.NoAddress:
-		fmt.Fprintln(out, "No device is paired with this vault yet, and this server cannot tell which address")
-		fmt.Fprintln(out, "devices reach it at, so it wrote no invite. Start it with -url wss://your-host:port,")
-		fmt.Fprintln(out, "the name TLS is terminated at, or run `trewd invite -url wss://your-host:port`.")
+		fmt.Fprintln(&b, "No device is paired with this vault yet, and this server cannot tell which address")
+		fmt.Fprintln(&b, "devices reach it at, so it wrote no invite. Start it with -url wss://your-host:port,")
+		fmt.Fprintln(&b, "the name TLS is terminated at, or run `trewd invite -url wss://your-host:port`.")
 	default:
-		fmt.Fprintln(out, "To add a device, run `trewd invite` on this server, or make an invite on a")
-		fmt.Fprintln(out, "device that already has the vault.")
+		fmt.Fprintln(&b, "To add a device, run `trewd invite` on this server, or make an invite on a")
+		fmt.Fprintln(&b, "device that already has the vault.")
 	}
+	fmt.Fprint(out, b.String())
 }
 
 // writeSecretFile writes a credential to a file atomically and durably, then
