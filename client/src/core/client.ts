@@ -7,6 +7,7 @@ import {
   type ConflictChoice,
 } from "./conflicts.ts";
 import type { Activity } from "./activity.ts";
+import { isConfigPath } from "./path-policy.ts";
 /**
  * A connected client, which is everything both shells have in common.
  *
@@ -1038,6 +1039,10 @@ export class Client {
       if (this.opts.readOnly)
         throw new Error("Turn off receive-only mode before resolving conflicts.");
       await resolveConflict(this.opts.vault, this.opts.device, review, choice, edited);
+      // A setting chosen over the one Obsidian holds goes out only as Apply's
+      // writes do; keeping the original changes nothing Obsidian holds.
+      if (choice !== "original" && isConfigPath(review.original))
+        this.engine.settingResolved(review.original);
       this.engine.noteChanged(review.original);
       this.engine.noteChanged(review.copy);
       try {

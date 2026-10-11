@@ -38,6 +38,23 @@ describe("reviewed conflicts", () => {
       expect(await vault.exists(pair.copy)).toBe(false);
     },
   );
+  it("refuses a combined version of a JSON file that does not parse, touching neither", async () => {
+    const json = {
+      original: ".obsidian-desktop/app.json",
+      copy: ".obsidian-desktop/app (Conflicted copy phone 202609101200).json",
+    };
+    const vault = new MemoryVault();
+    await vault.edit(json.original, '{\n  "tabSize": 8\n}');
+    await vault.edit(json.copy, '{\n  "tabSize": 2\n}');
+    const review = await reviewConflict(vault, json);
+    const before = vault.snapshot();
+    await expect(
+      resolveConflict(vault, "laptop", review, "edited", '{\n  "tabSize": 2,\n}'),
+    ).rejects.toThrow(/not valid JSON/);
+    expect(vault.snapshot()).toEqual(before);
+    await resolveConflict(vault, "laptop", review, "edited", '{\n  "tabSize": 4\n}');
+    expect(vault.text(json.original)).toBe('{\n  "tabSize": 4\n}');
+  });
   it.each([pair.original, pair.copy])(
     "refuses a changed %s before touching either file",
     async (path) => {

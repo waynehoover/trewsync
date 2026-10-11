@@ -7131,6 +7131,76 @@ describe("settings sync", () => {
     expect(newest().buttons.map((b) => b.label)).toContain("Apply and reload");
   }, 300_000);
 
+  // A setting kept both ways is a conflict copy in Obsidian's settings
+  // folder, which Obsidian's index never lists.
+  it("lists a setting kept both ways in Review conflicts, and reloads only for a new version", async () => {
+    await fresh();
+    const { plugin, app } = await load();
+    app.vault.adapter.seed(".obsidian/app.json", '{\n  "tabSize": 4\n}');
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    await plugin.setSettingsSync(".obsidian-desktop", "device");
+    await synced(plugin);
+    const keptBoth = async (stamp: string) => {
+      const copy = `.obsidian/app (Conflicted copy desk ${stamp}).json`;
+      app.vault.adapter.seed(".obsidian/app.json", '{\n  "tabSize": 8\n}', 9_000_000_000_000);
+      app.vault.adapter.seed(copy, '{\n  "tabSize": 2\n}', 9_000_000_000_000);
+      await plugin.syncNow();
+      await synced(plugin);
+      return copy;
+    };
+    const has = (label: string) => {
+      try {
+        modalButton(label);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const compare = async () => {
+      built.length = 0;
+      plugin.commands.find((c) => c.id === "review-conflicts")!.callback!();
+      await until("the setting's copy to be listed", () =>
+        built.some((s) => s.name === "Obsidian settings: app.json"),
+      );
+      await built.find((s) => s.name === "Obsidian settings: app.json")!.buttons[0]!.click();
+      await until("the comparison", () => has("Keep copy"));
+      const opens = built.filter((s) => s.name === "Original" || s.name === "Preserved copy");
+      expect(
+        opens.map((s) => s.buttons[0]!.disabled),
+        "Obsidian cannot open these",
+      ).toEqual([true, true]);
+    };
+    const reload = vi.fn();
+
+    // The original kept: nothing Obsidian holds changes, so no reload.
+    const first = await keptBoth("202610110930");
+    // The ribbon menu counts it too, once the settings folder has been walked.
+    const { Menu } = await import("./stub.ts");
+    plugin.ribbonIcons[0]!.callback();
+    await until("the menu to count the setting's copy", () =>
+      Menu.latest!.items.some((item) => item.label === "Review conflicts (1)"),
+    );
+    await compare();
+    await modalButton("Keep original").click();
+    await until("the copy to go", () => app.vault.adapter.text(first) === undefined);
+    expect(app.vault.adapter.text(".obsidian/app.json")).toContain('"tabSize": 8');
+
+    // The copy kept: written, sent, and Obsidian reloads to read it.
+    const second = await keptBoth("202610110945");
+    await compare();
+    vi.stubGlobal("window", { location: { reload } });
+    try {
+      await modalButton("Keep copy").click();
+      await until("Obsidian to reload", () => reload.mock.calls.length > 0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(app.vault.adapter.text(".obsidian/app.json")).toContain('"tabSize": 2');
+    expect(app.vault.adapter.text(second)).toBeUndefined();
+    expect(reload).toHaveBeenCalledTimes(1);
+  }, 300_000);
+
   it("offers one choice, and saves a group only once the first-time question is answered", async () => {
     await fresh();
     const { plugin } = await load();

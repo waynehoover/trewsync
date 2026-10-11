@@ -101,7 +101,8 @@ import { Backoff, ProtocolError, Transport } from "../core/transport.ts";
 import { DISPLACED_LOG, type Displaced, type Inventory } from "../core/displaced.ts";
 import { configFolderName, firstFreeName } from "../core/paths.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
-import { backUpSettings, keepSettingsBeforeApply } from "./settings.ts";
+import { backUpSettings, keepSettingsBeforeApply, settingsIn } from "./settings.ts";
+import { isConfigPath } from "../core/path-policy.ts";
 import { timedVault } from "../core/vault.ts";
 import type { JournalSaveCost, JournalStoreOptions } from "../core/index-journal-store.ts";
 import { INVITE_ACTION, inviteQrImage } from "./invite-qr.ts";
@@ -913,7 +914,27 @@ export default class TrewPlugin extends Plugin {
     void this.app.workspace.getLeaf().openFile(file);
   }
 
-  private conflictPairs(): ConflictPair[] {
+  /**
+   * Every conflict copy here, the settings' too. Obsidian's index never lists
+   * its own settings folder, so a setting kept both ways is found by walking
+   * the folder, and named as sync names it: in the group's folder.
+   */
+  private async conflictPairs(): Promise<ConflictPair[]> {
+    const pairs = this.noteConflictPairs();
+    const group = this.settingsGroup;
+    if (group !== undefined) {
+      const root = this.configRoot;
+      for (const file of await settingsIn(this.app.vault.adapter, root, group)) {
+        const copy = `${group}${file.slice(root.length)}`.normalize("NFC");
+        const original = conflictOriginal(copy);
+        if (original) pairs.push({ original, copy });
+      }
+    }
+    return pairs;
+  }
+
+  /** The conflict copies Obsidian's index lists, which is every one outside its settings. */
+  private noteConflictPairs(): ConflictPair[] {
     return this.app.vault.getFiles().flatMap((file) => {
       const original = conflictOriginal(file.path);
       return original ? [{ original, copy: file.path }] : [];
@@ -925,8 +946,12 @@ export default class TrewPlugin extends Plugin {
       pairs: () => this.conflictPairs(),
       open: (path) => this.openExisting(path),
       review: (pair) => {
-        if (!this.client)
-          return reviewConflict(new ObsidianVault(this.app.vault, this.app.vault.configDir), pair);
+        if (!this.client) {
+          const vault = new ObsidianVault(this.app.vault, this.app.vault.configDir, undefined, {
+            ...(this.settingsGroup !== undefined ? { settings: this.settingsGroup } : {}),
+          });
+          return reviewConflict(vault, pair);
+        }
         return this.client.reviewConflict(pair);
       },
       resolve: async (review, choice, edited) => {
@@ -934,6 +959,20 @@ export default class TrewPlugin extends Plugin {
         if (!client) throw new Error(this.whyNoClient());
         await client.resolveConflict(review, choice, edited);
         await this.activityLog?.flush();
+        // Obsidian holds the setting just replaced and reads the file only
+        // when it starts, so the choice is sent and Obsidian reloads, as Apply
+        // and reload does. Keeping the original changed nothing it holds.
+        if (choice !== "original" && isConfigPath(review.original)) {
+          await this.saveOpenEditors();
+          try {
+            await client.sync({ coalesceWrites: false });
+          } finally {
+            await this.quiet();
+            await this.saveOpenEditors();
+            reloadObsidian();
+          }
+          return;
+        }
         await this.syncNow();
       },
     }).open();
@@ -966,13 +1005,21 @@ export default class TrewPlugin extends Plugin {
         .setIcon("list")
         .onClick(() => this.openActivity()),
     );
-    const conflicts = this.conflictPairs().length;
-    menu.addItem((item) =>
+    const reviewTitle = (n: number) => `Review conflicts${n ? ` (${n})` : ""}`;
+    menu.addItem((item) => {
       item
-        .setTitle(`Review conflicts${conflicts ? ` (${conflicts})` : ""}`)
+        .setTitle(reviewTitle(this.noteConflictPairs().length))
         .setIcon("files")
-        .onClick(() => this.openConflicts()),
-    );
+        .onClick(() => this.openConflicts());
+      // The settings' copies need a walk of their folder, so they join the
+      // count once it is done.
+      if (this.settingsGroup !== undefined) {
+        void this.conflictPairs().then(
+          (all) => item.setTitle(reviewTitle(all.length)),
+          () => undefined,
+        );
+      }
+    });
     const file = this.app.workspace.getActiveFile();
     menu.addItem((item) =>
       item

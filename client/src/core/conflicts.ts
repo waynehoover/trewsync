@@ -1,5 +1,5 @@
 import { plainDigest } from "./digest.ts";
-import { looksLikeText } from "./chunk.ts";
+import { looksLikeJson, looksLikeText } from "./chunk.ts";
 import { conflictCopyPath } from "./merge.ts";
 import { firstFreeName } from "./paths.ts";
 import type { FileStat, Vault } from "./vault.ts";
@@ -102,6 +102,16 @@ export async function resolveConflict(
       review.preserved.text === undefined)
   )
     throw new Error("Open these files to edit them; they cannot be merged in this preview.");
+  // A combined version of a JSON file has to be JSON: a settings file that
+  // does not parse is never sent or applied, and a canvas that does not parse
+  // is one Obsidian will not open.
+  if (choice === "edited" && looksLikeJson(review.original)) {
+    try {
+      JSON.parse(edited!);
+    } catch {
+      throw new Error("The combined version is not valid JSON. Correct it before saving.");
+    }
+  }
   if (
     (await digest(vault, review.original)) !== review.current?.digest ||
     (await digest(vault, review.copy)) !== review.preserved.digest

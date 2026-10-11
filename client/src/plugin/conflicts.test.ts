@@ -16,7 +16,7 @@ it("keeps combined text when resolution fails and when the comparison refreshes"
   });
   const pending = deferred<void>();
   const source = {
-    pairs: () => [pair],
+    pairs: async () => [pair],
     open: () => {},
     review: async () => ({
       ...pair,
@@ -60,7 +60,7 @@ it("locks the combined editor until the submitted version has been saved", async
   const pending = deferred<void>();
   const written = deferred<void>();
   const modal = new ConflictsModal(new App() as never, {
-    pairs: () => (vault.text(pair.copy) === undefined ? [] : [pair]),
+    pairs: async () => (vault.text(pair.copy) === undefined ? [] : [pair]),
     open: () => {},
     review: () => reviewConflict(vault, pair),
     resolve: async (review, choice, edited) => {
@@ -102,7 +102,7 @@ it.each([false, true])(
       "new line\n".repeat(large ? 12000 : 1) + "NEW IMPORTANT DECISION\n",
     );
     const modal = new ConflictsModal(new App() as never, {
-      pairs: () => [pair],
+      pairs: async () => [pair],
       open: () => {},
       review: () => reviewConflict(vault, pair),
       resolve: async () => {},

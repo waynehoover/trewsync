@@ -1100,6 +1100,8 @@ export class Engine {
   private readonly unparsable = new Map<string, { since: number; hash: string }>();
   /** Settings JSON files given up on in this pass: named, owed nothing, never sent. */
   private settingsUnsendable = new Set<string>();
+  /** Settings a person chose a version of, with the base each had (`settingResolved`). */
+  private readonly resolved = new Map<string, { hash: string; uid: number }>();
 
   /**
    * Paths a file is standing in the way of, as of the last pass.
@@ -2438,6 +2440,22 @@ export class Engine {
 
   private readonly dirty = new Set<string>();
 
+  /**
+   * A setting a person has just written here by choosing a version of it in
+   * Review conflicts. It is sent as any edit is, and then treated as what
+   * Apply writes: Obsidian holds the old value until it reloads, so nothing
+   * more of it is sent in this load, and after the reload anything Obsidian
+   * wrote back over the choice is decided against the base the choice
+   * replaced, which offers the choice again rather than sending the old value.
+   */
+  settingResolved(path: string): void {
+    const canonical = canonicalSpelling(path);
+    const entry = this.entries.get(canonical);
+    if (entry !== undefined)
+      this.resolved.set(canonical, { hash: entry.synchash, uid: entry.syncuid });
+    this.noteChanged(path);
+  }
+
   /** An event invalidates content even when size and timestamps are unchanged. */
   noteChanged(path: string): void {
     const canonical = canonicalSpelling(path);
@@ -2667,6 +2685,14 @@ export class Engine {
     // first must still be checked against what was there before either.
     if (writesHere)
       entry.unconfirmed ??= { hash: entry.synchash, uid: entry.syncuid, load: this.loadId };
+    // A version chosen in Review conflicts goes out as it is, and from then on
+    // waits for the reload as an applied setting does (`settingResolved`).
+    const chosen = this.resolved.get(path);
+    if (chosen !== undefined) {
+      this.resolved.delete(path);
+      if (action.kind === "upload")
+        entry.unconfirmed = { hash: chosen.hash, uid: chosen.uid, load: this.loadId };
+    }
     return action;
   }
 

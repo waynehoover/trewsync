@@ -345,11 +345,19 @@ question again, and the group you leave keeps its settings on the server.
 where the server already has some from the group's other devices and this
 device's differ: the server's, or this device's. With the server's, a setting
 the group has deleted goes from this device too, after you apply it. The
-answer is for that first time only; later, a setting changed on two devices before either synced it
-keeps both copies, as a note does. Either way TrewSync first keeps a copy of
+answer is for that first time only. Either way TrewSync first keeps a copy of
 this device's settings as they were, in a `settings-before-sync-` folder inside
 the plugin's own folder, and says where. Uninstalling the plugin removes that
 folder with it.
+
+**When two devices disagree.** Different settings changed on two devices
+are merged, even in the same file. The same setting changed two ways before
+either device synced keeps both, as a note does: the device that syncs second
+keeps its value, and the other is saved beside the file as a conflicted copy,
+which Obsidian ignores. **Review conflicts** lists it as an Obsidian setting.
+Keeping the original removes the copy. Keeping the copy, or a combined
+version, writes it and reloads Obsidian, as applying does; a combined version
+has to be valid JSON.
 
 **Applying a change.** Obsidian reads its settings when it starts and holds
 them in memory, so a setting changed on another device waits until you apply

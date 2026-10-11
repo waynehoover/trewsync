@@ -37,6 +37,7 @@ import {
 } from "./fake-socket.ts";
 import { MemoryIndexStore, MemoryVault, type FileStat, type Times } from "./vault.ts";
 import { conflictCopyPath } from "./merge.ts";
+import { conflictOriginal, resolveConflict, reviewConflict } from "./conflicts.ts";
 import { firstFreeName, ignoredHereError, neverSync } from "./paths.ts";
 import type { IndexEntry } from "./index-state.ts";
 import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
@@ -4791,6 +4792,63 @@ describe("settings", () => {
       ".obsidian-desktop/app.json": "upload",
       ".obsidian-desktop/snippets/wide.css": "upload",
     });
+  });
+
+  // Review conflicts writes the version chosen of a setting kept both ways
+  // while Obsidian still holds the other, then reloads Obsidian as Apply does.
+  it("sends a setting chosen in Review conflicts, and offers it again if Obsidian writes the old one back", async () => {
+    await fresh();
+    const at = (t: number) => ({ mtime: t, ctime: 1_000 });
+    const reload = async (d: Device) => {
+      d.close();
+      await d.connect(server);
+      return settleCounting(d);
+    };
+    const app = ".obsidian-desktop/app.json";
+    const mac = await deviceWith("mac", { root: ".obsidian-desktop", firstChoice: "device" });
+    await mac.vault.write(app, json({ tabSize: 4 }), times);
+    await mac.settle();
+    const desk = await deviceWith("desk", { root: ".obsidian-desktop", firstChoice: "server" });
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    await reload(desk);
+
+    // The same setting two ways, before either synced: kept both ways.
+    await mac.vault.write(app, json({ tabSize: 2 }), at(5_000));
+    await desk.vault.write(app, json({ tabSize: 8 }), at(5_000));
+    await mac.settle();
+    await settleCounting(desk);
+    await desk.engine.sync({ applySettings: true });
+    await reload(desk);
+    const copy = Object.keys(desk.vault.snapshot()).find((p) => conflictOriginal(p) === app);
+    if (copy === undefined) throw new Error("no conflict copy was kept");
+
+    // The copy's version chosen, as Review conflicts chooses it.
+    const review = await reviewConflict(desk.vault, { original: app, copy });
+    await resolveConflict(desk.vault, "desk", review, "copy");
+    desk.engine.settingResolved(app);
+    desk.engine.noteChanged(copy);
+    expect((await settleCounting(desk)).uploaded, "the choice was not sent").toBeGreaterThan(0);
+
+    // The reload, with Obsidian writing the 8 it still held back over the choice.
+    desk.close();
+    await desk.vault.write(app, json({ tabSize: 8 }), at(9_000));
+    await desk.connect(server);
+    const after = await settleCounting(desk);
+    expect(after.uploaded, "the old setting was sent over the choice").toBe(0);
+    expect(after.settingsHeld, "the choice is not offered again").toBe(1);
+    await desk.engine.sync({ applySettings: true });
+    await reload(desk);
+
+    await settleCounting(mac);
+    await mac.engine.sync({ applySettings: true });
+    await reload(mac);
+    for (const [name, d] of [
+      ["desk", desk],
+      ["mac", mac],
+    ] as const) {
+      expect(d.vault.snapshot(), name).toEqual({ [app]: JSON.stringify({ tabSize: 2 }, null, 2) });
+    }
   });
 
   it("leaves the settings a device does not sync out of its first-sync review", async () => {

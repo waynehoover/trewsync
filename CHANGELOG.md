@@ -11,6 +11,16 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Plugin
+
+- **Review conflicts lists settings.** A setting changed two ways on two
+  devices before either synced keeps both, and the copy, which sits in
+  Obsidian's settings folder, never showed in **Review conflicts**. It does
+  now, as an Obsidian setting, and in the menu's count. Keeping the original
+  removes the copy; keeping the copy or a combined version writes it and
+  reloads Obsidian, as applying does, and a combined version of a JSON file
+  has to be valid JSON.
+
 ### Server
 
 - Releases carry four binaries, the ones Homebrew installs: Linux and macOS,

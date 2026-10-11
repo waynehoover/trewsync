@@ -1,11 +1,12 @@
 import { Modal, Notice, Setting, type App } from "obsidian";
 import { diffLines, when } from "./history.ts";
 import type { ConflictPair, ConflictReview, ConflictChoice } from "../core/conflicts.ts";
+import { isConfigPath } from "../core/path-policy.ts";
 
 const DIFF_PREVIEW_CHARS = 128 * 1024;
 
 export interface ConflictSource {
-  pairs(): ConflictPair[];
+  pairs(): Promise<ConflictPair[]>;
   review(pair: ConflictPair): Promise<ConflictReview>;
   resolve(review: ConflictReview, choice: ConflictChoice, edited?: string): Promise<void>;
   open(path: string): void;
@@ -24,22 +25,32 @@ export class ConflictsModal extends Modal {
   override onOpen(): void {
     this.setTitle("Review conflicts");
     this.modalEl.addClass("mod-trew-conflicts");
-    this.list();
+    void this.list();
   }
   override onClose(): void {
     this.generation++;
     this.contentEl.empty();
   }
 
-  private list(): void {
-    this.generation++;
+  private async list(): Promise<void> {
+    const generation = ++this.generation;
     this.contentEl.empty();
-    const pairs = this.source.pairs();
+    let pairs: ConflictPair[];
+    try {
+      pairs = await this.source.pairs();
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.contentEl.createEl("p", {
+        text: `Could not list the conflict copies: ${(error as Error).message}`,
+      });
+      return;
+    }
+    if (generation !== this.generation) return;
     if (!pairs.length) this.contentEl.createEl("p", { text: "No conflict copies to review." });
     for (const pair of pairs) {
       new Setting(this.contentEl)
-        .setName(pair.original)
-        .setDesc(pair.copy)
+        .setName(shown(pair.original))
+        .setDesc(shown(pair.copy))
         .addButton((button) =>
           button.setButtonText("Compare").onClick(() => void this.choose(pair)),
         );
@@ -56,12 +67,14 @@ export class ConflictsModal extends Modal {
       const review = await this.source.review(pair);
       if (generation !== this.generation) return;
       this.contentEl.empty();
+      // Obsidian reads its settings only when it starts, and cannot open them.
+      const setting = isConfigPath(review.original);
       new Setting(this.contentEl)
-        .setName(review.original)
+        .setName(shown(review.original))
         .addButton((button) =>
           button.setButtonText("Refresh").onClick(() => void this.choose(pair, edited)),
         )
-        .addButton((button) => button.setButtonText("Back").onClick(() => this.list()));
+        .addButton((button) => button.setButtonText("Back").onClick(() => void this.list()));
       for (const [name, file] of [
         ["Original", review.current],
         ["Preserved copy", review.preserved],
@@ -70,13 +83,13 @@ export class ConflictsModal extends Modal {
           .setName(name)
           .setDesc(
             file
-              ? `${file.path} · ${when(file.stat.mtime)} · ${file.stat.size.toLocaleString()} bytes`
+              ? `${shown(file.path)} · ${when(file.stat.mtime)} · ${file.stat.size.toLocaleString()} bytes`
               : "No longer present",
           )
           .addButton((button) =>
             button
               .setButtonText("Open")
-              .setDisabled(!file)
+              .setDisabled(!file || setting)
               .onClick(() => {
                 if (file) {
                   this.close();
@@ -118,7 +131,11 @@ export class ConflictsModal extends Modal {
         });
       this.contentEl.createEl("p", {
         cls: "setting-item-description",
-        text: "Choosing a version removes the extra copy and syncs your choice to other devices.",
+        text: setting
+          ? "Choosing a version removes the extra copy and syncs your choice to your other devices, " +
+            "where it waits to be applied. Keeping the copy or a combined version reloads Obsidian " +
+            "here, because Obsidian reads its settings only when it starts."
+          : "Choosing a version removes the extra copy and syncs your choice to other devices.",
       });
       const actions = new Setting(this.contentEl);
       actions.settingEl.addClass("trew-conflict-actions");
@@ -136,7 +153,7 @@ export class ConflictsModal extends Modal {
         try {
           await this.source.resolve(review, choice, edited);
           this.drafts.delete(pair.copy);
-          if (generation === this.generation) this.list();
+          if (generation === this.generation) void this.list();
         } catch (error) {
           new Notice((error as Error).message, 10000);
           // Keep the editor and its draft on failure. Refresh updates the comparison
@@ -174,7 +191,12 @@ export class ConflictsModal extends Modal {
     } catch (error) {
       if (generation !== this.generation) return;
       new Notice((error as Error).message, 10000);
-      this.list();
+      void this.list();
     }
   }
+}
+
+/** A setting under its file name, which is what Obsidian's settings folder holds. */
+function shown(path: string): string {
+  return isConfigPath(path) ? `Obsidian settings: ${path.slice(path.indexOf("/") + 1)}` : path;
 }
