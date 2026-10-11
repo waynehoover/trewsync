@@ -7157,15 +7157,22 @@ describe("settings sync", () => {
         return false;
       }
     };
-    const compare = async () => {
-      built.length = 0;
-      plugin.commands.find((c) => c.id === "review-conflicts")!.callback!();
-      await until("the setting's copy to be listed", () =>
-        built.some((s) => s.name === "Obsidian settings: app.json"),
+    // Rows of the newest window only: one left open after an answer lists
+    // again once its sync is done, which can be after the next one opens.
+    const inNewest = (name: string) =>
+      built.filter(
+        (s) => s.name === name && containsElement(modals.at(-1)!.contentEl, s.settingEl),
       );
-      await built.find((s) => s.name === "Obsidian settings: app.json")!.buttons[0]!.click();
+    const compare = async () => {
+      for (const modal of modals) if (modal.isOpen) modal.close();
+      plugin.commands.find((c) => c.id === "review-conflicts")!.callback!();
+      await until(
+        "the setting's copy to be listed",
+        () => inNewest("Obsidian settings: app.json").length > 0,
+      );
+      await inNewest("Obsidian settings: app.json")[0]!.buttons[0]!.click();
       await until("the comparison", () => has("Keep copy"));
-      const opens = built.filter((s) => s.name === "Original" || s.name === "Preserved copy");
+      const opens = [...inNewest("Original"), ...inNewest("Preserved copy")];
       expect(
         opens.map((s) => s.buttons[0]!.disabled),
         "Obsidian cannot open these",
