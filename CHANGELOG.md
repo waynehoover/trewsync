@@ -11,6 +11,20 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Server
+
+- Releases carry four binaries, the ones Homebrew installs: Linux and macOS,
+  each on amd64 and arm64. The FreeBSD and Linux riscv64 builds stop after
+  0.13.0, because no test ever ran on FreeBSD and riscv64 ran only under
+  emulation. On those, build trewd from source
+  ([server setup](docs/server.md#a-binary)); `trewd update` there says the
+  release has no build for the machine.
+
+## 0.14.0, plugin (2026-10-10)
+
+Settings sync by group. No server change: the plugin needs trewd 0.13.0 or
+later, as 0.13.0 did. `trew` stays at 0.12.0.
+
 ### Plugin
 
 - **Settings sync is one choice on each device:** Off, Mobile only (Desktop
@@ -29,15 +43,6 @@ client can talk; upgrade the server first.
 - The sync preview says what turning on settings sync will do with a setting
   this device has never synced. With **Use the server's** chosen it said
   "Keep both versions" of a file the sync then took from the server.
-
-### Server
-
-- Releases carry four binaries, the ones Homebrew installs: Linux and macOS,
-  each on amd64 and arm64. The FreeBSD and Linux riscv64 builds stop after
-  0.13.0, because no test ever ran on FreeBSD and riscv64 ran only under
-  emulation. On those, build trewd from source
-  ([server setup](docs/server.md#a-binary)); `trewd update` there says the
-  release has no build for the machine.
 
 ## 0.13.0, server and plugin (2026-10-10)
 
