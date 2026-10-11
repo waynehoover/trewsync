@@ -100,6 +100,17 @@ export class FakeEl {
     public cls: string = "",
   ) {}
 
+  get className(): string {
+    return this.cls;
+  }
+
+  get parentElement(): FakeEl | null {
+    return this.parent ?? null;
+  }
+
+  /** How far a container is scrolled. Emptying it scrolls it to the top, as a browser's does. */
+  scrollTop = 0;
+
   createEl(tag: string, o?: { text?: string; cls?: string } | string): FakeEl {
     const el = new FakeEl(tag, typeof o === "string" ? o : (o?.cls ?? ""));
     if (typeof o === "object" && o?.text) el.text = o.text;
@@ -120,6 +131,7 @@ export class FakeEl {
       FakeEl.activeElement = undefined;
     for (const child of this.children) child.parent = undefined;
     this.children.length = 0;
+    this.scrollTop = 0;
   }
 
   contains(el: FakeEl): boolean {

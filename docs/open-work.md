@@ -216,8 +216,9 @@ it, remove the guard, the runbook's paragraph on order and the check.
 
 ## Settings sync, after its review
 
-Settings sync (M11) had three reviews on 2026-10-10, and these were left on
-purpose, each with what would change the answer:
+Settings sync (M11) had three reviews and a click-through in Obsidian on
+2026-10-10, and these were left on purpose, each with what would change the
+answer:
 
 - **A settings save expires an agent's preview.** MCP previews are bound to
   the vault's head, so any device saving a setting between an agent's preview
@@ -242,6 +243,16 @@ purpose, each with what would change the answer:
   parsed values needs the applied bytes after the reload. The plan's ten
   second quiet period before an upload is not built either; every settings
   save is a version, which costs history and nothing else.
+- **The sync preview does not know the first choice.** The first-sync review
+  and **Preview sync** label a setting both sides have, and this device never
+  synced, "Keep both versions", from `decide` alone. The pass keeps one:
+  `settingsAction` takes the server's, held for Apply, under "Use the
+  server's", and sends this device's under "Keep this device's". The label
+  shows only while the choice is unspent: in the first-sync review of a
+  device that has never synced a note (an empty test vault, 2026-10-10), or a
+  Preview sync in the seconds before the first pass. Sharing the first-choice
+  rewrite between `settingsAction` and `preview` would fix it; worth it if
+  anybody meets it on a real vault.
 
 ## Follow-ups from the 2026-10-06 review
 

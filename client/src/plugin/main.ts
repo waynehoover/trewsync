@@ -1511,6 +1511,10 @@ export default class TrewPlugin extends Plugin {
         }
         this.working(undefined);
         this.settledFirstTime(mine, report);
+        // Before the state, which is what an open panel redraws on: the
+        // settings waiting for Apply are counted here, and a panel that read
+        // the count first went on offering nothing to apply.
+        this.announce(report, vault.displaced, vault.recovery);
         this.setState({
           kind: "synced",
           summary: summarise(report),
@@ -1529,7 +1533,6 @@ export default class TrewPlugin extends Plugin {
           issues: report.needsAttention ?? [],
           retryingPaths: report.retryingPaths ?? [],
         });
-        this.announce(report, vault.displaced, vault.recovery);
         void this.activityLog?.flush();
       },
       // A pass that failed outright, from wherever it was started (F16).
@@ -4229,6 +4232,27 @@ class TrewPanel {
   render(): void {
     // A pending settings request may finish after its modal or tab was closed.
     if (this.closed) return;
+    // A redraw leaves the panel as the person had it: what they opened still
+    // open, and scrolled where it was. Changing anything inside Manage this
+    // vault redraws the panel, and the section folding shut, or the page
+    // jumping to its top, hid the row they had just changed.
+    const opened = new Set(
+      Array.from(this.host.querySelectorAll("details"))
+        .filter((d) => d.getAttribute("open") !== null)
+        .map((d) => d.className),
+    );
+    const scrolled: [HTMLElement, number][] = [];
+    for (let el: HTMLElement | null = this.host; el; el = el.parentElement) {
+      if (el.scrollTop > 0) scrolled.push([el, el.scrollTop]);
+    }
+    this.draw();
+    for (const d of Array.from(this.host.querySelectorAll("details"))) {
+      if (opened.has(d.className)) d.setAttribute("open", "");
+    }
+    for (const [el, top] of scrolled) el.scrollTop = top;
+  }
+
+  private draw(): void {
     this.renderGeneration++;
     this.stopDelivery?.();
     this.unwatch?.();
@@ -4538,6 +4562,8 @@ class TrewPanel {
         this.plugin.pairingFailure,
         offersRejoin(this.plugin.currentState),
         offersPairAgain(this.plugin.currentState),
+        // The settings row's count and its Apply button.
+        this.plugin.settingsHeld,
       ]);
     const drawn = shape();
     this.unwatch = this.plugin.watchState(() => {

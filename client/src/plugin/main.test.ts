@@ -7076,6 +7076,61 @@ describe("settings sync", () => {
     expect(String(newest().desc)).toMatch(/^Syncing with your other desktops/);
   }, 300_000);
 
+  // Found by clicking through it in Obsidian 1.13: the row sits inside Manage
+  // this vault, and the redraw that shows the saved group folded it shut and
+  // scrolled the settings window back to its top.
+  it("keeps Manage this vault open, and scrolled, through the redraw a settings choice makes", async () => {
+    await fresh();
+    const { plugin } = await load();
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    const tab = plugin.settingTabs[0]!;
+    tab.display();
+    const section = (summary: string) =>
+      tab.containerEl.querySelectorAll("details").find((el) => el.children[0]?.text === summary)!;
+    section("Manage this vault").setAttribute("open", "");
+    tab.containerEl.scrollTop = 243;
+    const newest = () => built.filter((s) => s.name === "Sync settings").at(-1)!;
+
+    newest().dropdowns[0]!.choose(".obsidian-desktop");
+    await modalButton("Keep this device's").click();
+    await until("the row to be drawn again", () =>
+      String(newest().desc).startsWith("Syncing with your other desktops"),
+    );
+    expect(
+      section("Manage this vault").getAttribute("open"),
+      "the section folded shut under the row just changed",
+    ).not.toBeNull();
+    expect(section("Add another device").getAttribute("open")).toBeNull();
+    expect(tab.containerEl.scrollTop, "the settings window jumped to its top").toBe(243);
+  }, 300_000);
+
+  // Also found in Obsidian: the group's settings came to wait on a desktop
+  // whose settings tab was open, and its row went on offering nothing to apply.
+  it("shows settings arriving to wait in a settings tab that is already open", async () => {
+    await fresh();
+    const laptop = await load();
+    laptop.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "dark"\n}');
+    laptop.app.vault.adapter.seed("note.md", "a note\n");
+    await startVault(laptop.plugin, "laptop");
+    await synced(laptop.plugin);
+    await laptop.plugin.setSettingsSync(".obsidian-desktop", "device");
+    await synced(laptop.plugin);
+
+    const desktop = await load();
+    await desktop.plugin.pair((await laptop.plugin.createInvite()).invite, "desktop");
+    await synced(desktop.plugin);
+    desktop.plugin.settingTabs[0]!.display();
+    const newest = () => built.filter((s) => s.name === "Sync settings").at(-1)!;
+    newest().dropdowns[0]!.choose(".obsidian-desktop");
+    await modalButton("Use the server's").click();
+    await until("the laptop's setting to wait here", () => desktop.plugin.settingsHeld === 1);
+    expect(String(newest().desc), "the open row does not say a setting waits").toMatch(
+      /1 waiting now/,
+    );
+    expect(newest().buttons.map((b) => b.label)).toContain("Apply and reload");
+  }, 300_000);
+
   it("offers one choice, and saves a group only once the first-time question is answered", async () => {
     await fresh();
     const { plugin } = await load();

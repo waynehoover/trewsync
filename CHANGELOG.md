@@ -20,6 +20,12 @@ client can talk; upgrade the server first.
   profile to create, no Override config folder to set and no relaunch.
   **Create a settings profile for this device** is gone. A device that turned
   settings sync on in 0.13.0 has it off again until you choose a group.
+- The TrewSync panel shows what you just changed. In 0.13.0, turning on
+  **Sync settings** in Obsidian's Settings left the row saying Off; now the
+  row shows the saved choice, **Manage this vault** stays open and the page
+  stays where it was scrolled, after this and every other change made there.
+  Settings arriving to wait for **Apply and reload** appear in a panel that is
+  already open, with the button.
 
 ### Server
 
