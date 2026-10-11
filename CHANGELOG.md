@@ -26,6 +26,9 @@ client can talk; upgrade the server first.
   stays where it was scrolled, after this and every other change made there.
   Settings arriving to wait for **Apply and reload** appear in a panel that is
   already open, with the button.
+- The sync preview says what turning on settings sync will do with a setting
+  this device has never synced. With **Use the server's** chosen it said
+  "Keep both versions" of a file the sync then took from the server.
 
 ### Server
 

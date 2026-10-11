@@ -1787,7 +1787,9 @@ export class Engine {
         const local = stat
           ? { folder: false, mtime: index.mtime, size: index.size, hash: index.hash }
           : undefined;
-        const kind = decide({ local, remote: other, index, mergeable: this.mergeable(path) }).kind;
+        let { kind } = decide({ local, remote: other, index, mergeable: this.mergeable(path) });
+        if (isConfigPath(path))
+          kind = this.firstChoice(path, { kind }, index, local !== undefined)?.kind ?? kind;
         action =
           kind === "nothing"
             ? "unchanged"
@@ -2619,31 +2621,7 @@ export class Engine {
     report: SyncReport,
     now: number,
   ): Promise<Action | undefined> {
-    const choice = this.firstChoiceSpent ? undefined : this.opts.settings?.firstChoice;
-    if (action.kind === "conflict" && entry.synchash === "" && local !== undefined) {
-      if (choice === "server") {
-        action = { kind: "download", why: "the server's settings were chosen for this device" };
-      } else if (choice === "device") {
-        action = { kind: "upload", why: "this device's settings were chosen over the server's" };
-      }
-    }
-    // A setting this device never synced, which the group has deleted, is not
-    // the group's. With the server's settings chosen it goes from here too,
-    // held for Apply like every change written here, with the copy kept
-    // before the first sync as its backup. Keeping this device's sends it
-    // back, as an upload always did.
-    if (
-      choice === "server" &&
-      action.kind === "upload" &&
-      entry.synchash === "" &&
-      local !== undefined &&
-      this.remote.get(path)?.deleted === true
-    ) {
-      action = {
-        kind: "deleteLocal",
-        why: "the server's settings were chosen for this device, and the server deleted this one",
-      };
-    }
+    action = this.firstChoice(path, action, entry, local !== undefined) ?? action;
     // Every decision that sends this device's copy, a merge and a kept-both
     // conflict included, sends it only if it is JSON: the very bytes that go,
     // which a pass that just read the file holds, and otherwise the file as it
@@ -2690,6 +2668,39 @@ export class Engine {
     if (writesHere)
       entry.unconfirmed ??= { hash: entry.synchash, uid: entry.syncuid, load: this.loadId };
     return action;
+  }
+
+  /**
+   * The side the person chose when they turned settings sync on, for a
+   * setting this device has never synced, or undefined where it changes
+   * nothing. The pass acts on it and the preview says it, so the review
+   * cannot offer "Keep both versions" of a file the pass will replace.
+   */
+  private firstChoice(
+    path: string,
+    action: Pick<Action, "kind">,
+    entry: IndexEntry,
+    here: boolean,
+  ): Action | undefined {
+    const choice = this.firstChoiceSpent ? undefined : this.opts.settings?.firstChoice;
+    if (choice === undefined || entry.synchash !== "" || !here) return undefined;
+    if (action.kind === "conflict") {
+      return choice === "server"
+        ? { kind: "download", why: "the server's settings were chosen for this device" }
+        : { kind: "upload", why: "this device's settings were chosen over the server's" };
+    }
+    // A setting this device never synced, which the group has deleted, is not
+    // the group's. With the server's settings chosen it goes from here too,
+    // held for Apply like every change written here, with the copy kept
+    // before the first sync as its backup. Keeping this device's sends it
+    // back, as an upload always did.
+    if (choice === "server" && action.kind === "upload" && this.remote.get(path)?.deleted) {
+      return {
+        kind: "deleteLocal",
+        why: "the server's settings were chosen for this device, and the server deleted this one",
+      };
+    }
+    return undefined;
   }
 
   /** Whether a settings JSON file parses, as `settingsAction` asks it. */

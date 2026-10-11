@@ -4758,6 +4758,41 @@ describe("settings", () => {
     expect(moved?.prev).toBe(".obsidian/snippets/a.css");
   });
 
+  // Seen in Obsidian: "Use the server's" chosen, and the first-sync review
+  // still said "Keep both versions" of the app.json the pass was about to
+  // take from the server.
+  it("says in its preview what the first choice does with a setting never synced here", async () => {
+    await fresh();
+    const mac = await deviceWith("mac", { root: ".obsidian-desktop", firstChoice: "device" });
+    const css = new TextEncoder().encode(".wide {}");
+    await mac.vault.write(".obsidian-desktop/app.json", json({ theme: "dark" }), times);
+    await mac.vault.write(".obsidian-desktop/snippets/wide.css", css, times);
+    await mac.settle();
+    await mac.vault.remove(".obsidian-desktop/snippets/wide.css");
+    await mac.settle();
+
+    // A desktop joining the group, with its own app.json and the snippet the
+    // group has deleted.
+    const previewOf = async (firstChoice: "server" | "device") => {
+      const d = new Device(`desk-${firstChoice}`);
+      d.settings = { root: ".obsidian-desktop", firstChoice };
+      await d.vault.write(".obsidian-desktop/app.json", json({ theme: "light" }), times);
+      await d.vault.write(".obsidian-desktop/snippets/wide.css", css, times);
+      devices.push(d);
+      await d.connect(server);
+      const preview = await d.engine.preview();
+      return Object.fromEntries(preview.files.map((f) => [f.path, f.action]));
+    };
+    expect(await previewOf("server")).toEqual({
+      ".obsidian-desktop/app.json": "download",
+      ".obsidian-desktop/snippets/wide.css": "delete-local",
+    });
+    expect(await previewOf("device")).toEqual({
+      ".obsidian-desktop/app.json": "upload",
+      ".obsidian-desktop/snippets/wide.css": "upload",
+    });
+  });
+
   it("leaves the settings a device does not sync out of its first-sync review", async () => {
     await fresh();
     const mac = await deviceWith("mac", { root: ".obsidian" });
