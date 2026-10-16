@@ -20,6 +20,11 @@ client can talk; upgrade the server first.
   ([server setup](docs/server.md#a-binary)); `trewd update` there says the
   release has no build for the machine.
 
+## 0.14.2, plugin (2026-10-15)
+
+A first sync shows how far it has got. No server change: the plugin needs
+trewd 0.13.0 or later. `trew` stays at 0.12.0.
+
 ### Plugin
 
 - **A first sync counts its files.** A device joining a vault said "Syncing
