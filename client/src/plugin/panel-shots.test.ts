@@ -89,6 +89,7 @@ const EXPECTED = [
   "status-bar-syncing",
   "status-bar-uploading",
   "status-bar-downloading",
+  "status-bar-first-sync",
   "status-bar-synced",
   "status-bar-synced-needing-attention",
   "status-bar-synced-with-a-version-waiting",

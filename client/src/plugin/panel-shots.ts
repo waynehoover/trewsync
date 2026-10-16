@@ -336,6 +336,10 @@ const STATUSES: { name: string; state: State }[] = [
     },
   },
   {
+    name: "first-sync",
+    state: { kind: "syncing", since: Date.now(), received: { done: 1280, total: 3000 } },
+  },
+  {
     name: "synced",
     state: {
       kind: "synced",

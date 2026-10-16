@@ -1130,6 +1130,8 @@ export class Engine {
   /** Versions waiting to come down together, and what they will cost to hold. */
   private inbox: Incoming[] = [];
   private inboxBytes = 0;
+  /** Of the batch a fill took off the inbox, how many are not yet written. */
+  private landing = 0;
 
   /**
    * What the server said it will take, learned at the handshake, and kept so
@@ -1272,6 +1274,20 @@ export class Engine {
     const entry = this.entries.get(path);
     if (entry === undefined || entry.folder) return false;
     return entry.syncuid > 0 && entry.synchash !== "" && entry.synchash === entry.hash;
+  }
+
+  /**
+   * Server versions this device has yet to finish with: staged, queued to
+   * fetch, or fetched and being written. For a progress count.
+   *
+   * `pending` alone drops as each path is decided, a whole batch before its
+   * files are on disk, and the writing is where a first sync spends its time.
+   * Folders are left out: the count is of files, and a vault has dozens.
+   */
+  inbound(): number {
+    let files = this.inbox.length + this.landing;
+    for (const path of this.pending) if (this.remote.get(path)?.folder !== true) files++;
+    return files;
   }
 
   status(): {
@@ -1934,6 +1950,7 @@ export class Engine {
       this.inbox = [];
       this.inboxBytes = 0;
     }
+    this.landing = 0;
     // The same for the folder work a pass defers to its end: nothing in it
     // was sent or removed, and this pass decides it again.
     this.folderDeletes = [];
@@ -3938,6 +3955,7 @@ export class Engine {
     this.inbox = [];
     this.inboxBytes = 0;
     if (batch.length === 0) return;
+    this.landing = batch.length;
 
     // Bytes this device already holds are not worth asking for again.
     //
@@ -4013,6 +4031,7 @@ export class Engine {
           fetchIndividually = true;
         } else {
           for (const d of batch) this.recordFailure(d.path, err, report);
+          this.landing = 0;
           return;
         }
       }
@@ -4061,6 +4080,8 @@ export class Engine {
         this.log(d.kind, d.path, d.why);
       } catch (err) {
         this.recordFailure(d.path, err, report);
+      } finally {
+        this.landing--;
       }
     }
     await this.checkpoint();

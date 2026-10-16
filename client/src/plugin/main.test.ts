@@ -2463,6 +2463,52 @@ describe("saying what it is working on", () => {
   );
 
   /**
+   * A first sync is minutes of one pass on a real vault, nearly all of it
+   * writing files, and it used to say "Syncing notes." from start to finish,
+   * with "Device delivery unconfirmed." under it. The count is of files only:
+   * the folder they are in is a staged path too, and is not one of them.
+   */
+  it("counts a first sync's files as they are written", async () => {
+    await fresh();
+    const a = await load();
+    for (let i = 0; i < 6; i++) a.app.vault.adapter.seed(`first/n${i}.md`, `Note ${i}.\n`);
+    await startVault(a.plugin, "sender");
+    await synced(a.plugin);
+
+    const b = await load();
+    const adapter = b.app.vault.adapter;
+    const writeBinary = adapter.writeBinary.bind(adapter);
+    let writes = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    adapter.writeBinary = async (path, data, options) => {
+      if (path.startsWith("first/") && ++writes === 4) await gate;
+      return writeBinary(path, data, options);
+    };
+    const pairing = b.plugin.pair(await anInvite(), "receiver");
+    try {
+      await until("three of the six written", () => {
+        const state = b.plugin.currentState;
+        return state.kind === "syncing" && state.received?.done === 3;
+      });
+      const state = b.plugin.currentState;
+      if (state.kind !== "syncing") throw new Error("not syncing");
+      expect(state.received).toEqual({ done: 3, total: 6 });
+      await pairing;
+      b.plugin.commands.find((c) => c.id === "show-status")!.callback!();
+      const row = built.filter((s) => s.name === "Sync status").at(-1)!;
+      expect(row.descEl.allText()).toBe("Downloading 3 of 6 files.");
+      expect(row.infoEl.allText()).not.toMatch(/delivery|finish syncing/i);
+    } finally {
+      release();
+      await pairing.catch(() => undefined);
+      adapter.writeBinary = writeBinary;
+    }
+    await synced(b.plugin);
+    for (let i = 0; i < 6; i++) expect(adapter.text(`first/n${i}.md`)).toBe(`Note ${i}.\n`);
+  }, 300_000);
+
+  /**
    * A large attachment is minutes inside one pass. Without a state for it the
    * status shows the previous pass's result the whole time, so working and
    * idle look exactly alike, which is rule 7 with the two conditions that

@@ -71,7 +71,7 @@ import { watchResume } from "./resume.ts";
 import { watchDelivery } from "./delivery.ts";
 import { ScreenAwake } from "./screen-awake.ts";
 import type { TransferActivity } from "../core/transfer.ts";
-import { describeTransfer } from "./transfer.ts";
+import { describeReceived, describeTransfer } from "./transfer.ts";
 import { SUPPORT_TABLE, platformStanding } from "./platform-notice.ts";
 import { describeDelivery } from "../core/delivery.ts";
 import {
@@ -250,7 +250,14 @@ export type State =
       recoveryUnknown?: string | undefined;
     }
   /** Preparation or transfer activity; saving still has to finish. */
-  | { kind: "syncing"; path?: string; transfer?: TransferActivity; since: number }
+  | {
+      kind: "syncing";
+      path?: string;
+      transfer?: TransferActivity;
+      /** This pass's incoming files, when there is more than one. */
+      received?: { done: number; total: number };
+      since: number;
+    }
   /**
    * A pass is waiting for somebody to answer a review, and will not move
    * until they do.
@@ -350,6 +357,9 @@ export default class TrewPlugin extends Plugin {
   private workingPath: string | undefined;
   private workingTransfer: TransferActivity | undefined;
   private workingSince: number | undefined;
+  /** This pass's incoming work, and how much of it the engine last said was left. */
+  private inboundTotal = 0;
+  private inboundLeft = 0;
   private manualSync: Promise<void> | undefined;
   private previewing: Promise<void> | undefined;
   private previewModal: SyncPreviewModal | undefined;
@@ -1420,6 +1430,7 @@ export default class TrewPlugin extends Plugin {
     this.workingPath = path;
     if (path === undefined) {
       this.workingTransfer = undefined;
+      this.inboundTotal = this.inboundLeft = 0;
       clearTimeout(this.workingTimer);
       this.workingTimer = undefined;
       this.workingSince = undefined;
@@ -1436,13 +1447,34 @@ export default class TrewPlugin extends Plugin {
       // The pass that asked is waiting on the answer, so it is not syncing,
       // whatever it said on its way to asking.
       if (this.review) return;
+      const received = this.received();
       this.setState({
         kind: "syncing",
         ...(this.workingPath ? { path: this.workingPath } : {}),
         ...(this.workingTransfer ? { transfer: this.workingTransfer } : {}),
+        ...(received ? { received } : {}),
         since: this.workingSince!,
       });
     }, 200);
+  }
+
+  /**
+   * How far through its incoming files this pass is, or undefined for one or
+   * none, where the file's own name and bytes say more.
+   *
+   * A first sync of a few thousand notes is minutes of one pass, and without
+   * this it said "Syncing notes." from start to finish. More arriving during
+   * the pass is the only way the count left can grow, so that grows the total
+   * rather than taking back what is done.
+   */
+  private received(): { done: number; total: number } | undefined {
+    const left = this.connectedClient()?.engine.inbound();
+    if (left === undefined) return undefined;
+    if (left > this.inboundLeft) this.inboundTotal += left - this.inboundLeft;
+    this.inboundLeft = left;
+    return this.inboundTotal > 1
+      ? { done: this.inboundTotal - left, total: this.inboundTotal }
+      : undefined;
   }
 
   private clearTimers(): void {
@@ -1497,11 +1529,15 @@ export default class TrewPlugin extends Plugin {
       confirmFirstSync: (preview) => this.confirmSync(preview, "Review your first sync", current),
       confirmDeletions: (preview) => this.confirmSync(preview, "Review folder deletions", current),
       onActivity: (event) => {
-        if (current()) this.activityLog?.add(event);
+        if (!current()) return;
+        this.activityLog?.add(event);
+        // Each file landing moves the count, and writing is the slow part.
+        if (this.workingSince !== undefined) this.scheduleWorking();
       },
       onSyncStart: () => {
         if (!current()) return;
         this.working(undefined);
+        this.received();
         this.scheduleWorking();
       },
       onProgress: (path) => {
@@ -6269,6 +6305,9 @@ function longStatus(state: State): string {
       return `Loading sync history… ${percent}%. Keep Obsidian open.`;
     }
     case "syncing":
+      if (state.received && state.transfer?.direction !== "upload") {
+        return describeReceived(state.received, state.transfer);
+      }
       if (state.transfer) return describeTransfer(state.transfer);
       return state.path === undefined ? "Syncing notes." : `Working on ${state.path}.`;
     case "review":

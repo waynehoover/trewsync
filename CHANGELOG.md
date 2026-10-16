@@ -20,6 +20,15 @@ client can talk; upgrade the server first.
   ([server setup](docs/server.md#a-binary)); `trewd update` there says the
   release has no build for the machine.
 
+### Plugin
+
+- **A first sync counts its files.** A device joining a vault said "Syncing
+  notes." for the whole of its first sync, which on a large vault is minutes,
+  with "Device delivery unconfirmed." under it. It now counts the files as
+  they are written, "Downloading 1,280 of 3,000 files.", and the line about
+  other devices stays blank until this device has finished syncing and there
+  is something true to say.
+
 ## 0.14.1, plugin (2026-10-11)
 
 Settings that disagree can be resolved in Review conflicts. No server change:

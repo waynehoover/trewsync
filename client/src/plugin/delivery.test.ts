@@ -51,7 +51,7 @@ it("shares delivery requests, slows settled polling, and checks immediately afte
   expect(source.devices).toHaveBeenCalledTimes(1);
   source.cursor = 3;
   update();
-  expect(a).toHaveBeenLastCalledWith("Device delivery unconfirmed.");
+  expect(a).toHaveBeenLastCalledWith("");
   await vi.advanceTimersByTimeAsync(0);
   expect(source.devices).toHaveBeenCalledTimes(2);
   expect(b).toHaveBeenLastCalledWith("Waiting for Phone.");
@@ -78,6 +78,8 @@ it("never publishes a stale delivery response, and has no hidden or unsynced pol
   });
   await vi.advanceTimersByTimeAsync(0);
   expect(say).not.toHaveBeenCalledWith("Latest changes received on Phone.");
+  // Syncing says nothing about delivery; the status line above has it.
+  expect(say).toHaveBeenLastCalledWith("");
   expect(vi.getTimerCount()).toBe(0);
   doc.visibilityState = "hidden";
   doc.dispatchEvent(new Event("visibilitychange"));
@@ -126,4 +128,14 @@ it("keeps polling for a visible popout when another settings window is hidden", 
   doc.dispatchEvent(new Event("visibilitychange"));
   await vi.advanceTimersByTimeAsync(0);
   expect(source.devices).toHaveBeenCalledTimes(2);
+});
+
+it("says nothing until this device has reported what it applied", async () => {
+  const { source } = fixture();
+  source.deliveryReady = false;
+  const say = vi.fn();
+  stops.push(watchDelivery(source, say));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(say).toHaveBeenLastCalledWith("");
+  expect(source.devices).not.toHaveBeenCalled();
 });

@@ -153,10 +153,13 @@ server address and version, useful when diagnosing a connection problem.
 On desktop, the status bar shows a cloud with a check when synced. Hover for
 details or click it for quick actions and settings.
 
-During longer transfers, the panel shows which file is uploading or downloading
-and how much data has moved. Keep Obsidian open until sync finishes.
+When a sync brings in several files, as a new device's first sync does, the
+panel counts them: "Downloading 1,280 of 3,000 files." During other longer
+transfers it shows which file is uploading or downloading and how much data has
+moved. Keep Obsidian open until sync finishes.
 
 The delivery line reports which other devices have received the latest changes.
+It appears once this device has finished syncing, and is blank until then.
 If it is waiting for your phone, open Obsidian there. A disconnected device
 cannot confirm new changes until it reconnects.
 

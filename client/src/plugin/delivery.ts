@@ -26,13 +26,19 @@ export function watchDelivery(
   return monitor.watch(listener, doc);
 }
 
+// While delivery is unknown (this device still syncing, its checkpoint not yet
+// reported, or a new one not yet asked about) the line is empty, and so
+// hidden. "Device delivery unconfirmed" under "Syncing notes", and "Waiting for
+// this device to finish syncing" under "Up to date", read as faults on a first
+// sync; the status line above already says what this device is doing. Hiding
+// it also fails closed: nothing is claimed as received.
 class DeliveryMonitor {
   private readonly listeners = new Map<(message: string) => void, Document | undefined>();
   private visible = () =>
     [...this.listeners.values()].some((doc) => doc?.visibilityState !== "hidden");
   private poll: VisiblePoll | undefined;
   private unwatch: (() => void) | undefined;
-  private message = "Device delivery unconfirmed.";
+  private message = "";
   private interval: number | undefined;
   private key = "";
   private revision = 0;
@@ -45,7 +51,7 @@ class DeliveryMonitor {
     const changed = () => this.poll?.refresh();
     doc?.addEventListener("visibilitychange", changed);
     if (this.listeners.size === 1) {
-      this.message = "Device delivery unconfirmed.";
+      this.message = "";
       this.key = this.snapshot();
       this.poll = pollWhileVisible(
         () => this.refresh(),
@@ -57,7 +63,7 @@ class DeliveryMonitor {
         if (key === this.key) return;
         this.key = key;
         this.revision++;
-        this.say("Device delivery unconfirmed.");
+        this.say("");
         this.poll?.refresh();
       });
     }
@@ -93,12 +99,12 @@ class DeliveryMonitor {
     const source = this.source;
     if (source.currentState.kind !== "synced") {
       this.interval = undefined;
-      this.say("Device delivery unconfirmed.");
+      this.say("");
       return;
     }
     if (!source.deliveryReady) {
       this.interval = 250;
-      this.say("Waiting for this device to finish syncing.");
+      this.say("");
       return;
     }
     // A surface may close and reopen while its last request is still draining.
@@ -120,7 +126,7 @@ class DeliveryMonitor {
       const cursor = source.cursors()?.server;
       if (cursor === undefined) {
         this.interval = 2000;
-        this.say("Device delivery unconfirmed.");
+        this.say("");
         return;
       }
       const pending = answer.devices.filter(
