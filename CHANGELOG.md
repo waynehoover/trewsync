@@ -11,6 +11,15 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.15.0, plugin, and 0.14.0, server (2026-10-16)
+
+Community plugins' settings sync. **Upgrade the server first**: the 0.15.0
+plugin speaks protocol 4, and meeting an older server it stops at the
+handshake and says to upgrade the server. The server still serves older
+plugins and `trew` as before. `trew` stays at 0.12.0.
+
 ### Server
 
 - Releases carry four binaries, the ones Homebrew installs: Linux and macOS,
@@ -33,7 +42,7 @@ client can talk; upgrade the server first.
 - **Plugins' settings can sync.** With settings sync on, **Manage this
   vault**, **Sync plugin settings** syncs each community plugin's settings
   with the same group; the plugins themselves are installed and switched on
-  on each device. Off until turned on on each device. A change waits until
+  separately on each device. Off until turned on on each device. A change waits until
   you apply it, and **Apply synced settings** names each plugin and the device
   the change came from, and writes only what it named. Plugins' settings, API
   keys included, are stored on your server as they are, as notes are. Needs
