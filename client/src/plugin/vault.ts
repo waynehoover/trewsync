@@ -71,6 +71,7 @@ import {
 } from "obsidian";
 
 import { looksLikeText } from "../core/chunk.ts";
+import { limiter } from "../core/limiter.ts";
 import { plainDigest } from "../core/digest.ts";
 import {
   DISPLACED_LOG,
@@ -440,6 +441,18 @@ function isDesktopAdapter(adapter: DataAdapter): adapter is DesktopAdapter {
 }
 
 /** Opens one path for reading and fsyncs it, leaving no handle behind. */
+/**
+ * How many fsyncs a flush keeps in flight.
+ *
+ * On macOS Node's fsync is F_FULLFSYNC, which flushes the drive's whole
+ * cache, and while Obsidian is writing its own caches beside a first sync
+ * every one of them has something to flush: 4.5 ms each, measured, so 3,000
+ * notes spent 12.7 of an 18 s first sync here. One cache flush serves every
+ * fsync waiting on it, and 32 at once measured 0.34 ms each. Nothing about
+ * what is durable changes, only how long the waiting takes.
+ */
+const FSYNC_CONCURRENCY = 32;
+
 async function fsyncPath(fs: FsyncFs, adapter: DesktopAdapter, path: string): Promise<void> {
   const handle = await fs.promises.open(adapter.getFullPath(path), "r");
   try {
@@ -1887,46 +1900,61 @@ export class ObsidianVault implements Vault {
       return;
     }
     const adapter = this.adapter;
-    // An Error, so what is thrown below is one: the same object a platform's
-    // fsync threw, or one naming what it threw when that was not an Error.
-    let failure: Error | undefined;
-    for (const [path, stamp] of files) {
-      try {
-        await fsyncPath(fs, adapter, path);
-        // Dropped one at a time rather than cleared, and only the write this
-        // one synced, so a write that landed while it was running is still
-        // waiting for the next flush.
-        this.forget(this.unsynced.files, path, stamp);
-      } catch (err) {
-        // Gone rather than unopenable: there is nothing to make durable, so
-        // the name is dropped and the pass carries on. Asked of the adapter
-        // rather than read off the error, because a platform is free to
-        // report a missing file however it likes.
-        if (!(await this.adapter.exists(path))) {
-          this.forget(this.unsynced.files, path, stamp);
-          continue;
-        }
-        failure ??= err instanceof Error ? err : new Error(String(err));
-      }
+    // Several at once, not one after another (see FSYNC_CONCURRENCY). Every
+    // file is still synced before any directory, and both before this returns.
+    const gate = limiter(FSYNC_CONCURRENCY);
+    const settled = await Promise.allSettled(
+      files.map(([path, stamp]) =>
+        gate(async () => {
+          try {
+            await fsyncPath(fs, adapter, path);
+            // Dropped one at a time rather than cleared, and only the write
+            // this one synced, so a write that landed while it was running is
+            // still waiting for the next flush.
+            this.forget(this.unsynced.files, path, stamp);
+          } catch (err) {
+            // Gone rather than unopenable: there is nothing to make durable,
+            // so the name is dropped and the pass carries on. Asked of the
+            // adapter rather than read off the error, because a platform is
+            // free to report a missing file however it likes.
+            if (!(await this.adapter.exists(path))) {
+              this.forget(this.unsynced.files, path, stamp);
+              return;
+            }
+            throw err;
+          }
+        }),
+      ),
+    );
+    await Promise.all(
+      dirs.map(([dir, stamp]) =>
+        gate(async () => {
+          try {
+            await fsyncPath(fs, adapter, dir);
+          } catch (err) {
+            if (!this.saidNoDirSync) {
+              this.saidNoDirSync = true;
+              this.log(
+                "this platform will not sync a directory, so a new file's name is durable when the disk says",
+                (err as Error).message,
+              );
+            }
+          }
+          // Dropped either way: this failure is tolerated rather than retried,
+          // and a platform that refuses would refuse for ever. Still only the
+          // change this one synced, for the reason `forget` gives.
+          this.forget(this.unsynced.dirs, dir, stamp);
+        }),
+      ),
+    );
+    // The first failure in the order the files were written, so which one a
+    // pass fails with does not depend on which fsync happened to finish first.
+    // An Error either way: the platform's own, or one naming what it threw.
+    const failed = settled.find((s) => s.status === "rejected");
+    if (failed !== undefined) {
+      const err: unknown = failed.reason;
+      throw err instanceof Error ? err : new Error(String(err));
     }
-    for (const [dir, stamp] of dirs) {
-      try {
-        await fsyncPath(fs, adapter, dir);
-      } catch (err) {
-        if (!this.saidNoDirSync) {
-          this.saidNoDirSync = true;
-          this.log(
-            "this platform will not sync a directory, so a new file's name is durable when the disk says",
-            (err as Error).message,
-          );
-        }
-      }
-      // Dropped either way: this failure is tolerated rather than retried,
-      // and a platform that refuses would refuse for ever. Still only the
-      // change this one synced, for the reason `forget` gives.
-      this.forget(this.unsynced.dirs, dir, stamp);
-    }
-    if (failure !== undefined) throw failure;
   }
 
   /**

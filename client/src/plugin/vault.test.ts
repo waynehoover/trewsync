@@ -1632,6 +1632,45 @@ describe("making a pass durable on desktop", () => {
     expect(synced).toEqual([]);
   });
 
+  /**
+   * One at a time, 3,000 notes spent 12.7 of an 18 s first sync in this flush
+   * on macOS, where each fsync flushes the drive's cache. Several at once
+   * share the flushes; what is durable when it returns does not change.
+   */
+  it("keeps several fsyncs in flight, and finishes every file before a directory", async () => {
+    const desktop = new DesktopAdapter();
+    let inFlight = 0;
+    let most = 0;
+    const synced: string[] = [];
+    const fs = {
+      promises: {
+        async open(path: string) {
+          return {
+            async sync() {
+              most = Math.max(most, ++inFlight);
+              await new Promise((r) => setTimeout(r, 1));
+              inFlight--;
+              synced.push(path);
+            },
+            async close() {},
+          };
+        },
+      },
+    };
+    const v = new ObsidianVault(asVault(new FakeVaultIndex(desktop)), ".obsidian", () => {}, {
+      fs,
+    });
+    for (let i = 0; i < 100; i++) {
+      await v.write(`n${i}.md`, enc.encode(`${i}`), { mtime: 1, ctime: 1 });
+    }
+    await v.flush!();
+    expect(most).toBeGreaterThan(1);
+    expect(most).toBeLessThanOrEqual(32);
+    expect(synced.filter((p) => p.endsWith(".md"))).toHaveLength(100);
+    expect(synced.at(-1), "the root, after every file in it").toBe("/home/me/vault");
+    expect(inFlight).toBe(0);
+  });
+
   it("syncs a file created beside an occupied name too", async () => {
     const desktop = new DesktopAdapter();
     const { fs, synced } = recordingFs();

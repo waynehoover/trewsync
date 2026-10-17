@@ -39,6 +39,7 @@ import {
   obsidianSpaces,
   splitName,
 } from "../core/paths.ts";
+import { limiter } from "../core/limiter.ts";
 import { MAX_SEGMENT_BYTES } from "../core/path-policy.ts";
 import { composite, seam } from "../core/seam.ts";
 import {
@@ -3857,32 +3858,6 @@ export async function writeAll(
  * because a number nobody has needed to change is not a setting.
  */
 const SCAN_CONCURRENCY = 64;
-
-/**
- * A counting gate: at most `limit` calls are inside `fn` at once.
- *
- * Waiters are a queue rather than a poll, so nothing spins and the order they
- * were asked in is the order they run in. A rejection releases the slot the
- * same as a return does, which matters because the caller here lets the first
- * failure end the scan and the rest of the workers have to be able to finish.
- */
-function limiter(limit: number): <R>(fn: () => Promise<R>) => Promise<R> {
-  let running = 0;
-  const waiting: (() => void)[] = [];
-  const release = (): void => {
-    running--;
-    waiting.shift()?.();
-  };
-  return async <R>(fn: () => Promise<R>): Promise<R> => {
-    if (running >= limit) await new Promise<void>((go) => waiting.push(go));
-    running++;
-    try {
-      return await fn();
-    } finally {
-      release();
-    }
-  };
-}
 
 /** Makes a directory's own entries durable. */
 export async function syncDirectory(dir: string): Promise<void> {

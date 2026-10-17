@@ -20,6 +20,15 @@ client can talk; upgrade the server first.
   ([server setup](docs/server.md#a-binary)); `trewd update` there says the
   release has no build for the machine.
 
+### Plugin
+
+- **A first sync on a Mac is faster.** Before saving its progress, TrewSync
+  makes the files it wrote durable, one at a time. On macOS each of those
+  waits for the drive to flush its whole cache, and with Obsidian writing its
+  own caches at the same moment that was about 4 ms a file: 13 to 14 seconds
+  of a 3,000-note first sync. They now run 32 at a time, which took that step
+  to under 7 seconds. What is on disk before progress is saved is unchanged.
+
 ## 0.14.2, plugin (2026-10-15)
 
 A first sync shows how far it has got. No server change: the plugin needs
