@@ -322,10 +322,11 @@ both versions on a conflict is not a promise that sync never changes an open fil
 Off until you turn it on, on each device: **Manage this vault**, **Sync
 settings**. It syncs Obsidian's own settings, themes and CSS snippets from the
 settings folder this device runs. That includes core plugins and their
-settings, such as Daily notes and Templates. Community plugins, their settings
-and the workspace layout do not sync. Names you have told this device to skip
-are skipped in the settings folder too. It needs a server of 0.13.0 or later,
-which speaks protocol 3; upgrade the server first.
+settings, such as Daily notes and Templates. Community plugins sync only where
+you also turn on [community plugin sync](#community-plugins), and the workspace
+layout never does. Names you have told this device to skip are skipped in the
+settings folder too. It needs a server of 0.13.0 or later, which speaks
+protocol 3; upgrade the server first.
 
 **Whom a device shares its settings with.** **Sync settings** is one choice,
 made on each device:
@@ -376,10 +377,44 @@ is not valid JSON is never sent or applied, and is listed as needing attention.
 The server keeps every version of a setting, as it does for a note. Agents
 connected over MCP never see settings, and the Git export leaves them out.
 
+### Community plugins
+
+With settings sync on, **Manage this vault**, **Sync community plugins** syncs
+each plugin's files and its settings, and which plugins are switched on, with
+the same group. It is off until you turn it on, on each device, because it lets
+the group's other devices put code on this one. It needs a server of 0.14.0 or
+later, which speaks protocol 4; upgrade the server first.
+
+A plugin another device installs, updates or switches on waits until you apply
+it, as a setting does. **Apply synced settings** lists each one before you
+choose: whether it installs, updates (with both versions), changes its
+settings or removes the plugin, the device it came from, and which plugins
+switch on or off. A plugin made for desktops only is named as such when it
+arrives on a phone, and Obsidian does not run it there. Turning plugin sync on
+asks the first-time question again, for settings and plugins together, and
+keeps a copy of this device's settings and every plugin's files first. Later
+copies before an Apply keep plugins' settings but not their code, which the
+server's history keeps.
+
+- Plugins keep their settings in their own folders, sometimes with API keys or
+  passwords. With plugin sync on, those are stored on your server and in its
+  backups as they are, as your notes are.
+- Never synced, and never switched on or off by sync: TrewSync itself, Obsidian
+  Git, Local REST API, Self-hosted LiveSync, Remotely Save, Basalt Sync and
+  SuperSync. They sync or control the vault and hold credentials, and on a
+  second device they would be a second writer.
+- To keep another plugin to one device, add its folder name to **Skip these on
+  this device**. Whether it is switched on still follows the group.
+- Two different builds of a plugin's code are never merged: both are kept, and
+  the copy is inert, because Obsidian loads a plugin's files by name. A
+  plugin's settings merge as other settings do.
+
 ## What is not synced
 
-- Obsidian's configuration folder, unless settings sync is on; with it on, its
-  plugins, their settings and the workspace layout still do not sync.
+- Obsidian's configuration folder, unless settings sync is on; with it on, the
+  workspace layout still does not sync, and community plugins sync only with
+  [community plugin sync](#community-plugins) on as well. TrewSync itself and
+  the plugins that sync or control a vault never do.
 - Files or folders whose names start with a dot, at any depth, including
   `.git`, `.trash`, and `.trew`. An `.attachments` folder is one of these, so
   attachments kept there stay on the device that has them.

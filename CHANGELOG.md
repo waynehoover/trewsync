@@ -19,6 +19,24 @@ client can talk; upgrade the server first.
   emulation. On those, build trewd from source
   ([server setup](docs/server.md#a-binary)); `trewd update` there says the
   release has no build for the machine.
+- **Protocol 4: community plugins.** The server stores and sends Obsidian's
+  plugin list and the files in plugins' folders to devices of protocol 4. A
+  device of 3 or less, plugin 0.14 and earlier and `trew` 0.12, is answered
+  as before and never sees one. The plugins that sync or control a vault
+  (obsidian-git, Local REST API, LiveSync, Remotely Save, Basalt Sync,
+  SuperSync, and TrewSync itself) are refused in any spelling.
+
+### Plugin
+
+- **Community plugins can sync.** With settings sync on, **Manage this
+  vault**, **Sync community plugins** syncs each plugin's files and settings,
+  and which plugins are switched on, with the same group. Off until turned on
+  on each device. A plugin another device installs, updates or switches on
+  waits until you apply it, and **Apply synced settings** names each one
+  first, with its version and the device it came from. Plugins' own settings,
+  API keys included, are stored on your server as they are, as notes are; the
+  plugins that sync or control a vault never move. Needs trewd 0.14.0 or
+  later; upgrade the server first.
 
 ## 0.14.3, plugin (2026-10-16)
 

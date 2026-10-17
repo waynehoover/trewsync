@@ -142,7 +142,7 @@ Obsidian's index (`getAllLoadedFiles`, vault.ts:666-723) leaves config files out
 5. Acceptance on the Mac and the Pixel: a theme and a hotkey changed on the Mac reach a second desktop vault after Apply; the phone's profile backs up and restores from history.
 6. Docs: PLAN.md:68 and §4.1, ideas.md:41, design.md:404-407, compared.md:73-74, README.md:120, plugin.md:317-321, and a threat-model row.
 
-**Deferred:** community plugins (§6); immediate apply of the hot-reloadable files on desktops; a settings view in history; files meant to match in every root (`bookmarks.json`, `types.json`) copied across roots; the server reading Daily notes and Templates settings from a chosen root instead of flags (plan/mcp-tools.md:213); a settings mirror in the headless client; category switches in the panel.
+**Deferred:** community plugins (§6, built since: "Phase 2", below); immediate apply of the hot-reloadable files on desktops; a settings view in history; files meant to match in every root (`bookmarks.json`, `types.json`) copied across roots; the server reading Daily notes and Templates settings from a chosen root instead of flags (plan/mcp-tools.md:213); a settings mirror in the headless client; category switches in the panel.
 
 **Answered by the owner, 2026-10-09:**
 
@@ -155,8 +155,8 @@ Obsidian's index (`getAllLoadedFiles`, vault.ts:666-723) leaves config files out
 3. Should every device carry every root (a backup on each), or only its own? Decided while building, 2026-10-10: only its own (§2). Receive-only copies would have met the phone's leftover `.obsidian` as a conflict on every first enable, and the server already keeps every root with history.
 4. Bookmarks and property types: per profile, or the same everywhere? Default: per profile; copying across roots is deferred.
 5. Should `trewd restore -to-uid` roll settings back along with notes? Default: yes, as one undoable operation, which is what it does to every path today.
-7. The denylist, including obsidian-git and Local REST API on the Mac. Default: as listed in §6. It matters from phase 2, when plugins move.
-8. In phase 2, accept other plugins' API keys in plaintext on the server and in its backups? Asked again before phase 2.
+7. The denylist, including obsidian-git and Local REST API on the Mac. Answered by the owner, 2026-10-16: as listed in §6.
+8. In phase 2, accept other plugins' API keys in plaintext on the server and in its backups? Answered by the owner, 2026-10-16: yes, plugins' settings sync with their code, and the switch says where they end up.
 
 ## Groups instead of profile folders, 2026-10-10 (after 0.13.0)
 
@@ -180,6 +180,19 @@ Three reviews, of the server, the engine and the plugin, changed these decisions
 - **The walk** keeps the notes' listing when part of the settings folder cannot be read, and sets aside a setting the disk holds under two spellings, as the notes' listing does.
 - **A device that was on protocol 2** while settings were committed replays the whole history once, when settings sync is turned on.
 - **The server** compares names inside a profile root with the collision rule's fold, keeps settings first synced after a restore's uid, undoes an operation as copies of its notes while leaving settings to their history, and lets an older session neither read nor undo a setting.
+
+## Phase 2: community plugins, built 2026-10-16
+
+Asked of the owner first, and answered: plugins' settings sync with their code (question 8), the denylist of §6 stands (question 7), and a code change is approved in the Apply dialog, which lists each plugin, rather than with a checkbox per plugin.
+
+- **Protocol 4** is protocol 3 and the plugin list and the files in plugins' folders, by `paths.CheckPlugins` and `configPathReason(path, true)`, held to the `plugins` and `isPlugin` fields of the fixtures' `config` section. A session of 3 or less never sends or sees a plugin entry, in its batches, history, gets, live delivery or undo, through one predicate, `seenAt`. The denylist is the contract's `deviceLocalPlugins`, refused as `devicelocal` in any spelling; a rename between plugins and the other settings is `configmove`.
+- **Per device, off by default:** `settingsPlugins` in the pairing, under the settings group. Turning it on is turning settings sync on again: the copy first, which then takes every plugin's files, and the first-time question for settings and plugins together. Off, plugin paths are out of scope as another group's settings are, and the server's word for them is kept.
+- **The plugin list is filtered, not mirrored.** `community-plugins.json` holds entries that are one device's, so the engine is shown it without the denylisted plugins, and an incoming list is written with this device's own entries for them put back (`community-plugins.ts`), through every vault member the engine reads or writes with, including what a preserving write expects to find. The set left out is the same everywhere, so the shared list never names one and never ping-pongs. A separate TrewSync-owned list was considered and refused: two files that must agree need a record of which changed last, and a crash between writing them reads as a person's change.
+- **Apply names the code first** (`plugin-changes.ts`): install, update with both versions, settings or remove, the device each came from, the plugins the list switches on and off, and a desktop-only plugin arriving on a phone, read from the server's versions (`Engine.settingsWaiting`, `contentOf`) before anything is written.
+- **Code is never merged:** `Engine.merge` keeps both builds of any file in a plugin's folder but `data.json`. The plan's "last writer, with history" for vendor files was not taken: a kept copy is inert and loses nothing, and a newest-wins rule needs a clock the devices do not share.
+- **The folder the plugin runs from never syncs, whatever its name**, since Obsidian runs a plugin from any folder and only `trew-sync` is refused by id.
+- **The copy before an Apply** takes plugins' settings and the list, not their code: a version this device synced is in the server's history, and one it never synced was copied when plugin sync was turned on.
+- **Not done:** the walk's cost on a phone at the size of a real plugin folder (the Mac's has 257 files) is unmeasured, and the walk runs on every pass; per-plugin size caps and caches are left to the per-device skip list.
 
 ## Spike results, 2026-10-09 (MVP step 0)
 

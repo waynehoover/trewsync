@@ -120,9 +120,11 @@ is not supported.
 Obsidian's own settings, themes and CSS snippets sync on the devices where you
 turn [settings sync](docs/plugin.md#settings-sync) on, shared among your phones
 and tablets, among your desktops, or by all of them, as each device chooses.
-Community plugins and other hidden files do not sync:
-nothing else whose name starts with a dot does, so an `.attachments` folder
-stays on the device that has it. Attachments elsewhere are included, with a default limit of
+Community plugins sync too where you also turn
+[plugin sync](docs/plugin.md#community-plugins) on, each install or update
+waiting for you to apply it. Other hidden files do not sync: nothing else
+whose name starts with a dot does, so an `.attachments` folder stays on the
+device that has it. Attachments elsewhere are included, with a default limit of
 **64 MiB per file**.
 
 Use one sync service per local vault, and keep it off network filesystems.
