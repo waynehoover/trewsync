@@ -57,7 +57,13 @@ import { parsesAsYaml } from "./yaml.ts";
 import { drawingGate, looksLikeExcalidraw } from "./excalidraw.ts";
 import { looksLikeMarkupPath, wellFormedMarkup } from "./markup.ts";
 import { chunkName, chunkNames, plainDigest } from "./digest.ts";
-import { configPathReason, isConfigPath, pathReason, type PathReason } from "./path-policy.ts";
+import {
+  configPathReason,
+  isConfigPath,
+  isPluginCode,
+  pathReason,
+  type PathReason,
+} from "./path-policy.ts";
 import { describeWindowsRefusal, windowsRefusal } from "./windows-names.ts";
 import { conflictCopyPath, mergeText, sanitiseAuthor } from "./merge.ts";
 import {
@@ -454,6 +460,13 @@ export interface SettingsScope {
    * note is. The plugin forgets it at the same point.
    */
   readonly firstChoice?: "server" | "device" | undefined;
+  /**
+   * Whether this device syncs its community plugins as well: the plugin list
+   * and the files in plugins' folders, protocol 4's (plan/settings-sync.md,
+   * section 6). Off, they are out of scope as another group's settings are,
+   * in both directions, and the server's word for them is kept.
+   */
+  readonly plugins?: boolean;
 }
 
 /** Overrides for a single pass. */
@@ -1661,7 +1674,9 @@ export class Engine {
     if (!isConfigPath(path)) return false;
     const root = this.opts.settings?.root;
     return (
-      root === undefined || !path.startsWith(root + "/") || configPathReason(path) !== undefined
+      root === undefined ||
+      !path.startsWith(root + "/") ||
+      configPathReason(path, this.opts.settings?.plugins === true) !== undefined
     );
   }
 
@@ -2134,10 +2149,11 @@ export class Engine {
       if (
         this.outOfScope(path) &&
         // A settings path no rule admits, which a server holding to protocol
-        // 3 never sends, is refused by its name below like any other, so
-        // somebody sees that a peer wrote one: plugin code in a profile root
-        // is the case that matters.
-        (onDisk.has(path) || !this.remote.has(path) || configPathReason(path) === undefined)
+        // 4 never sends, is refused by its name below like any other, so
+        // somebody sees that a peer wrote one. A community plugin's file is
+        // one protocol 4 admits, and a device that does not sync its plugins
+        // leaves it alone as it leaves another group's settings.
+        (onDisk.has(path) || !this.remote.has(path) || configPathReason(path, true) === undefined)
       ) {
         // Settings this device does not sync. Not fetched, not written and
         // not counted, and owed nothing, like an ignored path: the server's
@@ -5632,6 +5648,16 @@ export class Engine {
       return;
     }
 
+    // A plugin's code is never merged, whatever its text looks like: two
+    // builds merged line by line can make a third that nobody built and that
+    // runs (plan/settings-sync.md, section 6). Both are kept whole instead,
+    // and the copy is inert, since Obsidian loads a plugin's files by name.
+    // Its settings, `data.json`, merge as any setting does.
+    if (isPluginCode(path)) {
+      await this.conflict(path, entry, remote, report, "a plugin's code is never merged");
+      return;
+    }
+
     // Refusing to decode is the point. A file is classified as text by its
     // extension, and an extension is a claim rather than a fact: a `.md`
     // holding bytes that are not UTF-8 decodes with replacement characters,
@@ -6415,9 +6441,10 @@ export function validityGateFor(
  * one; written instead, it fails, and a write that fails is retried for ever.
  */
 export function refusedInboundPath(path: string, windows = false): string | undefined {
-  // A settings path is held to protocol 3's rule, and reaches here only when
-  // this device syncs it; the rest of a profile root never gets this far.
-  const reason = isConfigPath(path) ? configPathReason(path) : pathReason(path);
+  // A settings path is held to protocol 4's rule, and reaches here only when
+  // this device syncs it; the rest of a profile root never gets this far, a
+  // plugin's file on a device that does not sync its plugins included.
+  const reason = isConfigPath(path) ? configPathReason(path, true) : pathReason(path);
   if (reason === undefined) {
     const onWindows = windows ? windowsRefusal(path) : undefined;
     return onWindows === undefined ? undefined : describeWindowsRefusal(onWindows);

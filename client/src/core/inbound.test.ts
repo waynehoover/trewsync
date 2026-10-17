@@ -63,6 +63,11 @@ async function accepted(engine: { status(): { pending: number } }, n: number): P
  * vault refused the write, the engine filed the refusal for retry, and the
  * one-shot sync exited 1 on every run for ever, saying the file would be
  * tried again.
+ *
+ * The example was a plugin's `main.js` until protocol 4 made community
+ * plugins something a device may sync (plan/settings-sync.md, section 6). A
+ * file in a settings folder that no rule admits, under any protocol, is the
+ * same case now.
  */
 describe("an inbound path that never syncs", () => {
   it("is refused at accept as permanent, not retried, and never written", async () => {
@@ -70,7 +75,7 @@ describe("an inbound path that never syncs", () => {
     const bodies = new Map<string, Uint8Array>();
     serving(socket, bodies);
     const entries = [
-      await entryFor(1, ".obsidian/plugins/evil/main.js", "module.exports = 1", bodies),
+      await entryFor(1, ".obsidian/icons/evil.js", "module.exports = 1", bodies),
       await entryFor(2, "ok.md", "fine", bodies),
     ];
     socket.raw({ op: "batch", from: 1, to: 2, entries });
@@ -79,7 +84,7 @@ describe("an inbound path that never syncs", () => {
     const report = await engine.sync();
     expect(report.downloaded).toBe(1);
     expect(vault.text("ok.md")).toBe("fine");
-    expect(vault.text(".obsidian/plugins/evil/main.js")).toBeUndefined();
+    expect(vault.text(".obsidian/icons/evil.js")).toBeUndefined();
     expect(report.retrying, "a path that can never sync was filed for retry").toBe(0);
     expect(report.skipped).toBe(1);
     // And the next pass says the same, rather than trying again.

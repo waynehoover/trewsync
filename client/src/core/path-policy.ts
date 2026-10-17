@@ -108,6 +108,17 @@ export function isPluginPath(path: string): boolean {
   return first === "plugins" || (rest.length === 1 && first === COMMUNITY_PLUGINS);
 }
 
+/**
+ * Whether `path` is a community plugin's code or assets: a file in a plugin's
+ * folder other than its settings, `data.json`. Two builds of these are never
+ * merged; the plugin list and a plugin's settings merge as settings do.
+ */
+export function isPluginCode(path: string): boolean {
+  if (!isPluginPath(path)) return false;
+  const rest = path.split("/").slice(1);
+  return rest.length >= 3 && fold(rest[rest.length - 1]!) !== "data.json";
+}
+
 /** Whether `name`, a single folder name, is a profile root. */
 export function isProfileRoot(name: string): boolean {
   return CONFIG_ROOT.test(name);
