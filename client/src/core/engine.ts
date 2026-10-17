@@ -5704,7 +5704,6 @@ export class Engine {
       return;
     }
 
-
     // Refusing to decode is the point. A file is classified as text by its
     // extension, and an extension is a claim rather than a fact: a `.md`
     // holding bytes that are not UTF-8 decodes with replacement characters,
