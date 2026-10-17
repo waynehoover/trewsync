@@ -67,7 +67,7 @@ What actually carries over:
 
 Carried from Basalt unchanged: one person's devices, one vault per server process, local storage on the server, Obsidian on macOS, Linux, and Android as the supported platforms, no network filesystems, no second sync tool on the same local vault, no teams, no web UI.
 
-Reversed (decided 2026-10-09): Basalt's refusal of Obsidian configuration sync, for Obsidian's own settings, with one profile per device class. It is M11, designed in [plan/settings-sync.md](plan/settings-sync.md); community plugins followed as its phase 2, built 2026-10-16 as protocol 4.
+Reversed (decided 2026-10-09): Basalt's refusal of Obsidian configuration sync, for Obsidian's own settings, with one profile per device class. It is M11, designed in [plan/settings-sync.md](plan/settings-sync.md); community plugins' settings followed as its phase 2, built 2026-10-16 as protocol 4; plugin code never syncs.
 
 New refusals: no per-note read access control on the MCP endpoint (a token reads the whole vault, and this is stated to the user as intentional exposure to the agent and its model provider), no OAuth (static bearer, Tailscale in front), no whole-file `write_note` tool in the first release (§4.4), **no second sync engine** (§2.6), **no plugin self-update** (Obsidian updates plugins from the directory, whose guidelines forbid a plugin fetching code of its own; PKV Sync does it; recorded in `docs/design.md#refusals`, 2026-09-24).
 

@@ -735,19 +735,58 @@ export class ObsidianVault implements Vault {
 
   /**
    * Whether the walk goes into a folder of the plugins folder, given its path
-   * under the config folder: never on a device that does not sync its
-   * plugins, and never into a plugin that does not move, a dot folder or a
-   * name this device skips, whose files the walk would only stat to leave
-   * out. The sync plugin's own folder is the first of those.
+   * under the config folder: the plugins folder itself and each plugin's own,
+   * where its settings are, and no deeper, on a device that syncs its
+   * plugins' settings; never into a plugin whose settings do not move, a dot
+   * folder or a name this device skips. The sync plugin's own folder is the
+   * first of those. `pluginSettingsMove` asks the rest of it of the disk.
    */
   private walksPluginFolder(rel: string): boolean {
     if (!this.syncsPlugins) return false;
     const segments = rel.split("/");
-    if (segments[0] !== "plugins") return false;
+    if (segments[0] !== "plugins" || segments.length > 2) return false;
     if (segments.length === 1) return true;
     if (isDeviceLocalPlugin(segments[1]!)) return false;
     if (this.inOwnFolder(`${this.configRoot}/${rel}`)) return false;
     return !isNeverSynced(segments.slice(1).join("/"), this.skipHere);
+  }
+
+  /** `pluginSettingsMove`'s answer for each plugin folder, once a session. */
+  private readonly pluginFolders = new Map<string, boolean>();
+
+  /**
+   * Whether a plugin's folder holds settings that move, by what is in it and
+   * not only by its name: Obsidian runs a plugin from any folder, so one of
+   * the plugins whose settings never move, this one included, can sit under
+   * another name, such as a copy of this plugin left from an earlier install.
+   * Its manifest's id decides, and a folder with no manifest whose settings
+   * are a pairing, this plugin's, is left out too. Read once a session, since
+   * a phone pays for every read.
+   */
+  private async pluginSettingsMove(folder: string): Promise<boolean> {
+    const known = this.pluginFolders.get(folder);
+    if (known !== undefined) return known;
+    let moves = true;
+    try {
+      const manifest = `${folder}/manifest.json`;
+      if (await this.adapter.exists(manifest)) {
+        const id: unknown = (JSON.parse(await this.adapter.read(manifest)) as { id?: unknown }).id;
+        moves = typeof id !== "string" || !isDeviceLocalPlugin(id);
+      } else if (await this.adapter.exists(`${folder}/data.json`)) {
+        const data: unknown = JSON.parse(await this.adapter.read(`${folder}/data.json`));
+        moves = !(
+          typeof data === "object" &&
+          data !== null &&
+          "vaultId" in data &&
+          "deviceId" in data
+        );
+      }
+    } catch {
+      // A manifest that cannot be read says nothing either way, and its
+      // settings are judged by the folder's name, as the server judges them.
+    }
+    this.pluginFolders.set(folder, moves);
+    return moves;
   }
 
   private async walkSettings(
@@ -759,10 +798,15 @@ export class ObsidianVault implements Vault {
     while (folders.length > 0) {
       const here = await this.adapter.list(folders.pop()!);
       for (const raw of here.folders) {
-        const rel = trimLeadingSlash(raw).slice(root.length + 1);
+        const folder = trimLeadingSlash(raw);
+        const rel = folder.slice(root.length + 1);
         const theme = rel.startsWith("themes/") && !rel.slice("themes/".length).includes("/");
-        if (rel === "themes" || rel === "snippets" || theme || this.walksPluginFolder(rel)) {
-          folders.push(trimLeadingSlash(raw));
+        if (rel === "themes" || rel === "snippets" || theme) folders.push(folder);
+        else if (
+          this.walksPluginFolder(rel) &&
+          (rel === "plugins" || (await this.pluginSettingsMove(folder)))
+        ) {
+          folders.push(folder);
         }
       }
       for (const file of here.files) {

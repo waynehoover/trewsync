@@ -408,10 +408,10 @@ own settings, themes and snippets, per device and off until turned on, with a
 change held until a person applies it and reloads. Settings and workspace
 files have different ownership and failure consequences from notes, and the
 configuration folder contains device credentials, so the sync plugin's folder
-and the workspace files never sync. Community plugins are a phase of their own
-(protocol 4): off until turned on on each device, every plugin another device
-installs, updates or switches on held until a person applies it, and the
-plugins that sync or control a vault never moved or switched by sync.
+and the workspace files never sync. Community plugins' settings are a phase of
+their own (protocol 4), off until turned on on each device: each plugin's
+`data.json`, held until a person applies it, and never its code or the list of
+plugins that run, so nothing a device syncs is code another device runs.
 
 The server's `/mcp` endpoint is an agent API, not a web interface: it serves
 no pages and has no browser login. It has no OAuth, no per-note or per-folder

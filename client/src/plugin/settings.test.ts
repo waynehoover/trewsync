@@ -77,20 +77,27 @@ describe("the vault, with settings sync", () => {
     expect(await files(off)).toEqual(["note.md"]);
   });
 
-  it("lists and writes community plugins only when it syncs them, and never the ones that stay", async () => {
+  it("lists and writes plugins' settings only when it syncs them, and never the ones that stay", async () => {
     const adapter = new FakeAdapter();
     await configFolder(adapter);
     for (const [path, text] of [
       [".obsidian/plugins/dataview/manifest.json", `{"id": "dataview"}`],
-      [".obsidian/plugins/dataview/lang/en.json", "{}"],
-      [".obsidian/plugins/dataview/.cache/x.json", "{}"],
+      [".obsidian/plugins/dataview/data.json", `{"refresh": 2500}`],
+      [".obsidian/plugins/dataview/lang/data.json", "{}"],
       [".obsidian/plugins/obsidian-git/data.json", `{"token": "secret"}`],
-      [".obsidian/plugins/Obsidian-Local-REST-API/main.js", "module.exports = {}"],
-      [".obsidian/plugins/omnisearch/main.js", "module.exports = {}"],
+      [".obsidian/plugins/Obsidian-Local-REST-API/data.json", `{"apiKey": "secret"}`],
+      [".obsidian/plugins/omnisearch/data.json", "{}"],
       // This plugin, run from a folder not named for its id, which Obsidian
       // allows: its pairing must stay here whatever the folder is called.
       [".obsidian/plugins/trew/data.json", `{"deviceToken": "secret"}`],
-      [".obsidian/plugins/trew/index.json", `{"cursor": 9}`],
+      // A copy of this plugin left from an earlier install, and obsidian-git
+      // installed under another name: the manifest says what they are.
+      [".obsidian/plugins/trew-sync-0.14.1/manifest.json", `{"id": "trew-sync"}`],
+      [".obsidian/plugins/trew-sync-0.14.1/data.json", `{"vaultId": "v", "deviceId": "d"}`],
+      [".obsidian/plugins/git/manifest.json", `{"id": "obsidian-git"}`],
+      [".obsidian/plugins/git/data.json", `{"token": "secret"}`],
+      // A folder with no manifest whose settings are a pairing.
+      [".obsidian/plugins/leftover/data.json", `{"vaultId": "v", "deviceId": "d"}`],
     ] as const) {
       await write(adapter, path, text);
     }
@@ -107,22 +114,19 @@ describe("the vault, with settings sync", () => {
         .map((s) => s.path)
         .sort();
     expect(await files(make(true))).toEqual(
-      [
-        ...SETTINGS,
-        ".obsidian/community-plugins.json",
-        ".obsidian/plugins/dataview/lang/en.json",
-        ".obsidian/plugins/dataview/main.js",
-        ".obsidian/plugins/dataview/manifest.json",
-      ].sort(),
+      [...SETTINGS, ".obsidian/plugins/dataview/data.json"].sort(),
     );
     expect(await files(make(false))).toEqual(SETTINGS);
 
     const on = make(true);
-    await on.write(".obsidian/plugins/quickadd/main.js", enc.encode("module.exports = 1"), times);
-    expect(dec.decode(await adapter.readBinary(".obsidian/plugins/quickadd/main.js"))).toBe(
-      "module.exports = 1",
+    await on.write(".obsidian/plugins/quickadd/data.json", enc.encode('{"a": 1}'), times);
+    expect(dec.decode(await adapter.readBinary(".obsidian/plugins/quickadd/data.json"))).toBe(
+      '{"a": 1}',
     );
     for (const path of [
+      ".obsidian/plugins/dataview/main.js",
+      ".obsidian/plugins/dataview/manifest.json",
+      ".obsidian/community-plugins.json",
       ".obsidian/plugins/trew-sync/data.json",
       ".obsidian/plugins/obsidian-git/data.json",
       ".obsidian/plugins/trew/data.json",
@@ -134,10 +138,10 @@ describe("the vault, with settings sync", () => {
     // A plugin this device skips is configuration, refused as the names it
     // skips anywhere else are.
     await expect(
-      on.write(".obsidian/plugins/omnisearch/main.js", enc.encode("{}"), times),
+      on.write(".obsidian/plugins/omnisearch/data.json", enc.encode("{}"), times),
     ).rejects.toMatchObject({ code: "ignored" });
     await expect(
-      make(false).write(".obsidian/plugins/quickadd/main.js", enc.encode("x"), times),
+      make(false).write(".obsidian/plugins/quickadd/data.json", enc.encode("{}"), times),
     ).rejects.toMatchObject({ code: "neversync" });
   });
 
@@ -422,35 +426,17 @@ describe("the settings folder", () => {
     );
   });
 
-  it("holds every community plugin's files for the first copy, and their settings for an Apply's", async () => {
+  it("holds plugins' settings when it syncs them, and never this plugin's own folder", async () => {
     const adapter = new FakeAdapter();
     await configFolder(adapter);
     await write(adapter, ".obsidian/plugins/dataview/data.json", "{}");
     await write(adapter, ".obsidian/plugins/obsidian-git/data.json", `{"token": "secret"}`);
     await write(adapter, ".obsidian/plugins/trew/settings-before-sync-1/app.json", "{}");
-    const all = await settingsIn(
-      adapter,
-      ".obsidian",
-      ".obsidian",
-      "all",
-      ".obsidian/plugins/trew",
-    );
-    expect(all).toEqual(
-      [
-        ...SETTINGS,
-        ".obsidian/community-plugins.json",
-        ".obsidian/plugins/dataview/data.json",
-        ".obsidian/plugins/dataview/main.js",
-      ].sort(),
-    );
-    expect(await settingsIn(adapter, ".obsidian", ".obsidian", "settings")).toEqual(
-      [
-        ...SETTINGS,
-        ".obsidian/community-plugins.json",
-        ".obsidian/plugins/dataview/data.json",
-      ].sort(),
-    );
-    expect(await settingsIn(adapter, ".obsidian", ".obsidian", "none")).toEqual(SETTINGS);
+    await write(adapter, ".obsidian/plugins/trew/data.json", `{"deviceToken": "secret"}`);
+    expect(
+      await settingsIn(adapter, ".obsidian", ".obsidian", true, ".obsidian/plugins/trew"),
+    ).toEqual([...SETTINGS, ".obsidian/plugins/dataview/data.json"].sort());
+    expect(await settingsIn(adapter, ".obsidian", ".obsidian", false)).toEqual(SETTINGS);
   });
 });
 

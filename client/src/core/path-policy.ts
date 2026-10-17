@@ -57,11 +57,10 @@ export type PathReason =
 export const SYNC_PLUGIN_ID = "trew-sync";
 
 /**
- * The plugins whose folders never move between devices and which sync never
- * switches on: this one, and the others that sync or remote-control a vault,
- * whose folders hold credentials and device identity, and which on a second
- * device would be a second writer (plan/settings-sync.md, section 6). The
- * server refuses their folders as well. Lower case, compared folded.
+ * The plugins whose settings never move between devices: this one, and the
+ * others that sync or remote-control a vault, whose settings hold credentials
+ * and device identity (plan/settings-sync.md, section 6). The server refuses
+ * them as well. Lower case, compared folded.
  */
 export const DEVICE_LOCAL_PLUGINS: readonly string[] = [
   SYNC_PLUGIN_ID,
@@ -97,26 +96,14 @@ export function isConfigPath(path: string): boolean {
 
 /**
  * Whether `path` is community plugins' inside a profile root: the plugin list,
- * or anything in the plugins folder, folded as the scope rule folds. These
- * are protocol 4's, and a device that does not sync its plugins leaves them
- * out of its scope.
+ * or anything in the plugins folder, folded as the scope rule folds. Of these
+ * only a plugin's settings sync, and only from protocol 4.
  */
 export function isPluginPath(path: string): boolean {
   if (!isConfigPath(path)) return false;
   const rest = path.split("/").slice(1);
   const first = rest[0] === undefined ? undefined : fold(rest[0]);
   return first === "plugins" || (rest.length === 1 && first === COMMUNITY_PLUGINS);
-}
-
-/**
- * Whether `path` is a community plugin's code or assets: a file in a plugin's
- * folder other than its settings, `data.json`. Two builds of these are never
- * merged; the plugin list and a plugin's settings merge as settings do.
- */
-export function isPluginCode(path: string): boolean {
-  if (!isPluginPath(path)) return false;
-  const rest = path.split("/").slice(1);
-  return rest.length >= 3 && fold(rest[rest.length - 1]!) !== "data.json";
 }
 
 /** Whether `name`, a single folder name, is a profile root. */
@@ -155,10 +142,11 @@ export function pathReason(path: string): PathReason | undefined {
  * (`configScope`). A path outside every profile root gets `pathReason`'s
  * answer.
  *
- * With `plugins`, protocol 4's: community plugins too, the plugin list and
- * any file inside a plugin's folder, except the folders of
- * `DEVICE_LOCAL_PLUGINS`. A device that syncs its settings but not its
- * plugins keeps protocol 3's scope.
+ * With `plugins`, protocol 4's: each community plugin's settings too,
+ * `plugins/<id>/data.json`, except those of `DEVICE_LOCAL_PLUGINS`. Never a
+ * plugin's code and never the list of plugins that run, so nothing synced is
+ * code another device runs. A device that syncs its settings but not its
+ * plugins' keeps protocol 3's scope.
  */
 export function configPathReason(path: string, plugins = false): PathReason | undefined {
   return reason(path, true, plugins);
@@ -168,10 +156,10 @@ export function configPathReason(path: string, plugins = false): PathReason | un
  * Why a path inside a profile root does not sync, given its segments after the
  * root, or `undefined` when it does. Settings sync carries Obsidian's own
  * settings, every JSON file at the top of the root, and themes and CSS
- * snippets. With `plugins`, which is protocol 4, it carries community plugins
- * too: their list, and any file inside a plugin's folder. Without it both are
- * out of scope. The sync plugin's folder, the other `DEVICE_LOCAL_PLUGINS` and
- * the workspace files never sync. Compared folded, with the fold the collision
+ * snippets. With `plugins`, which is protocol 4, it carries each community
+ * plugin's settings too, `plugins/<id>/data.json`, and nothing else of a
+ * plugin. Without it those are out of scope as well. The sync plugin's
+ * folder, the other `DEVICE_LOCAL_PLUGINS` and the workspace files never sync. Compared folded, with the fold the collision
  * rule uses, so a case-folding disk cannot spell its way past the device-local
  * rule: APFS holds workspace.json and workspace.json spelt with U+017F as one
  * file, which ASCII lower case does not see.
@@ -182,8 +170,8 @@ function configScope(rest: readonly string[], plugins: boolean): PathReason | un
   if (lower.length >= 2 && first === "plugins" && second === SYNC_PLUGIN_ID) return "devicelocal";
   if (plugins && lower.length >= 2 && first === "plugins" && DEVICE_LOCAL_PLUGINS.includes(second!))
     return "devicelocal";
-  if (plugins && lower.length >= 3 && first === "plugins") return undefined;
-  if (plugins && lower.length === 1 && first === COMMUNITY_PLUGINS) return undefined;
+  if (plugins && lower.length === 3 && first === "plugins" && lower[2] === "data.json")
+    return undefined;
   if (lower.length === 1 && (first === "workspace.json" || first === "workspace-mobile.json"))
     return "devicelocal";
   if (lower.length === 1 && first?.endsWith(".json") && first !== COMMUNITY_PLUGINS)

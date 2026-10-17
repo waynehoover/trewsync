@@ -51,9 +51,10 @@ PRODUCT = "trew"
 # still answers a hello of protocol 1, as protocol 1. Protocol 3 is protocol 2
 # and settings: paths inside a profile root (CONFIG_ROOT) that the config rule
 # below accepts, which a session of 1 or 2 never sends or sees
-# (plan/settings-sync.md). Protocol 4 is protocol 3 and community plugins: the
-# plugin list and each plugin's folder, which a session of 3 or less never
-# sends or sees (plan/settings-sync.md, section 6).
+# (plan/settings-sync.md). Protocol 4 is protocol 3 and community plugins'
+# settings: each plugin's data.json, never its code or the list of plugins
+# that run, which a session of 3 or less never sends or sees
+# (plan/settings-sync.md, section 6).
 PROTO = 4
 MIN_PROTO = 1
 
@@ -66,9 +67,9 @@ CONFIG_ROOT = re.compile(r"\.obsidian(?:-[a-z0-9][a-z0-9-]{0,31})?")
 # sync plugin's own folder, which holds that device's pairing and index.
 DEVICE_LOCAL_FILES = ("workspace.json", "workspace-mobile.json")
 SYNC_PLUGIN_ID = PRODUCT + "-sync"
-# Plugins that sync or remote-control a vault, and hold credentials and device
-# identity in their folders: never moved between devices, and never switched on
-# by sync, as the sync plugin itself is not (plan/settings-sync.md, section 6).
+# Plugins that sync or remote-control a vault, whose settings hold credentials
+# and device identity: their settings never move between devices, as the sync
+# plugin's own never do (plan/settings-sync.md, section 6).
 DEVICE_LOCAL_PLUGINS = (
     SYNC_PLUGIN_ID,
     "obsidian-git",
@@ -198,7 +199,8 @@ def path_reason(raw: bytes, config: bool = False, plugins: bool = False) -> str 
 
     With config, which is protocol 3's rule, a profile root may begin the path,
     and what follows it must be what settings sync carries (config_scope). With
-    plugins as well, which is protocol 4's, that includes community plugins.
+    plugins as well, which is protocol 4's, that includes community plugins'
+    settings.
     """
     try:
         text = raw.decode("utf-8", errors="strict")
@@ -268,10 +270,11 @@ def config_scope(rest: list[str], plugins: bool = False) -> str | None:
 
     rest is the path's segments after the root. Settings sync carries Obsidian's
     own settings files (any JSON file at the top of the root), themes and CSS
-    snippets. Protocol 4 (plugins) adds community plugins: the plugin list and
-    any file inside a plugin's folder. Under protocol 3 both are out of scope.
-    The sync plugin's own folder, the other plugins in DEVICE_LOCAL_PLUGINS and
-    the workspace files never sync. Names are compared folded, with the fold
+    snippets. Protocol 4 (plugins) adds each community plugin's settings,
+    plugins/<id>/data.json, and nothing else of a plugin: never its code and
+    never the list of plugins that run. Under protocol 3 those are out of scope
+    too. The sync plugin's own folder, the other plugins in
+    DEVICE_LOCAL_PLUGINS and the workspace files never sync. Names are compared folded, with the fold
     the collision rule uses, so a case-folding disk cannot spell its way past
     the device-local rule: APFS holds workspace.json and workſpace.json (U+017F)
     as one file, which ASCII lower case does not see.
@@ -281,9 +284,7 @@ def config_scope(rest: list[str], plugins: bool = False) -> str | None:
         return "devicelocal"
     if plugins and len(lower) >= 2 and lower[0] == "plugins" and lower[1] in DEVICE_LOCAL_PLUGINS:
         return "devicelocal"
-    if plugins and len(lower) >= 3 and lower[0] == "plugins":
-        return None
-    if plugins and lower == [COMMUNITY_PLUGINS]:
+    if plugins and len(lower) == 3 and lower[0] == "plugins" and lower[2] == "data.json":
         return None
     if len(lower) == 1 and lower[0] in DEVICE_LOCAL_FILES:
         return "devicelocal"
@@ -318,17 +319,20 @@ def config_vectors() -> list[dict]:
         ("the sync plugin's code", ".obsidian/plugins/trew-sync/main.js"),
         ("the sync plugin's folder", ".obsidian/plugins/trew-sync"),
         ("the sync plugin's folder, spelt in capitals", ".obsidian/plugins/Trew-Sync/index.json"),
-        ("the community plugin list", ".obsidian/community-plugins.json"),
-        ("a community plugin's code", ".obsidian/plugins/dataview/main.js"),
+        ("the community plugin list, which never syncs", ".obsidian/community-plugins.json"),
+        ("a community plugin's code, which never syncs", ".obsidian/plugins/dataview/main.js"),
         ("a community plugin's settings", ".obsidian/plugins/dataview/data.json"),
+        ("a community plugin's manifest, which never syncs", ".obsidian/plugins/dataview/manifest.json"),
         ("a community plugin's stylesheet", ".obsidian-mobile/plugins/obsidian-style-settings/styles.css"),
-        ("a file deeper in a plugin's folder", ".obsidian/plugins/dataview/lang/en.json"),
+        ("a file named data.json deeper in a plugin's folder", ".obsidian/plugins/dataview/lang/data.json"),
         ("a plugin's settings in a phone's profile", ".obsidian-mobile/plugins/dataview/data.json"),
+        ("a plugin's settings spelt in capitals", ".obsidian/plugins/dataview/Data.JSON"),
+        ("BRAT's settings, the plugins it tracks", ".obsidian-mobile/plugins/obsidian42-brat/data.json"),
         ("the plugin list of another profile", ".obsidian-desktop/community-plugins.json"),
         ("the plugins folder", ".obsidian/plugins"),
         ("a plugin's folder", ".obsidian/plugins/dataview"),
         ("a dotfile in a plugin's folder", ".obsidian/plugins/dataview/.cache.json"),
-        ("a plugin named like a device-local one", ".obsidian/plugins/obsidian-git-extras/main.js"),
+        ("a plugin named like a device-local one", ".obsidian/plugins/obsidian-git-extras/data.json"),
         ("obsidian-git's settings", ".obsidian/plugins/obsidian-git/data.json"),
         ("obsidian-git's folder", ".obsidian/plugins/obsidian-git"),
         ("obsidian-git, spelt in capitals", ".obsidian/plugins/Obsidian-Git/data.json"),
@@ -965,8 +969,8 @@ def main() -> None:
             "JSON file at its top, themes/<theme>/<file> or snippets/<name>.css, compared in ASCII lower case.",
             "devicelocal: the workspace files and plugins/trew-sync/, which are one device's and never sync.",
             "configscope: anything else inside a root, community plugins included under protocol 3.",
-            "plugins is protocol 4's rule: config's, plus community-plugins.json at the top of the root and any",
-            "file at least one level inside plugins/<id>/, except that plugins/<id> for an id in",
+            "plugins is protocol 4's rule: config's, plus each plugin's settings, plugins/<id>/data.json, and",
+            "no other file of a plugin, its code and the plugin list included; plugins/<id> for an id in",
             "constants.deviceLocalPlugins is devicelocal. isPlugin: a profile root followed by plugins/ or by",
             "community-plugins.json, folded; a session of protocol 3 or less never sends or sees one.",
         ],

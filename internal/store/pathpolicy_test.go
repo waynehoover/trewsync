@@ -159,7 +159,7 @@ func TestValidateHoldsSettingsToProtocol4sRule(t *testing.T) {
 		dest := "dest.md"
 		switch {
 		case paths.IsPlugin(p):
-			dest = ".obsidian/plugins/dest/dest.json"
+			dest = ".obsidian/plugins/dest/data.json"
 		case paths.IsConfig(p):
 			dest = ".obsidian/dest.json"
 		}

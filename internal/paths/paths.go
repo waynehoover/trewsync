@@ -69,11 +69,10 @@ const (
 // root. That folder holds one device's pairing and index and never syncs.
 const SyncPluginID = "trew-sync"
 
-// DeviceLocalPlugins are the plugins whose folders never move between devices
-// and which sync never switches on: the sync plugin, and the others that sync
-// or remote-control a vault, whose folders hold credentials and device
-// identity, and which on a second device would be a second writer
-// (plan/settings-sync.md, section 6). Lower case, compared folded.
+// DeviceLocalPlugins are the plugins whose settings never move between
+// devices: the sync plugin, and the others that sync or remote-control a vault,
+// whose settings hold credentials and device identity (plan/settings-sync.md,
+// section 6). Lower case, compared folded.
 var DeviceLocalPlugins = []string{
 	SyncPluginID,
 	"obsidian-git",
@@ -112,10 +111,11 @@ func Check(p string) Reason { return check(p, false, false) }
 // (configScope). A path outside every profile root gets Check's answer.
 func CheckConfig(p string) Reason { return check(p, true, false) }
 
-// CheckPlugins is protocol 4's rule: CheckConfig, and community plugins as
-// well, the plugin list and any file inside a plugin's folder, except the
-// folders of DeviceLocalPlugins. It is what the store holds; a session of 3
-// or less is still held to CheckConfig.
+// CheckPlugins is protocol 4's rule: CheckConfig, and each community plugin's
+// settings as well, plugins/<id>/data.json, except those of
+// DeviceLocalPlugins. Never a plugin's code, and never the list of plugins
+// that run, so nothing a device syncs is code another device runs. It is what
+// the store holds; a session of 3 or less is still held to CheckConfig.
 func CheckPlugins(p string) Reason { return check(p, true, true) }
 
 // IsPlugin reports whether p is community plugins' inside a profile root: the
@@ -198,10 +198,10 @@ func check(p string, config, plugins bool) Reason {
 // configScope says why a path inside a profile root does not sync, given its
 // segments after the root, or "" when it does. Settings sync carries
 // Obsidian's own settings, every JSON file at the top of the root, and themes
-// and CSS snippets. With plugins, which is protocol 4, it carries community
-// plugins too: their list, and any file inside a plugin's folder. Under
-// protocol 3 both are out of scope. The sync plugin's folder, the other
-// DeviceLocalPlugins and the workspace files never sync. Compared folded,
+// and CSS snippets. With plugins, which is protocol 4, it carries each
+// community plugin's settings too, plugins/<id>/data.json, and nothing else of
+// a plugin. Under protocol 3 those are out of scope as well. The sync plugin's
+// folder, the other DeviceLocalPlugins and the workspace files never sync. Compared folded,
 // with the fold the collision rule uses, so a case-folding disk cannot spell
 // its way past the device-local rule: APFS holds workspace.json and
 // workſpace.json (U+017F) as one file, which ASCII lower case does not see.
@@ -215,9 +215,7 @@ func configScope(rest []string, plugins bool) Reason {
 		return ReasonDeviceLocal
 	case plugins && len(lower) >= 2 && lower[0] == "plugins" && slices.Contains(DeviceLocalPlugins, lower[1]):
 		return ReasonDeviceLocal
-	case plugins && len(lower) >= 3 && lower[0] == "plugins":
-		return ""
-	case plugins && len(lower) == 1 && lower[0] == CommunityPlugins:
+	case plugins && len(lower) == 3 && lower[0] == "plugins" && lower[2] == "data.json":
 		return ""
 	case len(lower) == 1 && (lower[0] == "workspace.json" || lower[0] == "workspace-mobile.json"):
 		return ReasonDeviceLocal

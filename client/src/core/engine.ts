@@ -57,13 +57,7 @@ import { parsesAsYaml } from "./yaml.ts";
 import { drawingGate, looksLikeExcalidraw } from "./excalidraw.ts";
 import { looksLikeMarkupPath, wellFormedMarkup } from "./markup.ts";
 import { chunkName, chunkNames, plainDigest } from "./digest.ts";
-import {
-  configPathReason,
-  isConfigPath,
-  isPluginCode,
-  pathReason,
-  type PathReason,
-} from "./path-policy.ts";
+import { configPathReason, isConfigPath, pathReason, type PathReason } from "./path-policy.ts";
 import { describeWindowsRefusal, windowsRefusal } from "./windows-names.ts";
 import { conflictCopyPath, mergeText, sanitiseAuthor } from "./merge.ts";
 import {
@@ -473,12 +467,18 @@ export interface SettingsScope {
    */
   readonly firstChoice?: "server" | "device" | undefined;
   /**
-   * Whether this device syncs its community plugins as well: the plugin list
-   * and the files in plugins' folders, protocol 4's (plan/settings-sync.md,
-   * section 6). Off, they are out of scope as another group's settings are,
-   * in both directions, and the server's word for them is kept.
+   * Whether this device syncs its community plugins' settings as well, each
+   * plugin's `data.json`, protocol 4's (plan/settings-sync.md, section 6).
+   * Off, they are out of scope as another group's settings are, in both
+   * directions, and the server's word for them is kept.
    */
   readonly plugins?: boolean;
+  /**
+   * The folder the sync plugin runs from, under `root`, whatever it is called:
+   * out of scope whatever arrives for it, because it holds this device's
+   * pairing and index, and only `trew-sync` is refused by name everywhere.
+   */
+  readonly ownFolder?: string;
 }
 
 /** Overrides for a single pass. */
@@ -516,6 +516,13 @@ export interface SyncOptions {
    * written under a running app is one it can write back over.
    */
   readonly applySettings?: boolean;
+  /**
+   * With `applySettings`, write only these: each held setting a person was
+   * shown, by path, at the version of it they were shown. A setting that
+   * arrived after, or changed since, stays held for the next Apply, so an
+   * Apply writes what its dialog listed and nothing it did not.
+   */
+  readonly applyOnly?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -1101,6 +1108,8 @@ export class Engine {
   private heldSettings = new Set<string>();
   /** Whether the pass running now applies held settings (`applySettings`). */
   private applyingSettings = false;
+  /** `SyncOptions.applyOnly` for the pass running now. */
+  private applyOnly: ReadonlyMap<string, number> | undefined;
   /**
    * Settings applied before the engine last started, not yet checked against
    * the disk. Filled once at `start`: an applied setting is checked after the
@@ -1687,9 +1696,11 @@ export class Engine {
   private outOfScope(path: string): boolean {
     if (!isConfigPath(path)) return false;
     const root = this.opts.settings?.root;
+    const own = this.opts.settings?.ownFolder;
     return (
       root === undefined ||
       !path.startsWith(root + "/") ||
+      (own !== undefined && path.startsWith(own + "/")) ||
       configPathReason(path, this.opts.settings?.plugins === true) !== undefined
     );
   }
@@ -1936,6 +1947,7 @@ export class Engine {
     this.heldSettings = new Set();
     this.settingsUnsendable = new Set();
     this.applyingSettings = opts.applySettings === true;
+    this.applyOnly = opts.applyOnly;
     // A checkpoint's half minute is counted from here, so a short pass never
     // takes one however long ago the last save was (T12).
     this.checkpointedAt = Date.now();
@@ -2723,7 +2735,12 @@ export class Engine {
     // until an engine of the next load has checked it.
     const unreadByObsidian =
       entry.unconfirmed !== undefined && entry.unconfirmed.load === this.loadId;
-    if (writesHere ? !this.applyingSettings : unreadByObsidian && action.kind !== "nothing") {
+    // An Apply writes what its dialog showed: the version of each setting a
+    // person was told about, and nothing that arrived after or changed since.
+    const shown =
+      this.applyOnly === undefined || this.applyOnly.get(path) === this.remote.get(path)?.uid;
+    const holding = writesHere ? !this.applyingSettings || !shown : unreadByObsidian;
+    if (holding && action.kind !== "nothing") {
       this.heldSettings.add(path);
       report.settingsHeld++;
       if (report.settingsHeldPaths.length < LISTED_PATHS) report.settingsHeldPaths.push(path);
@@ -5687,15 +5704,6 @@ export class Engine {
       return;
     }
 
-    // A plugin's code is never merged, whatever its text looks like: two
-    // builds merged line by line can make a third that nobody built and that
-    // runs (plan/settings-sync.md, section 6). Both are kept whole instead,
-    // and the copy is inert, since Obsidian loads a plugin's files by name.
-    // Its settings, `data.json`, merge as any setting does.
-    if (isPluginCode(path)) {
-      await this.conflict(path, entry, remote, report, "a plugin's code is never merged");
-      return;
-    }
 
     // Refusing to decode is the point. A file is classified as text by its
     // extension, and an extension is a claim rather than a fact: a `.md`

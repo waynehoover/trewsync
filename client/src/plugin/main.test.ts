@@ -6972,7 +6972,7 @@ describe("settings sync", () => {
     expect(laptop.app.vault.adapter.text(".obsidian/app.json")).toContain("dark");
   }, 300_000);
 
-  it("moves a community plugin to a device that syncs them, and names it in Apply before it runs", async () => {
+  it("syncs a plugin's settings to a device that syncs them, and names it in Apply", async () => {
     await fresh();
     const laptop = await load();
     const manifest = JSON.stringify(
@@ -6980,11 +6980,10 @@ describe("settings sync", () => {
       null,
       2,
     );
+    const settings = JSON.stringify({ refreshInterval: 5000 }, null, 2);
     laptop.app.vault.adapter.seed(".obsidian/plugins/dataview/manifest.json", manifest);
-    laptop.app.vault.adapter.seed(
-      ".obsidian/plugins/dataview/main.js",
-      "module.exports = class {};\n",
-    );
+    laptop.app.vault.adapter.seed(".obsidian/plugins/dataview/main.js", "the laptop's build\n");
+    laptop.app.vault.adapter.seed(".obsidian/plugins/dataview/data.json", settings);
     laptop.app.vault.adapter.seed(
       ".obsidian/plugins/obsidian-git/data.json",
       '{"token": "secret"}',
@@ -6996,6 +6995,8 @@ describe("settings sync", () => {
     await startVault(laptop.plugin, "laptop");
     await synced(laptop.plugin);
     const phone = await load();
+    phone.app.vault.adapter.seed(".obsidian/plugins/dataview/manifest.json", manifest);
+    phone.app.vault.adapter.seed(".obsidian/plugins/dataview/main.js", "the phone's build\n");
     phone.app.vault.adapter.seed(
       ".obsidian/community-plugins.json",
       JSON.stringify(["trew-sync"], null, 2),
@@ -7008,18 +7009,20 @@ describe("settings sync", () => {
     await laptop.plugin.syncNow();
     await phone.plugin.setSettingsSync(".obsidian", "server", true);
     await synced(phone.plugin);
-    await until("the laptop's plugin to wait on the phone", () => phone.plugin.settingsHeld === 3);
+    await until(
+      "the laptop's plugin settings to wait on the phone",
+      () => phone.plugin.settingsHeld === 1,
+    );
     expect(
-      phone.app.vault.adapter.text(".obsidian/plugins/dataview/main.js"),
-      "run before Apply",
+      phone.app.vault.adapter.text(".obsidian/plugins/dataview/data.json"),
+      "before Apply",
     ).toBe(undefined);
 
     phone.plugin.applySettingsNow();
     const dialog = modals.at(-1)!;
-    await until("the plugins named", () =>
-      dialog.contentEl.allText().includes("Install Dataview 0.5.68, from laptop."),
+    await until("the plugin named", () =>
+      dialog.contentEl.allText().includes("Change Dataview's settings, from laptop."),
     );
-    expect(dialog.contentEl.allText()).toContain("Switch on: dataview.");
     const reload = vi.fn();
     vi.stubGlobal("window", { location: { reload } });
     try {
@@ -7028,24 +7031,17 @@ describe("settings sync", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+    expect(phone.app.vault.adapter.text(".obsidian/plugins/dataview/data.json")).toBe(settings);
+    // Only settings move: each device keeps its own code and its own list.
     expect(phone.app.vault.adapter.text(".obsidian/plugins/dataview/main.js")).toBe(
-      "module.exports = class {};\n",
+      "the phone's build\n",
     );
-    expect(phone.app.vault.adapter.text(".obsidian/plugins/dataview/manifest.json")).toBe(manifest);
-    // Switched on, and the sync plugin with it, as this device had it.
     expect(JSON.parse(phone.app.vault.adapter.text(".obsidian/community-plugins.json")!)).toEqual([
-      "dataview",
       "trew-sync",
     ]);
-    // obsidian-git never left the laptop, and stays on there.
     expect(phone.app.vault.adapter.text(".obsidian/plugins/obsidian-git/data.json")).toBe(
       undefined,
     );
-    expect(JSON.parse(laptop.app.vault.adapter.text(".obsidian/community-plugins.json")!)).toEqual([
-      "dataview",
-      "trew-sync",
-      "obsidian-git",
-    ]);
   }, 300_000);
 
   it("reloads once the apply has begun, even when it fails", async () => {

@@ -10,11 +10,11 @@ import (
 	"github.com/waynehoover/trewsync/internal/wire"
 )
 
-// Community plugins are protocol 4's (plan/settings-sync.md, section 6). A
-// session of 4 may write, and is sent, the plugin list and the files in
-// plugins' folders that paths.CheckPlugins accepts. A session of 3 or less is
-// held to the rule it always was and never sees a plugin entry, while its
-// cursor still moves past each one.
+// Community plugins' settings are protocol 4's (plan/settings-sync.md,
+// section 6). A session of 4 may write, and is sent, each plugin's data.json
+// that paths.CheckPlugins accepts, and never a plugin's code. A session of 3
+// or less is held to the rule it always was and never sees a plugin entry,
+// while its cursor still moves past each one.
 
 // pluginVector is one case of the `config` section of protocol-fixtures.json
 // with protocol 3's reason and protocol 4's.
@@ -106,7 +106,7 @@ func TestAPluginMoveToOrFromTheOtherSettingsIsRefused(t *testing.T) {
 	names, size := chunkNames([]string{"{}"})
 	for _, m := range []struct{ from, to string }{
 		{".obsidian/plugins/dataview/data.json", ".obsidian/dataview.json"},
-		{".obsidian/app.json", ".obsidian/plugins/dataview/app.json"},
+		{".obsidian/app.json", ".obsidian/plugins/other/data.json"},
 	} {
 		c.sendJSON(wire.In{Op: "put", Path: m.to, Chunks: names,
 			Meta: wire.PutMeta{Size: size, MTime: 2, Prev: m.from}, PrevBase: c.head(m.from)})
@@ -114,12 +114,12 @@ func TestAPluginMoveToOrFromTheOtherSettingsIsRefused(t *testing.T) {
 			t.Fatalf("a move from %s to %s was refused as %q", m.from, m.to, msg)
 		}
 	}
-	// Within plugins' folders, a rename is an ordinary one.
-	c.sendJSON(wire.In{Op: "put", Path: ".obsidian/plugins/dataview/old.json", Chunks: names,
+	// Between plugins, a rename is an ordinary one.
+	c.sendJSON(wire.In{Op: "put", Path: ".obsidian/plugins/dataview-old/data.json", Chunks: names,
 		Meta:     wire.PutMeta{Size: size, MTime: 3, Prev: ".obsidian/plugins/dataview/data.json"},
 		PrevBase: c.head(".obsidian/plugins/dataview/data.json")})
 	if m := c.recv(); m["res"] != "have" {
-		t.Fatalf("a rename inside a plugin's folder was answered %v", m)
+		t.Fatalf("a rename between plugins' settings was answered %v", m)
 	}
 }
 
@@ -134,16 +134,16 @@ func TestAnOlderSessionNeverSeesAPluginEntry(t *testing.T) {
 	}{
 		{wire.ProtoPlugins - 1, []string{".obsidian/app.json", "note.md"}},
 		{wire.ProtoConfig - 1, []string{"note.md"}},
-		{wire.ProtoPlugins, []string{".obsidian/app.json", ".obsidian/plugins/dataview/main.js", "note.md",
-			".obsidian/community-plugins.json"}},
+		{wire.ProtoPlugins, []string{".obsidian/app.json", ".obsidian/plugins/dataview/data.json", "note.md",
+			".obsidian/plugins/quickadd/data.json"}},
 	} {
 		r := newRig(t)
 		desk := r.dial("desk")
 		helloAt(desk, wire.ProtoPlugins)
 		desk.put(".obsidian/app.json", `{"a":1}`)
-		desk.put(".obsidian/plugins/dataview/main.js", "module.exports = {}")
+		desk.put(".obsidian/plugins/dataview/data.json", `{"refresh":2500}`)
 		desk.put("note.md", "a note")
-		last := desk.put(".obsidian/community-plugins.json", `["dataview"]`)
+		last := desk.put(".obsidian/plugins/quickadd/data.json", `{"choices":[]}`)
 
 		c := r.dial("other")
 		c.proto = tc.proto
@@ -158,7 +158,7 @@ func TestAnOlderSessionNeverSeesAPluginEntry(t *testing.T) {
 		if strings.Join(paths, ",") != strings.Join(tc.want, ",") {
 			t.Fatalf("protocol %d caught up with %v, want %v", tc.proto, paths, tc.want)
 		}
-		next := desk.put(".obsidian/plugins/dataview/data.json", "{}")
+		next := desk.put(".obsidian/plugins/templater/data.json", "{}")
 		b := c.nextBatch()
 		if b.From != last+1 || b.To != next {
 			t.Fatalf("protocol %d: the live batch covers %d to %d, want %d to %d",

@@ -4516,25 +4516,33 @@ describe("settings", () => {
     expect(Object.keys(state?.remote ?? {}).sort()).toEqual([".obsidian/hotkeys.json"]);
   });
 
-  describe("community plugins", () => {
+  describe("community plugins' settings", () => {
     const text = (s: string) => new TextEncoder().encode(s);
-    const plugin = {
+    const settingsOf = {
+      ".obsidian/plugins/dataview/data.json": JSON.stringify({ refreshInterval: 2500 }, null, 2),
+      ".obsidian/plugins/obsidian42-brat/data.json": JSON.stringify(
+        { pluginList: ["a/b"] },
+        null,
+        2,
+      ),
+    };
+    const code = {
       ".obsidian/plugins/dataview/main.js": "module.exports = class {};\n",
       ".obsidian/plugins/dataview/manifest.json": JSON.stringify(
         { id: "dataview", version: "0.5.68" },
         null,
         2,
       ),
-      ".obsidian/plugins/dataview/data.json": JSON.stringify({ refreshInterval: 2500 }, null, 2),
       ".obsidian/community-plugins.json": JSON.stringify(["dataview"], null, 2),
     };
 
-    it("moves a plugin's files between devices that sync plugins, held until Apply", async () => {
+    it("moves each plugin's settings, held until Apply, and never its code or the list that runs it", async () => {
       await fresh();
       const mac = await deviceWith("mac", { root: ".obsidian", plugins: true });
-      for (const [path, body] of Object.entries(plugin))
+      for (const [path, body] of Object.entries({ ...settingsOf, ...code })) {
         await mac.vault.write(path, text(body), times);
-      expect((await settleCounting(mac)).uploaded).toBe(4);
+      }
+      expect((await settleCounting(mac)).uploaded, "only the two settings files").toBe(2);
 
       const desk = await deviceWith("desk", {
         root: ".obsidian",
@@ -4542,102 +4550,43 @@ describe("settings", () => {
         firstChoice: "server",
       });
       const held = await desk.settle();
-      expect(desk.vault.snapshot(), "code waits for a person before it is written").toEqual({});
-      expect(held.settingsHeld).toBe(4);
-      // What a person is asked about: each file, the device that wrote it,
-      // and a version whose bytes can be read before anything runs.
-      const waiting = desk.engine.settingsWaiting();
-      expect(waiting.map((h) => [h.path, h.device, h.deleted])).toEqual(
-        Object.keys(plugin)
+      expect(desk.vault.snapshot(), "nothing written before Apply").toEqual({});
+      expect(held.settingsHeld).toBe(2);
+      // What a person is asked about: each file, and the device that wrote it.
+      expect(desk.engine.settingsWaiting().map((h) => [h.path, h.device])).toEqual(
+        Object.keys(settingsOf)
           .sort()
-          .map((path) => [path, "mac", false]),
+          .map((path) => [path, "mac"]),
       );
-      const manifest = waiting.find((h) => h.path.endsWith("manifest.json"))!;
-      expect(
-        new TextDecoder().decode(await desk.engine.contentOf(manifest.uid, manifest.hash)),
-      ).toBe(plugin[".obsidian/plugins/dataview/manifest.json"]);
       await desk.engine.sync({ applySettings: true });
-      expect(desk.vault.snapshot()).toEqual(plugin);
+      expect(desk.vault.snapshot()).toEqual(settingsOf);
+      const state = await desk.store.load();
+      expect(Object.keys(state?.remote ?? {}).sort(), "no code reached the server").toEqual(
+        Object.keys(settingsOf).sort(),
+      );
     });
 
-    it("owes nothing and refuses nothing for the plugins of a device that does not sync them", async () => {
+    it("owes nothing and refuses nothing for the plugin settings of a device that does not sync them", async () => {
       await fresh();
       const mac = await deviceWith("mac", { root: ".obsidian", plugins: true });
-      for (const [path, body] of Object.entries(plugin))
+      for (const [path, body] of Object.entries(settingsOf))
         await mac.vault.write(path, text(body), times);
       await mac.settle();
 
       const desk = await deviceWith("desk", { root: ".obsidian", firstChoice: "server" });
-      await desk.vault.write(
-        ".obsidian/plugins/dataview/main.js",
-        text("this desk's own build\n"),
-        times,
-      );
+      await desk.vault.write(".obsidian/plugins/dataview/data.json", text("{}"), times);
       const report = await desk.settle();
-      expect(report.skipped, "a plugin it does not sync, counted as refused").toBe(0);
+      expect(report.skipped, "a plugin's settings it does not sync, counted as refused").toBe(0);
       expect(report.needsAttention).toEqual([]);
       expect(report.settingsHeld).toBe(0);
-      expect(report.uploaded, "its own plugin went to the server").toBe(0);
+      expect(report.uploaded).toBe(0);
       expect(report.appliedCursor).toBeDefined();
       await desk.engine.sync({ applySettings: true });
-      expect(desk.vault.snapshot()).toEqual({
-        ".obsidian/plugins/dataview/main.js": "this desk's own build\n",
-      });
-      // The server's word is kept, for the day this device syncs its plugins.
-      expect(await knows(desk, ".obsidian/plugins/dataview/main.js")).toBe(true);
+      expect(desk.vault.snapshot()).toEqual({ ".obsidian/plugins/dataview/data.json": "{}" });
+      expect(await knows(desk, ".obsidian/plugins/dataview/data.json")).toBe(true);
     });
 
-    it("never merges two builds of a plugin's code, and still merges its settings", async () => {
-      await fresh();
-      const base = "line one\nline two\nline three\n";
-      const settings = (a: number, b: number) => `{\n  "a": ${a},\n  "b": ${b}\n}`;
-      const mac = await deviceWith("mac", { root: ".obsidian", plugins: true });
-      await mac.vault.write(".obsidian/plugins/dataview/main.js", text(base), times);
-      await mac.vault.write(".obsidian/plugins/dataview/data.json", text(settings(1, 1)), times);
-      await mac.settle();
-      const desk = await deviceWith("desk", {
-        root: ".obsidian",
-        plugins: true,
-        firstChoice: "server",
-      });
-      await desk.settle();
-      await desk.engine.sync({ applySettings: true });
-
-      // Each changes a different line of each file, which a line merge takes.
-      const later = { mtime: 5_000, ctime: 1_000 };
-      await mac.vault.write(
-        ".obsidian/plugins/dataview/main.js",
-        text("line one, the mac's build\nline two\nline three\n"),
-        later,
-      );
-      await mac.vault.write(".obsidian/plugins/dataview/data.json", text(settings(2, 1)), later);
-      await mac.settle();
-      await desk.vault.write(
-        ".obsidian/plugins/dataview/main.js",
-        text("line one\nline two\nline three, the desk's build\n"),
-        later,
-      );
-      await desk.vault.write(".obsidian/plugins/dataview/data.json", text(settings(1, 2)), later);
-      await desk.settle();
-      await desk.engine.sync({ applySettings: true });
-
-      const files = desk.vault.snapshot();
-      const builds = Object.entries(files).filter(([p]) =>
-        p.startsWith(".obsidian/plugins/dataview/main"),
-      );
-      expect(
-        builds.map(([, body]) => body).sort(),
-        "both builds whole, each in a file of its own, and no third made of the two",
-      ).toEqual(
-        [
-          "line one\nline two\nline three, the desk's build\n",
-          "line one, the mac's build\nline two\nline three\n",
-        ].sort(),
-      );
-      expect(files[".obsidian/plugins/dataview/data.json"]).toBe(settings(2, 2));
-    });
-
-    it("never moves a plugin that syncs or controls the vault", async () => {
+    it("never moves the settings of a plugin that syncs or controls the vault", async () => {
       await fresh();
       const mac = await deviceWith("mac", { root: ".obsidian", plugins: true });
       for (const path of [
@@ -4660,6 +4609,61 @@ describe("settings", () => {
       expect(Object.keys(state?.remote ?? {}).sort()).toEqual([
         ".obsidian/plugins/dataview/data.json",
       ]);
+    });
+
+    it("applies what it was shown, and holds what arrived or changed after", async () => {
+      await fresh();
+      const mac = await deviceWith("mac", { root: ".obsidian", plugins: true });
+      await mac.vault.write(".obsidian/plugins/dataview/data.json", json({ v: 1 }), times);
+      await mac.vault.write(".obsidian/plugins/quickadd/data.json", json({ v: 1 }), times);
+      await mac.settle();
+      const desk = await deviceWith("desk", {
+        root: ".obsidian",
+        plugins: true,
+        firstChoice: "server",
+      });
+      await desk.settle();
+      const shown = new Map(desk.engine.settingsWaiting().map((h) => [h.path, h.uid]));
+
+      // While the dialog is open: quickadd's settings change, and a third
+      // plugin's arrive.
+      const later = { mtime: 5_000, ctime: 1_000 };
+      await mac.vault.write(".obsidian/plugins/quickadd/data.json", json({ v: 2 }), later);
+      await mac.vault.write(".obsidian/plugins/templater/data.json", json({ v: 1 }), later);
+      await mac.settle();
+      await receiveCommitted(desk.transport);
+
+      const applied = await desk.engine.sync({ applySettings: true, applyOnly: shown });
+      expect(desk.vault.snapshot()).toEqual({
+        ".obsidian/plugins/dataview/data.json": JSON.stringify({ v: 1 }, null, 2),
+      });
+      expect(applied.settingsHeld, "the changed one and the new one wait for the next Apply").toBe(
+        2,
+      );
+    });
+
+    it("leaves alone whatever arrives for the folder it runs from, whatever that is called", async () => {
+      await fresh();
+      // A peer that synced a folder named like this device's own.
+      const mac = await deviceWith("mac", { root: ".obsidian", plugins: true });
+      await mac.vault.write(
+        ".obsidian/plugins/trewsync/data.json",
+        json({ deviceId: "mac" }),
+        times,
+      );
+      await mac.settle();
+      const desk = await deviceWith("desk", {
+        root: ".obsidian",
+        plugins: true,
+        firstChoice: "server",
+        ownFolder: ".obsidian/plugins/trewsync",
+      });
+      const report = await desk.settle();
+      expect(report.settingsHeld).toBe(0);
+      expect(report.skipped).toBe(0);
+      expect(report.appliedCursor).toBeDefined();
+      await desk.engine.sync({ applySettings: true });
+      expect(desk.vault.snapshot()).toEqual({});
     });
   });
 

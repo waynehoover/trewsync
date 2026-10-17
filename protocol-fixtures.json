@@ -1629,8 +1629,8 @@
       "JSON file at its top, themes/<theme>/<file> or snippets/<name>.css, compared in ASCII lower case.",
       "devicelocal: the workspace files and plugins/trew-sync/, which are one device's and never sync.",
       "configscope: anything else inside a root, community plugins included under protocol 3.",
-      "plugins is protocol 4's rule: config's, plus community-plugins.json at the top of the root and any",
-      "file at least one level inside plugins/<id>/, except that plugins/<id> for an id in",
+      "plugins is protocol 4's rule: config's, plus each plugin's settings, plugins/<id>/data.json, and",
+      "no other file of a plugin, its code and the plugin list included; plugins/<id> for an id in",
       "constants.deviceLocalPlugins is devicelocal. isPlugin: a profile root followed by plugins/ or by",
       "community-plugins.json, folded; a session of protocol 3 or less never sends or sees one."
     ],
@@ -1816,22 +1816,22 @@
         "plugins": "devicelocal"
       },
       {
-        "name": "the community plugin list",
+        "name": "the community plugin list, which never syncs",
         "hex": "2e6f6273696469616e2f636f6d6d756e6974792d706c7567696e732e6a736f6e",
         "isConfig": true,
         "isPlugin": true,
         "notes": "dotprefix",
         "config": "configscope",
-        "plugins": null
+        "plugins": "configscope"
       },
       {
-        "name": "a community plugin's code",
+        "name": "a community plugin's code, which never syncs",
         "hex": "2e6f6273696469616e2f706c7567696e732f64617461766965772f6d61696e2e6a73",
         "isConfig": true,
         "isPlugin": true,
         "notes": "dotprefix",
         "config": "configscope",
-        "plugins": null
+        "plugins": "configscope"
       },
       {
         "name": "a community plugin's settings",
@@ -1843,17 +1843,35 @@
         "plugins": null
       },
       {
+        "name": "a community plugin's manifest, which never syncs",
+        "hex": "2e6f6273696469616e2f706c7567696e732f64617461766965772f6d616e69666573742e6a736f6e",
+        "isConfig": true,
+        "isPlugin": true,
+        "notes": "dotprefix",
+        "config": "configscope",
+        "plugins": "configscope"
+      },
+      {
         "name": "a community plugin's stylesheet",
         "hex": "2e6f6273696469616e2d6d6f62696c652f706c7567696e732f6f6273696469616e2d7374796c652d73657474696e67732f7374796c65732e637373",
         "isConfig": true,
         "isPlugin": true,
         "notes": "dotprefix",
         "config": "configscope",
-        "plugins": null
+        "plugins": "configscope"
       },
       {
-        "name": "a file deeper in a plugin's folder",
-        "hex": "2e6f6273696469616e2f706c7567696e732f64617461766965772f6c616e672f656e2e6a736f6e",
+        "name": "a file named data.json deeper in a plugin's folder",
+        "hex": "2e6f6273696469616e2f706c7567696e732f64617461766965772f6c616e672f646174612e6a736f6e",
+        "isConfig": true,
+        "isPlugin": true,
+        "notes": "dotprefix",
+        "config": "configscope",
+        "plugins": "configscope"
+      },
+      {
+        "name": "a plugin's settings in a phone's profile",
+        "hex": "2e6f6273696469616e2d6d6f62696c652f706c7567696e732f64617461766965772f646174612e6a736f6e",
         "isConfig": true,
         "isPlugin": true,
         "notes": "dotprefix",
@@ -1861,8 +1879,17 @@
         "plugins": null
       },
       {
-        "name": "a plugin's settings in a phone's profile",
-        "hex": "2e6f6273696469616e2d6d6f62696c652f706c7567696e732f64617461766965772f646174612e6a736f6e",
+        "name": "a plugin's settings spelt in capitals",
+        "hex": "2e6f6273696469616e2f706c7567696e732f64617461766965772f446174612e4a534f4e",
+        "isConfig": true,
+        "isPlugin": true,
+        "notes": "dotprefix",
+        "config": "configscope",
+        "plugins": null
+      },
+      {
+        "name": "BRAT's settings, the plugins it tracks",
+        "hex": "2e6f6273696469616e2d6d6f62696c652f706c7567696e732f6f6273696469616e34322d627261742f646174612e6a736f6e",
         "isConfig": true,
         "isPlugin": true,
         "notes": "dotprefix",
@@ -1876,7 +1903,7 @@
         "isPlugin": true,
         "notes": "dotprefix",
         "config": "configscope",
-        "plugins": null
+        "plugins": "configscope"
       },
       {
         "name": "the plugins folder",
@@ -1907,7 +1934,7 @@
       },
       {
         "name": "a plugin named like a device-local one",
-        "hex": "2e6f6273696469616e2f706c7567696e732f6f6273696469616e2d6769742d6578747261732f6d61696e2e6a73",
+        "hex": "2e6f6273696469616e2f706c7567696e732f6f6273696469616e2d6769742d6578747261732f646174612e6a736f6e",
         "isConfig": true,
         "isPlugin": true,
         "notes": "dotprefix",
@@ -2164,7 +2191,7 @@
         "isPlugin": true,
         "notes": "dotprefix",
         "config": "configscope",
-        "plugins": null
+        "plugins": "configscope"
       },
       {
         "name": "the community plugin list in capitals",
@@ -2173,7 +2200,7 @@
         "isPlugin": true,
         "notes": "dotprefix",
         "config": "configscope",
-        "plugins": null
+        "plugins": "configscope"
       },
       {
         "name": "the sync plugin's folder, spelt with a long s",

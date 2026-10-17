@@ -76,6 +76,7 @@ import { SUPPORT_TABLE, platformStanding } from "./platform-notice.ts";
 import { describeDelivery } from "../core/delivery.ts";
 import {
   REJOIN_ADVICE,
+  type HeldSetting,
   type RepairReport,
   type SettingsScope,
   type SyncReport,
@@ -103,7 +104,6 @@ import { configFolderName, firstFreeName } from "../core/paths.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
 import { backUpSettings, keepSettingsBeforeApply, settingsIn } from "./settings.ts";
 import { isConfigPath } from "../core/path-policy.ts";
-import { sharingPluginList } from "./community-plugins.ts";
 import { describeChange, describePluginChanges, type PluginChanges } from "./plugin-changes.ts";
 import { timedVault } from "../core/vault.ts";
 import type { JournalSaveCost, JournalStoreOptions } from "../core/index-journal-store.ts";
@@ -936,7 +936,7 @@ export default class TrewPlugin extends Plugin {
     const group = this.settingsGroup;
     if (group !== undefined) {
       const root = this.configRoot;
-      const plugins = this.syncsPlugins ? "all" : "none";
+      const plugins = this.syncsPlugins;
       const files = await settingsIn(
         this.app.vault.adapter,
         root,
@@ -1517,9 +1517,6 @@ export default class TrewPlugin extends Plugin {
           }
         : {}),
     });
-    // The plugin list as the group shares it, without this device's own
-    // entries for the plugins that never move (community-plugins.ts).
-    const synced = settings?.plugins === true ? sharingPluginList(vault, settings.root) : vault;
     // Whether this run is being measured, asked once. See `timingLog`.
     const timingLog = this.timingLog();
     const measuring = await this.app.vault.adapter.exists(timingLog).catch(() => false);
@@ -1530,7 +1527,7 @@ export default class TrewPlugin extends Plugin {
     // hidden version back without a pass having to hand it over (Codex-08).
     this.liveVault = vault;
     return {
-      vault: measuring ? timedVault(synced, filesystemMs) : synced,
+      vault: measuring ? timedVault(vault, filesystemMs) : vault,
       ...(measuring ? { timing: true } : {}),
       activePath: () => this.app.workspace.getActiveFile()?.path,
       store: this.indexStore(
@@ -1958,7 +1955,12 @@ export default class TrewPlugin extends Plugin {
     return {
       root: config.settings,
       ...(config.settingsFirstChoice ? { firstChoice: config.settingsFirstChoice } : {}),
-      ...(config.settingsPlugins === true ? { plugins: true } : {}),
+      ...(config.settingsPlugins === true
+        ? {
+            plugins: true,
+            ownFolder: config.settings + this.pluginDir().slice(this.configRoot.length),
+          }
+        : {}),
     };
   }
 
@@ -2003,10 +2005,10 @@ export default class TrewPlugin extends Plugin {
     group: SettingsGroup | undefined,
     firstChoice?: "server" | "device",
     /**
-     * Whether to sync community plugins with the settings as well. Left
+     * Whether to sync community plugins' settings as well. Left
      * out, a change of group keeps what this device chose before. Turning it
      * on or off is turning settings sync on again: the copy first, which then
-     * takes every plugin's files, and the first-time question asked again.
+     * takes plugins' settings too, and the first-time question asked again.
      */
     plugins?: boolean,
   ): Promise<string | undefined> {
@@ -2120,7 +2122,14 @@ export default class TrewPlugin extends Plugin {
    * whatever happens: a setting written under a running app is one it can
    * write back over.
    */
-  async applySettings(): Promise<void> {
+  async applySettings(
+    /**
+     * The held settings the person was shown, by path, at the version shown:
+     * only these are written, and anything that arrived after waits for the
+     * next Apply (`SyncOptions.applyOnly`).
+     */
+    shown?: ReadonlyMap<string, number>,
+  ): Promise<void> {
     const client = this.client;
     if (!client) throw new Error(this.whyNoClient());
     const group = this.settingsGroup;
@@ -2136,7 +2145,11 @@ export default class TrewPlugin extends Plugin {
     );
     await this.saveOpenEditors();
     try {
-      await client.sync({ applySettings: true, coalesceWrites: false });
+      await client.sync({
+        applySettings: true,
+        coalesceWrites: false,
+        ...(shown !== undefined ? { applyOnly: shown } : {}),
+      });
     } finally {
       await this.quiet();
       await this.saveOpenEditors();
@@ -2144,36 +2157,29 @@ export default class TrewPlugin extends Plugin {
     }
   }
 
+  /** The settings waiting for Apply, as the last pass left them, with the server's version of each. */
+  settingsWaitingNow(): readonly HeldSetting[] {
+    return this.client?.engine.settingsWaiting() ?? [];
+  }
+
   /**
-   * What applying the waiting settings would do to this device's community
-   * plugins, read from the server's versions before anything is written, or
-   * undefined where this device does not sync its plugins or is not
-   * connected to say.
+   * What applying `waiting` would change in this device's plugins' settings,
+   * named for a person, or undefined where this device does not sync them.
    */
-  async pluginChanges(): Promise<PluginChanges | undefined> {
-    const client = this.client;
+  async pluginChanges(waiting: readonly HeldSetting[]): Promise<PluginChanges | undefined> {
     const group = this.settingsGroup;
-    if (!client || group === undefined || !this.syncsPlugins) return undefined;
+    if (group === undefined || !this.syncsPlugins) return undefined;
     const root = this.configRoot;
     const adapter = this.app.vault.adapter;
-    return describePluginChanges(client.engine.settingsWaiting(), group, {
-      held: async (setting) => {
-        try {
-          return await client.engine.contentOf(setting.uid, setting.hash, setting.size);
-        } catch {
-          return undefined;
-        }
-      },
-      local: async (path) => {
-        const disk = root + path.slice(group.length);
-        try {
-          return (await adapter.exists(disk))
-            ? new Uint8Array(await adapter.readBinary(disk))
-            : undefined;
-        } catch {
-          return undefined;
-        }
-      },
+    return describePluginChanges(waiting, group, async (path) => {
+      const disk = root + path.slice(group.length);
+      try {
+        return (await adapter.exists(disk))
+          ? new Uint8Array(await adapter.readBinary(disk))
+          : undefined;
+      } catch {
+        return undefined;
+      }
     });
   }
 
@@ -5110,7 +5116,7 @@ class TrewPanel {
       group === undefined
         ? "Off. Obsidian's settings, themes and CSS snippets can sync with " +
             `${Platform.isMobile ? "your other phones and tablets" : "your other desktops"}, or with ` +
-            "every device, and then community plugins too."
+            "every device, and then community plugins' settings too."
         : `Syncing with ${sharedWith(group)}. Changes from them wait until you apply them, which ` +
             "reloads Obsidian." +
             (held > 0 ? ` ${held} waiting now.` : ""),
@@ -5156,19 +5162,19 @@ class TrewPanel {
   }
 
   /**
-   * Community plugins, under the settings they sync with (plan/settings-sync.md,
-   * section 6). Off until turned on here, and turned on through a question,
-   * because it lets the group's other devices put code on this one.
+   * Community plugins' settings, under the settings they sync with
+   * (plan/settings-sync.md, section 6). Off until turned on here, through a
+   * question, because plugins' settings can hold keys the server then keeps.
    */
   private renderPluginSync(contentEl: HTMLElement, group: SettingsGroup): void {
     const on = this.plugin.syncsPlugins;
     row(
       contentEl,
-      "Sync community plugins",
+      "Sync plugin settings",
       on
-        ? `Syncing with ${sharedWith(group)}: each plugin's files and settings, and which are ` +
-            "switched on. A plugin they install, update or switch on waits until you apply it."
-        : "Off. Each device keeps its own plugins and their settings.",
+        ? `Syncing each community plugin's settings with ${sharedWith(group)}. Plugins ` +
+            "themselves are installed and switched on separately on each device."
+        : "Off. Each device keeps its own plugins' settings.",
     ).addButton((b) =>
       b.setButtonText(on ? "Turn off" : "Turn on").onClick(async () => {
         if (!on) {
@@ -6052,7 +6058,7 @@ class SettingsSyncModal extends Modal {
     contentEl.createEl("p", {
       text:
         `This device's settings, themes and CSS snippets will sync with ${sharedWith(this.group)}. ` +
-        "Community plugins can sync too, once this is on: Manage this vault, Sync community plugins.",
+        "Community plugins' settings can sync too, once this is on: Manage this vault, Sync plugin settings.",
     });
     contentEl.createEl("p", {
       text: "When another device changes a setting, this one waits for you to apply it, which reloads Obsidian.",
@@ -6094,10 +6100,9 @@ class SettingsSyncModal extends Modal {
 }
 
 /**
- * Turning community plugin sync on, asked first, because it lets the group's
- * other devices put code on this one (plan/settings-sync.md, section 6). It
- * says what moves, what never does and where plugins' secrets end up, and
- * asks the first-time question again, as changing group does.
+ * Turning plugin settings sync on, asked first (plan/settings-sync.md, section
+ * 6). It says what moves and what never does, and where plugins' secrets end
+ * up, and asks the first-time question again, as changing group does.
  */
 class PluginSyncModal extends Modal {
   constructor(
@@ -6109,20 +6114,18 @@ class PluginSyncModal extends Modal {
   }
 
   override onOpen(): void {
-    this.setTitle("Sync community plugins");
+    this.setTitle("Sync plugin settings");
     this.modalEl.addClass("mod-trew-panel");
     const { contentEl } = this;
     contentEl.addClass("trew-panel");
     contentEl.createEl("p", {
       text:
-        `Community plugins will sync with ${sharedWith(this.group)}: each plugin's files and its ` +
-        "settings, and which plugins are switched on.",
+        `Each community plugin's settings will sync with ${sharedWith(this.group)}. Plugins ` +
+        "themselves never sync: install them and switch them on separately on each device, and their settings follow. " +
+        "Settings for a plugin not installed here wait until it is.",
     });
     contentEl.createEl("p", {
-      text:
-        "A plugin another device installs, updates or switches on is code that runs on this one, so " +
-        "it waits until you apply it, and Apply lists each plugin with its version and the device it " +
-        "came from first.",
+      text: "A change from another device waits until you apply it, as other settings do.",
     });
     contentEl.createEl("p", {
       text:
@@ -6131,14 +6134,14 @@ class PluginSyncModal extends Modal {
     });
     contentEl.createEl("p", {
       text:
-        "Never synced: TrewSync itself, and plugins that sync or control the vault (Obsidian Git, " +
-        "Local REST API, Self-hosted LiveSync, Remotely Save, Basalt Sync and SuperSync).",
+        "Never synced: the settings of TrewSync itself, and of plugins that sync or control the vault " +
+        "(Obsidian Git, Local REST API, Self-hosted LiveSync, Remotely Save, Basalt Sync and SuperSync).",
     });
     contentEl.createEl("p", {
       text:
-        "If the server already has plugins from those devices, which should this device use the " +
-        "first time? The answer is for its settings again too. A copy of this device's settings and " +
-        "plugins as they are now is kept either way.",
+        "If the server already has plugin settings from those devices, which should this device use " +
+        "the first time? The answer is for its other settings again too. A copy of this device's " +
+        "settings as they are now is kept either way.",
     });
     const choices = new Setting(contentEl);
     choices.addButton((b) =>
@@ -6156,7 +6159,7 @@ class PluginSyncModal extends Modal {
     try {
       const backup = await this.plugin.setSettingsSync(this.group, choice, true);
       new Notice(
-        `TrewSync: community plugins sync now.${backup ? ` This device's settings and plugins as they were are kept in ${backup}.` : ""}`,
+        `TrewSync: plugin settings sync now.${backup ? ` This device's settings as they were are kept in ${backup}.` : ""}`,
         10_000,
       );
       this.close();
@@ -6195,59 +6198,43 @@ class ApplySettingsModal extends Modal {
         "Applying writes them and reloads Obsidian. Open notes are saved first, and a copy of this " +
         "device's settings as they are now is kept.",
     });
-    // Code another device sent is named before anything runs it: which
-    // plugin, which version, from where (plan/settings-sync.md, section 6).
-    // Apply waits until the list is on screen, and goes ahead with a reason
-    // where the versions cannot be read.
+    // What Apply writes is what this dialog shows: the settings waiting now,
+    // at the versions waiting now, and nothing that arrives while it is open.
+    // A plugin's settings are named, with the device they came from.
+    const waiting = this.plugin.settingsWaitingNow();
+    this.shown = waiting.length > 0 ? new Map(waiting.map((h) => [h.path, h.uid])) : undefined;
     const plugins = this.plugin.syncsPlugins
       ? contentEl.createDiv("trew-plugin-changes")
       : undefined;
-    let applyButton: ButtonComponent | undefined;
     const buttons = new Setting(contentEl);
-    buttons.addButton((b) => {
-      applyButton = b;
-      b.setButtonText("Apply and reload")
+    buttons.addButton((b) =>
+      b
+        .setButtonText("Apply and reload")
         .setCta()
-        .onClick(() => void this.apply());
-    });
+        .onClick(() => void this.apply()),
+    );
     buttons.addButton((b) => b.setButtonText("Not now").onClick(() => this.close()));
     if (plugins === undefined) return;
-    applyButton?.setDisabled(true);
-    plugins.createEl("p", { text: "Checking which plugins this changes…" });
-    void this.plugin.pluginChanges().then(
+    void this.plugin.pluginChanges(waiting).then(
       (changes) => {
-        plugins.empty();
         if (changes !== undefined) this.listPluginChanges(plugins, changes);
-        applyButton?.setDisabled(false);
       },
-      (err: unknown) => {
-        plugins.empty();
-        plugins.createEl("p", {
-          text: `TrewSync could not read which plugins this changes: ${(err as Error).message}`,
-        });
-        applyButton?.setDisabled(false);
-      },
+      () => undefined,
     );
   }
 
+  /** The held settings this dialog shows, by path, at the version shown. */
+  private shown: ReadonlyMap<string, number> | undefined;
+
   private listPluginChanges(el: HTMLElement, changes: PluginChanges): void {
-    const { plugins, switchedOn, switchedOff } = changes;
-    if (plugins.length === 0 && switchedOn.length === 0 && switchedOff.length === 0) return;
-    el.createEl("p", { text: "Community plugins from other devices:" });
+    if (changes.plugins.length === 0) return;
+    el.createEl("p", { text: "Plugin settings from other devices:" });
     const list = el.createEl("ul");
-    for (const change of plugins) {
-      const desktopOnly =
-        change.desktopOnly && Platform.isMobile
-          ? " It is for desktops only, so Obsidian will not run it on this device."
-          : "";
+    for (const change of changes.plugins) {
       list.createEl("li", {
-        text: `${describeChange(change)}${change.from ? `, from ${change.from}` : ""}.${desktopOnly}`,
+        text: `${describeChange(change)}${change.from ? `, from ${change.from}` : ""}.`,
       });
     }
-    if (switchedOn.length > 0)
-      list.createEl("li", { text: `Switch on: ${switchedOn.join(", ")}.` });
-    if (switchedOff.length > 0)
-      list.createEl("li", { text: `Switch off: ${switchedOff.join(", ")}.` });
   }
 
   private async apply(): Promise<void> {
@@ -6258,7 +6245,7 @@ class ApplySettingsModal extends Modal {
       text: "Applying. Obsidian reloads when the settings are written.",
     });
     try {
-      await this.plugin.applySettings();
+      await this.plugin.applySettings(this.shown);
     } catch (err) {
       new Notice(`TrewSync: the settings were not applied: ${(err as Error).message}`, 10_000);
       this.close();
