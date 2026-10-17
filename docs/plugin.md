@@ -408,6 +408,17 @@ sleep again when the sync finishes. Switching to another app or pressing the
 power button still pauses it; an interrupted sync carries on where it stopped
 when Obsidian is open again. Let changes finish before closing the app.
 
+On Android, keep the vault in **App storage**. Obsidian asks for a vault
+location when you create one, and **Device storage**, the one it marks
+recommended, is several times slower for TrewSync to write to: on a Pixel 9
+Pro XL a first sync of 3,000 notes took almost five minutes there and two in
+App storage. Other apps cannot open App storage, and Android deletes it when
+Obsidian is uninstalled, which with TrewSync loses only changes that have not
+synced yet. To move a vault you already have, create a new vault in App
+storage, pair it with a new invite, and let its first sync finish before you
+remove the old vault and its device. Obsidian's own settings come across only
+with [settings sync](#settings-sync) on.
+
 iOS has not been tested. If a first connection is rejected because of its
 browser origin, the panel shows an origin hint for the server operator; see
 [server connection troubleshooting](server.md#connection-troubleshooting).

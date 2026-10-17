@@ -250,6 +250,12 @@ can reintroduce moved or deleted files. Cancelling leaves the invite unused.
 For a fresh copy, create a new empty Obsidian vault and preserve the old vault
 separately; do not clear it automatically. Sync runs both ways after pairing.
 
+On Android, create a new vault in **App storage** (Obsidian asks for a vault
+location): **Device storage** is several times slower for TrewSync to write
+to. Moving an existing Android vault is the user's decision; if they want it,
+pair a new App-storage vault with a new invite and keep the old vault until
+the new one has finished its first sync.
+
 On a paired device, choose **Add another device → Create invite**. On the new
 device, paste the invite into **Invite**, or scan its QR code, check the server
 named under the field, and press **Pair**. An invite works once and expires

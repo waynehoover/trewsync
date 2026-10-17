@@ -61,9 +61,14 @@ Landing a batch's files concurrently is the other saving, about 2.6 times on
 this disk for eight at once, and carries more risk than the first.
 
 **What would change the answer:** a first sync that matters more than it
-does now, which is a phone. Android's fsync is not macOS's `F_FULLFSYNC`, so
-measure there (`bun run bench:phone`) before spending anything on this Mac's
-number.
+does now, which is a phone. It has been measured
+([research](research.md#a-first-download-on-android-october-16-2026)): the
+plugin has no fsync to wait on there, and nearly all of a first download is
+the four adapter calls that land each note, several times slower in a vault
+in Device storage than in App storage. The plugin's own flush on a Mac keeps
+32 fsyncs in flight since 0.14.3, which halved that step in Obsidian; this
+section's numbers are the headless client's, which writes through
+`NodeVault.replace` and is unchanged.
 
 ## search_notes reads every note at the head
 

@@ -395,6 +395,42 @@ proves the harness, not the phone: its numbers are this Mac's, and the one
 worth keeping is that a headless client reconciled 10,000 seeded files it
 already held in 4 s, against the thirty unfinished minutes above.
 
+### A first download on Android, October 16, 2026
+
+Pixel 9 Pro XL, Obsidian's WebView driven over its DevTools socket, a
+disposable `trewd` on a Mac reached over `adb reverse`, and 3,020 small notes
+downloaded into an empty vault with pass timing on. Plugin 0.14.2 and 0.14.3,
+which do the same on a phone.
+
+| Vault location | First sync | `create` per note |
+|---|---|---|
+| Device storage, `/sdcard/Documents` | 287 s | 92.6 ms |
+| App storage, `Android/data/md.obsidian/files` | 122 s | 38.5 ms |
+
+The transfer was 19 s of the 287. A CPU profile of 45 s of it had the main
+thread idle 67% of the time, TrewSync's own JavaScript at 1.5%, Obsidian
+indexing each new note (metadata cache, tags, links, File Recovery) at about
+15%, and the Capacitor bridge at about 10%. Landing one note is four calls:
+write a staged copy, read it back, rename it onto the name, read that back.
+Timed one at a time in Device storage they were 20.8, 9.4, 22.6 and 9.4 ms, so
+about 61 ms of every note was those calls, and the same four through
+Obsidian's adapter cost 60.8 ms in a hidden folder and 88.5 ms in a visible
+one, where Obsidian indexes each note. Running eight notes at once took the
+visible case to 79.8 ms and the hidden one nowhere, so the native side takes
+one call at a time.
+
+Through Capacitor's own `Filesystem` plugin, a write, read and rename cost
+2.7, 2.4 and 2.7 ms in app-private storage, 3.4, 2.8 and 3.9 ms in
+`Android/data/md.obsidian/files`, and 18.7, 5.9 and 19.5 ms in
+`/sdcard/Documents`: shared storage goes through Android's FUSE layer and the
+others do not. Reading through the vault's resource URL instead of
+`readBinary` was slower, 17.2 ms. So the largest saving on a phone is where
+the vault is, which [the plugin guide](plugin.md#phones) now says. Dropping
+the staged rename for a note with nothing at its name would save the rename
+and one read, about 30 ms a note in Device storage and 7 in App storage, and
+is not done: it needs a way to tell an interrupted landing from an edit after
+a crash, proved at a new seam in `faults.stress.ts`.
+
 ### Listing is the biggest term, and half of it was avoidable
 
 The phase breakdown put listing at 47% of a quiet pass on a desktop at 50,000
