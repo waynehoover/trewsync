@@ -103,12 +103,13 @@ func TestValidateRefusesExactlyTheFixturesPaths(t *testing.T) {
 	}
 }
 
-// The settings vectors through Entry.Validate, which is protocol 3's rule
-// because the store holds what a session of 3 may write, and through
-// CheckNotePaths, the notes rule a session of 1 or 2 and every MCP operation
-// are held to. A rename's source is renamed within its own side of the
-// boundary, so the boundary rule (configmove) is not what answers it.
-func TestValidateHoldsSettingsToProtocol3sRule(t *testing.T) {
+// The settings vectors through Entry.Validate, which is protocol 4's rule
+// because the store holds what a session of 4 may write, through
+// CheckConfigPaths, protocol 3's, and through CheckNotePaths, the notes rule a
+// session of 1 or 2 and every MCP operation are held to. A rename's source is
+// renamed within its own side of each boundary, so the boundary rule
+// (configmove) is not what answers it.
+func TestValidateHoldsSettingsToProtocol4sRule(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "protocol-fixtures.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -116,10 +117,11 @@ func TestValidateHoldsSettingsToProtocol3sRule(t *testing.T) {
 	var f struct {
 		Config struct {
 			Cases []struct {
-				Name   string  `json:"name"`
-				Hex    string  `json:"hex"`
-				Notes  *string `json:"notes"`
-				Config *string `json:"config"`
+				Name    string  `json:"name"`
+				Hex     string  `json:"hex"`
+				Notes   *string `json:"notes"`
+				Config  *string `json:"config"`
+				Plugins *string `json:"plugins"`
 			} `json:"cases"`
 		} `json:"config"`
 	}
@@ -152,8 +154,13 @@ func TestValidateHoldsSettingsToProtocol3sRule(t *testing.T) {
 			t.Fatal(err)
 		}
 		p := string(b)
+		// A destination on the same side of both boundaries, so the boundary
+		// rule (configmove) is not what answers the rename.
 		dest := "dest.md"
-		if paths.IsConfig(p) {
+		switch {
+		case paths.IsPlugin(p):
+			dest = ".obsidian/plugins/dest/dest.json"
+		case paths.IsConfig(p):
 			dest = ".obsidian/dest.json"
 		}
 		for i, e := range []Entry{
@@ -161,12 +168,17 @@ func TestValidateHoldsSettingsToProtocol3sRule(t *testing.T) {
 			{Path: p, Deleted: true},
 			{Path: dest, Prev: p},
 		} {
-			if got := reason(e.Validate()); got != want(c.Config) {
-				t.Errorf("%s: Validate gives %s for %+v, the reference %s", c.Name, got, e, want(c.Config))
+			if got := reason(e.Validate()); got != want(c.Plugins) {
+				t.Errorf("%s: Validate gives %s for %+v, the reference %s", c.Name, got, e, want(c.Plugins))
 			}
-			// The notes rule refuses a settings destination before it reads
-			// the source, so the rename is Validate's alone.
+			// The older rules refuse a destination they do not accept before
+			// they read the source, so the rename is Validate's alone. A
+			// session of 3 is held to protocol 3's rule first, and one of 1
+			// or 2 to the notes rule.
 			if i < 2 {
+				if got := reason(e.CheckConfigPaths()); got != want(c.Config) {
+					t.Errorf("%s: CheckConfigPaths gives %s for %+v, the reference %s", c.Name, got, e, want(c.Config))
+				}
 				if got := reason(e.CheckNotePaths()); got != want(c.Notes) {
 					t.Errorf("%s: CheckNotePaths gives %s for %+v, the reference %s", c.Name, got, e, want(c.Notes))
 				}

@@ -34,6 +34,11 @@ profile root such as `.obsidian` may be written and are sent. Nothing else
 changed, and a session of 1 or 2 is answered as before and never sees a
 settings path.
 
+Protocol 4 is protocol 3 and [community plugins](#community-plugins-protocol-4):
+the plugin list and the files in plugins' folders may be written and are sent.
+Nothing else changed, and a session of 3 or less is answered as before and
+never sees a plugin path.
+
 The client normally uses one connection. Large uploads can use a temporary
 second connection with the same device credential, leaving the main connection
 available for note edits. Both use this protocol unchanged. Only the main
@@ -233,8 +238,8 @@ with a dot. The server refuses, with `badpath`:
 - `devicelocal`: `workspace.json`, `workspace-mobile.json` and anything under
   `plugins/trew-sync/`, which are one device's open panes and the sync
   plugin's pairing and index, and never sync;
-- `configscope`: anything else inside a root, community plugins included until
-  a later phase;
+- `configscope`: anything else inside a root, community plugins included
+  under protocol 3;
 - `configmove`: a rename with one end in a profile root and the other in the
   vault.
 
@@ -246,6 +251,30 @@ batches leave each one out while their ranges still cover its uid, as a
 device's own write comes back. No MCP tool, the device search, the deleted
 list or the Git export shows a settings path. What syncs and how a device
 applies it is [plan/settings-sync.md](../plan/settings-sync.md).
+
+### Community plugins (protocol 4)
+
+A session of protocol 4 may also write, and is sent, inside a profile root:
+`community-plugins.json`, Obsidian's list of the plugins it runs, and any file
+at least one level inside `plugins/<id>/`. The server refuses, with `badpath`:
+
+- `devicelocal`: `plugins/<id>/` for an id in the fixtures'
+  `deviceLocalPlugins` (the sync plugin, obsidian-git, Local REST API,
+  LiveSync, Remotely Save, Basalt Sync and SuperSync), compared folded. They
+  sync or control the vault, hold credentials and device identity, and would
+  be a second writer on another device;
+- `configscope`: the `plugins` folder or a plugin's folder as an entry of its
+  own;
+- `configmove`: a rename with one end among community plugins and the other
+  among the other settings.
+
+The rule is `CheckPlugins` in `internal/paths` and `configPathReason(path,
+true)` in `path-policy.ts`, held to the `plugins` and `isPlugin` fields of the
+fixtures' `config` section. A session of protocol 3 is held to protocol 3's
+rule as before, and is never sent a plugin entry, in its batches, its history
+or a `get`, while its batches' ranges still cover each one. A client leaves
+the device-local plugins out of the list it sends, and keeps its own state for
+them in the list it writes, so the shared list never switches one on or off.
 
 ## Writing a file
 

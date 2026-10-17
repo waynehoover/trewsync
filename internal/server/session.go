@@ -857,7 +857,7 @@ func (s *Session) dispatch(m wire.In, frameLen int) error {
 func (s *Session) handleHello(m wire.In) error {
 	// Version before credentials: refusing on proto is not a security answer
 	// and a client on the wrong version deserves to be told so plainly. The
-	// range is 1 to 3, and the session is answered in the version its hello
+	// range is 1 to 4, and the session is answered in the version its hello
 	// asked for; see wire.Proto.
 	//
 	// Both numbers and nothing else. Nothing has authenticated yet, so this
@@ -1246,11 +1246,12 @@ func (s *Session) replay(vaultID string, cursor int64) (int64, int, error) {
 			return cursor, sent, s.fatal(wire.CodeInternal, fmt.Errorf(
 				"batch from %d does not continue cursor %d", b.From, cursor))
 		}
-		// A session of protocol 1 or 2 never sees a settings entry. The batch
-		// still covers its uid, so the cursor moves past it as past an echo.
+		// A session of protocol 1 or 2 never sees a settings entry, and one of
+		// 3 never sees a plugin entry. The batch still covers its uid, so the
+		// cursor moves past it as past an echo.
 		entries := make([]store.Entry, 0, len(b.Entries))
 		for _, e := range b.Entries {
-			if s.proto < wire.ProtoConfig && e.IsConfig() {
+			if !seenAt(s.proto, e) {
 				continue
 			}
 			entries = append(entries, e)
@@ -1401,6 +1402,14 @@ func (s *Session) flushPendingOnce(cursor int64) (bool, int64) {
  * put
  * ---------------------------------------------------------------- */
 
+// seenAt reports whether a session of protocol proto is sent an entry at all:
+// settings are protocol 3's and community plugins protocol 4's, and an older
+// session is sent neither, in its batches, its history or a get
+// (plan/settings-sync.md).
+func seenAt(proto int, e store.Entry) bool {
+	return !(proto < wire.ProtoConfig && e.IsConfig()) && !(proto < wire.ProtoPlugins && e.IsPlugin())
+}
+
 // checkEntry runs every refusal a single put makes, without writing one.
 //
 // Split out of handlePut so a batch can decide per entry and carry on. The
@@ -1417,6 +1426,14 @@ func (s *Session) checkEntry(e store.Entry) *wire.Err {
 	// held to the notes rule they always were, with the reason they always got.
 	if s.proto < wire.ProtoConfig {
 		if err := e.CheckNotePaths(); err != nil {
+			refusal := wire.Error(wire.CodeBadPath, err.Error())
+			return &refusal
+		}
+	}
+	// Community plugins are protocol 4's. A session of 3 is held to the
+	// settings rule it always was, with the reason it always got.
+	if s.proto < wire.ProtoPlugins {
+		if err := e.CheckConfigPaths(); err != nil {
 			refusal := wire.Error(wire.CodeBadPath, err.Error())
 			return &refusal
 		}
@@ -2153,6 +2170,12 @@ func (s *Session) handleHistory(m wire.In) error {
 		return s.reject(wire.CodeBadPath, errors.New(string(paths.Check(m.Path))+
 			": a settings path, which this protocol does not sync"))
 	}
+	// And a community plugin path to a session of protocol 3, held to the
+	// settings rule in the same way (plan/settings-sync.md, section 6).
+	if s.proto < wire.ProtoPlugins && paths.IsPlugin(m.Path) {
+		return s.reject(wire.CodeBadPath, errors.New(string(paths.CheckConfig(m.Path))+
+			": a community plugin path, which this protocol does not sync"))
+	}
 	if m.Before < 0 {
 		return s.reject(wire.CodeProtoState, fmt.Errorf("negative before %d", m.Before))
 	}
@@ -2318,9 +2341,9 @@ func (s *Session) handleGet(m wire.In) error {
 	if err != nil {
 		return s.reject(wire.CodeInternal, err)
 	}
-	if !ok || (s.proto < wire.ProtoConfig && e.IsConfig()) {
-		// A settings version is no entry at all to a session that is never
-		// sent one, as in its history and its batches.
+	if !ok || !seenAt(s.proto, e) {
+		// A settings or plugin version is no entry at all to a session that
+		// is never sent one, as in its history and its batches.
 		return s.reject(wire.CodeNoUID, fmt.Errorf("no entry %d in this vault", m.UID))
 	}
 	if !e.HasBody() {

@@ -561,13 +561,14 @@ func (e *PathError) Error() string {
 	case paths.ReasonStaging:
 		why = "contains " + paths.StagingMark + ", which only a client's half-written file carries"
 	case paths.ReasonDeviceLocal:
-		why = "is one device's own state in a settings folder (its open panes, or the sync plugin's " +
-			"pairing and index), which never syncs"
+		why = "is one device's own state in a settings folder (its open panes, the sync plugin's " +
+			"pairing and index, or a plugin that syncs or controls the vault), which never syncs"
 	case paths.ReasonConfigScope:
 		why = "is in a settings folder but is not something settings sync carries: Obsidian's own " +
-			"settings files, themes and CSS snippets"
+			"settings files, themes and CSS snippets, and from protocol 4 community plugins"
 	case reasonConfigMove:
-		why = "moves a file between a settings folder and the vault, which settings sync never does"
+		why = "moves a file between a settings folder and the vault, or between a plugin's files and " +
+			"the other settings, which settings sync never does"
 	default:
 		why = "is refused"
 	}
@@ -578,29 +579,47 @@ func (e *PathError) Error() string {
 func (e *PathError) Unwrap() error { return ErrBadPath }
 
 // reasonConfigMove refuses a rename with one end in a settings folder and the
-// other in the vault. Not a fixture reason, because no single path breaks it:
-// each end may be fine alone. A session of protocol 1 or 2 would see such a
-// move as a note appearing from, or vanishing into, a path it is never sent.
+// other in the vault, or one end among community plugins and the other among
+// the other settings. Not a fixture reason, because no single path breaks it:
+// each end may be fine alone. A session of protocol 1 or 2 would see the
+// first as a note appearing from, or vanishing into, a path it is never sent,
+// and a session of 3 the second as a setting doing the same.
 const reasonConfigMove paths.Reason = "configmove"
 
 // CheckPaths applies the path policy to an entry's path and, on a rename, to
 // the path it came from: the rules of plan/protocol.md, "Paths", through
 // internal/paths, which is where they are written down once for the server.
 //
-// It is protocol 3's rule, paths.CheckConfig, because the store holds what a
-// session of protocol 3 may write: settings inside a profile root
-// (plan/settings-sync.md). A session of protocol 1 or 2 is held to the notes
-// rule first (CheckNotePaths), and so is every MCP tool, by paths.Check.
+// It is protocol 4's rule, paths.CheckPlugins, because the store holds what a
+// session of protocol 4 may write: settings inside a profile root, community
+// plugins included (plan/settings-sync.md). A session of protocol 3 is held
+// to protocol 3's rule first (CheckConfigPaths), one of 1 or 2 to the notes
+// rule (CheckNotePaths), and so is every MCP tool, by paths.Check.
 func (e Entry) CheckPaths() error {
+	if r := paths.CheckPlugins(e.Path); r != "" {
+		return pathError("path", e.Path, r)
+	}
+	if e.Prev != "" {
+		if r := paths.CheckPlugins(e.Prev); r != "" {
+			return pathError("prev", e.Prev, r)
+		}
+		if paths.IsConfig(e.Path) != paths.IsConfig(e.Prev) || paths.IsPlugin(e.Path) != paths.IsPlugin(e.Prev) {
+			return &PathError{Field: "prev", Reason: reasonConfigMove, Len: len(e.Prev)}
+		}
+	}
+	return nil
+}
+
+// CheckConfigPaths is CheckPaths under protocol 3's rule, paths.CheckConfig,
+// which is what a session of protocol 3 was always held to: a community
+// plugin path is refused there for the reason it always was.
+func (e Entry) CheckConfigPaths() error {
 	if r := paths.CheckConfig(e.Path); r != "" {
 		return pathError("path", e.Path, r)
 	}
 	if e.Prev != "" {
 		if r := paths.CheckConfig(e.Prev); r != "" {
 			return pathError("prev", e.Prev, r)
-		}
-		if paths.IsConfig(e.Path) != paths.IsConfig(e.Prev) {
-			return &PathError{Field: "prev", Reason: reasonConfigMove, Len: len(e.Prev)}
 		}
 	}
 	return nil
@@ -626,6 +645,13 @@ func (e Entry) CheckNotePaths() error {
 // sent and which no MCP tool, search or Git export shows.
 func (e Entry) IsConfig() bool {
 	return paths.IsConfig(e.Path) || (e.Prev != "" && paths.IsConfig(e.Prev))
+}
+
+// IsPlugin reports whether an entry touches community plugins, at either end
+// of a rename: a plugin entry, which a session of protocol 3 or less is never
+// sent. Every plugin entry is a settings entry as well.
+func (e Entry) IsPlugin() bool {
+	return paths.IsPlugin(e.Path) || (e.Prev != "" && paths.IsPlugin(e.Prev))
 }
 
 // Validate checks an entry's shape. Exported so the session can reject a put

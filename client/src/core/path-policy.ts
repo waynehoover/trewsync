@@ -57,6 +57,31 @@ export type PathReason =
 export const SYNC_PLUGIN_ID = "trew-sync";
 
 /**
+ * The plugins whose folders never move between devices and which sync never
+ * switches on: this one, and the others that sync or remote-control a vault,
+ * whose folders hold credentials and device identity, and which on a second
+ * device would be a second writer (plan/settings-sync.md, section 6). The
+ * server refuses their folders as well. Lower case, compared folded.
+ */
+export const DEVICE_LOCAL_PLUGINS: readonly string[] = [
+  SYNC_PLUGIN_ID,
+  "obsidian-git",
+  "obsidian-local-rest-api",
+  "obsidian-livesync",
+  "remotely-save",
+  "basalt-sync",
+  "supersync",
+];
+
+/** Obsidian's list of the community plugins it runs, at the top of a profile root. */
+export const COMMUNITY_PLUGINS = "community-plugins.json";
+
+/** Whether a plugin id, a folder name under `plugins`, is one that never syncs. */
+export function isDeviceLocalPlugin(id: string): boolean {
+  return DEVICE_LOCAL_PLUGINS.includes(fold(id));
+}
+
+/**
  * A profile root: Obsidian's configuration folder, or one a device chose with
  * Obsidian's "Override config folder" as `.obsidian-<name>`
  * (plan/settings-sync.md, section 1). A fixed pattern keeps `.git`, `.trash`
@@ -68,6 +93,19 @@ const CONFIG_ROOT = /^\.obsidian(?:-[a-z0-9][a-z0-9-]{0,31})?$/u;
 export function isConfigPath(path: string): boolean {
   const slash = path.indexOf("/");
   return CONFIG_ROOT.test(slash < 0 ? path : path.slice(0, slash));
+}
+
+/**
+ * Whether `path` is community plugins' inside a profile root: the plugin list,
+ * or anything in the plugins folder, folded as the scope rule folds. These
+ * are protocol 4's, and a device that does not sync its plugins leaves them
+ * out of its scope.
+ */
+export function isPluginPath(path: string): boolean {
+  if (!isConfigPath(path)) return false;
+  const rest = path.split("/").slice(1);
+  const first = rest[0] === undefined ? undefined : fold(rest[0]);
+  return first === "plugins" || (rest.length === 1 && first === COMMUNITY_PLUGINS);
 }
 
 /** Whether `name`, a single folder name, is a profile root. */
@@ -105,36 +143,46 @@ export function pathReason(path: string): PathReason | undefined {
  * path, and then what follows it must be what settings sync carries
  * (`configScope`). A path outside every profile root gets `pathReason`'s
  * answer.
+ *
+ * With `plugins`, protocol 4's: community plugins too, the plugin list and
+ * any file inside a plugin's folder, except the folders of
+ * `DEVICE_LOCAL_PLUGINS`. A device that syncs its settings but not its
+ * plugins keeps protocol 3's scope.
  */
-export function configPathReason(path: string): PathReason | undefined {
-  return reason(path, true);
+export function configPathReason(path: string, plugins = false): PathReason | undefined {
+  return reason(path, true, plugins);
 }
 
 /**
  * Why a path inside a profile root does not sync, given its segments after the
  * root, or `undefined` when it does. Settings sync carries Obsidian's own
  * settings, every JSON file at the top of the root, and themes and CSS
- * snippets. Community plugins wait for a later phase, so their list and the
- * plugins folder are out of scope; the sync plugin's folder and the workspace
- * files never sync. Compared folded, with the fold the collision rule uses, so
- * a case-folding disk cannot spell its way past the device-local rule: APFS
- * holds workspace.json and workspace.json spelt with U+017F as one file, which
- * ASCII lower case does not see.
+ * snippets. With `plugins`, which is protocol 4, it carries community plugins
+ * too: their list, and any file inside a plugin's folder. Without it both are
+ * out of scope. The sync plugin's folder, the other `DEVICE_LOCAL_PLUGINS` and
+ * the workspace files never sync. Compared folded, with the fold the collision
+ * rule uses, so a case-folding disk cannot spell its way past the device-local
+ * rule: APFS holds workspace.json and workspace.json spelt with U+017F as one
+ * file, which ASCII lower case does not see.
  */
-function configScope(rest: readonly string[]): PathReason | undefined {
+function configScope(rest: readonly string[], plugins: boolean): PathReason | undefined {
   const lower = rest.map(fold);
   const [first, second] = lower;
   if (lower.length >= 2 && first === "plugins" && second === SYNC_PLUGIN_ID) return "devicelocal";
+  if (plugins && lower.length >= 2 && first === "plugins" && DEVICE_LOCAL_PLUGINS.includes(second!))
+    return "devicelocal";
+  if (plugins && lower.length >= 3 && first === "plugins") return undefined;
+  if (plugins && lower.length === 1 && first === COMMUNITY_PLUGINS) return undefined;
   if (lower.length === 1 && (first === "workspace.json" || first === "workspace-mobile.json"))
     return "devicelocal";
-  if (lower.length === 1 && first?.endsWith(".json") && first !== "community-plugins.json")
+  if (lower.length === 1 && first?.endsWith(".json") && first !== COMMUNITY_PLUGINS)
     return undefined;
   if (lower.length === 3 && first === "themes") return undefined;
   if (lower.length === 2 && first === "snippets" && second?.endsWith(".css")) return undefined;
   return "configscope";
 }
 
-function reason(path: string, config: boolean): PathReason | undefined {
+function reason(path: string, config: boolean, plugins = false): PathReason | undefined {
   if (!wellFormed(path)) return "utf8";
   if (path === "") return "empty";
   if (utf8.encode(path).length > MAX_PATH_BYTES) return "toolong";
@@ -152,7 +200,7 @@ function reason(path: string, config: boolean): PathReason | undefined {
   const root = config && isConfigPath(path);
   if ((root ? segments.slice(1) : segments).some((s) => s.startsWith("."))) return "dotprefix";
   if (path.includes(STAGING_MARK)) return "staging";
-  if (root) return configScope(segments.slice(1));
+  if (root) return configScope(segments.slice(1), plugins);
   return undefined;
 }
 

@@ -15,6 +15,7 @@ package paths
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -68,6 +69,25 @@ const (
 // root. That folder holds one device's pairing and index and never syncs.
 const SyncPluginID = "trew-sync"
 
+// DeviceLocalPlugins are the plugins whose folders never move between devices
+// and which sync never switches on: the sync plugin, and the others that sync
+// or remote-control a vault, whose folders hold credentials and device
+// identity, and which on a second device would be a second writer
+// (plan/settings-sync.md, section 6). Lower case, compared folded.
+var DeviceLocalPlugins = []string{
+	SyncPluginID,
+	"obsidian-git",
+	"obsidian-local-rest-api",
+	"obsidian-livesync",
+	"remotely-save",
+	"basalt-sync",
+	"supersync",
+}
+
+// CommunityPlugins is Obsidian's list of the community plugins it runs, at the
+// top of a profile root.
+const CommunityPlugins = "community-plugins.json"
+
 // configRoot is a profile root: Obsidian's configuration folder, or one a
 // device chose with Obsidian's "Override config folder" as .obsidian-<name>
 // (plan/settings-sync.md, section 1). A fixed pattern keeps .git, .trash and
@@ -85,14 +105,35 @@ func IsConfig(p string) bool {
 //
 // Go's utf8.ValidString refuses the encoded surrogates U+D800 to U+DFFF as
 // well as malformed sequences, which is what the fixture's "utf8" means.
-func Check(p string) Reason { return check(p, false) }
+func Check(p string) Reason { return check(p, false, false) }
 
 // CheckConfig is protocol 3's rule: Check, except that a profile root may
 // begin the path, and then what follows it must be what settings sync carries
 // (configScope). A path outside every profile root gets Check's answer.
-func CheckConfig(p string) Reason { return check(p, true) }
+func CheckConfig(p string) Reason { return check(p, true, false) }
 
-func check(p string, config bool) Reason {
+// CheckPlugins is protocol 4's rule: CheckConfig, and community plugins as
+// well, the plugin list and any file inside a plugin's folder, except the
+// folders of DeviceLocalPlugins. It is what the store holds; a session of 3
+// or less is still held to CheckConfig.
+func CheckPlugins(p string) Reason { return check(p, true, true) }
+
+// IsPlugin reports whether p is community plugins' inside a profile root: the
+// plugin list, or anything in the plugins folder, folded as the scope rule
+// folds. A session of protocol 3 or less never writes or is sent one.
+func IsPlugin(p string) bool {
+	if !IsConfig(p) {
+		return false
+	}
+	rest := strings.Split(p, "/")[1:]
+	if len(rest) == 0 {
+		return false
+	}
+	first := Fold(rest[0])
+	return first == "plugins" || (len(rest) == 1 && first == CommunityPlugins)
+}
+
+func check(p string, config, plugins bool) Reason {
 	if !utf8.ValidString(p) {
 		return ReasonUTF8
 	}
@@ -149,7 +190,7 @@ func check(p string, config bool) Reason {
 		return ReasonStaging
 	}
 	if root {
-		return configScope(segments[1:])
+		return configScope(segments[1:], plugins)
 	}
 	return ""
 }
@@ -157,13 +198,14 @@ func check(p string, config bool) Reason {
 // configScope says why a path inside a profile root does not sync, given its
 // segments after the root, or "" when it does. Settings sync carries
 // Obsidian's own settings, every JSON file at the top of the root, and themes
-// and CSS snippets. Community plugins wait for a later phase, so their list
-// and the plugins folder are out of scope; the sync plugin's folder and the
-// workspace files never sync. Compared folded, with the fold the collision
-// rule uses, so a case-folding disk cannot spell its way past the device-local
-// rule: APFS holds workspace.json and workſpace.json (U+017F) as one file,
-// which ASCII lower case does not see.
-func configScope(rest []string) Reason {
+// and CSS snippets. With plugins, which is protocol 4, it carries community
+// plugins too: their list, and any file inside a plugin's folder. Under
+// protocol 3 both are out of scope. The sync plugin's folder, the other
+// DeviceLocalPlugins and the workspace files never sync. Compared folded,
+// with the fold the collision rule uses, so a case-folding disk cannot spell
+// its way past the device-local rule: APFS holds workspace.json and
+// workſpace.json (U+017F) as one file, which ASCII lower case does not see.
+func configScope(rest []string, plugins bool) Reason {
 	lower := make([]string, len(rest))
 	for i, s := range rest {
 		lower[i] = Fold(s)
@@ -171,9 +213,15 @@ func configScope(rest []string) Reason {
 	switch {
 	case len(lower) >= 2 && lower[0] == "plugins" && lower[1] == SyncPluginID:
 		return ReasonDeviceLocal
+	case plugins && len(lower) >= 2 && lower[0] == "plugins" && slices.Contains(DeviceLocalPlugins, lower[1]):
+		return ReasonDeviceLocal
+	case plugins && len(lower) >= 3 && lower[0] == "plugins":
+		return ""
+	case plugins && len(lower) == 1 && lower[0] == CommunityPlugins:
+		return ""
 	case len(lower) == 1 && (lower[0] == "workspace.json" || lower[0] == "workspace-mobile.json"):
 		return ReasonDeviceLocal
-	case len(lower) == 1 && strings.HasSuffix(lower[0], ".json") && lower[0] != "community-plugins.json":
+	case len(lower) == 1 && strings.HasSuffix(lower[0], ".json") && lower[0] != CommunityPlugins:
 		return ""
 	case len(lower) == 3 && lower[0] == "themes":
 		return ""

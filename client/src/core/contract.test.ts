@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { base64urlDecode } from "./digest.ts";
+import { PROTO } from "./transport.ts";
 import { fold, foldTable } from "./fold.ts";
 import { FOLD_TABLE_DIGEST, FOLD_TABLE_UNICODE_VERSION } from "./fold-table.ts";
 import { FrameError, MARKER_DEFLATE, MARKER_RAW, decodeFrame, encodeFrame } from "./frame.ts";
@@ -35,7 +36,9 @@ import {
   mcpEditable,
   mcpReadable,
   configPathReason,
+  DEVICE_LOCAL_PLUGINS,
   isConfigPath,
+  isPluginPath,
   pathReason,
   searchable,
   syncable,
@@ -51,6 +54,8 @@ interface Contract {
     maxSegmentBytes: number;
     maxNameBytes: number;
     chunkMax: number;
+    proto: number;
+    deviceLocalPlugins: string[];
   };
   invite: {
     good: { string: string; token: string; url: string; vault: string }[];
@@ -80,8 +85,10 @@ interface Contract {
       name: string;
       hex: string;
       isConfig: boolean;
+      isPlugin: boolean;
       notes: string | null;
       config: string | null;
+      plugins: string | null;
     }[];
   };
   collisions: {
@@ -172,6 +179,8 @@ describe("the protocol 1 contract", () => {
     expect(MAX_SEGMENT_BYTES).toBe(contract.constants.maxSegmentBytes);
     expect(MAX_VAULT_NAME_BYTES).toBe(contract.constants.maxNameBytes);
     expect(contract.frames.chunkMax).toBe(contract.constants.chunkMax);
+    expect(PROTO).toBe(contract.constants.proto);
+    expect([...DEVICE_LOCAL_PLUGINS]).toEqual(contract.constants.deviceLocalPlugins);
   });
 
   describe("the fold", () => {
@@ -196,16 +205,20 @@ describe("the protocol 1 contract", () => {
     }
   });
 
-  // Protocol 3's settings rule, and the notes rule beside it on the same paths:
-  // a session of protocol 1 or 2 is held to the second, so a settings path has
-  // to keep failing it for the reason it always did.
-  it("gives every settings path the reference's verdicts under both rules", () => {
+  // Protocol 3's settings rule, protocol 4's with community plugins, and the
+  // notes rule beside them on the same paths. A device that does not sync its
+  // plugins keeps protocol 3's scope, so that rule has to keep giving the
+  // reason it always did.
+  it("gives every settings path the reference's verdicts under every rule", () => {
     expect(contract.config.cases.length).toBeGreaterThanOrEqual(30);
+    expect(contract.config.cases.filter((c) => c.isPlugin).length).toBeGreaterThanOrEqual(15);
     for (const c of contract.config.cases) {
       const path = new TextDecoder("utf-8", { fatal: true }).decode(unhex(c.hex));
       expect(isConfigPath(path), `isConfig ${c.name}`).toBe(c.isConfig);
+      expect(isPluginPath(path), `isPlugin ${c.name}`).toBe(c.isPlugin);
       expect(pathReason(path), `notes ${c.name}`).toBe(c.notes ?? undefined);
       expect(configPathReason(path), `config ${c.name}`).toBe(c.config ?? undefined);
+      expect(configPathReason(path, true), `plugins ${c.name}`).toBe(c.plugins ?? undefined);
     }
   });
 

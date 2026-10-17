@@ -74,11 +74,14 @@ func TestNoFieldOfTheCryptoSurvives(t *testing.T) {
 			}
 		}
 	}
-	// Protocol 2 added undo and search, and protocol 3 settings, so the range
-	// is 1 to 3 and protocols 1 and 2 are still answered as they were.
-	if Proto != 3 || MinProto != 1 || ProtoUndo != 2 || ProtoSearch != 2 || ProtoConfig != 3 {
-		t.Errorf("the protocol range is %d to %d with undo and search from %d and %d and settings from %d; "+
-			"it is 1 to 3, undo and search from 2, settings from 3", MinProto, Proto, ProtoUndo, ProtoSearch, ProtoConfig)
+	// Protocol 2 added undo and search, protocol 3 settings and protocol 4
+	// community plugins, so the range is 1 to 4 and protocols 1 to 3 are
+	// still answered as they were.
+	if Proto != 4 || MinProto != 1 || ProtoUndo != 2 || ProtoSearch != 2 || ProtoConfig != 3 ||
+		ProtoPlugins != 4 {
+		t.Errorf("the protocol range is %d to %d with undo and search from %d and %d, settings from %d and "+
+			"plugins from %d; it is 1 to 4, undo and search from 2, settings from 3, plugins from 4",
+			MinProto, Proto, ProtoUndo, ProtoSearch, ProtoConfig, ProtoPlugins)
 	}
 }
 

@@ -50,14 +50,22 @@ import (
 // accepts. A session of 1 or 2 is held to paths.Check, as before, and never
 // sees a settings entry: each is left out of its batches, whose ranges still
 // cover it, the way a device's own echo is.
+//
+// Version 4 is protocol 3 and community plugins (plan/settings-sync.md,
+// section 6): a session of 4 may write and is sent the plugin list and the
+// files in plugins' folders that paths.CheckPlugins accepts. A session of 3 or
+// less is held to paths.CheckConfig, as before, and never sees a plugin entry,
+// in the same way a session of 1 or 2 never sees a setting.
 const (
-	Proto    = 3
+	Proto    = 4
 	MinProto = 1
 	// ProtoUndo is the first version with undo, ProtoSearch the first with
-	// search, and ProtoConfig the first with settings.
-	ProtoUndo   = 2
-	ProtoSearch = 2
-	ProtoConfig = 3
+	// search, ProtoConfig the first with settings, and ProtoPlugins the first
+	// with community plugins.
+	ProtoUndo    = 2
+	ProtoSearch  = 2
+	ProtoConfig  = 3
+	ProtoPlugins = 4
 )
 
 // MaxRequestID bounds a client-chosen request id: an integer from 1 to 2^32-1.

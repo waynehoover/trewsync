@@ -51,8 +51,10 @@ PRODUCT = "trew"
 # still answers a hello of protocol 1, as protocol 1. Protocol 3 is protocol 2
 # and settings: paths inside a profile root (CONFIG_ROOT) that the config rule
 # below accepts, which a session of 1 or 2 never sends or sees
-# (plan/settings-sync.md).
-PROTO = 3
+# (plan/settings-sync.md). Protocol 4 is protocol 3 and community plugins: the
+# plugin list and each plugin's folder, which a session of 3 or less never
+# sends or sees (plan/settings-sync.md, section 6).
+PROTO = 4
 MIN_PROTO = 1
 
 # A profile root is Obsidian's configuration folder, `.obsidian`, or one a
@@ -64,6 +66,19 @@ CONFIG_ROOT = re.compile(r"\.obsidian(?:-[a-z0-9][a-z0-9-]{0,31})?")
 # sync plugin's own folder, which holds that device's pairing and index.
 DEVICE_LOCAL_FILES = ("workspace.json", "workspace-mobile.json")
 SYNC_PLUGIN_ID = PRODUCT + "-sync"
+# Plugins that sync or remote-control a vault, and hold credentials and device
+# identity in their folders: never moved between devices, and never switched on
+# by sync, as the sync plugin itself is not (plan/settings-sync.md, section 6).
+DEVICE_LOCAL_PLUGINS = (
+    SYNC_PLUGIN_ID,
+    "obsidian-git",
+    "obsidian-local-rest-api",
+    "obsidian-livesync",
+    "remotely-save",
+    "basalt-sync",
+    "supersync",
+)
+COMMUNITY_PLUGINS = "community-plugins.json"
 INVITE_VERSION = 1
 INVITE_TOKEN_BYTES = 16
 DEVICE_TOKEN_BYTES = 32
@@ -178,11 +193,12 @@ def ts_table(table: dict[int, str], digest: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def path_reason(raw: bytes, config: bool = False) -> str | None:
+def path_reason(raw: bytes, config: bool = False, plugins: bool = False) -> str | None:
     """The first rule a path breaks, in the order plan/protocol.md lists them.
 
     With config, which is protocol 3's rule, a profile root may begin the path,
-    and what follows it must be what settings sync carries (config_scope).
+    and what follows it must be what settings sync carries (config_scope). With
+    plugins as well, which is protocol 4's, that includes community plugins.
     """
     try:
         text = raw.decode("utf-8", errors="strict")
@@ -217,13 +233,23 @@ def path_reason(raw: bytes, config: bool = False) -> str | None:
     if STAGING_MARK in text:
         return "staging"
     if root:
-        return config_scope(segments[1:])
+        return config_scope(segments[1:], plugins)
     return None
 
 
 def is_config(text: str) -> bool:
     """Whether a path begins with a profile root, whatever follows it."""
     return CONFIG_ROOT.fullmatch(text.split("/", 1)[0]) is not None
+
+
+def is_plugin(text: str) -> bool:
+    """Whether a path is community plugins' inside a profile root: the plugin
+    list, or anything in the plugins folder, folded as the scope rule folds.
+    These are protocol 4's: a session of 3 or less never sends or sees one."""
+    if not is_config(text):
+        return False
+    rest = [config_fold(s) for s in text.split("/")[1:]]
+    return (len(rest) >= 1 and rest[0] == "plugins") or rest == [COMMUNITY_PLUGINS]
 
 
 _CONFIG_FOLD: dict[int, str] | None = None
@@ -237,13 +263,14 @@ def config_fold(s: str) -> str:
     return fold(s, _CONFIG_FOLD)
 
 
-def config_scope(rest: list[str]) -> str | None:
+def config_scope(rest: list[str], plugins: bool = False) -> str | None:
     """Why a path inside a profile root does not sync, or None when it does.
 
     rest is the path's segments after the root. Settings sync carries Obsidian's
     own settings files (any JSON file at the top of the root), themes and CSS
-    snippets. Community plugins are a later phase, so the plugin list and the
-    plugins folder are out of scope for now; the sync plugin's own folder and
+    snippets. Protocol 4 (plugins) adds community plugins: the plugin list and
+    any file inside a plugin's folder. Under protocol 3 both are out of scope.
+    The sync plugin's own folder, the other plugins in DEVICE_LOCAL_PLUGINS and
     the workspace files never sync. Names are compared folded, with the fold
     the collision rule uses, so a case-folding disk cannot spell its way past
     the device-local rule: APFS holds workspace.json and workſpace.json (U+017F)
@@ -252,9 +279,15 @@ def config_scope(rest: list[str]) -> str | None:
     lower = [config_fold(s) for s in rest]
     if len(lower) >= 2 and lower[0] == "plugins" and lower[1] == SYNC_PLUGIN_ID:
         return "devicelocal"
+    if plugins and len(lower) >= 2 and lower[0] == "plugins" and lower[1] in DEVICE_LOCAL_PLUGINS:
+        return "devicelocal"
+    if plugins and len(lower) >= 3 and lower[0] == "plugins":
+        return None
+    if plugins and lower == [COMMUNITY_PLUGINS]:
+        return None
     if len(lower) == 1 and lower[0] in DEVICE_LOCAL_FILES:
         return "devicelocal"
-    if len(lower) == 1 and lower[0].endswith(".json") and lower[0] != "community-plugins.json":
+    if len(lower) == 1 and lower[0].endswith(".json") and lower[0] != COMMUNITY_PLUGINS:
         return None
     if len(lower) == 3 and lower[0] == "themes":
         return None
@@ -285,9 +318,25 @@ def config_vectors() -> list[dict]:
         ("the sync plugin's code", ".obsidian/plugins/trew-sync/main.js"),
         ("the sync plugin's folder", ".obsidian/plugins/trew-sync"),
         ("the sync plugin's folder, spelt in capitals", ".obsidian/plugins/Trew-Sync/index.json"),
-        ("the community plugin list, a later phase", ".obsidian/community-plugins.json"),
-        ("a community plugin's code, a later phase", ".obsidian/plugins/dataview/main.js"),
-        ("a community plugin's settings, a later phase", ".obsidian/plugins/dataview/data.json"),
+        ("the community plugin list", ".obsidian/community-plugins.json"),
+        ("a community plugin's code", ".obsidian/plugins/dataview/main.js"),
+        ("a community plugin's settings", ".obsidian/plugins/dataview/data.json"),
+        ("a community plugin's stylesheet", ".obsidian-mobile/plugins/obsidian-style-settings/styles.css"),
+        ("a file deeper in a plugin's folder", ".obsidian/plugins/dataview/lang/en.json"),
+        ("a plugin's settings in a phone's profile", ".obsidian-mobile/plugins/dataview/data.json"),
+        ("the plugin list of another profile", ".obsidian-desktop/community-plugins.json"),
+        ("the plugins folder", ".obsidian/plugins"),
+        ("a plugin's folder", ".obsidian/plugins/dataview"),
+        ("a dotfile in a plugin's folder", ".obsidian/plugins/dataview/.cache.json"),
+        ("a plugin named like a device-local one", ".obsidian/plugins/obsidian-git-extras/main.js"),
+        ("obsidian-git's settings", ".obsidian/plugins/obsidian-git/data.json"),
+        ("obsidian-git's folder", ".obsidian/plugins/obsidian-git"),
+        ("obsidian-git, spelt in capitals", ".obsidian/plugins/Obsidian-Git/data.json"),
+        ("Local REST API's code", ".obsidian/plugins/obsidian-local-rest-api/main.js"),
+        ("LiveSync's settings", ".obsidian/plugins/obsidian-livesync/data.json"),
+        ("Remotely Save's settings", ".obsidian-mobile/plugins/remotely-save/data.json"),
+        ("Basalt Sync's settings", ".obsidian/plugins/basalt-sync/data.json"),
+        ("SuperSync's manifest", ".obsidian/plugins/supersync/manifest.json"),
         ("the root itself", ".obsidian"),
         ("the themes folder", ".obsidian/themes"),
         ("a theme's folder", ".obsidian/themes/Tela"),
@@ -324,8 +373,10 @@ def config_vectors() -> list[dict]:
         raw = value.encode("utf-8")
         notes = path_reason(raw)
         config = path_reason(raw, config=True)
+        plugins = path_reason(raw, config=True, plugins=True)
         out.append({"name": name, "hex": raw.hex(), "isConfig": is_config(value),
-                    "notes": notes, "config": config})
+                    "isPlugin": is_plugin(value), "notes": notes, "config": config,
+                    "plugins": plugins})
     return out
 
 
@@ -892,6 +943,7 @@ def main() -> None:
         "maxSegmentBytes": MAX_SEGMENT_BYTES,
         "maxNameBytes": MAX_NAME_BYTES,
         "chunkMax": CHUNK_MAX,
+        "deviceLocalPlugins": list(DEVICE_LOCAL_PLUGINS),
     }
     fixtures["invite"] = invite_vectors()
     fixtures["frames"] = frame_vectors()
@@ -912,7 +964,11 @@ def main() -> None:
             "the root may begin the path, nothing after it may begin with a dot, and what follows the root must be a",
             "JSON file at its top, themes/<theme>/<file> or snippets/<name>.css, compared in ASCII lower case.",
             "devicelocal: the workspace files and plugins/trew-sync/, which are one device's and never sync.",
-            "configscope: anything else inside a root, community plugins included until their phase.",
+            "configscope: anything else inside a root, community plugins included under protocol 3.",
+            "plugins is protocol 4's rule: config's, plus community-plugins.json at the top of the root and any",
+            "file at least one level inside plugins/<id>/, except that plugins/<id> for an id in",
+            "constants.deviceLocalPlugins is devicelocal. isPlugin: a profile root followed by plugins/ or by",
+            "community-plugins.json, folded; a session of protocol 3 or less never sends or sees one.",
         ],
         "cases": config_vectors(),
     }

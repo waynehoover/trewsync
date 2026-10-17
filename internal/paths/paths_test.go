@@ -17,9 +17,10 @@ import (
 // the TypeScript client reads the same file (PLAN.md M0.5 task 6).
 type contract struct {
 	Constants struct {
-		StagingMark     string `json:"stagingMark"`
-		MaxPathBytes    int    `json:"maxPathBytes"`
-		MaxSegmentBytes int    `json:"maxSegmentBytes"`
+		StagingMark        string   `json:"stagingMark"`
+		MaxPathBytes       int      `json:"maxPathBytes"`
+		MaxSegmentBytes    int      `json:"maxSegmentBytes"`
+		DeviceLocalPlugins []string `json:"deviceLocalPlugins"`
 	} `json:"constants"`
 	Fold struct {
 		UnicodeVersion string `json:"unicodeVersion"`
@@ -38,8 +39,10 @@ type contract struct {
 			Name     string  `json:"name"`
 			Hex      string  `json:"hex"`
 			IsConfig bool    `json:"isConfig"`
+			IsPlugin bool    `json:"isPlugin"`
 			Notes    *string `json:"notes"`
 			Config   *string `json:"config"`
+			Plugins  *string `json:"plugins"`
 		} `json:"cases"`
 	} `json:"config"`
 	Collisions struct {
@@ -179,9 +182,23 @@ func TestEveryPathGetsTheReferenceVerdictAndReason(t *testing.T) {
 	}
 }
 
-// Protocol 3's settings rule, and the notes rule beside it on the same paths:
-// a session of protocol 1 or 2 is held to the second, so a settings path has
-// to keep failing it for the reason it always did.
+// The plugins that never move between devices, as the contract names them:
+// the server refuses their folders, and a client keeps them out of the plugin
+// list it sends (plan/settings-sync.md, section 6).
+func TestTheDeviceLocalPluginsAreTheContracts(t *testing.T) {
+	want := load(t).Constants.DeviceLocalPlugins
+	if len(want) == 0 {
+		t.Fatal("the contract names no device-local plugins; regenerate with scripts/protocol-vectors.py")
+	}
+	if strings.Join(DeviceLocalPlugins, ",") != strings.Join(want, ",") {
+		t.Fatalf("this side holds %v and the contract says %v", DeviceLocalPlugins, want)
+	}
+}
+
+// Protocol 3's settings rule, protocol 4's with community plugins, and the
+// notes rule beside them on the same paths: a session of protocol 1 or 2 is
+// held to the notes rule and one of 3 to the settings rule, so a path has to
+// keep failing each for the reason it always did.
 func TestEveryConfigPathGetsTheReferenceVerdicts(t *testing.T) {
 	cases := load(t).Config.Cases
 	if len(cases) < 30 {
@@ -207,6 +224,12 @@ func TestEveryConfigPathGetsTheReferenceVerdicts(t *testing.T) {
 		}
 		if got, want := CheckConfig(p), reason(c.Config); got != want {
 			t.Errorf("%s: CheckConfig(%q) gives %q, the reference %q", c.Name, p, got, want)
+		}
+		if got := IsPlugin(p); got != c.IsPlugin {
+			t.Errorf("%s: IsPlugin(%q) is %v, the reference %v", c.Name, p, got, c.IsPlugin)
+		}
+		if got, want := CheckPlugins(p), reason(c.Plugins); got != want {
+			t.Errorf("%s: CheckPlugins(%q) gives %q, the reference %q", c.Name, p, got, want)
 		}
 	}
 }

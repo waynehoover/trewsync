@@ -58,8 +58,14 @@ import { FrameError, decodeFrame, encodeFrame } from "./frame.ts";
  * whether or not this device syncs its settings. A server of protocol 3 still
  * answers 1 and 2 and keeps settings from them, so the order is the same: the
  * server first.
+ *
+ * Version 4 is version 3 and community plugins (plan/settings-sync.md,
+ * section 6): the plugin list and the files in plugins' folders that
+ * `configPathReason(path, true)` accepts may be written and are sent, whether
+ * or not this device syncs its plugins. A server of protocol 4 still answers
+ * 1 to 3 and keeps plugins from them; the server first, again.
  */
-export const PROTO = 3;
+export const PROTO = 4;
 
 /** How long a request may go unanswered before the connection is considered dead. */
 export const REQUEST_TIMEOUT_MS = 60_000;

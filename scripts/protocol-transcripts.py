@@ -59,11 +59,11 @@ DEVICES = {
 }
 
 
-# The protocol a transcript speaks unless it says otherwise: 3, which is 2 and
-# settings (plan/settings-sync.md); 2 is 1 and undo (plan/protocol.md, "Undo
-# (protocol 2)"). The server answers a hello in the version it asks for, and
-# one transcript holds it to answering 1.
-PROTO = 3
+# The protocol a transcript speaks unless it says otherwise: 4, which is 3 and
+# community plugins, and 3 is 2 and settings (plan/settings-sync.md); 2 is 1
+# and undo (plan/protocol.md, "Undo (protocol 2)"). The server answers a hello
+# in the version it asks for, and one transcript holds it to answering 1.
+PROTO = 4
 MIN_PROTO = 1
 
 
