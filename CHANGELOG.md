@@ -20,6 +20,11 @@ client can talk; upgrade the server first.
   ([server setup](docs/server.md#a-binary)); `trewd update` there says the
   release has no build for the machine.
 
+## 0.14.3, plugin (2026-10-16)
+
+A first sync on a Mac is faster. No server change: the plugin needs trewd
+0.13.0 or later. `trew` stays at 0.12.0.
+
 ### Plugin
 
 - **A first sync on a Mac is faster.** Before saving its progress, TrewSync
