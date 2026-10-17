@@ -411,8 +411,8 @@ when Obsidian is open again. Let changes finish before closing the app.
 On Android, keep the vault in **App storage**. Obsidian asks for a vault
 location when you create one, and **Device storage**, the one it marks
 recommended, is several times slower for TrewSync to write to: on a Pixel 9
-Pro XL a first sync of 3,000 notes took almost five minutes there and two in
-App storage. Other apps cannot open App storage, and Android deletes it when
+Pro XL a first sync of 3,000 notes took 2.4 times as long there as in App
+storage. Other apps cannot open App storage, and Android deletes it when
 Obsidian is uninstalled, which with TrewSync loses only changes that have not
 synced yet. To move a vault you already have, create a new vault in App
 storage, pair it with a new invite, and let its first sync finish before you
