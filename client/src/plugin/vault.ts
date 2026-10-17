@@ -90,7 +90,7 @@ import {
   isNeverSynced,
   neverSync,
 } from "../core/paths.ts";
-import { configPathReason } from "../core/path-policy.ts";
+import { configPathReason, isDeviceLocalPlugin } from "../core/path-policy.ts";
 import {
   JournalIndexStore,
   indexLogPath,
@@ -573,6 +573,13 @@ export class ObsidianVault implements Vault {
       displacedLog?: string;
       ignore?: readonly string[];
       settings?: string;
+      plugins?: boolean;
+      /**
+       * The folder this plugin runs from, which holds this device's pairing
+       * and index and never syncs, whatever it is called: Obsidian runs a
+       * plugin from any folder name, and only `trew-sync` is refused by id.
+       */
+      ownFolder?: string;
     } = {},
   ) {
     this.adapter = vault.adapter;
@@ -598,7 +605,25 @@ export class ObsidianVault implements Vault {
     this.skipHere = new Set(opts.ignore ?? []);
     this.configRoot = configFolderName(configDir);
     this.settingsRoot = opts.settings;
+    this.syncsPlugins = opts.settings !== undefined && opts.plugins === true;
+    this.ownFolder = opts.ownFolder === undefined ? undefined : normalizePath(opts.ownFolder);
   }
+
+  /** `opts.ownFolder`, on this disk. */
+  private readonly ownFolder: string | undefined;
+
+  /** Whether a path on this disk is inside the folder this plugin runs from. */
+  private inOwnFolder(disk: string): boolean {
+    const own = this.ownFolder;
+    return own !== undefined && (disk === own || disk.startsWith(own + "/"));
+  }
+
+  /**
+   * Whether this device syncs its community plugins with its settings: the
+   * plugin list and the files in plugins' folders (plan/settings-sync.md,
+   * section 6). Protocol 4's scope when it does, protocol 3's when it does not.
+   */
+  private readonly syncsPlugins: boolean;
 
   /** The names this device was told to leave alone, without the config folder's. */
   private readonly skipHere: ReadonlySet<string>;
@@ -613,7 +638,8 @@ export class ObsidianVault implements Vault {
     return (
       root !== undefined &&
       path.startsWith(root + "/") &&
-      configPathReason(path) === undefined &&
+      configPathReason(path, this.syncsPlugins) === undefined &&
+      !this.inOwnFolder(this.toDisk(path)) &&
       isNeverSynced(path.slice(root.length + 1), this.skipHere)
     );
   }
@@ -661,7 +687,8 @@ export class ObsidianVault implements Vault {
     return (
       root !== undefined &&
       path.startsWith(root + "/") &&
-      configPathReason(path) === undefined &&
+      configPathReason(path, this.syncsPlugins) === undefined &&
+      !this.inOwnFolder(this.toDisk(path)) &&
       !isNeverSynced(path.slice(root.length + 1), this.skipHere)
     );
   }
@@ -669,8 +696,9 @@ export class ObsidianVault implements Vault {
   /**
    * The settings this device syncs, from the disk. Obsidian's index never
    * lists a dot folder, so the config folder is walked with the adapter: into
-   * `themes` and `snippets` only, because nothing else under it is a setting
-   * settings sync carries, and `plugins` is most of the folder. A few dozen
+   * `themes` and `snippets`, because nothing else under it is a setting
+   * settings sync carries, and into `plugins` only on a device that syncs its
+   * plugins, because it is most of the folder. Without plugins, a few dozen
    * stats, about 120 ms for the whole of a phone's folder on a Pixel 9a
    * (plan/settings-sync.md, spike results).
    *
@@ -705,6 +733,23 @@ export class ObsidianVault implements Vault {
     return listed;
   }
 
+  /**
+   * Whether the walk goes into a folder of the plugins folder, given its path
+   * under the config folder: never on a device that does not sync its
+   * plugins, and never into a plugin that does not move, a dot folder or a
+   * name this device skips, whose files the walk would only stat to leave
+   * out. The sync plugin's own folder is the first of those.
+   */
+  private walksPluginFolder(rel: string): boolean {
+    if (!this.syncsPlugins) return false;
+    const segments = rel.split("/");
+    if (segments[0] !== "plugins") return false;
+    if (segments.length === 1) return true;
+    if (isDeviceLocalPlugin(segments[1]!)) return false;
+    if (this.inOwnFolder(`${this.configRoot}/${rel}`)) return false;
+    return !isNeverSynced(segments.slice(1).join("/"), this.skipHere);
+  }
+
   private async walkSettings(
     root: string,
     found: Map<string, { raw: string; stat: FileStat }[]>,
@@ -716,7 +761,9 @@ export class ObsidianVault implements Vault {
       for (const raw of here.folders) {
         const rel = trimLeadingSlash(raw).slice(root.length + 1);
         const theme = rel.startsWith("themes/") && !rel.slice("themes/".length).includes("/");
-        if (rel === "themes" || rel === "snippets" || theme) folders.push(trimLeadingSlash(raw));
+        if (rel === "themes" || rel === "snippets" || theme || this.walksPluginFolder(rel)) {
+          folders.push(trimLeadingSlash(raw));
+        }
       }
       for (const file of here.files) {
         const raw = trimLeadingSlash(file);

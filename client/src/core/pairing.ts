@@ -179,6 +179,14 @@ export interface DeviceConfig {
    * cursor has moved past them. Forgotten after the first pass.
    */
   readonly settingsReplay?: boolean;
+  /**
+   * Whether this device syncs its community plugins with its settings group
+   * as well (plan/settings-sync.md, section 6): the plugin list and the files
+   * in plugins' folders. Off unless a person turns it on here, because it
+   * lets the group's other devices put code on this one, which waits for a
+   * person's Apply each time.
+   */
+  readonly settingsPlugins?: boolean;
 }
 
 /**
@@ -303,6 +311,7 @@ export function encodeConfig(config: DeviceConfig): Record<string, string> {
     ...(config.settings !== undefined ? { settings: config.settings } : {}),
     ...(config.settingsFirstChoice ? { settingsFirstChoice: config.settingsFirstChoice } : {}),
     ...(config.settingsReplay === true ? { settingsReplay: "true" } : {}),
+    ...(config.settingsPlugins === true ? { settingsPlugins: "true" } : {}),
   };
 }
 
@@ -383,6 +392,7 @@ export function decodeConfig(raw: unknown, where: string): DeviceConfig {
       ? { settingsFirstChoice: record["settingsFirstChoice"] }
       : {}),
     ...(record["settingsReplay"] === "true" ? { settingsReplay: true } : {}),
+    ...(record["settingsPlugins"] === "true" ? { settingsPlugins: true } : {}),
   } as DeviceConfig & { invite?: string };
   if (config.deviceId === undefined) {
     // Not a state anything here writes: a pairing is saved with its id and

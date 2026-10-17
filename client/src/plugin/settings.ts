@@ -10,7 +10,7 @@
 
 import type { DataAdapter } from "obsidian";
 
-import { configPathReason } from "../core/path-policy.ts";
+import { configPathReason, isDeviceLocalPlugin, isPluginCode } from "../core/path-policy.ts";
 
 type Adapter = Pick<
   DataAdapter,
@@ -18,14 +18,34 @@ type Adapter = Pick<
 >;
 
 /**
+ * Which of a device's community plugins a copy of its settings takes: all of
+ * their files, only their settings and the plugin list, or none, for a device
+ * that does not sync its plugins.
+ */
+export type PluginCopy = "all" | "settings" | "none";
+
+/**
  * Every setting settings sync carries in `root`, the config folder this
  * device runs, as vault paths, walked as the vault lists them: the JSON files
- * at its top, `themes/<theme>/<file>` and `snippets/<name>.css`. Judged as
- * the paths they sync as, under `group` and in NFC, and returned under the
- * name the disk has, which is the one to copy.
+ * at its top, `themes/<theme>/<file>` and `snippets/<name>.css`, and with
+ * `plugins` the plugin list and the files in plugins' folders, every plugin
+ * but those that never move. Judged as the paths they sync as, under `group`
+ * and in NFC, and returned under the name the disk has, which is the one to
+ * copy.
  */
-export async function settingsIn(adapter: Adapter, root: string, group: string): Promise<string[]> {
+export async function settingsIn(
+  adapter: Adapter,
+  root: string,
+  group: string,
+  plugins: PluginCopy = "none",
+  /**
+   * The folder this plugin runs from, left out: it holds this device's
+   * pairing and index, and the copies themselves are made inside it.
+   */
+  ownFolder?: string,
+): Promise<string[]> {
   if (!(await adapter.exists(root))) return [];
+  const withPlugins = plugins !== "none";
   const out: string[] = [];
   const folders = [root];
   while (folders.length > 0) {
@@ -33,11 +53,20 @@ export async function settingsIn(adapter: Adapter, root: string, group: string):
     for (const folder of here.folders) {
       const rel = folder.slice(root.length + 1);
       const theme = rel.startsWith("themes/") && !rel.slice("themes/".length).includes("/");
-      if (rel === "themes" || rel === "snippets" || theme) folders.push(folder);
+      const segments = rel.split("/");
+      const plugin =
+        withPlugins &&
+        segments[0] === "plugins" &&
+        (segments.length === 1 || !isDeviceLocalPlugin(segments[1]!)) &&
+        !segments.slice(1).some((s) => s.startsWith("."));
+      if (folder === ownFolder) continue;
+      if (rel === "themes" || rel === "snippets" || theme || plugin) folders.push(folder);
     }
     for (const file of here.files) {
       const synced = `${group}${file.slice(root.length)}`.normalize("NFC");
-      if (configPathReason(synced) === undefined) out.push(file);
+      if (configPathReason(synced, withPlugins) !== undefined) continue;
+      if (plugins === "settings" && isPluginCode(synced)) continue;
+      out.push(file);
     }
   }
   return out.sort();
@@ -97,13 +126,24 @@ export async function backUpSettings(
   group: string,
   pluginDir: string,
   now: Date,
+  /**
+   * Whether this device is to sync its community plugins, which the server's
+   * can replace as they replace its settings: the copy then takes every one
+   * of their files, once, when the person turns them on.
+   */
+  plugins = false,
 ): Promise<{ folder: string; files: number }> {
   const stamp = now.toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
   let folder = `${pluginDir}/settings-before-sync-${stamp}`;
   for (let n = 2; await adapter.exists(folder); n++) {
     folder = `${pluginDir}/settings-before-sync-${stamp}-${n}`;
   }
-  const files = await copyVerified(adapter, await settingsIn(adapter, root, group), root, folder);
+  const files = await copyVerified(
+    adapter,
+    await settingsIn(adapter, root, group, plugins ? "all" : "none", pluginDir),
+    root,
+    folder,
+  );
   return { folder, files };
 }
 
@@ -119,8 +159,21 @@ export async function keepSettingsBeforeApply(
   root: string,
   group: string,
   pluginDir: string,
+  /**
+   * Whether this device syncs its community plugins. Their settings and the
+   * plugin list are copied with the rest; their code is not, because it is
+   * most of the folder and every Apply would copy all of it again, and a
+   * version of it this device synced is in the server's history, while one it
+   * never synced was copied when plugin sync was turned on.
+   */
+  plugins = false,
 ): Promise<number> {
   const folder = `${pluginDir}/settings-before-apply`;
   if (await adapter.exists(folder)) await adapter.rmdir(folder, true);
-  return copyVerified(adapter, await settingsIn(adapter, root, group), root, folder);
+  return copyVerified(
+    adapter,
+    await settingsIn(adapter, root, group, plugins ? "settings" : "none", pluginDir),
+    root,
+    folder,
+  );
 }

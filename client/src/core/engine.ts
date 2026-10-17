@@ -441,6 +441,18 @@ export interface EngineOptions {
   readonly replayAll?: boolean;
 }
 
+/** A setting held for Apply, as `Engine.settingsWaiting` reports it. */
+export interface HeldSetting {
+  readonly path: string;
+  /** The server's version of it, which `contentOf` fetches. */
+  readonly uid: number;
+  readonly hash: string;
+  readonly size: number;
+  readonly deleted: boolean;
+  /** The device that wrote that version, when the server recorded one. */
+  readonly device?: string;
+}
+
 /** What a device syncs of its settings (`EngineOptions.settings`). */
 export interface SettingsScope {
   /**
@@ -1105,6 +1117,8 @@ export class Engine {
   private firstChoiceSpent = false;
   /** `heldSettings` as the last pass to finish left it, for `status`. */
   private settingsHeldLast = 0;
+  /** The same, by path, for `settingsWaiting`. */
+  private settingsHeldLastPaths: readonly string[] = [];
   /**
    * Since when each settings JSON file has not parsed, with the content it
    * had, so a write in progress gets a moment and a broken file is named
@@ -2399,6 +2413,7 @@ export class Engine {
       report.appliedCursor = this.cursor;
     }
     this.settingsHeldLast = this.heldSettings.size;
+    this.settingsHeldLastPaths = [...this.heldSettings].sort();
     if (this.opts.settings !== undefined && this.heldSettings.size === 0)
       this.firstChoiceSpent = true;
     report.needsAttention = this.attentionList(report);
@@ -5472,6 +5487,30 @@ export class Engine {
     }
     this.settled(d, content.length);
     return true;
+  }
+
+  /**
+   * The settings held for Apply as the last pass to finish left them, with
+   * what the server holds for each: the version, the device that wrote it,
+   * and whether it is a deletion. For a person deciding whether to apply
+   * them, which with community plugins is deciding whether to run code;
+   * `contentOf` fetches any one version's bytes.
+   */
+  settingsWaiting(): HeldSetting[] {
+    const out: HeldSetting[] = [];
+    for (const path of this.settingsHeldLastPaths) {
+      const remote = this.remote.get(path);
+      if (remote === undefined) continue;
+      out.push({
+        path,
+        uid: remote.uid,
+        hash: remote.hash,
+        size: remote.size,
+        deleted: remote.deleted,
+        ...(remote.device ? { device: remote.device } : {}),
+      });
+    }
+    return out;
   }
 
   /**

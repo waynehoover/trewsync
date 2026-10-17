@@ -4544,6 +4544,18 @@ describe("settings", () => {
       const held = await desk.settle();
       expect(desk.vault.snapshot(), "code waits for a person before it is written").toEqual({});
       expect(held.settingsHeld).toBe(4);
+      // What a person is asked about: each file, the device that wrote it,
+      // and a version whose bytes can be read before anything runs.
+      const waiting = desk.engine.settingsWaiting();
+      expect(waiting.map((h) => [h.path, h.device, h.deleted])).toEqual(
+        Object.keys(plugin)
+          .sort()
+          .map((path) => [path, "mac", false]),
+      );
+      const manifest = waiting.find((h) => h.path.endsWith("manifest.json"))!;
+      expect(
+        new TextDecoder().decode(await desk.engine.contentOf(manifest.uid, manifest.hash)),
+      ).toBe(plugin[".obsidian/plugins/dataview/manifest.json"]);
       await desk.engine.sync({ applySettings: true });
       expect(desk.vault.snapshot()).toEqual(plugin);
     });
