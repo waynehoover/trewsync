@@ -11,7 +11,12 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-### Command-line client
+Nothing yet.
+
+## trew 0.13.0, command-line client (2026-10-22)
+
+`trew` now speaks protocol 4, so it needs `trewd` 0.14.0 or later: upgrade
+the server first. It still syncs notes only, never settings.
 
 - A first sync writes new notes straight to their names and makes them
   durable together, instead of staging and fsyncing each one: 3,000 notes in
