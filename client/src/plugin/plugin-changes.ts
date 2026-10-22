@@ -83,7 +83,7 @@ export function describeChange(change: PluginSettingsChange): string {
   if (change.copy)
     return change.removed
       ? `Remove a conflict copy of ${change.name}'s settings`
-      : `Add a conflict copy of ${change.name}'s settings, from another device`;
+      : `Add a conflict copy of ${change.name}'s settings`;
   if (change.removed) return `Remove ${change.name}'s settings`;
   return change.installed
     ? `Change ${change.name}'s settings`

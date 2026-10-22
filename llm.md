@@ -64,7 +64,9 @@ the user requested a development build. Release channels have different tags:
 List releases and choose the newest compatible stable plugin and server. Do not
 assume GitHub's single “latest release” is the plugin, or that all components
 share a version. Read the chosen release notes for protocol requirements and
-upgrade the server before clients when required. Compare Obsidian's installed
+upgrade the server before clients when required. Plugin 0.15.0 needs `trewd`
+0.14.0 or later: it speaks protocol 4 only, and an older server refuses it at
+the handshake, with no fallback. Compare Obsidian's installed
 version with the **downloaded** manifest's `minAppVersion`.
 
 The following download template uses GitHub CLI; HTTPS downloads from the exact
@@ -181,10 +183,13 @@ file rather than the conversation:
   > /private/path/first-invite.txt)
 ```
 
-The file holds a line saying when the invite expires and the invite itself, the
-line starting `trew1i_`. For a binary installation, run
+The file holds a header line saying when the invite expires, a blank line, and
+then the invite indented by two spaces (one line per address if the server
+gives more than one), so match it with `grep -o 'trew1i_[^ ]*'`, not
+`grep '^trew1i_'`. For a binary installation, run
 `trewd invite -data /path/to/trew-data -url wss://actual-hostname -out /private/path/first-invite.txt`
-as the service account, which writes only the invite, mode 0600. Either way
+as the service account, which writes only the invite lines, unindented, mode
+0600. Either way
 the command goes through the running server. A server with no devices also
 writes an invite to `first-invite` in its data directory at startup and logs
 that path, never the string; it names the endpoint only when `serve` was
@@ -252,7 +257,10 @@ separately; do not clear it automatically. Sync runs both ways after pairing.
 
 On Android, create a new vault in **App storage** (Obsidian asks for a vault
 location): **Device storage** is several times slower for TrewSync to write
-to. Moving an existing Android vault is the user's decision; if they want it,
+to. A file manager cannot reach App storage, so install the plugin there with
+the community plugin **BRAT** (add the beta plugin `waynehoover/trewsync`), as
+the [plugin guide](docs/plugin.md#install-with-brat) describes; or install it
+into a Device storage vault before moving the vault. Moving an existing Android vault is the user's decision; if they want it,
 pair a new App-storage vault with a new invite and keep the old vault until
 the new one has finished its first sync.
 
@@ -362,7 +370,8 @@ agent reads reaches its model provider; record that they agreed. Follow
    note from section 7, through the client or with `curl` as
    [Check it from a shell](docs/agent.md#check-it-from-a-shell) shows, the
    token read from its file. For a write token, append a line to that test note
-   with `append_note` using the `uid` and `epoch` `read_note` returned, check
+   with `append_note`, passing the `uid` `read_note` returned as `base`, and
+   its `epoch` as `epoch`; check
    the line arrives on a device, then undo it with `undo_operation` and check
    it is gone there too.
 
@@ -399,9 +408,9 @@ never adopt a commit they have not looked at.
 
 ## Working from development source
 
-This source tree's server speaks protocols 1 to 3, and its plugin and CLI
-speak protocol 3 (protocol 2, which added undo and search, with settings);
-upgrade the server first. Basalt's
+This source tree's server speaks protocols 1 to 4, and its plugin and CLI
+speak protocol 4: protocol 2 added undo and search, protocol 3 settings sync,
+and protocol 4 plugins' settings. Upgrade the server first. Basalt's
 releases speak its protocol 7, and Basalt and TrewSync refuse each other at
 the handshake, naming both numbers. For source builds, build the server and clients from the same
 checkout. Keep existing data and credentials, and verify the reported protocol

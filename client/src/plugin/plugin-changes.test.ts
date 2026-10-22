@@ -83,7 +83,7 @@ describe("what the Apply dialog says is waiting", () => {
         path.endsWith("manifest.json") ? enc(JSON.stringify({ name: "Dataview" })) : undefined,
     );
     expect(changes.plugins.map(describeChange)).toEqual([
-      "Add a conflict copy of Dataview's settings, from another device",
+      "Add a conflict copy of Dataview's settings",
     ]);
   });
 });

@@ -55,6 +55,11 @@ it.
    names, and press **Pair**. Keep Obsidian open until the first sync
    finishes; on Android it has to stay in the foreground.
 
+   On Android, create the vault in **App storage** rather than Device storage,
+   which is several times slower for TrewSync. A file manager cannot reach App
+   storage, so install the plugin there with the community plugin **BRAT**
+   ([install with BRAT](docs/plugin.md#install-with-brat)).
+
 5. **Add your other devices.** On the paired device choose **Add another device
    → Create invite**, then scan the QR code with the next one.
 
@@ -104,8 +109,9 @@ Docker, is [server setup](docs/server.md).
 
 TrewSync is an early project for one person's devices. The supported setup is
 Obsidian on **macOS, Linux, and Android**, with local storage. The plugin needs
-Obsidian **1.7.2 or newer** and is installed manually. iOS is untested; Windows
-is not supported.
+Obsidian **1.7.2 or newer** and is installed manually or with BRAT. Plugin
+0.15.0 needs the server `trewd` 0.14.0 or later. iOS is untested; Windows is
+not supported.
 
 ### Platforms
 
@@ -113,7 +119,7 @@ is not supported.
 |---|---|---|
 | macOS | Supported | The tests run here. |
 | Linux | Supported | The tests run here. |
-| Android | Supported | Sync runs while Obsidian is open in the foreground. |
+| Android | Supported | Sync runs while Obsidian is open in the foreground. Keep the vault in App storage, and install the plugin with BRAT. |
 | iOS | Untested | The same code as on Android, but no test has run on an iPhone or iPad: background suspension, iCloud Drive vaults and the iOS file system are untested. The plugin pairs, and says so in its panel for as long as it runs. |
 | Windows | Not supported | No test runs on Windows. The plugin pairs, and says so in its panel and status bar for as long as it runs. A note whose name Windows cannot hold (a device name such as `CON` or `COM1`, one of the characters Windows forbids, or a name ending in a dot or a space) is listed as needing attention instead of syncing, and stays on your other devices. |
 

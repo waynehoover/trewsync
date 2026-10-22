@@ -9,7 +9,9 @@ agent holding a token reads the whole vault and, with a write token, makes
 exact, recorded, undoable edits; what the agent reads reaches its model
 provider. The supported client environment is macOS, Linux, and Android with
 local storage; Android sync runs in the foreground. The CLI is experimental.
-Settings and plugins do not sync.
+Obsidian's settings sync when the user turns settings sync on (protocol 3), and
+community plugins' settings, their `data.json`, with plugin settings sync
+(protocol 4); the plugins themselves and the workspace layout never sync.
 
 For installation requests, start with the agent runbook. Follow linked references
 only as needed. The URLs below point to Markdown on the main branch; use matching

@@ -26,7 +26,7 @@ From a copy of this repository:
 ```bash
 git clone https://github.com/waynehoover/trewsync.git
 cd trewsync
-docker compose up -d --build
+docker compose up -d
 docker compose logs trew
 ```
 
@@ -74,7 +74,7 @@ executable, and run it with a writable data directory, given as an absolute
 path:
 
 ```bash
-V=0.13.0   # the newest server release
+V=0.14.0   # the newest server release
 curl -fLO https://github.com/waynehoover/trewsync/releases/download/server/v$V/trewd-linux-amd64
 curl -fLO https://github.com/waynehoover/trewsync/releases/download/server/v$V/SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing
@@ -132,8 +132,16 @@ the MCP endpoint, with its data in `$(brew --prefix)/var/trewd`. Give that
 directory to every command (`trewd invite -data "$(brew --prefix)/var/trewd" ...`),
 or set `TREW_DATA` to it, since the default is `~/.trew`.
 
+The Homebrew service cannot be given `-mcp`. To serve the
+[MCP endpoint](agent.md), stop it (`brew services stop trewd`) and run the
+server under a service of your own with the same data directory and `-mcp`:
+`trewd serve -data "$(brew --prefix)/var/trewd" -addr 127.0.0.1:3003 -mcp`.
+On Linux, `trewd service ... -mcp`, below, prints a systemd unit for it.
+
 A binary downloaded by hand is upgraded with `trewd update`, which verifies the
 release before replacing anything ([reference](server-reference.md#update)).
+It needs the [packslip](https://github.com/jdx/packslip) CLI on `PATH` (or
+given with `-packslip`) for that check, and refuses to run without it.
 Homebrew and mise installs are upgraded through their own tool instead.
 
 ## Secure access
@@ -280,20 +288,24 @@ Server, plugin, and CLI release numbers are separate; protocol compatibility
 determines whether they can connect. An incompatible client stops with a
 protocol error instead of syncing partially.
 
-This source tree's server speaks protocols 1 to 3, and its plugin and CLI
-speak protocol 3, which is protocol 2 with settings sync (protocol 2 added
-undo and search). A server of this tree keeps serving a plugin or CLI of
-protocol 1 or 2 exactly as before, which is what makes the server-first order
-work; a plugin or CLI of protocol 3 meeting an older server stops at the
-handshake and says to upgrade the server.
+This source tree's server speaks protocols 1 to 4. Its plugin and CLI speak
+protocol 4, which is protocol 3 with plugins' settings (protocol 3 added
+settings sync, and protocol 2 undo and search). A server of this tree keeps
+serving a plugin or CLI of protocol 1, 2 or 3 exactly as before, which is what
+makes the server-first order work; a plugin or CLI of protocol 4 meeting an
+older server stops at the handshake and says to upgrade the server. Plugin
+0.15.0 speaks protocol 4, so it needs `trewd` 0.14.0 or later. The released
+`trew` CLI, 0.12.0, speaks protocol 2.
 Basalt Sync's releases speak protocol 7, and a Basalt client and a TrewSync
 server refuse each other at the handshake, naming both numbers; moving from
 Basalt is a fresh pairing, not an upgrade. For source builds, use the same
 revision for the server and clients.
 
 For Compose, take the `image:` line, tag and digest, from the repository's
-`compose.yaml` at the chosen server release (`git pull` in your clone brings
-the newest), then run `docker compose pull` and `docker compose up -d`.
+`compose.yaml` on `main` (`git pull` in your clone brings it), then run
+`docker compose pull` and `docker compose up -d`. Do not take it from the
+`server/vX.Y.Z` tag: the pin for a release is committed after the tag, so the
+tag's own `compose.yaml` names the release before it.
 Preserve the data volume and any customized flags, especially the file-size
 limit. Never use `docker compose down -v` to upgrade.
 

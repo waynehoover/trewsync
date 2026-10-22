@@ -1,4 +1,4 @@
-# Documentation review — September 8, 2026
+# Documentation review, September 8, 2026
 
 [Developer documentation](development.md)
 

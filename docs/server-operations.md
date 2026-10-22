@@ -17,12 +17,17 @@ server and its backups are not:
 ```bash
 trewd backup-key -out ~/trew-backup-key     # on your own machine, not the server
 scp ~/trew-backup-key.pub server:
-ssh -t server sudo install -D -m 644 trew-backup-key.pub /etc/trew/backup-key.pub
+ssh -t server sudo mkdir -p /etc/trew
+ssh -t server sudo install -m 644 trew-backup-key.pub /etc/trew/backup-key.pub
 ```
 
 `backup-key` writes both files mode 0600. The recipient is public, and the
 account that runs backups (the server's, or the container's 65532) has to read
 it, hence mode 644 on the server; the identity stays 0600 and off the server.
+A rehearsal and a restore need the identity on the server for as long as they
+run: copy it over (`scp ~/trew-backup-key server:`), give its path to
+`-identity`, and remove it when they finish. Under `sudo`, `~` still means your
+own home, not root's.
 
 Then back up the server while it is running:
 
@@ -164,8 +169,10 @@ sudo chown -R trew:trew /var/lib/trew
 sudo -u trew /usr/local/bin/trewd verify -deep -data /var/lib/trew
 ```
 
-From a plaintext backup directory, copy it into place instead of unpacking
-(`sudo rsync -a offsite:/backups/trew/ /var/lib/trew/`). Never start the server
+From a plaintext backup directory (one made with `-plaintext-ok`), copy it
+into place instead of unpacking
+(`sudo rsync -a offsite:/backups/trew-plain/ /var/lib/trew/`), naming the
+directory itself, not where the encrypted archives are kept. Never start the server
 on the backup directory itself: it would be a live store, and the next backup
 into it is refused.
 

@@ -11,7 +11,34 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Server
+
+- A conflict over a community plugin's settings now syncs the copy it keeps,
+  `data (Conflicted copy <device> <stamp>).json` beside the plugin's
+  `data.json`. It was refused, so the other device's version stayed on one
+  device, unlisted. Plugin 0.15.1 needs this to sync the copy; against
+  0.14.0 the copy is refused as before.
+
+### Plugin
+
+- "Use the server's" now holds even when the first sync is interrupted, by
+  an edit to the open note or a setting waiting out a retry. Before, an
+  interrupted first pass could send this device's settings to every device
+  instead.
+- A setting removed by Apply stays removed. Obsidian or the plugin writing
+  its old copy back before the reload is held and offered for Apply again,
+  not sent to every device.
+- A conflict over a plugin's settings keeps the other device's version in a
+  copy that syncs, appears in **Review conflicts**, and is named in the Apply
+  dialog.
+- Apply can no longer be cut short by unlinking during it, and its dialog
+  stays open until Obsidian reloads.
+- The first-sync count no longer includes deleted files, settings waiting for
+  Apply, or files waiting to retry, and no longer counts one file twice.
+- The Apply dialog counts a plugin once, with or without a conflict copy.
+- Documentation fixes throughout: the protocol numbers, the server each
+  plugin needs, installing with BRAT (the way onto an Android App storage
+  vault), and the `trew:history` and `trew:restore` Obsidian CLI commands.
 
 ## 0.15.0, plugin, and 0.14.0, server (2026-10-16)
 
@@ -185,8 +212,9 @@ Released together, so that BRAT installs the plugin again.
   and point at it. Every shipped way of running the server (the container
   image, the unit `trewd service` prints, the Homebrew service) already says
   `serve`, so nothing deployed changes.
-- An encrypted backup (`trewd backup -recipients`) of a data directory given
-  as a relative path, `-data ./trew-data`, works. It failed after staging.
+- An encrypted backup (`trewd backup -encrypt-to` or `-recipients-file`) of a
+  data directory given as a relative path, `-data ./trew-data`, works. It
+  failed after staging.
 - The invite a server prints at its first start says when the addresses in it
   are guesses, because the server was started without `-url`, and how to make
   the one to paste: `trewd invite -url wss://NAME`.

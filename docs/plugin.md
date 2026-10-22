@@ -7,8 +7,8 @@ earlier versions from inside Obsidian. Start with a
 [configured server](server.md) and Obsidian **1.7.2 or newer**.
 
 Use a local vault on macOS, Linux, or Android. iOS is untested; Windows is not
-supported. The plugin pairs on both, and says so in its panel for as long as
-it runs; the [platform table](../README.md#platforms) says what that means.
+supported. The plugin pairs on iOS and Windows too, and says so in its panel
+for as long as it runs; the [platform table](../README.md#platforms) says what that means.
 Back up an existing vault before pairing, and disable other sync
 services for that vault. Each device should have its own local copy.
 
@@ -22,12 +22,37 @@ services for that vault. Each device should have its own local copy.
    of `.obsidian`.
 3. Reload Obsidian. Under **Settings → Community plugins**, turn community plugins on if they are
    off, then enable **TrewSync**.
-4. Open the TrewSync ribbon icon and choose **Sync settings**, or run
-   **TrewSync: Show status** from the command palette.
+4. Open the TrewSync ribbon icon and choose **Sync settings** at the bottom of
+   its menu, or run **TrewSync: Show status** from the command palette. Either
+   opens the TrewSync panel, where you pair. (This is not
+   [settings sync](#settings-sync), which is a choice inside the panel.)
 
 Manual installation is required while TrewSync is outside the community directory.
 To upgrade, replace the same three files and reload Obsidian. When a release
 changes the protocol, upgrade the server before its clients.
+
+**Server version.** Plugin 0.15.0 needs `trewd` 0.14.0 or later. It speaks
+protocol 4 only, and a 0.13 or older server refuses it at the handshake, for
+everything and not only settings. Upgrade the server first; see
+[upgrade order](server.md#upgrade-order).
+
+### Install with BRAT
+
+On a phone, and on Android whenever the vault is in **App storage**, a file
+manager cannot reach the vault's `.obsidian` folder. Install with the community
+plugin **BRAT** instead, which installs a plugin from its GitHub releases:
+
+1. Under **Settings → Community plugins**, browse for **BRAT**, install it and
+   enable it.
+2. In BRAT's settings, choose **Add beta plugin** and enter
+   `waynehoover/trewsync`.
+3. Enable **TrewSync** under **Settings → Community plugins**.
+
+BRAT also updates TrewSync when a new plugin release appears. On Android you
+can instead create the vault in App storage, install TrewSync there with BRAT,
+and only then pair it; or install the plugin into a vault in Device storage
+first and move the vault afterwards. Settings sync never carries TrewSync
+itself, so each device needs it installed by one of these routes.
 
 ## Pairing
 
@@ -47,9 +72,11 @@ field, **Invite**, and a **Pair** button.
 
 ### Start your first device
 
-1. Get the first invite from your server. It is in the `first-invite` file in
-   the server's data directory, or `trewd invite` on the server prints a fresh
-   one; [server setup](server.md#the-first-device) shows both.
+1. Get the first invite from your server: run `trewd invite` there with the
+   address your devices use, as [server setup](server.md#the-first-device)
+   shows. The `first-invite` file in the server's data directory works only if
+   the server was started with that address (`-url`), or as a trial on one
+   machine (`-localhost`); otherwise it names a guessed address.
 2. Paste it into **Invite**. TrewSync reads it and says which server it points to,
    and which vault if it is not `default`; check that address. **Pair** becomes
    available once the invite can be read.
@@ -65,7 +92,8 @@ the server to pair a new one.
 ### Add another device
 
 1. On a paired device, open **Add another device → Create invite**.
-2. On your phone, install and enable TrewSync, then scan the QR code. Or copy the
+2. On your phone, install and enable TrewSync (on a phone, use
+   [BRAT](#install-with-brat)), then scan the QR code. Or copy the
    pairing code and paste it into **Invite** on the new device.
 3. Check the server (and vault) named under the field, then press **Pair**.
 4. If this vault already contains files, TrewSync asks you to confirm combining
@@ -253,8 +281,12 @@ that, undoing it may be refused because the earlier version is gone.
 
 Press **Browse deleted**, select the note, and restore it. A note whose
 content has been purged is listed without a restore button.
-Use **Show older** to browse further back and **Newest** to return. If the
-connection fails, choose **Try again** after reconnecting.
+Type in **Find a file** to filter the list by filename. **Show older** adds
+the next page of older deletions to the list; the filter searches only what is
+loaded. To restore several at once, press **Choose** on each note, or **Choose
+all shown**, then **Restore N**: they are restored together in one sync, into
+names nothing already occupies. If the connection fails, choose **Try again**
+after reconnecting.
 
 <details>
 <summary>See deleted notes</summary>
@@ -319,14 +351,14 @@ both versions on a conflict is not a promise that sync never changes an open fil
 
 ## Settings sync
 
-Off until you turn it on, on each device: **Manage this vault**, **Sync
-settings**. It syncs Obsidian's own settings, themes and CSS snippets from the
-settings folder this device runs. That includes core plugins and their
+Off until you turn it on, on each device: in the TrewSync panel, **Manage this
+vault → Sync settings**. It syncs Obsidian's own settings, themes and CSS
+snippets from the settings folder this device runs. That includes core plugins and their
 settings, such as Daily notes and Templates. Community plugins' own settings
 sync only where you also turn on [plugin settings sync](#plugin-settings);
 plugins themselves and the workspace layout never do. Names you have told this device to skip are skipped in the
-settings folder too. It needs a server of 0.13.0 or later, which speaks
-protocol 3; upgrade the server first.
+settings folder too. Plugin 0.15.0 needs a server of 0.14.0 or later for
+everything, settings sync included; see [Install](#install).
 
 **Whom a device shares its settings with.** **Sync settings** is one choice,
 made on each device:
@@ -379,13 +411,13 @@ connected over MCP never see settings, and the Git export leaves them out.
 
 ### Plugin settings
 
-With settings sync on, **Manage this vault**, **Sync plugin settings** syncs
+With settings sync on, **Manage this vault → Sync plugin settings** syncs
 each community plugin's settings, its `data.json`, with the same group. The
 plugins themselves never sync: install them and switch them on separately on
 each device, and their settings follow. Settings for a plugin that is not
 installed on a device wait in its folder until it is. It is off until you turn
-it on, on each device, and needs a server of 0.14.0 or later, which speaks
-protocol 4; upgrade the server first.
+it on, on each device. Like the rest of plugin 0.15.0 it needs a server of
+0.14.0 or later, which speaks protocol 4.
 
 A change from another device waits until you apply it, as other settings do,
 and **Apply synced settings** names each plugin whose settings it would
@@ -447,7 +479,8 @@ Pro XL a first sync of 3,000 notes took 2.4 times as long there as in App
 storage. Other apps cannot open App storage, and Android deletes it when
 Obsidian is uninstalled, which with TrewSync loses only changes that have not
 synced yet. To move a vault you already have, create a new vault in App
-storage, pair it with a new invite, and let its first sync finish before you
+storage, install TrewSync there with [BRAT](#install-with-brat), pair it with
+a new invite, and let its first sync finish before you
 remove the old vault and its device. Obsidian's own settings come across only
 with [settings sync](#settings-sync) on.
 
@@ -480,6 +513,9 @@ Under **Manage this vault**:
   Existing history and conflict filenames retain their old labels.
 - **Devices → Show devices** lists paired devices and outstanding invites.
 - **Revoke** stops a device syncing; **Cancel** invalidates an unused invite.
+  On the row for this device the same button reads **Unlink from the server**.
+  It revokes this device on the server, unlike **Unlink this vault**, which is
+  local only.
 
 When names match, the list shows device IDs to help you tell them apart.
 Rows marked **Never connected** may be left by an interrupted pairing. The
@@ -589,3 +625,20 @@ record; use **Devices** when you want to remove access.
 | TrewSync: Show status | Open the panel. |
 | TrewSync: Show version history | View history for the open note. |
 | TrewSync: Recover a deleted note | Browse deleted notes. |
+| TrewSync: Apply synced settings and reload | Apply settings changed on another device, then reload Obsidian. |
+
+### From the command line
+
+On Obsidian 1.12.2 and later, TrewSync adds two commands to Obsidian's
+command-line interface, `obsidian`, for scripts and agents working on a desktop
+vault. Both need the device paired and connected, and answer in text rather
+than failing.
+
+- `obsidian trew:history path=<path>` lists the newest 50 versions of a note,
+  one per line: the version's uid, its time, its size in bytes and the device
+  that wrote it, separated by tabs.
+- `obsidian trew:restore path=<path> uid=<n>` restores that version (any of
+  the note's, not only the 50 listed) as **Restore** in version history does:
+  it never overwrites an existing file, so if something is at the path the
+  copy goes beside it, and it uploads the copy to the server. The answer says
+  where the copy went and whether it was sent.
