@@ -233,7 +233,7 @@ adopt` continues a branch that already has history
 
 The server needs `git` 2.36 or later and, for a remote with files over the
 threshold, `git-lfs` 3.0 or later, with `ssh` for an SSH remote. The container
-image and the Nix package carry all three; Homebrew installs git-lfs; on
+image carries all three; Homebrew installs git-lfs; on
 another Linux install them from your distribution (Debian 12 and Ubuntu 24.04
 are new enough). Without them the server still serves every device and doctor
 says what is missing.

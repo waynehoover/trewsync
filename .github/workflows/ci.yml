@@ -184,11 +184,6 @@ jobs:
       - name: the Homebrew formula renders from the release sums
         run: scripts/homebrew-formula.test.sh
 
-      # Nix in a container, which is what the script does wherever nix itself
-      # is not installed, so this is the same check a laptop runs.
-      - name: the flake builds trewd
-        run: scripts/flake-check.sh
-
   # docs/server.md has carried the restore rehearsal as prose since the backup
   # was written, and a recovery path tested only in docs is a rumour. Not
   # because the steps are wrong: because nobody has run them since the backup

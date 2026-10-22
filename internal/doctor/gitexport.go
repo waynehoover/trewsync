@@ -58,7 +58,7 @@ func (r *run) gitExport() {
 	case st.Tools != nil && (st.Tools.Git == "" || !gitToolOK(st.Tools)):
 		r.bad(Fail, CheckGitExport, "the git export cannot run: "+strings.Join(st.Tools.Missing, "; "),
 			fmt.Sprintf("Install git %s or later (and git-lfs %s or later for a remote) on the server's PATH; the "+
-				"container image and the Nix package carry both. Sync is not affected.", gitexport.MinGit, gitexport.MinLFS))
+				"container image carries both. Sync is not affected.", gitexport.MinGit, gitexport.MinLFS))
 		return
 	case st.Refused != "":
 		r.bad(Fail, CheckGitExport, "the git export stopped: "+st.Refused,

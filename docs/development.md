@@ -609,7 +609,7 @@ refuses the same feed because a key is not the workflow. The keyless path
 itself, Fulcio and Rekor, cannot be exercised without publishing and is
 first checked by `scripts/verify-release.sh --server` on the first release.
 
-### Homebrew, mise, Nix and Docker
+### Homebrew, mise and Docker
 
 - **Homebrew.** [packaging/homebrew/trewd.rb](../packaging/homebrew/trewd.rb)
   is the formula for the tap `github.com/waynehoover/homebrew-tap`, where it
@@ -625,12 +625,6 @@ first checked by `scripts/verify-release.sh --server` on the first release.
   checks the binary. `brew audit` has not been run.
 - **mise.** `mise use -g packslip:github.com/waynehoover/trewsync/server` installs
   trewd from the signed manifest, verified against the repository's identity.
-- **Nix.** [flake.nix](../flake.nix) builds trewd from source with the release
-  flags, version `unstable-<rev>`, over only `go.mod`, `go.sum`, `cmd/` and
-  `internal/`; [flake.lock](../flake.lock) pins nixpkgs. `vendorHash` changes
-  whenever `go.sum` does, and `scripts/flake-check.sh` prints the new one. It
-  runs nix if installed and otherwise nix in a container (store in the
-  `trew-nix-store` volume).
 - **Docker.** `compose.yaml` builds the image from the checkout until the first
   server release, because the only image it could name was Basalt's, which has
   `/trew` inside rather than `/trewd`. `scripts/pin-compose.sh` replaces the
@@ -1892,8 +1886,7 @@ the commits, `update-ref` with an old value for the branch, `git lfs push
 - *Packaging, the cost.* The image was `scratch` and one binary (14.4 MB); it
   is now Alpine 3.24 with git 2.54, git-lfs 3.7.1 and OpenSSH 10.3 (55.7 MB,
   of which git-lfs is 13.2 MB). ssh refuses to run for a uid with no passwd
-  entry, so the image creates `trewd`, uid 65532. The flake wraps `trewd`
-  with the three on its PATH; the Homebrew formula depends on git-lfs; a
+  entry, so the image creates `trewd`, uid 65532. The Homebrew formula depends on git-lfs; a
   plain binary install needs them on the host, and doctor says when they are
   missing. The release workflow's arm64 image now runs its `apk add` under the
   QEMU it already set up.

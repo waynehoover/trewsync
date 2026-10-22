@@ -120,12 +120,11 @@ It does not install the service itself. The generated unit includes restart
 handling and a 30-second shutdown allowance. Add `-mcp` to have the unit serve
 the [MCP endpoint](agent.md) too.
 
-### Homebrew, mise or Nix
+### Homebrew or mise
 
 ```bash
 brew install waynehoover/tap/trewd                   # macOS or Linux
 mise use -g packslip:github.com/waynehoover/trewsync/server   # verified from the signed manifest
-nix run github:waynehoover/trewsync -- version           # built from source by the flake
 ```
 
 `brew services start trewd` runs it as a service on `127.0.0.1:3003`, without
@@ -135,7 +134,7 @@ or set `TREW_DATA` to it, since the default is `~/.trew`.
 
 A binary downloaded by hand is upgraded with `trewd update`, which verifies the
 release before replacing anything ([reference](server-reference.md#update)).
-Homebrew, mise and Nix installs are upgraded through their own tool instead.
+Homebrew and mise installs are upgraded through their own tool instead.
 
 ## Secure access
 

@@ -218,8 +218,8 @@ export only reads what the store has committed.
   copy it across with the server stopped, or export to a new branch with
   `trewd git-export set -branch NAME`.
 - **git or git-lfs is missing or too old.** Install git 2.36 or later and
-  git-lfs 3.0 or later on the server's PATH; the container image and the Nix
-  package carry both.
+  git-lfs 3.0 or later on the server's PATH; the container image carries
+  both.
 
 `trewd purge` does not reach the Git history. What was pushed stays readable
 by whoever hosts the remote until the repository itself is deleted.
