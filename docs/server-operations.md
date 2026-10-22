@@ -21,6 +21,18 @@ ssh -t server sudo mkdir -p /etc/trew
 ssh -t server sudo install -m 644 trew-backup-key.pub /etc/trew/backup-key.pub
 ```
 
+Without `trewd` on your own machine, Docker makes the key just as well, into a
+folder of your own:
+
+```bash
+mkdir -p ~/trew-keys
+docker run --rm --user "$(id -u):$(id -g)" -v ~/trew-keys:/out \
+  ghcr.io/waynehoover/trewsync backup-key -out /out/trew-backup-key
+```
+
+It writes `trew-backup-key` and `trew-backup-key.pub` into `~/trew-keys`, as
+you, so use those paths in the commands below.
+
 `backup-key` writes both files mode 0600. The recipient is public, and the
 account that runs backups (the server's, or the container's 65532) has to read
 it, hence mode 644 on the server; the identity stays 0600 and off the server.
@@ -147,6 +159,18 @@ rehearsal killed outright leaves is removed by the next. The backup is never
 touched. The result is recorded for `trewd doctor`, which warns when no
 rehearsal has passed in 90 days.
 
+For Compose, with the server still running and the identity copied to the
+server for the run. The container runs as 65532, so on a Linux host the copy
+has to be readable by that account; remove it afterwards:
+
+```bash
+sudo install -m 400 -o 65532 -g 65532 ~/trew-backup-key /run/trew-backup-key
+docker compose run --rm --no-deps -v /srv/trew-backups:/backup:ro \
+  -v /run/trew-backup-key:/run/secrets/backup-key:ro \
+  trew rehearse -data /data -backup /backup/trew.tar.age -identity /run/secrets/backup-key
+sudo rm /run/trew-backup-key
+```
+
 [Operating TrewSync](operations.md#rehearse-a-restore) has the steps to do it
 by hand once, which is worth doing: a rehearsal you have watched is the one you
 will trust at 2am. The project's CI rehearses an encrypted backup on every
@@ -209,10 +233,37 @@ commands one at a time and stop on an error. **Only after verification succeeds:
 sudo systemctl start trew
 ```
 
-For Docker, stop the container, preserve its existing data, and restore the
-verified backup into its data volume. Restore ownership to `65532:65532` and
-verify it with the same server image before starting. Do not restore over a
-running server or delete its volume as part of the procedure.
+For Compose, the data directory is the root of a named volume, and unpack
+needs an empty directory, so the volume's contents are kept on the host first
+and then cleared. The image has no shell, so `busybox` does the copying. The
+volume is the one Compose made, `<folder>_trew-data`, which `docker volume ls`
+lists; `trewsync_trew-data` below is for a checkout named `trewsync`. Run from
+the folder holding `compose.yaml`, one command at a time, and stop on an error:
+
+```bash
+docker compose stop trew
+sudo mkdir /srv/trew-before-restore
+docker run --rm -v trewsync_trew-data:/data:ro -v /srv/trew-before-restore:/keep \
+  busybox:1.37 cp -a /data/. /keep/
+docker run --rm -v trewsync_trew-data:/data busybox:1.37 find /data -mindepth 1 -delete
+sudo install -m 400 -o 65532 -g 65532 ~/trew-backup-key /run/trew-backup-key
+docker compose run --rm --no-deps -v /srv/trew-backups:/backup:ro \
+  -v /srv/trew-before-restore:/keep:ro -v /run/trew-backup-key:/run/secrets/backup-key:ro \
+  trew unpack -from /backup/trew.tar.age -identity /run/secrets/backup-key -to /data -record /keep
+sudo rm /run/trew-backup-key
+docker compose run --rm --no-deps trew verify -deep -data /data
+```
+
+With the Git export on, copy its repository back before the first start:
+
+```bash
+docker run --rm -v trewsync_trew-data:/data -v /srv/trew-before-restore:/keep:ro \
+  busybox:1.37 cp -a /keep/git-export /data/
+```
+
+**Only after verification succeeds:** `docker compose start trew`. Never delete the volume as part of
+this, and keep `/srv/trew-before-restore` until the restored server has run for
+a while.
 
 A store restored from a `trewd backup` snapshot starts a store epoch of its
 own the first time it is served, every time a snapshot is restored, the same
