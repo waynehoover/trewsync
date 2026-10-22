@@ -31,25 +31,46 @@ root=$(pwd)
 skip_docker=0
 [ "${1:-}" = "--skip-docker" ] && skip_docker=1
 
-pass=0 fail=0 skipped=0 elsewhere=0
-failed_names=()
-skipped_names=()
-elsewhere_names=()
+# A tree that has passed here once is not run again. The tree is every byte of
+# the repository at a commit, so the same tree is the same inputs: a commit
+# whose message changed, a rebase that changed nothing, the same commit checked
+# out in another worktree. Only with nothing uncommitted, since the run reads
+# the working tree, and only for a run that passed outright. Shared by every
+# worktree of the repository. TREW_CHECK_AGAIN=1 runs it regardless.
+passed_trees="$(git rev-parse --path-format=absolute --git-common-dir)/trew-check-passed"
+tree=""
+if [ -z "$(git status --porcelain --untracked-files=normal)" ]; then
+  tree=$(git rev-parse 'HEAD^{tree}')
+  if [ "${TREW_CHECK_AGAIN:-0}" != 1 ] && grep -qx "$tree" "$passed_trees" 2>/dev/null; then
+    echo "This tree ($tree) has already passed every check here; not running it again."
+    echo "TREW_CHECK_AGAIN=1 runs it regardless."
+    exit 0
+  fi
+fi
+
+# Every step writes one line to a results file, "<outcome>\t<step name>", and
+# the totals at the end are counted from those files. Files rather than shell
+# variables because the groups below run at once, each in a subshell of its
+# own, and a subshell's variables die with it.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+results="$work/main.results"
 
 # Each entry is a CI step name, so the guard can compare against the workflow.
 run() { # run <ci step name> <working dir> <command...>
-  local name=$1 dir=$2; shift 2
+  local name=$1 dir=$2 started=$SECONDS; shift 2
   printf '\n\033[1m==> %s\033[0m (%s)\n' "$name" "${dir:-.}"
   if ( cd "$root/${dir:-.}" && "$@" ); then
-    pass=$((pass + 1))
+    printf 'pass\t%s\n' "$name" >> "$results"
   else
-    fail=$((fail + 1)); failed_names+=("$name")
+    printf 'fail\t%s\n' "$name" >> "$results"
   fi
+  printf '    (%ss)\n' "$((SECONDS - started))"
 }
 
 skip() { # skip <ci step name> <why>
   printf '\n\033[1m==> %s\033[0m SKIPPED: %s\n' "$1" "$2"
-  skipped=$((skipped + 1)); skipped_names+=("$1")
+  printf 'skip\t%s\n' "$1" >> "$results"
 }
 
 # only_in_ci is for a check this machine cannot run and never will (I20).
@@ -66,7 +87,7 @@ skip() { # skip <ci step name> <why>
 # test is whether this platform can run it at all.
 only_in_ci() { # only_in_ci <ci step name> <why>
   printf '\n\033[1m==> %s\033[0m ONLY IN CI: %s\n' "$1" "$2"
-  elsewhere=$((elsewhere + 1)); elsewhere_names+=("$1")
+  printf 'elsewhere\t%s\n' "$1" >> "$results"
 }
 
 gofmt_clean() {
@@ -75,6 +96,7 @@ gofmt_clean() {
 }
 
 # ---- server ----------------------------------------------------------------
+server_checks() {
 run "gofmt" "" gofmt_clean
 run "vet" "" go vet ./...
 # The contract's vectors and fold tables are generated (scripts/protocol-vectors.py).
@@ -110,6 +132,9 @@ if command -v systemd-analyze >/dev/null 2>&1; then
 else
   only_in_ci "systemd accepts the unit" "there is no systemd on this machine"
 fi
+run "the backup restores, verifies and serves what it held" "" \
+  go test -tags rehearsal -run TestRestoreRehearsal -count=1 ./cmd/trewd/
+}
 
 # ---- the client suite on a filesystem of its own ----------------------------
 #
@@ -121,6 +146,7 @@ fi
 only_in_ci "a filesystem of its own, mounted" \
   "it needs a loopback mount, and this script does not ask for root"
 
+release_checks() {
 # ---- the kernel exclusion --------------------------------------------------
 #
 # Whether the operating system really takes the lock away when a trew dies,
@@ -171,6 +197,7 @@ run "the release version step refuses what it should" "" \
   bash "$root/scripts/release-prepare.test.sh"
 run "the Homebrew formula renders from the release sums" "" \
   bash "$root/scripts/homebrew-formula.test.sh"
+}
 
 # ---- the restore rehearsal -------------------------------------------------
 #
@@ -179,9 +206,6 @@ run "the Homebrew formula renders from the release sums" "" \
 # stress suite is: a recovery path tested only in docs is a rumour, and the
 # runbook it executes is the one nobody finds out is wrong until the day the
 # live directory is gone.
-run "the backup restores, verifies and serves what it held" "" \
-  go test -tags rehearsal -run TestRestoreRehearsal -count=1 ./cmd/trewd/
-
 # ---- client ----------------------------------------------------------------
 # ---- the filesystem this is running on --------------------------------------
 #
@@ -201,9 +225,8 @@ folds_case() {
   fi
   rm -rf "$d"
 }
+client_checks() {
 run "this runner folds case" "" folds_case
-
-run "install" client bun install --frozen-lockfile
 run "format" client bun run format:check
 run "typecheck" client bun run typecheck
 # The community directory's own review of the plugin bundle. It re-reviews
@@ -229,12 +252,16 @@ run "the packed CLI installs and runs under node" "" \
 # only incidentally is a step it would stop covering the day the other command
 # changed.
 run "capture every panel state" client bunx vitest run src/plugin/panel-shots.test.ts
+}
 
 # The one that was missed. Its own command, its own job, and not part of
 # `bun run test`.
+stress_checks() {
 run "stress" client bun run stress
+}
 
 # ---- docker ----------------------------------------------------------------
+docker_checks() {
 if [ "$skip_docker" = 1 ]; then
   skip "build the image" "asked to"
   skip "it runs" "asked to"
@@ -248,6 +275,32 @@ else
   run "it runs" "" docker run --rm trew:ci version
   run "the compose file is valid" "" docker compose -f compose.yaml config -q
 fi
+}
+
+# ---- running them -----------------------------------------------------------
+#
+# The client's dependencies first, because three groups run from them. Then
+# three lanes at once, each into a log of its own, printed whole and in this
+# order once all have finished, so the output reads as one run did: the
+# server's checks, whose race-enabled tests are the longest single step; the
+# client suite and then the stress suite; and the release scripts and the
+# image. Not every group at once: with the Go race tests, the client suite and
+# the stress suite all running together, tests that wait a fixed time for a
+# push or bound a pass's cost timed out on this 14-core Mac. They share
+# nothing: each test file builds its own server into a temporary directory and
+# listens on a port the system picks. Serial, this took about eleven minutes.
+run "install" client bun install --frozen-lockfile
+lanes=("server_checks" "client_checks stress_checks" "release_checks docker_checks")
+pids=()
+for i in "${!lanes[@]}"; do
+  (
+    results="$work/lane$i.results"
+    for g in ${lanes[$i]}; do "$g"; done
+  ) > "$work/lane$i.log" 2>&1 &
+  pids+=($!)
+done
+for pid in "${pids[@]}"; do wait "$pid"; done
+for i in "${!lanes[@]}"; do cat "$work/lane$i.log"; done
 
 # ---- the guard: CI must not grow a step this script does not know about ----
 #
@@ -262,11 +315,23 @@ if [ ${#missing[@]} -gt 0 ]; then
   echo "CI runs steps this script does not:"
   printf '  %s\n' "${missing[@]}"
   echo "Add them above, or this command means less than it says."
-  fail=$((fail + 1)); failed_names+=("every CI step is covered here")
+  printf 'fail\t%s\n' "every CI step is covered here" >> "$results"
 else
   echo "ok"
-  pass=$((pass + 1))
+  printf 'pass\t%s\n' "every CI step is covered here" >> "$results"
 fi
+
+# ---- the count --------------------------------------------------------------
+pass=0 fail=0 skipped=0
+failed_names=() skipped_names=() elsewhere_names=()
+while IFS=$'\t' read -r outcome name; do
+  case $outcome in
+    pass) pass=$((pass + 1)) ;;
+    fail) fail=$((fail + 1)); failed_names+=("$name") ;;
+    skip) skipped=$((skipped + 1)); skipped_names+=("$name") ;;
+    elsewhere) elsewhere_names+=("$name") ;;
+  esac
+done < <(cat "$work"/*.results)
 
 # ---- what actually happened ------------------------------------------------
 printf '\n\033[1m%d passed, %d failed, %d skipped\033[0m\n' "$pass" "$fail" "$skipped"
@@ -287,6 +352,7 @@ if [ "$skipped" -gt 0 ]; then
 fi
 echo
 echo "Everything CI runs passed on this machine."
+[ -z "$tree" ] || echo "$tree" >> "$passed_trees"
 # And what that does not establish, because it was believed to establish more.
 #
 # The drift guard above compares CI's step *names* against this script, so it
