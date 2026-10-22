@@ -64,5 +64,26 @@ describe("what the Apply dialog says is waiting", () => {
       waitingSummary([h(".obsidian/plugins/a/data.json"), h(".obsidian/plugins/b/data.json")], 2),
     ).toBe("2 plugins' settings are waiting");
     expect(waitingSummary([], 4)).toBe("4 settings are waiting");
+    expect(
+      waitingSummary(
+        [
+          h(".obsidian/plugins/a/data.json"),
+          h(".obsidian/plugins/a/data (Conflicted copy mac 202610221130).json"),
+        ],
+        2,
+      ),
+    ).toBe("one plugin's settings are waiting");
+  });
+
+  it("says when a change is a conflict copy, not the settings", async () => {
+    const changes = await describePluginChanges(
+      [held(".obsidian/plugins/dataview/data (Conflicted copy Mac 202610221130).json", 1)],
+      ".obsidian",
+      async (path) =>
+        path.endsWith("manifest.json") ? enc(JSON.stringify({ name: "Dataview" })) : undefined,
+    );
+    expect(changes.plugins.map(describeChange)).toEqual([
+      "Add a conflict copy of Dataview's settings, from another device",
+    ]);
   });
 });

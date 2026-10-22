@@ -21,6 +21,8 @@ export interface PluginSettingsChange {
   readonly installed: boolean;
   /** Whether the incoming change removes the settings. */
   readonly removed: boolean;
+  /** Whether it is the copy a conflict kept of another device's settings, not the settings. */
+  readonly copy: boolean;
 }
 
 export interface PluginChanges {
@@ -69,6 +71,7 @@ export async function describePluginChanges(
       ...(setting.device ? { from: setting.device } : {}),
       installed: manifest !== undefined,
       removed: setting.deleted,
+      copy: fold(rest[2]!) !== "data.json",
     });
   }
   plugins.sort((a, b) => a.name.localeCompare(b.name));
@@ -77,6 +80,10 @@ export async function describePluginChanges(
 
 /** One line a person reads about a change, without the device it came from. */
 export function describeChange(change: PluginSettingsChange): string {
+  if (change.copy)
+    return change.removed
+      ? `Remove a conflict copy of ${change.name}'s settings`
+      : `Add a conflict copy of ${change.name}'s settings, from another device`;
   if (change.removed) return `Remove ${change.name}'s settings`;
   return change.installed
     ? `Change ${change.name}'s settings`

@@ -1888,6 +1888,42 @@
         "plugins": null
       },
       {
+        "name": "a conflict copy of a plugin's settings",
+        "hex": "2e6f6273696469616e2f706c7567696e732f64617461766965772f646174612028436f6e666c696374656420636f7079206d616320323032363130323231313330292e6a736f6e",
+        "isConfig": true,
+        "isPlugin": true,
+        "notes": "dotprefix",
+        "config": "configscope",
+        "plugins": null
+      },
+      {
+        "name": "a second conflict copy of a plugin's settings",
+        "hex": "2e6f6273696469616e2f706c7567696e732f64617461766965772f646174612028436f6e666c696374656420636f7079206d6163203230323631303232313133302920322e6a736f6e",
+        "isConfig": true,
+        "isPlugin": true,
+        "notes": "dotprefix",
+        "config": "configscope",
+        "plugins": null
+      },
+      {
+        "name": "a conflict copy of a plugin's code, which never syncs",
+        "hex": "2e6f6273696469616e2f706c7567696e732f64617461766965772f6d61696e2028436f6e666c696374656420636f7079206d616320323032363130323231313330292e6a73",
+        "isConfig": true,
+        "isPlugin": true,
+        "notes": "dotprefix",
+        "config": "configscope",
+        "plugins": "configscope"
+      },
+      {
+        "name": "a conflict copy of the sync plugin's pairing",
+        "hex": "2e6f6273696469616e2f706c7567696e732f747265772d73796e632f646174612028436f6e666c696374656420636f7079206d616320323032363130323231313330292e6a736f6e",
+        "isConfig": true,
+        "isPlugin": true,
+        "notes": "dotprefix",
+        "config": "devicelocal",
+        "plugins": "devicelocal"
+      },
+      {
         "name": "BRAT's settings, the plugins it tracks",
         "hex": "2e6f6273696469616e2d6d6f62696c652f706c7567696e732f6f6273696469616e34322d627261742f646174612e6a736f6e",
         "isConfig": true,

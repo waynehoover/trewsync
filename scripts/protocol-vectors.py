@@ -80,6 +80,8 @@ DEVICE_LOCAL_PLUGINS = (
     "supersync",
 )
 COMMUNITY_PLUGINS = "community-plugins.json"
+# How the copy a settings conflict keeps of a plugin's data.json begins, folded.
+DATA_CONFLICT_COPY = "data (conflicted copy "
 INVITE_VERSION = 1
 INVITE_TOKEN_BYTES = 16
 DEVICE_TOKEN_BYTES = 32
@@ -286,6 +288,16 @@ def config_scope(rest: list[str], plugins: bool = False) -> str | None:
         return "devicelocal"
     if plugins and len(lower) == 3 and lower[0] == "plugins" and lower[2] == "data.json":
         return None
+    # The copy a settings conflict keeps of the other device's data.json,
+    # beside it, so it syncs, is listed and is counted like the original.
+    if (
+        plugins
+        and len(lower) == 3
+        and lower[0] == "plugins"
+        and lower[2].startswith(DATA_CONFLICT_COPY)
+        and lower[2].endswith(".json")
+    ):
+        return None
     if len(lower) == 1 and lower[0] in DEVICE_LOCAL_FILES:
         return "devicelocal"
     if len(lower) == 1 and lower[0].endswith(".json") and lower[0] != COMMUNITY_PLUGINS:
@@ -327,6 +339,10 @@ def config_vectors() -> list[dict]:
         ("a file named data.json deeper in a plugin's folder", ".obsidian/plugins/dataview/lang/data.json"),
         ("a plugin's settings in a phone's profile", ".obsidian-mobile/plugins/dataview/data.json"),
         ("a plugin's settings spelt in capitals", ".obsidian/plugins/dataview/Data.JSON"),
+        ("a conflict copy of a plugin's settings", ".obsidian/plugins/dataview/data (Conflicted copy mac 202610221130).json"),
+        ("a second conflict copy of a plugin's settings", ".obsidian/plugins/dataview/data (Conflicted copy mac 202610221130) 2.json"),
+        ("a conflict copy of a plugin's code, which never syncs", ".obsidian/plugins/dataview/main (Conflicted copy mac 202610221130).js"),
+        ("a conflict copy of the sync plugin's pairing", ".obsidian/plugins/trew-sync/data (Conflicted copy mac 202610221130).json"),
         ("BRAT's settings, the plugins it tracks", ".obsidian-mobile/plugins/obsidian42-brat/data.json"),
         ("the plugin list of another profile", ".obsidian-desktop/community-plugins.json"),
         ("the plugins folder", ".obsidian/plugins"),

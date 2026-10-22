@@ -5257,3 +5257,48 @@ describe("the count of files coming down", () => {
     expect(desk.engine.inbound()).toBe(0);
   });
 });
+
+describe("a plugin's settings changed on two devices while held", () => {
+  const json = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
+  const P = ".obsidian/plugins/dataview/data.json";
+  it("keeps the other device's version where every device can see it", async () => {
+    await fresh();
+    const mac = new Device("mac");
+    mac.settings = { root: ".obsidian", plugins: true };
+    devices.push(mac);
+    await mac.connect(server);
+    await mac.vault.write(P, json({ v: "base" }), { mtime: 1_000, ctime: 1_000 });
+    await mac.settle();
+    const desk = new Device("desk");
+    desk.settings = { root: ".obsidian", plugins: true, firstChoice: "server" };
+    desk.loadId = "load 1";
+    devices.push(desk);
+    await desk.connect(server);
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    await desk.settle();
+
+    await mac.vault.write(P, json({ v: "mac" }), { mtime: 3_000, ctime: 1_000 });
+    await mac.settle();
+    await desk.vault.write(P, json({ v: "desk" }), { mtime: 3_000, ctime: 1_000 });
+    await desk.settle();
+    const applied = await desk.engine.sync({ applySettings: true });
+    expect(applied.needsAttention).toEqual([]);
+    const after = await desk.settle();
+    expect(after.needsAttention).toEqual([]);
+    expect(after.skipped).toBe(0);
+    const copies = (snap: Record<string, string>) =>
+      Object.entries(snap).filter(([p]) =>
+        p.startsWith(".obsidian/plugins/dataview/data (Conflicted copy"),
+      );
+    expect(copies(desk.vault.snapshot()).map(([, v]) => v)).toEqual([JSON.stringify({ v: "mac" })]);
+
+    await mac.settle();
+    await mac.engine.sync({ applySettings: true });
+    await mac.settle();
+    // Whichever version mac now runs, the other is beside it, synced.
+    const snap = mac.vault.snapshot();
+    const versions = [snap[P], ...copies(snap).map(([, v]) => v)].sort();
+    expect(versions).toEqual([JSON.stringify({ v: "desk" }), JSON.stringify({ v: "mac" })]);
+  });
+});

@@ -104,6 +104,7 @@ import { configFolderName, firstFreeName } from "../core/paths.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
 import { backUpSettings, keepSettingsBeforeApply, settingsIn } from "./settings.ts";
 import { isConfigPath, isPluginPath } from "../core/path-policy.ts";
+import { fold } from "../core/fold.ts";
 import { describeChange, describePluginChanges, type PluginChanges } from "./plugin-changes.ts";
 import { timedVault } from "../core/vault.ts";
 import type { JournalSaveCost, JournalStoreOptions } from "../core/index-journal-store.ts";
@@ -6285,8 +6286,12 @@ class ApplySettingsModal extends Modal {
  */
 export function waitingSummary(waiting: readonly HeldSetting[], held: number): string {
   if (waiting.length === 0) return `${held} ${held === 1 ? "setting is" : "settings are"} waiting`;
-  const plugins = waiting.filter((h) => isPluginPath(h.path)).length;
-  const own = waiting.length - plugins;
+  // By plugin, so a conflict copy beside a plugin's settings is not a second plugin.
+  const ids = new Set(
+    waiting.filter((h) => isPluginPath(h.path)).map((h) => fold(h.path.split("/")[2] ?? "")),
+  );
+  const plugins = ids.size;
+  const own = waiting.filter((h) => !isPluginPath(h.path)).length;
   const parts = [
     ...(own > 0 ? [`${own} ${own === 1 ? "setting" : "settings"}`] : []),
     ...(plugins > 0 ? [`${plugins === 1 ? "one plugin's" : `${plugins} plugins'`} settings`] : []),

@@ -87,6 +87,9 @@ var DeviceLocalPlugins = []string{
 // top of a profile root.
 const CommunityPlugins = "community-plugins.json"
 
+// How the copy a settings conflict keeps of a plugin's data.json begins, folded.
+const dataConflictCopy = "data (conflicted copy "
+
 // configRoot is a profile root: Obsidian's configuration folder, or one a
 // device chose with Obsidian's "Override config folder" as .obsidian-<name>
 // (plan/settings-sync.md, section 1). A fixed pattern keeps .git, .trash and
@@ -216,6 +219,11 @@ func configScope(rest []string, plugins bool) Reason {
 	case plugins && len(lower) >= 2 && lower[0] == "plugins" && slices.Contains(DeviceLocalPlugins, lower[1]):
 		return ReasonDeviceLocal
 	case plugins && len(lower) == 3 && lower[0] == "plugins" && lower[2] == "data.json":
+		return ""
+	// The copy a settings conflict keeps of the other device's data.json,
+	// beside it, so it syncs, is listed and is counted like the original.
+	case plugins && len(lower) == 3 && lower[0] == "plugins" &&
+		strings.HasPrefix(lower[2], dataConflictCopy) && strings.HasSuffix(lower[2], ".json"):
 		return ""
 	case len(lower) == 1 && (lower[0] == "workspace.json" || lower[0] == "workspace-mobile.json"):
 		return ReasonDeviceLocal

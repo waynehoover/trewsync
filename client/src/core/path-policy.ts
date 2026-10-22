@@ -74,6 +74,8 @@ export const DEVICE_LOCAL_PLUGINS: readonly string[] = [
 
 /** Obsidian's list of the community plugins it runs, at the top of a profile root. */
 export const COMMUNITY_PLUGINS = "community-plugins.json";
+/** How the copy a settings conflict keeps of a plugin's data.json begins, folded. */
+const DATA_CONFLICT_COPY = "data (conflicted copy ";
 
 /** Whether a plugin id, a folder name under `plugins`, is one that never syncs. */
 export function isDeviceLocalPlugin(id: string): boolean {
@@ -171,6 +173,16 @@ function configScope(rest: readonly string[], plugins: boolean): PathReason | un
   if (plugins && lower.length >= 2 && first === "plugins" && DEVICE_LOCAL_PLUGINS.includes(second!))
     return "devicelocal";
   if (plugins && lower.length === 3 && first === "plugins" && lower[2] === "data.json")
+    return undefined;
+  // The copy a settings conflict keeps of the other device's data.json,
+  // beside it, so it syncs, is listed and is counted like the original.
+  if (
+    plugins &&
+    lower.length === 3 &&
+    first === "plugins" &&
+    lower[2]!.startsWith(DATA_CONFLICT_COPY) &&
+    lower[2]!.endsWith(".json")
+  )
     return undefined;
   if (lower.length === 1 && (first === "workspace.json" || first === "workspace-mobile.json"))
     return "devicelocal";
