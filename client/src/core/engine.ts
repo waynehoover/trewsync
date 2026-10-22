@@ -2609,6 +2609,35 @@ export class Engine {
         local = { folder: stat.folder, mtime: entry.mtime, size: entry.size, hash: entry.hash };
     }
 
+    // A direct create a crash interrupted (`IndexEntry.creating`). Finished,
+    // it is the version it was writing and is recorded as synced. Torn, it is
+    // a prefix of that version, perhaps padded with zeros where a power cut
+    // left blocks unwritten, and holds nothing the server does not: it is
+    // removed, and the version lands again. Anything else is somebody's note,
+    // made there since, and is decided as a note with no base always was. The
+    // intent goes only once one of those has happened, so a step that fails
+    // leaves it for the next pass rather than leaving a torn file to be sent.
+    const creating = entry.creating;
+    if (creating !== undefined) {
+      if (local !== undefined && !local.folder) {
+        if (local.hash === creating.hash) {
+          synced(entry, local.hash, entry.chunks, creating.uid, now);
+          this.log("a direct write a crash interrupted had finished", path);
+        } else if (await this.tornFrom(path, local.size, creating)) {
+          const still = await this.opts.vault.stat(path);
+          if (still?.size !== stat?.size || still?.mtime !== stat?.mtime) {
+            throw new Error(`${path} changed while a torn write was being checked`);
+          }
+          await this.opts.vault.remove(path);
+          this.log("removed what a crash left of a direct write", path);
+          Object.assign(entry, newEntry(path));
+          local = undefined;
+          scanned = undefined;
+        }
+      }
+      delete entry.creating;
+    }
+
     if (this.toConfirm.delete(path)) this.confirmApplied(path, entry, local);
 
     let action = decide({ local, remote, index: entry, mergeable: this.mergeable(path) });
@@ -4128,6 +4157,14 @@ export class Engine {
       }
     }
 
+    // New files go straight to their names where the vault can do that
+    // exclusively, which saves a staged copy and a rename each, and on a
+    // desktop the fsync of each, made durable together at the flush instead.
+    // Each is named in the index first, durably, and after everything already
+    // written is durable too, so a crash part way leaves a file the next pass
+    // knows is its own (`IndexEntry.creating`).
+    const direct = await this.intendDirect(batch, local);
+
     for (const d of batch) {
       try {
         const from = local.get(d);
@@ -4173,9 +4210,77 @@ export class Engine {
         this.recordFailure(d.path, err, report);
       } finally {
         this.landing.delete(d.path);
+        // An intent whose write was never tried names nothing written, and
+        // left in place it would claim a note somebody makes there later.
+        if (direct.has(d) && !this.triedDirect.delete(d)) delete d.entry.creating;
       }
     }
     await this.checkpoint();
+  }
+
+  /** Direct creates this fill has begun, whose intents stay until they land. */
+  private readonly triedDirect = new Set<Incoming>();
+
+  /**
+   * Names in the index each file of a batch that can be created straight at
+   * its path, and saves it, and answers which they are. None where the vault
+   * cannot, or the save fails: those land through `create`, staged, as always.
+   */
+  /**
+   * Whether the file at `path` is what a crash left of writing `creating`: no
+   * longer than it, and every byte either the version's or zero. The version
+   * is fetched by its chunks, which its hash lists.
+   */
+  private async tornFrom(
+    path: string,
+    size: number,
+    creating: NonNullable<IndexEntry["creating"]>,
+  ): Promise<boolean> {
+    if (size > creating.size) return false;
+    const here = await this.opts.vault.read(path);
+    if (here.length > creating.size) return false;
+    const names = creating.hash === contentId([]) ? [] : creating.hash.split(",");
+    const each = perChunkBudget(creating.size, names.length);
+    const bodies = await this.fetchAll(names, () => each, [path]);
+    const want = new Uint8Array(creating.size);
+    let at = 0;
+    for (const body of bodies) {
+      want.set(body.subarray(0, Math.max(0, want.length - at)), at);
+      at += body.length;
+    }
+    if (at !== creating.size) return false;
+    for (let k = 0; k < here.length; k++) if (here[k] !== want[k] && here[k] !== 0) return false;
+    return true;
+  }
+
+  private async intendDirect(
+    batch: readonly Incoming[],
+    local: ReadonlyMap<Incoming, string>,
+  ): Promise<Set<Incoming>> {
+    const vault = this.opts.vault;
+    const direct = new Set<Incoming>();
+    if (vault.createDirect === undefined) return direct;
+    for (const d of batch) {
+      if (d.based !== undefined || local.has(d) || this.entries.get(d.path) !== d.entry) continue;
+      // Only a path this device has never synced. A restore of a note deleted
+      // here has a base, and what a crash left of it would be merged against
+      // that base and sent; it goes staged, as it always did.
+      if (d.entry.synchash !== "") continue;
+      d.entry.creating = { hash: contentId(d.chunks), uid: d.remote.uid, size: d.remote.size };
+      direct.add(d);
+    }
+    if (direct.size === 0) return direct;
+    try {
+      await vault.flush?.();
+      await this.save();
+    } catch (err) {
+      for (const d of direct) delete d.entry.creating;
+      this.log("could not save the intent to write new files directly; writing them staged", {
+        why: (err as Error).message,
+      });
+      return new Set();
+    }
+    return direct;
   }
 
   /** Files a fill has written since the index was last saved, for `checkpoint`. */
@@ -5189,6 +5294,17 @@ export class Engine {
     const vault = this.opts.vault;
     if (d.based !== undefined || vault.create === undefined) return false;
     const times = { mtime: d.remote.mtime, ctime: d.remote.mtime };
+    const intent = d.entry.creating;
+    if (intent !== undefined && intent.uid === d.remote.uid && vault.createDirect !== undefined) {
+      // Tried from here on: a throw may have left part of it at the name, so
+      // the intent stays for the next pass to find.
+      this.triedDirect.add(d);
+      const made = await vault.createDirect(d.path, content, times);
+      delete d.entry.creating;
+      if (!made) return false;
+      this.settled(d, content.length);
+      return true;
+    }
     if (!(await vault.create(d.path, content, times))) return false;
     this.settled(d, content.length);
     return true;

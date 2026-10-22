@@ -72,6 +72,14 @@ export interface IndexEntry {
    * old values are what get replaced and not what get sent.
    */
   unconfirmed?: { hash: string; uid: number; load?: string };
+  /**
+   * A version this device is about to write straight to a path that held
+   * nothing (`Vault.createDirect`), saved before the write starts and dropped
+   * once the write is durable. A crash in between can leave the path holding
+   * part of the version; finding this at the next pass is how the engine knows
+   * the file is its own write and not a note somebody made.
+   */
+  creating?: { hash: string; uid: number; size: number };
 }
 
 export function newEntry(path: string): IndexEntry {

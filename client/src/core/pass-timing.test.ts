@@ -176,6 +176,7 @@ describe("the filesystem overlay", () => {
       "sameFile",
       "canonical",
       "create",
+      "createDirect",
       "stranded",
       "displaced",
       "recovery",
@@ -215,6 +216,7 @@ describe("the filesystem overlay", () => {
       }
     }
     const inner = new Equipped();
+    inner.enableDirect();
     await inner.edit("note.md", "hello\n");
     const into: Record<string, { ms: number; calls: number }> = {};
     const timed = timedVault(inner, into);

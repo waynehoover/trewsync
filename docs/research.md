@@ -431,6 +431,45 @@ and one read, about 30 ms a note in Device storage and 7 in App storage, and
 is not done: it needs a way to tell an interrupted landing from an edit after
 a crash, proved at a new seam in `faults.stress.ts`.
 
+### Writing new notes straight to their names, October 22, 2026
+
+Done for the headless client, and not for the plugin. The way to tell an
+interrupted landing from an edit is an intent: before a batch of new files
+lands, the engine saves in the index, after a flush, which version it is
+about to write at each path it has never synced (`IndexEntry.creating`). The
+file is then written into its name with `wx` and no fsync of its own, kept
+open, and `flush` fsyncs the batch through those handles thirty-two at a time
+before the index that records it is saved; a handle follows the file through
+a rename. A failed fsync fails every flush after it, because on Linux a
+second fsync can succeed after the bytes were dropped. A pass that finds an
+intent still there is the one after a crash: a file with the intended hash is
+recorded as synced; one that is a prefix of the intended version, perhaps
+padded with zeros, holds nothing the server lacks and is removed, and the
+version lands again; anything else is a note somebody made there and is
+decided as a note with no base, kept both ways. Never uploaded as the note.
+The intent is dropped only once one of those has happened. An independent
+review of the first version found that a restore of a note deleted here
+could be merged torn, that a failed recovery step dropped the intent, and
+that a note made at a path whose write never started was set aside; each has
+a test that fails without its fix.
+
+On this Mac, landing a thousand small notes one staged and fsynced copy at a
+time took 12.3 s, against 1.7 s written in place and fsynced thirty-two at
+once. A first sync of 3,000 notes through `trew` went from 21 to 36 s to 2
+to 4 s, with the vault byte for byte the server's. In
+`durability.stress.ts`, a `trew sync` killed with SIGKILL six times part
+way through a first download left an empty note at a name in three of them,
+and each run finished with exactly the server's notes and sent nothing; with
+the recovery step taken out, the second round ended with a damaged note and a
+conflict copy of it on the other device.
+
+The plugin keeps the staged rename. Obsidian's mobile adapter has no
+exclusive create: a check and then a write is a gap in which Obsidian itself
+can create the same name, an `Untitled.md` for instance, and the write would
+replace it. The rename is the only exclusive step the adapter has. On a
+desktop the plugin's saving would be two adapter calls a note, not the fsync,
+which it already batches.
+
 ### Listing is the biggest term, and half of it was avoidable
 
 The phase breakdown put listing at 47% of a quiet pass on a desktop at 50,000

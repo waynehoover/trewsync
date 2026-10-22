@@ -11,7 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Command-line client
+
+- A first sync writes new notes straight to their names and makes them
+  durable together, instead of staging and fsyncing each one: 3,000 notes in
+  2 to 4 s instead of 21 to 36 s on a Mac. A crash part way is recognised on
+  the next run, which finishes with the server's notes and sends nothing of
+  what the crash left part written.
 
 ## 0.15.1, plugin, and 0.14.1, server (2026-10-22)
 

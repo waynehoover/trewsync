@@ -24,6 +24,7 @@ import {
   rm,
   rmdir,
   stat,
+  type FileHandle,
 } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
@@ -780,11 +781,27 @@ export class NodeVault implements Vault {
   private readonly unflushed = new Set<string>();
 
   /**
+   * Files `createDirect` wrote since the last flush, still open, so that the
+   * fsync reaches the file wherever it has been renamed to since.
+   */
+  private readonly unsyncedFiles = new Map<string, FileHandle>();
+  /**
+   * An fsync that failed. Not retried: after a failed writeback Linux marks
+   * the pages clean, so a second fsync can succeed with the bytes gone. Every
+   * flush fails from then on, the index is never saved over them, and the
+   * next run finds the intents and checks each file.
+   */
+  private fsyncFailed: unknown;
+
+  /**
    * Makes durable the directory entries of everything written since the last
    * call. The engine calls this before it saves the index, which is what keeps
    * the index from being durable ahead of the notes it names.
    */
   async flush(): Promise<void> {
+    // The files first, then the names: a name made durable ahead of its
+    // bytes is a crash away from an empty note.
+    await this.syncFiles();
     const dirs = [...this.unflushed];
     this.unflushed.clear();
     // Every directory is attempted, and the ones that failed go back on
@@ -801,6 +818,33 @@ export class NodeVault implements Vault {
       }
     });
     if (first !== undefined) throw first;
+  }
+
+  /**
+   * Makes durable the bytes of every file `createDirect` wrote since the last
+   * flush. Thirty-two at once, because on macOS each is a full cache flush and
+   * one flush serves every fsync waiting on it: 12.3 s for a thousand notes
+   * one at a time, 1.7 s so.
+   */
+  private async syncFiles(): Promise<void> {
+    if (this.fsyncFailed !== undefined) throw this.fsyncFailed;
+    if (this.unsyncedFiles.size === 0) return;
+    const handles = [...this.unsyncedFiles.values()];
+    this.unsyncedFiles.clear();
+    const gate = limiter(FSYNC_CONCURRENCY);
+    const synced = await Promise.allSettled(
+      handles.map((h) =>
+        gate(async () => {
+          try {
+            await h.sync();
+          } finally {
+            await h.close();
+          }
+        }),
+      ),
+    );
+    for (const o of synced) if (o.status === "rejected") this.fsyncFailed ??= o.reason;
+    if (this.fsyncFailed !== undefined) throw this.fsyncFailed;
   }
 
   /**
@@ -2948,6 +2992,47 @@ export class NodeVault implements Vault {
   }
 
   /**
+   * Writes a file only if nothing is at the path, into the name itself, and
+   * leaves its bytes to `flush` (`Vault.createDirect`).
+   *
+   * `wx` is the exclusive claim, as it is in `create`'s fallback: it fails if
+   * anything is at the name, a link included. There is no staged copy and no
+   * fsync here, which is the saving; the engine has saved its intent for this
+   * path first, so a crash that leaves the name holding part of the file is
+   * recognised and the part set aside.
+   */
+  async createDirect(path: string, bytes: Uint8Array, times: Times): Promise<boolean> {
+    // A bound on open files: past it, the batch so far is made durable now.
+    if (this.unsyncedFiles.size >= MAX_UNSYNCED_FILES) await this.syncFiles();
+    this.invalidateListing();
+    const full = await this.absolute(path);
+    await this.insideForReal(full);
+    const had = await this.deepestExisting(full);
+    await mkdir(dirname(full), { recursive: true });
+    let handle: FileHandle;
+    try {
+      handle = await open(full, "wx");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw err;
+    }
+    try {
+      await writeAll(handle, bytes);
+      if (times.mtime > 0) await handle.utimes(times.mtime / 1000, times.mtime / 1000);
+    } catch (err) {
+      // This call made the name and nothing else has had it, so what is
+      // there is part of a version the server holds: taken away, not left
+      // for an editor to open until the retry.
+      await handle.close().catch(() => {});
+      await rm(full, { force: true }).catch(() => {});
+      throw err;
+    }
+    this.unsyncedFiles.set(full, handle);
+    this.dirty(full, had);
+    return true;
+  }
+
+  /**
    * Writes a file only if nothing is at the path, atomically.
    *
    * The bytes go to a temporary first, as every write does, and then a hard
@@ -3975,3 +4060,9 @@ class NodeDisplacedFiles implements DisplacedFiles {
     }
   }
 }
+
+/** How many fsyncs a flush keeps in flight; see `flush`. */
+const FSYNC_CONCURRENCY = 32;
+
+/** How many files `createDirect` keeps open before it makes them durable itself. */
+const MAX_UNSYNCED_FILES = 256;

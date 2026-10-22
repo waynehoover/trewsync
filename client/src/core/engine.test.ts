@@ -5302,3 +5302,206 @@ describe("a plugin's settings changed on two devices while held", () => {
     expect(versions).toEqual([JSON.stringify({ v: "desk" }), JSON.stringify({ v: "mac" })]);
   });
 });
+
+describe("new files written straight to their names", () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  const times = { mtime: 1_000, ctime: 1_000 };
+  async function seeded(n: number): Promise<Device> {
+    await fresh();
+    const a = await device("a");
+    for (let i = 0; i < n; i++)
+      await a.vault.write(`n/${i}.md`, enc(`note ${i}, `.repeat(20)), times);
+    await a.settle();
+    return a;
+  }
+
+  it("lands a first sync through the direct create, with nothing left intended", async () => {
+    await seeded(5);
+    const vault = new MemoryVault();
+    vault.enableDirect();
+    let direct = 0;
+    const inner = vault.createDirect!;
+    vault.createDirect = async (...args) => {
+      direct++;
+      return inner(...args);
+    };
+    const b = new Device("b", vault);
+    devices.push(b);
+    await b.connect(server);
+    expect((await b.engine.sync()).downloaded).toBe(5);
+    await b.settle();
+    expect(direct).toBe(5);
+    const saved = (await b.store.load())!;
+    expect(Object.values(saved.entries).filter((e) => (e as IndexEntry).creating)).toEqual([]);
+  });
+
+  it("removes an empty file a crash left before any byte was written", async () => {
+    const a = await seeded(3);
+    const vault = new MemoryVault();
+    vault.enableDirect();
+    const b = new Device("b", vault);
+    devices.push(b);
+    const save = b.store.save.bind(b.store);
+    const inner = vault.createDirect!;
+    vault.createDirect = async (path, bytes, t) => {
+      vault.tear = 0;
+      b.store.save = async () => {};
+      return inner(path, bytes, t);
+    };
+    await b.connect(server);
+    await b.engine.sync();
+    b.close();
+    b.store.save = save;
+    vault.createDirect = inner;
+    await b.connect(server);
+    const r = await b.settle();
+    expect(r.uploaded).toBe(0);
+    expect(b.vault.snapshot()).toEqual(a.vault.snapshot());
+  });
+
+  it("after a crash part way, keeps what finished, replaces what tore, and sends neither", async () => {
+    const a = await seeded(5);
+    const vault = new MemoryVault();
+    vault.enableDirect();
+    const b = new Device("b", vault);
+    devices.push(b);
+    // The process dies during the third write: what reached the disk stays,
+    // and no index saved after that moment survives.
+    const save = b.store.save.bind(b.store);
+    let written = 0;
+    const inner = vault.createDirect!;
+    vault.createDirect = async (path, bytes, t) => {
+      if (++written === 3) {
+        vault.tear = 7;
+        b.store.save = async () => {};
+      }
+      return inner(path, bytes, t);
+    };
+    await b.connect(server);
+    await b.engine.sync();
+    b.close();
+    b.store.save = save;
+    vault.createDirect = inner;
+
+    await b.connect(server);
+    const r = await b.settle();
+    expect(r.uploaded).toBe(0);
+    expect(r.conflicted).toBe(0);
+    expect(b.vault.snapshot()).toEqual(a.vault.snapshot());
+    const after = await a.settle();
+    expect(after.downloaded).toBe(0);
+    expect(Object.keys(a.vault.snapshot()).filter((p) => p.includes("Conflicted"))).toEqual([]);
+  });
+});
+
+describe("what a crash left of a direct write, and what it did not", () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  const dec = (b: Uint8Array) => new TextDecoder().decode(b);
+  const times = { mtime: 1_000, ctime: 1_000 };
+
+  /** Dies during the next direct create, leaving `keep` bytes; no later index save survives. */
+  function dieDuring(b: Device, vault: MemoryVault, keep: number): () => void {
+    const save = b.store.save.bind(b.store);
+    const inner = vault.createDirect!;
+    let dead = false;
+    vault.createDirect = async (path, bytes, t) => {
+      if (dead) throw new Error("the process is gone");
+      dead = true;
+      vault.tear = keep;
+      b.store.save = async () => {};
+      return inner(path, bytes, t);
+    };
+    return () => {
+      b.close();
+      b.store.save = save;
+      vault.createDirect = inner;
+    };
+  }
+
+  it("leaves a note this device synced and deleted, restored from elsewhere, to the staged write", async () => {
+    await fresh();
+    const a = await device("a");
+    const lines = Array.from({ length: 40 }, (_, i) => `line ${i} of the note`).join("\n") + "\n";
+    await a.vault.write("n.md", enc(lines), times);
+    await a.settle();
+    const vault = new MemoryVault();
+    vault.enableDirect();
+    let direct = 0;
+    const inner = vault.createDirect!;
+    vault.createDirect = async (...args) => {
+      direct++;
+      return inner(...args);
+    };
+    const b = new Device("b", vault);
+    devices.push(b);
+    await b.connect(server);
+    await b.settle();
+    expect(direct).toBe(1);
+    await vault.remove("n.md");
+    const edited = lines.replace("line 0 of the note", "LINE ZERO EDITED");
+    await a.vault.write("n.md", enc(edited), { mtime: 2_000, ctime: 2_000 });
+    await a.settle();
+    await b.settle();
+    expect(direct, "a restore over a synced entry went direct").toBe(1);
+    expect(dec(await vault.read("n.md"))).toBe(edited);
+  });
+
+  it("keeps the intent when checking the torn file fails, and sends nothing of it", async () => {
+    await fresh();
+    const a = await device("a");
+    const body = "a whole note, ".repeat(30);
+    await a.vault.write("n.md", enc(body), times);
+    await a.settle();
+    const vault = new MemoryVault();
+    vault.enableDirect();
+    const b = new Device("b", vault);
+    devices.push(b);
+    const revive = dieDuring(b, vault, 9);
+    await b.connect(server);
+    await b.engine.sync();
+    revive();
+    const remove = vault.remove.bind(vault);
+    let fails = 1;
+    vault.remove = async (path) => {
+      if (fails-- > 0) throw new Error("EIO");
+      return remove(path);
+    };
+    await b.connect(server);
+    await b.settle();
+    await a.settle();
+    expect(a.vault.snapshot()).toEqual({ "n.md": body });
+    expect(b.vault.snapshot()).toEqual({ "n.md": body });
+  });
+
+  it("decides a note a person made where a write never started as a note, and loses neither", async () => {
+    await fresh();
+    const a = await device("a");
+    for (let i = 0; i < 3; i++)
+      await a.vault.write(`n/${i}.md`, enc(`note ${i}, `.repeat(20)), times);
+    await a.settle();
+    const vault = new MemoryVault();
+    vault.enableDirect();
+    const b = new Device("b", vault);
+    devices.push(b);
+    const revive = dieDuring(b, vault, 3);
+    await b.connect(server);
+    await b.engine.sync();
+    revive();
+    const written = Object.keys(vault.snapshot());
+    const untouched = ["n/0.md", "n/1.md", "n/2.md"].find((p) => !written.includes(p))!;
+    const mine = "my own note, typed after the crash";
+    await vault.write(untouched, enc(mine), { mtime: 5_000, ctime: 5_000 });
+    await b.connect(server);
+    await b.settle();
+    await a.settle();
+    for (const d of [a, b]) {
+      const texts = Object.values(d.vault.snapshot());
+      expect(texts, d.name).toContain(mine);
+      for (let i = 0; i < 3; i++) expect(texts, d.name).toContain(`note ${i}, `.repeat(20));
+      expect(
+        texts.some((t) => t.length > 0 && t.length < 10),
+        `${d.name} holds a torn note`,
+      ).toBe(false);
+    }
+  });
+});

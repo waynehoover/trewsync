@@ -1364,3 +1364,55 @@ describe("a name the disk spells in NFD", () => {
     expect(vault.ambiguous().map((a) => a.path)).toEqual([nfc]);
   });
 });
+
+describe("a file written straight to its name", () => {
+  const times = { mtime: 1_000_000, ctime: 1_000_000 };
+
+  it("claims only a free name, and leaves whatever holds it alone", async () => {
+    await writeFile(join(root, "taken.md"), "mine");
+    await symlink(join(root, "elsewhere.md"), join(root, "link.md"));
+    const vault = new NodeVault(root);
+    expect(await vault.createDirect("taken.md", enc.encode("theirs"), times)).toBe(false);
+    expect(await vault.createDirect("link.md", enc.encode("theirs"), times)).toBe(false);
+    expect(await readFile(join(root, "taken.md"), "utf8")).toBe("mine");
+    await expect(stat(join(root, "elsewhere.md"))).rejects.toThrow();
+    expect(await vault.createDirect("new/free.md", enc.encode("theirs"), times)).toBe(true);
+    await vault.flush();
+    expect(await readFile(join(root, "new", "free.md"), "utf8")).toBe("theirs");
+  });
+
+  it("makes it durable wherever it was renamed to before the flush", async () => {
+    const vault = new NodeVault(root);
+    expect(await vault.createDirect("a.md", enc.encode("the note"), times)).toBe(true);
+    const handle = [
+      ...(
+        vault as unknown as { unsyncedFiles: Map<string, { sync(): Promise<void> }> }
+      ).unsyncedFiles.values(),
+    ][0]!;
+    let synced = 0;
+    const sync = handle.sync.bind(handle);
+    handle.sync = async () => {
+      synced++;
+      return sync();
+    };
+    await rename(join(root, "a.md"), join(root, "b.md"));
+    await vault.flush();
+    expect(synced).toBe(1);
+    expect(await readFile(join(root, "b.md"), "utf8")).toBe("the note");
+  });
+
+  it("fails every flush after an fsync failed, so no index is saved over lost bytes", async () => {
+    const vault = new NodeVault(root);
+    await vault.createDirect("a.md", enc.encode("the note"), times);
+    const handle = [
+      ...(
+        vault as unknown as { unsyncedFiles: Map<string, { sync(): Promise<void> }> }
+      ).unsyncedFiles.values(),
+    ][0]!;
+    handle.sync = async () => {
+      throw new Error("EIO");
+    };
+    await expect(vault.flush()).rejects.toThrow("EIO");
+    await expect(vault.flush()).rejects.toThrow("EIO");
+  });
+});

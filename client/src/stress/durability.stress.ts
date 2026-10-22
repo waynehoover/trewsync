@@ -12,15 +12,27 @@
  * replaced by an older backup, which is what a restore is (rule 11).
  */
 
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { build as esbuild } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import type { Client } from "../core/client.ts";
 import { cleanupBinary, serverBinary, TestServer } from "../core/test-server.ts";
-import { buildVault, device, differences, fingerprint, reopen, settle, tidy } from "./harness.ts";
+import {
+  buildVault,
+  device,
+  differences,
+  fingerprint,
+  pair,
+  reopen,
+  settle,
+  tidy,
+} from "./harness.ts";
 
 beforeAll(async () => {
   await serverBinary();
@@ -212,3 +224,77 @@ describe("a server restored from a backup its devices have moved past", () => {
     expect(await server.cli("verify", "-deep")).toMatch(/0 faults/);
   }, 900_000);
 });
+
+describe("a client killed while it writes new notes straight to their names", () => {
+  it("finishes on the next run with exactly the server's notes, and sends nothing of its own", async () => {
+    server = new TestServer();
+    await server.start();
+    const a = await device(server, "a", dirs, open);
+    await buildVault(a.dir, 2000);
+    await settle([a], 4);
+    const want = await fingerprint(a.dir);
+
+    const build = await mkdtemp(join(tmpdir(), "trew-kill-cli-"));
+    dirs.push(build);
+    const bundle = join(build, "trew.mjs");
+    await esbuild({
+      entryPoints: [fileURLToPath(new URL("../node/bin.ts", import.meta.url))],
+      outfile: bundle,
+      platform: "node",
+      target: "node22",
+      format: "esm",
+      bundle: true,
+      logLevel: "silent",
+      banner: {
+        js: 'import { createRequire as __trewRequire } from "node:module"; const require = __trewRequire(import.meta.url);',
+      },
+    });
+
+    let emptyAtKill = 0;
+    for (let round = 0; round < 6; round++) {
+      const dir = await mkdtemp(join(tmpdir(), `trew-kill-${round}-`));
+      dirs.push(dir);
+      await pair(server, `b${round}`, dir);
+      const child = spawn(process.execPath, [bundle, "sync", "--dir", dir], { stdio: "ignore" });
+      // Killed some way into the landing, a different way each round.
+      const after = 50 * (round + 1);
+      const deadline = Date.now() + 60_000;
+      const landed = async (): Promise<string[]> => {
+        try {
+          return await notesIn(dir);
+        } catch {
+          return []; // a file the child made and removed while this looked
+        }
+      };
+      while ((await landed()).length < after && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      child.kill("SIGKILL");
+      await new Promise((r) => child.once("exit", r));
+      for (const path of await notesIn(dir)) {
+        if ((await readFile(join(dir, path))).length === 0) emptyAtKill++;
+      }
+
+      const again = await reopen(server, `b${round}`, dir, open);
+      await settle([again], 6);
+      expect(differences(want, await fingerprint(dir)), `round ${round}`).toEqual([]);
+    }
+    await settle([a], 2);
+    expect(
+      differences(want, await fingerprint(a.dir)),
+      "something of the killed client's was sent",
+    ).toEqual([]);
+    expect(await server.cli("verify", "-deep")).toMatch(/0 faults/);
+    console.info(`direct-write kill rounds: ${emptyAtKill} empty file(s) at a kill`);
+  }, 900_000);
+});
+
+/** The notes `buildVault` writes that are in a vault now, by path. */
+async function notesIn(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const folder of await readdir(dir)) {
+    if (!folder.startsWith("folder")) continue;
+    for (const name of await readdir(join(dir, folder))) out.push(`${folder}/${name}`);
+  }
+  return out;
+}

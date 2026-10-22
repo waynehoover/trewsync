@@ -335,6 +335,14 @@ export interface Vault {
    */
   create?(path: string, bytes: Uint8Array, times: Times): Promise<boolean>;
   /**
+   * `create`, written into the name itself rather than staged beside it, and
+   * durable only at the next `flush`. A crash before then can leave the name
+   * holding part of the bytes, so the engine calls this only for a path whose
+   * intent it has saved first (`IndexEntry.creating`), and an adapter offers
+   * it only with a truly exclusive create.
+   */
+  createDirect?(path: string, bytes: Uint8Array, times: Times): Promise<boolean>;
+  /**
    * Versions this adapter took off a note and could not put anywhere, as
    * vault-relative paths (R46, R50).
    *
@@ -811,6 +819,29 @@ export class MemoryVault implements Vault {
     return true;
   }
 
+  /**
+   * A crash part way through the next direct create, when set: that many
+   * bytes land and the call throws.
+   */
+  tear: number | undefined;
+  createDirect?: (path: string, bytes: Uint8Array, times: Times) => Promise<boolean>;
+
+  /** Offers `createDirect`, as a filesystem with an exclusive create does. */
+  enableDirect(): void {
+    this.createDirect = async (path, bytes, times) => {
+      await this.midCreate?.(path);
+      if (this.files.has(path) || this.folders.has(path)) return false;
+      const torn = this.tear;
+      this.tear = undefined;
+      if (torn !== undefined) {
+        await this.write(path, bytes.slice(0, torn), times);
+        throw new Error("the process died part way through a write");
+      }
+      await this.write(path, bytes, times);
+      return true;
+    };
+  }
+
   watch(onChange: (path: string) => void): () => void {
     this.listeners.push(onChange);
     return () => {
@@ -941,6 +972,12 @@ export function timedVault(
     ...(inner.flush ? { flush: () => time("flush", () => inner.flush!()) } : {}),
     ...(inner.create
       ? { create: (path, bytes, times) => time("create", () => inner.create!(path, bytes, times)) }
+      : {}),
+    ...(inner.createDirect
+      ? {
+          createDirect: (path, bytes, times) =>
+            time("createDirect", () => inner.createDirect!(path, bytes, times)),
+        }
       : {}),
     ...(inner.replace
       ? {
