@@ -120,8 +120,13 @@ describe("a path refused as a collision", () => {
     await vaultA.remove("Note.md");
     await a.settle();
     // B hears of the deletion, and its next pass tries NOTE.md again.
-    for (let i = 0; i < 20 && (await vaultB.exists("Note.md")); i++) await b.settle();
-    const after = await b.settle();
+    // Bounded on the outcome itself, not on the deletion arriving: the retry of
+    // NOTE.md can still be backing off for a pass after Note.md is gone, which
+    // a slow CI runner hit (3d80697).
+    let after = await b.settle();
+    for (let i = 0; i < 20 && (after.skipped > 0 || (await vaultB.exists("Note.md"))); i++) {
+      after = await b.settle();
+    }
     expect(after.skipped, "the collision's cause is gone, so it is not stranded").toBe(0);
 
     // B's note is on the server now, byte for byte.
