@@ -11,6 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.15.1, plugin, and 0.14.1, server (2026-10-22)
+
+Upgrade the server first if you want a plugin settings conflict's copy to
+sync; the 0.15.1 plugin works with server 0.14.0 otherwise.
+
 ### Server
 
 - A conflict over a community plugin's settings now syncs the copy it keeps,
