@@ -7060,6 +7060,32 @@ describe("settings sync", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   }, 300_000);
 
+  it("refuses an unlink while an Apply runs, so the reload cannot cut it in half", async () => {
+    const { phone } = await heldOnThePhone();
+    const client = (phone.plugin as unknown as { client: { sync: () => Promise<unknown> } }).client;
+    let release!: () => void;
+    const sync = client.sync.bind(client);
+    client.sync = async (...args: unknown[]) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return (sync as (...a: unknown[]) => Promise<unknown>)(...args);
+    };
+    const reload = vi.fn();
+    vi.stubGlobal("window", { location: { reload } });
+    try {
+      const applying = phone.plugin.applySettings();
+      await until("the apply to reach its pass", () => release !== undefined);
+      await expect(phone.plugin.unlink()).rejects.toThrow("being applied");
+      release();
+      await applying;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(phone.plugin.savedData, "the pairing was cleared under the apply").not.toBeNull();
+    await phone.plugin.unlink();
+    expect(phone.plugin.savedData).toBeNull();
+  }, 300_000);
+
   it("offers Apply only while something waits, and forgets the first time once it is done", async () => {
     const { laptop, phone } = await heldOnThePhone();
     const command = phone.plugin.commands.find((c) => c.id === "apply-settings")!;

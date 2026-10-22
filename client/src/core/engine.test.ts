@@ -64,6 +64,8 @@ class Device {
   loadId: string | undefined;
   /** Whether the next `connect` asks for the whole history (`EngineOptions.replayAll`). */
   replayAll = false;
+  /** The note open in the editor, read at each `connect` (`EngineOptions.activePath`). */
+  activePath: (() => string | undefined) | undefined;
   /** Every batch this device has been handed, for asserting on the wire. */
   readonly batches: { from: number; to: number; entries: unknown[] }[] = [];
   caughtUp = false;
@@ -110,6 +112,7 @@ class Device {
       ...(this.settings !== undefined ? { settings: this.settings } : {}),
       ...(this.loadId !== undefined ? { loadId: this.loadId } : {}),
       ...(this.replayAll ? { replayAll: true } : {}),
+      ...(this.activePath ? { activePath: this.activePath } : {}),
       ...(await server.deviceCredentials(this.name)),
       // A clock the test advances, so the size-scaled write debounce does
       // not decide when a sync may happen.
@@ -4643,27 +4646,29 @@ describe("settings", () => {
     });
 
     it("leaves alone whatever arrives for the folder it runs from, whatever that is called", async () => {
-      await fresh();
-      // A peer that synced a folder named like this device's own.
-      const mac = await deviceWith("mac", { root: ".obsidian", plugins: true });
-      await mac.vault.write(
-        ".obsidian/plugins/trewsync/data.json",
-        json({ deviceId: "mac" }),
-        times,
-      );
-      await mac.settle();
-      const desk = await deviceWith("desk", {
-        root: ".obsidian",
-        plugins: true,
-        firstChoice: "server",
-        ownFolder: ".obsidian/plugins/trewsync",
-      });
-      const report = await desk.settle();
-      expect(report.settingsHeld).toBe(0);
-      expect(report.skipped).toBe(0);
-      expect(report.appliedCursor).toBeDefined();
-      await desk.engine.sync({ applySettings: true });
-      expect(desk.vault.snapshot()).toEqual({});
+      // A peer that synced a folder named like this device's own, in any case.
+      for (const spelt of ["trewsync", "TrewSync"]) {
+        await fresh();
+        const mac = await deviceWith("mac", { root: ".obsidian", plugins: true });
+        await mac.vault.write(
+          `.obsidian/plugins/${spelt}/data.json`,
+          json({ deviceId: "mac" }),
+          times,
+        );
+        await mac.settle();
+        const desk = await deviceWith("desk", {
+          root: ".obsidian",
+          plugins: true,
+          firstChoice: "server",
+          ownFolder: ".obsidian/plugins/trewsync",
+        });
+        const report = await desk.settle();
+        expect(report.settingsHeld, spelt).toBe(0);
+        expect(report.skipped, spelt).toBe(0);
+        expect(report.appliedCursor, spelt).toBeDefined();
+        await desk.engine.sync({ applySettings: true });
+        expect(desk.vault.snapshot(), spelt).toEqual({});
+      }
     });
   });
 
@@ -5034,5 +5039,221 @@ describe("settings", () => {
     expect((await desk.settle()).settingsHeld).toBe(1);
     await desk.engine.sync({ applySettings: true });
     expect(desk.vault.snapshot()[".obsidian/app.json"]).toContain("mac");
+  });
+});
+
+describe("the first choice of settings, when the first pass is interrupted", () => {
+  const json = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
+  const times = { mtime: 1_000, ctime: 1_000 };
+  class Typing extends MemoryVault {
+    onRead?: (path: string) => void;
+    override async read(path: string): Promise<Uint8Array> {
+      this.onRead?.(path);
+      return super.read(path);
+    }
+  }
+  for (const [what, path, plugins] of [
+    ["Obsidian's settings", ".obsidian/app.json", false],
+    ["a plugin's settings", ".obsidian/plugins/dataview/data.json", true],
+  ] as const) {
+    it(`is still the server's for ${what} after a round that yielded to an edit`, async () => {
+      await fresh();
+      const mac = new Device("mac");
+      mac.settings = { root: ".obsidian", plugins };
+      devices.push(mac);
+      await mac.connect(server);
+      await mac.vault.write(path, json({ from: "mac" }), times);
+      await mac.settle();
+
+      const vault = new Typing();
+      const desk = new Device("desk", vault);
+      desk.settings = { root: ".obsidian", plugins, firstChoice: "server" };
+      desk.replayAll = true;
+      desk.activePath = () => "today.md";
+      devices.push(desk);
+      await vault.write(path, json({ from: "desk" }), times);
+      await vault.write("today.md", new TextEncoder().encode("typing\n"), times);
+      // The person types into the open note while the first pass is on it,
+      // so the round yields before it reaches the settings.
+      let typed = false;
+      vault.onRead = (read) => {
+        if (read === "today.md" && !typed) {
+          typed = true;
+          desk.engine.noteChanged("today.md");
+        }
+      };
+      await desk.connect(server);
+      await desk.engine.sync();
+      expect(typed).toBe(true);
+      await desk.settle();
+      await desk.engine.sync({ applySettings: true });
+      await desk.settle();
+      await mac.settle();
+      await mac.engine.sync({ applySettings: true });
+      expect(desk.vault.snapshot()[path]).toContain("mac");
+      expect(mac.vault.snapshot()[path]).toContain("mac");
+      expect(Object.keys(mac.vault.snapshot()).filter((p) => p.includes("Conflicted"))).toEqual([]);
+      expect(desk.engine.firstChoiceDone).toBe(true);
+    });
+  }
+});
+
+describe("a setting Apply deleted, written back before Obsidian reloads", () => {
+  const json = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
+  const times = { mtime: 1_000, ctime: 1_000 };
+  const P = ".obsidian/plugins/dataview/data.json";
+  async function dev(name: string, settings: SettingsScope, loadId?: string): Promise<Device> {
+    const d = new Device(name);
+    d.settings = settings;
+    if (loadId) d.loadId = loadId;
+    devices.push(d);
+    await d.connect(server);
+    return d;
+  }
+  async function uploadedSettling(d: Device): Promise<number> {
+    let uploaded = 0;
+    for (let i = 0; i < 4; i++) {
+      await receiveCommitted(d.transport);
+      uploaded += (await d.engine.sync()).uploaded;
+    }
+    return uploaded;
+  }
+  async function deletedOnDesk(): Promise<{ mac: Device; desk: Device }> {
+    await fresh();
+    const mac = await dev("mac", { root: ".obsidian", plugins: true });
+    await mac.vault.write(P, json({ v: "old" }), times);
+    await mac.settle();
+    const desk = await dev(
+      "desk",
+      { root: ".obsidian", plugins: true, firstChoice: "server" },
+      "load 1",
+    );
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    await desk.settle();
+    expect(desk.vault.snapshot()[P]).toContain("old");
+    // mac uninstalls the plugin, and desk applies the deletion.
+    await mac.vault.remove(P);
+    await mac.settle();
+    expect((await desk.settle()).settingsHeld).toBe(1);
+    await desk.engine.sync({ applySettings: true });
+    expect(desk.vault.snapshot()[P]).toBeUndefined();
+    return { mac, desk };
+  }
+
+  it("holds it in the same load instead of sending it", async () => {
+    const { mac, desk } = await deletedOnDesk();
+    await desk.vault.write(P, json({ v: "old" }), { mtime: 9_000, ctime: 9_000 });
+    expect(await uploadedSettling(desk)).toBe(0);
+    expect((await desk.settle()).settingsHeld).toBe(1);
+    expect((await mac.settle()).settingsHeld).toBe(0);
+    expect(mac.vault.snapshot()[P]).toBeUndefined();
+  });
+
+  it("offers the deletion again in the next load instead of sending it", async () => {
+    const { mac, desk } = await deletedOnDesk();
+    desk.close();
+    await desk.vault.write(P, json({ v: "old" }), { mtime: 9_000, ctime: 9_000 });
+    desk.loadId = "load 2";
+    desk.settings = { root: ".obsidian", plugins: true };
+    await desk.connect(server);
+    expect(await uploadedSettling(desk)).toBe(0);
+    expect((await desk.settle()).settingsHeld).toBe(1);
+    await desk.engine.sync({ applySettings: true });
+    expect(desk.vault.snapshot()[P]).toBeUndefined();
+    expect((await mac.settle()).settingsHeld).toBe(0);
+  });
+
+  it("does not delete the setting when the group puts it back before the reload", async () => {
+    const { mac, desk } = await deletedOnDesk();
+    await mac.vault.write(P, json({ v: "old" }), { mtime: 5_000, ctime: 5_000 });
+    await mac.settle();
+    await desk.settle();
+    desk.close();
+    desk.loadId = "load 2";
+    desk.settings = { root: ".obsidian", plugins: true };
+    await desk.connect(server);
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    await desk.settle();
+    await mac.settle();
+    expect(mac.vault.snapshot()[P]).toContain("old");
+    expect(desk.vault.snapshot()[P]).toContain("old");
+  });
+
+  it("forgets it once a later load has seen it gone", async () => {
+    const { desk } = await deletedOnDesk();
+    desk.close();
+    desk.loadId = "load 2";
+    desk.settings = { root: ".obsidian", plugins: true };
+    await desk.connect(server);
+    const r = await desk.settle();
+    expect(r.settingsHeld).toBe(0);
+    expect(r.uploaded).toBe(0);
+    expect(desk.engine.status().files).toBe(0);
+  });
+});
+
+describe("the count of files coming down", () => {
+  class CountingVault extends MemoryVault {
+    engine?: Engine;
+    written = 0;
+    samples: number[] = [];
+    override async write(path: string, data: Uint8Array, times: Times): Promise<void> {
+      if (this.engine && path.startsWith("n/"))
+        this.samples.push(this.engine.inbound() + this.written);
+      await super.write(path, data, times);
+      if (path.startsWith("n/")) this.written++;
+    }
+  }
+  const times = { mtime: 1_000, ctime: 1_000 };
+
+  it("never counts more files than are coming, across full batches", async () => {
+    await fresh();
+    const a = await device("a");
+    const N = 300;
+    for (let i = 0; i < N; i++)
+      await a.vault.write(`n/${i}.md`, new TextEncoder().encode(`note ${i}\n`), times);
+    await a.settle();
+    const v = new CountingVault();
+    const b = new Device("b", v);
+    devices.push(b);
+    await b.connect(server);
+    v.engine = b.engine;
+    await b.engine.sync();
+    expect(v.written).toBe(N);
+    expect(Math.max(...v.samples)).toBe(N);
+  });
+
+  it("leaves out deletions, which download nothing", async () => {
+    await fresh();
+    const a = await device("a");
+    for (let i = 0; i < 10; i++)
+      await a.vault.write(`n/${i}.md`, new TextEncoder().encode(`note ${i}\n`), times);
+    await a.settle();
+    for (let i = 0; i < 6; i++) await a.vault.remove(`n/${i}.md`);
+    await a.settle();
+    const b = await device("b");
+    expect(b.engine.inbound()).toBe(4);
+    await b.engine.sync();
+    expect(b.engine.inbound()).toBe(0);
+  });
+
+  it("is zero after a pass that left settings held for Apply", async () => {
+    await fresh();
+    const json = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
+    const mac = new Device("mac");
+    mac.settings = { root: ".obsidian", plugins: true };
+    devices.push(mac);
+    await mac.connect(server);
+    await mac.vault.write(".obsidian/plugins/dataview/data.json", json({ a: 1 }), times);
+    await mac.vault.write(".obsidian/plugins/quickadd/data.json", json({ a: 1 }), times);
+    await mac.settle();
+    const desk = new Device("desk");
+    desk.settings = { root: ".obsidian", plugins: true, firstChoice: "server" };
+    devices.push(desk);
+    await desk.connect(server);
+    expect((await desk.settle()).settingsHeld).toBe(2);
+    expect(desk.engine.inbound()).toBe(0);
   });
 });

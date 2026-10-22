@@ -353,6 +353,8 @@ export default class TrewPlugin extends Plugin {
    */
   private generation = 0;
   private editingConnection = false;
+  /** An Apply is running, which ends in a reload an unlink must not straddle. */
+  private applying = false;
   private unlinking: Promise<void> | undefined;
   private nudgeTimer: ReturnType<typeof setTimeout> | undefined;
   private workingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1615,7 +1617,7 @@ export default class TrewPlugin extends Plugin {
           void this.app.vault.adapter.append(timingLog, text).catch(() => undefined);
         }
         this.working(undefined);
-        this.settledFirstTime(mine, report);
+        this.settledFirstTime(mine);
         // Before the state, which is what an open panel redraws on: the
         // settings waiting for Apply are counted here, and a panel that read
         // the count first went on offering nothing to apply.
@@ -2092,10 +2094,11 @@ export default class TrewPlugin extends Plugin {
    * pass that ends with nothing held, as the engine forgets it then. Saved
    * as the device name is, without a restart.
    */
-  private settledFirstTime(mine: number, report: SyncReport): void {
+  private settledFirstTime(mine: number): void {
     const config = this.config;
     if (!config || mine !== this.generation) return;
-    const choiceDone = config.settingsFirstChoice !== undefined && report.settingsHeld === 0;
+    const choiceDone =
+      config.settingsFirstChoice !== undefined && this.client?.engine.firstChoiceDone === true;
     if (config.settingsReplay !== true && !choiceDone) return;
     const next: Record<string, unknown> = { ...config };
     delete next["settingsReplay"];
@@ -2136,24 +2139,35 @@ export default class TrewPlugin extends Plugin {
     if (group === undefined || this.settingsHeld === 0) {
       throw new Error("no settings are waiting to be applied");
     }
-    await keepSettingsBeforeApply(
-      this.app.vault.adapter,
-      this.configRoot,
-      group,
-      this.pluginDir(),
-      this.syncsPlugins,
-    );
-    await this.saveOpenEditors();
+    // Held to the reload, so an unlink or another settings change cannot
+    // start under it and be cut in half by the reload.
+    if (this.unlinking) throw new Error("This vault is being unlinked.");
+    if (this.editingConnection) throw new Error("Another settings change is in progress.");
+    this.editingConnection = true;
+    this.applying = true;
     try {
-      await client.sync({
-        applySettings: true,
-        coalesceWrites: false,
-        ...(shown !== undefined ? { applyOnly: shown } : {}),
-      });
-    } finally {
-      await this.quiet();
+      await keepSettingsBeforeApply(
+        this.app.vault.adapter,
+        this.configRoot,
+        group,
+        this.pluginDir(),
+        this.syncsPlugins,
+      );
       await this.saveOpenEditors();
-      reloadObsidian();
+      try {
+        await client.sync({
+          applySettings: true,
+          coalesceWrites: false,
+          ...(shown !== undefined ? { applyOnly: shown } : {}),
+        });
+      } finally {
+        await this.quiet();
+        await this.saveOpenEditors();
+        reloadObsidian();
+      }
+    } finally {
+      this.editingConnection = false;
+      this.applying = false;
     }
   }
 
@@ -3735,6 +3749,7 @@ export default class TrewPlugin extends Plugin {
    */
   async unlink(): Promise<void> {
     if (this.unlinking) return this.unlinking;
+    if (this.applying) throw new Error("Synced settings are being applied.");
     this.unlinking = this.unlinkVault();
     try {
       await this.unlinking;
@@ -6201,7 +6216,8 @@ class ApplySettingsModal extends Modal {
         "Applying writes them and reloads Obsidian. Open notes are saved first, and a copy of this " +
         "device's settings as they are now is kept.",
     });
-    this.shown = waiting.length > 0 ? new Map(waiting.map((h) => [h.path, h.uid])) : undefined;
+    // Always a list, empty when nothing was shown, so Apply writes no more than it showed.
+    this.shown = new Map(waiting.map((h) => [h.path, h.uid]));
     const plugins = this.plugin.syncsPlugins
       ? contentEl.createDiv("trew-plugin-changes")
       : undefined;
@@ -6247,8 +6263,14 @@ class ApplySettingsModal extends Modal {
       await this.plugin.applySettings(this.shown);
     } catch (err) {
       new Notice(`TrewSync: the settings were not applied: ${(err as Error).message}`, 10_000);
+      this.applying = false;
       this.close();
     }
+  }
+
+  /** Stays open while applying: Obsidian reloads when it is done. */
+  override close(): void {
+    if (!this.applying) super.close();
   }
 
   override onClose(): void {

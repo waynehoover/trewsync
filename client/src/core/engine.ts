@@ -57,6 +57,7 @@ import { parsesAsYaml } from "./yaml.ts";
 import { drawingGate, looksLikeExcalidraw } from "./excalidraw.ts";
 import { looksLikeMarkupPath, wellFormedMarkup } from "./markup.ts";
 import { chunkName, chunkNames, plainDigest } from "./digest.ts";
+import { fold } from "./fold.ts";
 import { configPathReason, isConfigPath, pathReason, type PathReason } from "./path-policy.ts";
 import { describeWindowsRefusal, windowsRefusal } from "./windows-names.ts";
 import { conflictCopyPath, mergeText, sanitiseAuthor } from "./merge.ts";
@@ -1166,8 +1167,8 @@ export class Engine {
   /** Versions waiting to come down together, and what they will cost to hold. */
   private inbox: Incoming[] = [];
   private inboxBytes = 0;
-  /** Of the batch a fill took off the inbox, how many are not yet written. */
-  private landing = 0;
+  /** Of the batch a fill took off the inbox, the paths not yet written. */
+  private landing = new Set<string>();
 
   /**
    * What the server said it will take, learned at the handshake, and kept so
@@ -1319,11 +1320,26 @@ export class Engine {
    * `pending` alone drops as each path is decided, a whole batch before its
    * files are on disk, and the writing is where a first sync spends its time.
    * Folders are left out: the count is of files, and a vault has dozens.
+   * So are deletions, which download nothing, and what stays pending on
+   * purpose: settings held for Apply, and paths waiting out a retry. A path
+   * is counted once wherever it is, so the one whose decision set off a
+   * fill is not counted again while the fill writes it. The inbox and the
+   * batch landing are a pass's, and between passes are leftovers it drops.
    */
   inbound(): number {
-    let files = this.inbox.length + this.landing;
-    for (const path of this.pending) if (this.remote.get(path)?.folder !== true) files++;
-    return files;
+    const coming = new Set<string>();
+    if (this.syncing) {
+      for (const d of this.inbox) coming.add(d.path);
+      for (const path of this.landing) coming.add(path);
+    }
+    for (const path of this.pending) {
+      const remote = this.remote.get(path);
+      if (remote?.folder === true || remote?.deleted === true) continue;
+      if (this.heldSettings.has(path) || this.settingsUnsendable.has(path)) continue;
+      if (this.retries.has(path)) continue;
+      coming.add(path);
+    }
+    return coming.size;
   }
 
   status(): {
@@ -1357,6 +1373,11 @@ export class Engine {
       settingsHeld: this.settingsHeldLast,
       syncing: this.syncing,
     };
+  }
+
+  /** Whether the first-time choice of settings has been settled (`firstChoice`). */
+  get firstChoiceDone(): boolean {
+    return this.firstChoiceSpent;
   }
 
   /**
@@ -1700,7 +1721,7 @@ export class Engine {
     return (
       root === undefined ||
       !path.startsWith(root + "/") ||
-      (own !== undefined && path.startsWith(own + "/")) ||
+      (own !== undefined && fold(path).startsWith(fold(own) + "/")) ||
       configPathReason(path, this.opts.settings?.plugins === true) !== undefined
     );
   }
@@ -1991,7 +2012,7 @@ export class Engine {
       this.inbox = [];
       this.inboxBytes = 0;
     }
-    this.landing = 0;
+    this.landing = new Set();
     // The same for the folder work a pass defers to its end: nothing in it
     // was sent or removed, and this pass decides it again.
     this.folderDeletes = [];
@@ -2426,7 +2447,21 @@ export class Engine {
     }
     this.settingsHeldLast = this.heldSettings.size;
     this.settingsHeldLastPaths = [...this.heldSettings].sort();
-    if (this.opts.settings !== undefined && this.heldSettings.size === 0)
+    // Spent only once every setting it could decide has been decided. A pass
+    // that yielded, or left one waiting out a retry or a half-written file,
+    // has held nothing and decided nothing for it either.
+    if (
+      this.opts.settings !== undefined &&
+      !this.firstChoiceSpent &&
+      this.heldSettings.size === 0 &&
+      ![...onDisk.keys()].some(
+        (path) =>
+          isConfigPath(path) &&
+          !this.outOfScope(path) &&
+          this.remote.has(path) &&
+          (this.entries.get(path)?.synchash ?? "") === "",
+      )
+    )
       this.firstChoiceSpent = true;
     report.needsAttention = this.attentionList(report);
     if (phases !== undefined) {
@@ -2816,6 +2851,14 @@ export class Engine {
     const applied = entry.unconfirmed;
     delete entry.unconfirmed;
     if (applied === undefined || local?.hash === entry.synchash) return;
+    // Gone, so nothing was written back: a deletion Apply made, confirmed, or
+    // a file removed since. Decided with no base, as a first time is, which
+    // never reads as a deletion made here to send to the group.
+    if (local === undefined) {
+      entry.synchash = "";
+      entry.syncuid = 0;
+      return;
+    }
     this.log("a setting changed after it was applied, deciding against the base it replaced", path);
     if (applied.hash === "") {
       // The apply made this file, so there is no base to go back to, and with
@@ -4003,7 +4046,7 @@ export class Engine {
     this.inbox = [];
     this.inboxBytes = 0;
     if (batch.length === 0) return;
-    this.landing = batch.length;
+    this.landing = new Set(batch.map((d) => d.path));
 
     // Bytes this device already holds are not worth asking for again.
     //
@@ -4079,7 +4122,7 @@ export class Engine {
           fetchIndividually = true;
         } else {
           for (const d of batch) this.recordFailure(d.path, err, report);
-          this.landing = 0;
+          this.landing = new Set();
           return;
         }
       }
@@ -4129,7 +4172,7 @@ export class Engine {
       } catch (err) {
         this.recordFailure(d.path, err, report);
       } finally {
-        this.landing--;
+        this.landing.delete(d.path);
       }
     }
     await this.checkpoint();
@@ -4403,7 +4446,19 @@ export class Engine {
           this.entries.delete(path);
           continue;
         }
-        this.entries.delete(path);
+        // A setting deleted by Apply keeps its record until a later load has
+        // seen it gone: Obsidian, or the plugin, still holds it in memory and
+        // may write it back before the reload, and that copy is the old
+        // value, not a change to send (`unconfirmed`).
+        const applied = this.entries.get(path)?.unconfirmed;
+        if (applied !== undefined) {
+          this.entries.set(path, {
+            ...newEntry(path),
+            synchash: applied.hash,
+            syncuid: applied.uid,
+            unconfirmed: applied,
+          });
+        } else this.entries.delete(path);
         report.deletedLocally++;
         this.log("deleted locally", path, why);
         this.activity("deleted-local", path);

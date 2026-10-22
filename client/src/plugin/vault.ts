@@ -73,6 +73,7 @@ import {
 import { looksLikeText } from "../core/chunk.ts";
 import { limiter } from "../core/limiter.ts";
 import { plainDigest } from "../core/digest.ts";
+import { fold } from "../core/fold.ts";
 import {
   DISPLACED_LOG,
   DisplacedLedger,
@@ -440,7 +441,6 @@ function isDesktopAdapter(adapter: DataAdapter): adapter is DesktopAdapter {
   return typeof (adapter as Partial<DesktopAdapter>).getFullPath === "function";
 }
 
-/** Opens one path for reading and fsyncs it, leaving no handle behind. */
 /**
  * How many fsyncs a flush keeps in flight.
  *
@@ -453,6 +453,7 @@ function isDesktopAdapter(adapter: DataAdapter): adapter is DesktopAdapter {
  */
 const FSYNC_CONCURRENCY = 32;
 
+/** Opens one path for reading and fsyncs it, leaving no handle behind. */
 async function fsyncPath(fs: FsyncFs, adapter: DesktopAdapter, path: string): Promise<void> {
   const handle = await fs.promises.open(adapter.getFullPath(path), "r");
   try {
@@ -614,8 +615,11 @@ export class ObsidianVault implements Vault {
 
   /** Whether a path on this disk is inside the folder this plugin runs from. */
   private inOwnFolder(disk: string): boolean {
-    const own = this.ownFolder;
-    return own !== undefined && (disk === own || disk.startsWith(own + "/"));
+    if (this.ownFolder === undefined) return false;
+    // Folded, as every other test that keeps device-local state out is.
+    const own = fold(this.ownFolder);
+    const here = fold(disk);
+    return here === own || here.startsWith(own + "/");
   }
 
   /**
