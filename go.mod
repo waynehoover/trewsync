@@ -2,6 +2,8 @@ module github.com/waynehoover/trewsync
 
 go 1.27.0
 
+toolchain go1.27.3
+
 require (
 	filippo.io/age v1.3.2
 	github.com/coder/websocket v1.8.15

@@ -66,10 +66,14 @@
     "prettier": "^3.6.2",
     "qrcode-generator": "2.0.4",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.8",
+    "vitest": "^4.1.12",
     "yaml": "2.9.1"
   },
   "bin": {
     "trew": "dist/trew.mjs"
+  },
+  "overrides": {
+    "moment": "2.31.0",
+    "source-map-js": "1.2.2"
   }
 }

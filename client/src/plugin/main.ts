@@ -103,7 +103,7 @@ import { DISPLACED_LOG, type Displaced, type Inventory } from "../core/displaced
 import { configFolderName, firstFreeName } from "../core/paths.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
 import { backUpSettings, keepSettingsBeforeApply, settingsIn } from "./settings.ts";
-import { isConfigPath } from "../core/path-policy.ts";
+import { isConfigPath, isPluginPath } from "../core/path-policy.ts";
 import { describeChange, describePluginChanges, type PluginChanges } from "./plugin-changes.ts";
 import { timedVault } from "../core/vault.ts";
 import type { JournalSaveCost, JournalStoreOptions } from "../core/index-journal-store.ts";
@@ -6187,21 +6187,20 @@ class ApplySettingsModal extends Modal {
   }
 
   override onOpen(): void {
-    const n = this.plugin.settingsHeld;
     this.setTitle("Apply synced settings");
     this.modalEl.addClass("mod-trew-panel");
     const { contentEl } = this;
     contentEl.addClass("trew-panel");
-    contentEl.createEl("p", {
-      text:
-        `${n} ${n === 1 ? "setting" : "settings"} from other devices ${n === 1 ? "is" : "are"} waiting. ` +
-        "Applying writes them and reloads Obsidian. Open notes are saved first, and a copy of this " +
-        "device's settings as they are now is kept.",
-    });
     // What Apply writes is what this dialog shows: the settings waiting now,
     // at the versions waiting now, and nothing that arrives while it is open.
     // A plugin's settings are named, with the device they came from.
     const waiting = this.plugin.settingsWaitingNow();
+    contentEl.createEl("p", {
+      text:
+        `${waitingSummary(waiting, this.plugin.settingsHeld)} from other devices. ` +
+        "Applying writes them and reloads Obsidian. Open notes are saved first, and a copy of this " +
+        "device's settings as they are now is kept.",
+    });
     this.shown = waiting.length > 0 ? new Map(waiting.map((h) => [h.path, h.uid])) : undefined;
     const plugins = this.plugin.syncsPlugins
       ? contentEl.createDiv("trew-plugin-changes")
@@ -6255,6 +6254,22 @@ class ApplySettingsModal extends Modal {
   override onClose(): void {
     this.contentEl.empty();
   }
+}
+
+/**
+ * What waits for Apply, in words: Obsidian's settings and plugins' apart, so
+ * a plugin's settings are not counted as one of Obsidian's. `held` is the
+ * count to fall back on where the list is not to hand.
+ */
+export function waitingSummary(waiting: readonly HeldSetting[], held: number): string {
+  if (waiting.length === 0) return `${held} ${held === 1 ? "setting is" : "settings are"} waiting`;
+  const plugins = waiting.filter((h) => isPluginPath(h.path)).length;
+  const own = waiting.length - plugins;
+  const parts = [
+    ...(own > 0 ? [`${own} ${own === 1 ? "setting" : "settings"}`] : []),
+    ...(plugins > 0 ? [`${plugins === 1 ? "one plugin's" : `${plugins} plugins'`} settings`] : []),
+  ];
+  return `${parts.join(" and ")} ${own === 1 && plugins === 0 ? "is" : "are"} waiting`;
 }
 
 /** The dropdown's name for each group. */

@@ -45,3 +45,24 @@ describe("what an Apply would change in this device's plugins' settings", () => 
     expect(changes.otherSettings).toBe(0);
   });
 });
+
+describe("what the Apply dialog says is waiting", () => {
+  const h = (path: string) => held(path, 1);
+  it("counts Obsidian's settings and plugins' apart", async () => {
+    const { waitingSummary } = await import("./main.ts");
+    expect(waitingSummary([h(".obsidian/app.json")], 1)).toBe("1 setting is waiting");
+    expect(waitingSummary([h(".obsidian/plugins/a/data.json")], 1)).toBe(
+      "one plugin's settings are waiting",
+    );
+    expect(
+      waitingSummary(
+        [h(".obsidian/app.json"), h(".obsidian/hotkeys.json"), h(".obsidian/plugins/a/data.json")],
+        3,
+      ),
+    ).toBe("2 settings and one plugin's settings are waiting");
+    expect(
+      waitingSummary([h(".obsidian/plugins/a/data.json"), h(".obsidian/plugins/b/data.json")], 2),
+    ).toBe("2 plugins' settings are waiting");
+    expect(waitingSummary([], 4)).toBe("4 settings are waiting");
+  });
+});
