@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { App, FakeEl, built } from "./stub.ts";
-import { ConflictsModal } from "./conflicts.ts";
+import { ConflictsModal, shown } from "./conflicts.ts";
 import { deferred, nextTurn } from "../core/test-async.ts";
 import { MemoryVault } from "../core/vault.ts";
 import { reviewConflict, resolveConflict } from "../core/conflicts.ts";
@@ -127,3 +127,14 @@ it.each([false, true])(
     modal.close();
   },
 );
+
+it("names a setting by Obsidian, a plugin's settings by the plugin, and a note as it is", () => {
+  expect(shown(".obsidian/app.json")).toBe("Obsidian settings: app.json");
+  expect(shown(".obsidian-mobile/plugins/dataview/data.json")).toBe(
+    "dataview plugin settings: data.json",
+  );
+  expect(shown(".obsidian/plugins/dataview/data (Conflicted copy mac 202610221155).json")).toBe(
+    "dataview plugin settings: data (Conflicted copy mac 202610221155).json",
+  );
+  expect(shown("notes/plugins/a.md")).toBe("notes/plugins/a.md");
+});

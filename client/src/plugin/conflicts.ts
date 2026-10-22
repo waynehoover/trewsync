@@ -1,7 +1,7 @@
 import { Modal, Notice, Setting, type App } from "obsidian";
 import { diffLines, when } from "./history.ts";
 import type { ConflictPair, ConflictReview, ConflictChoice } from "../core/conflicts.ts";
-import { isConfigPath } from "../core/path-policy.ts";
+import { isConfigPath, isPluginPath } from "../core/path-policy.ts";
 
 const DIFF_PREVIEW_CHARS = 128 * 1024;
 
@@ -196,7 +196,17 @@ export class ConflictsModal extends Modal {
   }
 }
 
-/** A setting under its file name, which is what Obsidian's settings folder holds. */
-function shown(path: string): string {
-  return isConfigPath(path) ? `Obsidian settings: ${path.slice(path.indexOf("/") + 1)}` : path;
+/**
+ * A setting under its file name, which is what Obsidian's settings folder
+ * holds, and a plugin's under the plugin's folder name, so a plugin's
+ * settings do not read as Obsidian's.
+ */
+export function shown(path: string): string {
+  if (!isConfigPath(path)) return path;
+  const rest = path.slice(path.indexOf("/") + 1);
+  const [, id, ...file] = rest.split("/");
+  if (isPluginPath(path) && id !== undefined && file.length > 0) {
+    return `${id} plugin settings: ${file.join("/")}`;
+  }
+  return `Obsidian settings: ${rest}`;
 }
