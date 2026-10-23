@@ -31,18 +31,19 @@ root=$(pwd)
 skip_docker=0
 [ "${1:-}" = "--skip-docker" ] && skip_docker=1
 
-# A tree that has passed here once is not run again. The tree is every byte of
-# the repository at a commit, so the same tree is the same inputs: a commit
-# whose message changed, a rebase that changed nothing, the same commit checked
-# out in another worktree. Only with nothing uncommitted, since the run reads
-# the working tree, and only for a run that passed outright. Shared by every
+# A commit that has passed here once is not run again: the same commit checked
+# out in another worktree, or the gate run twice. The commit, not only its
+# tree, because a check reads more than the files: the compose pin check
+# excuses the one commit a server tag points at, and the same tree on another
+# commit has to fail it. Only with nothing uncommitted, since the run reads the
+# working tree, and only for a run that passed outright. Shared by every
 # worktree of the repository. TREW_CHECK_AGAIN=1 runs it regardless.
 passed_trees="$(git rev-parse --path-format=absolute --git-common-dir)/trew-check-passed"
 tree=""
 if [ -z "$(git status --porcelain --untracked-files=normal)" ]; then
-  tree=$(git rev-parse 'HEAD^{tree}')
+  tree=$(git rev-parse HEAD)
   if [ "${TREW_CHECK_AGAIN:-0}" != 1 ] && grep -qx "$tree" "$passed_trees" 2>/dev/null; then
-    echo "This tree ($tree) has already passed every check here; not running it again."
+    echo "This commit ($tree) has already passed every check here; not running it again."
     echo "TREW_CHECK_AGAIN=1 runs it regardless."
     exit 0
   fi
@@ -296,10 +297,18 @@ for i in "${!lanes[@]}"; do
   (
     results="$work/lane$i.results"
     for g in ${lanes[$i]}; do "$g"; done
+    : > "$work/lane$i.done"
   ) > "$work/lane$i.log" 2>&1 &
   pids+=($!)
 done
-for pid in "${pids[@]}"; do wait "$pid"; done
+# A lane that stopped early, killed or ended by a shell error, has not run
+# the checks after the one it stopped in, and its results file says nothing
+# about them: that is a failure, never a shorter green run.
+for i in "${!pids[@]}"; do
+  if ! wait "${pids[$i]}" || [ ! -e "$work/lane$i.done" ]; then
+    printf 'fail\t%s\n' "the lane running ${lanes[$i]} finished" >> "$results"
+  fi
+done
 for i in "${!lanes[@]}"; do cat "$work/lane$i.log"; done
 
 # ---- the guard: CI must not grow a step this script does not know about ----
