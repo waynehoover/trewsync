@@ -28,6 +28,16 @@ position, so nothing dedupes, which is fine for an archive of immutable photos
 and wrong for a vault of notes people edit. The part worth copying is that they
 never hold a file.
 
+**Measured on a phone, October 22, 2026.** A Pixel 9a downloading a 60 MiB
+attachment into a vault in App storage: Obsidian's resident memory (total PSS
+from `dumpsys meminfo`, sampled about once a second) rose from 258 to 334 MB
+and the file landed in 8 s; a 200 MiB attachment rose from 255 to 325 MB and
+landed in 28 s, with Obsidian never restarted. Neither came near a copy and a
+half of the file, so streaming the assembly is not worth its risk at the
+default limit, nor at four times it on a phone like this one. A once a second
+sample can miss a short peak, and a phone with less memory may tell another
+story; that is what would reopen this.
+
 **Before changing the default:** the 2.7 MB per MiB in
 [store.go](../internal/store/store.go) was measured in Basalt, before the
 single-buffer assembly and the windowed sealing (now windowed naming) landed,
