@@ -2046,7 +2046,12 @@ export class Engine {
     this.heldHere = leaving;
     for (const [path, hash] of this.owed) {
       const r = this.remote.get(path);
-      if (this.entries.get(path)?.synchash === hash || r === undefined || r.deleted || r.hash !== hash) {
+      if (
+        this.entries.get(path)?.synchash === hash ||
+        r === undefined ||
+        r.deleted ||
+        r.hash !== hash
+      ) {
         this.owed.delete(path);
       }
     }
