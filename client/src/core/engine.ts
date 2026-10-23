@@ -4322,9 +4322,7 @@ export class Engine {
           ? scanned.bytes
           : await this.opts.vault.read(path);
       const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-      return (
-        value !== null && typeof value === "object" && Object.keys(value as object).length === 0
-      );
+      return value !== null && typeof value === "object" && Object.keys(value).length === 0;
     } catch {
       return false;
     }
