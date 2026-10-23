@@ -22,7 +22,7 @@ nothing; `trewd COMMAND -h` shows a command's flags. Serving is always
 | `uninvite ID` | Cancel an outstanding invite. | Yes; it goes through the running server. |
 | `cat -path P [-uid N]` | Print a note, or one version of it, straight from the store. | Yes. |
 | `history -path P [-limit N] [-before UID]` | List a note's versions, newest first, with the uid `cat` takes; 50 a page by default, `-before` for the next. | Yes. |
-| `deleted [-limit N] [-before UID]` | List deleted notes and the version to restore each from; 100 a page by default. | Yes. |
+| `deleted [-settings] [-limit N] [-before UID]` | List deleted notes and the version to restore each from; 100 a page by default. `-settings` lists deleted settings instead: Obsidian's, themes, snippets and plugins'. | Yes. |
 | `export -uid N -to FILE` | Write one version to a new file. | Yes. |
 | `doctor [-json]` | Diagnose the data directory and a running server; changes nothing. | Yes. |
 | `backup -to FILE -encrypt-to KEY` | Take a verified backup, encrypted to an age recipient. `-plaintext-ok` writes a plaintext directory instead. | Yes. |

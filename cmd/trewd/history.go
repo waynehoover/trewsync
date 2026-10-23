@@ -114,6 +114,7 @@ func cmdDeleted(args []string, out io.Writer) error {
 	vault := fs.String("vault", defaultVault, "the vault to read")
 	limit := fs.Int("limit", 100, fmt.Sprintf("the most deletions to list, up to %d", store.DeletedMax))
 	before := fs.Int64("before", 0, "list only deletions older than this uid, to page back")
+	settings := fs.Bool("settings", false, "list deleted settings (Obsidian's, themes, snippets and plugins') instead of notes")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -123,15 +124,20 @@ func cmdDeleted(args []string, out io.Writer) error {
 	}
 	defer done()
 
+	what := "notes"
 	dels, more, err := st.Deleted(*vault, true, *limit, *before)
+	if *settings {
+		what = "settings"
+		dels, more, err = st.DeletedSettings(*vault, *limit, *before)
+	}
 	if err != nil {
 		return err
 	}
 	if len(dels) == 0 {
-		fmt.Fprintf(out, "vault %q has no deleted notes\n", *vault)
+		fmt.Fprintf(out, "vault %q has no deleted %s\n", *vault, what)
 		return nil
 	}
-	fmt.Fprintf(out, "deleted notes in vault %q, newest first:\n", *vault)
+	fmt.Fprintf(out, "deleted %s in vault %q, newest first:\n", what, *vault)
 	for _, d := range dels {
 		from := "nothing to restore it from: a purge took every version with words in it"
 		if d.RestorableUID != 0 {
@@ -140,7 +146,11 @@ func cmdDeleted(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "  uid %-6d %q deleted by %s, %s; %s\n", d.UID, d.Path, d.Device, clock(d.MTime), from)
 	}
 	if more {
-		fmt.Fprintf(out, "older deletions follow: trewd deleted -before %d\n", dels[len(dels)-1].UID)
+		flag := ""
+		if *settings {
+			flag = " -settings"
+		}
+		fmt.Fprintf(out, "older deletions follow: trewd deleted%s -before %d\n", flag, dels[len(dels)-1].UID)
 	}
 	return nil
 }

@@ -88,6 +88,9 @@ every device keeps its own copy. Look in this order.
    trewd deleted -data /var/lib/trew
    ```
 
+   A deleted setting, a snippet or a plugin's settings, is in its own list:
+   `trewd deleted -settings`.
+
 3. **Take any version out.** `cat` prints it, `export` writes it to a new file,
    and nothing else is needed: no device, no plugin, no running server.
 

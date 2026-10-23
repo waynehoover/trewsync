@@ -364,3 +364,43 @@ func TestAFolderMidCaseRenameIsNotEmptiedByItsOldSpelling(t *testing.T) {
 		t.Fatalf("deleting the folder once nothing is in it: %v", err)
 	}
 }
+
+// The deleted list is for lost notes, so it leaves settings out; the list of
+// deleted settings is where a deleted one is found without knowing its path.
+func TestDeletedSettingsAreListedApartFromNotes(t *testing.T) {
+	h := newTestStore(t)
+	h.file(t, "note.md", "a note")
+	h.file(t, ".obsidian/snippets/wide.css", "body {}")
+	h.file(t, ".obsidian/plugins/dataview/data.json", "{}")
+	for _, p := range []string{"note.md", ".obsidian/snippets/wide.css", ".obsidian/plugins/dataview/data.json"} {
+		if err := h.deleteAt(t, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths := func(ds []Deletion) string {
+		var out []string
+		for _, d := range ds {
+			out = append(out, d.Path)
+		}
+		return strings.Join(out, ",")
+	}
+	notes, _, err := h.Deleted("v1", true, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := paths(notes); got != "note.md" {
+		t.Fatalf("deleted notes listed %q", got)
+	}
+	settings, _, err := h.DeletedSettings("v1", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := paths(settings); got != ".obsidian/plugins/dataview/data.json,.obsidian/snippets/wide.css" {
+		t.Fatalf("deleted settings listed %q", got)
+	}
+	for _, d := range settings {
+		if d.RestorableUID == 0 {
+			t.Fatalf("%s has nothing to restore it from", d.Path)
+		}
+	}
+}

@@ -11,6 +11,12 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Server
+
+- `trewd deleted -settings` lists deleted settings, which the list of deleted
+  notes leaves out: Obsidian's, themes, snippets and plugins' settings, each
+  with the version to restore it from.
+
 ### Plugin
 
 - An incoming change to a note that a crash cuts short as it is written is put

@@ -209,10 +209,6 @@ purpose, each with what would change the answer:
   exact head for the operator's restore. Worth it once agents meet it often.
   `vault_status`'s store totals, `entries` and `bodies`, include settings
   versions too, and say so in the threat model.
-- **No listing finds a deleted setting.** The deleted list, `deleted_notes`
-  and `trewd deleted` leave settings out, because they are where somebody
-  looks for a lost note; a deleted snippet is found by its history, which
-  needs its path. A `-settings` flag on `trewd deleted` would do.
 - **Settings shape the Git export's commit timing.** The export leaves their
   content out, but they still go to its planner, so a setting saved between
   two note edits can split one commit or move its time. Skipping them before

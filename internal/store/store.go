@@ -1354,6 +1354,28 @@ func (s *Store) Deleted(
 	limit int,
 	beforeUID int64,
 ) ([]Deletion, bool, error) {
+	return s.deleted(vaultID, suppressRenames, limit, beforeUID, false)
+}
+
+// DeletedSettings is Deleted for settings alone: the files in a profile root,
+// Obsidian's settings, themes, snippets and plugins' settings, which the list
+// of deleted notes leaves out. For `trewd deleted -settings`, so a deleted
+// setting can be found without already knowing its path.
+func (s *Store) DeletedSettings(vaultID string, limit int, beforeUID int64) ([]Deletion, bool, error) {
+	return s.deleted(vaultID, true, limit, beforeUID, true)
+}
+
+func (s *Store) deleted(
+	vaultID string,
+	suppressRenames bool,
+	limit int,
+	beforeUID int64,
+	settings bool,
+) ([]Deletion, bool, error) {
+	which := "<>"
+	if settings {
+		which = "="
+	}
 	q := `SELECT e.uid, e.path, e.size, e.ctime, e.mtime, e.folder, e.deleted, e.device, e.prev_path,
 	             COALESCE((SELECT MAX(r.uid) FROM entries r
 	                        WHERE r.vault_id = e.vault_id AND r.path = e.path
@@ -1361,7 +1383,7 @@ func (s *Store) Deleted(
 	        FROM entries e
 	        JOIN (SELECT path, MAX(uid) AS uid FROM entries WHERE vault_id = ? GROUP BY path) latest
 	          ON e.path = latest.path AND e.uid = latest.uid
-	       WHERE e.vault_id = ? AND e.deleted = 1 AND substr(e.path, 1, 1) <> '.'
+	       WHERE e.vault_id = ? AND e.deleted = 1 AND substr(e.path, 1, 1) ` + which + ` '.'
 	         AND COALESCE((SELECT p.folder FROM entries p
 	                        WHERE p.vault_id = e.vault_id AND p.path = e.path AND p.uid < e.uid
 	                        ORDER BY p.uid DESC LIMIT 1), 0) = 0`
