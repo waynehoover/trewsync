@@ -471,17 +471,18 @@ describe("what a scan costs", () => {
     const listed = await v.list();
     expect(listed.length).toBe(210); // 200 notes and the 10 folders
 
-    // One case-folding probe on the first listing and one recovery-log stat
-    // on every listing. Neither costs a call per note as the vault grows.
+    // One case-folding probe and one look for in-place updates a crash
+    // interrupted on the first listing, and one recovery-log stat on every
+    // listing. None costs a call per note as the vault grows.
     expect(
       { stat: counting.stats, list: counting.lists, exists: counting.exists_ },
       `a 200 file vault cost ${counting.stats} stat, ${counting.lists} list and ${counting.exists_} exists calls`,
-    ).toEqual({ stat: 1, list: 0, exists: 1 });
+    ).toEqual({ stat: 1, list: 0, exists: 2 });
     await v.list();
     expect(
       { stat: counting.stats, list: counting.lists, exists: counting.exists_ },
       "the second scan cost more than the log",
-    ).toEqual({ stat: 2, list: 0, exists: 1 });
+    ).toEqual({ stat: 2, list: 0, exists: 2 });
 
     // And the same vault at ten times the size costs the same, which is the
     // claim. Pinning the number alone would pass on a scan that had become
@@ -497,7 +498,7 @@ describe("what a scan costs", () => {
     expect(
       { stat: bigCount.stats, list: bigCount.lists, exists: bigCount.exists_ },
       "ten times the notes must not increase scan calls",
-    ).toEqual({ stat: 1, list: 0, exists: 1 });
+    ).toEqual({ stat: 1, list: 0, exists: 2 });
   });
 
   it("still reports what the walk did", async () => {
@@ -2670,5 +2671,68 @@ describe("writing over a file the pass did not decide about", () => {
     );
     expect(out.keptAt, "the removal did not preserve what it took").toBe("gone (kept).md");
     expect(adapter.text("gone (kept).md")).toBe("the edit nobody sent\n");
+  });
+});
+
+describe("an in-place update a crash interrupted, at the next start", () => {
+  const encode = (s: string) => new TextEncoder().encode(s);
+  /** Starts an in-place update of note.md and kills the process at the note's write. */
+  async function crashDuringUpdate(a: FakeAdapter): Promise<void> {
+    a.seed("note.md", "the synced text\n", 1000);
+    const v = new ObsidianVault(asVault(new FakeVaultIndex(a)), ".obsidian");
+    let dead = false;
+    a.fault = (op, path) => {
+      if (dead) return new Error("the process was killed");
+      if (op === "write" && path === "note.md") {
+        dead = true;
+        return 4;
+      }
+      return undefined;
+    };
+    await v
+      .replace(
+        "note.md",
+        { contentId: await plainDigest(encode("the synced text\n")), idOf: plainDigest },
+        encode("the incoming text\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      )
+      .catch(() => undefined);
+    a.fault = undefined;
+  }
+
+  it("puts the note back and keeps the cut text aside", async () => {
+    const a = new FakeAdapter();
+    await crashDuringUpdate(a);
+    expect(a.text("note.md")).toHaveLength(4);
+    const restarted = new ObsidianVault(asVault(new FakeVaultIndex(a)), ".obsidian");
+    await restarted.list();
+    expect(a.text("note.md")).toBe("the synced text\n");
+    expect(a.text("note (kept).md")).toBeUndefined();
+    expect(restarted.stranded.map((p) => a.text(p))).toEqual(["the "]);
+  });
+
+  it("leaves a backup somebody edited since", async () => {
+    const a = new FakeAdapter();
+    await crashDuringUpdate(a);
+    // Restored by hand, as the note it was, then the backup edited.
+    a.seed("note.md", "the synced text\n", 1000);
+    a.seed("note (kept).md", "the synced text\nand a line typed into the copy\n", 5000);
+    const restarted = new ObsidianVault(asVault(new FakeVaultIndex(a)), ".obsidian");
+    await restarted.list();
+    expect(a.text("note (kept).md")).toBe("the synced text\nand a line typed into the copy\n");
+  });
+
+  it("fails the listing rather than reading past a record it cannot read", async () => {
+    const a = new FakeAdapter();
+    await crashDuringUpdate(a);
+    a.fault = (op, path) =>
+      op === "read" && path.includes("in-place-writes") ? new Error("EIO") : undefined;
+    const restarted = new ObsidianVault(asVault(new FakeVaultIndex(a)), ".obsidian");
+    await expect(restarted.list()).rejects.toThrow("EIO");
+    await expect(restarted.read("note.md")).resolves.toBeDefined();
+    a.fault = undefined;
+    await restarted.list();
+    expect(a.text("note.md")).toBe("the synced text\n");
   });
 });

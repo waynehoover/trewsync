@@ -533,11 +533,12 @@ export class ObsidianVault implements Vault {
   /** Refreshed by every scan, for anything that reports. */
   displaced: readonly Displaced[] = [];
   /**
-   * Where an in-place text update is written down before it starts and
-   * removed once it has landed (`InPlaceWrite`), beside the displaced log, in
-   * the plugin's own folder, which never syncs.
+   * Where each in-place text update is written down before it starts, one
+   * file a note, and removed once it has landed (`InPlaceWrite`): beside the
+   * displaced log, in the plugin's own folder, which never syncs. A file a
+   * note, so writing one record can never damage another's.
    */
-  private readonly writingMarker: string;
+  private readonly writingMarkers: string;
   /** Whether this instance has looked for an update a crash interrupted. */
   private checkedInterrupted = false;
   /**
@@ -601,8 +602,8 @@ export class ObsidianVault implements Vault {
       new ObsidianDisplacedFiles(vault.adapter, displacedLog),
       (message) => log(message),
     );
-    this.writingMarker = normalizePath(
-      `${displacedLog.slice(0, Math.max(0, displacedLog.lastIndexOf("/")))}/${WRITING_MARKER}`,
+    this.writingMarkers = normalizePath(
+      `${displacedLog.slice(0, Math.max(0, displacedLog.lastIndexOf("/")))}/${WRITING_MARKERS}`,
     );
     // Obsidian's config folder is *not* assumed to be `.obsidian`: the API
     // says plainly that it could be something else, and that folder holds
@@ -986,10 +987,7 @@ export class ObsidianVault implements Vault {
     // A note an update was cut short in is put back before it is listed, so
     // the listing describes it whole and the pass fetches the update again
     // rather than reading the cut text as an edit (T09).
-    if (!this.checkedInterrupted) {
-      this.checkedInterrupted = true;
-      await this.recoverInterruptedWrite();
-    }
+    if (!this.checkedInterrupted) await this.recoverInterruptedWrite();
     for (const [normalized, held] of [...this.cutShort]) await this.putBack(normalized, held);
     this.actualName.clear();
     this.ambiguousPaths = [];
@@ -1700,24 +1698,27 @@ export class ObsidianVault implements Vault {
     return { keptAt: keepAt, landed: true };
   }
 
-  /**
-   * In-place updates written down and not yet known to have landed, by note,
-   * and the file they are kept in. The file is the whole set, rewritten on
-   * every change, so one update cannot overwrite another's record, and it is
-   * removed when the set is empty. A failure to remove it leaves records the
-   * next start finds stale.
-   */
-  private readonly inPlace = new Map<string, InPlaceWrite>();
+  /** The record file for one note's in-place update. */
+  private async markerFor(normalized: string): Promise<string> {
+    const name = (await plainDigest(new TextEncoder().encode(normalized))).slice(0, 32);
+    return `${this.writingMarkers}/${name}.log`;
+  }
 
+  /**
+   * Writes one note's record down, durably as far as this platform can, or
+   * removes it. A failure to remove leaves a record the next start finds stale.
+   */
   private async writeDown(normalized: string, record: InPlaceWrite | undefined): Promise<void> {
+    const file = await this.markerFor(normalized);
     if (record === undefined) {
-      if (!this.inPlace.delete(normalized)) return;
-    } else this.inPlace.set(normalized, record);
-    if (this.inPlace.size === 0) {
-      await this.adapter.remove(this.writingMarker).catch(() => undefined);
+      await this.adapter.remove(file).catch(() => undefined);
       return;
     }
-    await this.adapter.write(this.writingMarker, JSON.stringify([...this.inPlace.values()]));
+    if (!(await this.adapter.exists(this.writingMarkers)))
+      await this.adapter.mkdir(this.writingMarkers);
+    await this.adapter.write(file, JSON.stringify(record));
+    // Made durable by the flush that comes before the note is truncated.
+    this.wrote(file);
   }
 
   /**
@@ -1732,31 +1733,32 @@ export class ObsidianVault implements Vault {
    * the note unread (`cutShort`'s refusal) and the record in place.
    */
   private async recoverInterruptedWrite(): Promise<void> {
-    let text: string;
-    try {
-      text = await this.adapter.read(this.writingMarker);
-    } catch {
-      return; // none, which is every start but one after a crash
+    // Only absence is a reason to skip this. A folder or record that cannot
+    // be read fails the listing, so the pass sends nothing, and the next one
+    // asks again: read past, a note a crash cut short is sent as an edit.
+    if (!(await this.adapter.exists(this.writingMarkers))) {
+      this.checkedInterrupted = true;
+      return;
     }
-    let records: InPlaceWrite[];
-    try {
-      const parsed: unknown = JSON.parse(text);
-      records = (Array.isArray(parsed) ? parsed : [parsed]).filter(
-        (r): r is InPlaceWrite =>
-          typeof r === "object" &&
-          r !== null &&
-          typeof (r as InPlaceWrite).path === "string" &&
-          typeof (r as InPlaceWrite).keepAt === "string",
-      );
-    } catch {
-      records = []; // cut short itself, before any note was touched
+    const listed = await this.adapter.list(this.writingMarkers);
+    for (const file of listed.files) {
+      const text = await this.adapter.read(file);
+      let record: InPlaceWrite | undefined;
+      try {
+        const parsed = JSON.parse(text) as InPlaceWrite;
+        if (typeof parsed.path === "string" && typeof parsed.keepAt === "string") record = parsed;
+      } catch {
+        // Cut short itself, before its note was touched.
+      }
+      if (record === undefined) {
+        await this.adapter.remove(file).catch(() => undefined);
+        continue;
+      }
+      // A note this instance already holds as cut short is put back by that
+      // record, which knows its text; only what a crash left is put right here.
+      if (!this.cutShort.has(record.path)) await this.putRight(record);
     }
-    for (const record of records) this.inPlace.set(record.path, record);
-    if (this.inPlace.size === 0)
-      await this.adapter.remove(this.writingMarker).catch(() => undefined);
-    // A note this instance already holds as cut short is put back by that
-    // record, which knows its text; only what a crash left is put right here.
-    for (const record of records) if (!this.cutShort.has(record.path)) await this.putRight(record);
+    this.checkedInterrupted = true;
   }
 
   /** One record of `recoverInterruptedWrite`, put right or left on record. */
@@ -1766,12 +1768,12 @@ export class ObsidianVault implements Vault {
       const here = await readRaw(this.adapter, path).catch(() => undefined);
       const digest = here === undefined ? undefined : await plainDigest(here);
       if (here === undefined || digest === record.before) {
-        if (here !== undefined) await this.dropDuplicate(keepAt);
+        if (here !== undefined) await this.dropIfStill(keepAt, record.before);
         await this.writeDown(path, undefined);
         return;
       }
       if (digest === record.next) {
-        if (record.beforeIsServers) await this.dropDuplicate(keepAt);
+        if (record.beforeIsServers) await this.dropIfStill(keepAt, record.before);
         await this.writeDown(path, undefined);
         return;
       }
@@ -1813,7 +1815,7 @@ export class ObsidianVault implements Vault {
       }
       this.wrote(path);
       await verify(this.adapter, path, backup);
-      await this.dropDuplicate(keepAt);
+      await this.dropIfStill(keepAt, record.before);
       await this.writeDown(path, undefined);
     } catch (err) {
       this.interrupted.add(path);
@@ -1822,6 +1824,16 @@ export class ObsidianVault implements Vault {
         String(err),
       );
     }
+  }
+
+  /**
+   * Removes a backup only while it still holds the version it was made of:
+   * one somebody has edited since is theirs, and stays.
+   */
+  private async dropIfStill(keepAt: string, digest: string): Promise<void> {
+    const there = await readRaw(this.adapter, keepAt).catch(() => undefined);
+    if (there !== undefined && (await plainDigest(there)) === digest)
+      await this.dropDuplicate(keepAt);
   }
 
   /**
@@ -2800,8 +2812,11 @@ interface InPlaceWrite {
   readonly beforeIsServers: boolean;
 }
 
-/** The file `InPlaceWrite` is kept in. Not JSON by name, so settings sync never carries it. */
-const WRITING_MARKER = "in-place-write.log";
+/**
+ * The folder `InPlaceWrite` records are kept in, a `.log` a note. Not JSON by
+ * name, so settings sync never carries one, wherever the folder is.
+ */
+const WRITING_MARKERS = "in-place-writes";
 
 interface CutShort {
   readonly previous: string;
