@@ -7447,4 +7447,79 @@ describe("attachments on demand, in the plugin", () => {
     await laptop.plugin.syncNow();
     expect(laptop.app.vault.adapter.text("big.png")).toBe(big);
   }, 300_000);
+  it("fetches what the open note needs once connected, what was asked for before a restart, and what a missing embed's tap means", async () => {
+    await fresh();
+    const laptop = await load();
+    laptop.app.vault.adapter.seed("Projects/note.md", "![[photo.png]] ![[asked.png]]\n");
+    await startVault(laptop.plugin, "laptop");
+    await synced(laptop.plugin);
+    const phone = await load();
+    await phone.plugin.pair((await laptop.plugin.createInvite()).invite, "phone");
+    await synced(phone.plugin);
+    await phone.plugin.setOnDemand(1_000);
+    await synced(phone.plugin);
+    laptop.app.vault.adapter.seed("att/photo.png", "a".repeat(50));
+    laptop.app.vault.adapter.seed("Projects/assets/photo.png", "p".repeat(5_000));
+    laptop.app.vault.adapter.seed("asked.png", "q".repeat(5_000));
+    laptop.app.vault.adapter.seed("tapped.png", "t".repeat(5_000));
+    await laptop.plugin.syncNow();
+    await phone.plugin.syncNow();
+    expect([...phone.plugin.serverOnly.keys()].sort()).toEqual([
+      "Projects/assets/photo.png",
+      "asked.png",
+      "tapped.png",
+    ]);
+
+    // Asked for in the last session, which ended before it landed.
+    phone.app.saveLocalStorage("trew-sync-wanted", ["asked.png"]);
+    // The note is open as Obsidian starts, before there is a connection,
+    // and its photo.png means the one under its own folder, not the small
+    // one already here.
+    (phone.app as unknown as { metadataCache: unknown }).metadataCache = {
+      getCache: (path: string) =>
+        path === "Projects/note.md" ? { embeds: [{ link: "photo.png" }] } : null,
+    };
+    phone.app.workspace.activeFile = { path: "Projects/note.md", extension: "md" };
+    const saved = phone.plugin.savedData;
+    phone.plugin.onunload();
+    await phone.plugin.closing;
+    const again = await load(saved, undefined, undefined, undefined, phone.app);
+    await until(
+      "the note's attachment and the one asked for to land",
+      () =>
+        phone.app.vault.adapter.text("Projects/assets/photo.png") === "p".repeat(5_000) &&
+        phone.app.vault.adapter.text("asked.png") === "q".repeat(5_000),
+    );
+    await again.plugin.syncNow();
+    expect(phone.app.loadLocalStorage("trew-sync-wanted")).toBeNull();
+    expect(phone.app.vault.adapter.text("att/photo.png")).toBe("a".repeat(50));
+
+    // Obsidian 1.14 renders an embed of a missing file with these classes,
+    // and no `is-unresolved`.
+    const embed = {
+      classes: ["internal-embed", "file-embed", "mod-empty-attachment", "is-loaded"],
+      getAttribute: (name: string) => (name === "src" ? "tapped.png" : null),
+    };
+    const closest = (selector: string) =>
+      selector.split(",").some((one) =>
+        one
+          .trim()
+          .split(".")
+          .filter(Boolean)
+          .every((c) => embed.classes.includes(c)),
+      )
+        ? embed
+        : null;
+    let stopped = false;
+    (again.plugin as unknown as { fetchOnClick(e: unknown): void }).fetchOnClick({
+      target: { closest },
+      preventDefault: () => (stopped = true),
+      stopPropagation: () => {},
+    });
+    expect(stopped).toBe(true);
+    await until(
+      "the tapped attachment to land",
+      () => phone.app.vault.adapter.text("tapped.png") !== undefined,
+    );
+  }, 300_000);
 });

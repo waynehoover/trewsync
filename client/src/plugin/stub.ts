@@ -474,6 +474,17 @@ export class App {
   readonly workspace = new FakeWorkspace();
   /** Undefined is an Obsidian older than 1.11.4, which has no keychain. */
   secretStorage: FakeSecretStorage | undefined;
+  /** Obsidian's per-vault local storage (`App.loadLocalStorage`), which outlives a plugin reload. */
+  readonly localStorage = new Map<string, unknown>();
+
+  loadLocalStorage(key: string): unknown {
+    return structuredClone(this.localStorage.get(key) ?? null);
+  }
+
+  saveLocalStorage(key: string, data: unknown): void {
+    if (data === null || data === undefined) this.localStorage.delete(key);
+    else this.localStorage.set(key, structuredClone(data));
+  }
 
   constructor(options: { vaultName?: string; secretStorage?: FakeSecretStorage | null } = {}) {
     if (options.vaultName !== undefined) this.vault.name = options.vaultName;

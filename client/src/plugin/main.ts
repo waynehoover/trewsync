@@ -9,7 +9,7 @@ import {
   bytesForPeople,
   coveredBy,
   neededBy,
-  resolveServerOnly,
+  resolveLink,
   type NoteLinks,
 } from "./on-demand.ts";
 import { conflictOriginal, reviewConflict, type ConflictPair } from "../core/conflicts.ts";
@@ -38,6 +38,7 @@ import {
   requireApiVersion,
   setIcon,
   type ButtonComponent,
+  type EventRef,
   type MarkdownView,
   type TAbstractFile,
   type TextComponent,
@@ -157,6 +158,8 @@ const log = (message: string, ...rest: unknown[]): void =>
  * could read before the unlink had removed it.
  */
 const CLOSING = Symbol.for("trew.closing");
+/** Obsidian local storage key for the files asked for that have not landed (`wanted`). */
+const WANTED_KEY = "trew-sync-wanted";
 
 /**
  * The size and times a file event carries, or undefined for a folder.
@@ -366,7 +369,9 @@ export default class TrewPlugin extends Plugin {
   /**
    * Files left on the server that somebody asked for, by opening a note that
    * needs one or asking outright: taken out of `onDemand`, so the next pass
-   * downloads them, and dropped once each lands as an ordinary file.
+   * downloads them, and dropped once each lands as an ordinary file. Kept
+   * in Obsidian's local storage for this vault, so a restart before a file
+   * lands still fetches it.
    */
   private readonly wanted = new Set<string>();
   /** An Apply is running, which ends in a reload an unlink must not straddle. */
@@ -486,6 +491,7 @@ export default class TrewPlugin extends Plugin {
     const mine = this.generation;
     await closingOn(this.app);
     if (mine !== this.generation) return;
+    for (const p of this.storedWanted()) this.wanted.add(p);
     this.stopResume = watchResume(() => this.resume());
     // Android pauses Obsidian when the screen turns off, and the sync socket
     // goes with it, so a first sync longer than the screen timeout was cut
@@ -687,6 +693,19 @@ export default class TrewPlugin extends Plugin {
       this.registerEvent(
         this.app.workspace.on("file-open", (file: { path: string } | null) => this.fetchFor(file)),
       );
+      // And once its links are known, if they were not yet when it opened.
+      const metadata = (
+        this.app as unknown as {
+          metadataCache?: { on?(name: "changed", cb: (file: { path: string }) => void): EventRef };
+        }
+      ).metadataCache;
+      if (metadata?.on) {
+        this.registerEvent(
+          metadata.on("changed", (file) => {
+            if (file.path === this.app.workspace.getActiveFile()?.path) this.fetchFor(file);
+          }),
+        );
+      }
       // Capture, so a tap on an embed of a file not here yet fetches it
       // before Obsidian offers to make a note of that name.
       if (typeof document !== "undefined") {
@@ -697,7 +716,7 @@ export default class TrewPlugin extends Plugin {
       this.registerEvent(
         this.app.vault.on("create", (file) => {
           // A file fetched on demand has landed: an ordinary file from now on.
-          this.wanted.delete(file.path);
+          if (this.wanted.delete(file.path)) this.storeWanted();
           if (!this.liveVault?.ownCreate(file.path, statOfEvent(file))) this.nudge(file.path);
         }),
       );
@@ -1655,6 +1674,10 @@ export default class TrewPlugin extends Plugin {
       // after any of the others.
       onPass: (report) => {
         if (!current()) return;
+        if (this.wanted.size > 0) this.pruneWanted(this.localPaths());
+        // The open note may have been opened before there was anything to
+        // say what is on the server only.
+        if (report.serverOnly > 0) this.fetchFor(this.app.workspace.getActiveFile());
         // Appended after the state below, and deliberately not awaited: the
         // write is one more filesystem call and charging it to the pass it
         // describes would be the measurement measuring itself.
@@ -1996,6 +2019,7 @@ export default class TrewPlugin extends Plugin {
     const fresh = paths.filter((p) => !this.wanted.has(p));
     if (fresh.length === 0) return;
     for (const p of fresh) this.wanted.add(p);
+    this.storeWanted();
     if (this.client === undefined) {
       new Notice(
         `TrewSync: ${fresh.length === 1 ? fresh[0] : `${fresh.length} files`} on the server only. ` +
@@ -2020,30 +2044,68 @@ export default class TrewPlugin extends Plugin {
       this.app as unknown as {
         metadataCache?: {
           getCache?(path: string): NoteLinks | null;
-          getFirstLinkpathDest?(link: string, source: string): unknown;
         };
       }
     ).metadataCache;
-    const needed = neededBy(
-      file.path,
-      cache?.getCache?.(file.path),
-      this.serverOnly,
-      (link) => cache?.getFirstLinkpathDest?.(link, file.path) != null,
-    );
+    const serverOnly = this.serverOnly;
+    if (serverOnly.size === 0) return;
+    const needed = neededBy(file.path, cache?.getCache?.(file.path), serverOnly, this.localPaths());
     if (needed.length > 0) this.fetchNow(needed);
   }
 
-  /** A tap on an embed or link to a file not here yet, which fetches it instead of making a note. */
+  private localPaths(): string[] {
+    return (
+      (this.app.vault as unknown as { getFiles?(): { path: string }[] }).getFiles?.() ?? []
+    ).map((f) => f.path);
+  }
+
+  /** Drops from `wanted` the files that have landed, which are ordinary files now. */
+  private pruneWanted(here: readonly string[]): void {
+    let landed = false;
+    for (const p of here) landed = this.wanted.delete(p) || landed;
+    if (landed) this.storeWanted();
+  }
+
+  private storedWanted(): string[] {
+    try {
+      const v: unknown = (
+        this.app as unknown as { loadLocalStorage?(key: string): unknown }
+      ).loadLocalStorage?.(WANTED_KEY);
+      return Array.isArray(v) ? v.filter((p): p is string => typeof p === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private storeWanted(): void {
+    try {
+      (
+        this.app as unknown as { saveLocalStorage?(key: string, data: unknown): void }
+      ).saveLocalStorage?.(WANTED_KEY, this.wanted.size === 0 ? null : [...this.wanted]);
+    } catch {
+      // Only a restart's memory of it: this session still fetches it.
+    }
+  }
+
+  /**
+   * A tap on an embed or link to a file not here yet, which fetches it instead
+   * of making a note. Any internal link or embed, however Obsidian marks a
+   * missing one (an unresolved link is `is-unresolved`, a missing embed
+   * `mod-empty-attachment`): what decides is whether the link means a file
+   * left on the server.
+   */
   private fetchOnClick(event: MouseEvent): void {
     if (this.onDemandBytes === undefined) return;
+    const serverOnly = this.serverOnly;
+    if (serverOnly.size === 0) return;
     const target = (event.target as { closest?(s: string): unknown } | null)?.closest?.(
-      ".internal-link.is-unresolved, .internal-embed.is-unresolved",
+      ".internal-link, .internal-embed",
     ) as { getAttribute(name: string): string | null } | null | undefined;
     const link = target?.getAttribute("data-href") ?? target?.getAttribute("src");
     if (!link) return;
     const source = this.app.workspace.getActiveFile()?.path ?? "";
-    const path = resolveServerOnly(link, source, this.serverOnly.keys());
-    if (path === undefined) return;
+    const path = resolveLink(link, source, [...this.localPaths(), ...serverOnly.keys()]);
+    if (path === undefined || !serverOnly.has(path)) return;
     event.preventDefault();
     event.stopPropagation();
     this.fetchNow([path]);
@@ -2063,7 +2125,7 @@ export default class TrewPlugin extends Plugin {
       ).getFiles?.() ?? [];
     // A file asked for that has landed is an ordinary file now, whether or
     // not its create event has been seen yet.
-    for (const f of files) this.wanted.delete(f.path);
+    this.pruneWanted(files.map((f) => f.path));
     const out = files.filter((f) => coveredBy(threshold, f.path, f.stat.size));
     return { paths: out.map((f) => f.path), bytes: out.reduce((n, f) => n + f.stat.size, 0) };
   }

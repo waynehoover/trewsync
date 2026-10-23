@@ -11,7 +11,7 @@
  * two things is worth testing in one place.
  */
 
-import { mkdtemp, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, chmod, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -333,5 +333,27 @@ describe("the plugin, when a displaced version has nowhere to go", () => {
     await second.list();
     expect(second.stranded).toEqual([out.keptAt]);
     expect(second.displaced[0]!.why).toContain("could not be dealt with");
+  });
+});
+
+describe("the headless client, freeing the space of a file the server holds", () => {
+  it("discards a verified match for good, and keeps one that changed", async () => {
+    const dir = await vaultDir();
+    const bytes = enc.encode("the server holds this");
+    await writeFile(join(dir, "big.png"), bytes);
+    const vault = new NodeVault(dir);
+    const expect_ = { contentId: await idOf(bytes), idOf };
+    expect(
+      (await vault.removeExpecting("big.png", expect_, "kept.png", true)).keptAt,
+    ).toBeUndefined();
+    expect(await readdir(dir, { recursive: true })).not.toContainEqual(
+      expect.stringContaining("big.png"),
+    );
+
+    await writeFile(join(dir, "big.png"), "an edit made since");
+    expect((await vault.removeExpecting("big.png", expect_, "kept.png", true)).keptAt).toBe(
+      "kept.png",
+    );
+    expect(await readFile(join(dir, "kept.png"), "utf8")).toBe("an edit made since");
   });
 });

@@ -2676,6 +2676,22 @@ describe("writing over a file the pass did not decide about", () => {
     expect(out.keptAt, "the removal did not preserve what it took").toBe("gone (kept).md");
     expect(adapter.text("gone (kept).md")).toBe("the edit nobody sent\n");
   });
+  it("discards for good what Free space verified, on a phone with no system trash", async () => {
+    adapter.systemTrashWorks = false;
+    adapter.seed("att/big.png", "the server holds this");
+    const id = await plainDigest(enc.encode("the server holds this"));
+    const expect_ = { contentId: id, idOf: plainDigest };
+    const out = await vault.removeExpecting("att/big.png", expect_, "att/big (kept).png", true);
+    expect(out.keptAt).toBeUndefined();
+    expect(adapter.trashedLocally).toEqual([]);
+    expect(adapter.filePaths().filter((p) => p.includes("big"))).toEqual([]);
+
+    // What it did not verify is still kept, discard or not.
+    adapter.seed("att/big.png", "an edit made since");
+    const kept = await vault.removeExpecting("att/big.png", expect_, "att/big (kept).png", true);
+    expect(kept.keptAt).toBe("att/big (kept).png");
+    expect(adapter.text("att/big (kept).png")).toBe("an edit made since");
+  });
 });
 
 describe("an in-place update a crash interrupted, at the next start", () => {

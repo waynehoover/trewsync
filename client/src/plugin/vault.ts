@@ -1979,6 +1979,7 @@ export class ObsidianVault implements Vault {
     path: string,
     expect: ExpectedContent | undefined,
     keepAt: string,
+    discard = false,
   ): Promise<Replaced> {
     const from = this.resolve(path);
     const kept = this.resolve(keepAt);
@@ -2047,8 +2048,11 @@ export class ObsidianVault implements Vault {
       ) {
         // The version the pass decided to delete. It goes where a deletion
         // goes, under the name it had: both trashes read the basename, which
-        // is why the move above was into a folder.
-        await this.intoTrash(aside);
+        // is why the move above was into a folder. Unless it is to be
+        // discarded, which on a phone with no system trash is the difference
+        // between freeing the space and moving the file into `.trash`.
+        if (discard) await this.touch(aside, () => this.adapter.remove(aside));
+        else await this.intoTrash(aside);
         emptied = true;
         this.wentAway(from);
         return { landed: true };

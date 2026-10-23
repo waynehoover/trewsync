@@ -212,11 +212,16 @@ The invariant every change here keeps: **a path this device leaves on the
 server has no index entry with a base.** The one thing that turns a file this
 device holds into one it leaves on the server, `Engine.release` (Free space),
 forgets the entry and saves the index before it removes the file, after
-reading the file in full and having the server confirm it holds every piece.
-The other order is a deletion sent to every device after a crash, which the
+reading the file in full, having the server confirm it holds every piece, and
+reading every piece back from the server: a resend answers from a chunk's name,
+and a body that rotted under its name is only found by reading it. The other
+order is a deletion sent to every device after a crash, which the
 engine test "sends no deletion when the process dies at the index save"
 shows. As a last line, the engine refuses to send a deletion for a path with
-no base, or one it left on the server this pass.
+no base, or one it left on the server this pass. A file the server has under a
+new name whose content this device already holds, the far half of a rename,
+downloads rather than staying on the server, or the rename's other half would
+take it off this device.
 
 ## The agent endpoint
 

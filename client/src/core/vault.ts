@@ -395,11 +395,17 @@ export interface Vault {
    * and a stat cannot tell. Returns the bytes it kept when they were not what
    * `expect` described, so the caller can put them back where somebody will
    * see them.
+   *
+   * `discard` deletes a file that is what `expect` described for good,
+   * rather than to the trash: for Free space, whose point is the space and
+   * which has just read the server's copy back whole. What is not what
+   * `expect` described is kept as ever.
    */
   removeExpecting?(
     path: string,
     expect: ExpectedContent | undefined,
     keepAt: string,
+    discard?: boolean,
   ): Promise<Replaced>;
   /**
    * Watches for changes, returning a function that stops watching.
@@ -987,8 +993,8 @@ export function timedVault(
       : {}),
     ...(inner.removeExpecting
       ? {
-          removeExpecting: (path, expect, keepAt) =>
-            time("removeExpecting", () => inner.removeExpecting!(path, expect, keepAt)),
+          removeExpecting: (path, expect, keepAt, discard) =>
+            time("removeExpecting", () => inner.removeExpecting!(path, expect, keepAt, discard)),
         }
       : {}),
     ...(inner.readRange

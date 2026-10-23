@@ -41,7 +41,7 @@ import { conflictOriginal, resolveConflict, reviewConflict } from "./conflicts.t
 import { firstFreeName, ignoredHereError, neverSync } from "./paths.ts";
 import type { IndexEntry } from "./index-state.ts";
 import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -5886,6 +5886,37 @@ describe("freeing the space of attachments the server holds", () => {
     expect(r.serverOnly).toBe(1);
     expect(await versionsOf(phone, "big.png")).toEqual(["5000:a"]);
     expect(await a.vault.read("big.png")).toEqual(big);
+  });
+
+  it("keeps a downloaded file here when another device renames it", async () => {
+    const { a, phone } = await fetched();
+    await a.vault.remove("big.png");
+    await a.vault.write("renamed.png", big, { mtime: 2_000, ctime: 1_000 });
+    a.engine.noteRename("big.png", "renamed.png");
+    await a.settle();
+    const r = await phone.settle();
+    expect(await phone.vault.read("renamed.png")).toEqual(big);
+    expect(phone.vault.snapshot()["big.png"]).toBeUndefined();
+    expect(r.serverOnly).toBe(0);
+  });
+
+  it("keeps the file when the server's copy has rotted under its name", async () => {
+    const { phone } = await fetched();
+    const name = await chunkName(big);
+    const found = (await readdir(server.dataDir, { recursive: true })).find((p) =>
+      p.endsWith(name),
+    );
+    const at = join(server.dataDir, found!);
+    const body = await readFile(at);
+    body[body.length - 1]! ^= 1;
+    await writeFile(at, body);
+    const out = await phone.engine.release(["big.png"]);
+    expect(out.released).toEqual([]);
+    expect(out.kept[0]!.why).toMatch(/did not read back intact/);
+    expect(await phone.vault.read("big.png")).toEqual(big);
+    // Set aside by the failed read, so the next try sends it again and frees.
+    const again = await phone.engine.release(["big.png"]);
+    expect(again.released).toEqual(["big.png"]);
   });
 
   it("keeps a file changed since it synced", async () => {

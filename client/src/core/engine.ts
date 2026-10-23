@@ -1131,6 +1131,13 @@ export class Engine {
   private serverOnly = new Map<string, number>();
   /** The same, as the last pass to finish left it, for `status` and `serverOnlyPaths`. */
   private serverOnlyLast: ReadonlyMap<string, number> = new Map();
+  /**
+   * The contents this device held as the pass began, by content hash. A file
+   * the server has under a new name, renamed or copied elsewhere, is one this
+   * device already holds, and fetches rather than leaves on the server: the
+   * rename's other half removes the old name here.
+   */
+  private heldHere: ReadonlySet<string> = new Set();
   /** Whether the pass running now applies held settings (`applySettings`). */
   private applyingSettings = false;
   /** `SyncOptions.applyOnly` for the pass running now. */
@@ -1926,6 +1933,7 @@ export class Engine {
           !other.deleted &&
           !isConfigPath(path) &&
           !looksLikeText(path) &&
+          !this.heldHere.has(other.hash) &&
           this.opts.onDemand?.(path, other.size) === true
         )
           action = "server-only";
@@ -2016,6 +2024,13 @@ export class Engine {
     const report = emptyReport();
     this.heldSettings = new Set();
     this.serverOnly = new Map();
+    this.heldHere = new Set(
+      this.opts.onDemand === undefined
+        ? []
+        : [...this.entries.values()].flatMap((e) =>
+            e.folder || e.synchash === "" ? [] : [e.synchash],
+          ),
+    );
     this.settingsUnsendable = new Set();
     this.applyingSettings = opts.applySettings === true;
     this.applyOnly = opts.applyOnly;
@@ -2800,6 +2815,7 @@ export class Engine {
       !remote.deleted &&
       !isConfigPath(path) &&
       !looksLikeText(path) &&
+      !this.heldHere.has(remote.hash) &&
       this.opts.onDemand?.(path, remote.size) === true
     ) {
       if (entry.prev === "" && entry.creating === undefined) this.entries.delete(path);
@@ -4168,6 +4184,14 @@ export class Engine {
           keep(path, "the server could not confirm it holds every piece of it");
           continue;
         }
+        // Held is not readable: a resend answers from the name alone, and a
+        // body that rotted under its name is only found by reading it back.
+        // The server sets a bad one aside as it fails, so the next Free space
+        // resends it from here.
+        if (!(await this.readsBackIntact(path, plan.names, stat.size))) {
+          keep(path, "the server's copy of it did not read back intact");
+          continue;
+        }
         const local: LocalState = {
           folder: false,
           mtime: Math.ceil(stat.mtime),
@@ -4190,7 +4214,7 @@ export class Engine {
     );
     for (const r of ready) {
       try {
-        const keptAt = await this.removedSomethingElse(r.path, r.local, baselines);
+        const keptAt = await this.removedSomethingElse(r.path, r.local, baselines, true);
         if (keptAt !== undefined) {
           keep(r.path, `it changed as it was being removed, and is kept at ${keptAt}`);
           continue;
@@ -4203,6 +4227,31 @@ export class Engine {
     }
     await this.opts.vault.flush?.();
     return report;
+  }
+
+  /**
+   * Whether the server sends back every chunk under its name, read one fetch
+   * at a time so a large file is never held whole.
+   */
+  private async readsBackIntact(
+    path: string,
+    names: readonly string[],
+    size: number,
+  ): Promise<boolean> {
+    const each = perChunkBudget(size, names.length);
+    try {
+      for (const ask of planFetches(names, () => each, this.fetchCap, MAX_FETCH_NAMES)) {
+        const bodies = await this.fetchAll(ask, () => each, [path]);
+        if (bodies.length !== ask.length) return false;
+        for (const [i, body] of bodies.entries()) {
+          if ((await chunkName(body)) !== ask[i]) return false;
+        }
+      }
+      return true;
+    } catch (err) {
+      this.log(`the server's copy did not read back: ${(err as Error).message}`, path);
+      return false;
+    }
   }
 
   private async planUpload(entry: IndexEntry, path: string, fresh?: Scanned): Promise<UploadPlan> {
@@ -5872,6 +5921,8 @@ export class Engine {
     path: string,
     based: LocalState | undefined,
     baselines: ReadonlyMap<string, string>,
+    /** `VaultAdapter.removeExpecting`'s: gone for good, not to the trash, when it matches. */
+    discard = false,
   ): Promise<string | undefined> {
     const vault = this.opts.vault;
     const digest = based === undefined || based.folder ? undefined : baselines.get(path);
@@ -5888,7 +5939,7 @@ export class Engine {
     // but the adapter keeps what it finds and that costs nothing. What it
     // keeps is an edit on this disk, so the copy carries this device's name.
     const keepAt = await this.freeConflictPath(path, this.opts.device);
-    const out = await vault.removeExpecting(path, this.expecting(digest), keepAt);
+    const out = await vault.removeExpecting(path, this.expecting(digest), keepAt, discard);
     return out.keptAt;
   }
 

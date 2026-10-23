@@ -2625,6 +2625,7 @@ export class NodeVault implements Vault {
     path: string,
     expect: ExpectedContent | undefined,
     keepAt: string,
+    discard = false,
   ): Promise<Replaced> {
     this.invalidateListing();
     const full = await this.absolute(path);
@@ -2697,8 +2698,12 @@ export class NodeVault implements Vault {
         expect === undefined ? undefined : await digestOf(aside).catch(() => undefined);
       if (digest !== undefined && expect !== undefined && digest === expect.contentId) {
         // The version the pass decided to delete. It goes where a deletion
-        // goes, which is the trash, under the name it had.
-        await this.intoTrash(full, aside);
+        // goes, which is the trash, under the name it had, unless it is to be
+        // discarded.
+        if (discard) {
+          await rm(aside);
+          this.unflushed.add(dirname(aside));
+        } else await this.intoTrash(full, aside);
         return { landed: true };
       }
       // Something else, so it is not deleted at all. It comes back out under a

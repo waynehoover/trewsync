@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { bytesForPeople, coveredBy, linkpathOf, neededBy, resolveServerOnly } from "./on-demand.ts";
+import { bytesForPeople, coveredBy, linkpathOf, neededBy, resolveLink } from "./on-demand.ts";
 
-describe("which server-only file a note's link means", () => {
+describe("which file a note's link means, as Obsidian 1.14 resolves it", () => {
   const paths = [
     "Projects/plan.pdf",
     "attachments/photo.png",
@@ -10,13 +10,25 @@ describe("which server-only file a note's link means", () => {
     "a/b/c.png",
   ];
   it("matches the path as written, relative to the note, then the shortest ending in it", () => {
-    expect(resolveServerOnly("Projects/plan.pdf", "x.md", paths)).toBe("Projects/plan.pdf");
-    expect(resolveServerOnly("../b/c.png", "a/d/note.md", paths)).toBe("a/b/c.png");
-    expect(resolveServerOnly("photo.png", "anywhere.md", paths)).toBe("attachments/photo.png");
-    expect(resolveServerOnly("plan.pdf#page=3", "x.md", paths)).toBe("Projects/plan.pdf");
-    expect(resolveServerOnly("plan.pdf|the plan", "x.md", paths)).toBe("Projects/plan.pdf");
-    expect(resolveServerOnly("nothing.png", "x.md", paths)).toBeUndefined();
-    expect(resolveServerOnly("../../c.png", "a/note.md", paths)).toBeUndefined();
+    expect(resolveLink("Projects/plan.pdf", "x.md", paths)).toBe("Projects/plan.pdf");
+    expect(resolveLink("../b/c.png", "a/d/note.md", paths)).toBe("a/b/c.png");
+    expect(resolveLink("photo.png", "anywhere.md", paths)).toBe("attachments/photo.png");
+    expect(resolveLink("plan.pdf#page=3", "x.md", paths)).toBe("Projects/plan.pdf");
+    expect(resolveLink("plan.pdf|the plan", "x.md", paths)).toBe("Projects/plan.pdf");
+    expect(resolveLink("nothing.png", "x.md", paths)).toBeUndefined();
+    // Climbing out of the vault falls through to the name, as in Obsidian.
+    expect(resolveLink("../../c.png", "a/note.md", paths)).toBe("a/b/c.png");
+  });
+
+  it("prefers the one under the note's folder, ignores case, and reads ./", () => {
+    const files = ["att/photo.png", "Projects/assets/photo.png", "photo2.png"];
+    expect(resolveLink("photo.png", "Projects/n.md", files)).toBe("Projects/assets/photo.png");
+    expect(resolveLink("photo.png", "Other/n.md", files)).toBe("att/photo.png");
+    expect(resolveLink("PHOTO.PNG", "Projects/n.md", files)).toBe("Projects/assets/photo.png");
+    expect(resolveLink("./photo2.png", "n.md", files)).toBe("photo2.png");
+    expect(resolveLink("/att/photo.png", "Projects/n.md", files)).toBe("att/photo.png");
+    expect(resolveLink("/photo.png", "Projects/n.md", files)).toBeUndefined();
+    expect(resolveLink("Some note", "n.md", ["Some note.md"])).toBe("Some note.md");
   });
 
   it("strips what is not the name", () => {
@@ -34,11 +46,26 @@ describe("what opening a note fetches", () => {
       embeds: [{ link: "a.png" }, { link: "here.png" }],
       links: [{ link: "b.pdf#page=2" }, { link: "a.png" }, { link: "Another note" }],
     };
-    expect(neededBy("n.md", cache, serverOnly, (l) => l === "here.png").sort()).toEqual([
+    expect(neededBy("n.md", cache, serverOnly, ["here.png", "Another note.md"]).sort()).toEqual([
       "att/a.png",
       "att/b.pdf",
     ]);
-    expect(neededBy("n.md", null, serverOnly, () => false)).toEqual([]);
+    expect(neededBy("n.md", null, serverOnly, [])).toEqual([]);
+  });
+
+  it("is the one the link means, even when another file of that name is here", () => {
+    const serverOnly = new Map([["Projects/assets/photo.png", 5]]);
+    const cache = { embeds: [{ link: "photo.png" }] };
+    expect(neededBy("Projects/n.md", cache, serverOnly, ["att/photo.png"])).toEqual([
+      "Projects/assets/photo.png",
+    ]);
+    // A note Obsidian made of the name on a tap does not stand in for it.
+    const made = new Map([["big.png", 5]]);
+    expect(neededBy("n.md", { embeds: [{ link: "big.png" }] }, made, ["big.png.md"])).toEqual([
+      "big.png",
+    ]);
+    // Nor does a file here that the link means, which is left alone.
+    expect(neededBy("Other/n.md", cache, serverOnly, ["att/photo.png"])).toEqual([]);
   });
 });
 

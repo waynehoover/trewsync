@@ -498,14 +498,17 @@ The panel says how many attachments are on the server only and what they
 weigh. **TrewSync: Download a file kept on the server** fetches any one of
 them, and **TrewSync: Download the attachments this note needs** fetches what
 the open note uses. Without a connection, an attachment you open waits and
-downloads when TrewSync reconnects. Once downloaded, an attachment stays and
-syncs like any other file.
+downloads when TrewSync reconnects, even if Obsidian restarts in between. Once
+downloaded, an attachment stays and syncs like any other file, including when
+another device renames it.
 
 Attachments already on the device stay when you turn it on. **Free space** in
 the panel removes the ones the setting covers from this device, keeping each
 on the server and on every other device that has it: each one is first read
-in full and checked against the server's newest version, and the server
-confirms it holds every piece of it, before it is removed. To free space, use
+in full and checked against the server's newest version, and the server's copy
+is read back and checked, before it is removed. A removed copy is deleted, not
+moved to the trash, since freeing the space is the point; a file that changed
+while it was being removed is kept under a new name instead. To free space, use
 Free space rather than deleting a file, which deletes it everywhere.
 
 A few things to know. An attachment that is on the server only is not in
