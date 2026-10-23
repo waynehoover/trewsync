@@ -2574,7 +2574,10 @@ export class Transport {
       throw new ProtocolError("protostate", `expected restored, got ${JSON.stringify(reply)}`);
     }
     const applied = reply["applied"] === true;
-    if (applied !== !("at" in ask) || reply["folder"] !== folder) {
+    // An apply of a preview that changes nothing commits nothing, and says
+    // so: applied false, with every count zero.
+    const nothing = ["restore", "remove", "removeFolder"].every((k) => reply[k] === 0);
+    if (("at" in ask ? applied : !applied && !nothing) || reply["folder"] !== folder) {
       throw this.malformed("a restored that is not an answer to what was asked");
     }
     const steps = reply["steps"];

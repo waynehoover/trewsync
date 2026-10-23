@@ -1,8 +1,10 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -72,6 +74,13 @@ type RestoreRequest struct {
 	// MaxEntries, when not zero, refuses a plan that would write more
 	// versions than it, as result_too_large.
 	MaxEntries int
+	// AbovePurgeMark refuses a ToUID below the vault's purge mark as gone,
+	// whatever exactAt would say of each path. Below it the history is not
+	// whole: a purge takes the commit times a time was resolved from and the
+	// renames a folder's moves are read from, so neither can be trusted, and
+	// a purge between a preview and its apply always moves the mark past the
+	// preview's uid. A device's restore; the operator's reads what is exact.
+	AbovePurgeMark bool
 }
 
 // inScope is whether the request's restore reaches path.
@@ -170,6 +179,19 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 	case r.Head != 0 && r.Head != head:
 		return plan, refused("", OpCodePlanChanged, "", head, fmt.Errorf(
 			"%w: previewed at uid %d, and the vault is at uid %d; preview it again", ErrPlanChanged, r.Head, head))
+	}
+
+	if r.AbovePurgeMark {
+		marked, err := s.PurgedThrough(r.Vault)
+		if err != nil {
+			return plan, failed("", err)
+		}
+		if r.ToUID < marked {
+			return plan, refused("", OpCodeGone, "", 0, fmt.Errorf(
+				"%w: the server purged history up to uid %d, and this restore is to uid %d before it; "+
+					"restore a backup taken before the purge, or ask the operator to run trewd restore",
+				ErrBeforeImageGone, marked, r.ToUID))
+		}
 	}
 
 	all, err := s.restoreRows(r.Vault, r.ToUID)
@@ -356,23 +378,25 @@ const (
 )
 
 // movedAcross says whether a rename since r.ToUID took row's path out of
-// r.Folder, the note still live where it went, or brought it in from outside.
+// r.Folder, the note still live wherever its renames took it, or whether the
+// note at the path now arrived from outside the folder since.
 func (s *Store) movedAcross(r RestoreRequest, row restoreRow) (crossing, error) {
 	if row.thenLive && !row.hasNow {
 		// Retired by a rename: its head is the rename, the version at the
-		// destination.
+		// destination. Followed through every later rename, each later
+		// than the last, to where the note is now.
 		dest, ok, err := s.EntryByUID(r.Vault, row.now.UID)
-		if err != nil || !ok || dest.Path == row.path || r.inScope(dest.Path) {
+		if err != nil || !ok || dest.Path == row.path {
 			return notMoved, err
 		}
-		_, state, _, err := s.EntryAsOf(r.Vault, dest.Path, 0)
-		if err != nil || state != PathLive {
+		at, live, err := s.followRenames(r.Vault, dest.Path, dest.UID)
+		if err != nil || !live || r.inScope(at) {
 			return notMoved, err
 		}
 		return movedOut, nil
 	}
-	if row.nowLive && !row.thenLive {
-		in, err := s.arrivedFromOutside(r, row.path, 0)
+	if row.nowLive && row.changed() {
+		in, err := s.arrivedFromOutside(r, row.path)
 		if err != nil || !in {
 			return notMoved, err
 		}
@@ -381,49 +405,65 @@ func (s *Store) movedAcross(r RestoreRequest, row restoreRow) (crossing, error) 
 	return notMoved, nil
 }
 
-// arrivedFromOutside is whether a rename since r.ToUID brought path into
-// r.Folder from outside it, following renames within the folder back to the
-// first name it had there: a note moved in and then renamed is still one that
-// arrived from elsewhere.
-func (s *Store) arrivedFromOutside(r RestoreRequest, path string, depth int) (bool, error) {
-	if depth > 64 {
-		return false, nil
+// followRenames follows a note from path, where version uid put it, through
+// each rename that later took it away, to where it is now, and says whether
+// it is still live there. A deletion before the next rename ends it.
+func (s *Store) followRenames(vault, path string, uid int64) (string, bool, error) {
+	for {
+		var next sql.NullInt64
+		var to sql.NullString
+		err := s.db.QueryRow(`SELECT uid, path FROM entries WHERE vault_id = ? AND prev_path = ? AND uid > ?
+		  ORDER BY uid LIMIT 1`, vault, path, uid).Scan(&next, &to)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", false, err
+		}
+		var gone sql.NullInt64
+		if err := s.db.QueryRow(`SELECT MIN(uid) FROM entries WHERE vault_id = ? AND path = ? AND uid > ?
+		  AND deleted = 1`, vault, path, uid).Scan(&gone); err != nil {
+			return "", false, err
+		}
+		if !next.Valid {
+			return path, !gone.Valid, nil
+		}
+		if gone.Valid && gone.Int64 < next.Int64 {
+			return path, false, nil
+		}
+		path, uid = to.String, next.Int64
 	}
-	rows, err := s.db.Query(`SELECT prev_path FROM entries
-	  WHERE vault_id = ? AND path = ? AND uid > ? AND COALESCE(prev_path, '') != ''`,
-		r.Vault, path, r.ToUID)
-	if err != nil {
-		return false, err
-	}
-	var prevs []string
-	for rows.Next() {
-		var prev string
-		if err := rows.Scan(&prev); err != nil {
-			rows.Close()
+}
+
+// arrivedFromOutside traces the note now at path back through the renames
+// that gave it each of its names, each step strictly earlier than the last,
+// and says whether one since r.ToUID brought it in from outside r.Folder: a
+// note moved in and renamed inside is still one that came from elsewhere,
+// and so is one moved onto a name a note held at r.ToUID. Each name's note
+// begins at the newest deletion of that name, or rename away from it, before
+// the step: what held the name earlier is another note.
+func (s *Store) arrivedFromOutside(r RestoreRequest, path string) (bool, error) {
+	cur, bound := path, int64(math.MaxInt64)
+	for {
+		var since int64
+		if err := s.db.QueryRow(`SELECT COALESCE(MAX(uid), 0) FROM entries WHERE vault_id = ? AND uid < ?
+		  AND ((path = ? AND deleted = 1) OR prev_path = ?)`, r.Vault, bound, cur, cur).Scan(&since); err != nil {
 			return false, err
 		}
-		prevs = append(prevs, prev)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-	for _, prev := range prevs {
-		if !r.inScope(prev) {
+		var first int64
+		var prev sql.NullString
+		err := s.db.QueryRow(`SELECT uid, prev_path FROM entries WHERE vault_id = ? AND path = ? AND uid > ?
+		  AND uid < ? ORDER BY uid LIMIT 1`, r.Vault, cur, since, bound).Scan(&first, &prev)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return false, nil
+		case err != nil:
+			return false, err
+		case first <= r.ToUID, !prev.Valid, prev.String == "":
+			// Under this name at ToUID, or made here since.
+			return false, nil
+		case !r.inScope(prev.String):
 			return true, nil
 		}
-		// Renamed within the folder: from a name it had at ToUID, it was
-		// here then, and otherwise follow that name back.
-		if _, state, _, err := s.EntryAsOf(r.Vault, prev, r.ToUID); err != nil {
-			return false, err
-		} else if state == PathLive {
-			continue
-		}
-		if in, err := s.arrivedFromOutside(r, prev, depth+1); err != nil || in {
-			return in, err
-		}
+		cur, bound = prev.String, first
 	}
-	return false, nil
 }
 
 // changed is whether the path's version now is not the one it held at ToUID.

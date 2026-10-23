@@ -129,3 +129,25 @@ describe("restoring to an earlier time, in the modal", () => {
     expect(fromLocalInput("Tuesday")).toBeUndefined();
   });
 });
+
+describe("a preview that answers an earlier question", () => {
+  /**
+   * The folder changed while the preview was being asked for. Shown, its
+   * Restore would apply the old folder's uid and head under the new inputs.
+   * Found by review, 2026-10-23.
+   */
+  it("is dropped, and Restore is not offered for it", async () => {
+    let answer: (r: RestoreResult) => void = () => {};
+    new RestoreTimeModal(new App() as unknown as ObsidianApp, "Projects", {
+      restore: () => new Promise((r) => (answer = r)),
+      undo: async () => {},
+    }).open();
+    const asking = press("Preview");
+    const folder = built.find((st) => st.name === "Folder")!.texts[0]!;
+    folder.type("Archive");
+    answer(plan());
+    await asking;
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(buttons().map((b) => b.label)).toEqual(["Preview"]);
+  });
+});

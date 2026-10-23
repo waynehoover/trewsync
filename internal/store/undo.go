@@ -467,11 +467,11 @@ func (b *undoBuilder) check(path string, base int64) {
 }
 
 // inPlace is the undo proper, in five passes, each one's entries written
-// before the next's so every entry meets the state it needs: the folders the
-// operation removed, put back; the folders the restores land in, checked; the
-// notes the operation edited, deleted or moved, put back; the notes it
-// created, removed; and the folders it created, removed, deepest first, when
-// nothing is left in them.
+// before the next's so every entry meets the state it needs: the notes the
+// operation created, removed; the folders it removed, put back; the folders
+// the restores land in, checked; the notes it edited, deleted or moved, put
+// back; and the folders it created, removed, deepest first, when nothing is
+// left in them.
 func (b *undoBuilder) inPlace() error {
 	b.made, b.moved = map[string]bool{}, map[string]bool{}
 	var folders, notes, removals, removeFolders []int
@@ -494,7 +494,19 @@ func (b *undoBuilder) inPlace() error {
 		}
 	}
 
-	// 1. Folders the operation removed.
+	// 1. Notes the operation created, first: a note put back can fold onto
+	// one of them, as a case-only rename's two names do, and written before
+	// the removal it collides with what is still there. Found undoing a
+	// device's restore of a case-only rename, 2026-10-23.
+	for _, i := range removals {
+		u := b.ps[i]
+		e := b.entry(u.Path)
+		e.Deleted = true
+		b.moved[u.Path] = true
+		b.add(OpEntry{Entry: e, Base: u.AfterUID}, UndoStep{Action: UndoRemove, Path: u.Path, After: u.AfterUID})
+	}
+
+	// 2. Folders the operation removed.
 	sort.SliceStable(folders, func(a, c int) bool { return depth(b.ps[folders[a]].Path) < depth(b.ps[folders[c]].Path) })
 	for _, i := range folders {
 		u := b.ps[i]
@@ -503,14 +515,14 @@ func (b *undoBuilder) inPlace() error {
 			UndoStep{Action: UndoRestore, Path: u.Path, Before: u.before.UID, After: u.AfterUID})
 	}
 
-	// 2. The folders every restore lands in.
+	// 3. The folders every restore lands in.
 	for _, i := range notes {
 		if err := b.parents(b.ps[i].Path); err != nil {
 			return err
 		}
 	}
 
-	// 3. Notes put back, and moves reversed.
+	// 4. Notes put back, and moves reversed.
 	for _, i := range notes {
 		u := b.ps[i]
 		if u.Role == "source" {
@@ -536,15 +548,6 @@ func (b *undoBuilder) inPlace() error {
 		}
 		b.add(OpEntry{Entry: b.restored(u.Path, u.before), Base: u.AfterUID},
 			UndoStep{Action: UndoRestore, Path: u.Path, Before: u.before.UID, After: u.AfterUID})
-	}
-
-	// 4. Notes the operation created.
-	for _, i := range removals {
-		u := b.ps[i]
-		e := b.entry(u.Path)
-		e.Deleted = true
-		b.moved[u.Path] = true
-		b.add(OpEntry{Entry: e, Base: u.AfterUID}, UndoStep{Action: UndoRemove, Path: u.Path, After: u.AfterUID})
 	}
 
 	// 5. Folders the operation created, deepest first, each only if it is

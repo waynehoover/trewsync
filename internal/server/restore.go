@@ -102,7 +102,7 @@ func (s *Server) deviceRestore(origin *Session, folder string, toUID, head int64
 	vaultID := origin.vaultID
 	epoch := s.st.Epoch()
 	plan, err := s.st.PlanRestore(store.RestoreRequest{Vault: vaultID, ToUID: toUID, Head: head,
-		Now: s.now().UnixMilli(), Folder: folder, NotesOnly: true, MaxEntries: deviceRestoreMax})
+		Now: s.now().UnixMilli(), Folder: folder, NotesOnly: true, MaxEntries: deviceRestoreMax, AbovePurgeMark: true})
 	if err != nil || !apply || len(plan.Entries) == 0 {
 		return Restored{Plan: plan}, err
 	}

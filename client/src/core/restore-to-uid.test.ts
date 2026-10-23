@@ -15,6 +15,7 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
+import { Client } from "./client.ts";
 import { Engine, type SyncReport } from "./engine.ts";
 import { receiveCommitted } from "./test-async.ts";
 import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
@@ -85,8 +86,11 @@ afterAll(async () => {
   await cleanupBinary();
 });
 
+const closers: (() => unknown)[] = [];
+
 afterEach(async () => {
   while (devices.length) devices.pop()!.close();
+  while (closers.length) await closers.pop()!();
   await server?.cleanup();
   server = undefined;
 });
@@ -259,5 +263,72 @@ describe("a device restoring a folder to a time", () => {
     ).rejects.toMatchObject({ code: "stale" });
     await laptop.settle();
     expect(laptop.vault.text("Projects/plan.md")).toBe("saved on the phone meanwhile\n");
+  }, 240_000);
+});
+
+describe("a device's restore, through the client", () => {
+  const pause = () => new Promise((r) => setTimeout(r, 50));
+
+  async function client(): Promise<{ c: Client; vault: MemoryVault; store: MemoryIndexStore }> {
+    server = new TestServer();
+    await server.start();
+    const vault = new MemoryVault();
+    const store = new MemoryIndexStore();
+    const c = new Client({
+      vault,
+      store,
+      url: server.wsUrl,
+      ...(await server.deviceCredentials()),
+      vaultId: "default",
+      device: "a",
+      timeoutMs: 20_000,
+      coalesceWrites: false,
+    });
+    closers.push(() => c.close());
+    await c.connect();
+    return { c, vault, store };
+  }
+
+  /**
+   * Committed is committed: a pass that cannot save afterwards does not undo
+   * it, and the caller still gets the operation to offer Undo with. Found by
+   * review, 2026-10-23: the error hid the restore and its Undo.
+   */
+  it("returns a committed restore when putting it on disk fails", async () => {
+    const { c, vault, store } = await client();
+    await vault.edit("note.md", "then\n", 1_000);
+    await c.settle();
+    await pause();
+    const then = Date.now();
+    await pause();
+    await vault.edit("note.md", "now\n", 2_000);
+    await c.settle();
+    const preview = await c.restoreTo({ at: then });
+    // The disk fills the moment the server has committed it.
+    const transport = (c as unknown as { transport: Transport }).transport;
+    const restore = transport.restore.bind(transport);
+    transport.restore = async (ask) => {
+      const out = await restore(ask);
+      store.save = async () => {
+        throw new Error("ENOSPC: no space left on device");
+      };
+      return out;
+    };
+    const done = await c.restoreTo({ uid: preview.toUid, head: preview.head });
+    expect(done.opId).toBeTruthy();
+    expect(await server!.cli("cat", "-path", "note.md")).toBe("then\n");
+  }, 240_000);
+
+  /** Applying a preview that changes nothing commits nothing, and says so. Found by review. */
+  it("applies a preview that changes nothing as nothing, and keeps the session", async () => {
+    const { c, vault } = await client();
+    await vault.edit("note.md", "the same\n", 1_000);
+    await c.settle();
+    await pause();
+    const preview = await c.restoreTo({ at: Date.now() });
+    expect(preview.restore + preview.remove + preview.removeFolder).toBe(0);
+    const done = await c.restoreTo({ uid: preview.toUid, head: preview.head });
+    expect(done.opId).toBeUndefined();
+    expect((await c.history("note.md")).length).toBe(1);
   }, 240_000);
 });

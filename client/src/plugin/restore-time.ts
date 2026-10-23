@@ -75,6 +75,8 @@ export class RestoreTimeModal extends Modal {
   private at: number;
   private preview: RestoreResult | undefined;
   private busy = false;
+  /** Moved on by every change of folder or time, so a late preview of the old ones is dropped. */
+  private asked = 0;
   private body!: HTMLElement;
 
   constructor(
@@ -123,7 +125,8 @@ export class RestoreTimeModal extends Modal {
 
   /** A changed folder or time makes the shown preview another question's. */
   private forget(): void {
-    if (this.preview === undefined) return;
+    this.asked++;
+    if (this.preview === undefined || this.preview.opId !== undefined) return;
     this.preview = undefined;
     this.draw();
   }
@@ -206,11 +209,15 @@ export class RestoreTimeModal extends Modal {
   }
 
   private runPreview(): Promise<void> {
+    const asked = this.asked;
     return this.step(async () => {
-      this.preview = await this.actions.restore({
+      const preview = await this.actions.restore({
         at: this.at,
         ...(this.folder !== "" ? { folder: this.folder } : {}),
       });
+      // The folder or the time changed while it was asked: it answers a
+      // question nobody is asking now.
+      if (asked === this.asked) this.preview = preview;
     });
   }
 

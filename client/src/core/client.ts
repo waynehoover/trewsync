@@ -1253,7 +1253,12 @@ export class Client {
   async restoreTo(ask: RestoreAsk): Promise<RestoreResult> {
     await this.settle({ coalesceWrites: false });
     const done = await this.serial(() => this.transport.restore(ask));
-    if (!("at" in ask)) await this.settle({ coalesceWrites: false });
+    if (done.opId !== undefined) {
+      // Committed, whatever happens here next: a pass that fails to put it on
+      // disk does not undo it, and the caller needs the operation to offer
+      // Undo. The next pass puts it here, and says why if it cannot.
+      await this.settle({ coalesceWrites: false }).catch(() => undefined);
+    }
     return done;
   }
 

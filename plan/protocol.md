@@ -285,11 +285,15 @@ A device puts one folder, or every note in the vault, back as it was at a time, 
 
 **Preview, then exactly that.** A preview writes nothing. An apply names the `uid` and `head` its preview answered with and is planned again against them: if any note in the vault was saved since (`head` is the newest uid that is not a setting), it is refused `stale`, and the device previews again. The apply's versions reach every device as an ordinary `batch`, the asking device included, before the reply. `opId` is the operation, which `undo` reverses as a whole.
 
+An apply of a preview that changes nothing commits nothing and says so: `applied` false, every count zero, no `opId`.
+
+**Never below a purge.** A point below the vault's purge mark is refused as `gone`, whatever the paths would say: a purge takes the commit times a time resolves from and the renames a folder's moves are read from, so the history there cannot answer either question, and a purge between a preview and its apply always moves the mark past the preview's point. The operator's `trewd restore` reads what is exact below the mark, or a backup taken before the purge is restored.
+
 The counts are whole; `steps`, `keptMovedIn` and `keptMovedOut` together list at most 500 rows, and `more` is how many were left out. A restore that would write more than 10,000 versions is refused whole, never cut short: a folder at a time goes through.
 
 Refusals, all before anything is written:
 
-- `norestore`: `before_history`, a time before the oldest recorded; `gone`, a version the restore needs was taken by a purge, naming the path; `result_too_large`, over the device's bound; `not_found`, a uid the vault has not reached.
+- `norestore`: `before_history`, a time before the oldest recorded; `gone`, a point below the purge mark; `result_too_large`, over the device's bound; `not_found`, a uid the vault has not reached.
 - `stale`: the vault's notes moved since the preview.
 - `badpath`: a folder no path can be.
 - `badentry`: a preview with no time, or an apply without its uid and head.

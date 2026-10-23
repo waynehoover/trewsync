@@ -224,3 +224,127 @@ func TestATimeIsTheNewestVersionCommittedByThen(t *testing.T) {
 		t.Errorf("a time before any history: %v", err)
 	}
 }
+
+// move appends a rename of the note at from to to, carrying body.
+func (h *harness) move(t *testing.T, from, to, body string) Entry {
+	t.Helper()
+	return h.appendAs(t, Entry{Path: to, Prev: from, Size: int64(len(body)), Chunks: h.put(t, "v1", body), MTime: 50})
+}
+
+// A note moved in from outside onto a name a note held at the point is the
+// note that arrived, not the one that held the name: it is kept, and so is it
+// after a rename inside the folder. Found by review, 2026-10-23: the first
+// was written over with the old note's bytes and the second removed.
+func TestANoteMovedOntoAnOldNameIsStillOneThatArrived(t *testing.T) {
+	h := newTestStore(t)
+	h.file(t, "Projects/old.md", "held the name at the point")
+	h.file(t, "outside.md", "arrives later")
+	at := h.latest(t)
+	h.appendAs(t, Entry{Path: "Projects/old.md", Deleted: true, MTime: 43})
+	h.move(t, "outside.md", "Projects/old.md", "arrives later")
+
+	plan, err := h.PlanRestore(RestoreRequest{Vault: "v1", ToUID: at, Now: 7000, Folder: "Projects", NotesOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.KeptMovedIn) != 1 || len(plan.Entries) != 0 {
+		t.Fatalf("kept %q and wrote %+v; the note that arrived is kept and nothing written", plan.KeptMovedIn, plan.Entries)
+	}
+
+	h.move(t, "Projects/old.md", "Projects/new.md", "arrives later")
+	h.restoreAsDevice(t, RestoreRequest{ToUID: at, Folder: "Projects"})
+	if got := h.vaultAt(t, 0)["Projects/new.md"]; got != "arrives later" {
+		t.Fatalf("after the restore Projects/new.md holds %q", got)
+	}
+	h.verified(t)
+}
+
+// Renames back and forth are traced once each, never once per path through
+// them. Found by review: five renames between two names took seconds.
+func TestRenamesBackAndForthAreTracedOnce(t *testing.T) {
+	h := newTestStore(t)
+	h.file(t, "elsewhere.md", "x")
+	at := h.latest(t)
+	h.file(t, "Projects/a.md", "made since")
+	names := []string{"Projects/a.md", "Projects/b.md"}
+	for i := 0; i < 40; i++ {
+		h.move(t, names[i%2], names[(i+1)%2], "made since")
+	}
+	start := time.Now()
+	plan, err := h.PlanRestore(RestoreRequest{Vault: "v1", ToUID: at, Now: 7000, Folder: "Projects", NotesOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("planning took %s", took)
+	}
+	if len(plan.KeptMovedIn) != 0 || len(plan.Entries) != 1 {
+		t.Fatalf("kept %q and wrote %d; a note made in the folder since is removed", plan.KeptMovedIn, len(plan.Entries))
+	}
+}
+
+// A note moved out and then renamed again outside is still where it went,
+// and is not put back in the folder as a second copy. Found by review.
+func TestANoteMovedOutTwiceIsNotPutBack(t *testing.T) {
+	h := newTestStore(t)
+	h.file(t, "Projects/out.md", "moved out")
+	at := h.latest(t)
+	h.move(t, "Projects/out.md", "Archive/out.md", "moved out")
+	h.move(t, "Archive/out.md", "Archive/final.md", "moved out")
+	plan, _ := h.restoreAsDevice(t, RestoreRequest{ToUID: at, Folder: "Projects"})
+	if len(plan.KeptMovedOut) != 1 {
+		t.Fatalf("kept as moved out: %q", plan.KeptMovedOut)
+	}
+	sameVault(t, "after the restore", h.vaultAt(t, 0), map[string]string{"Archive/final.md": "moved out"})
+}
+
+// A device's restore below the purge mark is refused: the history there is
+// not whole, so neither a time nor a folder's moves can be read from it, and
+// a purge between a preview and its apply always moves the mark past it.
+// Found by review: a purge in between changed what the same uid and head
+// applied, and a time resolved to an earlier point.
+func TestADeviceRestoreBelowThePurgeMarkIsRefused(t *testing.T) {
+	h := newTestStore(t)
+	// The point is the vault's first version, which a purge always keeps, so
+	// no gap below it shows what the purge took above it.
+	at := h.file(t, "anchor.md", "unchanged").UID
+	h.file(t, "outside.md", "arrives later")
+	h.move(t, "outside.md", "Projects/in.md", "arrives later")
+	h.file(t, "Projects/in.md", "arrived, then edited")
+	h.file(t, "outside.md", "a new note under the old name")
+	h.file(t, "Projects/new.md", "made since")
+	r := RestoreRequest{Vault: "v1", ToUID: at, Now: 7000, Folder: "Projects", NotesOnly: true, AbovePurgeMark: true}
+	plan, err := h.PlanRestore(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.KeptMovedIn) != 1 {
+		t.Fatalf("the preview kept %q", plan.KeptMovedIn)
+	}
+	if _, err := h.Purge("v1", 0); err != nil {
+		t.Fatal(err)
+	}
+	r.Head = plan.Head
+	_, err = h.PlanRestore(r)
+	var oe *OpError
+	if !errors.As(err, &oe) || oe.Code != OpCodeGone {
+		t.Fatalf("an apply after a purge planned, or was refused otherwise: %v", err)
+	}
+}
+
+// A restore of a case-only rename is undone as one operation: the undo
+// removes the name the restore put back before it writes the other, which
+// folds onto it. Found by review: the undo wrote first and was refused as a
+// collision, so the restore could not be undone.
+func TestARestoreOfACaseOnlyRenameUndoes(t *testing.T) {
+	h := newTestStore(t)
+	e := h.file(t, "Projects/Note.md", "body")
+	h.move(t, "Projects/Note.md", "Projects/note.md", "body")
+	before := h.vaultAt(t, 0)
+	_, res := h.restoreAsDevice(t, RestoreRequest{ToUID: e.UID, Folder: "Projects"})
+	if _, _, err := h.undo(t, res.OpID, false); err != nil {
+		t.Fatalf("undoing the restore of a case-only rename: %v", err)
+	}
+	sameVault(t, "after the restore and its undo", h.vaultAt(t, 0), before)
+	h.verified(t)
+}
