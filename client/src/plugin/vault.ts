@@ -1714,8 +1714,11 @@ export class ObsidianVault implements Vault {
       await this.adapter.remove(file).catch(() => undefined);
       return;
     }
-    if (!(await this.adapter.exists(this.writingMarkers)))
+    if (!(await this.adapter.exists(this.writingMarkers))) {
       await this.adapter.mkdir(this.writingMarkers);
+      // Its name in the plugin's folder is flushed with the record.
+      this.entryChanged(this.writingMarkers);
+    }
     await this.adapter.write(file, JSON.stringify(record));
     // Made durable by the flush that comes before the note is truncated.
     this.wrote(file);
@@ -1733,14 +1736,20 @@ export class ObsidianVault implements Vault {
    * the note unread (`cutShort`'s refusal) and the record in place.
    */
   private async recoverInterruptedWrite(): Promise<void> {
-    // Only absence is a reason to skip this. A folder or record that cannot
-    // be read fails the listing, so the pass sends nothing, and the next one
-    // asks again: read past, a note a crash cut short is sent as an edit.
-    if (!(await this.adapter.exists(this.writingMarkers))) {
-      this.checkedInterrupted = true;
-      return;
+    // Listed, never asked whether it exists: Obsidian's `exists` answers
+    // false for a disk that failed to say, and false would skip this. A
+    // folder that cannot be listed is made, which only succeeds where there
+    // was none, and listed again; still unlistable, the listing fails, so
+    // the pass sends nothing and the next one asks again: read past, a note
+    // a crash cut short is sent as an edit.
+    let listed: { files: string[] };
+    try {
+      listed = await this.adapter.list(this.writingMarkers);
+    } catch {
+      await this.adapter.mkdir(this.writingMarkers);
+      this.entryChanged(this.writingMarkers);
+      listed = await this.adapter.list(this.writingMarkers);
     }
-    const listed = await this.adapter.list(this.writingMarkers);
     for (const file of listed.files) {
       const text = await this.adapter.read(file);
       let record: InPlaceWrite | undefined;
@@ -1831,9 +1840,12 @@ export class ObsidianVault implements Vault {
    * one somebody has edited since is theirs, and stays.
    */
   private async dropIfStill(keepAt: string, digest: string): Promise<void> {
-    const there = await readRaw(this.adapter, keepAt).catch(() => undefined);
-    if (there !== undefined && (await plainDigest(there)) === digest)
-      await this.dropDuplicate(keepAt);
+    // Moved aside and identified there, as any removal that must not take a
+    // save made in between is (`removeExpecting`): reading it in place and
+    // then removing the name would remove whatever the name held by then.
+    await this.removeExpecting(keepAt, { contentId: digest, idOf: plainDigest }, keepAt).catch(
+      () => undefined,
+    );
   }
 
   /**

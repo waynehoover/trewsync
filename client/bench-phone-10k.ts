@@ -918,15 +918,20 @@ async function main(): Promise<void> {
     report["catchUpMs"] = ms(performance.now() - t1);
     say(`  caught up on ${away} edits in ${ms((performance.now() - t1) / 1000)} s`);
     // Until both agree: the phone's own edits reach the Mac.
+    let disagree: string[] = [];
     await waitFor(
       "the phone and the Mac to agree",
       async () => {
         await mac.c!.settle({ coalesceWrites: false });
-        return diff(await inventory(dirA), await phoneInventory()).length === 0;
+        disagree = diff(await inventory(dirA), await phoneInventory());
+        return disagree.length === 0;
       },
       600_000,
       3000,
-    );
+    ).catch((err: unknown) => {
+      // Which files, or a failure here says nothing anybody can act on.
+      throw new Error(`${(err as Error).message}; still different: ${disagree.join("; ")}`);
+    });
     report["catchUpUntilAgreedMs"] = ms(performance.now() - t1);
     const final = await inventory(dirA);
     for (const [p, text] of macEdits) {

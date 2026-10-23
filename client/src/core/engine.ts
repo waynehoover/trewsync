@@ -2622,7 +2622,9 @@ export class Engine {
     const creating = entry.creating;
     if (creating !== undefined) {
       if (local !== undefined && !local.folder) {
-        if (await this.tornFrom(path, local.size, creating)) {
+        // A whole copy is known by its hash, with no fetch of the version it
+        // is a copy of, which may be gone from the server since.
+        if (local.hash === creating.hash || (await this.tornFrom(path, local.size, creating))) {
           const still = await this.opts.vault.stat(path);
           if (still?.size !== stat?.size || still?.mtime !== stat?.mtime) {
             throw new Error(`${path} changed while a torn write was being checked`);
@@ -4671,13 +4673,16 @@ export class Engine {
         // seen it gone: Obsidian, or the plugin, still holds it in memory and
         // may write it back before the reload, and that copy is the old
         // value, not a change to send (`unconfirmed`).
-        // Its base is the version just deleted, so a write-back of it reads
-        // as unchanged here and the deletion is offered again.
+        // Its base is the file just deleted, as it was on this disk: what
+        // Obsidian or the plugin writes back is that, in its own byte order,
+        // whether or not it was ever synced from here, so a write-back reads
+        // as unchanged and the deletion is offered again.
         const was = this.entries.get(path);
-        if (was?.unconfirmed !== undefined && was.synchash !== "") {
+        const base = was?.hash || was?.synchash || "";
+        if (was?.unconfirmed !== undefined && base !== "") {
           this.entries.set(path, {
             ...newEntry(path),
-            synchash: was.synchash,
+            synchash: base,
             syncuid: was.syncuid,
             unconfirmed: was.unconfirmed,
           });

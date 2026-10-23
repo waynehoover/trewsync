@@ -5634,3 +5634,68 @@ describe("a setting Obsidian emptied because it could not read it", () => {
     expect(mac.vault.snapshot()[P]).toBe(settings);
   });
 });
+
+describe("a setting Apply deleted that was never synced, or synced in another order", () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  const P = ".obsidian/app.json";
+  const times = { mtime: 1_000, ctime: 1_000 };
+
+  it("holds a write-back of one the first choice deleted", async () => {
+    await fresh();
+    const mac = new Device("mac");
+    mac.settings = { root: ".obsidian" };
+    devices.push(mac);
+    await mac.connect(server);
+    await mac.vault.write(P, enc('{"a":1}'), times);
+    await mac.settle();
+    await mac.vault.remove(P);
+    await mac.settle();
+    const desk = new Device("desk");
+    desk.settings = { root: ".obsidian", firstChoice: "server" };
+    desk.loadId = "load 1";
+    devices.push(desk);
+    await desk.vault.write(P, enc('{"mine":true}'), times);
+    await desk.connect(server);
+    expect((await desk.settle()).settingsHeld).toBe(1);
+    await desk.engine.sync({ applySettings: true });
+    expect(desk.vault.snapshot()[P]).toBeUndefined();
+    await desk.engine.sync();
+    await desk.vault.write(P, enc('{"mine":true}'), { mtime: 9_000, ctime: 9_000 });
+    let uploaded = 0;
+    for (let i = 0; i < 3; i++) uploaded += (await desk.engine.sync()).uploaded;
+    expect(uploaded).toBe(0);
+    expect(mac.vault.snapshot()[P]).toBeUndefined();
+  });
+
+  it("holds a write-back, in this device's order, of one another device deleted", async () => {
+    await fresh();
+    const mac = new Device("mac");
+    mac.settings = { root: ".obsidian" };
+    devices.push(mac);
+    await mac.connect(server);
+    await mac.vault.write(P, enc('{"a":1,"b":2}'), times);
+    await mac.settle();
+    const desk = new Device("desk");
+    desk.settings = { root: ".obsidian" };
+    desk.loadId = "load 1";
+    devices.push(desk);
+    await desk.vault.write(P, enc('{"b":2,"a":1}'), times);
+    await desk.connect(server);
+    await desk.settle();
+    await mac.vault.remove(P);
+    await mac.settle();
+    expect((await desk.settle()).settingsHeld).toBe(1);
+    await desk.engine.sync({ applySettings: true });
+    expect(desk.vault.snapshot()[P]).toBeUndefined();
+    // The reload: Obsidian writes back what it held, its own way.
+    desk.close();
+    await desk.vault.write(P, enc('{"b":2,"a":1}'), { mtime: 9_000, ctime: 9_000 });
+    desk.loadId = "load 2";
+    await desk.connect(server);
+    let uploaded = 0;
+    for (let i = 0; i < 3; i++) uploaded += (await desk.engine.sync()).uploaded;
+    expect(uploaded).toBe(0);
+    await mac.settle();
+    expect(mac.vault.snapshot()[P]).toBeUndefined();
+  });
+});

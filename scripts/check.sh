@@ -35,15 +35,18 @@ skip_docker=0
 # out in another worktree, or the gate run twice. The commit, not only its
 # tree, because a check reads more than the files: the compose pin check
 # excuses the one commit a server tag points at, and the same tree on another
-# commit has to fail it. Only with nothing uncommitted, since the run reads the
+# commit has to fail it. And with the newest server tag, which that check
+# reads too. Only with nothing uncommitted, since the run reads the
 # working tree, and only for a run that passed outright. Shared by every
 # worktree of the repository. TREW_CHECK_AGAIN=1 runs it regardless.
 passed_trees="$(git rev-parse --path-format=absolute --git-common-dir)/trew-check-passed"
 tree=""
 if [ -z "$(git status --porcelain --untracked-files=normal)" ]; then
-  tree=$(git rev-parse HEAD)
-  if [ "${TREW_CHECK_AGAIN:-0}" != 1 ] && grep -qx "$tree" "$passed_trees" 2>/dev/null; then
-    echo "This commit ($tree) has already passed every check here; not running it again."
+  # With the newest server tag, which the compose pin check reads: the same
+  # commit can pass before a tag lands elsewhere and fail after.
+  tree="$(git rev-parse HEAD) $(git tag -l 'server/v*' --sort=-v:refname | head -1)"
+  if [ "${TREW_CHECK_AGAIN:-0}" != 1 ] && grep -Fqx "$tree" "$passed_trees" 2>/dev/null; then
+    echo "This commit and tag ($tree) have already passed every check here; not running again."
     echo "TREW_CHECK_AGAIN=1 runs it regardless."
     exit 0
   fi

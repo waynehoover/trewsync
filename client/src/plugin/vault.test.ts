@@ -471,18 +471,19 @@ describe("what a scan costs", () => {
     const listed = await v.list();
     expect(listed.length).toBe(210); // 200 notes and the 10 folders
 
-    // One case-folding probe and one look for in-place updates a crash
-    // interrupted on the first listing, and one recovery-log stat on every
-    // listing. None costs a call per note as the vault grows.
+    // One case-folding probe on the first listing, the folder of in-place
+    // update records listed (and made, the first time) once, and one
+    // recovery-log stat on every listing. None costs a call per note as the
+    // vault grows.
     expect(
       { stat: counting.stats, list: counting.lists, exists: counting.exists_ },
       `a 200 file vault cost ${counting.stats} stat, ${counting.lists} list and ${counting.exists_} exists calls`,
-    ).toEqual({ stat: 1, list: 0, exists: 2 });
+    ).toEqual({ stat: 1, list: 2, exists: 1 });
     await v.list();
     expect(
       { stat: counting.stats, list: counting.lists, exists: counting.exists_ },
       "the second scan cost more than the log",
-    ).toEqual({ stat: 2, list: 0, exists: 2 });
+    ).toEqual({ stat: 2, list: 2, exists: 1 });
 
     // And the same vault at ten times the size costs the same, which is the
     // claim. Pinning the number alone would pass on a scan that had become
@@ -498,7 +499,7 @@ describe("what a scan costs", () => {
     expect(
       { stat: bigCount.stats, list: bigCount.lists, exists: bigCount.exists_ },
       "ten times the notes must not increase scan calls",
-    ).toEqual({ stat: 1, list: 0, exists: 2 });
+    ).toEqual({ stat: 1, list: 2, exists: 1 });
   });
 
   it("still reports what the walk did", async () => {
@@ -545,6 +546,9 @@ class CountingAdapter {
   async exists(p: string) {
     this.exists_++;
     return this.inner.exists(p);
+  }
+  async mkdir(p: string) {
+    return this.inner.mkdir(p);
   }
 }
 
