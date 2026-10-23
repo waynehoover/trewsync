@@ -3,6 +3,15 @@ import { focusMainWindow, isMainWindow, openInMainWindow } from "./main-window.t
 import type { SyncPreview } from "../core/preview.ts";
 import { ActivityLog, ActivityModal } from "./activity.ts";
 import { ConflictsModal } from "./conflicts.ts";
+import {
+  ON_DEMAND_PRESETS,
+  ServerOnlyModal,
+  bytesForPeople,
+  coveredBy,
+  neededBy,
+  resolveServerOnly,
+  type NoteLinks,
+} from "./on-demand.ts";
 import { conflictOriginal, reviewConflict, type ConflictPair } from "../core/conflicts.ts";
 /** Obsidian plugin: lifecycle, platform adapter, and sync/recovery interfaces. */
 
@@ -354,6 +363,12 @@ export default class TrewPlugin extends Plugin {
    */
   private generation = 0;
   private editingConnection = false;
+  /**
+   * Files left on the server that somebody asked for, by opening a note that
+   * needs one or asking outright: taken out of `onDemand`, so the next pass
+   * downloads them, and dropped once each lands as an ordinary file.
+   */
+  private readonly wanted = new Set<string>();
   /** An Apply is running, which ends in a reload an unlink must not straddle. */
   private applying = false;
   private unlinking: Promise<void> | undefined;
@@ -555,6 +570,39 @@ export default class TrewPlugin extends Plugin {
       },
     });
     this.addCommand({
+      id: "download-note-attachments",
+      name: "Download the attachments this note needs",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (this.onDemandBytes === undefined || !file) return false;
+        if (!checking) this.fetchFor(file);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "download-server-file",
+      name: "Download a file kept on the server",
+      checkCallback: (checking) => {
+        if (this.onDemandBytes === undefined || this.serverOnly.size === 0) return false;
+        if (!checking)
+          new ServerOnlyModal(this.app, this.serverOnly, (p) => this.fetchNow([p])).open();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "free-space",
+      name: "Free space: keep attachments on the server only",
+      checkCallback: (checking) => {
+        if (this.onDemandBytes === undefined || this.client === undefined) return false;
+        if (!checking) {
+          void this.freeSpace().catch(
+            (err: unknown) => new Notice(`TrewSync: ${(err as Error).message}`, 10_000),
+          );
+        }
+        return true;
+      },
+    });
+    this.addCommand({
       id: "version-history",
       name: "Show version history",
       // Checking rather than callback, so the command does not appear in
@@ -637,7 +685,19 @@ export default class TrewPlugin extends Plugin {
       // asked for another round, which read and hashed again every file the
       // pass had just written and read back: 12 to 14 ms a file on a phone.
       this.registerEvent(
+        this.app.workspace.on("file-open", (file: { path: string } | null) => this.fetchFor(file)),
+      );
+      // Capture, so a tap on an embed of a file not here yet fetches it
+      // before Obsidian offers to make a note of that name.
+      if (typeof document !== "undefined") {
+        this.registerDomEvent(document, "click", (event) => this.fetchOnClick(event), {
+          capture: true,
+        });
+      }
+      this.registerEvent(
         this.app.vault.on("create", (file) => {
+          // A file fetched on demand has landed: an ordinary file from now on.
+          this.wanted.delete(file.path);
           if (!this.liveVault?.ownCreate(file.path, statOfEvent(file))) this.nudge(file.path);
         }),
       );
@@ -1548,6 +1608,12 @@ export default class TrewPlugin extends Plugin {
       // A name Windows cannot hold arrives as a stranded path with its reason
       // rather than as a write that fails for ever (PLAN.md section 4.12).
       ...(Platform.isWin ? { windows: true } : {}),
+      ...(config.onDemandBytes !== undefined
+        ? {
+            onDemand: (path: string, size: number) =>
+              coveredBy(config.onDemandBytes, path, size) && !this.wanted.has(path),
+          }
+        : {}),
       ...(settings !== undefined ? { settings } : {}),
       loadId: this.loadId,
       ...(config.settingsReplay === true ? { replayAll: true } : {}),
@@ -1905,22 +1971,157 @@ export default class TrewPlugin extends Plugin {
    * next pass reconciles it like any other path.
    */
   async setIgnoredNames(names: readonly string[]): Promise<void> {
+    const wanted = [...new Set(names.map((name) => name.trim()))].filter((name) =>
+      isIgnorableName(name),
+    );
+    wanted.sort();
+    await this.saveDeviceOption("what this device skips", (config) =>
+      JSON.stringify(wanted) === JSON.stringify([...(config.ignore ?? [])].sort())
+        ? undefined
+        : { ...config, ignore: wanted },
+    );
+  }
+
+  /** Files the last pass left on the server, by path, with their sizes. */
+  get serverOnly(): ReadonlyMap<string, number> {
+    return this.client?.engine.serverOnlyPaths() ?? new Map();
+  }
+
+  /**
+   * Downloads files left on the server, by asking the next pass for them.
+   * With no connection they wait in `wanted` and the next connection fetches
+   * them.
+   */
+  fetchNow(paths: readonly string[]): void {
+    const fresh = paths.filter((p) => !this.wanted.has(p));
+    if (fresh.length === 0) return;
+    for (const p of fresh) this.wanted.add(p);
+    if (this.client === undefined) {
+      new Notice(
+        `TrewSync: ${fresh.length === 1 ? fresh[0] : `${fresh.length} files`} on the server only. ` +
+          "They download when TrewSync reconnects.",
+      );
+      return;
+    }
+    const sizes = this.serverOnly;
+    const bytes = fresh.reduce((n, p) => n + (sizes.get(p) ?? 0), 0);
+    new Notice(
+      `TrewSync: downloading ${fresh.length === 1 ? fresh[0] : `${fresh.length} files`}` +
+        (bytes > 0 ? `, ${bytesForPeople(bytes)}` : "") +
+        ".",
+    );
+    void this.syncNow();
+  }
+
+  /** What a note embeds or links that is on the server only, fetched as it opens. */
+  private fetchFor(file: { path: string } | null): void {
+    if (file === null || this.onDemandBytes === undefined) return;
+    const cache = (
+      this.app as unknown as {
+        metadataCache?: {
+          getCache?(path: string): NoteLinks | null;
+          getFirstLinkpathDest?(link: string, source: string): unknown;
+        };
+      }
+    ).metadataCache;
+    const needed = neededBy(
+      file.path,
+      cache?.getCache?.(file.path),
+      this.serverOnly,
+      (link) => cache?.getFirstLinkpathDest?.(link, file.path) != null,
+    );
+    if (needed.length > 0) this.fetchNow(needed);
+  }
+
+  /** A tap on an embed or link to a file not here yet, which fetches it instead of making a note. */
+  private fetchOnClick(event: MouseEvent): void {
+    if (this.onDemandBytes === undefined) return;
+    const target = (event.target as { closest?(s: string): unknown } | null)?.closest?.(
+      ".internal-link.is-unresolved, .internal-embed.is-unresolved",
+    ) as { getAttribute(name: string): string | null } | null | undefined;
+    const link = target?.getAttribute("data-href") ?? target?.getAttribute("src");
+    if (!link) return;
+    const source = this.app.workspace.getActiveFile()?.path ?? "";
+    const path = resolveServerOnly(link, source, this.serverOnly.keys());
+    if (path === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.fetchNow([path]);
+  }
+
+  /**
+   * The files here the setting would leave on the server, whose space Free
+   * space can give back, with what they weigh.
+   */
+  freeable(): { paths: string[]; bytes: number } {
+    const threshold = this.onDemandBytes;
+    const files =
+      (
+        this.app.vault as unknown as {
+          getFiles?(): { path: string; stat: { size: number } }[];
+        }
+      ).getFiles?.() ?? [];
+    // A file asked for that has landed is an ordinary file now, whether or
+    // not its create event has been seen yet.
+    for (const f of files) this.wanted.delete(f.path);
+    const out = files.filter((f) => coveredBy(threshold, f.path, f.stat.size));
+    return { paths: out.map((f) => f.path), bytes: out.reduce((n, f) => n + f.stat.size, 0) };
+  }
+
+  /** Frees the space of files the server holds (`Engine.release`), and says what it did. */
+  async freeSpace(): Promise<void> {
+    const client = this.client;
+    if (!client) throw new Error(this.whyNoClient());
+    const { paths } = this.freeable();
+    const out = await client.release(paths);
+    new Notice(
+      `TrewSync: freed the space of ${out.released.length} ${out.released.length === 1 ? "file" : "files"}` +
+        (out.kept.length > 0
+          ? `; kept ${out.kept.length} (${out.kept[0]!.why}${out.kept.length > 1 ? ", and others" : ""})`
+          : "") +
+        ". They stay on the server.",
+      10_000,
+    );
+    this.nudge();
+  }
+
+  /** Attachments on demand: the size from which a file waits on the server, or off. */
+  get onDemandBytes(): number | undefined {
+    return this.config?.onDemandBytes;
+  }
+
+  async setOnDemand(bytes: number | undefined): Promise<void> {
+    await this.saveDeviceOption("whether attachments wait on the server", (config) => {
+      if (config.onDemandBytes === bytes) return undefined;
+      const next: Record<string, unknown> = { ...config };
+      if (bytes === undefined) delete next["onDemandBytes"];
+      else next["onDemandBytes"] = bytes;
+      return next as unknown as DeviceConfig;
+    });
+  }
+
+  /**
+   * Saves a change to this device's own options and starts the client again
+   * with it, as one settings change: refused during an unlink or another
+   * change, and refused again if the pairing changed while it was saving.
+   * `make` answers undefined for a change that changes nothing.
+   */
+  private async saveDeviceOption(
+    what: string,
+    make: (config: DeviceConfig) => DeviceConfig | undefined,
+  ): Promise<void> {
     if (this.unlinking) throw new Error("This vault is being unlinked.");
     if (this.editingConnection) throw new Error("Another settings change is in progress.");
     this.editingConnection = true;
     try {
       const config = this.config;
       if (!config || !this.paired) throw new Error("this vault is not paired yet.");
-      const wanted = [...new Set(names.map((name) => name.trim()))].filter((name) =>
-        isIgnorableName(name),
-      );
-      wanted.sort();
-      if (JSON.stringify(wanted) === JSON.stringify([...(config.ignore ?? [])].sort())) return;
-      const next: DeviceConfig = { ...config, ignore: wanted };
+      const next = make(config);
+      if (next === undefined) return;
       const mine = this.generation + 1;
       await this.quiet();
       if (this.generation !== mine || this.config !== config) {
-        throw new Error("the pairing changed while saving what this device skips");
+        throw new Error(`the pairing changed while saving ${what}`);
       }
       try {
         await this.saveDuringRun(mine, next);
@@ -1928,7 +2129,7 @@ export default class TrewPlugin extends Plugin {
         if (mine === this.generation) {
           this.setState({
             kind: "stopped",
-            why: `what this device skips could not be saved: ${(err as Error).message}. Reopen Obsidian to reload the saved settings`,
+            why: `${what} could not be saved: ${(err as Error).message}. Reopen Obsidian to reload the saved settings`,
           });
         }
         throw err;
@@ -1939,7 +2140,7 @@ export default class TrewPlugin extends Plugin {
       // a client against a vault that no longer exists while the panel says
       // this device is unpaired.
       if (this.unlinking || this.generation !== mine || this.config !== config) {
-        throw new Error("the pairing changed while saving what this device skips");
+        throw new Error(`the pairing changed while saving ${what}`);
       }
       this.config = next;
       this.start();
@@ -4606,6 +4807,7 @@ class TrewPanel {
     this.renderThisDeviceName(management);
     this.renderStranded(management);
     this.renderIgnored(management);
+    this.renderOnDemand(management);
     this.renderSettingsSync(management);
     this.renderDevices(management);
 
@@ -5201,6 +5403,63 @@ class TrewPanel {
         b.setDisabled(true);
         try {
           await this.plugin.setSettingsSync(group, undefined, false);
+        } catch (err) {
+          new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
+        }
+        this.render();
+      }),
+    );
+  }
+
+  /**
+   * Attachments on demand: which files wait on the server until opened, how
+   * many do now, and Free space for the ones already here.
+   */
+  private renderOnDemand(contentEl: HTMLElement): void {
+    const threshold = this.plugin.onDemandBytes;
+    const onServer = this.plugin.serverOnly;
+    const weight = [...onServer.values()].reduce((n, b) => n + b, 0);
+    const setting = row(
+      contentEl,
+      "Attachments on demand",
+      threshold === undefined
+        ? "Off: every attachment downloads. On, large attachments stay on the server until you open a note that uses them. This device only."
+        : onServer.size === 0
+          ? "Large attachments stay on the server until you open a note that uses them. None are waiting now."
+          : `${onServer.size} ${onServer.size === 1 ? "attachment is" : "attachments are"} on the server only (${bytesForPeople(weight)}). Each downloads when you open a note that uses it.`,
+    );
+    setting.addDropdown((d) => {
+      for (const preset of ON_DEMAND_PRESETS)
+        d.addOption(String(preset.bytes ?? "off"), preset.label);
+      const known = ON_DEMAND_PRESETS.some((p) => p.bytes === threshold);
+      if (!known && threshold !== undefined)
+        d.addOption(String(threshold), `Over ${bytesForPeople(threshold)}`);
+      d.setValue(String(threshold ?? "off"));
+      d.selectEl.setAttribute("aria-label", "Attachments on demand");
+      d.onChange(async (value) => {
+        d.setDisabled(true);
+        try {
+          await this.plugin.setOnDemand(value === "off" ? undefined : Number(value));
+        } catch (err) {
+          new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
+        }
+        this.render();
+      });
+    });
+    if (threshold === undefined) return;
+    const freeable = this.plugin.freeable();
+    if (freeable.paths.length === 0) return;
+    row(
+      contentEl,
+      "Free space",
+      `${freeable.paths.length} ${freeable.paths.length === 1 ? "attachment here is" : "attachments here are"} ` +
+        `covered by this setting (${bytesForPeople(freeable.bytes)}). Freeing them keeps each one on the server ` +
+        "and on any device that has it, and not on this one. The server's copy is checked first.",
+    ).addButton((b) =>
+      b.setButtonText("Free space").onClick(async () => {
+        b.setDisabled(true).setButtonText("Freeing");
+        try {
+          await this.plugin.freeSpace();
         } catch (err) {
           new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
         }

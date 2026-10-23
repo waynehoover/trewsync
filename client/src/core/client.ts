@@ -32,6 +32,7 @@ import {
   combinePasses,
   contentId,
   placeBeside,
+  type ReleaseReport,
   type RepairReport,
   type SettingsScope,
   type SyncOptions,
@@ -92,6 +93,8 @@ export interface ClientOptions {
   readonly readOnly?: boolean;
   /** Whether this device files notes on Windows. See EngineOptions. */
   readonly windows?: boolean;
+  /** Which files this device leaves on the server until opened. See EngineOptions. */
+  readonly onDemand?: (path: string, size: number) => boolean;
   /** What this device syncs of its settings. See EngineOptions. */
   readonly settings?: SettingsScope | undefined;
   /** Which load of the app this is. See EngineOptions. */
@@ -267,6 +270,7 @@ export class Client {
       ...(opts.merge !== undefined ? { merge: opts.merge } : {}),
       ...(opts.readOnly !== undefined ? { readOnly: opts.readOnly } : {}),
       ...(opts.windows !== undefined ? { windows: opts.windows } : {}),
+      ...(opts.onDemand !== undefined ? { onDemand: opts.onDemand } : {}),
       ...(opts.settings !== undefined ? { settings: opts.settings } : {}),
       ...(opts.loadId !== undefined ? { loadId: opts.loadId } : {}),
       ...(opts.replayAll === true ? { replayAll: true } : {}),
@@ -966,6 +970,11 @@ export class Client {
    */
   async repair(): Promise<RepairReport> {
     return this.serial(() => this.engine.repair());
+  }
+
+  /** Frees the space of files the server holds, never alongside a pass (`Engine.release`). */
+  async release(paths: readonly string[]): Promise<ReleaseReport> {
+    return this.serial(() => this.engine.release(paths));
   }
 
   /**
@@ -2085,6 +2094,8 @@ export function summarise(r: SyncReport): string {
   // disappear.
   add(needsAttention(r), "need attention", "needs attention");
   add(r.ignored, "ignored");
+  // Not a problem either, and on the screen for the same reason.
+  add(r.serverOnly, "on the server only");
   return bits.length === 0 ? "up to date" : bits.join(", ");
 }
 

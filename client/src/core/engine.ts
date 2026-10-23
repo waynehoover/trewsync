@@ -396,6 +396,16 @@ export interface EngineOptions {
    */
   readonly readOnly?: boolean;
   /**
+   * Whether a file this device has never held is left on the server for now
+   * (attachments on demand). Asked only for a path that is not text and not
+   * a setting, about to download as new on the server. Undefined, as in the
+   * headless client: everything downloads.
+   *
+   * Safe because of what such a path already is: no base, so it is decided
+   * as new on the server, never as deleted here (`decideMissingLocally`).
+   */
+  readonly onDemand?: (path: string, size: number) => boolean;
+  /**
    * Whether this device files notes on Windows. Default false.
    *
    * On, a path from another device that Windows cannot hold (a reserved
@@ -640,6 +650,14 @@ export interface SyncReport {
    * stopped syncing years ago.
    */
   ignored: number;
+  /**
+   * Files left on the server, not downloaded here, by this device's choice
+   * (`EngineOptions.onDemand`), and what they weigh. Out of the exit code and
+   * out of what is owed, like `ignored`: the configuration doing what it was
+   * told. Counted every pass so it stays on the screen (rule 7).
+   */
+  serverOnly: number;
+  serverOnlyBytes: number;
   /**
    * Local changes this device will never send, because it is read-only (I29).
    *
@@ -951,6 +969,8 @@ function emptyReport(): SyncReport {
     settingsHeld: 0,
     settingsHeldPaths: [],
     ignored: 0,
+    serverOnly: 0,
+    serverOnlyBytes: 0,
     blocked: 0,
     inTheWay: [],
     needsAttention: [],
@@ -1107,6 +1127,10 @@ export class Engine {
   private readonly ignoredPaths = new Map<string, string>();
   /** Settings held in the pass running now, or the last one (`settingsHeld`). */
   private heldSettings = new Set<string>();
+  /** Files this pass left on the server (`EngineOptions.onDemand`), by path, with their sizes. */
+  private serverOnly = new Map<string, number>();
+  /** The same, as the last pass to finish left it, for `status` and `serverOnlyPaths`. */
+  private serverOnlyLast: ReadonlyMap<string, number> = new Map();
   /** Whether the pass running now applies held settings (`applySettings`). */
   private applyingSettings = false;
   /** `SyncOptions.applyOnly` for the pass running now. */
@@ -1342,6 +1366,11 @@ export class Engine {
     return coming.size;
   }
 
+  /** Files the last pass left on the server (`EngineOptions.onDemand`), by path, with their sizes. */
+  serverOnlyPaths(): ReadonlyMap<string, number> {
+    return this.serverOnlyLast;
+  }
+
   status(): {
     cursor: number;
     files: number;
@@ -1357,6 +1386,8 @@ export class Engine {
      * apart at all.
      */
     ignored: number;
+    /** Files left on the server by this device's choice, as of the last pass. */
+    serverOnly: number;
     /** Settings changes waiting for Apply and reload, as of the last pass. */
     settingsHeld: number;
     syncing: boolean;
@@ -1370,6 +1401,7 @@ export class Engine {
       retrying: this.retries.size,
       skipped: this.skipped.size + this.refusedInbound.size,
       ignored: this.ignoredPaths.size,
+      serverOnly: this.serverOnlyLast.size,
       settingsHeld: this.settingsHeldLast,
       syncing: this.syncing,
     };
@@ -1885,6 +1917,18 @@ export class Engine {
                       : "blocked";
         if (!this.sending && (action === "upload" || action === "delete-server"))
           action = "held-back";
+        // As the pass decides it (`onDemand`): left on the server, not fetched.
+        if (
+          kind === "download" &&
+          local === undefined &&
+          index.synchash === "" &&
+          other !== undefined &&
+          !other.deleted &&
+          !isConfigPath(path) &&
+          !looksLikeText(path) &&
+          this.opts.onDemand?.(path, other.size) === true
+        )
+          action = "server-only";
         // The refusal from the name, not from the map: a restart has the
         // version back from the state file before it has run a pass to
         // refuse it again, and a preview run in between must not offer to
@@ -1935,7 +1979,12 @@ export class Engine {
     // stake still asks.
     if (
       first &&
-      preview.files.some((file) => file.action !== "unchanged" && file.action !== "download")
+      preview.files.some(
+        (file) =>
+          file.action !== "unchanged" &&
+          file.action !== "download" &&
+          file.action !== "server-only",
+      )
     ) {
       if (!(await this.opts.confirmFirstSync(preview)))
         throw new Error("First sync paused for review.");
@@ -1966,6 +2015,7 @@ export class Engine {
   private async pass(opts: SyncOptions = {}): Promise<SyncReport> {
     const report = emptyReport();
     this.heldSettings = new Set();
+    this.serverOnly = new Map();
     this.settingsUnsendable = new Set();
     this.applyingSettings = opts.applySettings === true;
     this.applyOnly = opts.applyOnly;
@@ -2437,6 +2487,9 @@ export class Engine {
           // finished happening (Codex-10). It is counted and named as ignored
           // on this device's own screen, which is where it belongs.
           this.ignoredPaths.has(path) ||
+          // Left on the server by this device's choice: not coming yet, by
+          // configuration, which is not the same as owed (as `ignored`).
+          this.serverOnly.has(path) ||
           this.outOfScope(path) ||
           this.heldSettings.has(path) ||
           this.settingsUnsendable.has(path) ||
@@ -2446,6 +2499,7 @@ export class Engine {
       report.appliedCursor = this.cursor;
     }
     this.settingsHeldLast = this.heldSettings.size;
+    this.serverOnlyLast = this.serverOnly;
     this.settingsHeldLastPaths = [...this.heldSettings].sort();
     // Spent only once every setting it could decide has been decided. A pass
     // that yielded, or left one waiting out a retry or a half-written file,
@@ -2728,6 +2782,32 @@ export class Engine {
       );
       if (settings === undefined) return;
       action = settings;
+    }
+
+    // Attachments on demand: a file this device has never held, about to
+    // download as new on the server, is left there. Only for a path with no
+    // base, which is what keeps its absence from ever reading as a deletion
+    // here (`decideMissingLocally` decides a path with no base as new on the
+    // server), so nothing about it is remembered: the empty entry `entryFor`
+    // made goes, and the next pass decides it the same way from `remote`.
+    if (
+      action.kind === "download" &&
+      local === undefined &&
+      entry.synchash === "" &&
+      entry.syncuid === 0 &&
+      remote !== undefined &&
+      !remote.folder &&
+      !remote.deleted &&
+      !isConfigPath(path) &&
+      !looksLikeText(path) &&
+      this.opts.onDemand?.(path, remote.size) === true
+    ) {
+      if (entry.prev === "" && entry.creating === undefined) this.entries.delete(path);
+      this.serverOnly.set(path, remote.size);
+      this.pending.delete(path);
+      report.serverOnly++;
+      report.serverOnlyBytes += remote.size;
+      return;
     }
 
     if (
@@ -3233,6 +3313,15 @@ export class Engine {
           // The one this feature exists for. A mirror that decides a note is
           // gone because its disk was not mounted must not be able to say so.
           this.heldBack(path, report, "this device is read-only, so it was not deleted anywhere");
+          return;
+        }
+        // The last word before a deletion goes to every device: only a file
+        // this device held, with a base, can have been deleted here. `decide`
+        // never asks otherwise; this is what keeps a file left on the server
+        // (`onDemand`), or any absence nothing here ever held, from being sent
+        // as a deletion if that ever changes.
+        if (entry.synchash === "" || this.serverOnly.has(path)) {
+          this.log("not sending a deletion of a file this device never held", path);
           return;
         }
         const deletedAt = this.now();
@@ -3999,6 +4088,123 @@ export class Engine {
    * separate copy of every body was what made a 256 MiB attachment cost twice
    * its size, and on a phone that is not a spike but the end of the process.
    */
+  /**
+   * Frees the space files left on this device take, where the server holds
+   * them: "Free space" for attachments on demand. Each one that goes is left
+   * on the server from then on, as if this device had never had it.
+   *
+   * The only thing in this feature that removes a file, so every step is in
+   * the order that cannot lose one:
+   *
+   * 1. Only a file the setting covers (`onDemand`), not text, not a setting,
+   *    and synced: its base is the server's newest version, and nothing here
+   *    is waiting to send it.
+   * 2. Read in full and named now (rule 4), not taken from the stat cache: it
+   *    must be exactly the server's newest version.
+   * 3. Offered to the server, which takes any piece it lacks and says how
+   *    many it still lacks (rule 3): none, or the file stays.
+   * 4. Forgotten, and the index saved, **before** the file is removed. A file
+   *    with no record is new on the server to the next pass, never deleted
+   *    here. The other order loses it: a crash between the removal and the
+   *    save leaves a record with a base over a missing file, which is a
+   *    deletion sent to every device.
+   * 5. Removed by the preserving removal, which keeps the file at another name
+   *    if it changed since step 2.
+   *
+   * Never alongside a pass: callers go through the client's serial queue.
+   */
+  async release(paths: readonly string[]): Promise<ReleaseReport> {
+    const report: ReleaseReport = { released: [], kept: [] };
+    const keep = (path: string, why: string): void => {
+      report.kept.push({ path, why });
+    };
+    const ready: { path: string; local: LocalState; digest: string | undefined }[] = [];
+    for (const path of paths) {
+      const entry = this.entries.get(path);
+      const remote = this.remote.get(path);
+      if (entry === undefined || entry.folder || entry.synchash === "") {
+        keep(path, "it is not a synced file on this device");
+        continue;
+      }
+      if (remote === undefined || remote.deleted || remote.folder) {
+        keep(path, "the server has no live copy of it");
+        continue;
+      }
+      if (remote.uid !== entry.syncuid || remote.hash !== entry.synchash) {
+        keep(path, "it is not the server's newest version");
+        continue;
+      }
+      if (
+        isConfigPath(path) ||
+        looksLikeText(path) ||
+        this.opts.onDemand?.(path, remote.size) !== true
+      ) {
+        keep(path, "the setting does not leave files like it on the server");
+        continue;
+      }
+      if (this.dirty.has(path) || this.retries.has(path) || this.skipped.has(path)) {
+        keep(path, "it has work outstanding");
+        continue;
+      }
+      if (this.opts.activePath?.() === path) {
+        keep(path, "it is open");
+        continue;
+      }
+      try {
+        const stat = await this.opts.vault.stat(path);
+        if (stat === undefined || stat.folder) {
+          keep(path, "it is not on this device");
+          continue;
+        }
+        const probe: IndexEntry = { ...entry, chunks: [], hash: "" };
+        const scanned = await this.rehash(probe, path, stat.size);
+        if (contentId(scanned.names) !== remote.hash) {
+          keep(path, "it has changed since it synced");
+          continue;
+        }
+        const plan = await this.planUpload(probe, path, scanned);
+        const out = await this.opts.transport.resend(plan.names, (name) => plan.bodyOf(name));
+        if (out.missing > 0) {
+          keep(path, "the server could not confirm it holds every piece of it");
+          continue;
+        }
+        const local: LocalState = {
+          folder: false,
+          mtime: Math.ceil(stat.mtime),
+          size: stat.size,
+          hash: probe.hash,
+        };
+        ready.push({ path, local, digest: await this.syncedDigestOf(path, local) });
+      } catch (err) {
+        keep(path, (err as Error).message);
+      }
+    }
+    if (ready.length === 0) return report;
+
+    for (const r of ready) this.entries.delete(r.path);
+    await this.opts.vault.flush?.();
+    await this.save();
+
+    const baselines = new Map(
+      ready.flatMap((r) => (r.digest === undefined ? [] : [[r.path, r.digest] as const])),
+    );
+    for (const r of ready) {
+      try {
+        const keptAt = await this.removedSomethingElse(r.path, r.local, baselines);
+        if (keptAt !== undefined) {
+          keep(r.path, `it changed as it was being removed, and is kept at ${keptAt}`);
+          continue;
+        }
+        report.released.push(r.path);
+        this.log("freed the space of a file the server holds", r.path);
+      } catch (err) {
+        keep(r.path, (err as Error).message);
+      }
+    }
+    await this.opts.vault.flush?.();
+    return report;
+  }
+
   private async planUpload(entry: IndexEntry, path: string, fresh?: Scanned): Promise<UploadPlan> {
     // A file whose chunk list is already right does not need reading at all.
     //
@@ -6714,6 +6920,8 @@ export function combinePasses(a: SyncReport, b: SyncReport): SyncReport {
     settingsHeld: b.settingsHeld,
     settingsHeldPaths: b.settingsHeldPaths,
     ignored: b.ignored,
+    serverOnly: b.serverOnly,
+    serverOnlyBytes: b.serverOnlyBytes,
     blocked: b.blocked,
     inTheWay: b.inTheWay,
     needsAttention: b.needsAttention,
@@ -7214,4 +7422,10 @@ function canonicalJson(value: unknown): string {
         )
       : v,
   );
+}
+
+/** What `Engine.release` did: the files whose space it freed, and the ones it kept, with why. */
+export interface ReleaseReport {
+  released: string[];
+  kept: { path: string; why: string }[];
 }

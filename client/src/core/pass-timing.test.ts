@@ -79,6 +79,8 @@ function report(over: Partial<SyncReport>): SyncReport {
     settingsHeld: 0,
     settingsHeldPaths: [],
     ignored: 0,
+    serverOnly: 0,
+    serverOnlyBytes: 0,
     blocked: 0,
     inTheWay: [],
     needsAttention: [],

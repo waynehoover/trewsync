@@ -7,7 +7,8 @@ export type PreviewAction =
   | "delete-server"
   | "unchanged"
   | "blocked"
-  | "held-back";
+  | "held-back"
+  | "server-only";
 export interface SyncPreview {
   cursor: number;
   files: { path: string; action: PreviewAction }[];
@@ -23,6 +24,7 @@ export function previewCounts(preview: SyncPreview): Record<PreviewAction, numbe
     unchanged: 0,
     blocked: 0,
     "held-back": 0,
+    "server-only": 0,
   };
   for (const file of preview.files) counts[file.action]++;
   return counts;

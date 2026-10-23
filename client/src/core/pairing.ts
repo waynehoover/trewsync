@@ -159,6 +159,12 @@ export interface DeviceConfig {
    */
   readonly ignore?: readonly string[];
   /**
+   * Attachments on demand: a file of at least this many bytes that is not
+   * text is left on the server until it is opened (`EngineOptions.onDemand`).
+   * Per device and never sent anywhere; absent is off.
+   */
+  readonly onDemandBytes?: number;
+  /**
    * The group this device syncs its Obsidian settings with
    * (plan/settings-sync.md): the folder on the server they go to, whatever
    * the folder Obsidian runs here is called. Per device, and off, absent,
@@ -308,6 +314,7 @@ export function encodeConfig(config: DeviceConfig): Record<string, string> {
     // and a separator is a character a folder is allowed to contain. Written
     // only when there is something to write, for the reason above.
     ...(config.ignore?.length ? { ignore: JSON.stringify(config.ignore) } : {}),
+    ...(config.onDemandBytes !== undefined ? { onDemandBytes: String(config.onDemandBytes) } : {}),
     ...(config.settings !== undefined ? { settings: config.settings } : {}),
     ...(config.settingsFirstChoice ? { settingsFirstChoice: config.settingsFirstChoice } : {}),
     ...(config.settingsReplay === true ? { settingsReplay: "true" } : {}),
@@ -386,6 +393,12 @@ export function decodeConfig(raw: unknown, where: string): DeviceConfig {
     // device with nothing to send (I29).
     ...(record["readOnly"] === "true" ? { readOnly: true } : {}),
     ...ignoreList(record),
+    // A whole number of bytes, or off: a value it cannot read leaves every
+    // file downloading, which is visible and costs space, never a file.
+    ...(typeof record["onDemandBytes"] === "string" &&
+    /^(0|[1-9][0-9]{0,14})$/.test(record["onDemandBytes"])
+      ? { onDemandBytes: Number(record["onDemandBytes"]) }
+      : {}),
     // The same rule as readOnly: only the string this writes turns it on.
     ...(isSettingsGroup(record["settings"]) ? { settings: record["settings"] } : {}),
     ...(record["settingsFirstChoice"] === "server" || record["settingsFirstChoice"] === "device"

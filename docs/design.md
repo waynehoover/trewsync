@@ -198,6 +198,26 @@ pass under the new rule; every other device then removes its copy only if it
 is empty there. A folder no device has that record of stays until someone
 deletes it again.
 
+## Attachments on demand
+
+A device can leave files on the server (`EngineOptions.onDemand`, the plugin's
+**Attachments on demand**). What makes that safe is a state the engine already
+had: a path the server holds that this device has never synced has no base,
+and a path with no base is decided as new on the server, never as deleted here
+(`decideMissingLocally`). The feature only turns that one download into
+"leave it there", for a path that is not text and not a setting, and keeps no
+record of it: the next pass decides it the same way from what the server said.
+
+The invariant every change here keeps: **a path this device leaves on the
+server has no index entry with a base.** The one thing that turns a file this
+device holds into one it leaves on the server, `Engine.release` (Free space),
+forgets the entry and saves the index before it removes the file, after
+reading the file in full and having the server confirm it holds every piece.
+The other order is a deletion sent to every device after a crash, which the
+engine test "sends no deletion when the process dies at the index save"
+shows. As a last line, the engine refuses to send a deletion for a path with
+no base, or one it left on the server this pass.
+
 ## The agent endpoint
 
 `trewd serve -mcp` answers MCP at `/mcp` on the devices' listener. The user

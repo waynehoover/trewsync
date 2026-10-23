@@ -64,6 +64,8 @@ class Device {
   loadId: string | undefined;
   /** Whether the next `connect` asks for the whole history (`EngineOptions.replayAll`). */
   replayAll = false;
+  /** Which files are left on the server, read at each `connect` (`EngineOptions.onDemand`). */
+  onDemand: ((path: string, size: number) => boolean) | undefined;
   /** The note open in the editor, read at each `connect` (`EngineOptions.activePath`). */
   activePath: (() => string | undefined) | undefined;
   /** Every batch this device has been handed, for asserting on the wire. */
@@ -113,6 +115,7 @@ class Device {
       ...(this.loadId !== undefined ? { loadId: this.loadId } : {}),
       ...(this.replayAll ? { replayAll: true } : {}),
       ...(this.activePath ? { activePath: this.activePath } : {}),
+      ...(this.onDemand ? { onDemand: this.onDemand } : {}),
       ...(await server.deviceCredentials(this.name)),
       // A clock the test advances, so the size-scaled write debounce does
       // not decide when a sync may happen.
@@ -5720,5 +5723,212 @@ describe("a setting saved a moment ago", () => {
 
     await mac.vault.write(P, enc('{"a":2}'), { mtime: mac.clock, ctime: mac.clock });
     expect((await mac.engine.sync({ coalesceWrites: false })).uploaded).toBe(1);
+  });
+});
+
+describe("attachments left on the server until opened", () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  const times = { mtime: 1_000, ctime: 1_000 };
+  const big = new Uint8Array(5_000).map((_, i) => i % 251);
+  const versionsOf = async (d: Device, path: string) =>
+    (await d.transport.history(path)).map((v) => `${v.deleted ? "deleted" : v.size}:${v.device}`);
+
+  async function setUp(): Promise<{ a: Device; phone: Device; wanted: Set<string> }> {
+    await fresh();
+    const a = await device("a");
+    await a.vault.write("n.md", enc("![[big.png]]\n"), times);
+    await a.vault.write("big.png", big, times);
+    await a.vault.write("small.png", new Uint8Array(10), times);
+    await a.settle();
+    const wanted = new Set<string>();
+    const phone = new Device("phone");
+    phone.onDemand = (path, size) => size >= 1_000 && !wanted.has(path);
+    devices.push(phone);
+    await phone.connect(server);
+    return { a, phone, wanted };
+  }
+
+  it("downloads notes and small files, leaves the big one on the server, and says so", async () => {
+    const { a, phone } = await setUp();
+    const r = await phone.settle();
+    expect(Object.keys(phone.vault.snapshot()).sort()).toEqual(["n.md", "small.png"]);
+    expect(r.serverOnly).toBe(1);
+    expect(r.serverOnlyBytes).toBe(5_000);
+    expect(r.appliedCursor, "a device waiting on it for ever").toBeDefined();
+    expect(phone.engine.status().serverOnly).toBe(1);
+    expect(phone.engine.status().files).toBe(2);
+    expect([...phone.engine.serverOnlyPaths().keys()]).toEqual(["big.png"]);
+    // Pass after pass, it is never read as deleted here.
+    for (let i = 0; i < 3; i++)
+      await phone.engine.sync({ forceFullScan: true, verifyContents: true });
+    expect(await versionsOf(phone, "big.png")).toEqual(["5000:a"]);
+    expect(await a.vault.read("big.png")).toEqual(big);
+  });
+
+  it("stays on the server when changed elsewhere, and goes when deleted elsewhere", async () => {
+    const { a, phone } = await setUp();
+    await phone.settle();
+    await a.vault.write(
+      "big.png",
+      big.map((b) => b ^ 1),
+      { mtime: 2_000, ctime: 2_000 },
+    );
+    await a.settle();
+    expect((await phone.settle()).serverOnly).toBe(1);
+    expect(phone.vault.snapshot()["big.png"]).toBeUndefined();
+    await a.vault.remove("big.png");
+    await a.settle();
+    expect((await phone.settle()).serverOnly).toBe(0);
+    expect((await versionsOf(phone, "big.png")).filter((v) => v.endsWith(":phone"))).toEqual([]);
+  });
+
+  it("downloads one when it is wanted, and then syncs it like any file", async () => {
+    const { a, phone, wanted } = await setUp();
+    await phone.settle();
+    wanted.add("big.png");
+    const r = await phone.settle();
+    expect(r.serverOnly).toBe(0);
+    expect(await phone.vault.read("big.png")).toEqual(big);
+    await a.vault.write(
+      "big.png",
+      big.map((b) => b ^ 2),
+      { mtime: 3_000, ctime: 3_000 },
+    );
+    await a.settle();
+    wanted.delete("big.png");
+    await phone.settle();
+    expect(await phone.vault.read("big.png")).toEqual(big.map((b) => b ^ 2));
+  });
+
+  it("uploads a big file made here, and keeps both when one is made at a server-only name", async () => {
+    const { a, phone } = await setUp();
+    await phone.settle();
+    const mine = new Uint8Array(4_000).fill(7);
+    await phone.vault.write("photo.png", mine, times);
+    await phone.vault.write("big.png", mine, times);
+    await phone.settle();
+    await a.settle();
+    expect(await a.vault.read("photo.png")).toEqual(mine);
+    const all = Object.keys(a.vault.snapshot());
+    const sides = await Promise.all(
+      all.filter((p) => p.startsWith("big")).map((p) => a.vault.read(p)),
+    );
+    expect(sides.some((b) => b.length === 5_000 && b[1] === 1)).toBe(true);
+    expect(sides.some((b) => b.length === 4_000 && b[0] === 7)).toBe(true);
+  });
+
+  it("keeps a folder on the server when the phone removes its own empty copy", async () => {
+    await fresh();
+    const a = await device("a");
+    await a.vault.write("att/one.pdf", new Uint8Array(3_000), times);
+    await a.vault.write("att/two.pdf", new Uint8Array(3_000), times);
+    await a.settle();
+    const phone = new Device("phone");
+    phone.onDemand = (_p, size) => size >= 1_000;
+    devices.push(phone);
+    await phone.connect(server);
+    await phone.settle();
+    await phone.vault.removeFolder("att").catch(() => undefined);
+    await phone.settle();
+    await a.settle();
+    expect(Object.keys(a.vault.snapshot()).sort()).toEqual(["att/one.pdf", "att/two.pdf"]);
+  });
+
+  it("downloads everything once the setting is turned off", async () => {
+    const { phone } = await setUp();
+    await phone.settle();
+    phone.close();
+    phone.onDemand = undefined;
+    await phone.connect(server);
+    await phone.settle();
+    expect(await phone.vault.read("big.png")).toEqual(big);
+  });
+
+  it("never asks to review a first sync for the files it leaves on the server", async () => {
+    const { phone } = await setUp();
+    const preview = await phone.engine.preview();
+    expect(preview.files.find((f) => f.path === "big.png")?.action).toBe("server-only");
+  });
+});
+
+describe("freeing the space of attachments the server holds", () => {
+  const times = { mtime: 1_000, ctime: 1_000 };
+  const big = new Uint8Array(5_000).map((_, i) => i % 251);
+  const versionsOf = async (d: Device, path: string) =>
+    (await d.transport.history(path)).map((v) => `${v.deleted ? "deleted" : v.size}:${v.device}`);
+
+  async function fetched(): Promise<{ a: Device; phone: Device }> {
+    await fresh();
+    const a = await device("a");
+    await a.vault.write("big.png", big, times);
+    await a.vault.write("n.md", new TextEncoder().encode("a note\n"), times);
+    await a.settle();
+    const phone = new Device("phone");
+    devices.push(phone);
+    await phone.connect(server);
+    await phone.settle();
+    expect(await phone.vault.read("big.png")).toEqual(big);
+    // The setting turned on after the file had arrived.
+    phone.close();
+    phone.onDemand = (_p, size) => size >= 1_000;
+    await phone.connect(server);
+    await phone.settle();
+    return { a, phone };
+  }
+
+  it("removes it here, leaves the server as it was, and leaves it on the server after", async () => {
+    const { a, phone } = await fetched();
+    const out = await phone.engine.release(["big.png", "n.md"]);
+    expect(out.released).toEqual(["big.png"]);
+    expect(out.kept.map((k) => k.path)).toEqual(["n.md"]);
+    expect(phone.vault.snapshot()["big.png"]).toBeUndefined();
+    const r = await phone.settle();
+    expect(r.serverOnly).toBe(1);
+    expect(await versionsOf(phone, "big.png")).toEqual(["5000:a"]);
+    expect(await a.vault.read("big.png")).toEqual(big);
+  });
+
+  it("keeps a file changed since it synced", async () => {
+    const { phone } = await fetched();
+    await phone.vault.write(
+      "big.png",
+      big.map((b) => b ^ 3),
+      { mtime: 1_000, ctime: 1_000 },
+    );
+    const out = await phone.engine.release(["big.png"]);
+    expect(out.released).toEqual([]);
+    expect(out.kept[0]!.why).toMatch(/changed since it synced/);
+    expect(phone.vault.snapshot()["big.png"]).toBeDefined();
+  });
+
+  it("sends no deletion when the process dies at the index save", async () => {
+    const { a, phone } = await fetched();
+    phone.store.save = async () => {
+      throw new Error("the process was killed");
+    };
+    await expect(phone.engine.release(["big.png"])).rejects.toThrow("killed");
+    phone.close();
+    phone.store.save = MemoryIndexStore.prototype.save.bind(phone.store);
+    await phone.connect(server);
+    await phone.settle();
+    await a.settle();
+    expect(await versionsOf(phone, "big.png")).toEqual(["5000:a"]);
+    expect(await a.vault.read("big.png")).toEqual(big);
+  });
+
+  it("sends no deletion when the process dies at the removal", async () => {
+    const { a, phone } = await fetched();
+    const remove = phone.vault.remove.bind(phone.vault);
+    phone.vault.remove = async () => {
+      throw new Error("the process was killed");
+    };
+    await phone.engine.release(["big.png"]);
+    phone.close();
+    phone.vault.remove = remove;
+    await phone.connect(server);
+    await phone.settle();
+    await a.settle();
+    expect(await versionsOf(phone, "big.png")).toEqual(["5000:a"]);
+    expect(await a.vault.read("big.png")).toEqual(big);
   });
 });

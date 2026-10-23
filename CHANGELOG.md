@@ -11,6 +11,15 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Plugin
+
+- **Attachments on demand.** A device can leave attachments of 1 MB or more
+  (or 10 MB, or all of them) on the server and download each one when a note
+  that uses it is opened, or when it is tapped. Off by default, per device;
+  notes, canvases and settings always download. **Free space** removes
+  attachments the setting covers from the device, each checked against the
+  server first. See [the plugin guide](docs/plugin.md#attachments-on-demand).
+
 ### Server
 
 - An agent's preview is no longer expired by a device saving its settings

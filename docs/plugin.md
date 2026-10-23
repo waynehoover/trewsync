@@ -484,6 +484,37 @@ a new invite, and let its first sync finish before you
 remove the old vault and its device. Obsidian's own settings come across only
 with [settings sync](#settings-sync) on.
 
+### Attachments on demand
+
+A phone does not need every PDF, photo and recording in the vault. With
+**Manage this vault → Attachments on demand** set to **Over 1 MB** (or **Over
+10 MB**, or **All attachments**), a new attachment at least that size stays on
+the server, and this device downloads it when you open a note that embeds or
+links it, or when you tap it. Notes, canvases and every other text file always
+download, whatever their size, and so do settings. The setting is this
+device's alone; the others keep downloading everything.
+
+The panel says how many attachments are on the server only and what they
+weigh. **TrewSync: Download a file kept on the server** fetches any one of
+them, and **TrewSync: Download the attachments this note needs** fetches what
+the open note uses. Without a connection, an attachment you open waits and
+downloads when TrewSync reconnects. Once downloaded, an attachment stays and
+syncs like any other file.
+
+Attachments already on the device stay when you turn it on. **Free space** in
+the panel removes the ones the setting covers from this device, keeping each
+on the server and on every other device that has it: each one is first read
+in full and checked against the server's newest version, and the server
+confirms it holds every piece of it, before it is removed. To free space, use
+Free space rather than deleting a file, which deletes it everywhere.
+
+A few things to know. An attachment that is on the server only is not in
+Obsidian's file list or search until it is downloaded, and an embed of one
+shows as not found until then. Renaming or deleting a folder here moves or
+removes only the files here: one that is on the server only stays at its old
+path on the server, and its folder comes back. Turning the setting off
+downloads everything that was waiting.
+
 iOS has not been tested. If a first connection is rejected because of its
 browser origin, the panel shows an origin hint for the server operator; see
 [server connection troubleshooting](server.md#connection-troubleshooting).
@@ -626,6 +657,9 @@ record; use **Devices** when you want to remove access.
 | TrewSync: Show version history | View history for the open note. |
 | TrewSync: Recover a deleted note | Browse deleted notes. |
 | TrewSync: Apply synced settings and reload | Apply settings changed on another device, then reload Obsidian. |
+| TrewSync: Download the attachments this note needs | With attachments on demand, fetch what the open note uses. |
+| TrewSync: Download a file kept on the server | With attachments on demand, pick a file to fetch. |
+| TrewSync: Free space: keep attachments on the server only | With attachments on demand, remove covered attachments from this device. |
 
 ### From the command line
 

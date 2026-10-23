@@ -306,6 +306,13 @@ describe("loading", () => {
     expect(plugin.commands.map((c) => c.id).sort()).toEqual([
       "activity",
       "apply-settings",
+
+      "download-note-attachments",
+
+      "download-server-file",
+
+      "free-space",
+
       "pause-resume",
       "preview-sync",
       "recover-deleted",
@@ -320,8 +327,9 @@ describe("loading", () => {
     // create, modify, delete, rename. Without these it only syncs on a timer.
     expect(app.vault.handlerCount()).toBe(4);
     // Those four, plus the file-menu entry that puts history where somebody
-    // already looks for it.
-    expect(plugin.registeredEvents.length).toBe(5);
+    // already looks for it, and opening a note, which fetches the attachments
+    // it needs that are on the server only.
+    expect(plugin.registeredEvents.length).toBe(6);
     expect([...plugin.cliHandlers.keys()].sort()).toEqual(["trew:history", "trew:restore"]);
   });
 
@@ -3550,6 +3558,8 @@ describe("what is announced, and how often", () => {
       retrying: 0,
       skipped: 1,
       ignored: 0,
+      serverOnly: 0,
+      serverOnlyBytes: 0,
       blocked: 0,
       inTheWay: [],
       chunksSent: 0,
@@ -4491,6 +4501,13 @@ describe("an older Obsidian", () => {
     expect(plugin.commands.map((c) => c.id).sort()).toEqual([
       "activity",
       "apply-settings",
+
+      "download-note-attachments",
+
+      "download-server-file",
+
+      "free-space",
+
       "pause-resume",
       "preview-sync",
       "recover-deleted",
@@ -4503,7 +4520,7 @@ describe("an older Obsidian", () => {
     expect(plugin.ribbonIcons.map((r) => r.title)).toEqual(["TrewSync"]);
     expect(plugin.statusBarItems.length).toBe(1);
     // The four vault events and the file-menu entry, all after the guard.
-    expect(plugin.registeredEvents.length).toBe(5);
+    expect(plugin.registeredEvents.length).toBe(6);
     expect([...plugin.cliHandlers.keys()]).toEqual([]);
   });
 
@@ -4528,7 +4545,7 @@ describe("an older Obsidian", () => {
     setApiVersion(manifest.minAppVersion);
     const older = (await load()).plugin;
     expect(older.commands.length).toBe(plugin.commands.length);
-    expect(older.registeredEvents.length).toBe(5);
+    expect(older.registeredEvents.length).toBe(6);
     expect([...older.cliHandlers.keys()]).toEqual([]);
     choosePairing(older);
     expect(modals.at(-1)!.contentEl.querySelector(".setting-group")).toBeUndefined();
@@ -6203,6 +6220,8 @@ describe("what a restore is allowed to claim", () => {
       skipped: 0,
       skippedPaths: [],
       ignored: 0,
+      serverOnly: 0,
+      serverOnlyBytes: 0,
       blocked: 0,
       inTheWay: [],
       needsAttention: [],
@@ -7387,5 +7406,45 @@ describe("settings sync", () => {
     } finally {
       Platform.isMobile = false;
     }
+  }, 300_000);
+});
+
+describe("attachments on demand, in the plugin", () => {
+  it("leaves a big attachment on the server, fetches it when its note opens, and frees it again", async () => {
+    await fresh();
+    const laptop = await load();
+    laptop.app.vault.adapter.seed("note.md", "![[big.png]]\n");
+    await startVault(laptop.plugin, "laptop");
+    await synced(laptop.plugin);
+    const phone = await load();
+    await phone.plugin.pair((await laptop.plugin.createInvite()).invite, "phone");
+    await synced(phone.plugin);
+    await phone.plugin.setOnDemand(1_000);
+    await synced(phone.plugin);
+    expect(phone.plugin.onDemandBytes).toBe(1_000);
+
+    const big = "x".repeat(5_000);
+    laptop.app.vault.adapter.seed("big.png", big);
+    await laptop.plugin.syncNow();
+    await phone.plugin.syncNow();
+    expect([...phone.plugin.serverOnly.keys()]).toEqual(["big.png"]);
+    expect(phone.app.vault.adapter.text("big.png")).toBeUndefined();
+
+    // Obsidian opens the note, whose cache embeds a file not on this device.
+    (phone.app as unknown as { metadataCache: unknown }).metadataCache = {
+      getCache: (path: string) => (path === "note.md" ? { embeds: [{ link: "big.png" }] } : null),
+      getFirstLinkpathDest: () => null,
+    };
+    phone.app.workspace.fire("file-open", { path: "note.md" });
+    await until("the attachment to land", () => phone.app.vault.adapter.text("big.png") === big);
+
+    await phone.plugin.syncNow();
+    expect(phone.plugin.freeable().paths).toEqual(["big.png"]);
+    await phone.plugin.freeSpace();
+    expect(phone.app.vault.adapter.text("big.png")).toBeUndefined();
+    await phone.plugin.syncNow();
+    expect([...phone.plugin.serverOnly.keys()]).toEqual(["big.png"]);
+    await laptop.plugin.syncNow();
+    expect(laptop.app.vault.adapter.text("big.png")).toBe(big);
   }, 300_000);
 });

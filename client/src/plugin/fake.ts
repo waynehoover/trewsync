@@ -913,9 +913,12 @@ export class FakeAdapter implements DataAdapter {
     }
     for (const [path, f] of this.files) {
       if (leftOut(path)) continue;
+      const name = path.split("/").pop() ?? path;
       out.push({
         path,
-        name: path.split("/").pop() ?? path,
+        name,
+        // As a TFile has, which is how Obsidian's getFiles tells a file from a folder.
+        extension: name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "",
         stat: { ctime: f.ctime, mtime: f.mtime, size: f.binary.length },
       } as unknown as TAbstractFile);
     }

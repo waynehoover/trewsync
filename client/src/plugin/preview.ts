@@ -10,6 +10,7 @@ const LABELS: Record<PreviewAction, string> = {
   unchanged: "Already matches",
   blocked: "Needs attention",
   "held-back": "Local change kept on this device",
+  "server-only": "Kept on the server until opened",
 };
 export class SyncPreviewModal extends Modal {
   private answer: ((proceed: boolean) => void) | undefined;
