@@ -11,6 +11,16 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Command-line client
+
+- A new note is linked into place whole again, as before 0.13.0, and only
+  its fsync waits to be done with the others. In 0.13.0 the name appeared
+  empty for an instant before its contents, and an editor saving into it
+  then would have lost that save. A first sync of 3,000 notes takes about
+  10 s, against 2 to 4 s in 0.13.0 and 21 to 36 s before it.
+- After a crash during a first sync, a file found whole is fetched again
+  rather than kept, since nothing had made it durable.
+
 ### Server
 
 - `trewd deleted -settings` lists deleted settings, which the list of deleted
@@ -19,6 +29,11 @@ client can talk; upgrade the server first.
 
 ### Plugin
 
+- A setting removed by Apply stays removed even when another sync runs before
+  Obsidian reloads. The record that holds back Obsidian's write-back of the
+  old setting was dropped by that sync in 0.15.1 and 0.15.2.
+- A setting another device deletes is deleted here too when this device held
+  it in another key order; it was kept and never offered for Apply.
 - An incoming change to a note that a crash cuts short as it is written is put
   right when Obsidian starts again. The plugin writes each such update down
   before it starts; at the next start, a note left holding part of the change

@@ -437,26 +437,33 @@ Done for the headless client, and not for the plugin. The way to tell an
 interrupted landing from an edit is an intent: before a batch of new files
 lands, the engine saves in the index, after a flush, which version it is
 about to write at each path it has never synced (`IndexEntry.creating`). The
-file is then written into its name with `wx` and no fsync of its own, kept
-open, and `flush` fsyncs the batch through those handles thirty-two at a time
-before the index that records it is saved; a handle follows the file through
-a rename. A failed fsync fails every flush after it, because on Linux a
-second fsync can succeed after the bytes were dropped. A pass that finds an
-intent still there is the one after a crash: a file with the intended hash is
-recorded as synced; one that is a prefix of the intended version, perhaps
-padded with zeros, holds nothing the server lacks and is removed, and the
-version lands again; anything else is a note somebody made there and is
-decided as a note with no base, kept both ways. Never uploaded as the note.
-The intent is dropped only once one of those has happened. An independent
-review of the first version found that a restore of a note deleted here
-could be merged torn, that a failed recovery step dropped the intent, and
-that a note made at a path whose write never started was set aside; each has
-a test that fails without its fix.
+file is then written whole into staging with no fsync of its own and linked
+to its name, which the link takes only if it is free, kept open, and `flush`
+fsyncs the batch through those handles thirty-two at a time before the index
+that records it is saved; a handle follows the file through a rename. A
+failed fsync fails every flush after it, because on Linux a second fsync can
+succeed after the bytes were dropped. A pass that finds an intent still
+there is the one after a crash: what is at the name is the intended version
+or a prefix of it, perhaps padded with zeros, which holds nothing the server
+lacks and was never made durable, so it is removed and the version lands
+again; anything else is a note somebody made there and is decided as a note
+with no base, kept both ways. Never uploaded as the note. The intent is
+dropped only once one of those has happened.
+
+Two independent reviews shaped it. The first found that a restore of a note
+deleted here could be merged torn, that a failed recovery step dropped the
+intent, and that a note made at a path whose write never started was set
+aside. The second (Codex Astra) found that writing into the name itself with
+`wx`, which the first version did, left the name visible and empty for an
+instant in which an editor's save would be overwritten, and that a whole copy
+found after a crash was adopted although nothing had made it durable. Each
+has a test that fails without its fix.
 
 On this Mac, landing a thousand small notes one staged and fsynced copy at a
 time took 12.3 s, against 1.7 s written in place and fsynced thirty-two at
 once. A first sync of 3,000 notes through `trew` went from 21 to 36 s to 2
-to 4 s, with the vault byte for byte the server's. In
+to 4 s written in place, and is 9.6 s staged and linked, the shipped form,
+with the vault byte for byte the server's either way. In
 `durability.stress.ts`, a `trew sync` killed with SIGKILL six times part
 way through a first download left an empty note at a name in three of them,
 and each run finished with exactly the server's notes and sent nothing; with

@@ -13,7 +13,8 @@
  *
  * What it does, in order:
  *
- *  1. Holds the phone awake: `svc power stayon usb`, a wake key, and Doze
+ *  1. Holds the phone awake: `svc power stayon true` (any power source: a phone
+ *     on a charger and adb over Wi-Fi is not on USB), a wake key, and Doze
  *     turned off with `dumpsys deviceidle disable`, every one undone at the
  *     end. Wakefulness and the focused window are read every thirty seconds
  *     throughout, and any moment the phone was not awake with Obsidian in
@@ -623,7 +624,7 @@ async function main(): Promise<void> {
     );
 
     // 1. Awake for the whole run.
-    await phone.shell("svc", "power", "stayon", "usb").catch(() => "");
+    await phone.shell("svc", "power", "stayon", "true").catch(() => "");
     await phone.shell("dumpsys", "deviceidle", "disable").catch(() => "");
     await phone.shell("input", "keyevent", "KEYCODE_WAKEUP").catch(() => "");
 
@@ -675,6 +676,15 @@ async function main(): Promise<void> {
     const pushed = performance.now();
     await phone.shell("tar", "-xf", `${VAULT_DIR}/corpus.tar`, "-C", VAULT_DIR);
     await phone.shell("rm", "-f", `${VAULT_DIR}/corpus.tar`);
+    // Unpacked as adb's shell user, the folders are shell's and 755. In App
+    // storage that leaves Obsidian able to change the files but not to make
+    // one beside them, so every safe update failed for want of its backup.
+    // The group Obsidian's own files carry, with write, as Obsidian makes them.
+    if (VAULT_DIR.startsWith("/sdcard/Android/data/")) {
+      // Files Obsidian made itself refuse this and already carry the group.
+      await phone.shell("chgrp", "-R", "ext_data_rw", VAULT_DIR).catch(() => "");
+      await phone.shell("chmod", "-R", "g+rwX", VAULT_DIR).catch(() => "");
+    }
     report["seed"] = {
       pushMs: ms(pushed - seedAt),
       unpackMs: ms(performance.now() - pushed),
