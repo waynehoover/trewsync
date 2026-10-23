@@ -11,6 +11,12 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.15.2, plugin (2026-10-22)
+
+Works with trewd 0.14.0 or later, as 0.15.1 does. The server is unchanged.
+
 ### Plugin
 
 - A setting saved again with the same values in another order or layout is
