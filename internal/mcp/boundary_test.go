@@ -36,7 +36,7 @@ import (
 // *chunks.Store that code in this package may reach outside commit.
 var outsideTheBoundary = map[string]bool{
 	// Reads of the log, as of a head or at the latest.
-	"LatestUID": true, "CurrentUID": true, "Head": true, "Epoch": true,
+	"LatestUID": true, "NotesHead": true, "CurrentUID": true, "Head": true, "Epoch": true,
 	"EntryAsOf": true, "EachAsOf": true, "EachLive": true, "EntryByUID": true, "HistoryForPath": true,
 	"Deleted": true, "PurgeGeneration": true, "Stats": true, "ChunkRefs": true,
 	// Credentials, read at the door and again before the reply.

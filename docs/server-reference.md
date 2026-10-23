@@ -332,9 +332,9 @@ also says:
 - **Moves, deletions and tag changes are previewed first.** Called without
   `changes`, these tools return a preview of every note they would change and
   write nothing. Called again with the preview's `changes`, `head` and
-  `epoch`, they commit exactly that plan, and only if nothing in the vault
-  changed since the preview; otherwise the answer is `plan_changed`, and the
-  agent previews again. A move rewrites the links to the moved note in every
+  `epoch`, they commit exactly that plan, and only if no note in the vault
+  changed since the preview (a device saving its settings does not count);
+  otherwise the answer is `plan_changed`, and the agent previews again. A move rewrites the links to the moved note in every
   other note, reading them through the search index when it is up to date and
   every note otherwise; a vault of more than 512 notes then answers
   `scan_incomplete` until the index has caught up.

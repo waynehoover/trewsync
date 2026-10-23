@@ -1653,6 +1653,37 @@ func (s *Store) LatestUID(vaultID string) (int64, error) {
 	return uid.Int64, nil
 }
 
+// NotesHead is the newest uid of a vault's entries that is not a setting
+// (Entry.IsConfig), or 0 when it has none. An MCP preview is bound to it
+// rather than to LatestUID: no tool reads a setting, so a device saving one
+// between an agent's preview and its apply changes nothing the plan read,
+// and the vault at NotesHead is, setting aside the settings, the vault at
+// its latest uid.
+func (s *Store) NotesHead(vaultID string) (int64, error) {
+	return notesHead(s.db, vaultID)
+}
+
+// notesHead walks back from the vault's newest entry to the first that is not
+// a setting. Settings saves come a few at a time, so the walk is short; a
+// path rule in SQL would be a second copy of paths.IsConfig to keep in step.
+func notesHead(q querier, vaultID string) (int64, error) {
+	rows, err := q.Query(`SELECT uid, path, COALESCE(prev_path, '') FROM entries WHERE vault_id = ? ORDER BY uid DESC`, vaultID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e Entry
+		if err := rows.Scan(&e.UID, &e.Path, &e.Prev); err != nil {
+			return 0, err
+		}
+		if !e.IsConfig() {
+			return e.UID, nil
+		}
+	}
+	return 0, rows.Err()
+}
+
 // Stats describes what the vault holds.
 //
 // Every count is separate on purpose. "Fully synced" has twice meant something

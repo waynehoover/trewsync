@@ -11,6 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Server
+
+- An agent's preview is no longer expired by a device saving its settings
+  between the preview and the apply. The apply is refused as `plan_changed`
+  only when a note changed; the operator's `trewd restore` is still bound to
+  the vault's exact head.
+
 ### Plugin
 
 - A changed setting is sent once it has been left alone for ten seconds, not

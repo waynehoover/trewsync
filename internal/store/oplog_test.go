@@ -323,6 +323,46 @@ func TestAChangedSnapshotHeadCommitsNothing(t *testing.T) {
 	}
 }
 
+// A setting saved after a preview is not a change the preview read, since no
+// tool reads a setting: the operation is bound to the newest uid that is not
+// a setting, and commits. The operator's restore is a statement about the
+// whole vault, settings included, and keeps the exact head.
+func TestASettingsSaveLeavesTheSnapshotHeadStanding(t *testing.T) {
+	h := newTestStore(t)
+	a := h.writer(t, "agent")
+	note := h.file(t, "note.md", "linked from elsewhere")
+	h.file(t, ".obsidian/app.json", `{"a":1}`)
+	head, err := h.NotesHead("v1")
+	if err != nil || head != note.UID {
+		t.Fatalf("NotesHead is %d (%v), and the newest note is %d", head, err, note.UID)
+	}
+	op := h.op(a, "move with backlinks", h.change(t, a, "note.md", note.UID, "rewritten links"))
+	op.SnapshotHead = &head
+	h.file(t, ".obsidian/app.json", `{"a":2}`)
+	h.file(t, ".obsidian-mobile/core-plugins.json", `[]`)
+	if _, err := h.CommitOperation(op); err != nil {
+		t.Fatalf("a settings save refused the operation: %v", err)
+	}
+	if got, _ := h.headBytes(t, "note.md"); got != "rewritten links" {
+		t.Fatalf("note.md reads %q", got)
+	}
+
+	latest, err := h.LatestUID("v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := h.PlanRestore(RestoreRequest{Vault: "v1", ToUID: note.UID, Head: latest, Now: 7000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := h.file(t, ".obsidian/app.json", `{"a":3}`)
+	before := h.footprint(t)
+	_, err = h.CommitOperation(h.restoreOp(plan))
+	if oe := h.refusedWith(t, err, OpCodePlanChanged, before); oe.CurrentUID != saved.UID {
+		t.Fatalf("the restore was refused at %d, and the vault is at %d", oe.CurrentUID, saved.UID)
+	}
+}
+
 // PLAN.md section 2.3: scope and credential are checked again at the commit
 // boundary, against the credential as it stands then. Each way a token can
 // stop being able to write between prepare and commit leaves nothing written.

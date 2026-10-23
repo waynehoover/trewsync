@@ -65,7 +65,7 @@ func stringsProp(maxItems, maxBytes int, description string) schema {
 // previewSentence is what every preview-then-apply tool says of itself.
 const previewSentence = " Without changes it returns a preview and writes nothing; to apply, call it again with the " +
 	"same arguments and the preview's changes, head and epoch. The apply commits all of it or none, and only if " +
-	"nothing in the vault changed since the preview (plan_changed otherwise)."
+	"no note in the vault changed since the preview (plan_changed otherwise); a device saving its settings changes no note."
 
 // resultSentence is what every mutation says about its result.
 const resultSentence = " The result says committed with an opId and the entries written, each with the uid it " +
@@ -600,7 +600,9 @@ func (m *mutation) operate(p applyArgs, plan planFunc, render func(store.OpResul
 	}
 	// A vault that moved since the preview refuses the apply before the plan
 	// is made again: the commit would refuse it anyway, bound to that head.
-	latest, err := c.h.st.LatestUID(c.h.vault)
+	// Moved means a note changed: the head is the newest uid that is not a
+	// setting, because no plan reads one (store.NotesHead).
+	latest, err := c.h.st.NotesHead(c.h.vault)
 	if err != nil {
 		return m.failed(err)
 	}
@@ -820,11 +822,13 @@ func (m *mutation) brokenLinks(made planned, path string) (any, any, error) {
 	return out, listed{changeRows(made.plan.Changes), broken}, nil
 }
 
-// headView is the vault at head, or at its latest uid for 0.
+// headView is the vault at head, or for 0 at its newest uid that is not a
+// setting, which is what a preview reports as its head and its apply is bound
+// to (store.NotesHead).
 func (c *call) headView(head int64) (*storeView, error) {
 	if head == 0 {
 		var err error
-		if head, err = c.h.st.LatestUID(c.h.vault); err != nil {
+		if head, err = c.h.st.NotesHead(c.h.vault); err != nil {
 			return nil, err
 		}
 	}

@@ -95,12 +95,13 @@ func healthTools() []*Tool {
 }
 
 // pinHead is the head a first page, or the preview of a move or a deletion
-// that rewrites backlinks (linkHead), reads at: the latest, after a moment's
-// wait for the link index to reach it, taking a newer head if the vault moves
-// on meanwhile. The index answers at any head; the wait only spares reading
-// the notes written since its last batch, which it cannot rule out.
+// that rewrites backlinks (linkHead), reads at: the newest uid that is not a
+// setting (store.NotesHead), after a moment's wait for the link index to
+// reach it, taking a newer head if the vault moves on meanwhile. The index
+// answers at any head; the wait only spares reading the notes written since
+// its last batch, which it cannot rule out.
 func (c *call) pinHead() (int64, error) {
-	head, err := c.h.st.LatestUID(c.h.vault)
+	head, err := c.h.st.NotesHead(c.h.vault)
 	if err != nil || c.h.index == nil || !c.h.index.Status().Usable {
 		return head, err
 	}
@@ -108,7 +109,7 @@ func (c *call) pinHead() (int64, error) {
 	defer cancel()
 	for attempt := 0; attempt < 3; attempt++ {
 		c.h.index.Await(ctx, head)
-		latest, err := c.h.st.LatestUID(c.h.vault)
+		latest, err := c.h.st.NotesHead(c.h.vault)
 		if err != nil || latest == head {
 			return head, err
 		}
@@ -407,8 +408,8 @@ func outgoingLinks(c *call, a *args) outcome {
 		head, from, err = c.resumeAt(options, cursor, true)
 	} else {
 		// One note is read, so the index has nothing to narrow: the head is
-		// the latest, without waiting for it.
-		head, err = c.h.st.LatestUID(c.h.vault)
+		// the latest that is not a setting, without waiting for it.
+		head, err = c.h.st.NotesHead(c.h.vault)
 	}
 	if err != nil {
 		return c.failErr(err)

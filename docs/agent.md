@@ -240,12 +240,13 @@ is restored from a backup, after which every uid read before is refused.
 **Previews, then apply.** `delete_note`, `move_note` and the tag tools,
 called without `changes`, return a preview of every note they would change
 and write nothing. Called again with the preview's `changes`, `head` and
-`epoch`, unchanged, they commit exactly that plan, and only if nothing in the
-vault has changed since the preview; otherwise the answer is `plan_changed`
-and the agent previews again. Binding the apply to the whole vault is
-conservative: an unrelated edit on your phone between the two calls refuses
-the apply. It is what catches a new link to the moved note written meanwhile,
-which no per-note check could see. A move over a vault of more than 512 notes
+`epoch`, unchanged, they commit exactly that plan, and only if no note in
+the vault has changed since the preview; otherwise the answer is
+`plan_changed` and the agent previews again. Binding the apply to every note
+in the vault is conservative: an unrelated edit on your phone between the two
+calls refuses the apply. It is what catches a new link to the moved note
+written meanwhile, which no per-note check could see. A device saving its
+settings is not a change to a note, and leaves the preview standing. A move over a vault of more than 512 notes
 answers `scan_incomplete` until the search index has caught up.
 
 **All or nothing.** A write is one operation: every note it changes is

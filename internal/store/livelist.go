@@ -21,6 +21,13 @@ import (
 // head: a caller that wants another head, or was given a newer one than it
 // asked for, lists that head with EachAsOf.
 //
+// The head returned is NotesHead, read in the same transaction: every path
+// that is not a setting is listed exactly as it stands at that head, since
+// nothing newer is anything but a setting, and the settings listed may be
+// newer than it. Its one caller lists no setting, and binds its previews to
+// that head, so a device saving a setting neither expires them nor sends the
+// listing the slow way.
+//
 // Chunk lists are not attached, as EachAsOf attaches none. fn returns false
 // to stop.
 func (s *Store) EachLive(vaultID string, fn func(Entry) (bool, error)) (head int64, err error) {
@@ -29,8 +36,8 @@ func (s *Store) EachLive(vaultID string, fn func(Entry) (bool, error)) (head int
 		return 0, err
 	}
 	defer tx.Rollback()
-	var latest sql.NullInt64
-	if err := tx.QueryRow(`SELECT MAX(uid) FROM entries WHERE vault_id = ?`, vaultID).Scan(&latest); err != nil {
+	latest, err := notesHead(tx, vaultID)
+	if err != nil {
 		return 0, err
 	}
 	rows, err := tx.Query(`SELECT `+asOfCols+` FROM live_paths l JOIN entries e
@@ -51,8 +58,8 @@ func (s *Store) EachLive(vaultID string, fn func(Entry) (bool, error)) (head int
 		e.Chunks = []string{}
 		more, err := fn(e)
 		if err != nil || !more {
-			return latest.Int64, err
+			return latest, err
 		}
 	}
-	return latest.Int64, rows.Err()
+	return latest, rows.Err()
 }

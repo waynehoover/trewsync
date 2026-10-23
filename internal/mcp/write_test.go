@@ -494,6 +494,40 @@ func TestAnApplyIsBoundToItsPreviewsHead(t *testing.T) {
 	}
 }
 
+// A device saving a setting between a preview and its apply changes nothing
+// the plan read, since no tool reads a setting, so the apply commits: before
+// the plan is made again and at the commit boundary alike. The preview's head
+// is the newest uid that is not a setting, which a settings save at the top
+// of the vault does not move either.
+func TestASettingsSaveLeavesAPreviewStanding(t *testing.T) {
+	r := newRig(t)
+	a := r.writer("agent")
+	epoch := r.epoch()
+	src := r.write("topic.md", "the topic\n")
+	backlink := r.write("one.md", "see [[topic]]\n")
+	r.write(".obsidian/app.json", `{"spellcheck":true}`)
+	args := map[string]any{"path": "topic.md", "base": src, "to": "subject.md", "epoch": epoch}
+
+	p := previewed(t, invoke(t, a.cs, "move_note", args))
+	if p.Head != backlink {
+		t.Fatalf("the preview is at head %d, and the newest note is at %d", p.Head, backlink)
+	}
+	r.write(".obsidian/app.json", `{"spellcheck":false}`)
+	r.h.seam = func(point string) {
+		if point == SeamBodies {
+			r.write(".obsidian-mobile/appearance.json", `{"theme":"obsidian"}`)
+		}
+	}
+	w := wrote(t, invoke(t, a.cs, "move_note", apply(args, p)))
+	r.h.seam = nil
+	if w.Entries[len(w.Entries)-1].Path != "subject.md" {
+		t.Fatalf("the apply wrote %+v", w.Entries)
+	}
+	if got := r.bytesAt(r.head("one.md")); got != "see [[subject]]\n" {
+		t.Fatalf("the backlink reads %q", got)
+	}
+}
+
 // A write token revoked after its call is prepared and before it commits
 // loses at the commit boundary: nothing is committed and the reply is 401
 // (PLAN.md section 2.3.1).

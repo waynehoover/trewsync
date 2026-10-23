@@ -381,9 +381,11 @@ type Operation struct {
 	// another (PLAN.md section 2.8).
 	Epoch string
 	// SnapshotHead, when set, is the vault head a preview was computed at,
-	// and the operation commits only if the vault's latest uid is still that
+	// and the operation commits only if the vault is still there
 	// (preview-then-apply, section 4.3): conservative, and honest about what
-	// a preview read that no base covers.
+	// a preview read that no base covers. For a restore the head is the
+	// vault's latest uid; for every other tool it is the newest uid that is
+	// not a setting (NotesHead), because no tool reads one.
 	SnapshotHead *int64
 
 	// Entries are the writes, in order. Each is checked against the state the
@@ -614,7 +616,8 @@ type OpError struct {
 	// Path is the path the refusal is about, when it is about one.
 	Path string
 	// CurrentUID is that path's head as it stands, for stale and exists, and
-	// the vault's head for plan_changed: what the agent reads again from.
+	// the head the snapshot is checked against for plan_changed (see
+	// Operation.SnapshotHead): what the agent reads again from.
 	CurrentUID int64
 	// OpID is the id this operation had. For OpUnknown it is the id to look
 	// the operation up by.
@@ -824,10 +827,20 @@ func (s *Store) commitOperationTx(q execer, op Operation, opID string) (OpResult
 		}
 	}
 
-	// 4. The snapshot a preview was computed at.
+	// 4. The snapshot a preview was computed at. A restore is a statement
+	// about the whole vault, settings included, so it is bound to the exact
+	// head; an MCP preview reads no setting, so it is bound to the newest uid
+	// that is not one, and a device saving a setting in between leaves it
+	// standing (NotesHead).
 	if op.SnapshotHead != nil {
 		var head int64
-		if err := q.QueryRow(`SELECT COALESCE(MAX(uid), 0) FROM entries WHERE vault_id = ?`, op.Vault).Scan(&head); err != nil {
+		var err error
+		if op.Tool == RestoreTool {
+			err = q.QueryRow(`SELECT COALESCE(MAX(uid), 0) FROM entries WHERE vault_id = ?`, op.Vault).Scan(&head)
+		} else {
+			head, err = notesHead(q, op.Vault)
+		}
+		if err != nil {
 			return OpResult{}, err
 		}
 		if head != *op.SnapshotHead {

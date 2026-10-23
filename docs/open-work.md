@@ -213,14 +213,11 @@ it, remove the guard, the runbook's paragraph on order and the check.
 Settings sync (M11) had three reviews on 2026-10-10, and these were left on
 purpose, each with what would change the answer:
 
-- **A settings save expires an agent's preview.** MCP previews are bound to
-  the vault's head, so any device saving a setting between an agent's preview
-  and its apply refuses the apply as `plan_changed`, and the agent previews
-  again. The fix is to bind previews to the newest uid of a path that is not a
-  setting, in the tool and in `CommitOperation`'s snapshot check, keeping the
-  exact head for the operator's restore. Worth it once agents meet it often.
-  `vault_status`'s store totals, `entries` and `bodies`, include settings
-  versions too, and say so in the threat model.
+- **A settings save expires an agent's preview.** Closed on 2026-10-22: a
+  preview is bound to the newest uid that is not a setting, in the tool and in
+  `CommitOperation`'s snapshot check, and the operator's restore keeps the
+  exact head. The threat model already says `vault_status`'s store totals
+  include settings versions.
 - **Settings shape the Git export's commit timing.** The export leaves their
   content out, but they still go to its planner, so a setting saved between
   two note edits can split one commit or move its time. Skipping them before

@@ -705,7 +705,11 @@ func (c *call) viewAt(head int64) (*storeView, error) {
 		}
 		return c.ctx.Err() == nil, nil
 	}
-	latest, err := c.h.st.LatestUID(c.h.vault)
+	// The live set is exactly the vault at its newest uid that is not a
+	// setting (store.EachLive), which is the head every preview and first
+	// page is read at, so a device saving a setting since does not send the
+	// listing the slow way.
+	latest, err := c.h.st.NotesHead(c.h.vault)
 	if err != nil {
 		return nil, err
 	}
@@ -888,7 +892,8 @@ func changeRows(changes []notes.PlannedChange) []changeRow {
 // previewInstructions is what a preview tells the agent to do with it.
 const previewInstructions = "Nothing has been written. To apply, call this tool again with the same arguments and " +
 	"changes set to these changes exactly as shown, head set to this head and epoch to this epoch. " +
-	"If anything in the vault changes first, the apply is refused with plan_changed and nothing is written; preview again."
+	"If any note changes first, the apply is refused with plan_changed and nothing is written; preview again. " +
+	"A device saving its settings changes no note."
 
 // previewTrusted is what a preview says under trusted: that it is one, the
 // head and epoch its plan read and its apply is bound to, how it read the
