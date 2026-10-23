@@ -348,3 +348,54 @@ func TestARestoreOfACaseOnlyRenameUndoes(t *testing.T) {
 	sameVault(t, "after the restore and its undo", h.vaultAt(t, 0), before)
 	h.verified(t)
 }
+
+// A restore of a case-only rename of a folder is undone too: the undo
+// removes the folder the restore put back before it writes the other
+// spelling. Found by review, 2026-10-23.
+func TestARestoreOfACaseOnlyFolderRenameUndoes(t *testing.T) {
+	h := newTestStore(t)
+	h.appendAs(t, Entry{Path: "Projects/Sub", Folder: true})
+	at := h.file(t, "Projects/Sub/note.md", "precious").UID
+	h.appendAs(t, Entry{Path: "Projects/sub", Prev: "Projects/Sub", Folder: true})
+	h.move(t, "Projects/Sub/note.md", "Projects/sub/note.md", "precious")
+	before := h.vaultAt(t, 0)
+	_, res := h.restoreAsDevice(t, RestoreRequest{ToUID: at, Folder: "Projects"})
+	if _, _, err := h.undo(t, res.OpID, false); err != nil {
+		t.Fatalf("undoing the restore of a case-only folder rename: %v", err)
+	}
+	sameVault(t, "after the restore and its undo", h.vaultAt(t, 0), before)
+	h.verified(t)
+}
+
+// The note followed out of the folder is the one the name held at the
+// point, not another note that later took the name and left too. Found by
+// review, 2026-10-23: the original was reported kept and never put back.
+func TestAReusedNameIsAnotherNote(t *testing.T) {
+	h := newTestStore(t)
+	at := h.file(t, "Projects/note.md", "original").UID
+	h.move(t, "Projects/note.md", "Archive/original.md", "original")
+	h.appendAs(t, Entry{Path: "Archive/original.md", Deleted: true, MTime: 43})
+	h.file(t, "Projects/note.md", "different note")
+	h.move(t, "Projects/note.md", "Archive/different.md", "different note")
+	h.restoreAsDevice(t, RestoreRequest{ToUID: at, Folder: "Projects"})
+	if got := h.vaultAt(t, 0)["Projects/note.md"]; got != "original" {
+		t.Fatalf("Projects/note.md holds %q after the restore", got)
+	}
+}
+
+// A rename onto a name that was live is the note that arrived, not the one
+// it replaced. Found by review, 2026-10-23: the incoming note was removed.
+func TestARenameOntoALiveNameIsTheNoteThatArrived(t *testing.T) {
+	h := newTestStore(t)
+	at := h.file(t, "anchor.md", "anchor").UID
+	dest := h.file(t, "Projects/note.md", "made since")
+	src := h.file(t, "outside.md", "incoming")
+	if _, err := h.AppendCurrent("v1", Entry{Path: "Projects/note.md", Prev: "outside.md", Device: "d1", Size: 8,
+		Chunks: h.put(t, "v1", "incoming")}, dest.UID, src.UID); err != nil {
+		t.Fatal(err)
+	}
+	h.restoreAsDevice(t, RestoreRequest{ToUID: at, Folder: "Projects"})
+	if got := h.vaultAt(t, 0)["Projects/note.md"]; got != "incoming" {
+		t.Fatalf("Projects/note.md holds %q after the restore", got)
+	}
+}

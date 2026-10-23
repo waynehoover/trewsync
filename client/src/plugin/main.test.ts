@@ -4488,6 +4488,137 @@ describe("small honesties", () => {
  */
 describe("an unload while the plugin is still loading", () => {
   /**
+   * A settings change takes the clients off the plugin before it closes
+   * them, so an unload in the middle of one saw nothing to wait for, and the
+   * next instance started beside a client still writing the index. Found by
+   * review, 2026-10-23, with the adapter's I/O serialised as Obsidian's is.
+   */
+  it("waits for a client a settings change is still closing", async () => {
+    await fresh();
+    const writer = await load();
+    await startVault(writer.plugin, "writer");
+    await synced(writer.plugin);
+    const host = new App({ secretStorage: keychain });
+    const raw = host.vault.adapter;
+    let queue = Promise.resolve();
+    const queued = new Set([
+      "exists",
+      "stat",
+      "read",
+      "readBinary",
+      "write",
+      "writeBinary",
+      "append",
+      "process",
+      "list",
+      "mkdir",
+      "rename",
+      "remove",
+      "rmdir",
+      "trashSystem",
+      "trashLocal",
+    ]);
+    const serialAdapter = new Proxy(raw, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== "function") return value;
+        if (!queued.has(String(prop))) return value.bind(target);
+        return (...args: unknown[]) => {
+          const next = queue.then(async () => {
+            await nextTurn();
+            return value.apply(target, args);
+          });
+          queue = next.then(
+            () => undefined,
+            () => undefined,
+          );
+          return next;
+        };
+      },
+    });
+    Object.defineProperty(host.vault, "adapter", { value: serialAdapter });
+    const first = await load(null, undefined, undefined, undefined, host);
+    await first.plugin.pair(await anInvite(), "phone");
+    await synced(first.plugin);
+    const gate = deferred();
+    const entered = deferred();
+    let held = false;
+    const rename = raw.rename.bind(raw);
+    raw.rename = async (from, to) => {
+      if (!held && from.includes(".trew-tmp-")) {
+        held = true;
+        entered.resolve();
+        await gate.promise;
+      }
+      return rename(from, to);
+    };
+    for (let i = 0; i < 30; i++)
+      writer.app.vault.adapter.seed(`note-${i}.md`, "the bytes being landed\n");
+    await writer.plugin.syncNow();
+    await entered.promise;
+    const oldClient = (first.plugin as unknown as { client: Client }).client;
+    const closeClient = oldClient.close.bind(oldClient);
+    let oldClientDrained = false;
+    oldClient.close = async () => {
+      await closeClient();
+      oldClientDrained = true;
+    };
+    const changing = first.plugin.setOnDemand(1_000).catch(() => undefined);
+    first.plugin.onunload();
+    let closed = false;
+    void first.plugin.closing!.then(() => {
+      closed = true;
+    });
+    const second = makePlugin(first.app);
+    loaded.push(second);
+    second.savedData = first.plugin.savedData;
+    (second as unknown as { confirmSync: () => Promise<boolean> }).confirmSync = async () => true;
+    let secondLoaded = false;
+    let oldWasDrainedWhenNewLoaded = false;
+    let newConnectedBeforeOldDrained = false;
+    second.watchState((state) => {
+      if (state.kind === "syncing" && !oldClientDrained) newConnectedBeforeOldDrained = true;
+    });
+    const loading = second.onload().then(() => {
+      secondLoaded = true;
+      oldWasDrainedWhenNewLoaded = oldClientDrained;
+    });
+    try {
+      for (let i = 0; i < 50; i++) await nextTurn();
+      expect(secondLoaded, "the next instance loaded while the old client was held mid-write").toBe(
+        false,
+      );
+      gate.resolve();
+      await loading;
+      await synced(second);
+      expect(closed).toBe(true);
+      expect(
+        oldWasDrainedWhenNewLoaded,
+        "the next instance loaded before the old client closed",
+      ).toBe(true);
+      expect(newConnectedBeforeOldDrained, "the next instance synced beside the old client").toBe(
+        false,
+      );
+    } finally {
+      gate.resolve();
+      await changing;
+      await loading;
+    }
+  }, 300_000);
+
+  /** Obsidian runs a queued layout callback after an unload, and nothing disposes what it registers. Found by review. */
+  it("registers nothing when layout is ready after an unload", async () => {
+    const app = new App();
+    app.workspace.layoutReady = false;
+    const { plugin } = await load(null, undefined, undefined, undefined, app);
+    plugin.onunload();
+    await plugin.closing;
+    const before = plugin.registeredEvents.length;
+    app.workspace.finishLayout();
+    expect(plugin.registeredEvents.length).toBe(before);
+  });
+
+  /**
    * Obsidian can disable a plugin whose onload is still waiting on a read: a
    * phone paused with the screen off held one there for half an hour. The
    * instance that resumed afterwards started a sync nothing could stop, which

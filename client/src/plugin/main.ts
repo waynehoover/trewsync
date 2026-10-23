@@ -712,6 +712,9 @@ export default class TrewPlugin extends Plugin {
     // thousands of pointless things rather than about correctness. The
     // callback runs immediately if the layout is already up.
     this.app.workspace.onLayoutReady(() => {
+      // Obsidian runs a queued callback whenever layout is ready, unloaded or
+      // not, and what it registers then is never disposed.
+      if (this.unloaded) return;
       // Except this client's own writes, which the engine accounts for itself
       // (P-3). Obsidian reports a file renamed into place when its watcher
       // gets to it, and a write in place, a removal or a new folder from
@@ -3777,8 +3780,17 @@ export default class TrewPlugin extends Plugin {
     this.wakeLoop?.();
     this.wakeLoop = undefined;
     const { live, client } = this.retireClients();
-    await live?.close();
-    await client?.close();
+    // Where an unload waits for it: these are off the plugin now, so an
+    // unload in the middle of a settings change would otherwise see no
+    // client to close, and the next instance would start beside one still
+    // writing the index.
+    const closing = (async () => {
+      await live?.close();
+      await client?.close();
+    })();
+    this.settling.add(closing);
+    void closing.catch(() => undefined).finally(() => this.settling.delete(closing));
+    await closing;
     await this.pausing;
     // Their callers report failures. Shutdown needs completion, including a
     // failed write, so unlink can perform and verify its own cleanup next.

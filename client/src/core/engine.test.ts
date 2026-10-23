@@ -5900,6 +5900,59 @@ describe("freeing the space of attachments the server holds", () => {
     expect(r.serverOnly).toBe(0);
   });
 
+  /**
+   * The old name goes in the same pass as the new one is written, so a
+   * write that fails once must leave the new name owed, not left on the
+   * server by the next pass. Found by review, 2026-10-23.
+   */
+  it("still downloads a renamed file after one failed write of its new name", async () => {
+    const { a, phone } = await fetched();
+    await a.vault.remove("big.png");
+    await a.vault.write("renamed.png", big, { mtime: 2_000, ctime: 1_000 });
+    a.engine.noteRename("big.png", "renamed.png");
+    await a.settle();
+    await receiveCommitted(phone.transport);
+    const create = phone.vault.create.bind(phone.vault);
+    let failed = false;
+    phone.vault.create = async (path, bytes, t) => {
+      if (path === "renamed.png" && !failed) {
+        failed = true;
+        throw new Error("transient write failure");
+      }
+      return create(path, bytes, t);
+    };
+    await phone.engine.sync();
+    expect(failed).toBe(true);
+    phone.vault.create = create;
+    const after = await phone.settle();
+    expect(after.serverOnly, "a failed rename became a file left on the server").toBe(0);
+    expect(await phone.vault.read("renamed.png")).toEqual(big);
+  });
+
+  /**
+   * A file freed here while an identical one stays is not a rename, and is
+   * not fetched back for having the same bytes. Found by review, 2026-10-23.
+   */
+  it("does not fetch back a freed file because an identical one stays", async () => {
+    const { a, phone } = await fetched();
+    await a.vault.write("open.png", big, times);
+    await a.settle();
+    phone.close();
+    phone.onDemand = undefined;
+    await phone.connect(server);
+    await phone.settle();
+    phone.close();
+    phone.onDemand = (_p, size) => size >= 1_000;
+    phone.activePath = () => "open.png";
+    await phone.connect(server);
+    await phone.settle();
+    const out = await phone.engine.release(["big.png", "open.png"]);
+    expect(out.released).toEqual(["big.png"]);
+    await phone.settle();
+    expect(phone.vault.snapshot()["big.png"], "the freed file was fetched back").toBeUndefined();
+    expect(await phone.vault.read("open.png")).toEqual(big);
+  });
+
   it("keeps the file when the server's copy has rotted under its name", async () => {
     const { phone } = await fetched();
     const name = await chunkName(big);

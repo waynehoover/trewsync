@@ -468,10 +468,12 @@ func (b *undoBuilder) check(path string, base int64) {
 
 // inPlace is the undo proper, in five passes, each one's entries written
 // before the next's so every entry meets the state it needs: the notes the
-// operation created, removed; the folders it removed, put back; the folders
-// the restores land in, checked; the notes it edited, deleted or moved, put
-// back; and the folders it created, removed, deepest first, when nothing is
-// left in them.
+// operation created, removed; the folders it created that are then empty,
+// removed; the folders it removed, put back; the folders the restores land
+// in, checked; the notes it edited, deleted or moved, put back; and the rest
+// of the folders it created, removed when nothing is left in them. What the
+// operation created goes as early as it can, so nothing put back folds onto
+// something still there.
 func (b *undoBuilder) inPlace() error {
 	b.made, b.moved = map[string]bool{}, map[string]bool{}
 	var folders, notes, removals, removeFolders []int
@@ -506,7 +508,29 @@ func (b *undoBuilder) inPlace() error {
 		b.add(OpEntry{Entry: e, Base: u.AfterUID}, UndoStep{Action: UndoRemove, Path: u.Path, After: u.AfterUID})
 	}
 
-	// 2. Folders the operation removed.
+	// 2. Folders the operation created that are empty once the notes it
+	// created are gone, deepest first, before anything is put back, for the
+	// reason the notes go first: a folder put back can fold onto one of
+	// them, as a case-only rename of a folder does. One that still holds
+	// something, a note the operation moved there, waits for the last pass.
+	sort.SliceStable(removeFolders, func(a, c int) bool {
+		return depth(b.ps[removeFolders[a]].Path) > depth(b.ps[removeFolders[c]].Path)
+	})
+	var later []int
+	for _, i := range removeFolders {
+		u := b.ps[i]
+		left, err := b.leftInside(u.Path)
+		if err != nil {
+			return err
+		}
+		if left > 0 {
+			later = append(later, i)
+			continue
+		}
+		b.removeFolder(u)
+	}
+
+	// 3. Folders the operation removed.
 	sort.SliceStable(folders, func(a, c int) bool { return depth(b.ps[folders[a]].Path) < depth(b.ps[folders[c]].Path) })
 	for _, i := range folders {
 		u := b.ps[i]
@@ -515,14 +539,14 @@ func (b *undoBuilder) inPlace() error {
 			UndoStep{Action: UndoRestore, Path: u.Path, Before: u.before.UID, After: u.AfterUID})
 	}
 
-	// 3. The folders every restore lands in.
+	// 4. The folders every restore lands in.
 	for _, i := range notes {
 		if err := b.parents(b.ps[i].Path); err != nil {
 			return err
 		}
 	}
 
-	// 4. Notes put back, and moves reversed.
+	// 5. Notes put back, and moves reversed.
 	for _, i := range notes {
 		u := b.ps[i]
 		if u.Role == "source" {
@@ -550,13 +574,11 @@ func (b *undoBuilder) inPlace() error {
 			UndoStep{Action: UndoRestore, Path: u.Path, Before: u.before.UID, After: u.AfterUID})
 	}
 
-	// 5. Folders the operation created, deepest first, each only if it is
-	// empty once everything above is written. A kept folder's head is still
-	// checked, so a folder moved or replaced meanwhile refuses the undo.
-	sort.SliceStable(removeFolders, func(a, c int) bool {
-		return depth(b.ps[removeFolders[a]].Path) > depth(b.ps[removeFolders[c]].Path)
-	})
-	for _, i := range removeFolders {
+	// 6. The rest of the folders the operation created, deepest first, each
+	// only if it is empty once everything above is written. A kept folder's
+	// head is still checked, so a folder moved or replaced meanwhile refuses
+	// the undo.
+	for _, i := range later {
 		u := b.ps[i]
 		left, err := b.leftInside(u.Path)
 		if err != nil {
@@ -568,13 +590,18 @@ func (b *undoBuilder) inPlace() error {
 			b.check(u.Path, u.AfterUID)
 			continue
 		}
-		e := b.entry(u.Path)
-		e.Deleted = true
-		b.moved[u.Path] = true
-		b.add(OpEntry{Entry: e, Base: u.AfterUID, EmptyFolder: true},
-			UndoStep{Action: UndoRemoveFolder, Path: u.Path, After: u.AfterUID})
+		b.removeFolder(u)
 	}
 	return nil
+}
+
+// removeFolder removes a folder the operation created, which is empty.
+func (b *undoBuilder) removeFolder(u undoPath) {
+	e := b.entry(u.Path)
+	e.Deleted = true
+	b.moved[u.Path] = true
+	b.add(OpEntry{Entry: e, Base: u.AfterUID, EmptyFolder: true},
+		UndoStep{Action: UndoRemoveFolder, Path: u.Path, After: u.AfterUID})
 }
 
 // copies is the copy: each before-image of a note written to a new, free path

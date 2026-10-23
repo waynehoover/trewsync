@@ -382,15 +382,13 @@ const (
 // note at the path now arrived from outside the folder since.
 func (s *Store) movedAcross(r RestoreRequest, row restoreRow) (crossing, error) {
 	if row.thenLive && !row.hasNow {
-		// Retired by a rename: its head is the rename, the version at the
-		// destination. Followed through every later rename, each later
-		// than the last, to where the note is now.
-		dest, ok, err := s.EntryByUID(r.Vault, row.now.UID)
-		if err != nil || !ok || dest.Path == row.path {
-			return notMoved, err
-		}
-		at, live, err := s.followRenames(r.Vault, dest.Path, dest.UID)
-		if err != nil || !live || r.inScope(at) {
+		// Retired by a rename. The note followed is the one the path held at
+		// ToUID, from the first rename away after it, not whichever note
+		// held the name last: a name reused and moved away again is another
+		// note's. Followed through every later rename, each later than the
+		// last, to where it is now.
+		at, live, err := s.followRenames(r.Vault, row.path, r.ToUID)
+		if err != nil || !live || at == row.path || r.inScope(at) {
 			return notMoved, err
 		}
 		return movedOut, nil
@@ -447,10 +445,25 @@ func (s *Store) arrivedFromOutside(r RestoreRequest, path string) (bool, error) 
 		  AND ((path = ? AND deleted = 1) OR prev_path = ?)`, r.Vault, bound, cur, cur).Scan(&since); err != nil {
 			return false, err
 		}
+		// A rename onto the name begins a note too, even over one that was
+		// live there: the server takes a rename onto a live destination,
+		// and what arrived is the renamed note, not the one it replaced.
+		var into int64
+		if err := s.db.QueryRow(`SELECT COALESCE(MAX(uid), 0) FROM entries WHERE vault_id = ? AND path = ?
+		  AND uid < ? AND COALESCE(prev_path, '') != ''`, r.Vault, cur, bound).Scan(&into); err != nil {
+			return false, err
+		}
 		var first int64
 		var prev sql.NullString
-		err := s.db.QueryRow(`SELECT uid, prev_path FROM entries WHERE vault_id = ? AND path = ? AND uid > ?
-		  AND uid < ? ORDER BY uid LIMIT 1`, r.Vault, cur, since, bound).Scan(&first, &prev)
+		var err error
+		if into > since {
+			first = into
+			err = s.db.QueryRow(`SELECT prev_path FROM entries WHERE vault_id = ? AND uid = ?`,
+				r.Vault, into).Scan(&prev)
+		} else {
+			err = s.db.QueryRow(`SELECT uid, prev_path FROM entries WHERE vault_id = ? AND path = ? AND uid > ?
+			  AND uid < ? ORDER BY uid LIMIT 1`, r.Vault, cur, since, bound).Scan(&first, &prev)
+		}
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return false, nil
