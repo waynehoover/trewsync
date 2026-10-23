@@ -55,7 +55,12 @@ import (
 // history below, so a purge that left it behind would make a restore read a
 // path's state from a history with a hole in it; the version fences that
 // build off before its purge can run.
-const SchemaVersion = 4
+//
+// Version 5 is a device's restore (protocol 5): a restore_to_uid operation
+// recorded as a device's, which the build at version 4 would report as
+// malformed and refuse to verify. Nothing stored changes meaning, so the step
+// only records the version, which is what fences that build off.
+const SchemaVersion = 5
 
 // migrations are the steps from one schema version to the next, keyed by the
 // version they upgrade from. Each step runs inside the transaction that
@@ -74,6 +79,9 @@ var migrations = map[int]func(q execer) error{
 	// 3 to 4: the purge mark, set for a vault already purged to its newest
 	// uid, since nothing recorded how far each earlier purge reached.
 	3: addPurgeMarks,
+	// 4 to 5: nothing to change. A device's restore is a row the build at 4
+	// cannot read, so the version alone is the fence.
+	4: func(execer) error { return nil },
 }
 
 // withoutForeignKeys are the steps that rebuild a table other tables refer

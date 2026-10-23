@@ -1539,8 +1539,9 @@ deletions deepest first (a folder something restored lands in is kept and
 checked), folders put back shallowest first, then files put back, each entry
 based on the head it replaces, the operation bound to the head it was planned
 at. Paths holding the same bytes by another version are left alone. The dry
-run prints the head; `-head H -apply` refuses a vault that has moved. Only the
-operator may commit one (`validate` and `verify` both know the tool). A
+run prints the head; `-head H -apply` refuses a vault that has moved. The
+operator and devices may commit one, never an agent (`validate` and `verify`
+both know the tool). A
 purge takes history, so what a path held at N is exact only at or after the
 vault's purge mark, or where no uid between the version it held then and N is
 missing (uids are allocated inside the transaction that uses them, so a gap is
@@ -1550,11 +1551,30 @@ schema is 4: a schema 3 purge would not move it, and schema 3 would read the
 operator's restore as a malformed undo. The migration marks a vault already
 purged at its newest uid, the one mark that cannot be too low. Tests:
 `internal/store/restore_test.go` (every kind of change undone, restore then
-undo byte-identical, a moved head refused, only the operator, the purge gap
+undo byte-identical, a moved head refused, never an agent, the purge gap
 refused and the mark exact, the schema 4 migration),
 `cmd/trewd/restore_test.go` (dry run, apply through the socket, the audit, the
 undo), `client/src/core/restore-to-uid.test.ts` (a phone offline across the
 restore converges with no conflict copy and keeps its own edit).
+
+**A device's restore** (protocol 5; `handleRestore` and `deviceRestore` in
+`internal/server/restore.go`). The same planner with three more fields on
+`RestoreRequest`: `Folder` scopes it by name, `NotesOnly` leaves settings out
+and binds the plan to `NotesHead` rather than the vault's head, and
+`MaxEntries` refuses a plan over 10,000 versions whole. In a folder, a path
+retired by a rename whose destination is outside and still live is kept out
+(`KeptMovedOut`), and one created since whose rename chain, followed back
+inside the folder, starts outside is kept in (`KeptMovedIn`,
+`arrivedFromOutside`). A preview's time becomes a uid through `UIDAt`, the
+newest version `entry_times` says was committed by then; an apply names the
+uid and head and is planned again against them. Recorded as the device's
+`restore_to_uid`, which is why the schema is 5: a schema 4 build would report
+it as malformed. Tests: `internal/store/restore_scope_test.go` (nothing
+outside the folder changes, moves across its edge kept, settings left and the
+notes head binding, a device's restore undone, the cap, the time lookup), the
+`restore refusals` transcript, `client/src/core/restore-to-uid.test.ts` (a
+folder previewed, applied to two devices, undone, and a stale apply refused)
+and `client/src/plugin/restore-time.test.ts`.
 
 **Metrics** (`internal/metrics`, `internal/server/observe.go`). The commit
 lock is a timed mutex, so lock wait and hold time are measured for every

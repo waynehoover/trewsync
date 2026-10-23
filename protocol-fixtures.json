@@ -256,7 +256,7 @@
     "note": [
       "Name-derived strings and wire numbers both implementations assert they hold."
     ],
-    "proto": 4,
+    "proto": 5,
     "minProto": 1,
     "product": "trew",
     "invitePrefix": "trew1i_",

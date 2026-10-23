@@ -265,6 +265,36 @@ Refusals, all of the request and none of the session unless it says so, with the
 - `auth`: the device was revoked; the session ends.
 - `internal`: the store failed.
 
+## Restore (protocol 5)
+
+**Settled 2026-10-23.** Protocol 5 is protocol 4 with `restore`, and nothing earlier changed; a session of 4 or less is told `restore` is an unknown op. The server first, as for every version.
+
+A device puts one folder, or every note in the vault, back as it was at a time, as one operation any device can undo. Settings are never part of it: they are applied with a reload, per profile, and the operator's `trewd restore` still restores them.
+
+```text
+-> {op:"restore", id, at, folder?}                     (preview)
+-> {op:"restore", id, apply:true, uid, head, folder?}  (apply)
+<- {res:"restored", id, applied, folder, toUid, at, head, restore, remove, removeFolder, unchanged,
+    steps:[{action, path, before?, after?, why?}], keptMovedIn:[path], keptMovedOut:[path], more,
+    opId?, committedAt?}
+```
+
+**A time is the server's.** `at` is milliseconds; the preview resolves it to `toUid`, the newest version the server had committed by then by its own clock (`entry_times`), and answers `at` as the time that version was committed. What a device's clock said about a version plays no part: an offline edit uploaded on Wednesday belongs to Wednesday. A time before the oldest version with a recorded time is refused rather than guessed.
+
+**Scope is by name.** `folder` is the path itself and every path under it, so `Projects` is not `Projects Archive`; absent, every note. Nothing outside it changes. A note moved out of the folder since the time, and still live where it went, is left there and not copied back; a note moved into it since, following renames inside the folder back to where it came from, is left where it arrived and not removed. Both are listed. Everything else is the operator's restore: a version for each path whose head differs from its state then, a deletion for each path created since, nothing for a path that already holds what it held.
+
+**Preview, then exactly that.** A preview writes nothing. An apply names the `uid` and `head` its preview answered with and is planned again against them: if any note in the vault was saved since (`head` is the newest uid that is not a setting), it is refused `stale`, and the device previews again. The apply's versions reach every device as an ordinary `batch`, the asking device included, before the reply. `opId` is the operation, which `undo` reverses as a whole.
+
+The counts are whole; `steps`, `keptMovedIn` and `keptMovedOut` together list at most 500 rows, and `more` is how many were left out. A restore that would write more than 10,000 versions is refused whole, never cut short: a folder at a time goes through.
+
+Refusals, all before anything is written:
+
+- `norestore`: `before_history`, a time before the oldest recorded; `gone`, a version the restore needs was taken by a purge, naming the path; `result_too_large`, over the device's bound; `not_found`, a uid the vault has not reached.
+- `stale`: the vault's notes moved since the preview.
+- `badpath`: a folder no path can be.
+- `badentry`: a preview with no time, or an apply without its uid and head.
+- `auth`: the device was revoked; the session ends.
+
 ## Errors
 
 | code | meaning | retryable | session |
@@ -287,6 +317,7 @@ Refusals, all of the request and none of the session unless it says so, with the
 | `nochunk` | a `fetch` or `resend` naming a body the server does not hold or no entry refers to | no | rejects |
 | `nodevice` | a `revoke` for a device id this vault does not have | no | rejects |
 | `noundo` | an `undo` (protocol 2) that cannot be done; the message begins with why | no | rejects |
+| `norestore` | a `restore` (protocol 5) that cannot be done as asked; the message begins with why | no | rejects |
 | `toomany` | a `search` (protocol 2) over the device searches' budget, with `retryAfterMs` | yes | rejects the request, keeps the session |
 | `internal` | server fault, not committed | yes | ends in handshake, else rejects |
 

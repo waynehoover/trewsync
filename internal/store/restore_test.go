@@ -211,10 +211,10 @@ func TestARestoreToAUidTheVaultHasNotReachedIsRefused(t *testing.T) {
 	}
 }
 
-// Only the operator restores the vault: an agent's token cannot commit a
+// An agent never restores the vault: its token cannot commit a
 // restore, whatever its scope, because a whole-vault rewind is not something
 // text in a note should be able to ask for.
-func TestOnlyTheOperatorRestores(t *testing.T) {
+func TestAnAgentNeverRestores(t *testing.T) {
 	h := newTestStore(t)
 	at, _ := h.seedForRestore(t)
 	plan, err := h.PlanRestore(RestoreRequest{Vault: "v1", ToUID: at, Now: 7000})

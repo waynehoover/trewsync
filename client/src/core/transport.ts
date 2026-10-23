@@ -64,8 +64,12 @@ import { FrameError, decodeFrame, encodeFrame } from "./frame.ts";
  * `configPathReason(path, true)` accepts may be written and are sent, whether
  * or not this device syncs its plugins. A server of protocol 4 still answers
  * 1 to 3 and keeps plugins from them; the server first, again.
+ *
+ * Version 5 is version 4 and restore (`restore`): a folder, or the vault's
+ * notes, previewed as they were at a time and put back as one operation. A
+ * server of protocol 5 still answers 1 to 4; the server first.
  */
-export const PROTO = 4;
+export const PROTO = 5;
 
 /** How long a request may go unanswered before the connection is considered dead. */
 export const REQUEST_TIMEOUT_MS = 60_000;
@@ -176,6 +180,38 @@ export interface UndoResult {
   readonly steps: UndoStep[];
   /** The versions it wrote, which also reach this device in a batch. */
   readonly entries: { path: string; uid: number; previousUid: number; prev?: string }[];
+}
+
+/**
+ * A restore asked for (protocol 5): a preview at a time, in milliseconds, or
+ * the apply of a preview, by the uid and head it answered with. `folder`
+ * scopes either to one folder; absent, every note in the vault.
+ */
+export type RestoreAsk =
+  | { readonly at: number; readonly folder?: string }
+  | { readonly uid: number; readonly head: number; readonly folder?: string };
+
+/**
+ * A restore's plan, and once applied its operation, which `undo` reverses.
+ * `at` is when the server committed `toUid`, the moment the folder is put
+ * back to. The counts are whole; `steps` and the two kept lists are the
+ * first rows, and `more` how many were left out.
+ */
+export interface RestoreResult {
+  readonly folder: string;
+  readonly toUid: number;
+  readonly at: number;
+  readonly head: number;
+  readonly restore: number;
+  readonly remove: number;
+  readonly removeFolder: number;
+  readonly unchanged: number;
+  readonly more: number;
+  readonly steps: UndoStep[];
+  readonly keptMovedIn: string[];
+  readonly keptMovedOut: string[];
+  readonly opId?: string;
+  readonly committedAt?: number;
 }
 
 /** What a search matches against (plan/protocol.md, "Search (protocol 2)"). */
@@ -2458,32 +2494,7 @@ export class Transport {
       undoes: opId,
       toCopy: opts.toCopy === true,
       committedAt: this.count(reply, "committedAt", "undone"),
-      steps: steps.map((raw, i) => {
-        const row = raw as Record<string, unknown>;
-        const action = text(row ?? {}, "action");
-        const path = text(row ?? {}, "path");
-        if (action === undefined || path === undefined) {
-          throw this.malformed(`an undone whose step ${i} names no action or no path`);
-        }
-        const step: {
-          action: string;
-          path: string;
-          from?: string;
-          copy?: string;
-          before?: number;
-          after?: number;
-          why?: string;
-        } = { action, path };
-        for (const key of ["from", "copy", "why"] as const) {
-          const v = text(row, key);
-          if (v !== undefined) step[key] = v;
-        }
-        for (const key of ["before", "after"] as const) {
-          const v = row[key];
-          if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) step[key] = v;
-        }
-        return step;
-      }),
+      steps: this.stepsOf(steps, "an undone"),
       entries: entries.map((raw, i) => {
         const row = raw as Record<string, unknown>;
         const path = text(row ?? {}, "path");
@@ -2504,6 +2515,101 @@ export class Transport {
         return { path, uid, previousUid, ...(prev !== undefined ? { prev } : {}) };
       }),
     };
+  }
+
+  /** The steps of an `undone` or a `restored`, each an action on a path. */
+  private stepsOf(steps: unknown[], what: string): UndoStep[] {
+    const text = (row: Record<string, unknown>, key: string): string | undefined => {
+      const v = row[key];
+      return typeof v === "string" && v !== "" ? v : undefined;
+    };
+    return steps.map((raw, i) => {
+      const row = (raw ?? {}) as Record<string, unknown>;
+      const action = text(row, "action");
+      const path = text(row, "path");
+      if (action === undefined || path === undefined) {
+        throw this.malformed(`${what} whose step ${i} names no action or no path`);
+      }
+      const step: {
+        action: string;
+        path: string;
+        from?: string;
+        copy?: string;
+        before?: number;
+        after?: number;
+        why?: string;
+      } = { action, path };
+      for (const key of ["from", "copy", "why"] as const) {
+        const v = text(row, key);
+        if (v !== undefined) step[key] = v;
+      }
+      for (const key of ["before", "after"] as const) {
+        const v = row[key];
+        if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) step[key] = v;
+      }
+      return step;
+    });
+  }
+
+  /**
+   * A restore (protocol 5; plan/protocol.md, "Restore"): a preview of a
+   * folder, or of every note, as it was at a time, or the apply of exactly
+   * that preview, named by the uid and head it answered with.
+   *
+   * Refusals are `ProtocolError`s: `stale` when the vault moved since the
+   * preview, `norestore` when it cannot be done as asked, whose message
+   * begins with why. Either leaves the session as it was.
+   */
+  async restore(ask: RestoreAsk): Promise<RestoreResult> {
+    const folder = ask.folder ?? "";
+    const reply = await this.request(
+      {
+        op: "restore",
+        ...("at" in ask ? { at: ask.at } : { apply: true, uid: ask.uid, head: ask.head }),
+        ...(folder !== "" ? { folder } : {}),
+      },
+      "restored",
+    );
+    if (reply["res"] !== "restored") {
+      throw new ProtocolError("protostate", `expected restored, got ${JSON.stringify(reply)}`);
+    }
+    const applied = reply["applied"] === true;
+    if (applied !== !("at" in ask) || reply["folder"] !== folder) {
+      throw this.malformed("a restored that is not an answer to what was asked");
+    }
+    const steps = reply["steps"];
+    const movedIn = reply["keptMovedIn"];
+    const movedOut = reply["keptMovedOut"];
+    const strings = (v: unknown): v is string[] =>
+      Array.isArray(v) && v.every((p) => typeof p === "string" && p !== "");
+    if (!Array.isArray(steps) || !strings(movedIn) || !strings(movedOut)) {
+      throw this.malformed("a restored with no list of steps or of notes left where they are");
+    }
+    const opId = reply["opId"];
+    if (applied && (typeof opId !== "string" || opId === "")) {
+      throw this.malformed("an applied restore that names no operation");
+    }
+    const out: RestoreResult = {
+      folder,
+      toUid: this.count(reply, "toUid", "restored"),
+      at: this.count(reply, "at", "restored"),
+      head: this.count(reply, "head", "restored"),
+      restore: this.count(reply, "restore", "restored"),
+      remove: this.count(reply, "remove", "restored"),
+      removeFolder: this.count(reply, "removeFolder", "restored"),
+      unchanged: this.count(reply, "unchanged", "restored"),
+      more: this.count(reply, "more", "restored"),
+      steps: this.stepsOf(steps, "a restored"),
+      keptMovedIn: movedIn,
+      keptMovedOut: movedOut,
+      ...(applied
+        ? { opId: opId as string, committedAt: this.count(reply, "committedAt", "restored") }
+        : {}),
+    };
+    if ("uid" in ask && (out.toUid !== ask.uid || out.head !== ask.head)) {
+      throw this.malformed("an applied restore of another point than the preview's");
+    }
+    return out;
   }
 
   /**

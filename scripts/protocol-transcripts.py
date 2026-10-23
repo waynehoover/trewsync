@@ -63,7 +63,7 @@ DEVICES = {
 # community plugins, and 3 is 2 and settings (plan/settings-sync.md); 2 is 1
 # and undo (plan/protocol.md, "Undo (protocol 2)"). The server answers a hello
 # in the version it asks for, and one transcript holds it to answering 1.
-PROTO = 4
+PROTO = 5
 MIN_PROTO = 1
 
 
@@ -389,10 +389,29 @@ TRANSCRIPTS = [
         ],
     },
     {
+        "name": "restore refusals",
+        "covers": "Protocol 5: a restore previewed at a time before the oldest version the server recorded a "
+                  "time for is refused norestore, an apply that does not name the uid and head its preview "
+                  "answered with is refused badentry, a folder no path can be is refused badpath, and the "
+                  "session goes on.",
+        "steps": [
+            seed("a.md", [A], 1),
+            *connect("laptop", "laptop", 1, [], 1),
+            c("laptop", send={"op": "restore", "id": 2, "at": 1}),
+            c("laptop", expect=err(2, "norestore", "$prefix:before_history: ")),
+            c("laptop", send={"op": "restore", "id": 3, "apply": True, "uid": 1, "head": 0}),
+            c("laptop", expect=err(3, "badentry")),
+            c("laptop", send={"op": "restore", "id": 4, "at": 1, "folder": "a//b"}),
+            c("laptop", expect=err(4, "badpath")),
+            c("laptop", send={"op": "ping"}),
+            c("laptop", expect={"res": "pong"}),
+        ],
+    },
+    {
         "name": "protocol 1 is still answered",
         "covers": "A device on protocol 1 is answered in protocol 1 by a server of protocol 2: its ready says "
                   "1, a history entry an agent wrote carries no operation, and undo and search, which protocol 1 "
-                  "does not have, are unknown ops that reject the request and keep the session. The server's "
+                  "does not have, and restore, are unknown ops that reject the request and keep the session. The server's "
                   "half only: the TypeScript client speaks protocol 2, so it does not play this one.",
         "steps": [
             seed("a.md", [A], 1),
@@ -408,6 +427,8 @@ TRANSCRIPTS = [
             c("laptop", expect=err(3, "protostate")),
             c("laptop", send={"op": "search", "id": 4, "query": "alpha"}),
             c("laptop", expect=err(4, "protostate")),
+            c("laptop", send={"op": "restore", "id": 5, "at": 1}),
+            c("laptop", expect=err(5, "protostate")),
             c("laptop", send={"op": "ping"}),
             c("laptop", expect={"res": "pong"}),
         ],

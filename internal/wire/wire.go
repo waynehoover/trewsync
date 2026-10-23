@@ -56,16 +56,22 @@ import (
 // files in plugins' folders that paths.CheckPlugins accepts. A session of 3 or
 // less is held to paths.CheckConfig, as before, and never sees a plugin entry,
 // in the same way a session of 1 or 2 never sees a setting.
+//
+// Version 5 is protocol 4 and restore (plan/protocol.md, "Restore"): the
+// `restore` request, which previews putting a folder, or the vault's notes,
+// back as they were at a time, and applies exactly that preview as one
+// operation a device can undo. A session of 4 or less is told it is unknown.
 const (
-	Proto    = 4
+	Proto    = 5
 	MinProto = 1
 	// ProtoUndo is the first version with undo, ProtoSearch the first with
-	// search, ProtoConfig the first with settings, and ProtoPlugins the first
-	// with community plugins.
+	// search, ProtoConfig the first with settings, ProtoPlugins the first
+	// with community plugins, and ProtoRestore the first with restore.
 	ProtoUndo    = 2
 	ProtoSearch  = 2
 	ProtoConfig  = 3
 	ProtoPlugins = 4
+	ProtoRestore = 5
 )
 
 // MaxRequestID bounds a client-chosen request id: an integer from 1 to 2^32-1.
@@ -134,6 +140,11 @@ const (
 	// refused because a note changed since is `stale` instead, since that
 	// one has an answer: the copy.
 	CodeNoUndo = "noundo"
+	// CodeNoRestore is a `restore` (protocol 5) that cannot be done as asked:
+	// a time before the oldest history with a time, a version a purge took,
+	// one bigger than a device may write at once. The message begins with
+	// why. Not retryable.
+	CodeNoRestore = "norestore"
 	// CodeTooMany is a device search (protocol 2) over its budget: more
 	// searches at once, or more requests or reply bytes in a moment, than the
 	// server gives one device, or than it runs for every device together. It
@@ -280,6 +291,15 @@ type In struct {
 	IncludeChildren *bool  `json:"includeChildren,omitempty"`
 	ContextLines    int    `json:"contextLines,omitempty"`
 	After           string `json:"after,omitempty"`
+
+	// restore (protocol 5). A preview names the time, At, in milliseconds
+	// by the server's clock, and the scope, Folder, empty for every note in
+	// the vault. An apply sets Apply and names, instead of a time, the uid
+	// and the head its preview answered with, UID and Head, so what is
+	// applied is exactly what was shown.
+	At    int64 `json:"at,omitempty"`
+	Head  int64 `json:"head,omitempty"`
+	Apply bool  `json:"apply,omitempty"`
 }
 
 // PutEntry is one file inside a batched put.
@@ -680,6 +700,39 @@ type Undone struct {
 	CommittedAt int64            `json:"committedAt"`
 	Steps       []store.UndoStep `json:"steps"`
 	Entries     []UndoneEntry    `json:"entries"`
+}
+
+// RestoreRows bounds the steps and kept paths a `restored` reply lists; the
+// counts are always whole, and More says how many were left out.
+const RestoreRows = 500
+
+// Restored answers a restore (protocol 5): the plan, and once applied the
+// operation that committed it, which `undo` names to put everything back.
+//
+// ToUID is the vault's newest version at the time asked for, and At when
+// the server committed it: the moment the vault is put back to, which may be
+// before the time asked. Head is what the plan is bound to; an apply naming
+// another is refused as stale. Restore, Remove and RemoveFolder count the
+// versions put back, the paths made since that go, and the folders made since
+// that go; Unchanged the paths changed since that already hold what they held.
+type Restored struct {
+	Res          string           `json:"res"` // "restored"
+	ID           int64            `json:"id,omitempty"`
+	Applied      bool             `json:"applied"`
+	Folder       string           `json:"folder"`
+	ToUID        int64            `json:"toUid"`
+	At           int64            `json:"at"`
+	Head         int64            `json:"head"`
+	Restore      int              `json:"restore"`
+	Remove       int              `json:"remove"`
+	RemoveFolder int              `json:"removeFolder"`
+	Unchanged    int              `json:"unchanged"`
+	Steps        []store.UndoStep `json:"steps"`
+	KeptMovedIn  []string         `json:"keptMovedIn"`
+	KeptMovedOut []string         `json:"keptMovedOut"`
+	More         int              `json:"more"`
+	OpID         string           `json:"opId,omitempty"`
+	CommittedAt  int64            `json:"committedAt,omitempty"`
 }
 
 // Searched answers a search (protocol 2): one page of matches, at most the

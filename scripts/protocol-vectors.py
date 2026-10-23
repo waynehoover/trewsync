@@ -55,7 +55,7 @@ PRODUCT = "trew"
 # settings: each plugin's data.json, never its code or the list of plugins
 # that run, which a session of 3 or less never sends or sees
 # (plan/settings-sync.md, section 6).
-PROTO = 4
+PROTO = 5
 MIN_PROTO = 1
 
 # A profile root is Obsidian's configuration folder, `.obsidian`, or one a

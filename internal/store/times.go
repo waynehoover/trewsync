@@ -2,6 +2,8 @@ package store
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -108,4 +110,32 @@ func (s *Store) OperationStamps(vaultID string, from, to int64) (map[int64]OpSta
 // noSuchTable reports whether err is SQLite saying a table is not there.
 func noSuchTable(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "no such table")
+}
+
+// ErrBeforeHistory is a time before the oldest version with a commit time.
+var ErrBeforeHistory = errors.New("no history that old")
+
+// UIDAt is the newest uid the vault had committed by atMs, by the server's
+// clock, and when it was committed: what "the vault as it was at that time"
+// means, which is what the server had received by then, not what a device's
+// clock said. Versions committed together share a time, so a moment never
+// falls inside one operation. A time before the oldest version with a time
+// recorded is refused rather than guessed (ErrBeforeHistory); versions
+// written before the table existed have none.
+func (s *Store) UIDAt(vaultID string, atMs int64) (uid, committedAt int64, err error) {
+	err = s.db.QueryRow(`SELECT uid, committed_at FROM entry_times
+	  WHERE vault_id = ? AND committed_at <= ? ORDER BY uid DESC LIMIT 1`, vaultID, atMs).Scan(&uid, &committedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		var oldest sql.NullInt64
+		if err := s.db.QueryRow(`SELECT MIN(committed_at) FROM entry_times WHERE vault_id = ?`,
+			vaultID).Scan(&oldest); err != nil {
+			return 0, 0, err
+		}
+		if !oldest.Valid {
+			return 0, 0, fmt.Errorf("%w: the server has recorded no commit times for this vault", ErrBeforeHistory)
+		}
+		return 0, 0, fmt.Errorf("%w: the oldest version with a time was committed at %s",
+			ErrBeforeHistory, time.UnixMilli(oldest.Int64).UTC().Format(time.RFC3339))
+	}
+	return uid, committedAt, err
 }

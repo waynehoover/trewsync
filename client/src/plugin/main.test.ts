@@ -306,16 +306,13 @@ describe("loading", () => {
     expect(plugin.commands.map((c) => c.id).sort()).toEqual([
       "activity",
       "apply-settings",
-
       "download-note-attachments",
-
       "download-server-file",
-
       "free-space",
-
       "pause-resume",
       "preview-sync",
       "recover-deleted",
+      "restore-to-time",
       "review-conflicts",
       "show-status",
       "sync-now",
@@ -4180,13 +4177,13 @@ describe("version history on the file menu (P-D8)", () => {
     expect(modals.at(-1)!.titleEl.allText()).toBe("History of daily/note.md");
   }, 300_000);
 
-  it("puts nothing on the menu of a folder", async () => {
+  it("puts a folder's restore to a time on the menu of a folder, and no history", async () => {
     const { plugin, app } = await load();
     expect(plugin.paired).toBe(false);
     const { menu, items } = fakeMenu();
     // A TFolder has no extension, and there is no history of a folder.
     app.workspace.fire("file-menu", menu, { path: "daily" });
-    expect(items).toEqual([]);
+    expect(items.map((i) => i.title)).toEqual(["TrewSync: restore to an earlier time"]);
   });
 });
 
@@ -4575,16 +4572,13 @@ describe("an older Obsidian", () => {
     expect(plugin.commands.map((c) => c.id).sort()).toEqual([
       "activity",
       "apply-settings",
-
       "download-note-attachments",
-
       "download-server-file",
-
       "free-space",
-
       "pause-resume",
       "preview-sync",
       "recover-deleted",
+      "restore-to-time",
       "review-conflicts",
       "show-status",
       "sync-now",

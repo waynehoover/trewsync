@@ -50,6 +50,8 @@ import {
   type SearchQuery,
   type ServerLimits,
   type SocketLike,
+  type RestoreAsk,
+  type RestoreResult,
   type UndoResult,
   type WireEntry,
 } from "./transport.ts";
@@ -1234,6 +1236,24 @@ export class Client {
     await this.settle({ coalesceWrites: false });
     const done = await this.serial(() => this.transport.undo(opId, opts));
     await this.settle({ coalesceWrites: false });
+    return done;
+  }
+
+  /**
+   * A folder, or every note, as it was at a time (protocol 5): the preview,
+   * which changes nothing, and the apply of exactly that preview, named by the
+   * uid and head it answered with, as one operation `undo` reverses.
+   *
+   * This device's own changes are sent first, before both, so an edit made
+   * here counts: one made between the preview and the apply moves the vault,
+   * and the apply is refused as `stale` rather than committed over it. The
+   * versions an apply wrote arrive as an ordinary batch; the settle after it
+   * puts them on disk here.
+   */
+  async restoreTo(ask: RestoreAsk): Promise<RestoreResult> {
+    await this.settle({ coalesceWrites: false });
+    const done = await this.serial(() => this.transport.restore(ask));
+    if (!("at" in ask)) await this.settle({ coalesceWrites: false });
     return done;
   }
 

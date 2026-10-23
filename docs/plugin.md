@@ -277,6 +277,38 @@ History remains available until the server operator
 earlier version for at least 30 days, whatever purge is asked to do; after
 that, undoing it may be refused because the earlier version is gone.
 
+## Restore a folder to an earlier time
+
+Right-click a folder and choose **TrewSync: restore to an earlier time**, or
+run **TrewSync: Restore a folder, or the vault, to an earlier time** and leave
+the folder empty for every note in the vault. Pick a date and time, in this
+device's time zone, and press **Preview**. Nothing changes yet: the preview
+says how many files would be put back and how many made since would be
+removed, and lists them. Press **Restore** to do exactly that, or close the
+window to do nothing.
+
+The time means what the server had received by then. A note edited on a phone
+while it was offline belongs to the time the phone sent it, not the time on
+the phone's clock. The preview says the exact moment it found.
+
+Only the folder changes. A note moved out of the folder since that time stays
+where it went, and a note moved into it since stays where it arrived; the
+preview says how many. Settings never change: a restore is of notes and
+attachments.
+
+Every device receives the restore as it syncs. **Undo** in the same window puts
+back everything the restore replaced, as one change; so does **Undo this
+change** in the version history of any note it touched. Nothing is lost
+either way: every version it replaced stays in the history.
+
+If a note is saved anywhere between the preview and Restore, Restore is
+refused and the window asks for a new preview, so what is restored is always
+what you saw. A restore of more than 10,000 files is refused; restore one
+folder at a time. The server needs version 0.15 or later; upgrade the server
+first. A time before the oldest history the server recorded a time for, or one
+whose history has been [purged](server-operations.md#purge), is refused rather
+than guessed.
+
 ## Deleted notes
 
 Press **Browse deleted**, select the note, and restore it. A note whose
@@ -659,6 +691,7 @@ record; use **Devices** when you want to remove access.
 | TrewSync: Show status | Open the panel. |
 | TrewSync: Show version history | View history for the open note. |
 | TrewSync: Recover a deleted note | Browse deleted notes. |
+| TrewSync: Restore a folder, or the vault, to an earlier time | Preview, then restore, a folder or every note as it was. |
 | TrewSync: Apply synced settings and reload | Apply settings changed on another device, then reload Obsidian. |
 | TrewSync: Download the attachments this note needs | With attachments on demand, fetch what the open note uses. |
 | TrewSync: Download a file kept on the server | With attachments on demand, pick a file to fetch. |

@@ -11,8 +11,19 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+**Upgrade the server first.** The plugin and `trew` now speak protocol 5, which
+adds restoring a folder to an earlier time, so they need the next server
+release. The server still answers every older plugin and `trew`.
+
 ### Plugin
 
+- **Restore a folder to an earlier time.** Right-click a folder, or run the
+  command for the whole vault, pick a date and time, and preview exactly what
+  would change before anything does. Restore puts the folder's notes and
+  attachments back as the server had them then, on every device, as one change
+  that Undo reverses. Notes moved into or out of the folder since stay where
+  they are, and settings never change. See
+  [the plugin guide](docs/plugin.md#restore-a-folder-to-an-earlier-time).
 - **Attachments on demand.** A device can leave attachments of 1 MB or more
   (or 10 MB, or all of them) on the server and download each one when a note
   that uses it is opened, or when it is tapped. Off by default, per device;
@@ -22,6 +33,12 @@ client can talk; upgrade the server first.
 
 ### Server
 
+- **Protocol 5: restore.** A device can put one folder, or every note in the
+  vault, back as it was at a time, previewed first and applied as exactly that
+  preview, recorded as one operation any device or `trewd undo` reverses. The
+  time is the server's own record of when each version arrived. It never
+  restores settings; `trewd restore` still restores everything, settings
+  included. Sessions of protocol 1 to 4 are answered as before.
 - An agent's preview is no longer expired by a device saving its settings
   between the preview and the apply. The apply is refused as `plan_changed`
   only when a note changed; the operator's `trewd restore` is still bound to

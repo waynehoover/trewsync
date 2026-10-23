@@ -185,3 +185,79 @@ describe("a restore to a uid while a phone is offline", () => {
     expect(laptop.vault.paths().filter((p) => p.includes("Conflicted copy"))).toEqual([]);
   }, 240_000);
 });
+
+/**
+ * A device puts one folder back as it was at a time (protocol 5): a preview
+ * that changes nothing, the apply of exactly that preview as one operation
+ * every device receives, nothing outside the folder touched, and an undo that
+ * puts back what it replaced. An edit between the preview and the apply makes
+ * the apply refused rather than committed over it.
+ */
+describe("a device restoring a folder to a time", () => {
+  const pause = () => new Promise((r) => setTimeout(r, 50));
+
+  it("previews, applies to every device, leaves the rest of the vault, and undoes", async () => {
+    server = new TestServer();
+    await server.start();
+    const laptop = new Device("laptop");
+    const phone = new Device("phone");
+    devices.push(laptop, phone);
+    await laptop.connect(server);
+    await phone.connect(server);
+
+    await laptop.vault.edit("Projects/plan.md", "the plan on Tuesday\n", 1_000);
+    await laptop.vault.edit("Projects/gone.md", "deleted since\n", 1_000);
+    await laptop.vault.edit("inbox.md", "inbox on Tuesday\n", 1_000);
+    await laptop.settle();
+    await phone.settle();
+    await pause();
+    const tuesday = Date.now();
+    await pause();
+
+    await laptop.vault.edit("Projects/plan.md", "the plan rewritten\n", 2_000);
+    await laptop.vault.remove("Projects/gone.md");
+    await laptop.vault.edit("Projects/new.md", "made since\n", 2_000);
+    await laptop.vault.edit("inbox.md", "inbox rewritten\n", 2_000);
+    await laptop.settle();
+    await phone.settle();
+    const before = phone.vault.snapshot();
+
+    const preview = await laptop.transport.restore({ at: tuesday, folder: "Projects" });
+    expect(preview).toMatchObject({ folder: "Projects", restore: 2, remove: 1, more: 0 });
+    expect(preview.opId).toBeUndefined();
+    expect(preview.at).toBeLessThanOrEqual(tuesday);
+    expect(phone.vault.snapshot(), "a preview changed something").toEqual(before);
+
+    const done = await laptop.transport.restore({
+      uid: preview.toUid,
+      head: preview.head,
+      folder: "Projects",
+    });
+    expect(done.opId).toBeTruthy();
+    await laptop.settle();
+    await phone.settle();
+    const restored = {
+      "Projects/plan.md": "the plan on Tuesday\n",
+      "Projects/gone.md": "deleted since\n",
+      "inbox.md": "inbox rewritten\n",
+    };
+    expect(laptop.vault.snapshot()).toEqual(restored);
+    expect(phone.vault.snapshot()).toEqual(restored);
+
+    await phone.transport.undo(done.opId!);
+    await phone.settle();
+    await laptop.settle();
+    expect(laptop.vault.snapshot()).toEqual(before);
+    expect(phone.vault.snapshot()).toEqual(before);
+
+    // A note saved between a preview and its apply refuses the apply.
+    const again = await laptop.transport.restore({ at: tuesday, folder: "Projects" });
+    await phone.vault.edit("Projects/plan.md", "saved on the phone meanwhile\n", 3_000);
+    await phone.settle();
+    await expect(
+      laptop.transport.restore({ uid: again.toUid, head: again.head, folder: "Projects" }),
+    ).rejects.toMatchObject({ code: "stale" });
+    await laptop.settle();
+    expect(laptop.vault.text("Projects/plan.md")).toBe("saved on the phone meanwhile\n");
+  }, 240_000);
+});

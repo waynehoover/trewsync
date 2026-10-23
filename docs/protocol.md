@@ -39,6 +39,10 @@ each community plugin's `data.json` may be written and is sent. Nothing else
 changed, and a session of 3 or less is answered as before and never sees a
 plugin path.
 
+Protocol 5 is protocol 4 and [restore](#restore): the `restore` request.
+Nothing else changed, and a session of 4 or less is told `restore` is an
+unknown op.
+
 The client normally uses one connection. Large uploads can use a temporary
 second connection with the same device credential, leaving the main connection
 available for note edits. Both use this protocol unchanged. Only the main
@@ -476,6 +480,28 @@ that is not empty) is `noundo`, whose message begins with the reason. The
 reasons and the result's shape are in
 [plan/protocol.md](../plan/protocol.md#undo-protocol-2).
 
+## Restore
+
+```text
+-> {op:"restore", id, at, folder?}                     preview
+-> {op:"restore", id, apply:true, uid, head, folder?}  apply
+<- {res:"restored", id, applied, folder, toUid, at, head, restore, remove,
+    removeFolder, unchanged, steps, keptMovedIn, keptMovedOut, more,
+    opId?, committedAt?}
+```
+
+Protocol 5 only. A restore puts a folder, or every note in the vault, back as
+the server had it at a time, as one operation that `undo` reverses. Settings
+are never part of it. The time is the server's: `at` resolves to `toUid`, the
+newest version committed by then, and the reply's `at` is when that version
+was committed. A folder is the path and everything under it, by name; nothing
+outside it changes, and notes moved across its edge since are left where they
+are and listed. A preview writes nothing. An apply names the `uid` and `head`
+its preview answered with, and a note saved since refuses it with `stale`.
+Over 10,000 versions, or a time before any recorded history, is `norestore`,
+whose message begins with the reason. The full contract is in
+[plan/protocol.md](../plan/protocol.md#restore-protocol-5).
+
 ## Search
 
 ```text
@@ -609,6 +635,7 @@ not an automatic retry of the unchanged request.
 | `nochunk` | Content unavailable. | no | request rejected without partial fetch bodies. |
 | `nodevice` | Device ID does not exist. | no | request rejected. |
 | `noundo` | An undo that cannot be done; the message starts with the reason. | no | request rejected. |
+| `norestore` | A restore that cannot be done as asked; the message starts with the reason. | no | request rejected. |
 | `toomany` | A search over the device searches' budget, with a delay hint. | yes | request rejected; the session continues. |
 | `internal` | Server fault; nothing committed. | yes | ends during handshake/catch-up, otherwise rejects the request. |
 

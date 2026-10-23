@@ -113,7 +113,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -126,7 +126,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -215,7 +215,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -228,7 +228,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -252,7 +252,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "phone",
             "token": "7-9Gc1q0Oygg54LeE0hmTYzAUcYEA-UWIEgSPXZtkJs",
@@ -265,7 +265,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -412,7 +412,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -425,7 +425,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -574,7 +574,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -587,7 +587,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -706,7 +706,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -719,7 +719,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -812,7 +812,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -825,7 +825,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -899,7 +899,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -912,7 +912,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -959,7 +959,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "phone",
             "token": "7-9Gc1q0Oygg54LeE0hmTYzAUcYEA-UWIEgSPXZtkJs",
@@ -972,7 +972,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1091,7 +1091,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -1104,7 +1104,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1209,7 +1209,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -1222,7 +1222,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1387,7 +1387,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -1400,7 +1400,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1460,7 +1460,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "phone",
             "token": "7-9Gc1q0Oygg54LeE0hmTYzAUcYEA-UWIEgSPXZtkJs",
@@ -1473,7 +1473,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1718,7 +1718,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -1731,7 +1731,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -1839,7 +1839,7 @@
           "send": {
             "op": "hello",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "vault": "v1",
             "deviceId": "laptop",
             "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
@@ -1852,7 +1852,7 @@
           "expect": {
             "res": "ready",
             "id": 1,
-            "proto": 4,
+            "proto": 5,
             "minProto": 1,
             "serverVersion": "$serverVersion",
             "epoch": "$epoch",
@@ -2050,8 +2050,130 @@
       ]
     },
     {
+      "name": "restore refusals",
+      "covers": "Protocol 5: a restore previewed at a time before the oldest version the server recorded a time for is refused norestore, an apply that does not name the uid and head its preview answered with is refused badentry, a folder no path can be is refused badpath, and the session goes on.",
+      "steps": [
+        {
+          "store": {
+            "op": "put",
+            "path": "a.md",
+            "bodies": [
+              "616c70686120626f6479"
+            ],
+            "mtime": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "hello",
+            "id": 1,
+            "proto": 5,
+            "vault": "v1",
+            "deviceId": "laptop",
+            "token": "YCoFoB82-d3l_6Bc34FkFDWmm3ZZ5XjtzRpDKVK9bVY",
+            "device": "laptop",
+            "cursor": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "ready",
+            "id": 1,
+            "proto": 5,
+            "minProto": 1,
+            "serverVersion": "$serverVersion",
+            "epoch": "$epoch",
+            "cursor": 1,
+            "perFileMax": 67108864,
+            "chunkMax": 1048576,
+            "maxChunks": 65536,
+            "maxBatchBytes": 16777216,
+            "maxFetchBytes": 67108864
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "op": "caught-up",
+            "cursor": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "restore",
+            "id": 2,
+            "at": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 2,
+            "code": "norestore",
+            "msg": "$prefix:before_history: ",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "restore",
+            "id": 3,
+            "apply": true,
+            "uid": 1,
+            "head": 0
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 3,
+            "code": "badentry",
+            "msg": "$msg",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "restore",
+            "id": 4,
+            "at": 1,
+            "folder": "a//b"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 4,
+            "code": "badpath",
+            "msg": "$msg",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "ping"
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "pong"
+          }
+        }
+      ]
+    },
+    {
       "name": "protocol 1 is still answered",
-      "covers": "A device on protocol 1 is answered in protocol 1 by a server of protocol 2: its ready says 1, a history entry an agent wrote carries no operation, and undo and search, which protocol 1 does not have, are unknown ops that reject the request and keep the session. The server's half only: the TypeScript client speaks protocol 2, so it does not play this one.",
+      "covers": "A device on protocol 1 is answered in protocol 1 by a server of protocol 2: its ready says 1, a history entry an agent wrote carries no operation, and undo and search, which protocol 1 does not have, and restore, are unknown ops that reject the request and keep the session. The server's half only: the TypeScript client speaks protocol 2, so it does not play this one.",
       "steps": [
         {
           "store": {
@@ -2221,6 +2343,24 @@
           "expect": {
             "res": "err",
             "id": 4,
+            "code": "protostate",
+            "msg": "$msg",
+            "retryable": false
+          }
+        },
+        {
+          "conn": "laptop",
+          "send": {
+            "op": "restore",
+            "id": 5,
+            "at": 1
+          }
+        },
+        {
+          "conn": "laptop",
+          "expect": {
+            "res": "err",
+            "id": 5,
             "code": "protostate",
             "msg": "$msg",
             "retryable": false

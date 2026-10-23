@@ -3,6 +3,7 @@ import { focusMainWindow, isMainWindow, openInMainWindow } from "./main-window.t
 import type { SyncPreview } from "../core/preview.ts";
 import { ActivityLog, ActivityModal } from "./activity.ts";
 import { ConflictsModal } from "./conflicts.ts";
+import { RestoreTimeModal } from "./restore-time.ts";
 import {
   ON_DEMAND_PRESETS,
   ServerOnlyModal,
@@ -578,6 +579,11 @@ export default class TrewPlugin extends Plugin {
       },
     });
     this.addCommand({
+      id: "restore-to-time",
+      name: "Restore a folder, or the vault, to an earlier time",
+      callback: () => this.openRestoreTime(""),
+    });
+    this.addCommand({
       id: "download-note-attachments",
       name: "Download the attachments this note needs",
       checkCallback: (checking) => {
@@ -627,7 +633,15 @@ export default class TrewPlugin extends Plugin {
     // history on the file menu, so this goes in the same place.
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
-        if (!("extension" in file)) return;
+        if (!("extension" in file)) {
+          menu.addItem((item) =>
+            item
+              .setTitle("TrewSync: restore to an earlier time")
+              .setIcon("history")
+              .onClick(() => this.openRestoreTime(file.path === "/" ? "" : file.path)),
+          );
+          return;
+        }
         menu.addItem((item) =>
           item
             .setTitle("TrewSync: version history")
@@ -2065,6 +2079,19 @@ export default class TrewPlugin extends Plugin {
         ".",
     );
     void this.syncNow();
+  }
+
+  /** The restore of a folder, or of every note, to a time (`RestoreTimeModal`). */
+  openRestoreTime(folder: string): void {
+    const client = this.client;
+    if (!client) {
+      new Notice(`TrewSync: ${this.whyNoClient()}`);
+      return;
+    }
+    new RestoreTimeModal(this.app, folder, {
+      restore: (ask) => client.restoreTo(ask),
+      undo: (opId) => client.undo(opId),
+    }).open();
   }
 
   /** What a note embeds or links that is on the server only, fetched as it opens. */

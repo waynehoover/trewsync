@@ -56,6 +56,30 @@ type RestoreRequest struct {
 	Head int64
 	// Now is the server's clock in milliseconds, every new version's mtime.
 	Now int64
+	// Folder, when not empty, scopes the restore to that folder: the path
+	// itself and every path under it, by name, so "Projects" is not
+	// "Projects Archive". A note moved out of it since ToUID is left where it
+	// went and not put back, and a note moved into it since is left there
+	// and not removed (KeptMovedOut, KeptMovedIn): a restore of one folder
+	// changes nothing outside it, and removes no note that only arrived from
+	// elsewhere.
+	Folder string
+	// NotesOnly leaves every setting as it is, and binds the plan to the
+	// vault's newest uid that is not a setting (NotesHead), so a device
+	// saving its settings between the preview and the apply leaves the
+	// preview standing. A device's restore.
+	NotesOnly bool
+	// MaxEntries, when not zero, refuses a plan that would write more
+	// versions than it, as result_too_large.
+	MaxEntries int
+}
+
+// inScope is whether the request's restore reaches path.
+func (r RestoreRequest) inScope(path string) bool {
+	if r.NotesOnly && paths.IsConfig(path) {
+		return false
+	}
+	return r.Folder == "" || path == r.Folder || strings.HasPrefix(path, r.Folder+"/")
 }
 
 // RestorePlan is the restore as an operation, and what it found.
@@ -84,6 +108,11 @@ type RestorePlan struct {
 	// Gone is every path whose state at ToUID the store can no longer give
 	// back exactly. Any refuses the restore.
 	Gone []GonePath
+	// KeptMovedOut is every path in the folder at ToUID that a rename has
+	// since taken out of it, and KeptMovedIn every path a rename has since
+	// brought into it, both left as they are (RestoreRequest.Folder).
+	KeptMovedOut []string
+	KeptMovedIn  []string
 }
 
 // Operation is the plan as an operation. The caller adds the actor, the
@@ -123,23 +152,53 @@ type restoreRow struct {
 // at the uid a purge has made unreadable or whose body is missing.
 func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 	plan := RestorePlan{ToUID: r.ToUID}
-	head, err := s.LatestUID(r.Vault)
+	latest, err := s.LatestUID(r.Vault)
 	if err != nil {
 		return plan, failed("", err)
 	}
+	head := latest
+	if r.NotesOnly {
+		if head, err = s.NotesHead(r.Vault); err != nil {
+			return plan, failed("", err)
+		}
+	}
 	plan.Head = head
 	switch {
-	case r.ToUID < 1 || r.ToUID > head:
-		return plan, refused("", OpCodeNotFound, "", head, fmt.Errorf(
-			"%w: uid %d, and the vault's uids run from 1 to %d", ErrNoSuchUID, r.ToUID, head))
+	case r.ToUID < 1 || r.ToUID > latest:
+		return plan, refused("", OpCodeNotFound, "", latest, fmt.Errorf(
+			"%w: uid %d, and the vault's uids run from 1 to %d", ErrNoSuchUID, r.ToUID, latest))
 	case r.Head != 0 && r.Head != head:
 		return plan, refused("", OpCodePlanChanged, "", head, fmt.Errorf(
 			"%w: previewed at uid %d, and the vault is at uid %d; preview it again", ErrPlanChanged, r.Head, head))
 	}
 
-	rows, err := s.restoreRows(r.Vault, r.ToUID)
+	all, err := s.restoreRows(r.Vault, r.ToUID)
 	if err != nil {
 		return plan, err
+	}
+	rows := all[:0]
+	for _, row := range all {
+		if !r.inScope(row.path) {
+			continue
+		}
+		if r.Folder != "" {
+			moved, err := s.movedAcross(r, row)
+			if err != nil {
+				return plan, failed("", err)
+			}
+			switch moved {
+			case movedOut:
+				plan.KeptMovedOut = append(plan.KeptMovedOut, row.path)
+				continue
+			case movedIn:
+				plan.KeptMovedIn = append(plan.KeptMovedIn, row.path)
+				// Kept as it is: a path unchanged since ToUID is left alone,
+				// and this one is now treated as one, so a folder it is in
+				// is kept too.
+				row.then, row.hadThen, row.thenLive, row.thenFolder = row.now, row.hasNow, row.nowLive, row.nowFolder
+			}
+		}
+		rows = append(rows, row)
 	}
 	marked, err := s.PurgedThrough(r.Vault)
 	if err != nil {
@@ -275,12 +334,96 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 		add(OpEntry{Entry: e, Base: row.headNow()},
 			UndoStep{Action: UndoRestore, Path: row.path, Before: row.then.UID, After: row.headNow()})
 	}
+	if r.MaxEntries > 0 && len(plan.Entries) > r.MaxEntries {
+		return plan, refused("", OpCodeResultTooLarge, "", 0, fmt.Errorf(
+			"%w: the restore would write %d versions, and one from a device writes at most %d; "+
+				"restore one folder at a time", ErrResultTooLarge, len(plan.Entries), r.MaxEntries))
+	}
 	if len(plan.Entries) > MaxOperationEntries {
 		return plan, refused("", OpCodeResultTooLarge, "", 0, fmt.Errorf(
 			"%w: the restore would write %d versions, and one operation writes at most %d",
 			ErrResultTooLarge, len(plan.Entries), MaxOperationEntries))
 	}
 	return plan, nil
+}
+
+type crossing int
+
+const (
+	notMoved crossing = iota
+	movedOut
+	movedIn
+)
+
+// movedAcross says whether a rename since r.ToUID took row's path out of
+// r.Folder, the note still live where it went, or brought it in from outside.
+func (s *Store) movedAcross(r RestoreRequest, row restoreRow) (crossing, error) {
+	if row.thenLive && !row.hasNow {
+		// Retired by a rename: its head is the rename, the version at the
+		// destination.
+		dest, ok, err := s.EntryByUID(r.Vault, row.now.UID)
+		if err != nil || !ok || dest.Path == row.path || r.inScope(dest.Path) {
+			return notMoved, err
+		}
+		_, state, _, err := s.EntryAsOf(r.Vault, dest.Path, 0)
+		if err != nil || state != PathLive {
+			return notMoved, err
+		}
+		return movedOut, nil
+	}
+	if row.nowLive && !row.thenLive {
+		in, err := s.arrivedFromOutside(r, row.path, 0)
+		if err != nil || !in {
+			return notMoved, err
+		}
+		return movedIn, nil
+	}
+	return notMoved, nil
+}
+
+// arrivedFromOutside is whether a rename since r.ToUID brought path into
+// r.Folder from outside it, following renames within the folder back to the
+// first name it had there: a note moved in and then renamed is still one that
+// arrived from elsewhere.
+func (s *Store) arrivedFromOutside(r RestoreRequest, path string, depth int) (bool, error) {
+	if depth > 64 {
+		return false, nil
+	}
+	rows, err := s.db.Query(`SELECT prev_path FROM entries
+	  WHERE vault_id = ? AND path = ? AND uid > ? AND COALESCE(prev_path, '') != ''`,
+		r.Vault, path, r.ToUID)
+	if err != nil {
+		return false, err
+	}
+	var prevs []string
+	for rows.Next() {
+		var prev string
+		if err := rows.Scan(&prev); err != nil {
+			rows.Close()
+			return false, err
+		}
+		prevs = append(prevs, prev)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	for _, prev := range prevs {
+		if !r.inScope(prev) {
+			return true, nil
+		}
+		// Renamed within the folder: from a name it had at ToUID, it was
+		// here then, and otherwise follow that name back.
+		if _, state, _, err := s.EntryAsOf(r.Vault, prev, r.ToUID); err != nil {
+			return false, err
+		} else if state == PathLive {
+			continue
+		}
+		if in, err := s.arrivedFromOutside(r, prev, depth+1); err != nil || in {
+			return in, err
+		}
+	}
+	return false, nil
 }
 
 // changed is whether the path's version now is not the one it held at ToUID.

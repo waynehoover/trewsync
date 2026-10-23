@@ -372,6 +372,20 @@ async function replay(file: TranscriptFile, tr: Transcript): Promise<Replayed> {
       case "undo":
         promise = t.undo(f["opId"] as string, f["toCopy"] === true ? { toCopy: true } : {});
         break;
+      case "restore":
+        promise = t.restore(
+          f["apply"] === true
+            ? {
+                uid: f["uid"] as number,
+                head: f["head"] as number,
+                ...(f["folder"] !== undefined ? { folder: f["folder"] as string } : {}),
+              }
+            : {
+                at: f["at"] as number,
+                ...(f["folder"] !== undefined ? { folder: f["folder"] as string } : {}),
+              },
+        );
+        break;
       case "search":
         promise = t.search({
           query: f["query"] as string,
@@ -732,6 +746,17 @@ const RESULTS: Record<string, (c: Map<string, Conn>) => void> = {
     expect(value(laptop, 3, "ping")).toBeUndefined();
     expect(laptop.openAtEnd, "a refused undo ended the session").toBe(true);
   },
+  "restore refusals": (c) => {
+    const laptop = c.get("laptop")!;
+    expect(refusal(laptop, 1, "restore")).toMatchObject({
+      code: "norestore",
+      message: "before_history: example",
+    });
+    expect(refusal(laptop, 2, "restore").code).toBe("badentry");
+    expect(refusal(laptop, 3, "restore").code).toBe("badpath");
+    expect(value(laptop, 4, "ping")).toBeUndefined();
+    expect(laptop.openAtEnd, "a refused restore ended the session").toBe(true);
+  },
 };
 
 /**
@@ -797,6 +822,7 @@ describe("the protocol transcripts, played to the real transport", () => {
         "undo",
         "undo of nothing",
         "search",
+        "restore refusals",
         "protocol 1 is still answered",
       ].sort(),
     );
@@ -804,7 +830,7 @@ describe("the protocol transcripts, played to the real transport", () => {
 
   it("sends exactly the client side of every transcript, and returns what it says", async () => {
     const all = await replayAll(load());
-    expect([...all.keys()]).toHaveLength(11);
+    expect([...all.keys()]).toHaveLength(12);
   });
 
   it("leaves the server alone with exactly the transcripts of another protocol", () => {
