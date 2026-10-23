@@ -596,7 +596,24 @@ async function main(): Promise<void> {
   const inApp = async (body: string, timeoutMs?: number) =>
     phone.evaluate(expression(body), timeoutMs);
   const phoneInventory = async () => {
-    const out = await phone.shell("find", VAULT_DIR, "-type", "f", "-exec", "sha256sum", "{}", "+");
+    let out: string;
+    try {
+      out = await phone.shell("find", VAULT_DIR, "-type", "f", "-exec", "sha256sum", "{}", "+");
+    } catch {
+      // In App storage a file Obsidian made is not readable from adb's shell,
+      // so Obsidian hashes the vault itself, through its own adapter.
+      const inApp = (await phone.evaluate(
+        expression(`const out = {};
+        for (const f of app.vault.getFiles()) {
+          if (f.path.split("/").some((s) => s.startsWith("."))) continue;
+          const d = await crypto.subtle.digest("SHA-256", await app.vault.adapter.readBinary(f.path));
+          out[f.path] = [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("");
+        }
+        return out;`),
+        300_000,
+      )) as Record<string, string>;
+      return new Map(Object.entries(inApp).map(([p, h]) => [p.normalize("NFC"), h]));
+    }
     const inv = new Map<string, string>();
     for (const line of out.split("\n")) {
       const m = /^([0-9a-f]{64})\s+(.*)$/.exec(line.trim());
@@ -922,8 +939,13 @@ async function main(): Promise<void> {
     await waitFor(
       "the phone and the Mac to agree",
       async () => {
-        await mac.c!.settle({ coalesceWrites: false });
-        disagree = diff(await inventory(dirA), await phoneInventory());
+        try {
+          await mac.c!.settle({ coalesceWrites: false });
+          disagree = diff(await inventory(dirA), await phoneInventory());
+        } catch (err) {
+          // Kept, because the wait reads a throw as "not yet" and says nothing.
+          disagree = [`a check failed: ${(err as Error).message}`];
+        }
         return disagree.length === 0;
       },
       600_000,
