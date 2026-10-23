@@ -153,15 +153,17 @@ TrewSync alone on the thread. If the quiet-pass shares and the desktop shares
 disagree, that disagreement goes in [research.md](research.md) and this rewrite
 does not start on the strength of it.
 
-**Where the measurement got to.** The harness exists, it works, and it has
-produced one Android data point: five hundred notes, where decide plus
-comparison is 38.1% of a quiet pass, below the threshold but at a size nobody
-claimed was decisive. Ten thousand was attempted and did not finish; the run is
-written up in [research.md](research.md#ten-thousand-notes-on-the-phone-was-attempted-and-not-obtained)
-along with why it cannot be read as a result. Fifty thousand has not been tried.
+**Where the measurement got to.** Two Android data points. At five hundred
+notes decide plus comparison was 38.1% of a quiet pass. At ten thousand, on a
+Pixel 9a with the vault in App storage
+([research.md](research.md#ten-thousand-notes-on-the-phone-october-22-2026)),
+it was 65% of a quiet pass that took about 100 ms in all: the first clause
+holds at that size and the second does not, by half. Fifty thousand has not
+been tried.
 
-So this stays declined, and the reason is unchanged rather than strengthened:
-there is still no phone number at the size the threshold names.
+So this stays declined. The share is now over the line, but a pass nobody
+waits on is the case the second clause exists for, and the size the threshold
+names is still unmeasured.
 
 **What the Mac run at ten thousand notes adds, and what it does not.** On the
 realistic corpus a quiet pass of the headless client took 58 ms and a saved

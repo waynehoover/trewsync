@@ -395,6 +395,42 @@ proves the harness, not the phone: its numbers are this Mac's, and the one
 worth keeping is that a headless client reconciled 10,000 seeded files it
 already held in 4 s, against the thirty unfinished minutes above.
 
+### Ten thousand notes on the phone, October 22, 2026
+
+Obtained this time. Pixel 9a, Android 17, Obsidian 1.14.4, plugin at
+`bd3f19e`, the vault in App storage
+(`/sdcard/Android/data/md.obsidian/files`), a disposable `trewd` on an M4
+Pro reached over `adb reverse`, and the realistic corpus of 10,000 files.
+`bun run bench:phone` with `PHONE_ROOT` set; the phone was awake with
+Obsidian in front at every one of its checks.
+
+| | |
+|---|---|
+| First reconcile of a seeded vault | 167 s (three other clean runs: 164, 175, 176) |
+| `syncNow`, median of seven | 94 ms |
+| Quiet pass, median of eight | 104 ms: list 20, decide 49, journal compare 29, save 42 |
+| A saved edit, Mac to phone and back, medians | 378 and 398 ms, each with a 92 ms DevTools round trip |
+| Catch-up on 500 edits made while the phone was paused | 86 s |
+
+Every file on both devices matched byte for byte afterwards, and the one
+note edited on both sides kept both versions, the Mac's in a conflict copy.
+
+Against the threshold in [open work](open-work.md#a-pass-still-re-decides-the-whole-vault):
+decide plus comparison was 65% of a quiet pass (62 to 67% over four runs),
+over the half the first clause names. The second clause, a save pass longer
+than 200 ms, is not met at this size: the whole quiet pass is about 100 ms.
+The threshold is written for fifty thousand notes, which is still untried.
+
+Three earlier attempts the same day are not results. In the first, the phone
+was charging from the wall and adb was over Wi-Fi, so `svc power stayon usb`
+did not hold it and it slept behind its lock screen; the benchmark now says
+`stayon true`. In the next two, the tar the benchmark seeds with left folders
+owned by adb's shell user, which Obsidian could not create files in, so every
+in-place update failed for want of its backup (correctly refused, and retried);
+and then the final comparison could not read, over adb, the files Obsidian had
+made in App storage. The benchmark now gives the tree Obsidian's group and
+hashes the vault through Obsidian where adb cannot.
+
 ### A first download on Android, October 16, 2026
 
 Pixel 9 Pro XL, Obsidian's WebView driven over its DevTools socket, a
