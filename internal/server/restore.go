@@ -203,7 +203,7 @@ func (s *Session) handleRestore(m wire.In) error {
 	plan := done.Plan
 	reply := wire.Restored{Res: "restored", ID: s.reqID, Applied: done.Applied, Folder: m.Folder, ToUID: toUID,
 		At: times[toUID], Head: plan.Head, Unchanged: plan.Unchanged, Steps: []store.UndoStep{},
-		KeptMovedIn: []string{}, KeptMovedOut: []string{}}
+		KeptMovedIn: []string{}}
 	rows := wire.RestoreRows
 	for _, st := range plan.Steps {
 		switch st.Action {
@@ -221,17 +221,12 @@ func (s *Session) handleRestore(m wire.In) error {
 			reply.More++
 		}
 	}
-	for _, kept := range []struct {
-		from []string
-		to   *[]string
-	}{{plan.KeptMovedIn, &reply.KeptMovedIn}, {plan.KeptMovedOut, &reply.KeptMovedOut}} {
-		for _, p := range kept.from {
-			if rows > 0 {
-				*kept.to = append(*kept.to, p)
-				rows--
-			} else {
-				reply.More++
-			}
+	for _, p := range plan.KeptMovedIn {
+		if rows > 0 {
+			reply.KeptMovedIn = append(reply.KeptMovedIn, p)
+			rows--
+		} else {
+			reply.More++
 		}
 	}
 	if done.Applied {

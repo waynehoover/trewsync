@@ -5888,45 +5888,26 @@ describe("freeing the space of attachments the server holds", () => {
     expect(await a.vault.read("big.png")).toEqual(big);
   });
 
-  it("keeps a downloaded file here when another device renames it", async () => {
+  /**
+   * Renamed on another device, a file the setting covers goes back to the
+   * server only here, and downloads again when it is opened: the old name
+   * goes, as any rename's does, and the new one is a file this device has
+   * never held. Nothing is deleted anywhere. Decided 2026-10-23, after three
+   * reviews found that keeping it downloaded depended on the order batches
+   * and passes arrive in.
+   */
+  it("leaves a downloaded file renamed elsewhere on the server, losing nothing", async () => {
     const { a, phone } = await fetched();
     await a.vault.remove("big.png");
     await a.vault.write("renamed.png", big, { mtime: 2_000, ctime: 1_000 });
     a.engine.noteRename("big.png", "renamed.png");
     await a.settle();
     const r = await phone.settle();
-    expect(await phone.vault.read("renamed.png")).toEqual(big);
     expect(phone.vault.snapshot()["big.png"]).toBeUndefined();
-    expect(r.serverOnly).toBe(0);
-  });
-
-  /**
-   * The old name goes in the same pass as the new one is written, so a
-   * write that fails once must leave the new name owed, not left on the
-   * server by the next pass. Found by review, 2026-10-23.
-   */
-  it("still downloads a renamed file after one failed write of its new name", async () => {
-    const { a, phone } = await fetched();
-    await a.vault.remove("big.png");
-    await a.vault.write("renamed.png", big, { mtime: 2_000, ctime: 1_000 });
-    a.engine.noteRename("big.png", "renamed.png");
-    await a.settle();
-    await receiveCommitted(phone.transport);
-    const create = phone.vault.create.bind(phone.vault);
-    let failed = false;
-    phone.vault.create = async (path, bytes, t) => {
-      if (path === "renamed.png" && !failed) {
-        failed = true;
-        throw new Error("transient write failure");
-      }
-      return create(path, bytes, t);
-    };
-    await phone.engine.sync();
-    expect(failed).toBe(true);
-    phone.vault.create = create;
-    const after = await phone.settle();
-    expect(after.serverOnly, "a failed rename became a file left on the server").toBe(0);
-    expect(await phone.vault.read("renamed.png")).toEqual(big);
+    expect(phone.vault.snapshot()["renamed.png"]).toBeUndefined();
+    expect(r.serverOnly).toBe(1);
+    expect(await versionsOf(phone, "renamed.png")).toEqual(["5000:a"]);
+    expect(await a.vault.read("renamed.png")).toEqual(big);
   });
 
   /**

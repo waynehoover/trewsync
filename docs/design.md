@@ -218,10 +218,12 @@ and a body that rotted under its name is only found by reading it. The other
 order is a deletion sent to every device after a crash, which the
 engine test "sends no deletion when the process dies at the index save"
 shows. As a last line, the engine refuses to send a deletion for a path with
-no base, or one it left on the server this pass. A file the server has under a
-new name whose content this device already holds, the far half of a rename,
-downloads rather than staying on the server, or the rename's other half would
-take it off this device.
+no base, or one it left on the server this pass. A covered file renamed on
+another device is a new name this device has never held, so it goes back to
+the server only, while the old name is removed here as any rename's is;
+nothing is deleted anywhere. Keeping it downloaded instead depended on the
+order batches and passes arrive in, and three reviews in a row found an
+ordering that lost track of it (2026-10-23).
 
 ## The agent endpoint
 

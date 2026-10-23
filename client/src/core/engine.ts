@@ -1131,23 +1131,6 @@ export class Engine {
   private serverOnly = new Map<string, number>();
   /** The same, as the last pass to finish left it, for `status` and `serverOnlyPaths`. */
   private serverOnlyLast: ReadonlyMap<string, number> = new Map();
-  /**
-   * The contents leaving this device as the pass began, by content hash: a
-   * file synced here whose server record is now a deletion or a rename away,
-   * which this pass removes. A file the server has under a new name with one
-   * of these contents is that file renamed elsewhere, and is fetched rather
-   * than left on the server, or the rename would take it off this device.
-   * Only leaving: a file freed here while an identical one stays is not a
-   * rename, and stays on the server.
-   */
-  private heldHere: ReadonlySet<string> = new Set();
-  /**
-   * The paths a rename elsewhere owes this device a download of, with the
-   * content owed: kept until it lands, because the old name goes in the same
-   * pass, and a destination whose write failed once would otherwise be left
-   * on the server by the next.
-   */
-  private readonly owed = new Map<string, string>();
   /** Whether the pass running now applies held settings (`applySettings`). */
   private applyingSettings = false;
   /** `SyncOptions.applyOnly` for the pass running now. */
@@ -1943,8 +1926,6 @@ export class Engine {
           !other.deleted &&
           !isConfigPath(path) &&
           !looksLikeText(path) &&
-          !this.heldHere.has(other.hash) &&
-          this.owed.get(path) !== other.hash &&
           this.opts.onDemand?.(path, other.size) === true
         )
           action = "server-only";
@@ -2035,26 +2016,6 @@ export class Engine {
     const report = emptyReport();
     this.heldSettings = new Set();
     this.serverOnly = new Map();
-    const leaving = new Set<string>();
-    if (this.opts.onDemand !== undefined) {
-      for (const [path, e] of this.entries) {
-        if (e.folder || e.synchash === "") continue;
-        const r = this.remote.get(path);
-        if (r === undefined || r.deleted) leaving.add(e.synchash);
-      }
-    }
-    this.heldHere = leaving;
-    for (const [path, hash] of this.owed) {
-      const r = this.remote.get(path);
-      if (
-        this.entries.get(path)?.synchash === hash ||
-        r === undefined ||
-        r.deleted ||
-        r.hash !== hash
-      ) {
-        this.owed.delete(path);
-      }
-    }
     this.settingsUnsendable = new Set();
     this.applyingSettings = opts.applySettings === true;
     this.applyOnly = opts.applyOnly;
@@ -2839,7 +2800,6 @@ export class Engine {
       !remote.deleted &&
       !isConfigPath(path) &&
       !looksLikeText(path) &&
-      !this.owedHere(path, remote.hash) &&
       this.opts.onDemand?.(path, remote.size) === true
     ) {
       if (entry.prev === "" && entry.creating === undefined) this.entries.delete(path);
@@ -4257,14 +4217,6 @@ export class Engine {
    * Whether the server sends back every chunk under its name, read one fetch
    * at a time so a large file is never held whole.
    */
-  /** Whether path, holding hash on the server, is a rename this device owes a download of. */
-  private owedHere(path: string, hash: string): boolean {
-    if (this.owed.get(path) === hash) return true;
-    if (!this.heldHere.has(hash)) return false;
-    this.owed.set(path, hash);
-    return true;
-  }
-
   private async readsBackIntact(
     path: string,
     names: readonly string[],

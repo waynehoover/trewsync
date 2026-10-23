@@ -4493,6 +4493,146 @@ describe("an unload while the plugin is still loading", () => {
    * next instance started beside a client still writing the index. Found by
    * review, 2026-10-23, with the adapter's I/O serialised as Obsidian's is.
    */
+  /**
+   * The next instance waits for every close to finish, not for the first to
+   * fail: a background settings save failing while a client was still
+   * closing let it start beside that client. Found by review, 2026-10-23.
+   */
+  it("waits for a client still closing when a settings save fails meanwhile", async () => {
+    await fresh();
+    const writer = await load();
+    await startVault(writer.plugin, "writer");
+    await synced(writer.plugin);
+    const host = new App({ secretStorage: keychain });
+    const raw = host.vault.adapter;
+    let queue = Promise.resolve();
+    const queued = new Set([
+      "exists",
+      "stat",
+      "read",
+      "readBinary",
+      "write",
+      "writeBinary",
+      "append",
+      "process",
+      "list",
+      "mkdir",
+      "rename",
+      "remove",
+      "rmdir",
+      "trashSystem",
+      "trashLocal",
+    ]);
+    const serialAdapter = new Proxy(raw, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== "function") return value;
+        if (!queued.has(String(prop))) return value.bind(target);
+        return (...args: unknown[]) => {
+          const next = queue.then(async () => {
+            await nextTurn();
+            return value.apply(target, args);
+          });
+          queue = next.then(
+            () => undefined,
+            () => undefined,
+          );
+          return next;
+        };
+      },
+    });
+    Object.defineProperty(host.vault, "adapter", { value: serialAdapter });
+    const first = await load(null, undefined, undefined, undefined, host);
+    await first.plugin.pair(await anInvite(), "phone");
+    await synced(first.plugin);
+    const gate = deferred();
+    const entered = deferred();
+    let held = false;
+    const rename = raw.rename.bind(raw);
+    raw.rename = async (from, to) => {
+      if (!held && from.includes(".trew-tmp-")) {
+        held = true;
+        entered.resolve();
+        await gate.promise;
+      }
+      return rename(from, to);
+    };
+    for (let i = 0; i < 30; i++)
+      writer.app.vault.adapter.seed(`note-${i}.md`, "the bytes being landed\n");
+    await writer.plugin.syncNow();
+    await entered.promise;
+    const oldClient = (first.plugin as unknown as { client: Client }).client;
+    const closeClient = oldClient.close.bind(oldClient);
+    let oldClientDrained = false;
+    oldClient.close = async () => {
+      await closeClient();
+      oldClientDrained = true;
+    };
+    const configSaving = deferred();
+    const failConfigSave = deferred();
+    first.plugin.saveData = async () => {
+      configSaving.resolve();
+      await failConfigSave.promise;
+      throw new Error("injected settings write failure");
+    };
+    const internals = first.plugin as unknown as {
+      generation: number;
+      config: Record<string, unknown>;
+      settledFirstTime(mine: number): void;
+    };
+    internals.config = { ...internals.config, settingsReplay: true };
+    internals.settledFirstTime(internals.generation);
+    await configSaving.promise;
+    const changing = first.plugin.setOnDemand(1_000).catch(() => undefined);
+    first.plugin.onunload();
+    let closed = false;
+    void first.plugin.closing!.then(() => {
+      closed = true;
+    });
+    const second = makePlugin(first.app);
+    loaded.push(second);
+    second.savedData = first.plugin.savedData;
+    (second as unknown as { confirmSync: () => Promise<boolean> }).confirmSync = async () => true;
+    let secondLoaded = false;
+    let oldWasDrainedWhenNewLoaded = false;
+    let newConnectedBeforeOldDrained = false;
+    second.watchState((state) => {
+      if (state.kind === "syncing" && !oldClientDrained) newConnectedBeforeOldDrained = true;
+    });
+    const loading = second.onload().then(() => {
+      secondLoaded = true;
+      oldWasDrainedWhenNewLoaded = oldClientDrained;
+    });
+    try {
+      failConfigSave.resolve();
+      for (let i = 0; i < 50; i++) await nextTurn();
+      const closedBeforeDraining = closed && !oldClientDrained;
+      expect(secondLoaded, "the next instance loaded while the old client was held mid-write").toBe(
+        false,
+      );
+      gate.resolve();
+      await loading;
+      await synced(second);
+      expect(
+        closedBeforeDraining,
+        "unload resolved while the old client was still blocked writing",
+      ).toBe(false);
+      expect(closed).toBe(true);
+      expect(
+        oldWasDrainedWhenNewLoaded,
+        "the next instance loaded before the old client closed",
+      ).toBe(true);
+      expect(newConnectedBeforeOldDrained, "the next instance synced beside the old client").toBe(
+        false,
+      );
+    } finally {
+      failConfigSave.resolve();
+      gate.resolve();
+      await changing;
+      await loading;
+    }
+  }, 300_000);
+
   it("waits for a client a settings change is still closing", async () => {
     await fresh();
     const writer = await load();

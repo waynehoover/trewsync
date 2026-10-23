@@ -21,8 +21,8 @@ release. The server still answers every older plugin and `trew`.
   command for the whole vault, pick a date and time, and preview exactly what
   would change before anything does. Restore puts the folder's notes and
   attachments back as the server had them then, on every device, as one change
-  that Undo reverses. Notes moved into or out of the folder since stay where
-  they are, and settings never change. See
+  that Undo reverses. Notes moved into the folder since stay where they are,
+  notes moved out of it come back as a copy, and settings never change. See
   [the plugin guide](docs/plugin.md#restore-a-folder-to-an-earlier-time).
 - **Attachments on demand.** A device can leave attachments of 1 MB or more
   (or 10 MB, or all of them) on the server and download each one when a note

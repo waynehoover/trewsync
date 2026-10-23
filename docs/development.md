@@ -1561,11 +1561,14 @@ restore converges with no conflict copy and keeps its own edit).
 `internal/server/restore.go`). The same planner with three more fields on
 `RestoreRequest`: `Folder` scopes it by name, `NotesOnly` leaves settings out
 and binds the plan to `NotesHead` rather than the vault's head, and
-`MaxEntries` refuses a plan over 10,000 versions whole. In a folder, a path
-retired by a rename whose destination is outside and still live is kept out
-(`KeptMovedOut`), and one created since whose rename chain, followed back
-inside the folder, starts outside is kept in (`KeptMovedIn`,
-`arrivedFromOutside`). A preview's time becomes a uid through `UIDAt`, the
+`MaxEntries` refuses a plan over 10,000 versions whole. In a folder, a note
+whose rename chain, traced back with each step strictly earlier, came from
+outside is kept in (`KeptMovedIn`, `arrivedFromOutside`); a rename onto a
+live name begins a note too. A note moved out is put back like any path: an
+earlier rule left it where it went, and three reviews in a row found reused
+names it followed to the wrong note, so it was dropped for an extra copy that
+loses nothing. Below the purge mark a device's restore is refused
+(`AbovePurgeMark`). A preview's time becomes a uid through `UIDAt`, the
 newest version `entry_times` says was committed by then; an apply names the
 uid and head and is planned again against them. Recorded as the device's
 `restore_to_uid`, which is why the schema is 5: a schema 4 build would report

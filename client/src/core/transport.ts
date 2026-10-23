@@ -194,7 +194,7 @@ export type RestoreAsk =
 /**
  * A restore's plan, and once applied its operation, which `undo` reverses.
  * `at` is when the server committed `toUid`, the moment the folder is put
- * back to. The counts are whole; `steps` and the two kept lists are the
+ * back to. The counts are whole; `steps` and `keptMovedIn` are the
  * first rows, and `more` how many were left out.
  */
 export interface RestoreResult {
@@ -209,7 +209,6 @@ export interface RestoreResult {
   readonly more: number;
   readonly steps: UndoStep[];
   readonly keptMovedIn: string[];
-  readonly keptMovedOut: string[];
   readonly opId?: string;
   readonly committedAt?: number;
 }
@@ -2582,10 +2581,9 @@ export class Transport {
     }
     const steps = reply["steps"];
     const movedIn = reply["keptMovedIn"];
-    const movedOut = reply["keptMovedOut"];
     const strings = (v: unknown): v is string[] =>
       Array.isArray(v) && v.every((p) => typeof p === "string" && p !== "");
-    if (!Array.isArray(steps) || !strings(movedIn) || !strings(movedOut)) {
+    if (!Array.isArray(steps) || !strings(movedIn)) {
       throw this.malformed("a restored with no list of steps or of notes left where they are");
     }
     const opId = reply["opId"];
@@ -2604,7 +2602,6 @@ export class Transport {
       more: this.count(reply, "more", "restored"),
       steps: this.stepsOf(steps, "a restored"),
       keptMovedIn: movedIn,
-      keptMovedOut: movedOut,
       ...(applied
         ? { opId: opId as string, committedAt: this.count(reply, "committedAt", "restored") }
         : {}),

@@ -86,12 +86,12 @@ func TestARestoreOfAFolderChangesNothingOutsideIt(t *testing.T) {
 	h.verified(t)
 }
 
-// A note moved out of the folder since is left where it went, and one moved
-// in is left where it arrived, even after a rename inside the folder: a
-// restore of one folder neither copies a note back that lives on elsewhere
-// nor removes one that only came from elsewhere. A rename within the folder
-// is undone like any other change.
-func TestARestoreOfAFolderLeavesNotesMovedAcrossItsEdge(t *testing.T) {
+// A note moved into the folder since is left where it arrived, even after a
+// rename inside the folder: a restore of one folder removes no note that only
+// came from elsewhere. A note moved out since is put back, so it is then in
+// both places, which loses nothing. A rename within the folder is undone
+// like any other change.
+func TestARestoreOfAFolderKeepsNotesMovedInAndPutsBackThoseMovedOut(t *testing.T) {
 	h := newTestStore(t)
 	body := func(s string) []string { return h.put(t, "v1", s) }
 	h.file(t, "Projects/out.md", "moved out later")
@@ -109,14 +109,12 @@ func TestARestoreOfAFolderLeavesNotesMovedAcrossItsEdge(t *testing.T) {
 		Chunks: body("moved in later"), MTime: 47})
 
 	plan, _ := h.restoreAsDevice(t, RestoreRequest{ToUID: at, Folder: "Projects"})
-	if len(plan.KeptMovedOut) != 1 || plan.KeptMovedOut[0] != "Projects/out.md" {
-		t.Errorf("kept as moved out: %q", plan.KeptMovedOut)
-	}
 	if len(plan.KeptMovedIn) != 1 || plan.KeptMovedIn[0] != "Projects/in renamed.md" {
 		t.Errorf("kept as moved in: %q", plan.KeptMovedIn)
 	}
 	sameVault(t, "after restoring Projects", h.vaultAt(t, 0), map[string]string{
 		"Archive/out.md":         "moved out later",
+		"Projects/out.md":        "moved out later",
 		"Projects/within.md":     "renamed within later",
 		"Projects/in renamed.md": "moved in later",
 	})
@@ -283,19 +281,19 @@ func TestRenamesBackAndForthAreTracedOnce(t *testing.T) {
 	}
 }
 
-// A note moved out and then renamed again outside is still where it went,
-// and is not put back in the folder as a second copy. Found by review.
-func TestANoteMovedOutTwiceIsNotPutBack(t *testing.T) {
+// A note moved out and renamed again outside is put back in the folder and
+// left where it went: two copies, nothing lost, nothing outside touched.
+func TestANoteMovedOutTwiceIsPutBackBeside(t *testing.T) {
 	h := newTestStore(t)
 	h.file(t, "Projects/out.md", "moved out")
 	at := h.latest(t)
 	h.move(t, "Projects/out.md", "Archive/out.md", "moved out")
 	h.move(t, "Archive/out.md", "Archive/final.md", "moved out")
-	plan, _ := h.restoreAsDevice(t, RestoreRequest{ToUID: at, Folder: "Projects"})
-	if len(plan.KeptMovedOut) != 1 {
-		t.Fatalf("kept as moved out: %q", plan.KeptMovedOut)
-	}
-	sameVault(t, "after the restore", h.vaultAt(t, 0), map[string]string{"Archive/final.md": "moved out"})
+	h.restoreAsDevice(t, RestoreRequest{ToUID: at, Folder: "Projects"})
+	sameVault(t, "after the restore", h.vaultAt(t, 0), map[string]string{
+		"Archive/final.md": "moved out",
+		"Projects/out.md":  "moved out",
+	})
 }
 
 // A device's restore below the purge mark is refused: the history there is

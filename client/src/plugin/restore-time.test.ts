@@ -59,7 +59,6 @@ const plan = (over: Partial<RestoreResult> = {}): RestoreResult => ({
     { action: "restore", path: "Projects/gone.md", before: 6, after: 9 },
   ],
   keptMovedIn: [],
-  keptMovedOut: [],
   ...over,
 });
 

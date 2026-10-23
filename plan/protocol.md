@@ -275,13 +275,13 @@ A device puts one folder, or every note in the vault, back as it was at a time, 
 -> {op:"restore", id, at, folder?}                     (preview)
 -> {op:"restore", id, apply:true, uid, head, folder?}  (apply)
 <- {res:"restored", id, applied, folder, toUid, at, head, restore, remove, removeFolder, unchanged,
-    steps:[{action, path, before?, after?, why?}], keptMovedIn:[path], keptMovedOut:[path], more,
+    steps:[{action, path, before?, after?, why?}], keptMovedIn:[path], more,
     opId?, committedAt?}
 ```
 
 **A time is the server's.** `at` is milliseconds; the preview resolves it to `toUid`, the newest version the server had committed by then by its own clock (`entry_times`), and answers `at` as the time that version was committed. What a device's clock said about a version plays no part: an offline edit uploaded on Wednesday belongs to Wednesday. A time before the oldest version with a recorded time is refused rather than guessed.
 
-**Scope is by name.** `folder` is the path itself and every path under it, so `Projects` is not `Projects Archive`; absent, every note. Nothing outside it changes. A note moved out of the folder since the time, and still live where it went, is left there and not copied back; a note moved into it since, following renames inside the folder back to where it came from, is left where it arrived and not removed. Both are listed. Everything else is the operator's restore: a version for each path whose head differs from its state then, a deletion for each path created since, nothing for a path that already holds what it held.
+**Scope is by name.** `folder` is the path itself and every path under it, so `Projects` is not `Projects Archive`; absent, every note. Nothing outside it changes. A note moved into it since, following renames inside the folder back to where it came from, and including one renamed onto a name that was live, is left where it arrived and not removed, and listed. A note moved out of it since is put back like any other path, so it is then in both places: an extra copy loses nothing, where telling the same note apart across reused names was not reliable. Everything else is the operator's restore: a version for each path whose head differs from its state then, a deletion for each path created since, nothing for a path that already holds what it held.
 
 **Preview, then exactly that.** A preview writes nothing. An apply names the `uid` and `head` its preview answered with and is planned again against them: if any note in the vault was saved since (`head` is the newest uid that is not a setting), it is refused `stale`, and the device previews again. The apply's versions reach every device as an ordinary `batch`, the asking device included, before the reply. `opId` is the operation, which `undo` reverses as a whole.
 
@@ -289,7 +289,7 @@ An apply of a preview that changes nothing commits nothing and says so: `applied
 
 **Never below a purge.** A point below the vault's purge mark is refused as `gone`, whatever the paths would say: a purge takes the commit times a time resolves from and the renames a folder's moves are read from, so the history there cannot answer either question, and a purge between a preview and its apply always moves the mark past the preview's point. The operator's `trewd restore` reads what is exact below the mark, or a backup taken before the purge is restored.
 
-The counts are whole; `steps`, `keptMovedIn` and `keptMovedOut` together list at most 500 rows, and `more` is how many were left out. A restore that would write more than 10,000 versions is refused whole, never cut short: a folder at a time goes through.
+The counts are whole; `steps` and `keptMovedIn` together list at most 500 rows, and `more` is how many were left out. A restore that would write more than 10,000 versions is refused whole, never cut short: a folder at a time goes through.
 
 Refusals, all before anything is written:
 

@@ -882,16 +882,18 @@ export default class TrewPlugin extends Plugin {
     this.wakeLoop?.();
     this.wakeLoop = undefined;
     const { live, client } = this.retireClients();
-    this.closing = Promise.all([
+    // Settled, not all: the next instance must wait for every one of these
+    // to finish, and `all` stopped waiting at the first that failed, so a
+    // settings save failing while a client was still closing let the next
+    // instance start beside it (found by review, 2026-10-23).
+    this.closing = Promise.allSettled([
       live?.close(),
       client?.close(),
       this.unlinking,
       this.pausing,
       ...this.settling,
       this.activityLog?.flush(),
-    ])
-      .then(() => undefined)
-      .catch(() => undefined);
+    ]).then(() => undefined);
     // And for the next instance of this plugin, which Obsidian may load into
     // the same app before this close has finished (T10).
     leaveClosing(this.app, this.closing);

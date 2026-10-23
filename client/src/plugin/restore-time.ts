@@ -150,12 +150,11 @@ export class RestoreTimeModal extends Modal {
       text: `${scope}, as the server had it at ${new Date(p.at).toLocaleString()}.`,
     });
     this.body.createEl("p", { text: summarise(p) });
-    const kept = [...p.keptMovedIn, ...p.keptMovedOut];
-    if (kept.length > 0) {
+    if (p.keptMovedIn.length > 0) {
       this.body.createEl("p", {
         text:
-          `Left where they are: ${kept.length} moved into or out of the folder since, ` +
-          `which a restore of the folder does not change.`,
+          `Left where they are: ${p.keptMovedIn.length} moved into the folder since, ` +
+          `which a restore of the folder does not remove.`,
       });
     }
     const list = this.body.createEl("ul", { cls: "trew-restore-list" });

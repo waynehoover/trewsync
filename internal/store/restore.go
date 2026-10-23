@@ -60,11 +60,13 @@ type RestoreRequest struct {
 	Now int64
 	// Folder, when not empty, scopes the restore to that folder: the path
 	// itself and every path under it, by name, so "Projects" is not
-	// "Projects Archive". A note moved out of it since ToUID is left where it
-	// went and not put back, and a note moved into it since is left there
-	// and not removed (KeptMovedOut, KeptMovedIn): a restore of one folder
-	// changes nothing outside it, and removes no note that only arrived from
-	// elsewhere.
+	// "Projects Archive". A note moved into it since is left there and not
+	// removed (KeptMovedIn): a restore of one folder changes nothing outside
+	// it, and removes no note that only arrived from elsewhere. A note moved
+	// out of it since is put back like any other, and so is then in both
+	// places: an extra copy is visible and loses nothing, where telling the
+	// same note apart across reused names was not (three reviews,
+	// 2026-10-23).
 	Folder string
 	// NotesOnly leaves every setting as it is, and binds the plan to the
 	// vault's newest uid that is not a setting (NotesHead), so a device
@@ -117,11 +119,9 @@ type RestorePlan struct {
 	// Gone is every path whose state at ToUID the store can no longer give
 	// back exactly. Any refuses the restore.
 	Gone []GonePath
-	// KeptMovedOut is every path in the folder at ToUID that a rename has
-	// since taken out of it, and KeptMovedIn every path a rename has since
-	// brought into it, both left as they are (RestoreRequest.Folder).
-	KeptMovedOut []string
-	KeptMovedIn  []string
+	// KeptMovedIn is every path a rename has since brought into the folder,
+	// left as it is (RestoreRequest.Folder).
+	KeptMovedIn []string
 }
 
 // Operation is the plan as an operation. The caller adds the actor, the
@@ -203,16 +203,12 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 		if !r.inScope(row.path) {
 			continue
 		}
-		if r.Folder != "" {
-			moved, err := s.movedAcross(r, row)
+		if r.Folder != "" && row.nowLive && row.changed() {
+			in, err := s.arrivedFromOutside(r, row.path)
 			if err != nil {
 				return plan, failed("", err)
 			}
-			switch moved {
-			case movedOut:
-				plan.KeptMovedOut = append(plan.KeptMovedOut, row.path)
-				continue
-			case movedIn:
+			if in {
 				plan.KeptMovedIn = append(plan.KeptMovedIn, row.path)
 				// Kept as it is: a path unchanged since ToUID is left alone,
 				// and this one is now treated as one, so a folder it is in
@@ -367,67 +363,6 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 			ErrResultTooLarge, len(plan.Entries), MaxOperationEntries))
 	}
 	return plan, nil
-}
-
-type crossing int
-
-const (
-	notMoved crossing = iota
-	movedOut
-	movedIn
-)
-
-// movedAcross says whether a rename since r.ToUID took row's path out of
-// r.Folder, the note still live wherever its renames took it, or whether the
-// note at the path now arrived from outside the folder since.
-func (s *Store) movedAcross(r RestoreRequest, row restoreRow) (crossing, error) {
-	if row.thenLive && !row.hasNow {
-		// Retired by a rename. The note followed is the one the path held at
-		// ToUID, from the first rename away after it, not whichever note
-		// held the name last: a name reused and moved away again is another
-		// note's. Followed through every later rename, each later than the
-		// last, to where it is now.
-		at, live, err := s.followRenames(r.Vault, row.path, r.ToUID)
-		if err != nil || !live || at == row.path || r.inScope(at) {
-			return notMoved, err
-		}
-		return movedOut, nil
-	}
-	if row.nowLive && row.changed() {
-		in, err := s.arrivedFromOutside(r, row.path)
-		if err != nil || !in {
-			return notMoved, err
-		}
-		return movedIn, nil
-	}
-	return notMoved, nil
-}
-
-// followRenames follows a note from path, where version uid put it, through
-// each rename that later took it away, to where it is now, and says whether
-// it is still live there. A deletion before the next rename ends it.
-func (s *Store) followRenames(vault, path string, uid int64) (string, bool, error) {
-	for {
-		var next sql.NullInt64
-		var to sql.NullString
-		err := s.db.QueryRow(`SELECT uid, path FROM entries WHERE vault_id = ? AND prev_path = ? AND uid > ?
-		  ORDER BY uid LIMIT 1`, vault, path, uid).Scan(&next, &to)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return "", false, err
-		}
-		var gone sql.NullInt64
-		if err := s.db.QueryRow(`SELECT MIN(uid) FROM entries WHERE vault_id = ? AND path = ? AND uid > ?
-		  AND deleted = 1`, vault, path, uid).Scan(&gone); err != nil {
-			return "", false, err
-		}
-		if !next.Valid {
-			return path, !gone.Valid, nil
-		}
-		if gone.Valid && gone.Int64 < next.Int64 {
-			return path, false, nil
-		}
-		path, uid = to.String, next.Int64
-	}
 }
 
 // arrivedFromOutside traces the note now at path back through the renames

@@ -729,7 +729,6 @@ type Restored struct {
 	Unchanged    int              `json:"unchanged"`
 	Steps        []store.UndoStep `json:"steps"`
 	KeptMovedIn  []string         `json:"keptMovedIn"`
-	KeptMovedOut []string         `json:"keptMovedOut"`
 	More         int              `json:"more"`
 	OpID         string           `json:"opId,omitempty"`
 	CommittedAt  int64            `json:"committedAt,omitempty"`

@@ -291,9 +291,10 @@ The time means what the server had received by then. A note edited on a phone
 while it was offline belongs to the time the phone sent it, not the time on
 the phone's clock. The preview says the exact moment it found.
 
-Only the folder changes. A note moved out of the folder since that time stays
-where it went, and a note moved into it since stays where it arrived; the
-preview says how many. Settings never change: a restore is of notes and
+Only the folder changes. A note moved into the folder since that time stays
+where it arrived, and the preview says how many. A note moved out of it since
+is put back in the folder, and the one where it went is left alone, so you
+then have both. Settings never change: a restore is of notes and
 attachments.
 
 Every device receives the restore as it syncs. **Undo** in the same window puts
@@ -531,8 +532,9 @@ weigh. **TrewSync: Download a file kept on the server** fetches any one of
 them, and **TrewSync: Download the attachments this note needs** fetches what
 the open note uses. Without a connection, an attachment you open waits and
 downloads when TrewSync reconnects, even if Obsidian restarts in between. Once
-downloaded, an attachment stays and syncs like any other file, including when
-another device renames it.
+downloaded, an attachment stays and syncs like any other file. If another
+device renames it, it goes back to the server only here, under its new name,
+and downloads again when you open it.
 
 Attachments already on the device stay when you turn it on. **Free space** in
 the panel removes the ones the setting covers from this device, keeping each

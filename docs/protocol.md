@@ -486,7 +486,7 @@ reasons and the result's shape are in
 -> {op:"restore", id, at, folder?}                     preview
 -> {op:"restore", id, apply:true, uid, head, folder?}  apply
 <- {res:"restored", id, applied, folder, toUid, at, head, restore, remove,
-    removeFolder, unchanged, steps, keptMovedIn, keptMovedOut, more,
+    removeFolder, unchanged, steps, keptMovedIn, more,
     opId?, committedAt?}
 ```
 
@@ -495,8 +495,9 @@ the server had it at a time, as one operation that `undo` reverses. Settings
 are never part of it. The time is the server's: `at` resolves to `toUid`, the
 newest version committed by then, and the reply's `at` is when that version
 was committed. A folder is the path and everything under it, by name; nothing
-outside it changes, and notes moved across its edge since are left where they
-are and listed. A preview writes nothing. An apply names the `uid` and `head`
+outside it changes. Notes moved into it since are left where they arrived and
+listed; notes moved out of it since are put back, so they are then in both
+places. A preview writes nothing. An apply names the `uid` and `head`
 its preview answered with, and a note saved since refuses it with `stale`.
 Over 10,000 versions, or a time before any recorded history, is `norestore`,
 whose message begins with the reason. The full contract is in
