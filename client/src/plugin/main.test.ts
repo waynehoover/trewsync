@@ -7748,6 +7748,18 @@ describe("settings sync", () => {
   }, 300_000);
 });
 
+/**
+ * Passes on `plugin` until `done` holds. One pass right after another
+ * device's sync can run before that device's batch has arrived here, which a
+ * slower disk makes likely (seen on CI's mounted filesystem, 2026-10-23).
+ */
+async function syncUntil(plugin: Testable, done: () => boolean): Promise<void> {
+  for (let i = 0; i < 50 && !done(); i++) {
+    await plugin.syncNow();
+    if (!done()) await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 describe("attachments on demand, in the plugin", () => {
   it("leaves a big attachment on the server, fetches it when its note opens, and frees it again", async () => {
     await fresh();
@@ -7765,7 +7777,7 @@ describe("attachments on demand, in the plugin", () => {
     const big = "x".repeat(5_000);
     laptop.app.vault.adapter.seed("big.png", big);
     await laptop.plugin.syncNow();
-    await phone.plugin.syncNow();
+    await syncUntil(phone.plugin, () => phone.plugin.serverOnly.size === 1);
     expect([...phone.plugin.serverOnly.keys()]).toEqual(["big.png"]);
     expect(phone.app.vault.adapter.text("big.png")).toBeUndefined();
 
@@ -7802,7 +7814,7 @@ describe("attachments on demand, in the plugin", () => {
     laptop.app.vault.adapter.seed("asked.png", "q".repeat(5_000));
     laptop.app.vault.adapter.seed("tapped.png", "t".repeat(5_000));
     await laptop.plugin.syncNow();
-    await phone.plugin.syncNow();
+    await syncUntil(phone.plugin, () => phone.plugin.serverOnly.size === 3);
     expect([...phone.plugin.serverOnly.keys()].sort()).toEqual([
       "Projects/assets/photo.png",
       "asked.png",
