@@ -5699,3 +5699,26 @@ describe("a setting Apply deleted that was never synced, or synced in another or
     expect(mac.vault.snapshot()[P]).toBeUndefined();
   });
 });
+
+describe("a setting saved a moment ago", () => {
+  it("waits for ten quiet seconds before it is sent, unless the sync is Sync now", async () => {
+    await fresh();
+    const enc = (s: string) => new TextEncoder().encode(s);
+    const P = ".obsidian/app.json";
+    const mac = new Device("mac");
+    mac.settings = { root: ".obsidian" };
+    devices.push(mac);
+    await mac.connect(server);
+    mac.step = 0;
+    await mac.vault.write(P, enc('{"a":1}'), { mtime: mac.clock, ctime: mac.clock });
+    const first = await mac.engine.sync();
+    expect(first.uploaded).toBe(0);
+    expect(first.waiting).toBe(1);
+    expect(first.nextUploadAt).toBe(mac.clock + 10_000);
+    mac.clock += 10_000;
+    expect((await mac.engine.sync()).uploaded).toBe(1);
+
+    await mac.vault.write(P, enc('{"a":2}'), { mtime: mac.clock, ctime: mac.clock });
+    expect((await mac.engine.sync({ coalesceWrites: false })).uploaded).toBe(1);
+  });
+});

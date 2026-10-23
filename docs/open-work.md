@@ -226,12 +226,6 @@ purpose, each with what would change the answer:
   two note edits can split one commit or move its time. Skipping them before
   the planner needs the export's position to cover their uids all the same,
   or `doctor` reports the export behind a settings write at the head.
-- **There is no quiet period.** The plan's ten second quiet period before a
-  setting is uploaded is not built; every settings save is a version, which
-  costs history and nothing else. (The other half of this item, a re-save in
-  another byte order reading as a change, was fixed on 2026-10-22: a settings
-  file is compared with the server's as parsed JSON before it is sent or
-  held.)
 
 ## Follow-ups from the 2026-10-06 review
 

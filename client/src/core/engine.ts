@@ -2716,7 +2716,16 @@ export class Engine {
 
     if (isConfigPath(path)) {
       // In scope here, or the pass would not have reached it.
-      const settings = await this.settingsAction(path, action, entry, local, scanned, report, now);
+      const settings = await this.settingsAction(
+        path,
+        action,
+        entry,
+        local,
+        scanned,
+        report,
+        now,
+        coalesce,
+      );
       if (settings === undefined) return;
       action = settings;
     }
@@ -2763,6 +2772,7 @@ export class Engine {
     scanned: Scanned | undefined,
     report: SyncReport,
     now: number,
+    coalesce = false,
   ): Promise<Action | undefined> {
     action = this.firstChoice(path, action, entry, local !== undefined) ?? action;
     // The same values in another order or layout are not a change, either way
@@ -2826,6 +2836,25 @@ export class Engine {
     // is, unchanged since it was hashed or the pass would have read it.
     const sendsLocal =
       action.kind === "upload" || action.kind === "merge" || action.kind === "conflict";
+    // A quiet period before a setting goes (plan/settings-sync.md): Obsidian
+    // saves its settings about a second after a change, and a plugin's tab
+    // often on every keystroke, and history need not keep each one. Waited
+    // out through the deferred-upload deadline, so a running client wakes
+    // for it; "Sync now" sends at once, and a clock set back never stalls it.
+    if (
+      sendsLocal &&
+      coalesce &&
+      local !== undefined &&
+      local.mtime <= now &&
+      now - local.mtime < SETTINGS_QUIET_MS
+    ) {
+      report.waiting++;
+      report.nextUploadAt = Math.min(
+        report.nextUploadAt ?? Infinity,
+        local.mtime + SETTINGS_QUIET_MS,
+      );
+      return undefined;
+    }
     if (sendsLocal && local !== undefined && looksLikeJson(path)) {
       if (!(await this.parsesHere(path, scanned))) {
         const seen = this.unparsable.get(path);
@@ -7143,6 +7172,9 @@ function ancestorIsGone(err: unknown): boolean {
  * second after a change, and short enough that nobody notices.
  */
 const SETTINGS_WRITE_WAIT_MS = 1_000;
+
+/** How long a setting stays unchanged before it is sent (plan/settings-sync.md). */
+const SETTINGS_QUIET_MS = 10_000;
 
 /**
  * How long a settings JSON file with the same content may go on not parsing

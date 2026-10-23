@@ -11,6 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Plugin
+
+- A changed setting is sent once it has been left alone for ten seconds, not
+  on every save. Obsidian saves a setting about a second after you change it,
+  and some plugins' settings tabs save on every keystroke; each save used to
+  become a version in the server's history. **Sync now** still sends at once.
+
 ### Command-line client
 
 - A note a crash cut off part way through being replaced is put back at the
