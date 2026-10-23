@@ -11,6 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.15.3, plugin, 0.14.2, server, and trew 0.13.1 (2026-10-22)
+
+The plugin and `trew` work with trewd 0.14.0 or later. Upgrading the
+server to 0.14.2 adds `trewd deleted -settings`.
+
 ### Command-line client
 
 - A new note is linked into place whole again, as before 0.13.0, and only
