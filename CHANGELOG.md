@@ -11,7 +11,15 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Plugin
+
+- An incoming change to a note that a crash cuts short as it is written is put
+  right when Obsidian starts again. The plugin writes each such update down
+  before it starts; at the next start, a note left holding part of the change
+  goes back to what it held, the part is kept aside and reported, and the
+  incoming change is fetched again. Before, the part could be sent to every
+  device as the note's newest version. Its original was always kept in a
+  conflict copy.
 
 ## 0.15.2, plugin (2026-10-22)
 

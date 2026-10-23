@@ -239,11 +239,10 @@ Until then the client's fixed 32 MiB text-frame ceiling (T07) covers default
 settings; a server with a lowered `-max-batch-bytes` and very large files can
 still produce a page a client refuses, loudly.
 
-**A crash during an in-place text update (T09).** A failed write now puts the
-note back, but a crash or power loss in the middle of the write leaves no
-record, so after a restart the cut note reads as an edit. Its original content
-survives in the backup conflict copy. Closing it needs a durable intent record
-per incoming text edit: one append and one clear each.
+**A crash during an in-place text update (T09).** Closed on 2026-10-22: the
+plugin writes each in-place update down before it truncates the note, and the
+next start puts a note the crash cut short back from its backup, keeps the cut
+text in a hidden folder the displaced log names, and sends nothing of it.
 
 **A crash during the headless client's replace.** If a crash keeps the note's
 move aside but loses the link back, the next pass reads the note as deleted.

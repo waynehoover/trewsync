@@ -58,7 +58,7 @@
  * Documents/TrewBench10k); every later run opens it with `obsidian://open`.
  * The script waits, and says so, until the WebView reports that vault.
  *
- * Environment: PHONE_VAULT, PHONE_FILES (10000), PHONE_SEED (1),
+ * Environment: PHONE_VAULT, PHONE_ROOT (/sdcard/Documents), PHONE_FILES (10000), PHONE_SEED (1),
  * PHONE_SETTLE_MS (first reconcile limit, 3600000), PHONE_REPEATS (7),
  * PHONE_OUT (report path), ANDROID_SERIAL (which device, as adb reads it).
  */
@@ -97,7 +97,13 @@ import {
 
 const DRY = process.argv.includes("--dry-run") || process.env["PHONE_DRY_RUN"] === "1";
 const VAULT = process.env["PHONE_VAULT"] ?? "TrewBench10k";
-const VAULT_DIR = `/sdcard/Documents/${VAULT}`;
+/**
+ * Where the vault's folder is on the phone. Device storage by default; a vault
+ * in App storage, which the plugin guide recommends for Android, is at
+ * `/sdcard/Android/data/md.obsidian/files`.
+ */
+const PHONE_ROOT = process.env["PHONE_ROOT"] ?? "/sdcard/Documents";
+const VAULT_DIR = `${PHONE_ROOT}/${VAULT}`;
 const PLUGIN_DIR = `${VAULT_DIR}/.obsidian/plugins/trew-sync`;
 /** The plugin writes a line per pass here while the file exists (`timingLog` in main.ts). */
 const TIMING_LOG = `${PLUGIN_DIR}/pass-timings.ndjson`;

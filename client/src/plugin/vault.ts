@@ -533,6 +533,14 @@ export class ObsidianVault implements Vault {
   /** Refreshed by every scan, for anything that reports. */
   displaced: readonly Displaced[] = [];
   /**
+   * Where an in-place text update is written down before it starts and
+   * removed once it has landed (`InPlaceWrite`), beside the displaced log, in
+   * the plugin's own folder, which never syncs.
+   */
+  private readonly writingMarker: string;
+  /** Whether this instance has looked for an update a crash interrupted. */
+  private checkedInterrupted = false;
+  /**
    * And whether that is the whole of it (RR2).
    *
    * It matters more here than in the headless client, because here the record
@@ -586,12 +594,15 @@ export class ObsidianVault implements Vault {
     this.adapter = vault.adapter;
     this.log = log;
     this.fsOverride = opts.fs;
+    const displacedLog = normalizePath(
+      opts.displacedLog ?? `${configFolderName(configDir)}/${DISPLACED_LOG}`,
+    );
     this.ledger = new DisplacedLedger(
-      new ObsidianDisplacedFiles(
-        vault.adapter,
-        normalizePath(opts.displacedLog ?? `${configFolderName(configDir)}/${DISPLACED_LOG}`),
-      ),
+      new ObsidianDisplacedFiles(vault.adapter, displacedLog),
       (message) => log(message),
+    );
+    this.writingMarker = normalizePath(
+      `${displacedLog.slice(0, Math.max(0, displacedLog.lastIndexOf("/")))}/${WRITING_MARKER}`,
     );
     // Obsidian's config folder is *not* assumed to be `.obsidian`: the API
     // says plainly that it could be something else, and that folder holds
@@ -975,6 +986,10 @@ export class ObsidianVault implements Vault {
     // A note an update was cut short in is put back before it is listed, so
     // the listing describes it whole and the pass fetches the update again
     // rather than reading the cut text as an edit (T09).
+    if (!this.checkedInterrupted) {
+      this.checkedInterrupted = true;
+      await this.recoverInterruptedWrite();
+    }
     for (const [normalized, held] of [...this.cutShort]) await this.putBack(normalized, held);
     this.actualName.clear();
     this.ambiguousPaths = [];
@@ -1589,6 +1604,30 @@ export class ObsidianVault implements Vault {
     }
 
     const changed = new Error("the note changed before its update could be applied");
+    const nextBytes = new TextEncoder().encode(next);
+    const beforeIsServers =
+      expect !== undefined && (await expect.idOf(before)) === expect.contentId;
+    // Written down before the note is truncated, so a crash part way is known
+    // for what it is after a restart (`recoverInterruptedWrite`). The backup
+    // above is what puts the note back then. Not written down, it is not
+    // written: a crash would leave a cut note nothing could tell from an edit.
+    try {
+      await this.writeDown(normalized, {
+        path: normalized,
+        keepAt: this.resolve(keepAt),
+        before: await plainDigest(before),
+        next: await plainDigest(nextBytes),
+        was,
+        beforeIsServers,
+      });
+    } catch (error) {
+      this.log(
+        `could not write down the update of ${path} first, so it was left alone`,
+        String(error),
+      );
+      await this.dropDuplicate(this.resolve(keepAt));
+      return { landed: false };
+    }
     try {
       await this.flush();
       // A peer may intentionally change only the filename's case. Updating
@@ -1610,10 +1649,12 @@ export class ObsidianVault implements Vault {
         ),
       );
       this.wrote(normalized);
-      await verify(this.adapter, normalized, new TextEncoder().encode(next));
+      await verify(this.adapter, normalized, nextBytes);
       await this.flush();
+      await this.writeDown(normalized, undefined);
     } catch (error) {
       if (error === changed) {
+        await this.writeDown(normalized, undefined).catch(() => undefined);
         // The save that changed the note is kept and the update goes beside
         // it. The backup is checked as it is after a write that lands: when
         // it holds the version this was decided about, the server has it,
@@ -1633,6 +1674,7 @@ export class ObsidianVault implements Vault {
       // 410-byte note was fifteen bytes everywhere (T09). So what it held is
       // put back, here and now, unless something else has been saved there.
       const whole = await this.putBack(normalized, { previous, next, before, was });
+      if (whole) await this.writeDown(normalized, undefined).catch(() => undefined);
       const why = `writing ${path} failed: ${String(error)}`;
       if (!whole) {
         throw new Error(
@@ -1651,12 +1693,142 @@ export class ObsidianVault implements Vault {
       throw new Error(`${why}. What the note held was put back, and is also at ${keepAt}`);
     }
 
-    if (expect !== undefined && (await expect.idOf(before)) === expect.contentId) {
+    if (beforeIsServers) {
       await this.dropDuplicate(this.resolve(keepAt));
       return { landed: true };
     }
     return { keptAt: keepAt, landed: true };
   }
+
+  /**
+   * In-place updates written down and not yet known to have landed, by note,
+   * and the file they are kept in. The file is the whole set, rewritten on
+   * every change, so one update cannot overwrite another's record, and it is
+   * removed when the set is empty. A failure to remove it leaves records the
+   * next start finds stale.
+   */
+  private readonly inPlace = new Map<string, InPlaceWrite>();
+
+  private async writeDown(normalized: string, record: InPlaceWrite | undefined): Promise<void> {
+    if (record === undefined) {
+      if (!this.inPlace.delete(normalized)) return;
+    } else this.inPlace.set(normalized, record);
+    if (this.inPlace.size === 0) {
+      await this.adapter.remove(this.writingMarker).catch(() => undefined);
+      return;
+    }
+    await this.adapter.write(this.writingMarker, JSON.stringify([...this.inPlace.values()]));
+  }
+
+  /**
+   * Puts right an in-place text update a crash interrupted, from the record
+   * `replaceText` wrote before it truncated the note (T09).
+   *
+   * The note holding either version means the update landed or never began,
+   * and the record is stale. Anything else is what the crash left: the note
+   * is put back to what it held, from the backup beside it, and what was in
+   * it is kept in a hidden folder the displaced log names, so it is reported
+   * and never sent as this device's edit. A backup that is not whole leaves
+   * the note unread (`cutShort`'s refusal) and the record in place.
+   */
+  private async recoverInterruptedWrite(): Promise<void> {
+    let text: string;
+    try {
+      text = await this.adapter.read(this.writingMarker);
+    } catch {
+      return; // none, which is every start but one after a crash
+    }
+    let records: InPlaceWrite[];
+    try {
+      const parsed: unknown = JSON.parse(text);
+      records = (Array.isArray(parsed) ? parsed : [parsed]).filter(
+        (r): r is InPlaceWrite =>
+          typeof r === "object" &&
+          r !== null &&
+          typeof (r as InPlaceWrite).path === "string" &&
+          typeof (r as InPlaceWrite).keepAt === "string",
+      );
+    } catch {
+      records = []; // cut short itself, before any note was touched
+    }
+    for (const record of records) this.inPlace.set(record.path, record);
+    if (this.inPlace.size === 0)
+      await this.adapter.remove(this.writingMarker).catch(() => undefined);
+    // A note this instance already holds as cut short is put back by that
+    // record, which knows its text; only what a crash left is put right here.
+    for (const record of records) if (!this.cutShort.has(record.path)) await this.putRight(record);
+  }
+
+  /** One record of `recoverInterruptedWrite`, put right or left on record. */
+  private async putRight(record: InPlaceWrite): Promise<void> {
+    const { path, keepAt, was } = record;
+    try {
+      const here = await readRaw(this.adapter, path).catch(() => undefined);
+      const digest = here === undefined ? undefined : await plainDigest(here);
+      if (here === undefined || digest === record.before) {
+        if (here !== undefined) await this.dropDuplicate(keepAt);
+        await this.writeDown(path, undefined);
+        return;
+      }
+      if (digest === record.next) {
+        if (record.beforeIsServers) await this.dropDuplicate(keepAt);
+        await this.writeDown(path, undefined);
+        return;
+      }
+      const backup = await readRaw(this.adapter, keepAt).catch(() => undefined);
+      if (backup === undefined || (await plainDigest(backup)) !== record.before) {
+        this.interrupted.add(path);
+        this.log(`${path} was cut short by a crash during an update, and its backup is not whole`);
+        return;
+      }
+      const folder = await freeRemovalFolder(this.adapter, path);
+      const aside = `${folder}/${path.slice(path.lastIndexOf("/") + 1)}`;
+      const why = `${path} was cut short by a crash while an update was written into it; this is what it held, and the note was put back`;
+      if (!(await this.ledger.record({ at: aside, from: path, why, when: Date.now() }))) {
+        this.interrupted.add(path);
+        return;
+      }
+      await this.adapter.mkdir(folder);
+      await this.adapter.writeBinary(aside, standalone(here));
+      const previous = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(backup);
+      const cut = new TextDecoder().decode(here);
+      let restored = false;
+      await this.touch(path, () =>
+        this.adapter.process(
+          path,
+          (current) => {
+            // Somebody's save since the restart is theirs, and left alone.
+            restored = current === cut;
+            return restored ? previous : current;
+          },
+          writeOptions(was),
+        ),
+      );
+      if (!restored) {
+        // A save since the restart: the note is somebody's text now, and the
+        // cut text is kept beside it all the same.
+        this.log(`${path} was saved again before a crash's cut text could be put right`);
+        await this.writeDown(path, undefined);
+        return;
+      }
+      this.wrote(path);
+      await verify(this.adapter, path, backup);
+      await this.dropDuplicate(keepAt);
+      await this.writeDown(path, undefined);
+    } catch (err) {
+      this.interrupted.add(path);
+      this.log(
+        `${path} was cut short by a crash during an update and could not be put back yet`,
+        String(err),
+      );
+    }
+  }
+
+  /**
+   * Notes a crash cut short that could not be put back (`recoverInterruptedWrite`):
+   * not read for the engine, so the cut text is never sent as an edit.
+   */
+  private readonly interrupted = new Set<string>();
 
   /**
    * Removes a copy that duplicates a version the server holds, as this
@@ -1716,6 +1888,7 @@ export class ObsidianVault implements Vault {
         await verify(this.adapter, normalized, held.before);
       }
       this.cutShort.delete(normalized);
+      await this.writeDown(normalized, undefined).catch(() => undefined);
       return restoring;
     } catch (err) {
       if (!(await this.stillThere(normalized))) {
@@ -1736,7 +1909,7 @@ export class ObsidianVault implements Vault {
    * (see `cutShort`), on every path the engine reads by.
    */
   private refuseCutShort(normalized: string): void {
-    if (!this.cutShort.has(normalized)) return;
+    if (!this.cutShort.has(normalized) && !this.interrupted.has(normalized)) return;
     throw new Error(
       `${normalized} was cut short while an update was being written into it, and is not ` +
         `read until what it held has been put back`,
@@ -2612,6 +2785,24 @@ function writeOptions(times: Times): {
  * What puts back a note whose in-place update was cut short (T09): the text
  * it held, its bytes, its times, and the incoming text the write was cutting.
  */
+/** The record of an in-place text update, written before the note is truncated. */
+interface InPlaceWrite {
+  /** The note, normalised. */
+  readonly path: string;
+  /** The backup of what it held, written before this record. */
+  readonly keepAt: string;
+  /** SHA-256 of what it held, and of what was being written. */
+  readonly before: string;
+  readonly next: string;
+  /** Its times before the update, put back with its text. */
+  readonly was: Times;
+  /** Whether what it held is the version the server has, so its backup is a duplicate. */
+  readonly beforeIsServers: boolean;
+}
+
+/** The file `InPlaceWrite` is kept in. Not JSON by name, so settings sync never carries it. */
+const WRITING_MARKER = "in-place-write.log";
+
 interface CutShort {
   readonly previous: string;
   readonly next: string;

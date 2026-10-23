@@ -32,6 +32,8 @@ afterAll(async () => {
 class Device {
   readonly adapter = new FakeAdapter();
   client!: Client;
+  /** Kept, so a reconnect is this device starting again rather than a new one. */
+  private credentials: { deviceId: string; token: string } | undefined;
 
   constructor(readonly name: string) {}
 
@@ -42,7 +44,7 @@ class Device {
       // `.obsidian`, which never syncs.
       store: new ObsidianIndexStore(this.adapter, ".obsidian/plugins/trew/index.json"),
       url: server.wsUrl,
-      ...(await server.deviceCredentials(this.name)),
+      ...(this.credentials ??= await server.deviceCredentials(this.name)),
       vaultId: "default",
       device: this.name,
       timeoutMs: 20_000,
@@ -926,6 +928,56 @@ describe("an incoming update cut short as it is written in place", () => {
     ).toEqual([]);
     expect(a.notes()).toEqual(["n.md"]);
     expect(b.notes()).toEqual(["n.md"]);
+  }, 300_000);
+});
+
+describe("an incoming update cut short by a crash as it is written in place", () => {
+  it("is put back at the next start, never sent, and the cut text is kept aside", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    const lines =
+      Array.from({ length: 20 }, (_, i) => `line ${i + 1} of the note`).join("\n") + "\n";
+    a.adapter.seed("n.md", lines, 1_700_000_000_000);
+    await converge(a, b);
+    expect(b.text("n.md")).toBe(lines);
+
+    const next = `${lines}line 21 added on a\n`;
+    a.adapter.seed("n.md", next, 1_700_000_100_000);
+    await a.client.settle();
+    await receiveCommitted(b.client.transport);
+    // Fifteen bytes land, and the process is gone: nothing after that reaches
+    // the disk, so nothing in memory can put the note back.
+    let dead = false;
+    b.adapter.fault = (op, path) => {
+      if (dead) return new Error("the process was killed");
+      if (op === "write" && path === "n.md") {
+        dead = true;
+        return 15;
+      }
+      return undefined;
+    };
+    await b.client.settle().catch(() => undefined);
+    expect(dead, "the update was never written").toBe(true);
+    b.close();
+    b.adapter.fault = undefined;
+    expect(b.text("n.md")).toHaveLength(15);
+
+    // Obsidian starts again.
+    await b.connect(server);
+    await converge(a, b);
+    expect(b.text("n.md")).toBe(next);
+    expect(a.text("n.md")).toBe(next);
+    const history = await a.client.history("n.md");
+    expect(
+      history.filter((v) => v.device === "b").map((v) => `${v.uid}:${v.size}B`),
+      "b sent a version of a note it never edited",
+    ).toEqual([]);
+    expect(a.notes()).toEqual(["n.md"]);
+    const hidden = (p: string) => p.split("/").some((part) => part.startsWith(".trew-"));
+    expect(b.notes().filter((p) => !hidden(p))).toEqual(["n.md"]);
+    const kept = b.adapter.filePaths().filter((p) => hidden(p) && p.endsWith("/n.md"));
+    expect(kept.map((p) => b.text(p))).toEqual([lines.slice(0, 15)]);
   }, 300_000);
 });
 
