@@ -11,9 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-**Upgrade the server first.** The plugin and `trew` now speak protocol 5, which
-adds restoring a folder to an earlier time, so they need the next server
-release. The server still answers every older plugin and `trew`.
+Nothing yet.
+
+## 0.16.0, plugin, 0.15.0, server, and trew 0.14.0 (2026-10-23)
+
+**Upgrade the server first.** The plugin and `trew` now speak protocol 5,
+which adds restoring a folder to an earlier time, so they need trewd 0.15.0 or
+later. The server still answers every older plugin and `trew`.
 
 ### Plugin
 
@@ -30,27 +34,6 @@ release. The server still answers every older plugin and `trew`.
   notes, canvases and settings always download. **Free space** removes
   attachments the setting covers from the device, each checked against the
   server first. See [the plugin guide](docs/plugin.md#attachments-on-demand).
-
-### Server
-
-- **Protocol 5: restore.** A device can put one folder, or every note in the
-  vault, back as it was at a time, previewed first and applied as exactly that
-  preview, recorded as one operation any device or `trewd undo` reverses. The
-  time is the server's own record of when each version arrived. It never
-  restores settings; `trewd restore` still restores everything, settings
-  included. Sessions of protocol 1 to 4 are answered as before.
-- An agent's preview is no longer expired by a device saving its settings
-  between the preview and the apply. The apply is refused as `plan_changed`
-  only when a note changed; the operator's `trewd restore` is still bound to
-  the vault's exact head.
-- A settings save no longer shapes the Git export's commits: one saved
-  between two note edits could split a device's commit in two or move its
-  time. The export's position still moves past it. A history exported by
-  0.14.2 or earlier and rebuilt from scratch can differ where that happened,
-  so keep `git-export/` across the upgrade.
-
-### Plugin
-
 - Disabling, reloading or updating the plugin while it was still starting up
   (most easily on a phone whose screen turned off at that moment) could leave
   the old copy syncing in the background with nothing able to stop it, beside
@@ -67,6 +50,26 @@ release. The server still answers every older plugin and `trew`.
   and some plugins' settings tabs save on every keystroke; each save used to
   become a version in the server's history. **Sync now** still sends at once.
 
+### Server
+
+- The store moves to schema 5 on first start, so an older `trewd` refuses it
+  afterwards. Take a backup before upgrading if you might go back.
+- **Protocol 5: restore.** A device can put one folder, or every note in the
+  vault, back as it was at a time, previewed first and applied as exactly that
+  preview, recorded as one operation any device or `trewd undo` reverses. The
+  time is the server's own record of when each version arrived. It never
+  restores settings; `trewd restore` still restores everything, settings
+  included. Sessions of protocol 1 to 4 are answered as before.
+- An agent's preview is no longer expired by a device saving its settings
+  between the preview and the apply. The apply is refused as `plan_changed`
+  only when a note changed; the operator's `trewd restore` is still bound to
+  the vault's exact head.
+- A settings save no longer shapes the Git export's commits: one saved
+  between two note edits could split a device's commit in two or move its
+  time. The export's position still moves past it. A history exported by
+  0.14.2 or earlier and rebuilt from scratch can differ where that happened,
+  so keep `git-export/` across the upgrade.
+
 ### Command-line client
 
 - A note a crash cut off part way through being replaced is put back at the
@@ -74,6 +77,7 @@ release. The server still answers every older plugin and `trew`.
   a crash between the two left nothing at the note's name, which the next run
   sent to every device as a deletion. The note was always kept, reported as
   stranded.
+- `trew` speaks protocol 5 too, so it needs `trewd` 0.15.0 or later.
 
 ## 0.15.3, plugin, 0.14.2, server, and trew 0.13.1 (2026-10-22)
 
