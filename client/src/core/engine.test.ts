@@ -5150,6 +5150,17 @@ describe("a setting Apply deleted, written back before Obsidian reloads", () => 
     expect(mac.vault.snapshot()[P]).toBeUndefined();
   });
 
+  it("holds it after another pass in the same load, too", async () => {
+    const { mac, desk } = await deletedOnDesk();
+    // A pass with both sides gone, before Obsidian writes back.
+    await desk.engine.sync();
+    await desk.engine.sync();
+    await desk.vault.write(P, json({ v: "old" }), { mtime: 9_000, ctime: 9_000 });
+    expect(await uploadedSettling(desk)).toBe(0);
+    expect((await mac.settle()).settingsHeld).toBe(0);
+    expect(mac.vault.snapshot()[P]).toBeUndefined();
+  });
+
   it("offers the deletion again in the next load instead of sending it", async () => {
     const { mac, desk } = await deletedOnDesk();
     desk.close();
@@ -5528,6 +5539,31 @@ describe("an applied setting Obsidian saves again with the same values", () => {
     expect(Object.keys(desk.vault.snapshot())).toEqual([P]);
     expect((await mac.settle()).settingsHeld).toBe(0);
     expect(Object.keys(mac.vault.snapshot())).toEqual([P]);
+  });
+
+  it("is still deleted here when another device deletes it", async () => {
+    await fresh();
+    const enc = (s: string) => new TextEncoder().encode(s);
+    const P = ".obsidian/app.json";
+    const mac = new Device("mac");
+    mac.settings = { root: ".obsidian" };
+    devices.push(mac);
+    await mac.connect(server);
+    await mac.vault.write(P, enc('{"a":1,"b":2}'), { mtime: 1_000, ctime: 1_000 });
+    await mac.settle();
+    const desk = new Device("desk");
+    desk.settings = { root: ".obsidian" };
+    devices.push(desk);
+    await desk.vault.write(P, enc('{"b":2,"a":1}'), { mtime: 1_000, ctime: 1_000 });
+    await desk.connect(server);
+    await desk.settle();
+    await mac.vault.remove(P);
+    await mac.settle();
+    expect((await desk.settle()).settingsHeld).toBe(1);
+    await desk.engine.sync({ applySettings: true });
+    expect(desk.vault.snapshot()[P]).toBeUndefined();
+    await mac.settle();
+    expect(mac.vault.snapshot()[P]).toBeUndefined();
   });
 
   it("is confirmed, not sent and not offered for another Apply", async () => {

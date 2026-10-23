@@ -2609,21 +2609,20 @@ export class Engine {
         local = { folder: stat.folder, mtime: entry.mtime, size: entry.size, hash: entry.hash };
     }
 
-    // A direct create a crash interrupted (`IndexEntry.creating`). Finished,
-    // it is the version it was writing and is recorded as synced. Torn, it is
-    // a prefix of that version, perhaps padded with zeros where a power cut
-    // left blocks unwritten, and holds nothing the server does not: it is
-    // removed, and the version lands again. Anything else is somebody's note,
-    // made there since, and is decided as a note with no base always was. The
-    // intent goes only once one of those has happened, so a step that fails
-    // leaves it for the next pass rather than leaving a torn file to be sent.
+    // A direct create a crash interrupted (`IndexEntry.creating`). What is at
+    // the name is the version it was writing, or a prefix of it, perhaps
+    // padded with zeros where a power cut left blocks unwritten: either way
+    // nothing the server lacks, and nothing that was ever made durable, so it
+    // is removed and the version lands again through a write that is. Even a
+    // whole copy is not adopted: its bytes may still be only in the cache.
+    // Anything else is somebody's note, made there since, and is decided as a
+    // note with no base always was. The intent goes only once one of those
+    // has happened, so a step that fails leaves it for the next pass rather
+    // than leaving a torn file to be sent.
     const creating = entry.creating;
     if (creating !== undefined) {
       if (local !== undefined && !local.folder) {
-        if (local.hash === creating.hash) {
-          synced(entry, local.hash, entry.chunks, creating.uid, now);
-          this.log("a direct write a crash interrupted had finished", path);
-        } else if (await this.tornFrom(path, local.size, creating)) {
+        if (await this.tornFrom(path, local.size, creating)) {
           const still = await this.opts.vault.stat(path);
           if (still?.size !== stat?.size || still?.mtime !== stat?.mtime) {
             throw new Error(`${path} changed while a torn write was being checked`);
@@ -2772,7 +2771,11 @@ export class Engine {
     if (same !== undefined && (local?.hash !== same.local || entry.synchash !== same.base)) {
       delete entry.sameAs;
     } else if (same !== undefined) {
-      if (action.kind === "upload") return undefined;
+      // Unchanged here, as far as anybody could tell: a deletion on another
+      // device is one to apply, not one to answer by sending this copy back.
+      if (remote?.deleted === true) {
+        action = { kind: "deleteLocal", why: "deleted on another device, and only reordered here" };
+      } else if (action.kind === "upload") return undefined;
       if (action.kind === "merge" || action.kind === "conflict") {
         action = { kind: "download", why: "changed on another device, and only reordered here" };
       }
@@ -3112,7 +3115,11 @@ export class Engine {
         // device's own deletion or rename whose acknowledgement was lost and
         // came back in catch-up. Forgetting it is what a deletion committed
         // here already does, and `prune` then drops the tombstone.
-        if (local === undefined && remote?.deleted) this.entries.delete(path);
+        // Not a deletion Apply made in this load: Obsidian or the plugin can
+        // still write the old setting back before the reload, and the record
+        // is what holds that copy instead of sending it (`unconfirmed`).
+        if (local === undefined && remote?.deleted && entry.unconfirmed?.load !== this.loadId)
+          this.entries.delete(path);
         return;
 
       case "upload":
@@ -4664,13 +4671,15 @@ export class Engine {
         // seen it gone: Obsidian, or the plugin, still holds it in memory and
         // may write it back before the reload, and that copy is the old
         // value, not a change to send (`unconfirmed`).
-        const applied = this.entries.get(path)?.unconfirmed;
-        if (applied !== undefined) {
+        // Its base is the version just deleted, so a write-back of it reads
+        // as unchanged here and the deletion is offered again.
+        const was = this.entries.get(path);
+        if (was?.unconfirmed !== undefined && was.synchash !== "") {
           this.entries.set(path, {
             ...newEntry(path),
-            synchash: applied.hash,
-            syncuid: applied.uid,
-            unconfirmed: applied,
+            synchash: was.synchash,
+            syncuid: was.syncuid,
+            unconfirmed: was.unconfirmed,
           });
         } else this.entries.delete(path);
         report.deletedLocally++;
