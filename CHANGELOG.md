@@ -17,6 +17,14 @@ client can talk; upgrade the server first.
   no longer a change. Obsidian re-saving a setting its own way after an Apply
   no longer asks for a second Apply, and two devices that held a setting in
   different orders before they synced no longer get a conflict copy of it.
+- A settings file Obsidian resets because it could not read it is no longer
+  sent to your other devices. When Android stops Obsidian part way through
+  saving `app.json`, Obsidian replaces the damaged file with an empty one at
+  its next start, which used to reach every device as "all settings back to
+  default". Now that device offers its synced settings back in **Apply synced
+  settings** instead. Found by doing exactly that on a Pixel.
+- The Apply dialog no longer says every setting waiting came from another
+  device.
 
 ## trew 0.13.0, command-line client (2026-10-22)
 

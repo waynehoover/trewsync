@@ -2796,6 +2796,25 @@ export class Engine {
       this.log("a setting holds the same values as the server's, in another order", path);
       return undefined;
     }
+    // Emptied here, after it was synced with something in it: what Obsidian
+    // does at start to a settings file it cannot read, such as one a phone
+    // killed it part way through writing (seen on a Pixel, plugin 0.15.1).
+    // Sent, it would reset the setting on every device; the server's version
+    // is offered back instead, held for Apply like any other.
+    if (
+      local !== undefined &&
+      entry.synchash !== "" &&
+      remote !== undefined &&
+      !remote.deleted &&
+      (action.kind === "upload" || action.kind === "merge" || action.kind === "conflict") &&
+      (await this.emptiedHere(path, scanned))
+    ) {
+      this.log("a setting was emptied here, as Obsidian does with one it cannot read", path);
+      action = {
+        kind: "download",
+        why: "emptied here, as Obsidian does with a settings file it cannot read, so the synced version is offered back",
+      };
+    }
     // Every decision that sends this device's copy, a merge and a kept-both
     // conflict included, sends it only if it is JSON: the very bytes that go,
     // which a pass that just read the file holds, and otherwise the file as it
@@ -4292,6 +4311,23 @@ export class Engine {
     if (want.length !== creating.size) return false;
     for (let k = 0; k < here.length; k++) if (here[k] !== want[k] && here[k] !== 0) return false;
     return true;
+  }
+
+  /** Whether a settings JSON file here holds an empty object or array. */
+  private async emptiedHere(path: string, scanned: Scanned | undefined): Promise<boolean> {
+    if (!looksLikeJson(path)) return false;
+    try {
+      const bytes =
+        scanned !== undefined && scanned.spans === undefined
+          ? scanned.bytes
+          : await this.opts.vault.read(path);
+      const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      return (
+        value !== null && typeof value === "object" && Object.keys(value as object).length === 0
+      );
+    } catch {
+      return false;
+    }
   }
 
   /** A version's bytes, fetched by the chunks its content hash lists. */

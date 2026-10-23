@@ -6213,7 +6213,7 @@ class ApplySettingsModal extends Modal {
     const waiting = this.plugin.settingsWaitingNow();
     contentEl.createEl("p", {
       text:
-        `${waitingSummary(waiting, this.plugin.settingsHeld)} from other devices. ` +
+        `${waitingSummary(waiting, this.plugin.settingsHeld)}. ` +
         "Applying writes them and reloads Obsidian. Open notes are saved first, and a copy of this " +
         "device's settings as they are now is kept.",
     });

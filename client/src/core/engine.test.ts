@@ -5565,3 +5565,36 @@ describe("an applied setting Obsidian saves again with the same values", () => {
     expect((await mac.settle()).settingsHeld).toBe(0);
   });
 });
+
+describe("a setting Obsidian emptied because it could not read it", () => {
+  it("is not sent, and the synced version is offered back for Apply", async () => {
+    await fresh();
+    const enc = (s: string) => new TextEncoder().encode(s);
+    const P = ".obsidian/app.json";
+    const settings = '{\n  "showLineNumber": true,\n  "spellcheck": false\n}';
+    const mac = new Device("mac");
+    mac.settings = { root: ".obsidian" };
+    devices.push(mac);
+    await mac.connect(server);
+    await mac.vault.write(P, enc(settings), { mtime: 1_000, ctime: 1_000 });
+    await mac.settle();
+    const phone = new Device("phone");
+    phone.settings = { root: ".obsidian", firstChoice: "server" };
+    devices.push(phone);
+    await phone.connect(server);
+    await phone.settle();
+    await phone.engine.sync({ applySettings: true });
+    await phone.settle();
+    expect(phone.vault.snapshot()[P]).toBe(settings);
+
+    // Killed part way through a save; Obsidian starts and writes its defaults.
+    await phone.vault.write(P, enc("{}"), { mtime: 9_000, ctime: 9_000 });
+    const r = await phone.settle();
+    expect(r.uploaded).toBe(0);
+    expect(r.settingsHeld).toBe(1);
+    expect((await mac.settle()).settingsHeld).toBe(0);
+    await phone.engine.sync({ applySettings: true });
+    expect(phone.vault.snapshot()[P]).toBe(settings);
+    expect(mac.vault.snapshot()[P]).toBe(settings);
+  });
+});
