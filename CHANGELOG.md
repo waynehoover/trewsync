@@ -30,7 +30,8 @@ Works with trewd 0.14.0 or later, as 0.15.1 does. The server is unchanged.
   default". Now that device offers its synced settings back in **Apply synced
   settings** instead. Found by doing exactly that on a Pixel.
 - The Apply dialog no longer says every setting waiting came from another
-  device.
+  device, and **Review conflicts** names a plugin's settings as that
+  plugin's ("dataview plugin settings: data.json") rather than as Obsidian's.
 
 ## trew 0.13.0, command-line client (2026-10-22)
 
