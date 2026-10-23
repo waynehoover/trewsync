@@ -218,11 +218,12 @@ purpose, each with what would change the answer:
   `CommitOperation`'s snapshot check, and the operator's restore keeps the
   exact head. The threat model already says `vault_status`'s store totals
   include settings versions.
-- **Settings shape the Git export's commit timing.** The export leaves their
-  content out, but they still go to its planner, so a setting saved between
-  two note edits can split one commit or move its time. Skipping them before
-  the planner needs the export's position to cover their uids all the same,
-  or `doctor` reports the export behind a settings write at the head.
+- **Settings shape the Git export's commit timing.** Closed on 2026-10-22:
+  settings are skipped before the planner, and the export's position still
+  moves past their uids, so `doctor` does not report it behind a settings
+  write at the head.
+- **There is no quiet period.** Closed on 2026-10-22: a changed setting is
+  sent once it has been unchanged for ten seconds.
 
 ## Follow-ups from the 2026-10-06 review
 

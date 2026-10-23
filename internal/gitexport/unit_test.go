@@ -213,6 +213,28 @@ func TestThePlan(t *testing.T) {
 	if len(o.closed) != 0 || o.openUntil() != 6*min+inFlight.Milliseconds() {
 		t.Fatalf("an open run closed early, or closes at %d", o.openUntil())
 	}
+
+	// A skipped setting moves the position only where no unwritten note is
+	// before it: past a closed group, not past an open one's first version.
+	s := &planner{quiet: 5 * time.Minute, seen: 10, settled: 10}
+	s.skip(11)
+	if s.through() != 11 {
+		t.Fatalf("a setting alone leaves the position at %d", s.through())
+	}
+	s.add(e(12, "Laptop", "a"), 1*min, true, nil)
+	s.skip(13)
+	if s.through() != 11 {
+		t.Fatalf("a setting after an open run moves the position to %d, past its note", s.through())
+	}
+	s.add(e(14, "Phone", "b"), 2*min, true, nil) // closes the laptop's run
+	s.skip(15)
+	if len(s.closed) != 1 || s.through() != 12 {
+		t.Fatalf("with the laptop's run closed and the phone's open, the position is %d", s.through())
+	}
+	s.finish(1 << 50)
+	if s.through() != 15 {
+		t.Fatalf("with every run closed, the position is %d, and the last setting %d", s.through(), 15)
+	}
 }
 
 // TestSSHIsRunWithOnlyTheKeyAndTheKnownHosts: git's ssh is given this key and

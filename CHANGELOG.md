@@ -17,6 +17,11 @@ client can talk; upgrade the server first.
   between the preview and the apply. The apply is refused as `plan_changed`
   only when a note changed; the operator's `trewd restore` is still bound to
   the vault's exact head.
+- A settings save no longer shapes the Git export's commits: one saved
+  between two note edits could split a device's commit in two or move its
+  time. The export's position still moves past it. A history exported by
+  0.14.2 or earlier and rebuilt from scratch can differ where that happened,
+  so keep `git-export/` across the upgrade.
 
 ### Plugin
 

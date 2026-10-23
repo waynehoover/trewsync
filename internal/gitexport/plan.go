@@ -73,11 +73,40 @@ type planner struct {
 	// closedEntries and closedBytes are what the closed groups hold, which
 	// bound a step.
 	closedEntries, closedBytes int64
+	// seen is the last uid handed to the planner, added or skipped, and
+	// settled the last uid every version up to which is in a closed group or
+	// is a setting. Both start at the branch's position (through).
+	seen, settled int64
+}
+
+// skip passes over a setting's version (store.Entry.IsConfig). The export
+// leaves settings' content out, and they are left out of the plan too: a
+// device saving a setting between two of another device's note edits would
+// otherwise close that device's run and split one commit in two, or move a
+// commit's time. The branch's position still has to cover the setting's uid,
+// or doctor reads a settings save at the head as a version not exported.
+func (p *planner) skip(uid int64) {
+	p.seen = uid
+	if p.open == nil {
+		p.settled = uid
+	}
+}
+
+// through is how far the branch's position can move once the closed groups
+// are written: every uid seen when no group is open, and otherwise only up
+// to the last closed group's end, or a setting skipped after it and before
+// the open group began.
+func (p *planner) through() int64 {
+	if p.open == nil {
+		return p.seen
+	}
+	return p.settled
 }
 
 // add places e, with its recorded time if it has one and its operation if it
 // has one.
 func (p *planner) add(e store.Entry, recorded int64, timed bool, op *store.OpStamp) {
+	p.seen = e.UID
 	at := p.lastAt
 	switch {
 	case timed:
@@ -133,6 +162,7 @@ func (p *planner) closeOpen() {
 		p.closedBytes += e.Size
 	}
 	p.closed = append(p.closed, p.open)
+	p.settled = max(p.settled, p.open.last())
 	p.open = nil
 }
 

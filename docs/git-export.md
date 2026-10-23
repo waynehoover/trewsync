@@ -58,7 +58,8 @@ of the server.
   has no empty folders. Nothing whose name starts with a dot reaches the
   repository: Obsidian's settings, which settings sync carries between
   devices, are left out of the export, and nothing else in `.obsidian/` or
-  any other dot folder is synced at all.
+  any other dot folder is synced at all. A settings save does not shape the
+  commits either: it neither splits a device's run nor moves its time.
 - **Large attachments in Git LFS.** A file over the threshold is an LFS pointer
   in the tree and its bytes are uploaded to the remote's LFS store. The export
   writes a `.gitattributes` at the root naming each one, so a clone with
@@ -372,7 +373,11 @@ the details. Sync is never affected by any of these.
   server and move `git-export/` aside: the export starts again from the store.
   The rebuilt history has the same commits, byte for byte, provided the store
   has not been purged since and the settings are the same, so the remote
-  accepts it as the history it already has.
+  accepts it as the history it already has. One exception: servers up to
+  0.14.2 let a settings save split a commit or move its time, so a history
+  one of them exported, rebuilt by a later server, can differ where that
+  happened, and the remote refuses it. Push the rebuild to a new branch with
+  `trewd git-export set -branch NAME` then.
 - **The store was restored from a backup.** The restored store is a different
   history. The export does not rewrite the branch: it adds one commit whose
   message starts `Restore:` and whose tree is the restored notes, and goes on

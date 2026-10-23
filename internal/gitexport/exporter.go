@@ -493,7 +493,7 @@ func (x *Exporter) exportStep(ctx context.Context, r *runner, s Settings) (bool,
 		return true, 0, x.restoreCommit(ctx, r, s, b, epoch)
 	}
 
-	p := &planner{quiet: s.Quiet, lastAt: b.lastAt, fallback: x.st.Identity().CreatedAt}
+	p := &planner{quiet: s.Quiet, lastAt: b.lastAt, fallback: x.st.Identity().CreatedAt, seen: b.through, settled: b.through}
 	cursor, reachedEnd := b.through, false
 	full := func() bool { return p.closedEntries >= stepEntries || p.closedBytes >= stepBytes }
 	for !full() {
@@ -516,6 +516,10 @@ func (x *Exporter) exportStep(ctx context.Context, r *runner, s Settings) (bool,
 		// Stopping anywhere is safe: only closed groups are written, and the
 		// next step reads again from the last one's end.
 		for _, e := range batch.Entries {
+			if e.IsConfig() {
+				p.skip(e.UID)
+				continue
+			}
 			at, timed := times[e.UID]
 			var op *store.OpStamp
 			if o, ok := ops[e.UID]; ok {
@@ -532,6 +536,13 @@ func (x *Exporter) exportStep(ctx context.Context, r *runner, s Settings) (bool,
 		p.finish(x.st.Now().UnixMilli())
 	}
 	if len(p.closed) == 0 {
+		if p.through() > b.through {
+			// Only settings since the branch's position: no commit, and the
+			// position moves past them.
+			next := b
+			next.through = p.through()
+			return true, 0, x.land(ctx, r, s, b, next, b.commit, nil)
+		}
 		return false, p.openUntil(), nil
 	}
 	last := p.closed[len(p.closed)-1]
@@ -551,7 +562,7 @@ func (x *Exporter) exportStep(ctx context.Context, r *runner, s Settings) (bool,
 		return false, 0, err
 	}
 	next := b
-	next.through, next.lastAt = last.last(), last.lastAt
+	next.through, next.lastAt = p.through(), last.lastAt
 	if err := x.land(ctx, r, s, b, next, tip, oids); err != nil {
 		return false, 0, err
 	}

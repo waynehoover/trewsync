@@ -429,3 +429,45 @@ func TestSettingsAreLeftOutOfTheExportQuietly(t *testing.T) {
 		t.Fatalf("the tree holds %q", files)
 	}
 }
+
+// A setting is left out of the plan as well as the tree: a phone saving one
+// between two of the laptop's note edits does not split the laptop's run into
+// two commits, and a setting saved last does not move the commit's time. The
+// export's position still covers the settings, so doctor does not read a
+// settings save at the head as a version not exported, and a save alone at
+// the head moves it at once, with no commit.
+func TestSettingsShapeNoCommit(t *testing.T) {
+	r := newRig(t)
+	out := t.TempDir()
+	r.put("Laptop", "a.md", []byte("one\n"))
+	r.clock.advance(time.Minute)
+	r.put("Phone", ".obsidian-mobile/app.json", []byte("{}\n"))
+	r.clock.advance(time.Minute)
+	r.put("Laptop", "b.md", []byte("two\n"))
+	noteAt := r.clock.Now().Unix()
+	r.clock.advance(time.Minute)
+	r.put("Laptop", ".obsidian/app.json", []byte("{}\n"))
+	r.clock.advance(10 * time.Minute)
+	x := r.exporter(out, settings(t, out, ""))
+	x.sync(t)
+
+	if n := git(t, repo(out), "rev-list", "--count", "main"); n != "1" {
+		t.Fatalf("the laptop's two edits are %s commits:\n%s", n, git(t, repo(out), "log", "--format=%s", "main"))
+	}
+	if at := git(t, repo(out), "log", "-1", "--format=%ct", "main"); at != fmt.Sprint(noteAt) {
+		t.Fatalf("the commit is dated %s, and the laptop's last note at %d", at, noteAt)
+	}
+	head, _ := r.st.LatestUID(vault)
+	if s := x.Status(); s.ExportedThrough != head {
+		t.Fatalf("exported through %d, and the head is a setting at %d", s.ExportedThrough, head)
+	}
+
+	saved := r.put("Phone", ".obsidian-mobile/app.json", []byte(`{"a":1}`+"\n"))
+	x.sync(t)
+	if s := x.Status(); s.ExportedThrough != saved {
+		t.Fatalf("exported through %d, and a settings save alone is at %d", s.ExportedThrough, saved)
+	}
+	if n := git(t, repo(out), "rev-list", "--count", "main"); n != "1" {
+		t.Fatalf("a settings save made a commit: %s commits", n)
+	}
+}
