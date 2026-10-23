@@ -145,6 +145,7 @@ class Device {
   transport!: Transport;
   engine!: Engine;
   caughtUp = false;
+  onDemand: ((path: string, size: number) => boolean) | undefined;
   clock = 1_000_000;
   /** Every report this device's passes produced. */
   readonly reports: SyncReport[] = [];
@@ -168,6 +169,7 @@ class Device {
       store: this.store,
       transport: this.transport,
       device: this.name,
+      ...(this.onDemand ? { onDemand: this.onDemand } : {}),
       vaultId: "default",
       ...(await server.deviceCredentials(this.name)),
       // A clock that moves a minute a reading, so the write debounce never
@@ -371,3 +373,71 @@ describe("a case-only rename, on a disk that folds case", () => {
     240_000,
   );
 });
+
+/**
+ * Attachments on demand meeting a case-only rename from another device: a
+ * file this disk holds under the old spelling, which folds onto the new one,
+ * is never also reported as on the server only. Found by review, 2026-10-23.
+ */
+describe("a case-only rename of a file left on the server elsewhere", () => {
+  for (const mode of ["normal", "failed-remove", "edited-here"]) {
+    it(mode, async () => {
+      const [a, b] = await two(() => new CaseFoldingVault());
+      const av = a.vault as CaseFoldingVault;
+      const bv = b.vault as CaseFoldingVault;
+      const bytes = new Uint8Array(5000).fill(7);
+      await av.write("a.png", bytes, { mtime: 1000, ctime: 1000 });
+      await syncBoth(a, b);
+      b.close();
+      b.onDemand = () => true;
+      await b.connect(server);
+      if (mode === "edited-here") {
+        await bv.write("a.png", new Uint8Array(5000).fill(8), { mtime: 9000, ctime: 1000 });
+      }
+      await av.respell("A.png");
+      a.engine.noteRename("a.png", "A.png");
+      await a.sync();
+      if (mode === "failed-remove") bv.failRemoveOnce = "a.png";
+      await b.sync();
+      const paths = [...b.engine.serverOnlyPaths().keys()];
+      const local = await bv.exists("A.png");
+      expect(paths.includes("A.png") && local, "a server-only path is on this disk").toBe(false);
+      expect((await newest(a, "A.png"))?.deleted).toBe(false);
+    });
+  }
+});
+
+it.skipIf(!diskFolds)(
+  "a case-only rename of an attachment edited here, on a disk that folds case",
+  async () => {
+    const made: string[] = [];
+    const [a, b] = await two(async () => {
+      const dir = await mkdtemp(join(tmpdir(), "trew-review-case-vault-"));
+      dirs.push(dir);
+      made.push(dir);
+      return new NodeVault(dir);
+    });
+    const [aDir, bDir] = made as [string, string];
+    const original = "A".repeat(5000);
+    const edited = "B".repeat(5001);
+    await writeFile(join(aDir, "a.png"), original);
+    await syncBoth(a, b);
+    b.close();
+    b.onDemand = () => true;
+    await b.connect(server);
+    await writeFile(join(bDir, "a.png"), edited);
+    await rename(join(aDir, "a.png"), join(aDir, "A.png"));
+    a.engine.noteRename("a.png", "A.png");
+    await a.sync();
+    for (let i = 0; i < 3; i++) await b.sync();
+    const paths = [...b.engine.serverOnlyPaths().keys()];
+    const preview = (await b.engine.preview()).files;
+    const contents = await readFile(join(bDir, "A.png"), "utf8");
+    expect(contents).toBe(edited);
+    expect(await server.cli("cat", "-path", "A.png")).toBe(original);
+    expect(paths.includes("A.png"), "A.png is reported server-only but reads the local edit").toBe(
+      false,
+    );
+    expect(preview.find((f) => f.path === "A.png")?.action).not.toBe("server-only");
+  },
+);

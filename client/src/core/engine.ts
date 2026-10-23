@@ -1859,6 +1859,9 @@ export class Engine {
     const disk = new Map(
       (stats ?? (await this.opts.vault.list())).map((stat) => [stat.path, stat]),
     );
+    // What the disk files each listed path under, for the same alias check
+    // the pass makes before calling a path the server's only.
+    const aliases = new Set([...disk.keys()].map((p) => this.identity(p)));
     const moving = new Set(
       [...this.entries].flatMap(([path, entry]) =>
         entry.prev && disk.has(path) && !disk.has(entry.prev) ? [entry.prev] : [],
@@ -1926,6 +1929,7 @@ export class Engine {
           !other.deleted &&
           !isConfigPath(path) &&
           !looksLikeText(path) &&
+          !aliases.has(this.identity(path)) &&
           this.opts.onDemand?.(path, other.size) === true
         )
           action = "server-only";
@@ -2800,6 +2804,10 @@ export class Engine {
       !remote.deleted &&
       !isConfigPath(path) &&
       !looksLikeText(path) &&
+      // Not when a file here folds onto the name: on a disk that ignores case
+      // that is this name, held here under another spelling, and the alias
+      // handling below decides it (found by review, 2026-10-23).
+      !this.localByIdentity.has(this.identity(path)) &&
       this.opts.onDemand?.(path, remote.size) === true
     ) {
       if (entry.prev === "" && entry.creating === undefined) this.entries.delete(path);
