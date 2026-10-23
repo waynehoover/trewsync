@@ -36,39 +36,16 @@ resident on a phone for one large attachment first.
 
 ## A first sync on a Mac waits on fsync
 
-At ten thousand notes on an M4 Pro, a fresh headless device's first download
-took about two minutes and the first upload about a minute and a half
-([research.md](research.md#ten-thousand-notes-on-a-mac-september-24-2026)).
-Both are linear in the number of files, so this is a constant, not a curve,
-and almost all of it is the disk being made to promise.
-
-The download writes each file through `NodeVault.replace`, which costs two
-`F_FULLFSYNC`s: the staged file's own, and the staging folder's, so that the
-staged name is durable before whatever is at the note's path is moved aside.
-Each costs about 8 ms on this machine's SSD. Counted over a 2,000-file
-download, 4,112 of them took 17.5 s of a 23.6 s run: three quarters of the
-wall clock, with the client's JavaScript and the server both idle.
-
-The staging folder's flush protects nothing on a first download, because
-there is nothing at the path to move aside, and dropping it there would save
-close to half. It is not done because it is a change to the preserving write,
-where nearly every step carries a review finding (R18, R33, R37, R43, R46
-among them), and the argument that it is safe (a note that appears in the
-instant between the check and the move is still moved aside rather than
-written over, and the server's bytes can be fetched again after a crash) is
-one to prove at a new seam in `faults.stress.ts` before anybody relies on it.
-Landing a batch's files concurrently is the other saving, about 2.6 times on
-this disk for eight at once, and carries more risk than the first.
-
-**What would change the answer:** a first sync that matters more than it
-does now, which is a phone. It has been measured
-([research](research.md#a-first-download-on-android-october-16-2026)): the
-plugin has no fsync to wait on there, and nearly all of a first download is
-the four adapter calls that land each note, several times slower in a vault
-in Device storage than in App storage. The plugin's own flush on a Mac keeps
-32 fsyncs in flight since 0.14.3, which halved that step in Obsidian; this
-section's numbers are the headless client's, which writes through
-`NodeVault.replace` and is unchanged.
+Done for new files on 2026-10-22: the headless client writes a file that
+nothing on this device has synced straight to its name and fsyncs the batch
+together, behind an intent saved in the index, and a first sync of 3,000 notes
+went from 21 to 36 s to 2 to 4 s
+([research.md](research.md#writing-new-notes-straight-to-their-names-october-22-2026)).
+What remains is the replace of a note already here, which still pays two
+`F_FULLFSYNC`s through `NodeVault.replace`; that is an ordinary sync's cost, not
+a first sync's, and is left for the same reasons the preserving write's other
+steps are. The plugin keeps its staged rename, because Obsidian's mobile
+adapter has no exclusive create.
 
 ## search_notes reads every note at the head
 
@@ -241,12 +218,12 @@ purpose, each with what would change the answer:
   two note edits can split one commit or move its time. Skipping them before
   the planner needs the export's position to cover their uids all the same,
   or `doctor` reports the export behind a settings write at the head.
-- **The check after a reload compares bytes, and there is no quiet period.**
-  Obsidian re-saving a setting with the same values in another byte order
-  reads as a change, which costs a second Apply and never a value. Comparing
-  parsed values needs the applied bytes after the reload. The plan's ten
-  second quiet period before an upload is not built either; every settings
-  save is a version, which costs history and nothing else.
+- **There is no quiet period.** The plan's ten second quiet period before a
+  setting is uploaded is not built; every settings save is a version, which
+  costs history and nothing else. (The other half of this item, a re-save in
+  another byte order reading as a change, was fixed on 2026-10-22: a settings
+  file is compared with the server's as parsed JSON before it is sent or
+  held.)
 
 ## Follow-ups from the 2026-10-06 review
 
