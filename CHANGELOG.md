@@ -34,6 +34,17 @@ client can talk; upgrade the server first.
 
 ### Plugin
 
+- Disabling, reloading or updating the plugin while it was still starting up
+  (most easily on a phone whose screen turned off at that moment) could leave
+  the old copy syncing in the background with nothing able to stop it, beside
+  the new one. Two copies syncing one vault can undo each other's work: on a
+  test phone the old copy sent deletions of attachments the new one had just
+  freed. The old copy now stops for good when it is unloaded, whenever that
+  happens.
+- After that happened once, every later reload until Obsidian restarted
+  showed the vault as not paired, because Obsidian refused to register the
+  plugin's command line commands and invite links a second time. The plugin
+  now starts without them in that case, and the pairing is never in doubt.
 - A changed setting is sent once it has been left alone for ten seconds, not
   on every save. Obsidian saves a setting about a second after you change it,
   and some plugins' settings tabs save on every keystroke; each save used to

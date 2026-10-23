@@ -365,6 +365,8 @@ export default class TrewPlugin extends Plugin {
    * when it has.
    */
   private generation = 0;
+  /** Unloaded: no run starts again in this instance, whatever asks. */
+  private unloaded = false;
   private editingConnection = false;
   /**
    * Files left on the server that somebody asked for, by opening a note that
@@ -654,13 +656,25 @@ export default class TrewPlugin extends Plugin {
     // `typeof` stays because it is the one that asks the object itself, and a
     // build can report a version without carrying everything it promises.
     if (requireApiVersion("1.12.2") && typeof this.registerCliHandler === "function") {
-      this.registerCliHandler(
+      // Each refusal caught, so the command line can never cost the vault its
+      // sync. Obsidian refuses a name already registered, and an earlier
+      // instance whose load failed partway never unloads what it registered,
+      // so every reload after that one threw here, before the pairing was
+      // read, and the panel said this vault was not paired.
+      const cli = (...args: Parameters<typeof this.registerCliHandler>): void => {
+        try {
+          this.registerCliHandler(...args);
+        } catch (err) {
+          log(`the command line command ${args[0]} is not available: ${(err as Error).message}`);
+        }
+      };
+      cli(
         "trew:history",
         "List TrewSync version history for a note",
         { path: { value: "<path>", description: "Vault path" } },
         async (flags) => this.cliHistory(String(flags["path"] ?? "")),
       );
-      this.registerCliHandler(
+      cli(
         "trew:restore",
         "Restore a TrewSync version",
         {
@@ -776,34 +790,49 @@ export default class TrewPlugin extends Plugin {
       this.setState({ kind: "stopped", why: this.unreadable });
       new Notice(`TrewSync: ${this.unreadable}`, 10_000);
     }
+    // Unloaded while those reads were waiting, which a phone paused with its
+    // screen off can hold for as long as it likes: nothing after this may
+    // happen. Started anyway, it was a sync nothing could stop, deciding from
+    // an index the next instance had moved on from, and it sent deletions of
+    // the files that instance had freed.
+    if (mine !== this.generation) return;
 
     // A link opens the form, filled in, and never pairs by itself: the panel
     // shows where the invite points and nothing changes until somebody
     // presses Pair. Anybody who can put a link in front of somebody can send
     // one of these, which is the reason (plan/research/README.md section 5).
-    this.registerObsidianProtocolHandler(INVITE_ACTION, (params) => {
-      try {
-        this.refuseUnlessPairable();
-        const invite = params["invite"]?.trim() ?? "";
-        try {
-          parseInvite(invite);
-        } catch (err) {
-          throw new Error(
-            `This invite link is invalid: ${(err as Error).message}. Create a new invite on a ` +
-              `paired device, or with trewd invite on the server.`,
-          );
-        }
-        new TrewModal(this, invite).open();
-      } catch (err) {
-        new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
-      }
-    });
+    // Caught for the reason the command line's registrations are: a name an
+    // earlier failed load left registered must not stop this one starting.
+    try {
+      this.registerObsidianProtocolHandler(INVITE_ACTION, (params) => this.openInviteLink(params));
+    } catch (err) {
+      log(`invite links are not available: ${(err as Error).message}`);
+    }
 
     if (this.unreadable !== undefined) return;
     // A pending pairing starts too: the run loop finishes it before anything
     // connects as the device it names.
     if (this.config) this.start();
     else this.setState({ kind: "unpaired" });
+  }
+
+  /** An `obsidian://trew` invite link: opens the form, filled in. */
+  private openInviteLink(params: Record<string, string | undefined>): void {
+    try {
+      this.refuseUnlessPairable();
+      const invite = params["invite"]?.trim() ?? "";
+      try {
+        parseInvite(invite);
+      } catch (err) {
+        throw new Error(
+          `This invite link is invalid: ${(err as Error).message}. Create a new invite on a ` +
+            `paired device, or with trewd invite on the server.`,
+        );
+      }
+      new TrewModal(this, invite).open();
+    } catch (err) {
+      new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
+    }
   }
 
   /**
@@ -828,6 +857,7 @@ export default class TrewPlugin extends Plugin {
     this.awake?.dispose();
     this.awake = undefined;
     this.running = false;
+    this.unloaded = true;
     this.generation++;
     this.clearTimers();
     // After `running` is false, so the loop wakes into a decision to stop
@@ -1197,7 +1227,7 @@ export default class TrewPlugin extends Plugin {
 
   private start(): void {
     const config = this.config;
-    if (!config || this.running || this.paused || this.pausing) return;
+    if (!config || this.running || this.paused || this.pausing || this.unloaded) return;
     this.running = true;
     this.everConnected = false;
     this.announced = { attention: "", waiting: "", unknown: "", settings: 0 };

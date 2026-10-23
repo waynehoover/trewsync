@@ -4489,6 +4489,80 @@ describe("small honesties", () => {
  * throws: the commands after it never register and the plugin half exists with
  * nothing saying why.
  */
+describe("an unload while the plugin is still loading", () => {
+  /**
+   * Obsidian can disable a plugin whose onload is still waiting on a read: a
+   * phone paused with the screen off held one there for half an hour. The
+   * instance that resumed afterwards started a sync nothing could stop, which
+   * went on deciding from an index the next instance had moved on from, and
+   * sent deletions of files the next instance had freed (found on the Pixel,
+   * 2026-10-23).
+   */
+  it("starts nothing once it resumes", async () => {
+    await fresh();
+    const { plugin, app } = await load();
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    const saved = plugin.savedData;
+    plugin.onunload();
+    await plugin.closing;
+
+    const second = makePlugin(app);
+    second.savedData = saved;
+    loaded.push(second);
+    const reading = deferred();
+    const gate = deferred();
+    const realLoad = second.loadData.bind(second);
+    second.loadData = async () => {
+      reading.resolve();
+      await gate.promise;
+      return realLoad();
+    };
+    const loading = second.onload();
+    await reading.promise;
+    second.onunload();
+    gate.resolve();
+    await loading;
+    for (let i = 0; i < 50; i++) await nextTurn();
+    const state = second as unknown as { client?: unknown; running: boolean };
+    expect(state.client, "a sync started after the plugin was unloaded").toBeUndefined();
+    expect(state.running).toBe(false);
+    expect([...second.protocolHandlers.keys()]).toEqual([]);
+  }, 300_000);
+});
+
+describe("names an earlier instance left registered", () => {
+  it("still loads the pairing and syncs", async () => {
+    await fresh();
+    const { plugin, app } = await load();
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    const saved = plugin.savedData;
+    plugin.onunload();
+    await plugin.closing;
+    const again = await load(
+      saved,
+      undefined,
+      undefined,
+      (p) => {
+        (p as unknown as { registerCliHandler: (name: string) => void }).registerCliHandler = (
+          name,
+        ) => {
+          throw new Error(`Command "${name}" is already registered as a handler.`);
+        };
+        (
+          p as unknown as { registerObsidianProtocolHandler: (name: string) => void }
+        ).registerObsidianProtocolHandler = (name) => {
+          throw new Error(`Action "${name}" is already registered as a handler.`);
+        };
+      },
+      app,
+    );
+    await synced(again.plugin);
+    expect(again.plugin.commands.map((c) => c.id)).toContain("sync-now");
+  }, 300_000);
+});
+
 describe("an older Obsidian", () => {
   it("loads everything except the command line integration", async () => {
     const { plugin } = await load(null, undefined, undefined, (p) => {
