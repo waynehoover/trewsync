@@ -113,6 +113,8 @@ describe("the headless client, when a displaced version has nowhere to go", () =
     // dropping it in favour of the ledger would have lost them: the two
     // sources answer different halves.
     const dir = await vaultDir();
+    // Its name taken since: under a free one it is put back instead.
+    await writeFile(join(dir, "orphan.md"), "written since\n");
     await writeFile(join(dir, `orphan.md..trew-tmp-keepdeadbeef`), MINE);
 
     const vault = new NodeVault(dir);

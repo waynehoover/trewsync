@@ -20,6 +20,7 @@ import {
   NodeVault,
   TEMP_MARK,
   isParkedOriginal,
+  parkedFrom,
   isTemporary,
   midReplace,
   writeDurably,
@@ -1414,5 +1415,34 @@ describe("a file written straight to its name", () => {
     };
     await expect(vault.flush()).rejects.toThrow("EIO");
     await expect(vault.flush()).rejects.toThrow("EIO");
+  });
+});
+
+describe("a note a crash left parked, between being moved aside and replaced", () => {
+  it("goes back under its own name, so the next pass does the update again", async () => {
+    await mkdir(join(root, "sub"), { recursive: true });
+    await writeFile(join(root, "sub", "note.md..trew-tmp-keep0123abcd"), "what it held\n");
+    const vault = new NodeVault(root);
+    const listed = await vault.list();
+    expect(listed.map((f) => f.path)).toContain("sub/note.md");
+    expect(await readFile(join(root, "sub", "note.md"), "utf8")).toBe("what it held\n");
+    expect(await readdir(join(root, "sub"))).toEqual(["note.md"]);
+    expect(vault.stranded).toEqual([]);
+  });
+
+  it("stays where it is, and is reported, when something has taken the name", async () => {
+    await writeFile(join(root, "note.md"), "written since\n");
+    await writeFile(join(root, "note.md..trew-tmp-keep0123abcd"), "what it held\n");
+    const vault = new NodeVault(root);
+    await vault.list();
+    expect(await readFile(join(root, "note.md"), "utf8")).toBe("written since\n");
+    expect(vault.stranded).toEqual(["note.md..trew-tmp-keep0123abcd"]);
+  });
+
+  it("is not guessed at when its name was cut short to make room for the marker", async () => {
+    const long = `${"n".repeat(250)}..trew-tmp-keep0123abcd`.slice(0, 255);
+    expect(parkedFrom(long)).toBeUndefined();
+    expect(parkedFrom("note.md..trew-tmp-keep0123abcd")).toBe("note.md");
+    expect(parkedFrom("note.md..trew-tmp-keepzz")).toBeUndefined();
   });
 });

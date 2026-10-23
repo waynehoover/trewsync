@@ -252,9 +252,11 @@ plugin writes each in-place update down before it truncates the note, and the
 next start puts a note the crash cut short back from its backup, keeps the cut
 text in a hidden folder the displaced log names, and sends nothing of it.
 
-**A crash during the headless client's replace.** If a crash keeps the note's
-move aside but loses the link back, the next pass reads the note as deleted.
-The parked copy is reported as stranded, but the deletion is still sent.
+**A crash during the headless client's replace.** Closed on 2026-10-22: a
+note a crash left parked, between being moved aside and the new version being
+linked into its name, is linked back under that name by the next listing while
+the name is free, so the pass does the update again rather than reading a
+deletion. A name taken since leaves the parked copy reported, as before.
 
 **A stale lock after a reboot (T21).** `trew unlock --force` now clears a
 record whose pid is running but holds nothing, which is what a pid reused

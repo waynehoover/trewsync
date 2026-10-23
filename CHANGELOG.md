@@ -11,7 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Command-line client
+
+- A note a crash cut off part way through being replaced is put back at the
+  next run. `trew` moves a note aside before linking its new version in, and
+  a crash between the two left nothing at the note's name, which the next run
+  sent to every device as a deletion. The note was always kept, reported as
+  stranded.
 
 ## 0.15.3, plugin, 0.14.2, server, and trew 0.13.1 (2026-10-22)
 

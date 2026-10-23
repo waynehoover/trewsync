@@ -352,11 +352,12 @@ export async function crashSweep(scenario: Scenario, seamName: string): Promise<
       );
     }
 
-    const tree = await everything(dir);
-
+    // After the restart's first listing, which is what anybody would find:
+    // that listing puts back a note a crash left parked under a free name.
     const vault = new NodeVault(dir);
     await vault.list().catch(() => undefined);
     const reported = new Set<string>(vault.stranded);
+    const tree = await everything(dir);
 
     // Both of them. The competitor's version is the obvious one; the version
     // this device already had is just as unrecoverable if the crash took it,

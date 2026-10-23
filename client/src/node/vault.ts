@@ -1787,6 +1787,16 @@ export class NodeVault implements Vault {
       // MCP then listed outside note titles through that stale type check.
       await checkDirectory();
 
+      // A note a crash left parked, between being moved aside and the new
+      // version being linked into its name, goes back under that name while
+      // the name is still free: it is the version the index knows, so the
+      // pass sees it unchanged and does the update again. Missing, it read as
+      // a deletion here, sent to every device. A name taken since keeps the
+      // parked copy where it is, reported below as it always was.
+      if (!this.observeOnly && (await this.putBackParked(dir, items))) {
+        items = await readdir(dir, { withFileTypes: true });
+      }
+
       // Symlinks and anything else are left alone: following one would
       // sync a file that is not in the vault, and copying it as a link
       // would sync a path that means nothing elsewhere. `readdir` answers
@@ -2256,6 +2266,39 @@ export class NodeVault implements Vault {
    * `.trash` is in the never-sync list, so what lands there does not travel
    * back out and undo the deletion everywhere else.
    */
+  /**
+   * Puts back under its own name each note parked in `dir` by a replace or a
+   * removal a crash cut off, where that name is free, and says whether it put
+   * any back (see `list`). A name cut short to make room for the marker, or
+   * a marker this client did not make, cannot say what the note was called,
+   * and is left to be reported.
+   */
+  private async putBackParked(
+    dir: string,
+    items: readonly { name: string; isFile(): boolean }[],
+  ): Promise<boolean> {
+    const names = new Set(items.map((i) => i.name));
+    let any = false;
+    for (const item of items) {
+      if (!item.isFile() || !isParkedOriginal(item.name)) continue;
+      const at = join(dir, item.name);
+      if (liveTemps.has(at)) continue;
+      const original = parkedFrom(item.name);
+      if (original === undefined || names.has(original)) continue;
+      const to = join(dir, original);
+      try {
+        await link(at, to);
+      } catch {
+        continue; // taken in the meantime, or no links here: left to be reported
+      }
+      await rm(at, { force: true });
+      this.unflushed.add(dir);
+      names.add(original);
+      any = true;
+    }
+    return any;
+  }
+
   /**
    * Writes over a file without ever destroying the bytes that were there
    * (R01).
@@ -3469,6 +3512,21 @@ const PARKED_MARK = `${TEMP_MARK}keep`;
 /** Whether a name is a displaced version waiting for somewhere to go. */
 export function isParkedOriginal(name: string): boolean {
   return name.includes(PARKED_MARK);
+}
+
+/**
+ * The name a parked note had, from its parked name: what comes before the
+ * marker this client adds (`.` PARKED_MARK and eight hex digits). Undefined
+ * for any other shape, and for a parked name long enough that its own was
+ * cut short to make room.
+ */
+export function parkedFrom(name: string): string | undefined {
+  const match = new RegExp(`^(.+)\\.${PARKED_MARK.replaceAll(".", "\\.")}[0-9a-f]{8}$`, "u").exec(
+    name,
+  );
+  if (match === null) return undefined;
+  if (Buffer.byteLength(name) > MAX_SEGMENT_BYTES - 4) return undefined;
+  return match[1];
 }
 
 /** Temporaries open in this process, by full path. Exact, so a note is never mistaken for one. */
