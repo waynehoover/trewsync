@@ -80,6 +80,13 @@ export interface IndexEntry {
    * the file is its own write and not a note somebody made.
    */
   creating?: { hash: string; uid: number; size: number };
+  /**
+   * A local copy that parses to the same JSON value as the synced version, in
+   * another key order or layout: Obsidian re-saving a setting its own way. For
+   * as long as the file is still that copy and the base still that version, it
+   * is not a change to send, and the server's version is not one to apply.
+   */
+  sameAs?: { local: string; base: string };
 }
 
 export function newEntry(path: string): IndexEntry {

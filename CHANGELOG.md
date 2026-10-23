@@ -11,7 +11,12 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Plugin
+
+- A setting saved again with the same values in another order or layout is
+  no longer a change. Obsidian re-saving a setting its own way after an Apply
+  no longer asks for a second Apply, and two devices that held a setting in
+  different orders before they synced no longer get a conflict copy of it.
 
 ## trew 0.13.0, command-line client (2026-10-22)
 

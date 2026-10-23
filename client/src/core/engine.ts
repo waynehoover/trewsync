@@ -2638,7 +2638,7 @@ export class Engine {
       delete entry.creating;
     }
 
-    if (this.toConfirm.delete(path)) this.confirmApplied(path, entry, local);
+    if (this.toConfirm.delete(path)) await this.confirmApplied(path, entry, local);
 
     let action = decide({ local, remote, index: entry, mergeable: this.mergeable(path) });
 
@@ -2764,6 +2764,38 @@ export class Engine {
     now: number,
   ): Promise<Action | undefined> {
     action = this.firstChoice(path, action, entry, local !== undefined) ?? action;
+    // The same values in another order or layout are not a change, either way
+    // (`IndexEntry.sameAs`): this device's copy is not sent, and the server's
+    // is recorded as synced without being written or held for Apply.
+    const remote = this.remote.get(path);
+    const same = entry.sameAs;
+    if (same !== undefined && (local?.hash !== same.local || entry.synchash !== same.base)) {
+      delete entry.sameAs;
+    } else if (same !== undefined) {
+      if (action.kind === "upload") return undefined;
+      if (action.kind === "merge" || action.kind === "conflict") {
+        action = { kind: "download", why: "changed on another device, and only reordered here" };
+      }
+    }
+    if (
+      entry.sameAs === undefined &&
+      local !== undefined &&
+      remote !== undefined &&
+      !remote.deleted &&
+      local.hash !== remote.hash &&
+      (action.kind === "upload" ||
+        action.kind === "download" ||
+        action.kind === "merge" ||
+        action.kind === "conflict") &&
+      (await this.sameJson(path, remote.hash))
+    ) {
+      entry.sameAs = { local: local.hash, base: remote.hash };
+      entry.synchash = remote.hash;
+      entry.syncuid = remote.uid;
+      this.pending.delete(path);
+      this.log("a setting holds the same values as the server's, in another order", path);
+      return undefined;
+    }
     // Every decision that sends this device's copy, a merge and a kept-both
     // conflict included, sends it only if it is JSON: the very bytes that go,
     // which a pass that just read the file holds, and otherwise the file as it
@@ -2876,8 +2908,25 @@ export class Engine {
    * values then read as unchanged here, so the applied version is put back
    * (held for another Apply) rather than the old one sent to every device.
    */
-  private confirmApplied(path: string, entry: IndexEntry, local: LocalState | undefined): void {
+  private async confirmApplied(
+    path: string,
+    entry: IndexEntry,
+    local: LocalState | undefined,
+  ): Promise<void> {
     const applied = entry.unconfirmed;
+    if (applied !== undefined && local !== undefined && local.hash !== entry.synchash) {
+      // Obsidian re-saves its settings at start, and the same values in
+      // another order or layout are the applied version, confirmed: taken as
+      // the synced copy, so they are neither sent nor offered for another
+      // Apply. Only when both parse to the same value; anything else,
+      // including a version that cannot be fetched now, is decided below.
+      if (await this.sameJson(path, entry.synchash)) {
+        delete entry.unconfirmed;
+        entry.sameAs = { local: local.hash, base: entry.synchash };
+        this.log("a setting applied here was saved again with the same values", path);
+        return;
+      }
+    }
     delete entry.unconfirmed;
     if (applied === undefined || local?.hash === entry.synchash) return;
     // Gone, so nothing was written back: a deletion Apply made, confirmed, or
@@ -4239,18 +4288,44 @@ export class Engine {
     if (size > creating.size) return false;
     const here = await this.opts.vault.read(path);
     if (here.length > creating.size) return false;
-    const names = creating.hash === contentId([]) ? [] : creating.hash.split(",");
-    const each = perChunkBudget(creating.size, names.length);
-    const bodies = await this.fetchAll(names, () => each, [path]);
-    const want = new Uint8Array(creating.size);
-    let at = 0;
-    for (const body of bodies) {
-      want.set(body.subarray(0, Math.max(0, want.length - at)), at);
-      at += body.length;
-    }
-    if (at !== creating.size) return false;
+    const want = await this.versionBytes(path, creating.hash, creating.size);
+    if (want.length !== creating.size) return false;
     for (let k = 0; k < here.length; k++) if (here[k] !== want[k] && here[k] !== 0) return false;
     return true;
+  }
+
+  /** A version's bytes, fetched by the chunks its content hash lists. */
+  private async versionBytes(path: string, hash: string, size: number): Promise<Uint8Array> {
+    const names = hash === contentId([]) ? [] : hash.split(",");
+    const each = perChunkBudget(size, names.length);
+    const bodies = await this.fetchAll(names, () => each, [path]);
+    const out = new Uint8Array(bodies.reduce((n, b) => n + b.length, 0));
+    let at = 0;
+    for (const body of bodies) {
+      out.set(body, at);
+      at += body.length;
+    }
+    return out;
+  }
+
+  /**
+   * Whether the file at `path` and the server's newest version of it, which
+   * has `hash`, parse to the same JSON value, whatever the order of keys or
+   * the layout. False when either cannot be read, fetched or parsed.
+   */
+  private async sameJson(path: string, hash: string): Promise<boolean> {
+    if (!looksLikeJson(path)) return false;
+    const remote = this.remote.get(path);
+    if (remote === undefined || remote.hash !== hash || remote.deleted) return false;
+    try {
+      const here = await this.opts.vault.read(path);
+      const synced = await this.versionBytes(path, hash, remote.size);
+      const parse = (bytes: Uint8Array): unknown =>
+        JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      return canonicalJson(parse(here)) === canonicalJson(parse(synced));
+    } catch {
+      return false;
+    }
   }
 
   private async intendDirect(
@@ -7046,4 +7121,17 @@ function parsesAsJson(text: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** A JSON value as text with every object's keys sorted, so equal values compare equal. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v !== null && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.entries(v as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        )
+      : v,
+  );
 }

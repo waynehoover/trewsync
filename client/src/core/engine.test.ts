@@ -5505,3 +5505,63 @@ describe("what a crash left of a direct write, and what it did not", () => {
     }
   });
 });
+
+describe("an applied setting Obsidian saves again with the same values", () => {
+  it("is no conflict between two devices that held it in different orders before syncing", async () => {
+    await fresh();
+    const enc = (s: string) => new TextEncoder().encode(s);
+    const P = ".obsidian/app.json";
+    const mac = new Device("mac");
+    mac.settings = { root: ".obsidian" };
+    devices.push(mac);
+    await mac.connect(server);
+    await mac.vault.write(P, enc('{\n  "a": 1,\n  "b": 2\n}'), { mtime: 1_000, ctime: 1_000 });
+    await mac.settle();
+    const desk = new Device("desk");
+    desk.settings = { root: ".obsidian" };
+    devices.push(desk);
+    await desk.vault.write(P, enc('{"b":2,"a":1}'), { mtime: 1_000, ctime: 1_000 });
+    await desk.connect(server);
+    const r = await desk.settle();
+    expect(r.settingsHeld).toBe(0);
+    expect(r.uploaded).toBe(0);
+    expect(Object.keys(desk.vault.snapshot())).toEqual([P]);
+    expect((await mac.settle()).settingsHeld).toBe(0);
+    expect(Object.keys(mac.vault.snapshot())).toEqual([P]);
+  });
+
+  it("is confirmed, not sent and not offered for another Apply", async () => {
+    await fresh();
+    const enc = (s: string) => new TextEncoder().encode(s);
+    const P = ".obsidian/app.json";
+    const mac = new Device("mac");
+    mac.settings = { root: ".obsidian" };
+    devices.push(mac);
+    await mac.connect(server);
+    await mac.vault.write(P, enc('{\n  "a": 1,\n  "b": [1, 2]\n}'), { mtime: 1_000, ctime: 1_000 });
+    await mac.settle();
+
+    const desk = new Device("desk");
+    desk.settings = { root: ".obsidian", firstChoice: "server" };
+    desk.loadId = "load 1";
+    devices.push(desk);
+    await desk.connect(server);
+    expect((await desk.settle()).settingsHeld).toBe(1);
+    await desk.engine.sync({ applySettings: true });
+    desk.close();
+    // The reload: Obsidian starts, and saves the same values its own way.
+    await desk.vault.write(P, enc('{"b":[1,2],"a":1}'), { mtime: 9_000, ctime: 9_000 });
+    desk.loadId = "load 2";
+    await desk.connect(server);
+    let uploaded = 0;
+    let held = 0;
+    for (let i = 0; i < 3; i++) {
+      const r = await desk.engine.sync();
+      uploaded += r.uploaded;
+      held = r.settingsHeld;
+    }
+    expect(uploaded).toBe(0);
+    expect(held).toBe(0);
+    expect((await mac.settle()).settingsHeld).toBe(0);
+  });
+});
