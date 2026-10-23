@@ -3007,25 +3007,37 @@ export class NodeVault implements Vault {
     this.invalidateListing();
     const full = await this.absolute(path);
     await this.insideForReal(full);
+    await this.checkStaging();
     const had = await this.deepestExisting(full);
     await mkdir(dirname(full), { recursive: true });
-    let handle: FileHandle;
-    try {
-      handle = await open(full, "wx");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
-      throw err;
-    }
+    // Written whole into staging, then linked to the name: the name never
+    // holds part of the file, so nothing can save into it half written. A
+    // name opened with `wx` and written after was visible empty for an
+    // instant, and an editor saving into it then lost its save to the bytes
+    // that followed. Only the fsync waits, for `flush`, through this handle,
+    // which is the same file once it is linked.
+    const { tmp, handle } = await openTemp(full, undefined, this.staging);
+    let linked = false;
     try {
       await writeAll(handle, bytes);
       if (times.mtime > 0) await handle.utimes(times.mtime / 1000, times.mtime / 1000);
-    } catch (err) {
-      // This call made the name and nothing else has had it, so what is
-      // there is part of a version the server holds: taken away, not left
-      // for an editor to open until the retry.
-      await handle.close().catch(() => {});
-      await rm(full, { force: true }).catch(() => {});
-      throw err;
+      try {
+        await link(tmp, full);
+        linked = true;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "EEXIST") return false;
+        // No link across this boundary: the staged and fsynced create, which
+        // has its own way round, does it.
+        if (code === "EPERM" || code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EXDEV") {
+          return await this.create(path, bytes, times);
+        }
+        throw err;
+      }
+    } finally {
+      if (!linked) await handle.close().catch(() => {});
+      await rm(tmp, { force: true }).catch(() => {});
+      liveTemps.delete(tmp);
     }
     this.unsyncedFiles.set(full, handle);
     this.dirty(full, had);
