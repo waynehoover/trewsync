@@ -25,6 +25,11 @@ vault. Commands use the current directory unless `--dir` is set. Run
 | `search QUERY` | Search the vault's notes on the server for literal text, file names or a tag. |
 | `deleted` | List deleted notes and recovery availability. |
 | `restore PATH` | Restore the newest version with content, or use `--uid`. |
+| `rewind [FOLDER] --at TIME` | Preview a folder, or every note, as the server had it at a time, and print the command that applies exactly that preview. |
+| `undo OP` | Reverse one operation, such as a rewind, by the id `history` shows beside a version it wrote. |
+| `on-demand [SETTING]` | Show or set attachments on demand for this device: `off`, `all`, or a size such as `1MB`. |
+| `fetch PATH...` | Download files this device leaves on the server. |
+| `free-space [PATH...]` | Keep covered attachments on the server only, freeing their space here. |
 | `repair` | Resend missing server content available on this device. |
 | `unlink` | Forget the local pairing and index; retain notes. |
 | `unlock` | Recover a lock when manual intervention is required. |
@@ -44,7 +49,12 @@ vault. Commands use the current directory unless `--dir` is set. Run
 | `--config-dir NAME` | Obsidian configuration folder; default `.obsidian`. |
 | `--ignore NAME` | Exclude a file/folder name at any depth, local to this device; repeatable. |
 | `--ttl DURATION` | Invite lifetime, such as `30m`; default `1h`, which is also the most a device can ask for. |
-| `--uid N` | Exact version for `restore`. |
+| `--uid N` | Exact version for `restore`; for `rewind --apply`, the version its preview printed. |
+| `--at TIME` | `rewind`: `2026-10-20 15:00` in this machine's time zone, a bare date for the start of that day, or either with `Z` or an offset such as `+02:00`. |
+| `--ago DURATION` | `rewind`: that long ago, such as `90m`, `6h`, `3d` or `2w`. |
+| `--head UID` | `rewind --apply`: the head its preview printed. |
+| `--apply` | `rewind`: apply the preview named by `--uid` and `--head`, and nothing else. |
+| `--copy` | `undo`: write the earlier versions beside their notes instead of over them. |
 | `--to PATH` | Destination for `restore`. |
 | `--limit N` | `history`: default 20; `deleted`: default all; `search`: matches a page, default 50, at most 200. |
 | `--before UID` | Earlier page for `history` or `deleted`. |

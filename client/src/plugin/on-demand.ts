@@ -10,8 +10,9 @@
 
 import { Modal, Setting, type App } from "obsidian";
 
-import { looksLikeText } from "../core/chunk.ts";
-import { isConfigPath } from "../core/path-policy.ts";
+import { coveredBy } from "../core/on-demand.ts";
+
+export { coveredBy };
 
 /** The presets a person chooses from, in bytes. Absent is off. */
 export const ON_DEMAND_PRESETS: readonly { label: string; bytes: number | undefined }[] = [
@@ -23,13 +24,6 @@ export const ON_DEMAND_PRESETS: readonly { label: string; bytes: number | undefi
 
 /** The default once it is turned on: over 1 MB. */
 export const ON_DEMAND_DEFAULT = 1_000_000;
-
-/** Whether a file of this size is one the setting leaves on the server. */
-export function coveredBy(threshold: number | undefined, path: string, size: number): boolean {
-  return (
-    threshold !== undefined && size >= threshold && !looksLikeText(path) && !isConfigPath(path)
-  );
-}
 
 /** The part of a link that names a file: no `#heading`, no `|alias`, in NFC. */
 export function linkpathOf(link: string): string {

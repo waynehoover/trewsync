@@ -184,6 +184,57 @@ again with a new invite. Local files are kept, and what only this device holds
 is sent back. Either way the next edit made on two devices at once keeps both
 versions instead of merging them, because the last agreed version is gone.
 
+### Rewind a folder to an earlier time
+
+```bash
+trew rewind Projects --at "2026-10-20 15:00"
+trew rewind Projects --ago 6h
+trew rewind --at 2026-10-20            # every note in the vault
+```
+
+A rewind previews first and changes nothing. It says which files would be put
+back and which made since would be removed, and prints the one command that
+applies exactly that preview:
+
+```bash
+trew rewind --uid 812 --head 830 --apply Projects
+```
+
+The time is the server's: what it had received by then, not what a device's
+clock said. A note moved into the folder since stays where it arrived, a note
+moved out of it comes back as a copy, and settings never change. If any note is
+saved between the preview and the apply, the apply is refused and nothing
+changes; preview again. The apply prints its operation, which every device
+receives as it syncs, and the command that reverses it:
+
+```bash
+trew undo NM7sE_0lcbKcOOjUljmzbw
+```
+
+`trew undo` reverses any operation `trew history` shows beside a version: a
+rewind, an undo, or an agent's edit. If a note it changed has been edited since,
+nothing changes; `--copy` writes the earlier versions beside the notes instead.
+The server must be trewd 0.15.0 or later.
+
+### Attachments on demand
+
+```bash
+trew on-demand 1MB          # or 10MB, all, off
+trew sync                   # leaves covered attachments on the server
+trew fetch Attachments/scan.pdf
+trew free-space             # takes covered attachments off this disk
+```
+
+With the setting on, a sync leaves new attachments at or over the size on the
+server, and `trew status` says how many. Notes, canvases and settings always
+download. `trew fetch` downloads named ones, which then stay like any other
+file. `trew free-space` removes covered attachments already here, each one
+first checked against the server's newest version and read back from the
+server, and deleted rather than moved to `.trash`; a file changed since it
+synced is kept. Freeing space never deletes anything on the server: delete a
+file to delete it everywhere. `trew on-demand off` downloads everything again
+at the next sync.
+
 If a command reports a version kept at a hidden path, preserve that file and
 `.trew/`. Copy the retained version to a new visible filename and inspect it
 before removing recovery material. An unreadable recovery inventory needs

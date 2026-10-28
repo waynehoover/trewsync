@@ -75,9 +75,13 @@ import {
   ConnectionError,
   MAX_NAME_BYTES,
   ProtocolError,
+  type RestoreResult,
   type SearchMode,
   type SearchPage,
+  type UndoResult,
+  type UndoStep,
 } from "../core/transport.ts";
+import { coveredBy } from "../core/on-demand.ts";
 import { renderMatch } from "./search-output.ts";
 import { forTerminal, printable, safeJson } from "./terminal.ts";
 import { describeOutcome, exitCodeOf, outcomeOf } from "../core/outcome.ts";
@@ -126,6 +130,14 @@ export const USAGE = `trew: the TrewSync command-line client, self-hosted sync f
   trew history PATH                       every version the server holds of one note
   trew search QUERY                       search the vault's notes on the server for literal text
   trew restore PATH                       put a note back, newest version first
+  trew rewind [FOLDER] --at TIME          preview a folder, or every note, as the server had it at a
+                                            time, and print the command that applies exactly that
+  trew undo OP                            reverse one operation, such as a rewind, from trew history
+  trew on-demand [off|1MB|10MB|all]       show or set which attachments stay on the server until
+                                            asked for (this device only)
+  trew fetch PATH...                      download files this device leaves on the server
+  trew free-space [PATH...]               keep covered attachments on the server only, freeing the
+                                            space here; each is checked against the server first
   trew repair                             resend bodies the server has lost, from this device
   trew unlink                             forget the pairing, keep the notes
   trew unlock                             clear a lock left behind by a trew that crashed
@@ -152,7 +164,8 @@ Options
                    after a restart. Saying it is not a running trew is your assertion. It will
                    not break a lock a trew on this machine is holding
   --ttl DURATION   how long an invite lasts, like 10m or 1h (default: 1h, at most 1h)
-  --uid N          restore one exact version, from trew history
+  --uid N          restore one exact version, from trew history; for rewind --apply, the version
+                   its preview printed
   --to PATH        restore somewhere other than where it came from
   --limit N        how many versions history or deleted shows (default: 20, or all deletions),
                    or matches on one page of search (default: 50, at most 200)
@@ -164,6 +177,12 @@ Options
   --all            for search: every page of matches, not only the first
   --after CURSOR   for search: the page after this one, from the cursor a page ends with
   --verify         for sync: read every file to verify the content cache
+  --at TIME        for rewind: 2026-10-20 15:00 in this machine's time zone, a bare date for the
+                   start of that day, or either with Z or an offset such as +02:00
+  --ago DURATION   for rewind: that long ago, like 90m, 6h, 3d or 2w
+  --head UID       for rewind --apply: the head its preview printed
+  --apply          for rewind: apply the preview named by --uid and --head, and nothing else
+  --copy           for undo: write the earlier versions beside the notes instead of over them
   --key-file PATH  pair: read the invite from a file, so it stays out of the shell's history
   --config-dir DIR Obsidian's config folder, if it is not .obsidian
   --ignore NAME    a folder or file name never to sync, at any depth, repeatable; local to this
@@ -308,6 +327,22 @@ export async function run(argv: readonly string[], terminal: Console): Promise<n
         return await cmdSearch(args, io);
       case "restore":
         return await locked(args, () => cmdRestore(args, io));
+      case "rewind":
+        // A preview writes nothing here or there, so it takes no lock.
+        return args.apply
+          ? await locked(args, () => cmdRewind(args, io))
+          : await cmdRewind(args, io);
+      case "undo":
+        return await locked(args, () => cmdUndo(args, io));
+      case "on-demand":
+        // Reading the setting takes no lock; changing it writes the config.
+        return args.rest[0] === undefined
+          ? await cmdOnDemand(args, io)
+          : await locked(args, () => cmdOnDemand(args, io));
+      case "fetch":
+        return await locked(args, () => cmdFetch(args, io));
+      case "free-space":
+        return await locked(args, () => cmdFreeSpace(args, io));
       case "unlink":
         return await locked(args, () => cmdUnlink(args, io));
       // Not under `locked`, which would be asking the lock for permission to
@@ -1335,6 +1370,10 @@ async function cmdStatus(args: Args, io: Console): Promise<number> {
     // plugin ignores nothing beyond the dot rule and the config folder, and
     // a folder ignored here is one the phone uploads.
     ignore: [...args.ignore],
+    // Attachments on demand (`trew on-demand`), and what the last sync left on
+    // the server by it, read from the index and so as of that sync.
+    onDemandBytes: config.onDemandBytes ?? null,
+    serverOnly: serverOnlyHere(config.onDemandBytes, stored),
     // Notes changed here since the last pass (F27), and how that was decided
     // (R25).
     //
@@ -1470,6 +1509,12 @@ async function cmdStatus(args: Args, io: Console): Promise<number> {
   io.out(
     `ignore   ${local.ignore.length === 0 ? "nothing beyond the dot rule and the config folder" : local.ignore.join(", ")} (this device only)`,
   );
+  if (local.onDemandBytes !== null) {
+    io.out(
+      `on demand ${onDemandWords(local.onDemandBytes)}: ${local.serverOnly.files} on the ` +
+        `server only (${bytes(local.serverOnly.bytes)}), as of the last sync`,
+    );
+  }
   // Both cursors, on their own lines, so "behind and nothing arriving" is
   // something a person can see rather than something the design says cannot
   // be detected (I11).
@@ -1760,7 +1805,14 @@ async function cmdHistory(args: Args, io: Console): Promise<number> {
     }
     for (const v of versions) {
       const what = v.deleted ? "deleted" : v.folder ? "folder" : `${bytes(v.size)}`;
-      io.out(`${String(v.uid).padStart(7)}  ${when(v.mtime)}  ${v.device.padEnd(12)}  ${what}`);
+      // The operation that wrote it, which is what trew undo takes.
+      const op = v.operation
+        ? `  ${v.operation.tool} ${v.operation.id}` +
+          (v.operation.undoneBy ? ` (undone by ${v.operation.undoneBy})` : "")
+        : "";
+      io.out(
+        `${String(v.uid).padStart(7)}  ${when(v.mtime)}  ${v.device.padEnd(12)}  ${what}${op}`,
+      );
     }
     io.out("");
     if (args.limit > limit) {
@@ -1770,6 +1822,9 @@ async function cmdHistory(args: Args, io: Console): Promise<number> {
       );
     }
     io.out("trew restore PATH --uid N brings one of these back.");
+    if (versions.some((v) => v.operation && !v.operation.undoneBy)) {
+      io.out("trew undo OP reverses the operation that wrote a version, in every note it changed.");
+    }
     if (nextBefore !== null) io.out(`Older versions: trew history PATH --before ${nextBefore}`);
     return 0;
   } finally {
@@ -2074,6 +2129,533 @@ async function cmdRestore(args: Args, io: Console): Promise<number> {
   }
 }
 
+/** What a restore's or an undo's step did to its path, for a person. */
+function stepWords(action: string): string {
+  switch (action) {
+    case "restore":
+      return "put back";
+    case "remove":
+      return "removed";
+    case "remove_folder":
+      return "folder removed";
+    case "keep_folder":
+      return "folder kept";
+    case "move_back":
+      return "moved back";
+    case "copy":
+      return "copied beside";
+    case "nothing":
+      return "nothing to copy";
+    default:
+      return action;
+  }
+}
+
+/** How many steps a listing prints before it says how many more there are. */
+const STEPS_LISTED = 50;
+
+/** The steps, one a line, the first `STEPS_LISTED` of them, then how many more. */
+function listSteps(io: Console, steps: readonly UndoStep[], moreBeyond = 0): void {
+  const shown = steps.filter((st) => st.action !== "keep_folder");
+  for (const st of shown.slice(0, STEPS_LISTED)) {
+    io.out(`  ${stepWords(st.action).padEnd(16)}${st.path}`);
+  }
+  const hidden = Math.max(0, shown.length - STEPS_LISTED) + moreBeyond;
+  if (hidden > 0) io.out(`  and ${hidden} more`);
+}
+
+/** A word a shell takes as one argument, quoted only when it is not plainly one. */
+export function shellWord(word: string): string {
+  return /^[A-Za-z0-9_./@%+=:,-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * A time somebody typed, for `rewind --at`: `2026-10-20 15:00` or
+ * `2026-10-20T15:00:30` in this machine's time zone, a bare date for the start
+ * of that day here, or either with `Z` or an offset such as `+02:00`.
+ *
+ * Read here rather than by `Date.parse`, which takes a bare date as UTC and a
+ * date and time as local, and accepts much else besides: a rewind to a time
+ * somebody did not mean writes over a folder.
+ */
+export function parseTime(text: string, now = Date.now()): number {
+  const m =
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?\s*(Z|[+-]\d{2}:?\d{2})?$/i.exec(
+      text.trim(),
+    );
+  const wants = `--at wants a time like 2026-10-20 15:00, not ${text}`;
+  if (!m) throw new Error(wants);
+  const [y, mo, d, h, mi, sec] = [1, 2, 3, 4, 5, 6].map((i) => Number(m[i] ?? 0)) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || sec > 59) throw new Error(wants);
+  const milli = Number((m[7] ?? "").padEnd(3, "0"));
+  const zone = m[8];
+  let ms: number;
+  if (zone === undefined) {
+    ms = new Date(y, mo - 1, d, h, mi, sec, milli).getTime();
+    // February 31 rolls over into March; refused rather than moved.
+    if (new Date(ms).getDate() !== d) throw new Error(wants);
+  } else {
+    const z = zone.toUpperCase() === "Z" ? "+00:00" : zone;
+    const sign = z.startsWith("-") ? -1 : 1;
+    const digits = z.slice(1).replace(":", "");
+    const offset = sign * (Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2)));
+    ms = Date.UTC(y, mo - 1, d, h, mi, sec, milli) - offset * 60_000;
+    if (new Date(Date.UTC(y, mo - 1, d)).getUTCDate() !== d) throw new Error(wants);
+  }
+  if (!Number.isFinite(ms)) throw new Error(wants);
+  if (ms > now + 60_000) throw new Error(`--at ${text} is in the future`);
+  return ms;
+}
+
+/** How long ago, for `rewind --ago`: 90m, 6h, 3d or 2w. */
+export function parseAgo(text: string): number {
+  const m = /^(\d+)\s*(m|h|d|w)$/.exec(text.trim());
+  if (!m) throw new Error(`--ago wants a duration like 90m, 6h, 3d or 2w, not ${text}`);
+  const unit = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 }[
+    m[2] as "m" | "h" | "d" | "w"
+  ];
+  const ms = Number(m[1]) * unit;
+  if (!Number.isSafeInteger(ms) || ms <= 0) throw new Error("--ago must be more than nothing");
+  return ms;
+}
+
+/**
+ * A threshold for `trew on-demand`: off, all, or a size like 1MB or 500KB, in
+ * the decimal units the plugin's presets use (1 MB is 1,000,000 bytes).
+ * Undefined is off.
+ */
+export function parseOnDemand(text: string): number | undefined {
+  const t = text.trim().toLowerCase();
+  if (t === "off") return undefined;
+  if (t === "all") return 0;
+  const m = /^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb)?$/.exec(t);
+  if (!m) throw new Error(`on-demand wants off, all, or a size like 1MB or 500KB, not ${text}`);
+  const unit = { b: 1, kb: 1e3, mb: 1e6, gb: 1e9 }[(m[2] ?? "b") as "b" | "kb" | "mb" | "gb"];
+  const n = Math.round(Number(m[1]) * unit);
+  if (!Number.isSafeInteger(n) || n > 999_999_999_999_999) {
+    throw new Error(`${text} is larger than any file`);
+  }
+  return n;
+}
+
+/** A threshold in the units it was given in: 1 MB, 500 KB, 10 MB. */
+function decimalSize(n: number): string {
+  const trim = (x: number) => String(Number(x.toFixed(1)));
+  if (n >= 1e9) return `${trim(n / 1e9)} GB`;
+  if (n >= 1e6) return `${trim(n / 1e6)} MB`;
+  if (n >= 1e3) return `${trim(n / 1e3)} KB`;
+  return `${n} bytes`;
+}
+
+/** What the setting leaves on the server, in words. */
+function onDemandWords(threshold: number): string {
+  return threshold === 0
+    ? "every attachment stays on the server until it is fetched"
+    : `attachments of ${decimalSize(threshold)} or more stay on the server until fetched`;
+}
+
+/**
+ * The files the setting has left on the server, as of the last sync: every
+ * live file the server holds that this device has no record of and that the
+ * setting covers. From the index, so `status` and `on-demand` need no
+ * connection.
+ */
+function serverOnlyHere(
+  threshold: number | undefined,
+  stored: StoredState | undefined,
+): { files: number; bytes: number } {
+  const out = { files: 0, bytes: 0 };
+  if (threshold === undefined || !stored) return out;
+  for (const [path, raw] of Object.entries(stored.remote)) {
+    const r = raw as { deleted?: unknown; folder?: unknown; size?: unknown };
+    if (r.deleted === true || r.folder === true || typeof r.size !== "number") continue;
+    if (path in stored.entries || !coveredBy(threshold, path, r.size)) continue;
+    out.files++;
+    out.bytes += r.size;
+  }
+  return out;
+}
+
+/**
+ * Puts a folder, or every note, back as the server had it at a time
+ * (protocol 5; plan/protocol.md, "Restore").
+ *
+ * In two steps, as `trewd restore` is: the preview writes nothing and prints
+ * the one command that applies exactly it, named by the version and head it
+ * answered with, and the server refuses that command if any note was saved
+ * in between. The apply is one operation, which `trew undo` reverses.
+ */
+async function cmdRewind(args: Args, io: Console): Promise<number> {
+  const folder = (args.rest[0] ?? "").replace(/^\/+|\/+$/g, "");
+  const config = await mustLoad(args.dir);
+  if (args.apply && (args.readOnly || config.readOnly === true)) {
+    throw new Error(
+      "this device is read-only, and a rewind writes new versions on the server. " +
+        "Apply it from a device that may write.",
+    );
+  }
+  const scope = folder === "" ? "every note in the vault" : folder;
+  const client = await open(config, args, io, args.apply ? {} : { inspect: true });
+  try {
+    let result: RestoreResult;
+    try {
+      result = await client.restoreTo(
+        args.apply
+          ? { uid: args.uid!, head: args.head!, ...(folder !== "" ? { folder } : {}) }
+          : { at: args.at!, ...(folder !== "" ? { folder } : {}) },
+      );
+    } catch (err) {
+      if (err instanceof ProtocolError && err.code === "stale") {
+        throw new Error(
+          "a note was saved since that preview, so nothing was applied and nothing changed. " +
+            "Preview it again, with --at or --ago, and use the command that prints",
+        );
+      }
+      throw err;
+    }
+    const changes = result.restore + result.remove + result.removeFolder;
+    const counts: string[] = [];
+    if (result.restore > 0) counts.push(`${result.restore} put back`);
+    if (result.remove > 0) counts.push(`${result.remove} made since removed`);
+    if (result.removeFolder > 0) counts.push(`${result.removeFolder} folders made since removed`);
+
+    if (!args.apply) {
+      if (args.json) {
+        io.out(safeJson({ ok: true, applied: false, ...result }));
+        return 0;
+      }
+      const Scope = scope.charAt(0).toUpperCase() + scope.slice(1);
+      io.out(`${Scope}, as the server had it at ${when(result.at)} (version ${result.toUid}).`);
+      if (changes === 0) {
+        io.out("It already holds what it held then. Nothing to apply.");
+        return 0;
+      }
+      io.out(`${counts.join(", ")}.`);
+      if (result.keptMovedIn.length > 0) {
+        io.out(
+          `Left where they are: ${result.keptMovedIn.length} moved into the folder since, ` +
+            "which a rewind of the folder does not remove.",
+        );
+      }
+      listSteps(io, result.steps, result.more);
+      const dir = args.provided?.has("--dir") ? ` --dir ${shellWord(args.dir)}` : "";
+      const where =
+        folder === "" ? "" : ` ${folder.startsWith("-") ? "-- " : ""}${shellWord(folder)}`;
+      io.out("Nothing has changed. To apply exactly this:");
+      io.out(`  trew rewind --uid ${result.toUid} --head ${result.head} --apply${dir}${where}`);
+      return 0;
+    }
+
+    // Committed on the server: what is left is putting it on this disk.
+    let report: SyncReport | undefined;
+    let syncError: string | undefined;
+    try {
+      report = await client.settle({ coalesceWrites: false });
+    } catch (err) {
+      syncError = withRecovery(err);
+    }
+    const code = report === undefined ? 1 : exitCodeFor(report, client.vault);
+    if (args.json) {
+      io.out(
+        safeJson({
+          ok: code === 0,
+          applied: result.opId !== undefined,
+          ...result,
+          sync: report ?? null,
+          ...(syncError !== undefined ? { error: syncError } : {}),
+        }),
+      );
+      return code;
+    }
+    if (result.opId === undefined) {
+      io.out(`${scope} already held what it held at ${when(result.at)}. Nothing was written.`);
+      return code;
+    }
+    io.out(
+      `Rewound ${scope} to ${when(result.at)}, as operation ${result.opId}: ${counts.join(", ")}.`,
+    );
+    io.out("Every device receives it as it syncs.");
+    io.out(`To undo it: trew undo ${asTyped(result.opId)}`);
+    if (syncError !== undefined) {
+      io.err(
+        `The rewind is on the server, but this device did not finish applying it: ${syncError}. ` +
+          "Run trew sync to retry.",
+      );
+    } else if (code !== 0) {
+      renderReport(
+        report!,
+        args,
+        io,
+        client.serverCursor,
+        client.vault.stranded ?? [],
+        client.vault.displaced ?? [],
+        unknownRecovery(client.vault),
+      );
+    }
+    return code;
+  } finally {
+    await client.close();
+  }
+}
+
+/**
+ * Reverses one operation, by the id `trew history` shows beside a version it
+ * wrote: a rewind, an undo, or an agent's edit. All of it or nothing, and only
+ * against the versions it left: a note changed since refuses it, and `--copy`
+ * writes each earlier version beside its note instead, changing nothing there.
+ */
+async function cmdUndo(args: Args, io: Console): Promise<number> {
+  const opId = args.rest[0]!;
+  const config = await mustLoad(args.dir);
+  if (args.readOnly || config.readOnly === true) {
+    throw new Error(
+      "this device is read-only, and an undo writes new versions on the server. " +
+        "Undo it from a device that may write.",
+    );
+  }
+  const client = await open(config, args, io);
+  try {
+    let done: UndoResult;
+    try {
+      done = await client.undo(opId, args.copy ? { toCopy: true } : {});
+    } catch (err) {
+      if (err instanceof ProtocolError && err.code === "stale" && !args.copy) {
+        throw new Error(
+          `${err.message}. Nothing was changed. To write the earlier versions beside the notes ` +
+            `instead, leaving what is there now: trew undo ${asTyped(opId)} --copy`,
+        );
+      }
+      throw err;
+    }
+    let report: SyncReport | undefined;
+    let syncError: string | undefined;
+    try {
+      report = await client.settle({ coalesceWrites: false });
+    } catch (err) {
+      syncError = withRecovery(err);
+    }
+    const code = report === undefined ? 1 : exitCodeFor(report, client.vault);
+    if (args.json) {
+      io.out(
+        safeJson({
+          ok: code === 0,
+          ...done,
+          sync: report ?? null,
+          ...(syncError !== undefined ? { error: syncError } : {}),
+        }),
+      );
+      return code;
+    }
+    const tally = new Map<string, number>();
+    for (const st of done.steps) {
+      if (st.action === "keep_folder") continue;
+      tally.set(stepWords(st.action), (tally.get(stepWords(st.action)) ?? 0) + 1);
+    }
+    const what = [...tally].map(([w, n]) => `${n} ${w}`).join(", ") || "nothing to change";
+    io.out(`Undid ${opId}${done.toCopy ? " as copies" : ""}, as operation ${done.opId}: ${what}.`);
+    listSteps(io, done.steps);
+    io.out("Every device receives it as it syncs.");
+    io.out(`To reverse this undo: trew undo ${asTyped(done.opId)}`);
+    if (syncError !== undefined) {
+      io.err(
+        `The undo is on the server, but this device did not finish applying it: ${syncError}. ` +
+          "Run trew sync to retry.",
+      );
+    } else if (code !== 0) {
+      renderReport(
+        report!,
+        args,
+        io,
+        client.serverCursor,
+        client.vault.stranded ?? [],
+        client.vault.displaced ?? [],
+        unknownRecovery(client.vault),
+      );
+    }
+    return code;
+  } finally {
+    await client.close();
+  }
+}
+
+/**
+ * Shows or sets attachments on demand for this device: which files a sync
+ * leaves on the server until `trew fetch` asks for one. Notes, canvases and
+ * settings always download. Turning it on keeps what is already here; `trew
+ * free-space` is what takes covered files off this disk. Turning it off
+ * downloads everything left on the server at the next sync.
+ */
+async function cmdOnDemand(args: Args, io: Console): Promise<number> {
+  const given = args.rest[0];
+  const config = await mustLoad(args.dir);
+  if (given === undefined) {
+    const stored = validateStoredState(await new JsonIndexStore(indexPath(args.dir)).load());
+    const there = serverOnlyHere(config.onDemandBytes, stored);
+    if (args.json) {
+      io.out(
+        safeJson({
+          ok: true,
+          onDemandBytes: config.onDemandBytes ?? null,
+          serverOnly: there.files,
+          serverOnlyBytes: there.bytes,
+        }),
+      );
+      return 0;
+    }
+    if (config.onDemandBytes === undefined) {
+      io.out("Attachments on demand is off: every file downloads.");
+      return 0;
+    }
+    io.out(`Attachments on demand: ${onDemandWords(config.onDemandBytes)}.`);
+    io.out(
+      `${there.files} on the server only (${bytes(there.bytes)}), as of the last sync. ` +
+        "trew fetch PATH downloads one.",
+    );
+    return 0;
+  }
+  const threshold = parseOnDemand(given);
+  const next: Record<string, unknown> = { ...config };
+  if (threshold === undefined) delete next["onDemandBytes"];
+  else next["onDemandBytes"] = threshold;
+  await saveConfig(args.dir, next as unknown as Config);
+  if (args.json) {
+    io.out(safeJson({ ok: true, onDemandBytes: threshold ?? null }));
+    return 0;
+  }
+  if (threshold === undefined) {
+    io.out(
+      "Attachments on demand is off. The next trew sync downloads every file left on the server.",
+    );
+  } else {
+    io.out(`Attachments on demand: ${onDemandWords(threshold)}.`);
+    io.out("Files already here stay; trew free-space keeps the covered ones on the server only.");
+  }
+  return 0;
+}
+
+/**
+ * Downloads files this device leaves on the server (`trew on-demand`), by
+ * syncing once with them taken out of the setting. Each that lands is an
+ * ordinary file from then on, which the setting never takes away again.
+ */
+async function cmdFetch(args: Args, io: Console): Promise<number> {
+  const wanted = args.rest;
+  const config = await mustLoad(args.dir);
+  if (config.onDemandBytes === undefined) {
+    throw new Error("attachments on demand is off, so trew sync already downloads every file");
+  }
+  const client = await open(config, args, io);
+  try {
+    const report = await client.settle({ coalesceWrites: false });
+    const here = new Set(
+      (await client.vault.list()).filter((st) => !st.folder).map((st) => st.path),
+    );
+    const landed = wanted.filter((p) => here.has(p));
+    const missing = wanted.filter((p) => !here.has(p));
+    const code = missing.length > 0 ? 1 : exitCodeFor(report, client.vault);
+    if (args.json) {
+      io.out(safeJson({ ok: code === 0, fetched: landed, missing, sync: report }));
+      return code;
+    }
+    for (const p of landed) io.out(`here     ${p}`);
+    for (const p of missing) {
+      io.out(
+        `missing  ${p}: ${
+          client.engine.serverOnlyPaths().has(p)
+            ? "still on the server only; the sync below says why"
+            : "the server holds no file at that path"
+        }`,
+      );
+    }
+    if (missing.length > 0 || exitCodeFor(report, client.vault) !== 0) {
+      renderReport(
+        report,
+        args,
+        io,
+        client.serverCursor,
+        client.vault.stranded ?? [],
+        client.vault.displaced ?? [],
+        unknownRecovery(client.vault),
+      );
+    }
+    return code;
+  } finally {
+    await client.close();
+  }
+}
+
+/**
+ * Keeps the files the setting covers on the server only, freeing their space
+ * here (`Engine.release`): each is read in full and checked against the
+ * server's newest version, the server is given any piece it lacks and read
+ * back, and only then is the file removed here, for good rather than to the
+ * trash. A file changed since it synced, or one the server's copy of does not
+ * read back intact, is kept and said so. Named paths limit it to those.
+ */
+async function cmdFreeSpace(args: Args, io: Console): Promise<number> {
+  const config = await mustLoad(args.dir);
+  const threshold = config.onDemandBytes;
+  if (threshold === undefined) {
+    throw new Error(
+      "attachments on demand is off, so nothing is kept on the server only. " +
+        "Turn it on first, with trew on-demand 1MB",
+    );
+  }
+  if (args.readOnly || config.readOnly === true) {
+    throw new Error(
+      "this device is read-only, and freeing space first sends the server any piece of a file " +
+        "it lacks. Free space on a device that may write.",
+    );
+  }
+  const client = await open(config, args, io);
+  try {
+    await client.settle({ coalesceWrites: false });
+    const covered = (await client.vault.list()).filter(
+      (st) => !st.folder && coveredBy(threshold, st.path, st.size),
+    );
+    const named = args.rest;
+    const sizes = new Map(covered.map((st) => [st.path, st.size]));
+    const asked = named.length > 0 ? named.filter((p) => sizes.has(p)) : [...sizes.keys()];
+    const notCovered = named.filter((p) => !sizes.has(p));
+    const out =
+      asked.length > 0 ? await client.release(asked) : { released: [] as string[], kept: [] };
+    const kept = [
+      ...out.kept,
+      ...notCovered.map((path) => ({
+        path,
+        why: "it is not a file here that the setting covers",
+      })),
+    ];
+    const freed = out.released.reduce((n, p) => n + (sizes.get(p) ?? 0), 0);
+    // Named files are what was asked for, so one kept is a failure; when
+    // freeing everything, a file kept safely is the point of checking.
+    const code = named.length > 0 && kept.length > 0 ? 1 : 0;
+    if (args.json) {
+      io.out(safeJson({ ok: code === 0, released: out.released, freedBytes: freed, kept }));
+      return code;
+    }
+    if (out.released.length === 0 && kept.length === 0) {
+      io.out(`Nothing to free: no file here is covered (${onDemandWords(threshold)}).`);
+      return 0;
+    }
+    io.out(
+      `Freed ${out.released.length} ${out.released.length === 1 ? "file" : "files"}, ${bytes(freed)}. ` +
+        "They stay on the server; trew fetch PATH brings one back.",
+    );
+    for (const k of kept) io.out(`kept     ${k.path}: ${k.why}`);
+    return code;
+  } finally {
+    await client.close();
+  }
+}
+
 /**
  * Forgets the pairing here, and says what is still on the server.
  *
@@ -2318,6 +2900,8 @@ export function renderReport(
   // code (R2), and a number that quietly disappears is how somebody loses
   // track of a folder they stopped syncing years ago.
   say(r.ignored, "ignored here, and synced by another device");
+  // Not a problem either: the setting doing what it was told (trew on-demand).
+  say(r.serverOnly, "on the server only, until trew fetch asks for one");
 
   if (lines.length === 0) {
     io.out(
@@ -2440,6 +3024,14 @@ export interface Args {
   all: boolean;
   /** For search: the cursor of the page before. */
   after?: string;
+  /** For rewind: the time to preview, in milliseconds, from --at or --ago. */
+  at?: number;
+  /** For rewind --apply: the head its preview answered with. */
+  head?: number;
+  /** For rewind: apply the preview --uid and --head name. */
+  apply: boolean;
+  /** For undo: write earlier versions beside their notes rather than over them. */
+  copy: boolean;
 }
 
 export function parseArgs(argv: readonly string[]): Args {
@@ -2468,6 +3060,8 @@ export function parseArgs(argv: readonly string[]): Args {
     caseSensitive: false,
     context: 0,
     all: false,
+    apply: false,
+    copy: false,
   };
 
   const takes = new Set([
@@ -2486,6 +3080,9 @@ export function parseArgs(argv: readonly string[]): Args {
     "--folder",
     "--context",
     "--after",
+    "--at",
+    "--ago",
+    "--head",
   ]);
   let onlyPositional = false;
   for (let i = 0; i < argv.length; i++) {
@@ -2534,6 +3131,25 @@ export function parseArgs(argv: readonly string[]): Args {
         args.uid = uid;
         break;
       }
+      case "--head": {
+        const head = Number(value);
+        if (!Number.isSafeInteger(head) || head <= 0)
+          throw new Error(`--head wants a version number, not ${value}`);
+        args.head = head;
+        break;
+      }
+      case "--at":
+        args.at = parseTime(value!);
+        break;
+      case "--ago":
+        args.at = Date.now() - parseAgo(value!);
+        break;
+      case "--apply":
+        args.apply = true;
+        break;
+      case "--copy":
+        args.copy = true;
+        break;
       case "--to":
         args.to = value!;
         break;

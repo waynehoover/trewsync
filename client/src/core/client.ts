@@ -1235,7 +1235,10 @@ export class Client {
   async undo(opId: string, opts: { toCopy?: boolean } = {}): Promise<UndoResult> {
     await this.settle({ coalesceWrites: false });
     const done = await this.serial(() => this.transport.undo(opId, opts));
-    await this.settle({ coalesceWrites: false });
+    // Committed, whatever happens here next, as `restoreTo` says: a pass that
+    // fails to put it on disk does not undo it, and the caller needs the
+    // operation it wrote. The next pass puts it here, and says why if not.
+    await this.settle({ coalesceWrites: false }).catch(() => undefined);
     return done;
   }
 

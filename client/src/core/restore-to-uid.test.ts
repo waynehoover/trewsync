@@ -319,6 +319,35 @@ describe("a device's restore, through the client", () => {
     expect(await server!.cli("cat", "-path", "note.md")).toBe("then\n");
   }, 240_000);
 
+  /**
+   * The same for an undo: committed on the server is committed, and the
+   * caller gets the operation even when the pass after it cannot save.
+   */
+  it("returns a committed undo when putting it on disk fails", async () => {
+    const { c, vault, store } = await client();
+    await vault.edit("note.md", "then\n", 1_000);
+    await c.settle();
+    await pause();
+    const then = Date.now();
+    await pause();
+    await vault.edit("note.md", "now\n", 2_000);
+    await c.settle();
+    const preview = await c.restoreTo({ at: then });
+    const done = await c.restoreTo({ uid: preview.toUid, head: preview.head });
+    const transport = (c as unknown as { transport: Transport }).transport;
+    const undo = transport.undo.bind(transport);
+    transport.undo = async (opId, opts) => {
+      const out = await undo(opId, opts);
+      store.save = async () => {
+        throw new Error("ENOSPC: no space left on device");
+      };
+      return out;
+    };
+    const undone = await c.undo(done.opId!);
+    expect(undone.opId).toBeTruthy();
+    expect(await server!.cli("cat", "-path", "note.md")).toBe("now\n");
+  }, 240_000);
+
   /** Applying a preview that changes nothing commits nothing, and says so. Found by review. */
   it("applies a preview that changes nothing as nothing, and keeps the session", async () => {
     const { c, vault } = await client();

@@ -1,6 +1,7 @@
 import type { Args, Console } from "./cli.ts";
 import { credentialsFor, type ClientOptions } from "../core/client.ts";
 import { configPath, indexPath, type Config } from "./config.ts";
+import { coveredBy } from "../core/on-demand.ts";
 import { JsonIndexStore, NodeVault } from "./vault.ts";
 
 export async function clientOptions(
@@ -51,6 +52,17 @@ export async function clientOptions(
     // in `status`, rather than as a write that fails for ever (PLAN.md
     // section 4.12). Asked of the process, since the disk is the host's.
     ...(process.platform === "win32" ? { windows: true } : {}),
+    // Attachments on demand, from the config (`trew on-demand`). The paths a
+    // `trew fetch` names are the ones asked for, so this run downloads them;
+    // once one is here it is an ordinary file, which the setting never takes
+    // away again (only `trew free-space` does).
+    ...(config.onDemandBytes !== undefined
+      ? {
+          onDemand: (path: string, size: number) =>
+            coveredBy(config.onDemandBytes, path, size) &&
+            !(args.command === "fetch" && args.rest.includes(path)),
+        }
+      : {}),
     // Only while watching. A one-shot sync prints its report at the end and
     // a line per path on the way would bury it; a client that stays running
     // has nothing else to say between passes.

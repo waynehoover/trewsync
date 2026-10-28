@@ -50,8 +50,12 @@ import {
   run,
   exitCodeFor,
   normaliseUrl,
+  parseAgo,
   parseArgs,
+  parseOnDemand,
+  parseTime,
   renderReport,
+  shellWord,
   USAGE,
   type Console,
 } from "./cli.ts";
@@ -2959,4 +2963,182 @@ describe("what reaches the terminal (T20)", () => {
     expect(raw(gone), gone.all).toEqual([]);
     expect((gone.json()["deleted"] as { path: string }[]).map((d) => d.path)).toContain(peers);
   }, 300_000);
+});
+
+describe("attachments on demand, from the command line", () => {
+  it("leaves a big file on the server, fetches it, frees it again, and sends no deletion", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    const big = Buffer.alloc(5_000, 7);
+    await write(a, "note.md", "a note\n");
+    await writeFile(join(a, "big.bin"), big);
+    expect((await cli("sync", "--dir", a)).code).toBe(0);
+
+    const set = await cli("on-demand", "1KB", "--dir", b);
+    expect(set.code, set.all).toBe(0);
+    expect((await cli("on-demand", "--dir", b, "--json")).json()["onDemandBytes"]).toBe(1_000);
+
+    const down = await cli("sync", "--dir", b, "--json");
+    expect(down.code, down.all).toBe(0);
+    expect(down.json()["serverOnly"]).toBe(1);
+    expect(await read(b, "note.md")).toBe("a note\n");
+    await expect(stat(join(b, "big.bin"))).rejects.toThrow();
+    const status = await cli("status", "--dir", b, "--json");
+    expect(status.json()["serverOnly"], status.all).toEqual({ files: 1, bytes: 5_000 });
+    expect((await cli("sync", "--dir", b)).stdout).toMatch(/1 {2}on the server only/);
+
+    const fetched = await cli("fetch", "big.bin", "--dir", b);
+    expect(fetched.code, fetched.all).toBe(0);
+    expect(await readFile(join(b, "big.bin"))).toEqual(big);
+    // Here now, so an ordinary sync leaves it here.
+    expect((await cli("sync", "--dir", b, "--json")).json()["serverOnly"]).toBe(0);
+    expect(await readFile(join(b, "big.bin"))).toEqual(big);
+
+    const freed = await cli("free-space", "--dir", b, "--json");
+    expect(freed.code, freed.all).toBe(0);
+    expect(freed.json()["released"]).toEqual(["big.bin"]);
+    expect(freed.json()["freedBytes"]).toBe(5_000);
+    await expect(stat(join(b, "big.bin"))).rejects.toThrow();
+    expect((await cli("sync", "--dir", b, "--json")).json()["serverOnly"]).toBe(1);
+    // Nothing went to the server as a deletion: a still has it, and its
+    // history is the one version a wrote.
+    expect((await cli("sync", "--dir", a, "--json")).json()["deletedLocally"]).toBe(0);
+    expect(await readFile(join(a, "big.bin"))).toEqual(big);
+    const history = await cli("history", "big.bin", "--dir", a, "--json");
+    expect((history.json()["versions"] as { deleted: boolean }[]).map((v) => v.deleted)).toEqual([
+      false,
+    ]);
+
+    const missing = await cli("fetch", "nothing.bin", "--dir", b);
+    expect(missing.code).toBe(1);
+    expect(missing.stdout).toMatch(/nothing\.bin: the server holds no file at that path/);
+
+    expect((await cli("on-demand", "off", "--dir", b)).code).toBe(0);
+    expect((await cli("sync", "--dir", b, "--json")).json()["downloaded"]).toBe(1);
+    expect(await readFile(join(b, "big.bin"))).toEqual(big);
+  }, 300_000);
+
+  it("refuses what it cannot do, and says what to do instead", async () => {
+    await fresh();
+    const a = await firstDevice();
+    const off = await cli("free-space", "--dir", a);
+    expect(off.code).toBe(1);
+    expect(off.stderr).toMatch(/trew on-demand 1MB/);
+    expect((await cli("fetch", "x.bin", "--dir", a)).stderr).toMatch(
+      /already downloads every file/,
+    );
+    expect((await cli("on-demand", "lots", "--dir", a)).stderr).toMatch(/off, all, or a size/);
+  }, 300_000);
+});
+
+describe("rewinding a folder, from the command line", () => {
+  const pause = () => new Promise((r) => setTimeout(r, 50));
+
+  it("previews, applies exactly the preview, leaves the rest of the vault, and undoes", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    await write(a, "Projects/plan.md", "the plan on Tuesday\n");
+    await write(a, "inbox.md", "inbox on Tuesday\n");
+    await cli("sync", "--dir", a);
+    await cli("sync", "--dir", b);
+    await pause();
+    const tuesday = new Date().toISOString();
+    await pause();
+    await write(a, "Projects/plan.md", "the plan rewritten\n");
+    await write(a, "Projects/new.md", "made since\n");
+    await write(a, "inbox.md", "inbox rewritten\n");
+    await cli("sync", "--dir", a);
+    await cli("sync", "--dir", b);
+
+    const json = await cli("rewind", "Projects", "--at", tuesday, "--dir", b, "--json");
+    expect(json.code, json.all).toBe(0);
+    expect(json.json()).toMatchObject({
+      applied: false,
+      folder: "Projects",
+      restore: 1,
+      remove: 1,
+    });
+
+    const preview = await cli("rewind", "Projects", "--at", tuesday, "--dir", b);
+    expect(preview.code, preview.all).toBe(0);
+    expect(preview.stdout).toMatch(/1 put back, 1 made since removed/);
+    expect(preview.stdout).toMatch(/Nothing has changed/);
+    expect(await read(b, "Projects/plan.md")).toBe("the plan rewritten\n");
+    const command = preview.out.find((l) => l.trim().startsWith("trew rewind"))!.trim();
+    const [, ...words] = command.split(" ");
+    const applied = await cli(...words);
+    expect(applied.code, applied.all).toBe(0);
+    expect(await read(b, "Projects/plan.md")).toBe("the plan on Tuesday\n");
+    await expect(stat(join(b, "Projects/new.md"))).rejects.toThrow();
+    expect(await read(b, "inbox.md")).toBe("inbox rewritten\n");
+
+    const undo = applied.out
+      .find((l) => l.startsWith("To undo it: "))!
+      .slice("To undo it: ".length);
+    const undone = await cli(...undo.split(" ").slice(1), "--dir", b);
+    expect(undone.code, undone.all).toBe(0);
+    expect(await read(b, "Projects/plan.md")).toBe("the plan rewritten\n");
+    expect(await read(b, "Projects/new.md")).toBe("made since\n");
+
+    // A note saved between a preview and its apply refuses the apply.
+    const again = await cli("rewind", "Projects", "--at", tuesday, "--dir", b, "--json");
+    const { toUid, head } = again.json() as { toUid: number; head: number };
+    await write(a, "Projects/plan.md", "saved meanwhile\n");
+    await cli("sync", "--dir", a);
+    const stale = await cli(
+      "rewind",
+      "Projects",
+      "--uid",
+      String(toUid),
+      "--head",
+      String(head),
+      "--apply",
+      "--dir",
+      b,
+    );
+    expect(stale.code).toBe(1);
+    expect(stale.stderr).toMatch(/saved since that preview/);
+  }, 300_000);
+
+  it("is a preview or the apply of one, never both", async () => {
+    await fresh();
+    const a = await firstDevice();
+    for (const [argv, says] of [
+      [["rewind", "Projects"], /needs a time/],
+      [["rewind", "--at", "2026-10-20", "--ago", "2h"], /--at or --ago, not both/],
+      [["rewind", "--at", "2026-10-20", "--apply", "--uid", "3", "--head", "4"], /not a time/],
+      [["rewind", "--apply", "--uid", "3"], /needs the --uid and --head/],
+      [["rewind", "--at", "2026-10-20", "--uid", "3"], /are for rewind --apply/],
+      [["undo"], /needs an operation id/],
+      [["rewind", "--at", "Tuesday"], /wants a time like/],
+    ] as [string[], RegExp][]) {
+      const r = await cli(...argv, "--dir", a);
+      expect(r.code, argv.join(" ")).toBe(2);
+      expect(r.all, argv.join(" ")).toMatch(says);
+    }
+  }, 300_000);
+});
+
+describe("what rewind and on-demand read", () => {
+  it("reads a time in this machine's zone, or the zone given, and refuses the rest", () => {
+    expect(parseTime("2026-10-20 15:07")).toBe(new Date(2026, 9, 20, 15, 7).getTime());
+    expect(parseTime("2026-10-20T15:07:30")).toBe(new Date(2026, 9, 20, 15, 7, 30).getTime());
+    expect(parseTime("2026-10-20")).toBe(new Date(2026, 9, 20).getTime());
+    expect(parseTime("2026-10-20T15:07Z")).toBe(Date.UTC(2026, 9, 20, 15, 7));
+    expect(parseTime("2026-10-20T15:07:30.250Z")).toBe(Date.UTC(2026, 9, 20, 15, 7, 30, 250));
+    expect(parseTime("2026-10-20T15:07+02:00")).toBe(Date.UTC(2026, 9, 20, 13, 7));
+    for (const bad of ["2026-02-31 10:00", "2026-13-01", "20 Oct 2026", "2026-10-20 25:00"]) {
+      expect(() => parseTime(bad), bad).toThrow(/wants a time like/);
+    }
+    expect(() => parseTime("2026-10-20", Date.UTC(2026, 0, 1))).toThrow(/in the future/);
+    expect(parseAgo("90m")).toBe(90 * 60_000);
+    expect(parseAgo("2w")).toBe(14 * 86_400_000);
+    expect(() => parseAgo("2y")).toThrow(/wants a duration/);
+    expect(parseOnDemand("1MB")).toBe(1_000_000);
+    expect(parseOnDemand("500kb")).toBe(500_000);
+    expect(parseOnDemand("all")).toBe(0);
+    expect(parseOnDemand("off")).toBeUndefined();
+    expect(shellWord("Projects/plan")).toBe("Projects/plan");
+    expect(shellWord("Bob's notes")).toBe(`'Bob'\\''s notes'`);
+  });
 });

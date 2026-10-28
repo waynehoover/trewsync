@@ -11,7 +11,21 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Command-line client
+
+- **`trew rewind`** previews a folder, or every note, as the server had it at a
+  time (`--at 2026-10-20 15:00` or `--ago 6h`) and prints the one command that
+  applies exactly that preview, as one operation every device receives.
+- **`trew undo OP`** reverses an operation, such as a rewind, by the id
+  `trew history` now shows beside each version an operation wrote. `--copy`
+  writes the earlier versions beside their notes instead.
+- **Attachments on demand:** `trew on-demand 1MB` leaves covered attachments on
+  the server, `trew fetch PATH` downloads one, and `trew free-space` frees the
+  space of those already here, each checked against the server first.
+  `trew status` and `trew sync` say how many are on the server only.
+- An undo or a restore the server committed is reported as done even when the
+  sync after it fails to save here; the next sync puts it on disk. This also
+  applies to the plugin's history panel.
 
 ## 0.16.0, plugin, 0.15.0, server, and trew 0.14.0 (2026-10-23)
 
