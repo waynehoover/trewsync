@@ -395,6 +395,24 @@
     background: var(--background-modifier-form-field);
   }
 
+  /* A search box wraps its input in a container, so the input's `width: 0`
+   * above would shrink the whole box to its icon (Deleted notes' search). */
+  .trew-panel
+    .setting-item:not(.setting-item-heading):not(.mod-toggle)
+    .setting-item-control
+    .search-input-container {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .trew-panel
+    .setting-item:not(.setting-item-heading):not(.mod-toggle)
+    .setting-item-control
+    .search-input-container
+    input {
+    width: 100%;
+  }
+
   .trew-panel .setting-item-description {
     overflow-wrap: anywhere;
   }

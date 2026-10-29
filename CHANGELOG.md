@@ -11,7 +11,10 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Plugin
+
+- On a phone, the search box in Deleted notes fills its row. It had shrunk to
+  its icon, leaving almost no room to type.
 
 ## 0.16.1, plugin, 0.15.1, server, and trew 0.14.1 (2026-10-28)
 

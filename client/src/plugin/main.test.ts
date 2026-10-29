@@ -17,6 +17,7 @@ import { deferred, nextTurn, receiveCommitted, within } from "../core/test-async
  * or draws what this builds. That needs Obsidian.
  */
 
+import { readFileSync } from "node:fs";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1928,6 +1929,31 @@ describe("the panel, which is a modal and a settings tab", () => {
     ).toBe(true);
     expect(unmarked()).toEqual([]);
   }, 300_000);
+
+  /**
+   * The narrow-screen styles give each input in a row `flex: 1; width: 0`, so a
+   * text field fills what its row leaves. A search box wraps its input in a
+   * container, which that shrank to its icon: Deleted notes' search was 40px
+   * wide in Obsidian 1.14.4 at 600px. Only a browser lays this out, so this
+   * holds the phone styles to the two rules that let the box fill its row.
+   */
+  it("lets a search box fill its row on a phone", () => {
+    const css = readFileSync(new URL("../../styles.css", import.meta.url), "utf8").replace(
+      /\/\*[\s\S]*?\*\//g,
+      "",
+    );
+    const start = css.indexOf("{", css.indexOf("@media (max-width: 600px)")) + 1;
+    let end = start;
+    for (let depth = 1; depth > 0; end++) depth += css[end] === "{" ? 1 : css[end] === "}" ? -1 : 0;
+    const rules = [...css.slice(start, end).matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+      selector: m[1]!.replace(/\s+/g, " ").trim(),
+      body: m[2]!,
+    }));
+    const rule = (ending: string) =>
+      rules.find((r) => r.selector.startsWith(".trew-panel") && r.selector.endsWith(ending));
+    expect(rule(".search-input-container")?.body).toMatch(/flex: 1;/);
+    expect(rule(".search-input-container input")?.body).toMatch(/width: 100%;/);
+  });
 
   it("asks for one string and works out the rest from it", async () => {
     // Several designs failed here before this one, all the same way: the
