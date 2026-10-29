@@ -403,6 +403,16 @@ plugin-only one:
   benchmarks, the stress suite and the headless client), the rest are
   type-checking rules in test scaffolding, and the three vitest configs are
   outside the TypeScript project, so they fail to parse rather than lint.
+
+  **Settled by Review branch on 2026-10-28.** The scanner does read those
+  files, everything under `client` but tests, and grades them more gently
+  than the local config: the console rule, Node imports, timers and the rest
+  are warnings, and the type-checking rules do not appear. It reported one
+  error, `no-unsanitized/method` on micromark's `parse().document().write`
+  in `src/node/mcp-links.ts`, which matches any `write` call whose object's
+  text says "document"; the tokenizer has its own name now. Every other line
+  of the Source code section is a warning or a recommendation, and warnings do
+  not block a release.
 - **Build verification.** The scanner runs the first of the `build`,
   `build:plugin` and `compile` scripts and checks that the build matches what
   is committed. This repository has no `package.json` at its root: the
