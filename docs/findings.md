@@ -376,7 +376,7 @@ regression test that fails without it; the merge is `review-fixes`.
 - **T54** `Normalize` missed an envelope key with a line break before its colon.
 - **T55** A save on any device evicted a peer that was downloading.
 - **T56** The keepalive killed healthy uploads on slow uplinks.
-- **T57** Catch-up batches were not bounded by bytes. History pages still are not: see open work.
+- **T57** Catch-up batches and history pages were not bounded by bytes. History pages are now, for clients that ask: see open work.
 - **T58** An update or a case-only move could turn a live folder into a file while notes lived inside it.
 - **T59** A live batch could carry `"chunks":null`.
 - **T60** A store error reached a caller before its credential was checked.
