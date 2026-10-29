@@ -11,6 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.16.1, plugin, 0.15.1, server, and trew 0.14.1 (2026-10-28)
+
+The plugin and `trew` work with trewd 0.15.0 or later; with 0.15.1 they
+page a note's history by size as well as by count.
+
 ### Server
 
 - The log says when a start upgraded the store's format, and from which
