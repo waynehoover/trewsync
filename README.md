@@ -110,7 +110,7 @@ Docker, is [server setup](docs/server.md).
 TrewSync is an early project for one person's devices. The supported setup is
 Obsidian on **macOS, Linux, and Android**, with local storage. The plugin needs
 Obsidian **1.7.2 or newer** and is installed manually or with BRAT. Plugin
-0.15.0 needs the server `trewd` 0.14.0 or later. iOS is untested; Windows is
+0.16 needs the server `trewd` 0.15.0 or later. iOS is untested; Windows is
 not supported.
 
 ### Platforms

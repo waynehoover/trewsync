@@ -297,14 +297,16 @@ Server, plugin, and CLI release numbers are separate; protocol compatibility
 determines whether they can connect. An incompatible client stops with a
 protocol error instead of syncing partially.
 
-This source tree's server speaks protocols 1 to 4. Its plugin and CLI speak
-protocol 4, which is protocol 3 with plugins' settings (protocol 3 added
-settings sync, and protocol 2 undo and search). A server of this tree keeps
-serving a plugin or CLI of protocol 1, 2 or 3 exactly as before, which is what
-makes the server-first order work; a plugin or CLI of protocol 4 meeting an
-older server stops at the handshake and says to upgrade the server. Plugin
-0.15.0 speaks protocol 4, so it needs `trewd` 0.14.0 or later, and so does
-`trew` 0.13.0. `trew` 0.12.0 speaks protocol 2.
+This source tree's server speaks protocols 1 to 5. Its plugin and CLI speak
+protocol 5, which is protocol 4 with restoring a folder to an earlier time
+(protocol 4 added plugins' settings, protocol 3 settings sync, and protocol 2
+undo and search). A server of this tree keeps serving a plugin or CLI of
+protocol 1 to 4 exactly as before, which is what makes the server-first order
+work; a plugin or CLI of protocol 5 meeting an older server stops at the
+handshake and says to upgrade the server. Plugin 0.16 speaks protocol 5, so it
+needs `trewd` 0.15.0 or later, and so does `trew` 0.14.0. Plugin 0.15 and
+`trew` 0.13 speak protocol 4 and need `trewd` 0.14.0 or later; `trew` 0.12.0
+speaks protocol 2.
 Basalt Sync's releases speak protocol 7, and a Basalt client and a TrewSync
 server refuse each other at the handshake, naming both numbers; moving from
 Basalt is a fresh pairing, not an upgrade. For source builds, use the same

@@ -31,9 +31,9 @@ Manual installation is required while TrewSync is outside the community director
 To upgrade, replace the same three files and reload Obsidian. When a release
 changes the protocol, upgrade the server before its clients.
 
-**Server version.** Plugin 0.15.0 needs `trewd` 0.14.0 or later. It speaks
-protocol 4 only, and a 0.13 or older server refuses it at the handshake, for
-everything and not only settings. Upgrade the server first; see
+**Server version.** Plugin 0.16 needs `trewd` 0.15.0 or later. It speaks
+protocol 5 only, and a 0.14 or older server refuses it at the handshake, for
+everything and not only restore. Upgrade the server first; see
 [upgrade order](server.md#upgrade-order).
 
 ### Install with BRAT
@@ -390,7 +390,7 @@ snippets from the settings folder this device runs. That includes core plugins a
 settings, such as Daily notes and Templates. Community plugins' own settings
 sync only where you also turn on [plugin settings sync](#plugin-settings);
 plugins themselves and the workspace layout never do. Names you have told this device to skip are skipped in the
-settings folder too. Plugin 0.15.0 needs a server of 0.14.0 or later for
+settings folder too. Plugin 0.16 needs a server of 0.15.0 or later for
 everything, settings sync included; see [Install](#install).
 
 **Whom a device shares its settings with.** **Sync settings** is one choice,
@@ -449,8 +449,8 @@ each community plugin's settings, its `data.json`, with the same group. The
 plugins themselves never sync: install them and switch them on separately on
 each device, and their settings follow. Settings for a plugin that is not
 installed on a device wait in its folder until it is. It is off until you turn
-it on, on each device. Like the rest of plugin 0.15.0 it needs a server of
-0.14.0 or later, which speaks protocol 4.
+it on, on each device. Like the rest of plugin 0.16 it needs a server of
+0.15.0 or later, which speaks protocol 5.
 
 A change from another device waits until you apply it, as other settings do,
 and **Apply synced settings** names each plugin whose settings it would

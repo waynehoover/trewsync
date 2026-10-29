@@ -64,8 +64,8 @@ the user requested a development build. Release channels have different tags:
 List releases and choose the newest compatible stable plugin and server. Do not
 assume GitHub's single “latest release” is the plugin, or that all components
 share a version. Read the chosen release notes for protocol requirements and
-upgrade the server before clients when required. Plugin 0.15.0 needs `trewd`
-0.14.0 or later: it speaks protocol 4 only, and an older server refuses it at
+upgrade the server before clients when required. Plugin 0.16 needs `trewd`
+0.15.0 or later: it speaks protocol 5 only, and an older server refuses it at
 the handshake, with no fallback. Compare Obsidian's installed
 version with the **downloaded** manifest's `minAppVersion`.
 
@@ -408,9 +408,10 @@ never adopt a commit they have not looked at.
 
 ## Working from development source
 
-This source tree's server speaks protocols 1 to 4, and its plugin and CLI
-speak protocol 4: protocol 2 added undo and search, protocol 3 settings sync,
-and protocol 4 plugins' settings. Upgrade the server first. Basalt's
+This source tree's server speaks protocols 1 to 5, and its plugin and CLI
+speak protocol 5: protocol 2 added undo and search, protocol 3 settings sync,
+protocol 4 plugins' settings, and protocol 5 restoring to an earlier time.
+Upgrade the server first. Basalt's
 releases speak its protocol 7, and Basalt and TrewSync refuse each other at
 the handshake, naming both numbers. For source builds, build the server and clients from the same
 checkout. Keep existing data and credentials, and verify the reported protocol
