@@ -124,8 +124,8 @@ describe("restoring to an earlier time, in the modal", () => {
     const ms = new Date(2026, 9, 20, 15, 7).getTime();
     expect(localInputValue(ms)).toBe("2026-10-20T15:07");
     expect(fromLocalInput("2026-10-20T15:07")).toBe(ms);
-    expect(fromLocalInput("")).toBeUndefined();
-    expect(fromLocalInput("Tuesday")).toBeUndefined();
+    expect(fromLocalInput("")).toBe("Choose a date and a time.");
+    expect(fromLocalInput("Tuesday")).toBe("Choose a date and a time.");
   });
 });
 

@@ -3075,7 +3075,9 @@ describe("rewinding a folder, from the command line", () => {
     const undo = applied.out
       .find((l) => l.startsWith("To undo it: "))!
       .slice("To undo it: ".length);
-    const undone = await cli(...undo.split(" ").slice(1), "--dir", b);
+    // As printed, which names the vault it was given (found by review).
+    expect(undo).toContain(`--dir ${b}`);
+    const undone = await cli(...undo.split(" ").slice(1));
     expect(undone.code, undone.all).toBe(0);
     expect(await read(b, "Projects/plan.md")).toBe("the plan rewritten\n");
     expect(await read(b, "Projects/new.md")).toBe("made since\n");
@@ -3131,6 +3133,14 @@ describe("what rewind and on-demand read", () => {
       expect(() => parseTime(bad), bad).toThrow(/wants a time like/);
     }
     expect(() => parseTime("2026-10-20", Date.UTC(2026, 0, 1))).toThrow(/in the future/);
+    for (const bad of [
+      "2026-10-20T15:07+99:00",
+      "2026-10-20T15:07+14:30",
+      "2026-10-20T15:07+02:60",
+    ]) {
+      expect(() => parseTime(bad), bad).toThrow(/wants a time like/);
+    }
+    expect(parseTime("2026-10-20T15:07-14:00")).toBe(Date.UTC(2026, 9, 21, 5, 7));
     expect(parseAgo("90m")).toBe(90 * 60_000);
     expect(parseAgo("2w")).toBe(14 * 86_400_000);
     expect(() => parseAgo("2y")).toThrow(/wants a duration/);
@@ -3139,6 +3149,94 @@ describe("what rewind and on-demand read", () => {
     expect(parseOnDemand("all")).toBe(0);
     expect(parseOnDemand("off")).toBeUndefined();
     expect(shellWord("Projects/plan")).toBe("Projects/plan");
+    // zsh expands a bare word beginning with = into a command's path.
+    expect(shellWord("=ls")).toBe("'=ls'");
     expect(shellWord("Bob's notes")).toBe(`'Bob'\\''s notes'`);
   });
+});
+
+/**
+ * A local time the clocks skip, or go through twice, names no one instant;
+ * `Date` would move the first and pick the earlier of the second without a
+ * word (found by review, 2026-10-28). Read in a zone with daylight saving.
+ */
+describe("a local time around a change of the clocks", () => {
+  it("is refused when skipped or repeated, and read with an offset", async () => {
+    const was = process.env["TZ"];
+    process.env["TZ"] = "America/New_York";
+    try {
+      expect(() => parseTime("2025-03-09 02:30")).toThrow(/clocks skipped it/);
+      expect(() => parseTime("2025-11-02 01:30")).toThrow(/happens twice here/);
+      expect(parseTime("2025-11-02 01:30-05:00")).toBe(Date.UTC(2025, 10, 2, 6, 30));
+      expect(parseTime("2025-03-09 03:30")).toBe(Date.UTC(2025, 2, 9, 7, 30));
+      const { fromLocalInput } = await import("../plugin/restore-time.ts");
+      expect(fromLocalInput("2025-03-09T02:30")).toMatch(/clocks skipped it/);
+      expect(fromLocalInput("2025-11-02T01:30")).toMatch(/happens twice/);
+      expect(fromLocalInput("2025-11-02T03:00")).toBe(Date.UTC(2025, 10, 2, 8, 0));
+    } finally {
+      if (was === undefined) delete process.env["TZ"];
+      else process.env["TZ"] = was;
+    }
+  });
+});
+
+describe("what the new commands leave alone (found by review, 2026-10-28)", () => {
+  const pause = () => new Promise((r) => setTimeout(r, 50));
+
+  it("previews a rewind without syncing anything", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    await write(a, "Projects/plan.md", "the plan\n");
+    await write(a, "outside.md", "a note outside\n");
+    await cli("sync", "--dir", a);
+    await cli("sync", "--dir", b);
+    await pause();
+    const then = new Date().toISOString();
+    await pause();
+    await write(a, "Projects/plan.md", "rewritten\n");
+    await cli("sync", "--dir", a);
+    await rm(join(b, "outside.md"));
+
+    const preview = await cli("rewind", "Projects", "--at", then, "--dir", b, "--json");
+    expect(preview.code, preview.all).toBe(0);
+    // b's deletion of outside.md was not sent, and a's edit not fetched.
+    const history = await cli("history", "outside.md", "--dir", a, "--json");
+    expect((history.json()["versions"] as { deleted: boolean }[]).map((v) => v.deleted)).toEqual([
+      false,
+    ]);
+    expect(await read(b, "Projects/plan.md")).toBe("the plan\n");
+  }, 300_000);
+
+  it("frees no file changed here since it synced, and sends nothing else", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    await write(b, "outside.md", "a note\n");
+    await writeFile(join(b, "covered.bin"), Buffer.alloc(5_000, 1));
+    await cli("sync", "--dir", b);
+    await cli("on-demand", "1KB", "--dir", b);
+    await rm(join(b, "outside.md"));
+    await writeFile(join(b, "covered.bin"), Buffer.alloc(5_000, 2));
+
+    const freed = await cli("free-space", "covered.bin", "--dir", b, "--json");
+    expect(freed.code, freed.all).toBe(1);
+    expect(freed.json()["released"]).toEqual([]);
+    expect(await readFile(join(b, "covered.bin"))).toEqual(Buffer.alloc(5_000, 2));
+    await cli("sync", "--dir", a);
+    expect(await read(a, "outside.md")).toBe("a note\n");
+    expect(await readFile(join(a, "covered.bin"))).toEqual(Buffer.alloc(5_000, 1));
+  }, 300_000);
+
+  it("fetches a file named in another normal form, or from ./", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    await writeFile(join(a, "caf\u00e9.bin"), Buffer.alloc(5_000, 3));
+    await writeFile(join(a, "other.bin"), Buffer.alloc(5_000, 4));
+    await cli("sync", "--dir", a);
+    await cli("on-demand", "1KB", "--dir", b);
+    await cli("sync", "--dir", b);
+    const fetched = await cli("fetch", "cafe\u0301.bin", "./other.bin", "--dir", b);
+    expect(fetched.code, fetched.all).toBe(0);
+    expect(await readFile(join(b, "caf\u00e9.bin"))).toEqual(Buffer.alloc(5_000, 3));
+    expect(await readFile(join(b, "other.bin"))).toEqual(Buffer.alloc(5_000, 4));
+  }, 300_000);
 });

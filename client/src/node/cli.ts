@@ -1,4 +1,4 @@
-import { clientOptions } from "./client-options.ts";
+import { clientOptions, vaultPathArg } from "./client-options.ts";
 import { validateUsage } from "./usage.ts";
 import { previewCounts } from "../core/preview.ts";
 /**
@@ -82,6 +82,7 @@ import {
   type UndoStep,
 } from "../core/transport.ts";
 import { coveredBy } from "../core/on-demand.ts";
+import { wallClock, wallClockWhy } from "../core/wall-clock.ts";
 import { renderMatch } from "./search-output.ts";
 import { forTerminal, printable, safeJson } from "./terminal.ts";
 import { describeOutcome, exitCodeOf, outcomeOf } from "../core/outcome.ts";
@@ -2164,9 +2165,19 @@ function listSteps(io: Console, steps: readonly UndoStep[], moreBeyond = 0): voi
   if (hidden > 0) io.out(`  and ${hidden} more`);
 }
 
+/**
+ * The `--dir` a printed command needs to name the same vault, when the one
+ * that printed it was given one.
+ */
+function dirFlag(args: Args): string {
+  return args.provided?.has("--dir") ? ` --dir ${shellWord(args.dir)}` : "";
+}
+
 /** A word a shell takes as one argument, quoted only when it is not plainly one. */
 export function shellWord(word: string): string {
-  return /^[A-Za-z0-9_./@%+=:,-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
+  // Not `=`: zsh expands a word beginning with one into a command's path,
+  // and `=ls` printed bare would rewind `bin/ls` (found by review).
+  return /^[A-Za-z0-9_./@%+:,-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
 }
 
 /**
@@ -2198,15 +2209,22 @@ export function parseTime(text: string, now = Date.now()): number {
   const zone = m[8];
   let ms: number;
   if (zone === undefined) {
-    ms = new Date(y, mo - 1, d, h, mi, sec, milli).getTime();
-    // February 31 rolls over into March; refused rather than moved.
-    if (new Date(ms).getDate() !== d) throw new Error(wants);
+    const local = wallClock(y, mo, d, h, mi, sec, milli);
+    if ("problem" in local) {
+      throw new Error(
+        local.problem === "not a date" ? wants : `--at ${text} ${wallClockWhy(local.problem)}`,
+      );
+    }
+    ms = local.ms;
   } else {
     const z = zone.toUpperCase() === "Z" ? "+00:00" : zone;
     const sign = z.startsWith("-") ? -1 : 1;
     const digits = z.slice(1).replace(":", "");
-    const offset = sign * (Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2)));
-    ms = Date.UTC(y, mo - 1, d, h, mi, sec, milli) - offset * 60_000;
+    const hours = Number(digits.slice(0, 2));
+    const minutes = Number(digits.slice(2));
+    // No place is more than fourteen hours from UTC.
+    if (hours > 14 || minutes > 59 || (hours === 14 && minutes > 0)) throw new Error(wants);
+    ms = Date.UTC(y, mo - 1, d, h, mi, sec, milli) - sign * (hours * 60 + minutes) * 60_000;
     if (new Date(Date.UTC(y, mo - 1, d)).getUTCDate() !== d) throw new Error(wants);
   }
   if (!Number.isFinite(ms)) throw new Error(wants);
@@ -2293,7 +2311,7 @@ function serverOnlyHere(
  * in between. The apply is one operation, which `trew undo` reverses.
  */
 async function cmdRewind(args: Args, io: Console): Promise<number> {
-  const folder = (args.rest[0] ?? "").replace(/^\/+|\/+$/g, "");
+  const folder = vaultPathArg(args.rest[0] ?? "");
   const config = await mustLoad(args.dir);
   if (args.apply && (args.readOnly || config.readOnly === true)) {
     throw new Error(
@@ -2345,11 +2363,12 @@ async function cmdRewind(args: Args, io: Console): Promise<number> {
         );
       }
       listSteps(io, result.steps, result.more);
-      const dir = args.provided?.has("--dir") ? ` --dir ${shellWord(args.dir)}` : "";
       const where =
         folder === "" ? "" : ` ${folder.startsWith("-") ? "-- " : ""}${shellWord(folder)}`;
       io.out("Nothing has changed. To apply exactly this:");
-      io.out(`  trew rewind --uid ${result.toUid} --head ${result.head} --apply${dir}${where}`);
+      io.out(
+        `  trew rewind --uid ${result.toUid} --head ${result.head} --apply${dirFlag(args)}${where}`,
+      );
       return 0;
     }
 
@@ -2382,7 +2401,7 @@ async function cmdRewind(args: Args, io: Console): Promise<number> {
       `Rewound ${scope} to ${when(result.at)}, as operation ${result.opId}: ${counts.join(", ")}.`,
     );
     io.out("Every device receives it as it syncs.");
-    io.out(`To undo it: trew undo ${asTyped(result.opId)}`);
+    io.out(`To undo it: trew undo${dirFlag(args)} ${asTyped(result.opId)}`);
     if (syncError !== undefined) {
       io.err(
         `The rewind is on the server, but this device did not finish applying it: ${syncError}. ` +
@@ -2429,7 +2448,7 @@ async function cmdUndo(args: Args, io: Console): Promise<number> {
       if (err instanceof ProtocolError && err.code === "stale" && !args.copy) {
         throw new Error(
           `${err.message}. Nothing was changed. To write the earlier versions beside the notes ` +
-            `instead, leaving what is there now: trew undo ${asTyped(opId)} --copy`,
+            `instead, leaving what is there now: trew undo --copy${dirFlag(args)} ${asTyped(opId)}`,
         );
       }
       throw err;
@@ -2462,7 +2481,7 @@ async function cmdUndo(args: Args, io: Console): Promise<number> {
     io.out(`Undid ${opId}${done.toCopy ? " as copies" : ""}, as operation ${done.opId}: ${what}.`);
     listSteps(io, done.steps);
     io.out("Every device receives it as it syncs.");
-    io.out(`To reverse this undo: trew undo ${asTyped(done.opId)}`);
+    io.out(`To reverse this undo: trew undo${dirFlag(args)} ${asTyped(done.opId)}`);
     if (syncError !== undefined) {
       io.err(
         `The undo is on the server, but this device did not finish applying it: ${syncError}. ` +
@@ -2546,7 +2565,7 @@ async function cmdOnDemand(args: Args, io: Console): Promise<number> {
  * ordinary file from then on, which the setting never takes away again.
  */
 async function cmdFetch(args: Args, io: Console): Promise<number> {
-  const wanted = args.rest;
+  const wanted = args.rest.map(vaultPathArg);
   const config = await mustLoad(args.dir);
   if (config.onDemandBytes === undefined) {
     throw new Error("attachments on demand is off, so trew sync already downloads every file");
@@ -2616,11 +2635,16 @@ async function cmdFreeSpace(args: Args, io: Console): Promise<number> {
   }
   const client = await open(config, args, io);
   try {
-    await client.settle({ coalesceWrites: false });
+    // No sync first. A pass would send this device's other changes, a note
+    // deleted here among them, under a command that changes nothing on the
+    // server; and it would upload a covered file edited here and then free
+    // it, when a file changed since it synced is the one to keep (found by
+    // review). `Engine.release` reads each file in full against what the
+    // server holds, and what connecting brought is all it needs.
     const covered = (await client.vault.list()).filter(
       (st) => !st.folder && coveredBy(threshold, st.path, st.size),
     );
-    const named = args.rest;
+    const named = args.rest.map(vaultPathArg);
     const sizes = new Map(covered.map((st) => [st.path, st.size]));
     const asked = named.length > 0 ? named.filter((p) => sizes.has(p)) : [...sizes.keys()];
     const notCovered = named.filter((p) => !sizes.has(p));

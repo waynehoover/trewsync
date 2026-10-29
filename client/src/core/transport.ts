@@ -2038,7 +2038,9 @@ export class Transport {
           op: "history",
           path,
           ...(before !== undefined ? { before } : {}),
-          ...(opts.limit !== undefined ? { limit: target - out.length } : {}),
+          // On a follow-up always, so the pages add up to the target rather
+          // than each being the server's default.
+          ...(opts.limit !== undefined || out.length > 0 ? { limit: target - out.length } : {}),
           paged: true,
         },
         "history",
@@ -2052,7 +2054,12 @@ export class Transport {
       if (more === undefined) return out;
       if (typeof more !== "boolean")
         throw this.malformed("a history whose more is not true or false");
-      if (!more || entries.length === 0 || out.length >= target) return out;
+      // An empty page cannot have more after it; read as the end, it would
+      // hide every older version (found by review).
+      if (more && entries.length === 0) {
+        throw this.malformed("an empty history page with more after it");
+      }
+      if (!more || out.length >= target) return out.slice(0, target);
       before = entries[entries.length - 1]!.uid;
     }
   }

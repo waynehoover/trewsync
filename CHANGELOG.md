@@ -21,6 +21,12 @@ client can talk; upgrade the server first.
   so a note with many versions of a very large file can no longer produce a
   history page a client refuses (T57). Older clients are answered as before.
 
+### Plugin
+
+- The restore window refuses a time the clocks skip or go through twice, when
+  daylight saving starts or ends, and says so, rather than quietly moving it
+  to another instant.
+
 ### Command-line client
 
 - **`trew rewind`** previews a folder, or every note, as the server had it at a

@@ -2642,6 +2642,36 @@ describe("a history the server pages by bytes", () => {
     expect(rest.map((e) => e.uid)).toEqual([4, 3, 2, 1]);
   });
 
+  it("refuses an empty page that says there is more", async () => {
+    const { t, socket } = await helloed(0);
+    socket.autoReply = (_frame, s) =>
+      s.reply({ res: "history", path: "a.md", entries: [], more: true });
+    await expect(t.history("a.md", { limit: 20, before: 200 })).rejects.toThrow(
+      /empty history page with more/,
+    );
+  });
+
+  it("keeps to the server's default page when the caller gives no limit", async () => {
+    const { t, socket } = await helloed(0);
+    socket.autoReply = (frame, s) => {
+      const before = (frame["before"] as number | undefined) ?? 1_000;
+      const limit = (frame["limit"] as number | undefined) ?? 100;
+      const n = Math.min(60, limit);
+      s.reply({
+        res: "history",
+        path: "a.md",
+        entries: Array.from({ length: n }, (_, i) => version(before - 1 - i)),
+        more: true,
+      });
+    };
+    const page = await t.history("a.md");
+    expect(page).toHaveLength(100);
+    expect(socket.sentText.filter((f) => f["op"] === "history").map((f) => f["limit"])).toEqual([
+      undefined,
+      40,
+    ]);
+  });
+
   it("takes one page by count from a server that does not page", async () => {
     const { t, socket } = await helloed(0);
     socket.autoReply = (_frame, s) =>

@@ -638,6 +638,16 @@ export class Client {
       // after the drain, run a pass against the closed transport, and save
       // the index that unlink had just removed.
       if (this.closing) throw new ConnectionError("this client has been closed");
+      // Refused here as `sync` refuses it, and here because `settle` comes
+      // here too: an inspection client holds no lock, and a pass writes. A
+      // restore's preview through one ran a pass, and sent a deletion made
+      // beside a running `trew sync --watch` (found by review, 2026-10-28).
+      if (this.opts.inspect === true) {
+        throw new Error(
+          "this client is connected to read, not to sync: an inspection command cannot write to " +
+            "the vault, because it does not hold the lock that makes writing safe",
+        );
+      }
       this.confirmedPass = false;
       this.opts.onSyncStart?.();
       const report = await this.engine.sync(opts);
@@ -1254,6 +1264,14 @@ export class Client {
    * puts them on disk here.
    */
   async restoreTo(ask: RestoreAsk): Promise<RestoreResult> {
+    // An inspection client previews and nothing more: it sends nothing first,
+    // because it holds no lock and a pass writes, and it applies nothing.
+    if (this.opts.inspect === true) {
+      if (!("at" in ask)) {
+        throw new Error("an inspection client previews a restore and does not apply one");
+      }
+      return this.serial(() => this.transport.restore(ask));
+    }
     await this.settle({ coalesceWrites: false });
     const done = await this.serial(() => this.transport.restore(ask));
     if (done.opId !== undefined) {

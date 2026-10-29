@@ -12,6 +12,7 @@
 import { Modal, Notice, Setting, type App } from "obsidian";
 
 import type { RestoreAsk, RestoreResult } from "../core/transport.ts";
+import { wallClock } from "../core/wall-clock.ts";
 import { ProtocolError } from "../core/transport.ts";
 
 /** How many of a preview's changes are listed; the counts are always whole. */
@@ -34,10 +35,24 @@ export function localInputValue(ms: number): string {
 }
 
 /** A `datetime-local` value as milliseconds, read in local time, or undefined. */
-export function fromLocalInput(value: string): number | undefined {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(value)) return undefined;
-  const ms = new Date(value).getTime();
-  return Number.isFinite(ms) ? ms : undefined;
+/**
+ * A `datetime-local` value as milliseconds, read in local time, or why it
+ * names no one instant: a time the clocks skip, or one they repeat, which
+ * `new Date` would quietly move or pick (`wallClock`).
+ */
+export function fromLocalInput(value: string): number | string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  if (!m) return "Choose a date and a time.";
+  const t = wallClock(+m[1]!, +m[2]!, +m[3]!, +m[4]!, +m[5]!, +(m[6] ?? 0));
+  if ("ms" in t) return t.ms;
+  switch (t.problem) {
+    case "skipped":
+      return "That time does not exist here: the clocks skipped it. Choose a time after the change.";
+    case "twice":
+      return "That time happens twice here, as the clocks go back. Choose a time outside that hour.";
+    default:
+      return "Choose a date and a time.";
+  }
 }
 
 /** What a step does, for a person. */
@@ -73,6 +88,8 @@ export function summarise(p: RestoreResult): string {
 export class RestoreTimeModal extends Modal {
   private folder: string;
   private at: number;
+  /** Why the time chosen names no one instant, when it does not; Preview waits for one that does. */
+  private timeProblem: string | undefined;
   private preview: RestoreResult | undefined;
   private busy = false;
   /** Moved on by every change of folder or time, so a late preview of the old ones is dropped. */
@@ -110,9 +127,15 @@ export class RestoreTimeModal extends Modal {
       .addText((t) => {
         t.inputEl.type = "datetime-local";
         t.setValue(localInputValue(this.at)).onChange((v) => {
-          const ms = fromLocalInput(v);
-          if (ms !== undefined) this.at = ms;
+          const read = fromLocalInput(v);
+          if (typeof read === "number") {
+            this.at = read;
+            this.timeProblem = undefined;
+          } else {
+            this.timeProblem = read;
+          }
           this.forget();
+          if (this.preview === undefined) this.draw();
         });
       });
     this.body = this.contentEl.createDiv();
@@ -136,11 +159,14 @@ export class RestoreTimeModal extends Modal {
     if (message) this.body.createEl("p", { text: message, cls: "trew-restore-message" });
     const p = this.preview;
     if (p === undefined) {
+      if (this.timeProblem !== undefined) {
+        this.body.createEl("p", { text: this.timeProblem, cls: "trew-restore-message" });
+      }
       new Setting(this.body).addButton((b) =>
         b
           .setButtonText("Preview")
           .setCta()
-          .setDisabled(this.busy)
+          .setDisabled(this.busy || this.timeProblem !== undefined)
           .onClick(() => void this.runPreview()),
       );
       return;

@@ -14,7 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { JsonIndexStore, NodeVault, TEMP_MARK } from "./vault.ts";
-import { Client } from "../core/client.ts";
+import { Client, didSomething } from "../core/client.ts";
+import { combinePasses, type SyncReport } from "../core/engine.ts";
 import { TestServer } from "../core/test-server.ts";
 import { deferred, receiveCommitted, within } from "../core/test-async.ts";
 
@@ -49,6 +50,22 @@ beforeEach(async () => {
     ["one.md", "two.md", "three.md"].map((name) => writeFile(join(root, "notes", name), name)),
   );
 });
+/**
+ * Passes on the engine until one does nothing, as `Client.settle` does. The
+ * clients here are inspection clients so that nothing but the test runs a
+ * pass, and an inspection client refuses a pass through `settle`, as every
+ * unlocked command must; so the test drives the engine itself.
+ */
+async function settle(client: Client): Promise<SyncReport> {
+  let pass = await client.engine.sync({ coalesceWrites: false });
+  let total = pass;
+  for (let i = 0; i < 8 && didSomething(pass); i++) {
+    pass = await client.engine.sync({ coalesceWrites: false });
+    total = combinePasses(total, pass);
+  }
+  return total;
+}
+
 afterEach(async () => {
   stop?.();
   stop = undefined;
@@ -327,7 +344,7 @@ it.each([false, true])(
       const store = () => new JsonIndexStore(join(root, ".trew/index.json"));
       client = new Client({ ...opts, vault: new NodeVault(root), store: store() });
       await client.connect();
-      await client.settle();
+      await settle(client);
       await client.close();
 
       const vault = new NodeVault(root, { alsoIgnore: ["notes"] });
@@ -340,7 +357,7 @@ it.each([false, true])(
         await vault.list();
         await writeFile(join(root, "a-restored.md"), "Restored without a watcher notification\n");
       }
-      const report = await client.settle();
+      const report = await settle(client);
       expect(report.deletedRemotely).toBe(0);
       expect(report.ignored).toBeGreaterThan(0);
       const latest = async (path: string) => {
@@ -384,12 +401,12 @@ it("still aborts reconciliation when an omitted synced path cannot be checked", 
       inspect: true,
     });
     await client.connect();
-    await client.settle();
+    await settle(client);
     await rm(join(root, "notes/one.md"));
     await writeFile(join(root, "notes/two.md"), "Edit must survive an unreadable presence check");
     const denied = Object.assign(new Error("presence is unreadable"), { code: "EACCES" });
     vi.spyOn(vault, "exists").mockRejectedValueOnce(denied);
-    await expect(client.settle()).rejects.toBe(denied);
+    await expect(settle(client)).rejects.toBe(denied);
     const versions = await client.history("notes/one.md");
     expect(versions.every((version) => !version.deleted)).toBe(true);
     expect(new TextDecoder().decode(await client.contentAt(versions[0]!))).toBe("one.md");

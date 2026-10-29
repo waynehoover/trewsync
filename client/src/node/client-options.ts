@@ -2,6 +2,20 @@ import type { Args, Console } from "./cli.ts";
 import { credentialsFor, type ClientOptions } from "../core/client.ts";
 import { configPath, indexPath, type Config } from "./config.ts";
 import { coveredBy } from "../core/on-demand.ts";
+import { canonicalSpelling, obsidianSpaces } from "../core/paths.ts";
+
+/**
+ * A vault path as somebody typed it, as the vault reports it: in NFC, with
+ * Obsidian's plain spaces, and without a leading `./` or `/` or a trailing
+ * `/`. A name typed in another normal form, or relative to the vault's own
+ * folder, is the same file, and a comparison by the raw string missed it.
+ */
+export function vaultPathArg(typed: string): string {
+  return obsidianSpaces(canonicalSpelling(typed))
+    .replace(/^(\.\/)+/, "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+}
 import { JsonIndexStore, NodeVault } from "./vault.ts";
 
 export async function clientOptions(
@@ -60,7 +74,7 @@ export async function clientOptions(
       ? {
           onDemand: (path: string, size: number) =>
             coveredBy(config.onDemandBytes, path, size) &&
-            !(args.command === "fetch" && args.rest.includes(path)),
+            !(args.command === "fetch" && args.rest.map(vaultPathArg).includes(path)),
         }
       : {}),
     // Only while watching. A one-shot sync prints its report at the end and

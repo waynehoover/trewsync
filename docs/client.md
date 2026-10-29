@@ -201,7 +201,10 @@ trew rewind --uid 812 --head 830 --apply Projects
 ```
 
 The time is the server's: what it had received by then, not what a device's
-clock said. A note moved into the folder since stays where it arrived, a note
+clock said. A local time the clocks skip, or go through twice, when daylight
+saving starts or ends, is refused rather than guessed; give it with an offset,
+such as `2026-11-01 01:30-05:00`. A preview syncs nothing, so it is safe beside
+a running `trew sync --watch`. A note moved into the folder since stays where it arrived, a note
 moved out of it comes back as a copy, and settings never change. If any note is
 saved between the preview and the apply, the apply is refused and nothing
 changes; preview again. The apply prints its operation, which every device
@@ -231,7 +234,7 @@ download. `trew fetch` downloads named ones, which then stay like any other
 file. `trew free-space` removes covered attachments already here, each one
 first checked against the server's newest version and read back from the
 server, and deleted rather than moved to `.trash`; a file changed since it
-synced is kept. Freeing space never deletes anything on the server: delete a
+synced is kept. It does not sync first: run `trew sync` before it for that. Freeing space never deletes anything on the server: delete a
 file to delete it everywhere. `trew on-demand off` downloads everything again
 at the next sync.
 
