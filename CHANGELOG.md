@@ -11,6 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.16.2, plugin (2026-10-28)
+
+Works with trewd 0.15.0 or later, as 0.16.1 does. The server and `trew` are
+unchanged.
+
 ### Plugin
 
 - On a phone, the search box in Deleted notes fills its row. It had shrunk to
