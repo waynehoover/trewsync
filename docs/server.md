@@ -120,12 +120,19 @@ It does not install the service itself. The generated unit includes restart
 handling and a 30-second shutdown allowance. Add `-mcp` to have the unit serve
 the [MCP endpoint](agent.md) too.
 
-### Homebrew or mise
+### Homebrew, mise or packslip
 
 ```bash
 brew install waynehoover/tap/trewd                   # macOS or Linux
-mise use -g packslip:github.com/waynehoover/trewsync/server   # verified from the signed manifest
+mise use -g packslip:waynehoover/trewsync/server
+packslip install github.com/waynehoover/trewsync/server --pin ps1_puqrourkbcv2h6nky6fzbdkksa
 ```
+
+mise and the [packslip](https://packslip.dev) CLI install from the release's
+signed manifest: they check that this repository's release workflow signed
+it, then check the download against it. `--pin` is this repository's signer
+fingerprint, so even a first install accepts only a release signed here.
+packslip puts `trewd` in `~/.local/bin`.
 
 `brew services start trewd` runs it as a service on `127.0.0.1:3003`, without
 the MCP endpoint, with its data in `$(brew --prefix)/var/trewd`. Give that
@@ -138,11 +145,13 @@ server under a service of your own with the same data directory and `-mcp`:
 `trewd serve -data "$(brew --prefix)/var/trewd" -addr 127.0.0.1:3003 -mcp`.
 On Linux, `trewd service ... -mcp`, below, prints a systemd unit for it.
 
-A binary downloaded by hand is upgraded with `trewd update`, which verifies the
-release before replacing anything ([reference](server-reference.md#update)).
-It needs the [packslip](https://github.com/jdx/packslip) CLI on `PATH` (or
-given with `-packslip`) for that check, and refuses to run without it.
-Homebrew and mise installs are upgraded through their own tool instead.
+A binary downloaded by hand or installed by packslip is upgraded with
+`trewd update`, which verifies the release before replacing anything
+([reference](server-reference.md#update)); for a packslip install, running the
+same `packslip install` again works too. `trewd update` needs the
+[packslip](https://github.com/jdx/packslip) CLI on `PATH` (or given with
+`-packslip`) for that check, and refuses to run without it. Homebrew and mise
+installs are upgraded through their own tool instead.
 
 ## Secure access
 

@@ -654,8 +654,19 @@ first checked by `scripts/verify-release.sh --server` on the first release.
   hand (`Formula/trewd.rb`; 0.12.0 was the first, 2026-10-08): `brew style`
   passes, and `brew fetch --formula waynehoover/tap/trewd` downloads and
   checks the binary. `brew audit` has not been run.
-- **mise.** `mise use -g packslip:github.com/waynehoover/trewsync/server` installs
-  trewd from the signed manifest, verified against the repository's identity.
+- **mise and packslip.** `mise use -g packslip:waynehoover/trewsync/server`
+  and `packslip install github.com/waynehoover/trewsync/server --pin
+  ps1_puqrourkbcv2h6nky6fzbdkksa` install trewd from the signed manifest,
+  verified against the repository's identity. The fingerprint is what
+  `packslip pin packslip.server.sigstore.json` printed for server/v0.15.1
+  (packslip 1.11.1, 2026-10-28). It comes from the repository's ID, so it
+  survives a rename, but consumers also hold each release to the workflow
+  that signed the ones before, so keep signing from `attest.yml` alone.
+  Checked from 0.15.0: `trewd update` and a second `packslip install` both
+  upgrade a packslip install. Without `--version`, `packslip install` warns
+  that GitHub's latest release, the plugin's, has no server packslip, then
+  takes the newest server release. mise's registry has no short name for
+  trewd and will not take one: it is for tools with thousands of stars.
 - **Docker.** `compose.yaml` builds the image from the checkout until the first
   server release, because the only image it could name was Basalt's, which has
   `/trew` inside rather than `/trewd`. `scripts/pin-compose.sh` replaces the
