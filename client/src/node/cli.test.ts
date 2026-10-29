@@ -26,9 +26,9 @@ import {
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
 import { MAX_NAME_BYTES, ProtocolError, Transport, checkName } from "../core/transport.ts";
@@ -3224,6 +3224,65 @@ describe("what the new commands leave alone (found by review, 2026-10-28)", () =
     await cli("sync", "--dir", a);
     expect(await read(a, "outside.md")).toBe("a note\n");
     expect(await readFile(join(a, "covered.bin"))).toEqual(Buffer.alloc(5_000, 1));
+  }, 300_000);
+
+  /**
+   * Nor does anything run a pass under it: a peer's commit arriving while it
+   * started scheduled one, which sent the deletion made here and uploaded the
+   * edited attachment, which free-space then freed (found by review).
+   */
+  it("runs no pass of its own while it frees space, whatever arrives", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    await write(b, "outside.md", "keep this note on the server\n");
+    await writeFile(join(b, "covered.bin"), Buffer.alloc(5_000, 1));
+    await cli("sync", "--dir", b);
+    await cli("sync", "--dir", a);
+    await cli("on-demand", "1KB", "--dir", b);
+    await rm(join(b, "outside.md"));
+    await writeFile(join(b, "covered.bin"), Buffer.alloc(5_000, 2));
+    const here = (await loadConfig(b))!;
+    const writer = new Client(
+      await clientOptions((await loadConfig(a))!, parseArgs(["sync", "--dir", a])),
+    );
+    await writer.connect();
+    let passes = 0;
+    const sync = Client.prototype.sync;
+    const syncSpy = vi.spyOn(Client.prototype, "sync").mockImplementation(async function (
+      this: Client,
+      ...rest
+    ) {
+      if (this.deviceId === here.deviceId) passes++;
+      return sync.apply(this, rest);
+    });
+    const list = NodeVault.prototype.list;
+    let held = false;
+    const listSpy = vi.spyOn(NodeVault.prototype, "list").mockImplementation(async function (
+      this: NodeVault,
+      ...rest
+    ) {
+      if (!held && (this as unknown as { root: string }).root === resolve(b)) {
+        held = true;
+        // A peer commits while the command's first scan is held, and has
+        // time to start a pass here if anything would.
+        await write(a, "remote-arrival.md", "an ordinary remote update\n");
+        await writer.settle({ coalesceWrites: false });
+        await new Promise((r) => setTimeout(r, 1_000));
+      }
+      return list.apply(this, rest);
+    });
+    try {
+      const freed = await cli("free-space", "covered.bin", "--dir", b, "--json");
+      expect(passes, "a pass ran under free-space").toBe(0);
+      expect(freed.json()["released"]).toEqual([]);
+      expect(await readFile(join(b, "covered.bin"))).toEqual(Buffer.alloc(5_000, 2));
+      const outside = await writer.history("outside.md");
+      expect(outside.map((v) => v.deleted)).toEqual([false]);
+    } finally {
+      listSpy.mockRestore();
+      syncSpy.mockRestore();
+      await writer.close();
+    }
   }, 300_000);
 
   it("fetches a file named in another normal form, or from ./", async () => {

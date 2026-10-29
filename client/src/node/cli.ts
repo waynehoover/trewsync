@@ -2633,7 +2633,9 @@ async function cmdFreeSpace(args: Args, io: Console): Promise<number> {
         "it lacks. Free space on a device that may write.",
     );
   }
-  const client = await open(config, args, io);
+  // Manual, so nothing runs a pass while it works: a peer's commit arriving
+  // would otherwise start one (found by review).
+  const client = await open(config, args, io, { manual: true });
   try {
     // No sync first. A pass would send this device's other changes, a note
     // deleted here among them, under a command that changes nothing on the
@@ -2822,11 +2824,12 @@ async function open(
   config: Config,
   args: Args,
   io?: Console,
-  opts: ConnectHow & { inspect?: boolean } = {},
+  opts: ConnectHow & { inspect?: boolean; manual?: boolean } = {},
 ): Promise<Client> {
   const client = new Client({
     ...(await clientOptions(config, args, io, opts.inspect)),
     ...(opts.inspect === true ? { inspect: true } : {}),
+    ...(opts.manual === true ? { manual: true } : {}),
   });
   // Where a request to stop can reach it, and not started once one came (T21).
   stopping.clients.add(client);

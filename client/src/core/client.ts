@@ -159,6 +159,16 @@ export interface ClientOptions {
    * stale cursor.
    */
   readonly inspect?: boolean;
+  /**
+   * Runs a pass only when its caller asks: a batch arriving schedules none.
+   * For a command that writes through something other than a pass and must
+   * not have a pass send this device's other changes under it, as `trew
+   * free-space` does, where one ran on a peer's commit while it was starting,
+   * published a deletion made here, and uploaded an edited attachment that the
+   * command then freed (found by review, 2026-10-28). Unlike `inspect` it
+   * still writes, under the caller's lock.
+   */
+  readonly manual?: boolean;
   readonly socketFactory?: (url: string) => SocketLike;
 }
 
@@ -241,7 +251,7 @@ export class Client {
         // below the engine distinguishes a pass somebody asked for from one an
         // arrival scheduled, so an inspection command that happened to be
         // connected while a note arrived wrote it to disk.
-        if (batch.entries.length > 0 && opts.inspect !== true) this.soon();
+        if (batch.entries.length > 0 && opts.inspect !== true && opts.manual !== true) this.soon();
       },
       onCaughtUp: () => {
         this.caughtUp = true;
@@ -760,7 +770,7 @@ export class Client {
   private soon(): void {
     // Initial sync belongs to the caller after connect finishes. A partial
     // backlog cannot safely decide which files exist only on this device.
-    if (!this.caughtUp || this.soonTimer !== undefined) return;
+    if (!this.caughtUp || this.soonTimer !== undefined || this.opts.manual === true) return;
     this.soonTimer = setTimeout(() => {
       // Retain the scheduled marker until this snapshot finishes checking.
       // The engine may still be applying frames already on the socket;
