@@ -284,8 +284,8 @@ added or removed, change this table in the same commit.
 | `obsidianmd/no-global-this` | 2 | `plugin/activity.ts` (1), `plugin/main-window.ts` (1) | Each wants the global object itself, not a name on it. In `activity.ts` it stands in for the panel's window when the panel's element has none, which is where the test that counts animation frames supplies `requestAnimationFrame`; where an element is at hand the panel uses its `ownerDocument` and that document's window, which is what keeps it right in a popout. In `main-window.ts` it is where Obsidian keeps `activeWindow` and `activeDocument`, which it points at the main window for the length of a modal's `open`, so the first-sync review opens there and not in a Settings popout; Obsidian has no API for choosing a modal's window. The plugin reads `document`, `window`, `navigator` and `location` by name behind a `typeof` guard, so a missing one is `undefined` rather than a thrown error in the tests, which run in Node and supply them with `vi.stubGlobal`. |
 | `obsidianmd/no-global-this` | 1 | `electronFs` in `plugin/vault.ts` | Node's `fs` for the durable fsync on desktop, through the `require` Electron provides as a global. Written as `require("fs")` the bundler would resolve it and the plugin would name a Node module, which the build test refuses. Only a desktop `FileSystemAdapter` asks for it, and a phone has no such global, so it gets none. That is the self-critique checklist's advice for a Node module in a plugin that also runs on mobile (gate it to desktop and `require()` it at run time), and why `isDesktopOnly` stays `false`. |
 | `no-restricted-globals` (`fetch`) | 2 | `readBlocks` and `readRange` in `plugin/vault.ts` | They fetch the vault's own resource URL, not the network, to read a large attachment as a stream and by range. `requestUrl` returns whole bodies and does not read resource URLs. |
-| `@typescript-eslint/no-deprecated` (`setWarning`) | 5 | `plugin/main.ts` | Its replacement, `setDestructive`, arrived in 1.13.0 and the manifest admits 1.7.2, so using it would be a `no-unsupported-api` error. |
-| `obsidianmd/ui/sentence-case` | 16 | `plugin/main.ts` | Thirteen are the product's name, TrewSync, whose capital S the rule reads as a second word to lowercase: the plugin's name on the ribbon and in the panel's title, "Which platforms TrewSync supports", the file menu's "TrewSync: version history", and nine notices that name it. One is the literal invite prefix `trew1i_...`, and two are the example device name `laptop` in a placeholder, spelled as device names are everywhere else. The guideline itself capitalizes proper nouns, and the rule keeps the casing of the brands on its own list, GitHub and macOS among them; TrewSync is not on it. |
+| `@typescript-eslint/no-deprecated` (`setWarning`) | 6 | `plugin/main.ts` (5), `plugin/restore-time.ts` (1) | Its replacement, `setDestructive`, arrived in 1.13.0 and the manifest admits 1.7.2, so using it would be a `no-unsupported-api` error. |
+| `obsidianmd/ui/sentence-case` | 18 | `plugin/main.ts` (17), `plugin/restore-time.ts` (1) | Fifteen are the product's name, TrewSync, whose capital S the rule reads as a second word to lowercase: the plugin's name on the ribbon and in the panel's title, "Which platforms TrewSync supports", the file menu's "TrewSync: version history" and "TrewSync: restore to an earlier time", and ten notices that name it. One is the literal invite prefix `trew1i_...`, and two are the example device name `laptop` in a placeholder, spelled as device names are everywhere else. The guideline itself capitalizes proper nouns, and the rule keeps the casing of the brands on its own list, GitHub and macOS among them; TrewSync is not on it. |
 | `obsidianmd/hardcoded-config-path` | 1 | `EVERY_DEVICE` in `core/pairing.ts` | The name of the settings group every device can join, which is a folder on the server and on no device ([plan/settings-sync.md](../plan/settings-sync.md)). The folder a device runs is still read from `configDir`, and mapped onto its group's. |
 | `obsidianmd/settings-tab/prefer-setting-definitions` | 1 | the settings tab in `plugin/main.ts` | `getSettingDefinitions` is the declarative settings API of 1.13.0. Until it is adopted, the tab's settings do not appear in Obsidian's settings search on 1.13 or later. The tab is the sync panel, drawn from live state (status, pairing, devices, invites), which a fixed list of setting definitions does not describe. |
 
@@ -300,7 +300,9 @@ something else (`obsidianmd/hardcoded-config-path`). That notice now names
 more, so it is 60. Settings sync's message stating its folder rule made it 61,
 and its notice that nothing is waiting to apply, which names TrewSync, 62. The
 groups that replaced settings profiles took that message away and named the
-shared group instead, so it is still 62.
+shared group instead, so it is still 62. Restoring to an earlier time added
+its Restore button's `setWarning`, the folder menu's entry and the notice that
+a restore is undone, which name TrewSync, so it is 65.
 
 ### Submitting to the community directory
 
@@ -395,7 +397,12 @@ plugin-only one:
   `console.info` calls, which `no-console` refuses in a plugin, 127 of them in
   the benchmarks and the stress suite. If the scanner reads those files,
   every release is uninstallable until they are fixed, moved under ignored
-  names, or the plugin is published from a repository of its own.
+  names, or the plugin is published from a repository of its own. Run again
+  on 2026-10-28 over the 125 files the list now leaves: 186 errors and 467
+  warnings, still none in the bundle. 121 are the console rule (in the
+  benchmarks, the stress suite and the headless client), the rest are
+  type-checking rules in test scaffolding, and the three vitest configs are
+  outside the TypeScript project, so they fail to parse rather than lint.
 - **Build verification.** The scanner runs the first of the `build`,
   `build:plugin` and `compile` scripts and checks that the build matches what
   is committed. This repository has no `package.json` at its root: the
