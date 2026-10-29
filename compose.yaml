@@ -21,8 +21,8 @@ services:
     # protocol it does not speak at hello, naming both numbers, so a client
     # upgraded first cannot connect until the server catches up.
     # The digest came from:
-    #   docker buildx imagetools inspect ghcr.io/waynehoover/trewsync:0.15.0
-    image: ghcr.io/waynehoover/trewsync:0.15.0@sha256:b6c2e78abc6ac8004c2b57f02e4c82eb4e13067e55b7f2c6b995bdea0e6dcf64
+    #   docker buildx imagetools inspect ghcr.io/waynehoover/trewsync:0.15.1
+    image: ghcr.io/waynehoover/trewsync:0.15.1@sha256:42df14d8b4daa50e5c9da278136faad0751946515e4967374a22b3dc2e5bdccb
     container_name: trew
     restart: unless-stopped
 
