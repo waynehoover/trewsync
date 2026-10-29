@@ -17,6 +17,35 @@ same notes your devices sync, with every agent edit recorded and undoable.
   <img src="docs/assets/screenshots/panel.png" alt="TrewSync's sync panel in Obsidian." width="700">
 </picture>
 
+## What's different
+
+- **MCP built into the sync server.** An agent such as Claude Code reads,
+  searches and, with a write token, edits the same notes your devices sync,
+  with no second copy of the vault ([connect an agent](docs/agent.md)).
+- **Agent edits you can undo.** An agent changes notes only by exact edits,
+  never by overwriting a whole note. Every write is recorded and can be undone
+  from Obsidian, from the server, or by the agent.
+- **Go back in time.** Put a folder, or the whole vault, back as it was at a
+  date and time you pick: previewed first, then applied on every device as one
+  change that Undo reverses
+  ([restore to an earlier time](docs/plugin.md#restore-a-folder-to-an-earlier-time)).
+- **History that never expires.** Every version of every note stays on your
+  server until you purge it. Browse a note's history, compare versions and
+  restore deleted notes inside Obsidian.
+- **A headless client.** [`trew`](docs/client.md) syncs a copy of the vault
+  without Obsidian, on a NAS or a server, read-only or two-way, and can rewind
+  or undo from a shell.
+- **Attachments on demand.** A phone can leave large attachments on the server
+  and download each one when you open a note that uses it.
+- **A Git history, if you want one.** The server can push the vault's history
+  to a private repository, with a commit for each agent change and for each
+  device's edits once it goes quiet ([Keep a Git history](docs/git-export.md)).
+- **Small to run.** One static binary or a small container, with SQLite inside
+  and no database service beside it.
+
+[How it compares](docs/compared.md) sets TrewSync beside Obsidian Sync and
+Self-hosted LiveSync, including when one of them is the better fit.
+
 ## Quickstart
 
 You need a Linux or macOS machine with Docker and local storage, and
@@ -73,37 +102,6 @@ refuses every request until a token exists.
 Prefer to have your agent do the setup? Give it [llm.md](llm.md). The full
 walk-through, including Caddy instead of Tailscale and a binary instead of
 Docker, is [server setup](docs/server.md).
-
-## What you get
-
-- **An MCP endpoint in your sync server.** An agent you run, such as Claude
-  Code, connects with a token and reads, searches and compares versions over
-  the same store your devices sync, with no second copy of the vault to keep
-  in step.
-- **Agent edits you can undo.** An agent changes notes only by exact edits
-  against the version it read, never by overwriting a whole note. Every write
-  is recorded, keeps what it replaced for at least 30 days, and can be undone
-  from Obsidian, from the server, or by the agent.
-- **Every version kept.** Browse a note's history, compare versions, and
-  restore deleted notes, inside Obsidian. Restoring writes a copy beside the
-  note rather than over it.
-- **Conflicts keep both.** TrewSync combines edits when its merge checks pass
-  and keeps both versions when they do not, in a copy named after whoever
-  wrote it: another device, or the agent.
-- **Pair by QR code.** Scan it, or paste a pairing code. There is no fixed
-  device limit, and a lost device is revoked from another one or from the
-  server.
-- **No key to lose.** The notes and their history live on the server, so
-  losing every device loses no synced note: the server pairs a new one.
-- **A mirror without Obsidian.** The [command-line client](docs/client.md)
-  keeps a copy on a NAS or another machine, read-only or two-way.
-- **A Git history, if you want one.** The server can keep the vault's history
-  in Git and push it to a private repository: one commit per agent change and
-  per quiet run of a device's edits, large attachments in Git LFS, never read
-  back ([Keep a Git history](docs/git-export.md)).
-- **Small to run.** One static binary, or a small container with Git beside
-  it for the export, SQLite inside, no database service beside it. Edits
-  upload only the changed pieces of a file.
 
 ## Before you choose TrewSync
 
