@@ -1897,6 +1897,38 @@ describe("the panel, which is a modal and a settings tab", () => {
     expect(tab.containerEl.children).toEqual([]);
   }, 300_000);
 
+  /**
+   * Every row with a field carries `trew-field-row`, which the narrow-screen
+   * styles stack under its label, so a field added later cannot be squeezed
+   * beside one on a phone. The class replaced `:has`, which the directory's
+   * CSS review warns re-checks selectors across the whole page.
+   */
+  it("marks every row with a field for the phone layout", async () => {
+    await fresh();
+    const { plugin } = await load();
+    const unmarked = () =>
+      built
+        .filter((st) => st.texts.length + st.dropdowns.length > 0)
+        .filter((st) => !st.settingEl.hasClass("trew-field-row"))
+        .map((st) => st.name);
+    built.length = 0;
+    plugin.settingTabs[0]!.display();
+    expect(
+      built.some((st) => st.texts.length > 0),
+      "the unpaired panel drew no field",
+    ).toBe(true);
+    expect(unmarked()).toEqual([]);
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    built.length = 0;
+    plugin.settingTabs[0]!.display();
+    expect(
+      built.some((st) => st.dropdowns.length > 0),
+      "the paired panel drew no dropdown",
+    ).toBe(true);
+    expect(unmarked()).toEqual([]);
+  }, 300_000);
+
   it("asks for one string and works out the rest from it", async () => {
     // Several designs failed here before this one, all the same way: the
     // screen asked somebody to choose between kinds of string before it would

@@ -5102,6 +5102,7 @@ class TrewPanel {
     );
     const said = later(contentEl, "trew-advice");
     setting
+      .setClass("trew-field-row")
       .addText((text) => {
         address = text;
         text.setPlaceholder("wss://sync.example.com").setValue(this.plugin.connection()?.url ?? "");
@@ -5328,6 +5329,7 @@ class TrewPanel {
     codeRow.settingEl.addClass("trew-invite-code");
     codeRow.settingEl.hide();
     codeRow
+      .setClass("trew-field-row")
       .addText((text) => {
         codeField = text;
         text.inputEl.setAttribute("readonly", "");
@@ -5420,7 +5422,7 @@ class TrewPanel {
       "This device's name",
       "Shown in the device list and future sync activity.",
     );
-    setting.addText((t) => {
+    setting.setClass("trew-field-row").addText((t) => {
       t.setPlaceholder("laptop");
       t.inputEl.setAttribute("aria-label", "This device's name");
       t.setValue(this.plugin.deviceName ?? "");
@@ -5483,7 +5485,7 @@ class TrewPanel {
           }),
       );
     }
-    setting.addDropdown((d) => {
+    setting.setClass("trew-field-row").addDropdown((d) => {
       d.addOption("off", "Off");
       // The saved group is offered even when it is not one of these two, so
       // the dropdown never shows a choice this device has not made.
@@ -5561,7 +5563,7 @@ class TrewPanel {
           ? "Large attachments stay on the server until you open a note that uses them. None are waiting now."
           : `${onServer.size} ${onServer.size === 1 ? "attachment is" : "attachments are"} on the server only (${bytesForPeople(weight)}). Each downloads when you open a note that uses it.`,
     );
-    setting.addDropdown((d) => {
+    setting.setClass("trew-field-row").addDropdown((d) => {
       for (const preset of ON_DEMAND_PRESETS)
         d.addOption(String(preset.bytes ?? "off"), preset.label);
       const known = ON_DEMAND_PRESETS.some((p) => p.bytes === threshold);
@@ -5620,7 +5622,7 @@ class TrewPanel {
         : `Not synced here: ${names.join(", ")}. This device only; other devices keep syncing them.`,
     );
     let field: TextComponent | undefined;
-    setting.addText((t) => {
+    setting.setClass("trew-field-row").addText((t) => {
       t.setPlaceholder("Attachments");
       t.inputEl.setAttribute("aria-label", "A folder or file name to skip on this device");
       field = t;
@@ -5833,15 +5835,17 @@ class TrewPanel {
         : "Paste an invite from a paired device's TrewSync panel. For the first device, use the one " +
             "trewd serve wrote to first-invite in its data folder, or make one with trewd invite on " +
             "the server.",
-    ).addText((t) => {
-      t.setPlaceholder("trew1i_...");
-      t.inputEl.setAttribute("aria-label", "Invite");
-      literalInput(t);
-      const value = this.joinDraft?.invite ?? this.incomingInvite;
-      if (value !== undefined) t.setValue(value);
-      t.onChange(() => showDestination());
-      inviteField = t;
-    });
+    )
+      .setClass("trew-field-row")
+      .addText((t) => {
+        t.setPlaceholder("trew1i_...");
+        t.inputEl.setAttribute("aria-label", "Invite");
+        literalInput(t);
+        const value = this.joinDraft?.invite ?? this.incomingInvite;
+        if (value !== undefined) t.setValue(value);
+        t.onChange(() => showDestination());
+        inviteField = t;
+      });
 
     // Where this invite goes, before it goes there (R083-05).
     const destination = contentEl.createEl("p", { cls: "trew-advice" });
@@ -5913,8 +5917,9 @@ class TrewPanel {
     // not a value, so the honest thing to do with the field was leave it
     // alone, and every device ended up named after the app rather than after
     // itself. What is offered is what will be used, and it can be typed over.
-    row(moreEl, "Device name", "Shown in the device list and future sync activity.").addText(
-      (t) => {
+    row(moreEl, "Device name", "Shown in the device list and future sync activity.")
+      .setClass("trew-field-row")
+      .addText((t) => {
         t.setPlaceholder("laptop");
         t.inputEl.setAttribute("aria-label", "Device name");
         // Pairing again keeps the name this device already had: it is the same
@@ -5922,8 +5927,7 @@ class TrewPanel {
         const kept = again ? this.plugin.deviceName : "";
         t.setValue(this.joinDraft?.device ?? (kept !== "" ? kept : suggestedDeviceName()));
         deviceField = t;
-      },
-    );
+      });
 
     this.renderJoinSkip(moreEl);
     const skipping = () => this.joinSkip;
@@ -6019,7 +6023,7 @@ class TrewPanel {
         : `Not synced here: ${this.joinSkip.join(", ")}. Other devices keep syncing them.`,
     );
     let field: TextComponent | undefined;
-    setting.addText((t) => {
+    setting.setClass("trew-field-row").addText((t) => {
       t.setPlaceholder("Attachments");
       t.inputEl.setAttribute("aria-label", "A folder or file name to skip on this device");
       field = t;
@@ -6268,16 +6272,19 @@ class RecoverModal extends Modal {
     // The same control the activity log has, for the same reason: the useful
     // question is "which one was called something like this", and the answer
     // was a page at a time of unfiltered names.
-    new Setting(contentEl).setName("Deleted notes").addSearch((input) => {
-      input.inputEl.setAttribute("aria-label", "Find a deleted note by filename");
-      input
-        .setPlaceholder("Find a file…")
-        .setValue(this.query)
-        .onChange((value) => {
-          this.query = value;
-          this.list();
-        });
-    });
+    new Setting(contentEl)
+      .setName("Deleted notes")
+      .setClass("trew-field-row")
+      .addSearch((input) => {
+        input.inputEl.setAttribute("aria-label", "Find a deleted note by filename");
+        input
+          .setPlaceholder("Find a file…")
+          .setValue(this.query)
+          .onChange((value) => {
+            this.query = value;
+            this.list();
+          });
+      });
 
     // The filter redraws this and only this, so the field it is typed into
     // survives the keystroke and keeps the caret.

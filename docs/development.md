@@ -413,6 +413,17 @@ plugin-only one:
   text says "document"; the tokenizer has its own name now. Every other line
   of the Source code section is a warning or a recommendation, and warnings do
   not block a release.
+
+  The other sections had no error either. **Releases** recommends a plugin
+  release carry only the three files Obsidian downloads, and passes the
+  attestations of `main.js` and `styles.css`; `SHA256SUMS` stays, because the
+  install instructions and `scripts/verify-release.sh` check downloads
+  against it. **Behavior** recommends saying the plugin enumerates the vault
+  and touches the clipboard, which the README's Disclosures now do (it only
+  writes to the clipboard, when Copy is pressed). **CSS lint** warned about
+  three `:has` selectors, which re-check across the whole page on every
+  change; the rows they found now carry `trew-field-row` from where each
+  field is made, and a test holds every field row to it.
 - **Build verification.** The scanner runs the first of the `build`,
   `build:plugin` and `compile` scripts and checks that the build matches what
   is committed. This repository has no `package.json` at its root: the

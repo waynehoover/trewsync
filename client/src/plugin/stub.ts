@@ -197,6 +197,10 @@ export class FakeEl {
     this.cls = [this.cls, ...classes].filter(Boolean).join(" ");
   }
 
+  hasClass(cls: string): boolean {
+    return this.cls.split(" ").includes(cls);
+  }
+
   removeClass(...classes: string[]): void {
     const drop = new Set(classes);
     this.cls = this.cls
@@ -905,6 +909,11 @@ export class Setting {
 
   setName(name: string): this {
     this.name = String(name);
+    return this;
+  }
+
+  setClass(cls: string): this {
+    this.settingEl.addClass(cls);
     return this;
   }
 

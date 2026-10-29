@@ -243,6 +243,12 @@ In the terms of Obsidian's developer policies:
   vault's `.trash` if that fails. On Obsidian 1.11.4 and later the device's
   token is kept in Obsidian's keychain, which belongs to Obsidian on that
   device rather than to the vault.
+- **Every file in the vault:** to sync a vault the plugin lists and reads
+  every file in it, notes and attachments alike, except what it is set never
+  to sync.
+- **Clipboard:** the plugin writes to the clipboard only when you press Copy,
+  on an invite or on the activity log's diagnostics. It never reads the
+  clipboard.
 - **Telemetry:** none, in the plugin or the server. Neither reports anything
   to the author or anyone else. The server contacts another service only when
   its operator asks it to: pushing to the Git remote they name, or downloading

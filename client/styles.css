@@ -312,7 +312,10 @@
   }
 
   /* Obsidian stacks generic controls on phones. Single actions fit beside
-   * their labels; only rows with fields need a second line. */
+   * their labels; only rows with fields need a second line. Those rows carry
+   * `trew-field-row`, set where each field is made, rather than being found
+   * with `:has`, which re-checks the selector across the whole page on every
+   * change (the directory's CSS review warns of it). */
   .trew-panel .setting-item:not(.setting-item-heading):not(.mod-toggle) {
     flex-direction: row;
     align-items: center;
@@ -360,19 +363,19 @@
   }
 
   .trew-panel
-    .setting-item:not(.setting-item-heading):not(.mod-toggle):has(input, textarea, select) {
+    .setting-item.trew-field-row:not(.setting-item-heading):not(.mod-toggle) {
     flex-direction: column;
     align-items: stretch;
   }
 
   .trew-panel
-    .setting-item:not(.setting-item-heading):not(.mod-toggle):has(input, textarea, select)
+    .setting-item.trew-field-row:not(.setting-item-heading):not(.mod-toggle)
     .setting-item-info {
     align-self: stretch;
   }
 
   .trew-panel
-    .setting-item:not(.setting-item-heading):not(.mod-toggle):has(input, textarea, select)
+    .setting-item.trew-field-row:not(.setting-item-heading):not(.mod-toggle)
     .setting-item-control {
     width: 100%;
     flex-wrap: nowrap;
