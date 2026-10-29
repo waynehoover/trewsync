@@ -40,7 +40,7 @@ the harness uncommitted, before the fix below, and the second at `162faf9`,
 after it, which is the one every check passed on. Where they differ both are
 given, first run first.
 
-The corpus is `src/stress/corpus.ts` at seed 1: 10,000 files, of which 9,646
+The corpus is `test/stress/corpus.ts` at seed 1: 10,000 files, of which 9,646
 notes, 308 attachments and 46 canvases, in 105 folders, 174 MiB. Names in
 Japanese, Greek, Cyrillic and accented Latin, emoji, spaces and every kind of
 capitalisation; frontmatter, wikilinks, tags, a few CRLF and BOM files. Two
@@ -134,7 +134,7 @@ cd client
 bun run bench:10k                        # headless devices, server, search
 BENCH_OBSIDIAN=1 bun run bench:10k       # and the plugin, in a new scratch vault
 BENCH_FILES=500 bun run bench:10k        # the same at another size
-bunx vitest run --config vitest.stress.config.ts src/stress/scale10k.stress.ts
+bunx vitest run --config vitest.stress.config.ts test/stress/scale10k.stress.ts
 ```
 
 The last is the stress suite's short form, in memory and without timings: the
@@ -680,10 +680,10 @@ in this pass.
 
 ```bash
 cd client
-TREW_BENCH_CLIENTS=2 TREW_BENCH_SAMPLES=20 node --experimental-transform-types bench-cadence.ts
-TREW_BENCH_CLIENTS=5 TREW_BENCH_SAMPLES=20 node --experimental-transform-types bench-cadence.ts
-TREW_BENCH_HISTORY=1000 node --experimental-transform-types bench-history.ts
-BENCH_NODE=1 BENCH_SIZES=500,2000 BENCH_REPEATS=3 node --experimental-transform-types bench-pass.ts
+TREW_BENCH_CLIENTS=2 TREW_BENCH_SAMPLES=20 node --experimental-transform-types test/bench/bench-cadence.ts
+TREW_BENCH_CLIENTS=5 TREW_BENCH_SAMPLES=20 node --experimental-transform-types test/bench/bench-cadence.ts
+TREW_BENCH_HISTORY=1000 node --experimental-transform-types test/bench/bench-history.ts
+BENCH_NODE=1 BENCH_SIZES=500,2000 BENCH_REPEATS=3 node --experimental-transform-types test/bench/bench-pass.ts
 ```
 
 The [September 9 prior-art review](reviews/0.7.1.md#what-to-borrow-from-other-plugins)

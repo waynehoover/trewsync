@@ -211,7 +211,7 @@ trew/
     src/core/                 shared engine, both clients              (from basalt client/src/core)
     src/plugin/               Obsidian plugin                          (from client/src/plugin)
     src/node/                 Node adapter + published headless CLI    (from client/src/cli, trimmed)
-    src/stress/               fault, crash, scale suites               (from client/src/stress)
+    test/stress/              fault, crash, scale suites               (from client/src/stress)
     esbuild.config.mjs        plugin bundle and CLI bundle
   manifest.json  versions.json  styles.css
   docs/                       README-adjacent user docs, design.md, protocol.md, development.md
@@ -595,7 +595,7 @@ Done when: one stale slot, a changed namespace, a new backlink, a revoked actor,
 
 **Status, 2026-09-24.** Task 7 (undo) is built, on protocol 2 (protocol 1 and undo; the server answers devices of protocol 1 as before): `store.PlanUndo` and `CommitOperation` in the store, `trewd undo OPID [-to-copy]` for the operator, `undo_operation` for an agent's own operations, and "Undo this change" in the plugin's history panel beside an unchanged Restore (`docs/development.md`, "Undo (M5 task 7)"; plan/protocol.md, "Undo (protocol 2)"; plan/mcp-tools.md, `undo_operation`).
 
-**Status, 2026-09-24, later.** The soak (`client/src/stress/soak.ts`; `docs/development.md`, "The soak (M5 done-when)"): two headless clients, one watching and one mostly offline, with people editing on a schedule, and sixteen `claude -p` sessions with a write token over two runs of 80 and 35 minutes, 29 operations and 288 device edits in all. One conflict copy, explained by three appends to the day's note that none of the writers had seen from the others; the witness matched the server, `verify -deep` was clean, and every version the people wrote is in history. Its short mode is in the stress suite. Building it found and fixed one engine defect: a conflict copy could take a name another device's copy already held on the server, which then arrived as a copy of a copy.
+**Status, 2026-09-24, later.** The soak (`client/test/stress/soak.ts`; `docs/development.md`, "The soak (M5 done-when)"): two headless clients, one watching and one mostly offline, with people editing on a schedule, and sixteen `claude -p` sessions with a write token over two runs of 80 and 35 minutes, 29 operations and 288 device edits in all. One conflict copy, explained by three appends to the day's note that none of the writers had seen from the others; the witness matched the server, `verify -deep` was clean, and every version the people wrote is in history. Its short mode is in the stress suite. Building it found and fixed one engine defect: a conflict copy could take a name another device's copy already held on the server, which then arrived as a copy of a copy.
 
 **Also carry** the items for this milestone in [plan/research/README.md](plan/research/README.md) §5, under "MCP (M4, M5, plan/mcp-tools.md)" and "Retention and history". They came from the 2026-09-22 investigation of seven other sync projects and of Basalt's history, and each names the project or incident it came from.
 

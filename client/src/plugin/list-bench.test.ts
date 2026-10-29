@@ -15,7 +15,7 @@ import { expect, it } from "vitest";
 
 import { ObsidianVault } from "./vault.ts";
 import { FakeAdapter, FakeVaultIndex, asVault } from "./fake.ts";
-import { noteBody, pathFor } from "../../bench-corpus.ts";
+import { noteBody, pathFor } from "../../test/bench/bench-corpus.ts";
 
 const asked = process.env["BENCH_LIST"] === "1";
 

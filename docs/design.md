@@ -652,4 +652,4 @@ before retrying. Merged local text retains the remote ancestor it incorporated,
 even if publishing that merge is refused. Renames retire their source at the
 same UID; a concurrent source edit prevents that retirement and is preserved.
 See [conditional writes](protocol.md#conditional-writes) and the
-[multi-device regression cases](../client/src/stress/preservation.stress.ts).
+[multi-device regression cases](../client/test/stress/preservation.stress.ts).

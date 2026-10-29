@@ -40,9 +40,9 @@ const EQUAL = 0;
  *
  * diff-match-patch's bisect is O(m*n) on the two texts once their common ends
  * are trimmed, and the merge is synchronous and on Obsidian's UI thread. That
- * combination was measured rather than reasoned about, in client/bench-merge.ts,
- * on the shape two devices produce most often: both edited the same note in
- * places spread through it.
+ * combination was measured rather than reasoned about, in
+ * client/test/bench/bench-merge.ts, on the shape two devices produce most
+ * often: both edited the same note in places spread through it.
  *
  *     1,000 lines,   91 KiB      45 ms
  *     5,000 lines,  458 KiB   1,230 ms

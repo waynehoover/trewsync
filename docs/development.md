@@ -28,7 +28,8 @@ go.mod, cmd/, internal/  trewd: server, store, backup, verification, purge
 client/src/core/         shared sync engine, chunking, merging, transport
 client/src/plugin/       Obsidian plugin and Vault adapter
 client/src/node/          trew CLI and filesystem adapter
-client/src/stress/       fault, crash, collision, and scale coverage
+client/test/stress/      fault, crash, collision, and scale coverage
+client/test/bench/       benchmarks
 scripts/                 validation and release tools
 ```
 
@@ -95,7 +96,7 @@ after it describe them.
 ```bash
 go test ./internal/notes/ ./internal/mcp/
 go test -run 'TestAProductionBuildHasNoTestSeam|TestAKillAround|TestAWriteThatLoses|TestAStorageError|TestSIGTERMLetsAnAdmittedMCPWriteFinish' ./cmd/trewd/
-cd client && bunx vitest run --config vitest.stress.config.ts src/stress/mcp-crash.stress.ts src/stress/mcp-races.stress.ts
+cd client && bunx vitest run --config vitest.stress.config.ts test/stress/mcp-crash.stress.ts test/stress/mcp-races.stress.ts
 ```
 
 **The oracle.** The headless client's own MCP server, `trew mcp` and `trew
@@ -412,7 +413,9 @@ plugin-only one:
   in `src/node/mcp-links.ts`, which matches any `write` call whose object's
   text says "document"; the tokenizer has its own name now. Every other line
   of the Source code section is a warning or a recommendation, and warnings do
-  not block a release.
+  not block a release. The benchmarks and the stress suite have since moved to
+  `client/test/bench` and `client/test/stress`, under a name the list
+  ignores, so the scanner no longer reads them.
 
   The other sections had no error either. **Releases** recommends a plugin
   release carry only the three files Obsidian downloads, and passes the
@@ -498,7 +501,7 @@ requires. Until that job exists, the Markdown on GitHub is the documentation.
 
 From `client/`, use `bun run bench`, `bun run bench:sync`, `bun run scale`, and
 `bun run dedup`. `bun run bench:10k` is the end-to-end run at ten thousand
-realistic notes (`src/stress/corpus.ts`) against a real `trewd serve -mcp`,
+realistic notes (`test/stress/corpus.ts`) against a real `trewd serve -mcp`,
 with `BENCH_OBSIDIAN=1` adding the plugin in a new scratch vault, and
 `bun run bench:phone` is the same on the Android phone over adb, `--dry-run`
 for everything but the phone. Both check exact bytes on every device and fail
@@ -897,7 +900,7 @@ Findings:
    Covered by `client/src/core/folder-deletion.test.ts`,
    `client/src/plugin/folders.test.ts`, `client/src/node/folders.test.ts`,
    `internal/store/folder_deletion_test.go` and
-   `client/src/stress/folders.stress.ts`. Folders left behind by the old rule
+   `client/test/stress/folders.stress.ts`. Folders left behind by the old rule
    are not migrated. Not yet repeated with real devices.
 6. Not TrewSync: a meeting-notes exporter on this Mac ran `obsidian create
    vault=NAME ...` with `vault=` after the command, which the CLI ignores,
@@ -1471,7 +1474,7 @@ before and after a default purge.
 
 ```bash
 go test -run 'TestAProductionBuildHasNoTestSeam|TestAKillAround|TestAWriteThatLoses|TestAStorageError' ./cmd/trewd/
-cd client && bunx vitest run --config vitest.stress.config.ts src/stress/mcp-crash.stress.ts src/stress/mcp-races.stress.ts
+cd client && bunx vitest run --config vitest.stress.config.ts test/stress/mcp-crash.stress.ts test/stress/mcp-races.stress.ts
 ```
 
 A SIGKILL is not a power cut: the page cache survives it, so these prove the
@@ -1721,7 +1724,7 @@ not claimed here.
 
 The done-when's last clause, "a day of real use on a scratch vault has
 produced no unexplained conflict copy", as a machine can run it:
-`client/src/stress/soak.ts`, with the vault and the people in
+`client/test/stress/soak.ts`, with the vault and the people in
 `soak-vault.ts`.
 
 **What runs.** A real `trewd serve -mcp` on a temporary data directory. The

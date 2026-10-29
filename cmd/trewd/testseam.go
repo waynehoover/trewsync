@@ -3,7 +3,7 @@
 // The crash matrix's hold on a real server (PLAN.md M5 task 9).
 //
 // Compiled only into a trewd built with `-tags crashmatrix`, which the crash
-// matrix builds for itself (client/src/stress/mcp-crash.stress.ts and
+// matrix builds for itself (client/test/stress/mcp-crash.stress.ts and
 // cmd/trewd/crash_test.go). No release, image or `go install` passes the tag,
 // so a trewd anybody runs has none of this: not the variable's name, not the
 // hold, and nothing a request could reach. TestAProductionBuildHasNoTestSeam

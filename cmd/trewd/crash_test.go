@@ -6,7 +6,7 @@ package main
 // away, and this test's process has to survive it to make the assertions.
 //
 // The whole crash matrix, every tool at every seam with a freshly paired
-// headless client as the witness, is client/src/stress/mcp-crash.stress.ts.
+// headless client as the witness, is client/test/stress/mcp-crash.stress.ts.
 // What is here is what `go test ./...` should hold on its own: that the hold
 // the matrix kills the server at exists only in a build made for it, that a
 // kill after an append resolves on retry into exactly one result, and that a

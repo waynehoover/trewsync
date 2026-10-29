@@ -169,7 +169,7 @@ export function replay(snapshot: Snapshot, log: string): Replayed {
   // micro-optimisation. Copying the whole entries map for every record is a
   // thousand copies of ten thousand entries: measured at 454 ms to load a
   // 10,000 note index with a full log, against 10 ms for the whole-file read
-  // it replaced (`bun run src/stress/journal.ts`). Rule 8 found it, not a
+  // it replaced (`bun run test/stress/journal.ts`). Rule 8 found it, not a
   // failing assertion. The copies were never observable, because nothing sees
   // an intermediate state, and `applyDelta` below is still pure for the
   // caller that folds one record over one state.
