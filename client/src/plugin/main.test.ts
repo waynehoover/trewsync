@@ -1944,7 +1944,11 @@ describe("the panel, which is a modal and a settings tab", () => {
     );
     const start = css.indexOf("{", css.indexOf("@media (max-width: 600px)")) + 1;
     let end = start;
-    for (let depth = 1; depth > 0; end++) depth += css[end] === "{" ? 1 : css[end] === "}" ? -1 : 0;
+    let depth = 1;
+    // Bounded, so a rule left unclosed in the block fails here rather than spinning.
+    for (; depth > 0 && end < css.length; end++)
+      depth += css[end] === "{" ? 1 : css[end] === "}" ? -1 : 0;
+    expect(depth, "the phone styles' block never closes").toBe(0);
     const rules = [...css.slice(start, end).matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
       selector: m[1]!.replace(/\s+/g, " ").trim(),
       body: m[2]!,
