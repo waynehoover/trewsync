@@ -11,6 +11,16 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Server
+
+- The log says when a start upgraded the store's format, and from which
+  schema: from then on an older `trewd` refuses the store, so going back means
+  restoring a backup taken before the upgrade. The other commands that can
+  upgrade it say so too.
+- A note's history is paged by bytes as well as by count for clients that ask,
+  so a note with many versions of a very large file can no longer produce a
+  history page a client refuses (T57). Older clients are answered as before.
+
 ### Command-line client
 
 - **`trew rewind`** previews a folder, or every note, as the server had it at a

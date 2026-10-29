@@ -224,8 +224,10 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 		return nil, &OlderSchemaError{Path: dbPath, Schema: id.SchemaVersion, mode: mode}
 	}
 
+	upgradedFrom := 0
 	if mode != ReadOnly && mode != Source {
 		legacy := false
+		from := id.SchemaVersion
 		if empty {
 			id, err = initialise(db, dbPath)
 		} else if legacy, err = snapshotFromBeforeTheMark(db, dbPath); err == nil {
@@ -239,11 +241,14 @@ func OpenMode(dbPath, chunkDir string, mode Mode, sync SyncMode) (*Store, error)
 			db.Close()
 			return nil, err
 		}
+		if !empty && id.SchemaVersion > from {
+			upgradedFrom = from
+		}
 	}
 
 	return &Store{
 		db: db, chunks: cs, dbPath: dbPath, identity: id, readOnly: mode == ReadOnly,
-		retention: DefaultRetention,
+		retention: DefaultRetention, upgradedFrom: upgradedFrom,
 	}, nil
 }
 
@@ -712,6 +717,12 @@ func (s *Store) markSnapshot() error {
 
 // Identity is what this store says about itself, as read when it was opened.
 func (s *Store) Identity() Identity { return s.identity }
+
+// UpgradedFrom is the schema version opening this store migrated it from, or
+// zero when it was already current. A migration is one way: the build it came
+// from refuses the store afterwards (ErrFutureSchema), so whoever opened it is
+// told, rather than finding out from a rollback that will not start.
+func (s *Store) UpgradedFrom() int { return s.upgradedFrom }
 
 // Epoch is this store's epoch, which `ready` carries: the uid sequence a
 // device's cursor belongs to.

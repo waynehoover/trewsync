@@ -316,6 +316,9 @@ type Store struct {
 	// identity is the store's identity row, read and validated when it was
 	// opened, before anything was written (PLAN.md section 2.8).
 	identity Identity
+	// upgradedFrom is the schema version this open migrated the store from,
+	// or zero when it was current already or was not migrated (UpgradedFrom).
+	upgradedFrom int
 
 	// readOnly is whether this handle was opened for inspection.
 	//
@@ -1272,6 +1275,28 @@ func (s *Store) HistoryForPath(vaultID, path string, beforeUID int64, limit int)
 	args = append(args, limit)
 
 	return s.manyEntries(vaultID, q, args...)
+}
+
+// HistoryPage is HistoryForPath, and whether the path has versions older than
+// the ones returned: one more is read than is returned, so the answer is exact
+// rather than inferred from a full page.
+func (s *Store) HistoryPage(vaultID, path string, beforeUID int64, limit int) ([]Entry, bool, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	q := `SELECT ` + s.entryCols() + ` FROM entries WHERE vault_id = ? AND path = ?`
+	args := []any{vaultID, path}
+	if beforeUID > 0 {
+		q += ` AND uid < ?`
+		args = append(args, beforeUID)
+	}
+	q += ` ORDER BY uid DESC LIMIT ?`
+	args = append(args, limit+1)
+	entries, err := s.manyEntries(vaultID, q, args...)
+	if err != nil || len(entries) <= limit {
+		return entries, false, err
+	}
+	return entries[:limit], true, nil
 }
 
 // DeletedMax is the most deletions one call will return.

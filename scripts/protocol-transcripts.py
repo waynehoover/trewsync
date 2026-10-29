@@ -311,7 +311,8 @@ TRANSCRIPTS = [
     },
     {
         "name": "undo",
-        "covers": "Protocol 2: a history entry an agent wrote names its operation; undoing it writes the "
+        "covers": "Protocol 2: a history entry an agent wrote names its operation, on a page the client asked to "
+                  "page by its `more`, which says there is none older; undoing it writes the "
                   "former bytes back as a new version by the device that asked, which every device is sent "
                   "as an ordinary batch, the asking one first and before its reply; the history then names "
                   "the undo and says the edit was undone, and a second undo is refused.",
@@ -321,11 +322,11 @@ TRANSCRIPTS = [
             *connect("laptop", "laptop", 0, [(1, 2, [entry(1, "a.md", [A], 1, "seed"),
                                                      entry(2, "a.md", [B], 2, "agent")])], 2),
             *connect("phone", "phone", 2, [], 2),
-            c("laptop", send={"op": "history", "id": 2, "path": "a.md"}),
+            c("laptop", send={"op": "history", "id": 2, "path": "a.md", "paged": True}),
             c("laptop", expect={"res": "history", "id": 2, "path": "a.md", "entries": [
                 with_op(entry(2, "a.md", [B], 2, "agent"), {"id": "$opId", "tool": "edit_note", "kind": "mcp"}),
                 entry(1, "a.md", [A], 1, "seed"),
-            ]}),
+            ], "more": False}),
             c("laptop", send={"op": "undo", "id": 3, "opId": "$opId"}),
             c("laptop", expect=batch(3, 3, [entry(3, "a.md", [A], "$time", "laptop")])),
             c("laptop", expect={"res": "undone", "id": 3, "opId": "$undoId", "undoes": "$opId", "toCopy": False,
@@ -333,13 +334,13 @@ TRANSCRIPTS = [
                                 "steps": [{"action": "restore", "path": "a.md", "before": 1, "after": 2}],
                                 "entries": [{"path": "a.md", "uid": 3, "previousUid": 2}]}),
             c("phone", expect=batch(3, 3, [entry(3, "a.md", [A], "$time", "laptop")])),
-            c("laptop", send={"op": "history", "id": 4, "path": "a.md"}),
+            c("laptop", send={"op": "history", "id": 4, "path": "a.md", "paged": True}),
             c("laptop", expect={"res": "history", "id": 4, "path": "a.md", "entries": [
                 with_op(entry(3, "a.md", [A], "$time", "laptop"), {"id": "$undoId", "tool": "undo", "kind": "device"}),
                 with_op(entry(2, "a.md", [B], 2, "agent"),
                         {"id": "$opId", "tool": "edit_note", "kind": "mcp", "undoneBy": "$undoId"}),
                 entry(1, "a.md", [A], 1, "seed"),
-            ]}),
+            ], "more": False}),
             c("laptop", send={"op": "undo", "id": 5, "opId": "$opId"}),
             c("laptop", expect=err(5, "noundo", "$prefix:already_undone: ")),
         ],

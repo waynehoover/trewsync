@@ -2606,3 +2606,48 @@ describe("a body frame that does not decode", () => {
     await expect(fetching).rejects.toMatchObject({ code: "badchunk" });
   });
 });
+
+/**
+ * A server that pages history by bytes as well as by count (T57) cuts a page
+ * short and says with `more` that older versions remain. The transport asks
+ * for the rest until the caller's limit is met, so a caller still reading a
+ * page shorter than its limit as the end of the history is never misled; a
+ * server that sends no `more` is answered by its one page, as before.
+ */
+describe("a history the server pages by bytes", () => {
+  const version = (uid: number) => ({ uid, path: "a.md", size: 1, chunks: [] as string[] });
+
+  it("follows a page cut short until the limit is met, and stops when there is no more", async () => {
+    const { t, socket } = await helloed(0);
+    socket.autoReply = (frame, s) => {
+      expect(frame["paged"]).toBe(true);
+      const before = (frame["before"] as number | undefined) ?? 10;
+      const limit = frame["limit"] as number;
+      // Two versions a page whatever was asked, as a byte budget would cut them.
+      const uids = [before - 1, before - 2].filter((u) => u > 0).slice(0, limit);
+      s.reply({
+        res: "history",
+        path: "a.md",
+        entries: uids.map(version),
+        more: uids.length > 0 && uids[uids.length - 1]! > 1,
+      });
+    };
+    const page = await t.history("a.md", { limit: 5 });
+    expect(page.map((e) => e.uid)).toEqual([9, 8, 7, 6, 5]);
+    expect(socket.sentText.filter((f) => f["op"] === "history").map((f) => f["limit"])).toEqual([
+      5, 3, 1,
+    ]);
+
+    const rest = await t.history("a.md", { limit: 50, before: 5 });
+    expect(rest.map((e) => e.uid)).toEqual([4, 3, 2, 1]);
+  });
+
+  it("takes one page by count from a server that does not page", async () => {
+    const { t, socket } = await helloed(0);
+    socket.autoReply = (_frame, s) =>
+      s.reply({ res: "history", path: "a.md", entries: [version(9), version(8)] });
+    const page = await t.history("a.md", { limit: 5 });
+    expect(page.map((e) => e.uid)).toEqual([9, 8]);
+    expect(socket.sentText.filter((f) => f["op"] === "history")).toHaveLength(1);
+  });
+});

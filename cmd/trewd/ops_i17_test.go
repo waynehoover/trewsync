@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -241,5 +242,41 @@ func TestI18PurgeRunsWithAFreshBackupAndNamesIt(t *testing.T) {
 	out = mustRun(t, "purge", "-data", seeded(t), "-confirm", "default", "-no-backup-check")
 	if !strings.Contains(out, "No backup was checked (-no-backup-check)") {
 		t.Fatalf("the waived check is not reported:\n%s", out)
+	}
+}
+
+// A store opened at an older schema is migrated, which an older trewd then
+// refuses, and the startup line says so: the moment a rollback stopped being
+// a matter of swapping the binary is the moment an operator should hear it.
+func TestStartupSaysTheStoreWasUpgraded(t *testing.T) {
+	dir := seeded(t)
+	st, err := openExisting(dir, "inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := store.SchemaVersion - 1
+	for _, stmt := range []string{
+		fmt.Sprintf(`UPDATE store_identity SET schema_version = %d`, older),
+		fmt.Sprintf(`PRAGMA user_version = %d`, older),
+	} {
+		if err := st.ExecForTest(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	up, err := openExisting(dir, "inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer up.Close()
+	var buf bytes.Buffer
+	if err := logStartup(slog.New(slog.NewTextHandler(&buf, nil)), up, "default", "1.2.3"); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("from_schema=%d to_schema=%d", older, store.SchemaVersion)
+	if !strings.Contains(buf.String(), `msg="store upgraded"`) || !strings.Contains(buf.String(), want) {
+		t.Fatalf("the startup log does not say the store was upgraded (%s):\n%s", want, buf.String())
 	}
 }

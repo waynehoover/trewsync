@@ -213,6 +213,10 @@ export interface RestoreResult {
   readonly committedAt?: number;
 }
 
+/** The most versions the server puts on one history page, and what it puts when asked for more. */
+export const HISTORY_PAGE_MAX = 500;
+export const HISTORY_PAGE_DEFAULT = 100;
+
 /** What a search matches against (plan/protocol.md, "Search (protocol 2)"). */
 export type SearchMode = "content" | "filename" | "both" | "tag";
 
@@ -2008,24 +2012,49 @@ export class Transport {
    *
    * An empty list means the server has no versions of that path. It cannot
    * tell "never existed" from "history purged", so neither can this.
+   *
+   * Asked for paged (T57): a server that pages answers with pages cut by bytes
+   * as well as by count, and says with `more` whether older versions remain.
+   * A page cut short is followed by the next until the limit is met, so the
+   * caller still gets as many versions as it asked for, and still reads fewer
+   * as the end of the note's history. A server that does not page sends no
+   * `more`, and its one page by count is the answer, as it always was.
    */
   async history(
     path: string,
     opts: { before?: number; limit?: number } = {},
   ): Promise<WireEntry[]> {
-    const reply = await this.request(
-      {
-        op: "history",
-        path,
-        ...(opts.before !== undefined ? { before: opts.before } : {}),
-        ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-      },
-      "history",
-    );
-    if (reply["res"] !== "history") {
-      throw new ProtocolError("protostate", `expected history, got ${JSON.stringify(reply)}`);
+    // The server's own bound on a page, which it applies to a limit it
+    // does not take.
+    const target =
+      opts.limit === undefined || opts.limit <= 0 || opts.limit > HISTORY_PAGE_MAX
+        ? HISTORY_PAGE_DEFAULT
+        : opts.limit;
+    const out: WireEntry[] = [];
+    let before = opts.before;
+    for (;;) {
+      const reply = await this.request(
+        {
+          op: "history",
+          path,
+          ...(before !== undefined ? { before } : {}),
+          ...(opts.limit !== undefined ? { limit: target - out.length } : {}),
+          paged: true,
+        },
+        "history",
+      );
+      if (reply["res"] !== "history") {
+        throw new ProtocolError("protostate", `expected history, got ${JSON.stringify(reply)}`);
+      }
+      const entries = entriesOf(reply["entries"], "history");
+      out.push(...entries);
+      const more = reply["more"];
+      if (more === undefined) return out;
+      if (typeof more !== "boolean")
+        throw this.malformed("a history whose more is not true or false");
+      if (!more || entries.length === 0 || out.length >= target) return out;
+      before = entries[entries.length - 1]!.uid;
     }
-    return entriesOf(reply["entries"], "history");
   }
 
   /**

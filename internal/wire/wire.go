@@ -266,6 +266,12 @@ type In struct {
 	// can page one can page the other (F21).
 	Before int64 `json:"before"`
 	Limit  int   `json:"limit"`
+	// Paged, on a history request, is a client that pages on the reply's
+	// `more` rather than on a page shorter than its limit, and so may be sent
+	// a page cut short by bytes (T57). A client that does not say so is
+	// answered as before: by count alone, with no `more`, because it would
+	// read a page cut by bytes as the end of the note's history.
+	Paged bool `json:"paged,omitempty"`
 
 	// putmany
 	Entries []PutEntry `json:"entries"`
@@ -677,6 +683,11 @@ type HistoryV2 struct {
 	ID      int64          `json:"id,omitempty"`
 	Path    string         `json:"path"`
 	Entries []HistoryEntry `json:"entries"`
+	// More, to a request that asked for paging (In.Paged), says whether the
+	// note has versions older than this page: the page may be shorter than
+	// the limit because it was cut by bytes, so its length cannot say. Absent
+	// otherwise.
+	More *bool `json:"more,omitempty"`
 }
 
 // HistoryEntry is one version in a protocol 2 history: the entry, and the

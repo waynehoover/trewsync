@@ -230,14 +230,13 @@ purpose, each with what would change the answer:
 Each was found by the review (docs/findings.md, the T series) and left on
 purpose, because closing it costs something the review could not decide alone.
 
-**History pages are bounded by count, not bytes (T57).** Catch-up batches now
-stop at the advertised `maxBatchBytes`; history pages do not, because every
-client reads a page shorter than its limit as the end of a note's history, so
-a page cut by bytes would quietly hide older versions. The fix is a `more`
-flag on the history reply that all three clients page on, then a byte bound.
-Until then the client's fixed 32 MiB text-frame ceiling (T07) covers default
-settings; a server with a lowered `-max-batch-bytes` and very large files can
-still produce a page a client refuses, loudly.
+**History pages are bounded by count, not bytes (T57).** Closed on
+2026-10-28: a client that asks with `paged` is sent pages cut by bytes too,
+with `more` saying whether older versions remain, and fetches the rest of a
+page cut short. A client that does not ask, which is every release before the
+next plugin and `trew`, is answered by count as before, so a server with a
+lowered `-max-batch-bytes` and very large files can still send one of those a
+page it refuses, loudly.
 
 **A crash during an in-place text update (T09).** Closed on 2026-10-22: the
 plugin writes each in-place update down before it truncates the note, and the

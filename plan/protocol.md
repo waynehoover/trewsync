@@ -210,6 +210,13 @@ Two things are new.
                                       op?:{id, tool, kind, undoneBy?}}]}
 ```
 
+**Settled 2026-10-28 (T57): a history request may ask to be paged.** With `paged: true` the server cuts a page by bytes as well as by count, at the budget a catch-up batch keeps to (`maxBatchBytes`), never below one entry, and the reply carries `more`, whether the note has versions older than the page; a page cut by bytes is shorter than its limit, so its length cannot say. A request without `paged` is answered exactly as before, by count alone and with no `more`, because such a client reads a page shorter than its limit as the end of the note's history. A session of protocol 1 is never paged. The clients of this tree ask for paging and fetch the rest of a page cut short, so a caller still gets as many versions as it asked for.
+
+```text
+-> {op:"history", id, path, before?, limit?, paged?}
+<- {res:"history", id, path, entries:[...], more?}
+```
+
 `id` is the operation's id (16 bytes, base64url), `tool` what it was (`edit_note`, `move_note`, `undo`, `undo_to_copy`, and the rest of plan/mcp-tools.md), `kind` who made it (`mcp`, an agent's token; `operator`, `trewd undo` on the server; `device`, a device's undo), and `undoneBy` the undo in place that undid it, when one has. A version a device wrote has no `op`. The entry's `device` is the label the version was written under, as for every version: the token's label, `trewd undo`, or the device's name.
 
 **`undo` undoes one operation.**

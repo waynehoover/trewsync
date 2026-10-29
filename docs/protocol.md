@@ -432,12 +432,14 @@ whole.
 
 | Request | Reply |
 |---|---|
-| `{op:"history", id, path, before?, limit?}` | `{res:"history", id, path, entries}` |
+| `{op:"history", id, path, before?, limit?, paged?}` | `{res:"history", id, path, entries, more?}` |
 | `{op:"deleted", id, before?, limit?}` | `{res:"deleted", id, entries, more}` |
 
 History returns versions newest first, including deletions; `before` pages
 backward. An empty history does not distinguish an unknown path from purged
-history.
+history. With `paged: true` a page is cut by bytes as well as by count, at the
+catch-up budget and never below one entry, and `more` says whether older
+versions remain; without it, pages are by count alone and carry no `more`.
 
 Deleted lists the latest deletion for each path, suppressing file renames and
 folder deletions (a deletion whose previous version was a folder), and

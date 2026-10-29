@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -395,5 +396,40 @@ func TestARenameOntoALiveNameIsTheNoteThatArrived(t *testing.T) {
 	h.restoreAsDevice(t, RestoreRequest{ToUID: at, Folder: "Projects"})
 	if got := h.vaultAt(t, 0)["Projects/note.md"]; got != "incoming" {
 		t.Fatalf("Projects/note.md holds %q after the restore", got)
+	}
+}
+
+// Opening a store at an older schema migrates it and says from which, so the
+// server can log what made a rollback impossible; opening it again, or
+// opening a new one, says nothing.
+func TestAnUpgradeSaysWhichSchemaItCameFrom(t *testing.T) {
+	dir := t.TempDir()
+	st := openAt(t, dir)
+	if got := st.UpgradedFrom(); got != 0 {
+		t.Fatalf("a new store says it was upgraded from %d", got)
+	}
+	older := SchemaVersion - 1
+	for _, stmt := range []string{
+		fmt.Sprintf(`UPDATE store_identity SET schema_version = %d`, older),
+		fmt.Sprintf(`PRAGMA user_version = %d`, older),
+	} {
+		if err := st.ExecForTest(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	up := openAt(t, dir)
+	if got := up.UpgradedFrom(); got != older {
+		t.Fatalf("an upgrade from schema %d says %d", older, got)
+	}
+	if err := up.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again := openAt(t, dir)
+	defer again.Close()
+	if got := again.UpgradedFrom(); got != 0 {
+		t.Fatalf("a store already current says it was upgraded from %d", got)
 	}
 }

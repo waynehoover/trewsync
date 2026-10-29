@@ -1360,7 +1360,7 @@
     },
     {
       "name": "undo",
-      "covers": "Protocol 2: a history entry an agent wrote names its operation; undoing it writes the former bytes back as a new version by the device that asked, which every device is sent as an ordinary batch, the asking one first and before its reply; the history then names the undo and says the edit was undone, and a second undo is refused.",
+      "covers": "Protocol 2: a history entry an agent wrote names its operation, on a page the client asked to page by its `more`, which says there is none older; undoing it writes the former bytes back as a new version by the device that asked, which every device is sent as an ordinary batch, the asking one first and before its reply; the history then names the undo and says the edit was undone, and a second undo is refused.",
       "steps": [
         {
           "store": {
@@ -1497,7 +1497,8 @@
           "send": {
             "op": "history",
             "id": 2,
-            "path": "a.md"
+            "path": "a.md",
+            "paged": true
           }
         },
         {
@@ -1538,7 +1539,8 @@
                   "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
                 ]
               }
-            ]
+            ],
+            "more": false
           }
         },
         {
@@ -1626,7 +1628,8 @@
           "send": {
             "op": "history",
             "id": 4,
-            "path": "a.md"
+            "path": "a.md",
+            "paged": true
           }
         },
         {
@@ -1686,7 +1689,8 @@
                   "8be52585779d628b1925d0b8494cc568aa1be5f51542f07862c6a0e9a9b60b80"
                 ]
               }
-            ]
+            ],
+            "more": false
           }
         },
         {

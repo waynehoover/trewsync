@@ -2185,7 +2185,17 @@ func (s *Session) handleHistory(m wire.In) error {
 		return s.reject(wire.CodeProtoState, fmt.Errorf("negative before %d", m.Before))
 	}
 
-	entries, err := s.srv.st.HistoryForPath(s.vaultID, m.Path, m.Before, m.Limit)
+	// Paging on `more` is a protocol 2 reply's (HistoryV2); a protocol 1
+	// session is answered exactly as protocol 1 was, whatever it sends.
+	paged := m.Paged && s.proto >= wire.ProtoUndo
+	var entries []store.Entry
+	var more bool
+	var err error
+	if paged {
+		entries, more, err = s.srv.st.HistoryPage(s.vaultID, m.Path, m.Before, m.Limit)
+	} else {
+		entries, err = s.srv.st.HistoryForPath(s.vaultID, m.Path, m.Before, m.Limit)
+	}
 	if err != nil {
 		s.srv.log.Error("history", "vault", s.vaultID, "err", err)
 		return s.reject(wire.CodeInternal, errors.New("could not read history"))
@@ -2211,7 +2221,29 @@ func (s *Session) handleHistory(m wire.In) error {
 			out[i].Op = &ref
 		}
 	}
-	return s.writeJSON(wire.HistoryV2{Res: "history", ID: s.reqID, Path: m.Path, Entries: out})
+	reply := wire.HistoryV2{Res: "history", ID: s.reqID, Path: m.Path, Entries: out}
+	if paged {
+		// Cut by bytes too, at the budget a catch-up batch keeps to (T57): a
+		// page of a large file's versions is a chunk list each, and a hundred
+		// of them could make a frame no client will read. Never below one
+		// entry, which is the only page that can carry it.
+		budget := s.srv.maxBatchBytes
+		var size int64
+		for i, e := range out {
+			b, err := json.Marshal(e)
+			if err != nil {
+				s.srv.log.Error("history", "vault", s.vaultID, "err", err)
+				return s.reject(wire.CodeInternal, errors.New("could not read history"))
+			}
+			size += int64(len(b)) + 1
+			if i > 0 && size > budget {
+				reply.Entries, more = out[:i], true
+				break
+			}
+		}
+		reply.More = &more
+	}
+	return s.writeJSON(reply)
 }
 
 // handleDeleted answers with every path whose newest version is a deletion.

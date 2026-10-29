@@ -280,7 +280,14 @@ func openExisting(dataDir, verb string) (*store.Store, error) {
 	if err := requireDataDir(dataDir, verb); err != nil {
 		return nil, err
 	}
-	return openStore(dataDir)
+	st, err := openStore(dataDir)
+	if err == nil && st.UpgradedFrom() > 0 {
+		// Said once, by whichever command opened it first; serve logs it.
+		fmt.Fprintf(os.Stderr, "trewd: upgraded the store at %s from schema %d to %d; an older trewd "+
+			"refuses it now, and going back means restoring a backup taken before the upgrade\n",
+			dataDir, st.UpgradedFrom(), st.Identity().SchemaVersion)
+	}
+	return st, err
 }
 
 // openForInspection is openExisting for the commands that only ask questions
@@ -953,6 +960,10 @@ func logStartup(log *slog.Logger, st *store.Store, served, version string) error
 	if !found {
 		log.Info("starting", "version", version, "vault", served, "latest", 0, "devices", 0,
 			"reclaimable", reclaimable)
+	}
+	if from := st.UpgradedFrom(); from > 0 {
+		log.Info("store upgraded", "from_schema", from, "to_schema", st.Identity().SchemaVersion,
+			"rollback", "an older trewd refuses this store now; going back means restoring a backup taken before the upgrade")
 	}
 	for _, v := range vaults {
 		if v.Name != served {

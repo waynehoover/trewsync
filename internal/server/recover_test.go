@@ -371,3 +371,79 @@ func TestDeletedSaysWhetherThereIsAnythingLeftToRestore(t *testing.T) {
 			after.Entries[0].RestorableUID)
 	}
 }
+
+// A client that pages on `more` is sent history pages cut by bytes as well as
+// by count, so a note whose versions are large chunk lists never becomes a
+// frame a client refuses (T57); `more` says whether older versions remain,
+// which a page cut short by bytes cannot say by its length. A client that does
+// not ask is answered exactly as before: by count, with no `more`, because it
+// would read a page cut by bytes as the end of the note's history.
+func TestAPagedHistoryIsCutByBytesAndSaysWhenThereIsMore(t *testing.T) {
+	r := newRig(t)
+	r.srv.maxBatchBytes = 2_000
+	cl := r.dial("a")
+	cl.hello(0)
+	var uids []int64
+	for i := 0; i < 20; i++ {
+		uids = append(uids, cl.put("note.md", fmt.Sprintf("revision %d", i)))
+	}
+
+	raw := cl.recvRawFor(t, wire.In{Op: "history", Path: "note.md", Limit: 100})
+	var whole map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &whole); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := whole["more"]; ok {
+		t.Fatalf("a client that did not ask was sent more: %s", raw)
+	}
+	var all []json.RawMessage
+	if err := json.Unmarshal(whole["entries"], &all); err != nil || len(all) != 20 {
+		t.Fatalf("a client that did not ask got %d versions (%v), and the page is by count alone", len(all), err)
+	}
+
+	var seen []int64
+	before := int64(0)
+	pages := 0
+	for {
+		pages++
+		raw := cl.recvRawFor(t, wire.In{Op: "history", Path: "note.md", Before: before, Limit: 100, Paged: true})
+		var page wire.HistoryV2
+		if err := json.Unmarshal([]byte(raw), &page); err != nil {
+			t.Fatal(err)
+		}
+		if page.More == nil {
+			t.Fatalf("a paged answer did not say whether there is more: %s", raw)
+		}
+		if len(page.Entries) > 1 && int64(len(raw)) > r.srv.maxBatchBytes+200 {
+			t.Fatalf("a page of %d versions is %d bytes, over the %d budget", len(page.Entries), len(raw), r.srv.maxBatchBytes)
+		}
+		for _, e := range page.Entries {
+			seen = append(seen, e.UID)
+		}
+		if !*page.More {
+			break
+		}
+		before = page.Entries[len(page.Entries)-1].UID
+		if pages > 50 {
+			t.Fatal("the pages never ended")
+		}
+	}
+	if pages < 2 {
+		t.Fatalf("twenty versions fit one page of %d bytes, so this tested no cut", r.srv.maxBatchBytes)
+	}
+	if len(seen) != len(uids) {
+		t.Fatalf("the pages held %v, and the note has %v", seen, uids)
+	}
+	for i := range uids {
+		if seen[i] != uids[len(uids)-1-i] {
+			t.Fatalf("the pages held %v, newest first, and the note has %v", seen, uids)
+		}
+	}
+
+	// A full page by count still says whether there is more, exactly.
+	raw = cl.recvRawFor(t, wire.In{Op: "history", Path: "other.md", Limit: 2, Paged: true})
+	var empty wire.HistoryV2
+	if err := json.Unmarshal([]byte(raw), &empty); err != nil || empty.More == nil || *empty.More {
+		t.Fatalf("a note with no versions says there is more: %s (%v)", raw, err)
+	}
+}
