@@ -11,6 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.16.3, plugin (2026-10-29)
+
+Works with trewd 0.15.0 or later, as 0.16.2 does. The server and `trew` are
+unchanged.
+
 ### Plugin
 
 - Turning settings sync on asks whose settings to use only where the answer
