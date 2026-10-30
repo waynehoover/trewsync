@@ -418,11 +418,14 @@ server's, or this device's. With the server's, a setting the group has
 deleted goes from this device too, after you apply it. The answer is for that
 first time only. Where there is no such setting, both answers do the same, so
 it does not ask: this device's settings go to the group, and the group's that
-this device does not have wait for you to apply them. It asks anyway when it
-cannot reach the server. Either way TrewSync first keeps a copy of this
-device's settings as they were, in a `settings-before-sync-` folder inside the
-plugin's own folder, and says where. Uninstalling the plugin removes that
-folder with it.
+this device does not have wait for you to apply them. The same values in
+another order count as the same. It asks anyway when it cannot ask the server
+now, offline or in the middle of a sync. One case it cannot see: a setting
+renamed on another device, such as a snippet, which goes back to the group
+under its old name from this device, as keeping this device's would send it.
+Either way TrewSync first keeps a copy of this device's settings as they
+were, in a `settings-before-sync-` folder inside the plugin's own folder, and
+says where. Uninstalling the plugin removes that folder with it.
 
 **When two devices disagree.** Different settings changed on two devices
 are merged, even in the same file. The same setting changed two ways before

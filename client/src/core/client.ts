@@ -894,6 +894,15 @@ export class Client {
     this.engine.noteChanged(path);
   }
 
+  /**
+   * `Engine.settingsToChoose`, queued like a pass: its questions to the
+   * server must not land inside an upload's exchange of chunks, which the
+   * server ends the session for.
+   */
+  settingsToChoose(files: readonly { path: string; bytes: Uint8Array }[]): Promise<boolean> {
+    return this.serial(() => this.engine.settingsToChoose(files));
+  }
+
   /* ------------------------------------------------------------ *
    * Recovery
    * ------------------------------------------------------------ */

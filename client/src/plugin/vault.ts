@@ -750,6 +750,26 @@ export class ObsidianVault implements Vault {
   }
 
   /**
+   * The settings this vault's scope syncs, each under the path it syncs as
+   * and with what is in it now: walked as `list` walks them, and touching
+   * nothing else, for the first-time question asked before settings sync
+   * starts under that scope (`Engine.settingsToChoose`). A setting two names
+   * on this disk claim is left out, as `list` leaves it out. A walk that
+   * fails part way throws, since a setting it missed could be one to ask
+   * about.
+   */
+  async settingsHere(): Promise<{ path: string; bytes: Uint8Array }[]> {
+    const found = new Map<string, { raw: string; stat: FileStat }[]>();
+    if (this.settingsRoot !== undefined) await this.walkSettings(this.configRoot, found);
+    const out: { path: string; bytes: Uint8Array }[] = [];
+    for (const [path, group] of found) {
+      if (group.length !== 1) continue;
+      out.push({ path, bytes: new Uint8Array(await this.adapter.readBinary(group[0]!.raw)) });
+    }
+    return out;
+  }
+
+  /**
    * Whether the walk goes into a folder of the plugins folder, given its path
    * under the config folder: the plugins folder itself and each plugin's own,
    * where its settings are, and no deeper, on a device that syncs its

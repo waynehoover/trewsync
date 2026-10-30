@@ -19,9 +19,9 @@ client can talk; upgrade the server first.
   deleted one. Otherwise there is nothing to choose between, so it does not
   ask: this device's settings go to the group, and the group's that this
   device does not have wait for you to apply them. It asks anyway when it
-  cannot reach the server. The same goes for changing group, and for turning
-  plugin settings sync on, whose warning about what plugins' settings can hold
-  still shows.
+  cannot ask the server now, offline or in the middle of a sync. The same goes
+  for changing group, and for turning plugin settings sync on, whose warning
+  about what plugins' settings can hold still shows.
 
 ## 0.16.2, plugin (2026-10-28)
 

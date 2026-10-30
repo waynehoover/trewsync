@@ -2292,28 +2292,39 @@ export default class TrewPlugin extends Plugin {
     };
   }
 
+  /** Bumped by every settings sync choice, so a check still out acts only if none came after it. */
+  private settingsChoices = 0;
+
   /**
    * Whether turning settings sync on with `group`, with plugins' settings or
    * without, needs the first-time question: the server has a different
    * version of one of this device's settings there, or has deleted one, or
-   * cannot be asked. Otherwise both answers do the same, and this device's
-   * settings simply upload (plan/settings-sync.md, section 4).
+   * cannot be asked now, offline or in the middle of a sync. Otherwise both
+   * answers do the same, and this device's settings simply upload
+   * (plan/settings-sync.md, section 4).
+   *
+   * Undefined when another settings choice came while the server was asked:
+   * that one stands, and the caller does nothing with this one.
    */
-  async needsFirstChoice(group: SettingsGroup, plugins: boolean): Promise<boolean> {
-    const engine = this.client?.engine;
-    if (!engine) return true;
+  async needsFirstChoice(group: SettingsGroup, plugins: boolean): Promise<boolean | undefined> {
+    const mine = ++this.settingsChoices;
+    const ask = await this.firstChoiceMatters(group, plugins);
+    return mine === this.settingsChoices ? ask : undefined;
+  }
+
+  private async firstChoiceMatters(group: SettingsGroup, plugins: boolean): Promise<boolean> {
+    const config = this.config;
+    const client = this.client;
+    if (!config || !client || this.state.kind !== "synced") return true;
     try {
-      const adapter = this.app.vault.adapter;
-      const root = this.configRoot;
-      const files = await settingsIn(adapter, root, group, plugins, this.pluginDir());
-      return await engine.settingsToChoose(
-        await Promise.all(
-          files.map(async (file) => ({
-            path: `${group}${file.slice(root.length)}`.normalize("NFC"),
-            bytes: new Uint8Array(await adapter.readBinary(file)),
-          })),
-        ),
-      );
+      // The settings the pass will decide, found as it finds them.
+      const scope = new ObsidianVault(this.app.vault, this.app.vault.configDir, log, {
+        ...(config.ignore?.length ? { ignore: config.ignore } : {}),
+        settings: group,
+        plugins,
+        ownFolder: this.pluginDir(),
+      });
+      return await client.settingsToChoose(await scope.settingsHere());
     } catch (err) {
       log("could not ask the server whether it has settings to choose between", err);
       return true;
@@ -2368,6 +2379,7 @@ export default class TrewPlugin extends Plugin {
      */
     plugins?: boolean,
   ): Promise<string | undefined> {
+    this.settingsChoices++;
     if (this.unlinking) throw new Error("This vault is being unlinked.");
     if (this.editingConnection) throw new Error("Another settings change is in progress.");
     this.editingConnection = true;
@@ -5525,12 +5537,20 @@ class TrewPanel {
       d.onChange(async (value) => {
         const chosen = isSettingsGroup(value) ? value : undefined;
         d.setDisabled(true);
-        if (chosen && (await this.plugin.needsFirstChoice(chosen, this.plugin.syncsPlugins))) {
-          this.dismiss();
-          // Drawn again once the question closes, answered or not, so the row
-          // says what is saved: in the settings tab nothing else redraws it.
-          new SettingsSyncModal(this.plugin, chosen, () => this.render()).open();
-          return;
+        if (chosen) {
+          const ask = await this.plugin.needsFirstChoice(chosen, this.plugin.syncsPlugins);
+          // Another choice came while the server was asked, and stands.
+          if (ask === undefined) {
+            this.render();
+            return;
+          }
+          if (ask) {
+            this.dismiss();
+            // Drawn again once the question closes, answered or not, so the row
+            // says what is saved: in the settings tab nothing else redraws it.
+            new SettingsSyncModal(this.plugin, chosen, () => this.render()).open();
+            return;
+          }
         }
         try {
           const backup = await this.plugin.setSettingsSync(chosen);
@@ -5563,6 +5583,10 @@ class TrewPanel {
         if (!on) {
           b.setDisabled(true);
           const ask = await this.plugin.needsFirstChoice(group, true);
+          if (ask === undefined) {
+            this.render();
+            return;
+          }
           this.dismiss();
           new PluginSyncModal(this.plugin, group, ask, () => this.render()).open();
           return;
@@ -6549,6 +6573,9 @@ class SettingsSyncModal extends Modal {
  * there is anything for it to decide (`ask`).
  */
 class PluginSyncModal extends Modal {
+  /** Closed, answered or not, so a second look still out does nothing. */
+  private gone = false;
+
   constructor(
     private readonly plugin: TrewPlugin,
     private readonly group: SettingsGroup,
@@ -6591,7 +6618,14 @@ class PluginSyncModal extends Modal {
             b.setDisabled(true);
             // Asked again: another device may have sent plugins' settings
             // since this opened.
-            if (await this.plugin.needsFirstChoice(this.group, true)) {
+            const ask = await this.plugin.needsFirstChoice(this.group, true);
+            if (this.gone) return;
+            // Another choice came meanwhile, and stands.
+            if (ask === undefined) {
+              this.close();
+              return;
+            }
+            if (ask) {
               this.ask = true;
               contentEl.empty();
               this.onOpen();
@@ -6635,6 +6669,7 @@ class PluginSyncModal extends Modal {
   }
 
   override onClose(): void {
+    this.gone = true;
     this.contentEl.empty();
     this.closed();
   }

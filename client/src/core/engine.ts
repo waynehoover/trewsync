@@ -1417,8 +1417,10 @@ export class Engine {
    * anything to decide, for `files`: this device's settings as they would
    * sync, each under the path it syncs as. The choice decides only a setting
    * this device has whose newest version on the server differs or is a
-   * deletion. One only the server has is fetched, and one the server never
-   * had is sent, whatever the answer (plan/settings-sync.md, section 4).
+   * deletion. One only the server has is fetched, one the server never had
+   * is sent, and one holding the same JSON values in another order or layout
+   * is recorded as synced, whatever the answer (plan/settings-sync.md,
+   * section 4).
    *
    * Asked of the server itself, not of `remote`: a device is never sent the
    * settings written while it spoke a protocol older than settings sync, and
@@ -1426,17 +1428,32 @@ export class Engine {
    * sight: a setting renamed elsewhere, whose old name's history ends with
    * its last version, not the rename. This device's copy under the old name
    * is then sent back, as "Keep this device's" would.
+   *
+   * Between passes only (`Client.settingsToChoose`): a question sent inside an
+   * upload's exchange of chunks ends the session.
    */
   async settingsToChoose(files: readonly { path: string; bytes: Uint8Array }[]): Promise<boolean> {
-    const differs = async ({ path, bytes }: { path: string; bytes: Uint8Array }) => {
-      const [newest] = await this.opts.transport.history(path, { limit: 1 });
-      if (newest === undefined) return false;
-      if (newest.deleted || newest.folder || newest.path !== path) return true;
+    // Asked all at once, since replies are routed by request; the rest one
+    // file at a time, since a fetch of bodies has the stream to itself.
+    const newest = await Promise.all(
+      files.map(async ({ path }) => (await this.opts.transport.history(path, { limit: 1 }))[0]),
+    );
+    for (const [at, { path, bytes }] of files.entries()) {
+      const theirs = newest[at];
+      if (theirs === undefined) continue;
+      if (theirs.deleted || theirs.folder || theirs.path !== path) return true;
       const text = this.mergeable(path);
       const pieces = [...chunkBytes(bytes, this.sizesFor(bytes.length, text), text)];
-      return contentId(await chunkNames(pieces.map((c) => c.bytes))) !== contentId(newest.chunks);
-    };
-    return (await Promise.all(files.map(differs))).some(Boolean);
+      const id = contentId(theirs.chunks);
+      if (contentId(await chunkNames(pieces.map((c) => c.bytes))) === id) continue;
+      if (!looksLikeJson(path)) return true;
+      try {
+        if (!sameJsonValue(bytes, await this.contentOf(theirs.uid, id, theirs.size))) return true;
+      } catch {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -4665,10 +4682,7 @@ export class Engine {
     if (remote === undefined || remote.hash !== hash || remote.deleted) return false;
     try {
       const here = await this.opts.vault.read(path);
-      const synced = await this.versionBytes(path, hash, remote.size);
-      const parse = (bytes: Uint8Array): unknown =>
-        JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-      return canonicalJson(parse(here)) === canonicalJson(parse(synced));
+      return sameJsonValue(here, await this.versionBytes(path, hash, remote.size));
     } catch {
       return false;
     }
@@ -7479,6 +7493,16 @@ function parsesAsJson(text: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether two files parse to the same JSON value, whatever the order of keys
+ * or the layout. Throws where either does not parse.
+ */
+function sameJsonValue(a: Uint8Array, b: Uint8Array): boolean {
+  const parse = (bytes: Uint8Array): unknown =>
+    JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  return canonicalJson(parse(a)) === canonicalJson(parse(b));
 }
 
 /** A JSON value as text with every object's keys sorted, so equal values compare equal. */

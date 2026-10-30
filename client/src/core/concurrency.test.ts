@@ -60,6 +60,37 @@ describe("a recovery question during a sync", () => {
     }
   }, 300_000);
 
+  it("asks whether settings sync has anything to choose between passes, never inside an upload", async () => {
+    const { client: c, vault } = await ready();
+    await c.settle();
+    // Held just after the server has asked for the note's chunks, when the
+    // next frame it reads has to be one of them.
+    const transport = c.transport as unknown as {
+      sendBodies(...args: unknown[]): Promise<number>;
+    };
+    const send = transport.sendBodies.bind(transport);
+    let reached!: () => void;
+    const inside = new Promise<void>((resolve) => (reached = resolve));
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    transport.sendBodies = async (...args) => {
+      reached();
+      await held;
+      return send(...args);
+    };
+    await vault.edit("note.md", "a note\n");
+    const syncing = c.settle();
+    await inside;
+    const asking = c.settingsToChoose([
+      { path: ".obsidian/app.json", bytes: new TextEncoder().encode("{}") },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    release();
+    const [, choice] = await Promise.all([syncing, asking]);
+    expect(choice).toBe(false);
+    expect((await c.history("note.md")).length, "the note reached the server").toBe(1);
+  }, 300_000);
+
   it("does not collide with another recovery question", async () => {
     const { client: c, vault } = await ready();
     await vault.edit("note.md", "one\n");

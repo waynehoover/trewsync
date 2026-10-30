@@ -4408,7 +4408,8 @@ describe("settings", () => {
     await fresh();
     const dark = json({ theme: "dark" });
     const light = json({ theme: "light" });
-    const wide = new TextEncoder().encode("body { max-width: none; }\n");
+    const encode = (text: string) => new TextEncoder().encode(text);
+    const wide = encode("body { max-width: none; }\n");
     const laptop = await deviceWith("laptop", { root: ".obsidian-desktop", plugins: true });
     await laptop.vault.write(".obsidian-desktop/app.json", dark, times);
     await laptop.vault.write(".obsidian-desktop/snippets/wide.css", wide, times);
@@ -4423,6 +4424,10 @@ describe("settings", () => {
     );
     expect(await choice(phone, { ".obsidian-desktop/app.json": dark }), "the same").toBe(false);
     expect(await choice(phone, { ".obsidian-desktop/app.json": light }), "another").toBe(true);
+    expect(
+      await choice(phone, { ".obsidian-desktop/app.json": encode('{"theme":"dark"}') }),
+      "the same values, laid out otherwise",
+    ).toBe(false);
     expect(
       await choice(phone, { ".obsidian-desktop/plugins/tasks/data.json": json({ due: 1 }) }),
       "a setting only this device has",

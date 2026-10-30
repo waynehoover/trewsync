@@ -7867,19 +7867,113 @@ describe("settings sync", () => {
     }
   }, 300_000);
 
-  it("asks the first-time question when it cannot ask the server", async () => {
+  it("asks about the settings the pass will decide, named as it names them", async () => {
+    await fresh();
+    const laptop = await load();
+    laptop.app.vault.adapter.seed(".obsidian/snippets/local.css", "body { color: red; }\n");
+    laptop.app.vault.adapter.seed(".obsidian/snippets/wide view.css", "body { color: red; }\n");
+    await startVault(laptop.plugin, "laptop");
+    await synced(laptop.plugin);
+    await laptop.plugin.setSettingsSync(".obsidian-desktop", "device");
+    await synced(laptop.plugin);
+    const desk = await load();
+    desk.app.vault.adapter.seed(".obsidian/snippets/local.css", "body { color: blue; }\n");
+    await desk.plugin.pair((await laptop.plugin.createInvite()).invite, "desk");
+    await synced(desk.plugin);
+    await desk.plugin.setIgnoredNames(["local.css"]);
+    await synced(desk.plugin);
+    expect(
+      await desk.plugin.needsFirstChoice(".obsidian-desktop", false),
+      "a setting this device skips",
+    ).toBe(false);
+
+    // Synced under the name with an ordinary space, as Obsidian would name it.
+    desk.app.vault.adapter.seed(".obsidian/snippets/wide view.css", "body { color: blue; }\n");
+    expect(
+      await desk.plugin.needsFirstChoice(".obsidian-desktop", false),
+      "a name with a no-break space",
+    ).toBe(true);
+  }, 300_000);
+
+  it("does nothing with a check a later choice overtook, or whose window closed", async () => {
     await fresh();
     const { plugin, app } = await load();
     app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "dark"\n}');
     await startVault(plugin, "laptop");
     await synced(plugin);
-    await server.stop();
-    await until("the disconnect", () => plugin.currentState.kind === "offline");
+    const client = (plugin as unknown as { client: Client }).client;
+    const answer = client.settingsToChoose.bind(client);
+    /** Holds the server's answer to the next check until the returned function runs. */
+    const slow = () => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      client.settingsToChoose = async (files) => {
+        await held;
+        return answer(files);
+      };
+      return () => {
+        client.settingsToChoose = answer;
+        release();
+      };
+    };
+
+    // Desktop only chosen, then Off while the server is asked about it.
+    let release = slow();
     built.length = 0;
     plugin.commands.find((c) => c.id === "show-status")!.callback!();
-    const before = modals.length;
-    built.find((s) => s.name === "Sync settings")!.dropdowns[0]!.choose(".obsidian-desktop");
-    await question(before);
+    const dropdown = built.find((s) => s.name === "Sync settings")!.dropdowns[0]! as unknown as {
+      change(value: string): Promise<void>;
+    };
+    const choosing = dropdown.change(".obsidian-desktop");
+    await plugin.setSettingsSync(undefined);
+    release();
+    await choosing;
+    expect(plugin.settingsGroup, "the later choice stands").toBeUndefined();
+
+    // The plugin settings window, closed while its second look is out.
+    await plugin.setSettingsSync(".obsidian-desktop", "device");
+    await synced(plugin);
+    plugin.commands.find((c) => c.id === "show-status")!.callback!();
+    await built
+      .filter((s) => s.name === "Sync plugin settings")
+      .at(-1)!
+      .buttons.find((b) => b.label === "Turn on")!
+      .click();
+    const open = modals.at(-1)!;
+    release = slow();
+    const turning = buttonIn(open, "Turn on").click();
+    open.close();
+    release();
+    await turning;
+    expect(plugin.syncsPlugins, "closed before the answer came").toBe(false);
+  }, 300_000);
+
+  it("asks the first-time question when it cannot ask the server now", async () => {
+    await fresh();
+    const { plugin, app } = await load();
+    app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "dark"\n}');
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    const choose = () => {
+      built.length = 0;
+      plugin.commands.find((c) => c.id === "show-status")!.callback!();
+      const before = modals.length;
+      built.find((s) => s.name === "Sync settings")!.dropdowns[0]!.choose(".obsidian-desktop");
+      return question(before);
+    };
+
+    // In the middle of a sync, rather than wait for it to end.
+    (plugin as unknown as { setState(s: unknown): void }).setState({
+      kind: "syncing",
+      since: Date.now(),
+    });
+    await choose();
+    expect(modalButton("Use the server's")).toBeDefined();
+    modals.at(-1)!.close();
+
+    await server.stop();
+    await until("the disconnect", () => plugin.currentState.kind === "offline");
+    await choose();
     expect(modalButton("Use the server's")).toBeDefined();
     expect(plugin.settingsGroup).toBeUndefined();
   }, 300_000);
