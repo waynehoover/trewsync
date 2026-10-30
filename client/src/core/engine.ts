@@ -7497,7 +7497,8 @@ function parsesAsJson(text: string): boolean {
 
 /**
  * Whether two files parse to the same JSON value, whatever the order of keys
- * or the layout. Throws where either does not parse.
+ * or the layout. Throws where either does not parse, or holds a number too
+ * large to be one (`canonicalJson`).
  */
 function sameJsonValue(a: Uint8Array, b: Uint8Array): boolean {
   const parse = (bytes: Uint8Array): unknown =>
@@ -7505,17 +7506,22 @@ function sameJsonValue(a: Uint8Array, b: Uint8Array): boolean {
   return canonicalJson(parse(a)) === canonicalJson(parse(b));
 }
 
-/** A JSON value as text with every object's keys sorted, so equal values compare equal. */
+/**
+ * A JSON value as text with every object's keys sorted, so equal values
+ * compare equal. Throws on a number that parsed as infinite, such as `1e400`,
+ * which would otherwise be written as `null` and equal one.
+ */
 function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v: unknown) =>
-    v !== null && typeof v === "object" && !Array.isArray(v)
+  return JSON.stringify(value, (_key, v: unknown) => {
+    if (typeof v === "number" && !Number.isFinite(v)) throw new Error("not a finite number");
+    return v !== null && typeof v === "object" && !Array.isArray(v)
       ? Object.fromEntries(
           Object.entries(v as Record<string, unknown>).sort(([a], [b]) =>
             a < b ? -1 : a > b ? 1 : 0,
           ),
         )
-      : v,
-  );
+      : v;
+  });
 }
 
 /** What `Engine.release` did: the files whose space it freed, and the ones it kept, with why. */

@@ -2296,18 +2296,26 @@ export default class TrewPlugin extends Plugin {
   private settingsChoices = 0;
 
   /**
+   * A settings sync choice was made, so a check still out for an earlier one
+   * does nothing (`needsFirstChoice`). `setSettingsSync` counts as one too.
+   */
+  choseSettingsSync(): void {
+    this.settingsChoices++;
+  }
+
+  /**
    * Whether turning settings sync on with `group`, with plugins' settings or
    * without, needs the first-time question: the server has a different
    * version of one of this device's settings there, or has deleted one, or
-   * cannot be asked now, offline or in the middle of a sync. Otherwise both
-   * answers do the same, and this device's settings simply upload
-   * (plan/settings-sync.md, section 4).
+   * cannot be asked now, offline or busy syncing. Otherwise both answers do
+   * the same, and this device's settings simply upload (plan/settings-sync.md,
+   * section 4).
    *
-   * Undefined when another settings choice came while the server was asked:
-   * that one stands, and the caller does nothing with this one.
+   * Undefined when a settings sync choice was made while the server was
+   * asked: that one stands, and the caller does nothing with this one.
    */
   async needsFirstChoice(group: SettingsGroup, plugins: boolean): Promise<boolean | undefined> {
-    const mine = ++this.settingsChoices;
+    const mine = this.settingsChoices;
     const ask = await this.firstChoiceMatters(group, plugins);
     return mine === this.settingsChoices ? ask : undefined;
   }
@@ -2324,7 +2332,8 @@ export default class TrewPlugin extends Plugin {
         plugins,
         ownFolder: this.pluginDir(),
       });
-      return await client.settingsToChoose(await scope.settingsHere());
+      // Unasked, with a sync under way.
+      return (await client.settingsToChoose(await scope.settingsHere())) ?? true;
     } catch (err) {
       log("could not ask the server whether it has settings to choose between", err);
       return true;
@@ -5536,6 +5545,7 @@ class TrewPanel {
       d.selectEl.setAttribute("aria-label", "Sync settings");
       d.onChange(async (value) => {
         const chosen = isSettingsGroup(value) ? value : undefined;
+        this.plugin.choseSettingsSync();
         d.setDisabled(true);
         if (chosen) {
           const ask = await this.plugin.needsFirstChoice(chosen, this.plugin.syncsPlugins);

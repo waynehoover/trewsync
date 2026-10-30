@@ -7903,18 +7903,16 @@ describe("settings sync", () => {
     await synced(plugin);
     const client = (plugin as unknown as { client: Client }).client;
     const answer = client.settingsToChoose.bind(client);
-    /** Holds the server's answer to the next check until the returned function runs. */
+    /** Holds the server's answer to the next check, and only that one, until the returned function runs. */
     const slow = () => {
       let release!: () => void;
       const held = new Promise<void>((resolve) => (release = resolve));
       client.settingsToChoose = async (files) => {
+        client.settingsToChoose = answer;
         await held;
         return answer(files);
       };
-      return () => {
-        client.settingsToChoose = answer;
-        release();
-      };
+      return release;
     };
 
     // Desktop only chosen, then Off while the server is asked about it.
@@ -7946,6 +7944,25 @@ describe("settings sync", () => {
     release();
     await turning;
     expect(plugin.syncsPlugins, "closed before the answer came").toBe(false);
+
+    // Looking at plugins' settings is not a choice: a group chosen while the
+    // warning opened and closed unanswered still goes ahead.
+    release = slow();
+    built.length = 0;
+    plugin.commands.find((c) => c.id === "show-status")!.callback!();
+    const group = built.find((s) => s.name === "Sync settings")!.dropdowns[0]! as unknown as {
+      change(value: string): Promise<void>;
+    };
+    const regrouping = group.change(".obsidian");
+    await built
+      .filter((s) => s.name === "Sync plugin settings")
+      .at(-1)!
+      .buttons.find((b) => b.label === "Turn on")!
+      .click();
+    modals.at(-1)!.close();
+    release();
+    await regrouping;
+    expect(plugin.settingsGroup, "the group chosen before").toBe(".obsidian");
   }, 300_000);
 
   it("asks the first-time question when it cannot ask the server now", async () => {

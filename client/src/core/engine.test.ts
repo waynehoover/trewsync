@@ -4428,6 +4428,12 @@ describe("settings", () => {
       await choice(phone, { ".obsidian-desktop/app.json": encode('{"theme":"dark"}') }),
       "the same values, laid out otherwise",
     ).toBe(false);
+    await laptop.vault.write(".obsidian-desktop/hotkeys.json", encode('{"x":1e400}'), times);
+    await laptop.settle();
+    expect(
+      await choice(phone, { ".obsidian-desktop/hotkeys.json": encode('{"x":null}') }),
+      "a number too large for a double is not null",
+    ).toBe(true);
     expect(
       await choice(phone, { ".obsidian-desktop/plugins/tasks/data.json": json({ due: 1 }) }),
       "a setting only this device has",

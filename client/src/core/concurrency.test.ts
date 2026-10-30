@@ -60,7 +60,7 @@ describe("a recovery question during a sync", () => {
     }
   }, 300_000);
 
-  it("asks whether settings sync has anything to choose between passes, never inside an upload", async () => {
+  it("asks whether settings sync has anything to choose only between passes, never inside or behind one", async () => {
     const { client: c, vault } = await ready();
     await c.settle();
     // Held just after the server has asked for the note's chunks, when the
@@ -81,14 +81,12 @@ describe("a recovery question during a sync", () => {
     await vault.edit("note.md", "a note\n");
     const syncing = c.settle();
     await inside;
-    const asking = c.settingsToChoose([
-      { path: ".obsidian/app.json", bytes: new TextEncoder().encode("{}") },
-    ]);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    const settings = [{ path: ".obsidian/app.json", bytes: new TextEncoder().encode("{}") }];
+    expect(await c.settingsToChoose(settings), "unasked, and not waiting").toBeUndefined();
     release();
-    const [, choice] = await Promise.all([syncing, asking]);
-    expect(choice).toBe(false);
+    await syncing;
     expect((await c.history("note.md")).length, "the note reached the server").toBe(1);
+    expect(await c.settingsToChoose(settings), "asked once nothing else is").toBe(false);
   }, 300_000);
 
   it("does not collide with another recovery question", async () => {

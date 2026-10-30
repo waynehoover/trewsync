@@ -636,7 +636,19 @@ export class Client {
     return total;
   }
 
-  private pass(opts: SyncOptions, onStart?: () => void): Promise<SyncReport> {
+  /** How many passes hold the queue or wait for it (`settingsToChoose`). */
+  private passes = 0;
+
+  private async pass(opts: SyncOptions, onStart?: () => void): Promise<SyncReport> {
+    this.passes++;
+    try {
+      return await this.passing(opts, onStart);
+    } finally {
+      this.passes--;
+    }
+  }
+
+  private passing(opts: SyncOptions, onStart?: () => void): Promise<SyncReport> {
     return this.serial(async () => {
       // Inside the queue slot, so "this pass has begun" means the vault is
       // about to be read rather than that a promise exists. `sync` uses it to
@@ -897,9 +909,15 @@ export class Client {
   /**
    * `Engine.settingsToChoose`, queued like a pass: its questions to the
    * server must not land inside an upload's exchange of chunks, which the
-   * server ends the session for.
+   * server ends the session for. Only with no pass in the queue, so a
+   * person waiting on the answer never waits behind one, or behind a dialog
+   * one waits on; undefined, unasked, otherwise. A quick question in the
+   * queue, such as the device list, is waited for.
    */
-  settingsToChoose(files: readonly { path: string; bytes: Uint8Array }[]): Promise<boolean> {
+  settingsToChoose(
+    files: readonly { path: string; bytes: Uint8Array }[],
+  ): Promise<boolean | undefined> {
+    if (this.passes > 0) return Promise.resolve(undefined);
     return this.serial(() => this.engine.settingsToChoose(files));
   }
 
