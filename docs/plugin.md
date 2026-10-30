@@ -411,16 +411,17 @@ later is the same as turning settings sync on: TrewSync asks the first-time
 question again where there is one, and the group you leave keeps its settings
 on the server.
 
-**The first time.** When you turn it on and the server already has settings
-from the group's other devices that differ from this device's, TrewSync asks
-which to use: the server's, or this device's. With the server's, a setting
-the group has deleted goes from this device too, after you apply it. The
-answer is for that first time only. When the group has nothing on the server
-yet, there is nothing to choose, so it does not ask: this device's settings
-become the group's. It asks anyway while it cannot tell, offline or in the
-middle of a sync. Either way TrewSync first keeps a copy of
-this device's settings as they were, in a `settings-before-sync-` folder inside
-the plugin's own folder, and says where. Uninstalling the plugin removes that
+**The first time.** When you turn it on, TrewSync asks the server about each
+of this device's settings in the group. Where the server has a different
+version of one, or the group has deleted one, it asks which to use: the
+server's, or this device's. With the server's, a setting the group has
+deleted goes from this device too, after you apply it. The answer is for that
+first time only. Where there is no such setting, both answers do the same, so
+it does not ask: this device's settings go to the group, and the group's that
+this device does not have wait for you to apply them. It asks anyway when it
+cannot reach the server. Either way TrewSync first keeps a copy of this
+device's settings as they were, in a `settings-before-sync-` folder inside the
+plugin's own folder, and says where. Uninstalling the plugin removes that
 folder with it.
 
 **When two devices disagree.** Different settings changed on two devices
@@ -460,8 +461,7 @@ A change from another device waits until you apply it, as other settings do,
 and **Apply synced settings** names each plugin whose settings it would
 change, and the device the change came from. Turning it on asks the
 first-time question again, for plugin settings and the rest together, where
-the server has any this device has not synced, and keeps a copy of this
-device's settings first.
+there is a choice to make, and keeps a copy of this device's settings first.
 
 - Plugins keep their settings in their own folders, sometimes with API keys or
   passwords. With plugin settings sync on, those are stored on your server and

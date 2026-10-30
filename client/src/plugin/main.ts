@@ -2294,17 +2294,30 @@ export default class TrewPlugin extends Plugin {
 
   /**
    * Whether turning settings sync on with `group`, with plugins' settings or
-   * without, needs the first-time question: the server has settings there
-   * that this device has not synced as they are, or this device cannot say,
-   * not being caught up with the server. Otherwise this device's settings
-   * simply upload, whatever the answer (plan/settings-sync.md, section 4).
+   * without, needs the first-time question: the server has a different
+   * version of one of this device's settings there, or has deleted one, or
+   * cannot be asked. Otherwise both answers do the same, and this device's
+   * settings simply upload (plan/settings-sync.md, section 4).
    */
-  needsFirstChoice(group: SettingsGroup, plugins: boolean): boolean {
-    const config = this.config;
+  async needsFirstChoice(group: SettingsGroup, plugins: boolean): Promise<boolean> {
     const engine = this.client?.engine;
-    if (!config || !engine || this.state.kind !== "synced") return true;
-    const scope = this.settingsScope({ ...config, settings: group, settingsPlugins: plugins });
-    return scope === undefined || engine.settingsToChoose(scope);
+    if (!engine) return true;
+    try {
+      const adapter = this.app.vault.adapter;
+      const root = this.configRoot;
+      const files = await settingsIn(adapter, root, group, plugins, this.pluginDir());
+      return await engine.settingsToChoose(
+        await Promise.all(
+          files.map(async (file) => ({
+            path: `${group}${file.slice(root.length)}`.normalize("NFC"),
+            bytes: new Uint8Array(await adapter.readBinary(file)),
+          })),
+        ),
+      );
+    } catch (err) {
+      log("could not ask the server whether it has settings to choose between", err);
+      return true;
+    }
   }
 
   /** Whether this device syncs its Obsidian settings, as saved. */
@@ -5511,14 +5524,14 @@ class TrewPanel {
       d.selectEl.setAttribute("aria-label", "Sync settings");
       d.onChange(async (value) => {
         const chosen = isSettingsGroup(value) ? value : undefined;
-        if (chosen && this.plugin.needsFirstChoice(chosen, this.plugin.syncsPlugins)) {
+        d.setDisabled(true);
+        if (chosen && (await this.plugin.needsFirstChoice(chosen, this.plugin.syncsPlugins))) {
           this.dismiss();
           // Drawn again once the question closes, answered or not, so the row
           // says what is saved: in the settings tab nothing else redraws it.
           new SettingsSyncModal(this.plugin, chosen, () => this.render()).open();
           return;
         }
-        d.setDisabled(true);
         try {
           const backup = await this.plugin.setSettingsSync(chosen);
           if (chosen) new Notice(settingsSyncOn(backup), 10_000);
@@ -5548,8 +5561,9 @@ class TrewPanel {
     ).addButton((b) =>
       b.setButtonText(on ? "Turn off" : "Turn on").onClick(async () => {
         if (!on) {
+          b.setDisabled(true);
+          const ask = await this.plugin.needsFirstChoice(group, true);
           this.dismiss();
-          const ask = this.plugin.needsFirstChoice(group, true);
           new PluginSyncModal(this.plugin, group, ask, () => this.render()).open();
           return;
         }
@@ -6538,7 +6552,7 @@ class PluginSyncModal extends Modal {
   constructor(
     private readonly plugin: TrewPlugin,
     private readonly group: SettingsGroup,
-    private readonly ask: boolean,
+    private ask: boolean,
     private readonly closed: () => void,
   ) {
     super(plugin.app);
@@ -6573,7 +6587,19 @@ class PluginSyncModal extends Modal {
         b
           .setButtonText("Turn on")
           .setCta()
-          .onClick(() => void this.choose()),
+          .onClick(async () => {
+            b.setDisabled(true);
+            // Asked again: another device may have sent plugins' settings
+            // since this opened.
+            if (await this.plugin.needsFirstChoice(this.group, true)) {
+              this.ask = true;
+              contentEl.empty();
+              this.onOpen();
+              return;
+            }
+            await this.choose();
+            b.setDisabled(false);
+          }),
       );
       return;
     }

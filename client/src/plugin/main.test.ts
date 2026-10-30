@@ -7326,9 +7326,8 @@ describe("settings sync", () => {
     return { laptop, phone };
   }
 
-  /** The newest modal's button, by its label. */
-  const modalButton = (label: string) => {
-    const modal = modals.at(-1)!;
+  /** A modal's button, by its label. */
+  const buttonIn = (modal: (typeof modals)[number], label: string) => {
     const button = built
       .filter((s) => containsElement(modal.contentEl, s.settingEl))
       .flatMap((s) => s.buttons)
@@ -7337,7 +7336,19 @@ describe("settings sync", () => {
     return button;
   };
 
-  /** A second desktop, paired to a vault whose Desktop only group the laptop already syncs. */
+  /** The newest modal's button, by its label. */
+  const modalButton = (label: string) => buttonIn(modals.at(-1)!, label);
+
+  /** The first-time question, which opens once the server has been asked. */
+  const question = async (before: number) => {
+    await until("the first-time question", () => modals.length > before);
+    return modals.at(-1)!;
+  };
+
+  /**
+   * A second desktop with a theme of its own, paired to a vault whose Desktop
+   * only group the laptop already syncs.
+   */
   async function joiningAGroupInUse() {
     await fresh();
     const laptop = await load();
@@ -7347,6 +7358,7 @@ describe("settings sync", () => {
     await laptop.plugin.setSettingsSync(".obsidian-desktop", "device");
     await synced(laptop.plugin);
     const desk = await load();
+    desk.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "light"\n}');
     await desk.plugin.pair((await laptop.plugin.createInvite()).invite, "desk");
     await synced(desk.plugin);
     return desk;
@@ -7642,12 +7654,15 @@ describe("settings sync", () => {
     (plugin as unknown as { settingTabs: { display(): void }[] }).settingTabs[0]!.display();
     const newest = () => built.filter((s) => s.name === "Sync settings").at(-1)!;
 
+    let before = modals.length;
     newest().dropdowns[0]!.choose(".obsidian-desktop");
-    modals.at(-1)!.close();
+    (await question(before)).close();
     expect(plugin.settingsGroup).toBeUndefined();
     expect(newest().dropdowns[0]!.getValue(), "it shows a group nobody saved").toBe("off");
 
+    before = modals.length;
     newest().dropdowns[0]!.choose(".obsidian-desktop");
+    await question(before);
     await modalButton("Keep this device's").click();
     await until("the group to be saved", () => plugin.settingsGroup === ".obsidian-desktop");
     expect(newest().dropdowns[0]!.getValue()).toBe(".obsidian-desktop");
@@ -7699,8 +7714,8 @@ describe("settings sync", () => {
     await synced(desktop.plugin);
     desktop.plugin.settingTabs[0]!.display();
     const newest = () => built.filter((s) => s.name === "Sync settings").at(-1)!;
+    // With no settings of its own here, there is nothing to choose between.
     newest().dropdowns[0]!.choose(".obsidian-desktop");
-    await modalButton("Use the server's").click();
     await until("the laptop's setting to wait here", () => desktop.plugin.settingsHeld === 1);
     expect(String(newest().desc), "the open row does not say a setting waits").toMatch(
       /1 waiting now/,
@@ -7785,7 +7800,7 @@ describe("settings sync", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   }, 300_000);
 
-  it("offers one choice, and asks the first-time question only where the group has settings on the server", async () => {
+  it("offers one choice, and asks the first-time question only where the server has another version of this device's settings", async () => {
     await fresh();
     const phone = await load();
     phone.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "dark"\n}');
@@ -7825,15 +7840,22 @@ describe("settings sync", () => {
       expect(saved(phone.plugin)).toBeUndefined();
 
       // The phone's settings stay on the server for the group, so a tablet
-      // joining it is asked, and closing the question keeps what was.
+      // with settings of its own is asked, and closing the question keeps
+      // what was.
       const tablet = await load();
+      tablet.app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "light"\n}');
       await tablet.plugin.pair((await phone.plugin.createInvite()).invite, "tablet");
       await synced(tablet.plugin);
-      choiceIn(tablet.plugin).choose(".obsidian-mobile");
-      modals.at(-1)!.close();
+      let open = choiceIn(tablet.plugin);
+      let before = modals.length;
+      open.choose(".obsidian-mobile");
+      (await question(before)).close();
       expect(tablet.plugin.settingsGroup).toBeUndefined();
 
-      choiceIn(tablet.plugin).choose(".obsidian-mobile");
+      open = choiceIn(tablet.plugin);
+      before = modals.length;
+      open.choose(".obsidian-mobile");
+      await question(before);
       await modalButton("Keep this device's").click();
       await until(
         "the group to be saved",
@@ -7845,76 +7867,78 @@ describe("settings sync", () => {
     }
   }, 300_000);
 
-  it("asks the first-time question while it cannot tell what the server has", async () => {
+  it("asks the first-time question when it cannot ask the server", async () => {
     await fresh();
-    const { plugin } = await load();
+    const { plugin, app } = await load();
+    app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "dark"\n}');
     await startVault(plugin, "laptop");
     await synced(plugin);
-    const choose = () => {
-      built.length = 0;
-      plugin.commands.find((c) => c.id === "show-status")!.callback!();
-      built.find((s) => s.name === "Sync settings")!.dropdowns[0]!.choose(".obsidian-desktop");
-    };
-
-    // In the middle of a pass, what it last heard of the group can be behind.
-    (plugin as unknown as { setState(s: unknown): void }).setState({
-      kind: "syncing",
-      since: Date.now(),
-    });
-    choose();
-    expect(modalButton("Use the server's")).toBeDefined();
-    modals.at(-1)!.close();
-
     await server.stop();
     await until("the disconnect", () => plugin.currentState.kind === "offline");
-    choose();
+    built.length = 0;
+    plugin.commands.find((c) => c.id === "show-status")!.callback!();
+    const before = modals.length;
+    built.find((s) => s.name === "Sync settings")!.dropdowns[0]!.choose(".obsidian-desktop");
+    await question(before);
     expect(modalButton("Use the server's")).toBeDefined();
     expect(plugin.settingsGroup).toBeUndefined();
   }, 300_000);
 
-  it("asks about plugins' settings only where the group has some this device has not synced", async () => {
+  it("asks about plugins' settings only where the server has another version of one here, and asks again on Turn on", async () => {
     await fresh();
+    const withDataview = (
+      app: Awaited<ReturnType<typeof load>>["app"],
+      refreshInterval: number,
+    ) => {
+      app.vault.adapter.seed(
+        ".obsidian/plugins/dataview/manifest.json",
+        JSON.stringify({ id: "dataview", name: "Dataview", version: "0.5.68" }, null, 2),
+      );
+      app.vault.adapter.seed(
+        ".obsidian/plugins/dataview/data.json",
+        JSON.stringify({ refreshInterval }, null, 2),
+      );
+    };
     const laptop = await load();
-    laptop.app.vault.adapter.seed(
-      ".obsidian/plugins/dataview/manifest.json",
-      JSON.stringify({ id: "dataview", name: "Dataview", version: "0.5.68" }, null, 2),
-    );
-    laptop.app.vault.adapter.seed(
-      ".obsidian/plugins/dataview/data.json",
-      JSON.stringify({ refreshInterval: 5000 }, null, 2),
-    );
+    withDataview(laptop.app, 5000);
     await startVault(laptop.plugin, "laptop");
     await synced(laptop.plugin);
     await laptop.plugin.setSettingsSync(".obsidian-desktop", "device");
     await synced(laptop.plugin);
-    const turnOn = (plugin: Testable) => {
-      built.length = 0;
+    const desk = await load();
+    withDataview(desk.app, 9000);
+    await desk.plugin.pair((await laptop.plugin.createInvite()).invite, "desk");
+    await synced(desk.plugin);
+    await desk.plugin.setSettingsSync(".obsidian-desktop", "server");
+    await synced(desk.plugin);
+    const turnOn = async (plugin: Testable) => {
       plugin.commands.find((c) => c.id === "show-status")!.callback!();
-      built
-        .find((s) => s.name === "Sync plugin settings")!
+      await built
+        .filter((s) => s.name === "Sync plugin settings")
+        .at(-1)!
         .buttons.find((b) => b.label === "Turn on")!
         .click();
       return modals.at(-1)!;
     };
 
-    // The first device of the group to sync its plugins' settings: the
-    // warning about what they hold, and nothing to choose between.
-    const first = turnOn(laptop.plugin);
-    expect(first.contentEl.allText()).toMatch(/sometimes with API keys or passwords/);
-    expect(() => modalButton("Use the server's")).toThrow();
-    await modalButton("Turn on").click();
+    // No plugins' settings on the server yet: the warning about what they
+    // hold, and nothing to choose between.
+    const open = await turnOn(desk.plugin);
+    expect(open.contentEl.allText()).toMatch(/sometimes with API keys or passwords/);
+    expect(() => buttonIn(open, "Use the server's")).toThrow();
+
+    // The laptop, not asked either, sends its own while the desk's is open.
+    const first = await turnOn(laptop.plugin);
+    expect(() => buttonIn(first, "Use the server's")).toThrow();
+    await buttonIn(first, "Turn on").click();
     await until("plugins' settings to sync", () => laptop.plugin.syncsPlugins);
     await synced(laptop.plugin);
     await laptop.plugin.syncNow();
 
-    // The laptop's are on the server now, so the next desktop is asked.
-    const desk = await load();
-    await desk.plugin.pair((await laptop.plugin.createInvite()).invite, "desk");
-    await synced(desk.plugin);
-    await desk.plugin.setSettingsSync(".obsidian-desktop", "server");
-    await synced(desk.plugin);
-    turnOn(desk.plugin);
-    await modalButton("Use the server's").click();
+    // So the desk's Turn on asks first, and changes nothing until answered.
+    await buttonIn(open, "Turn on").click();
+    expect(desk.plugin.syncsPlugins).toBe(false);
+    await buttonIn(open, "Use the server's").click();
     await until("plugins' settings to sync", () => desk.plugin.syncsPlugins);
   }, 300_000);
 });

@@ -120,7 +120,6 @@ function note(line: string): void {
   if (file) appendFileSync(file, `${line}\n`);
 }
 
-/** One server, on its own port, with its own data directory. */
 /** The servers this process started that have not exited (`serversRunning`). */
 const live = new Set<ChildProcess>();
 
@@ -133,6 +132,7 @@ export function serversRunning(): number {
   return live.size;
 }
 
+/** One server, on its own port, with its own data directory. */
 export class TestServer {
   private proc: ChildProcess | undefined;
   dataDir = "";
