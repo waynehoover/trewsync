@@ -11,7 +11,15 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Plugin
+
+- Turning settings sync on no longer asks whose settings to use when the
+  server has none for that group yet: there is nothing to choose between, and
+  this device's settings become the group's. It still asks where the group has
+  settings that differ from this device's, and while it cannot tell, offline
+  or in the middle of a sync. The same goes for changing group, and for
+  turning plugin settings sync on, whose warning about what plugins' settings
+  can hold still shows.
 
 ## 0.16.2, plugin (2026-10-28)
 

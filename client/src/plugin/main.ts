@@ -2292,6 +2292,21 @@ export default class TrewPlugin extends Plugin {
     };
   }
 
+  /**
+   * Whether turning settings sync on with `group`, with plugins' settings or
+   * without, needs the first-time question: the server has settings there
+   * that this device has not synced as they are, or this device cannot say,
+   * not being caught up with the server. Otherwise this device's settings
+   * simply upload, whatever the answer (plan/settings-sync.md, section 4).
+   */
+  needsFirstChoice(group: SettingsGroup, plugins: boolean): boolean {
+    const config = this.config;
+    const engine = this.client?.engine;
+    if (!config || !engine || this.state.kind !== "synced") return true;
+    const scope = this.settingsScope({ ...config, settings: group, settingsPlugins: plugins });
+    return scope === undefined || engine.settingsToChoose(scope);
+  }
+
   /** Whether this device syncs its Obsidian settings, as saved. */
   get syncsSettings(): boolean {
     return this.config?.settings !== undefined;
@@ -5495,16 +5510,18 @@ class TrewPanel {
       d.setValue(group ?? "off");
       d.selectEl.setAttribute("aria-label", "Sync settings");
       d.onChange(async (value) => {
-        if (isSettingsGroup(value)) {
+        const chosen = isSettingsGroup(value) ? value : undefined;
+        if (chosen && this.plugin.needsFirstChoice(chosen, this.plugin.syncsPlugins)) {
           this.dismiss();
           // Drawn again once the question closes, answered or not, so the row
           // says what is saved: in the settings tab nothing else redraws it.
-          new SettingsSyncModal(this.plugin, value, () => this.render()).open();
+          new SettingsSyncModal(this.plugin, chosen, () => this.render()).open();
           return;
         }
         d.setDisabled(true);
         try {
-          await this.plugin.setSettingsSync(undefined);
+          const backup = await this.plugin.setSettingsSync(chosen);
+          if (chosen) new Notice(settingsSyncOn(backup), 10_000);
         } catch (err) {
           new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
         }
@@ -5532,7 +5549,8 @@ class TrewPanel {
       b.setButtonText(on ? "Turn off" : "Turn on").onClick(async () => {
         if (!on) {
           this.dismiss();
-          new PluginSyncModal(this.plugin, group, () => this.render()).open();
+          const ask = this.plugin.needsFirstChoice(group, true);
+          new PluginSyncModal(this.plugin, group, ask, () => this.render()).open();
           return;
         }
         b.setDisabled(true);
@@ -6497,11 +6515,7 @@ class SettingsSyncModal extends Modal {
 
   private async choose(choice: "server" | "device"): Promise<void> {
     try {
-      const backup = await this.plugin.setSettingsSync(this.group, choice);
-      new Notice(
-        `TrewSync: settings sync is on.${backup ? ` This device's settings as they were are kept in ${backup}.` : ""}`,
-        10_000,
-      );
+      new Notice(settingsSyncOn(await this.plugin.setSettingsSync(this.group, choice)), 10_000);
       this.close();
     } catch (err) {
       new Notice(`TrewSync: ${(err as Error).message}`, 10_000);
@@ -6517,12 +6531,14 @@ class SettingsSyncModal extends Modal {
 /**
  * Turning plugin settings sync on, asked first (plan/settings-sync.md, section
  * 6). It says what moves and what never does, and where plugins' secrets end
- * up, and asks the first-time question again, as changing group does.
+ * up, and asks the first-time question again, as changing group does, when
+ * there is anything for it to decide (`ask`).
  */
 class PluginSyncModal extends Modal {
   constructor(
     private readonly plugin: TrewPlugin,
     private readonly group: SettingsGroup,
+    private readonly ask: boolean,
     private readonly closed: () => void,
   ) {
     super(plugin.app);
@@ -6552,6 +6568,15 @@ class PluginSyncModal extends Modal {
         "Never synced: the settings of TrewSync itself, and of plugins that sync or control the vault " +
         "(Obsidian Git, Local REST API, Self-hosted LiveSync, Remotely Save, Basalt Sync and SuperSync).",
     });
+    if (!this.ask) {
+      new Setting(contentEl).addButton((b) =>
+        b
+          .setButtonText("Turn on")
+          .setCta()
+          .onClick(() => void this.choose()),
+      );
+      return;
+    }
     contentEl.createEl("p", {
       text:
         "If the server already has plugin settings from those devices, which should this device use " +
@@ -6570,7 +6595,7 @@ class PluginSyncModal extends Modal {
     );
   }
 
-  private async choose(choice: "server" | "device"): Promise<void> {
+  private async choose(choice?: "server" | "device"): Promise<void> {
     try {
       const backup = await this.plugin.setSettingsSync(this.group, choice, true);
       new Notice(
@@ -6704,6 +6729,11 @@ const GROUP_LABELS: Record<SettingsGroup, string> = {
   ".obsidian-desktop": "Desktop only",
   [EVERY_DEVICE]: "Mobile and desktop",
 };
+
+/** The notice settings sync turned on gives, naming where this device's settings were copied. */
+function settingsSyncOn(backup: string | undefined): string {
+  return `TrewSync: settings sync is on.${backup ? ` This device's settings as they were are kept in ${backup}.` : ""}`;
+}
 
 /** Whom a device in `group` shares its settings with, for a sentence. */
 function sharedWith(group: SettingsGroup): string {

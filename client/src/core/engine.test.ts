@@ -4404,6 +4404,46 @@ describe("settings", () => {
     expect((await settleCounting(other)).uploaded).toBe(1);
   });
 
+  it("has a first-time choice to make only where the group's settings differ from this device's record", async () => {
+    await fresh();
+    const dark = json({ theme: "dark" });
+    const laptop = await deviceWith("laptop", { root: ".obsidian-desktop", plugins: true });
+    await laptop.vault.write(".obsidian-desktop/app.json", dark, times);
+    await laptop.vault.write(".obsidian-desktop/plugins/tasks/data.json", json({ due: 1 }), times);
+    await laptop.settle();
+    expect(
+      laptop.engine.settingsToChoose({ root: ".obsidian-desktop", plugins: true }),
+      "what it synced, as it is there",
+    ).toBe(false);
+
+    // Settings sync off, a device hears of every group's settings all the same.
+    const phone = await deviceWith("phone", undefined);
+    await phone.settle();
+    expect(phone.engine.settingsToChoose({ root: ".obsidian-mobile" }), "an empty group").toBe(
+      false,
+    );
+    expect(phone.engine.settingsToChoose({ root: ".obsidian-desktop" })).toBe(true);
+
+    // The same settings already here are synced as they are, and plugins'
+    // settings count only for a device that would sync them.
+    const desk = await deviceWith("desk", { root: ".obsidian-desktop", firstChoice: "device" });
+    await desk.vault.write(".obsidian-desktop/app.json", dark, times);
+    await desk.settle();
+    expect(desk.engine.settingsToChoose({ root: ".obsidian-desktop" })).toBe(false);
+    expect(desk.engine.settingsToChoose({ root: ".obsidian-desktop", plugins: true })).toBe(true);
+
+    // The group deleting a setting is one to settle where it was synced, and
+    // nothing where it never was.
+    await laptop.vault.remove(".obsidian-desktop/app.json");
+    await laptop.settle();
+    await desk.settle();
+    await phone.settle();
+    expect(desk.engine.settingsToChoose({ root: ".obsidian-desktop" }), "a deletion held").toBe(
+      true,
+    );
+    expect(phone.engine.settingsToChoose({ root: ".obsidian-desktop" })).toBe(false);
+  });
+
   it("owes nothing for settings a device does not sync", async () => {
     await fresh();
     const mac = await deviceWith("mac", { root: ".obsidian" });

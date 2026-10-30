@@ -1025,6 +1025,24 @@ function recordedAuthor(e: WireEntry): Pick<Remote, "device"> {
     : {};
 }
 
+/**
+ * Whether a path is settings a device with `scope` does not sync: a path in a
+ * profile root while settings sync is off, in another profile than the one the
+ * device runs, or one settings sync does not carry. Every other path, notes
+ * included, is in scope.
+ */
+function outsideScope(path: string, scope: SettingsScope | undefined): boolean {
+  if (!isConfigPath(path)) return false;
+  const root = scope?.root;
+  const own = scope?.ownFolder;
+  return (
+    root === undefined ||
+    !path.startsWith(root + "/") ||
+    (own !== undefined && fold(path).startsWith(fold(own) + "/")) ||
+    configPathReason(path, scope?.plugins === true) !== undefined
+  );
+}
+
 function pathBase(state: Remote | undefined, path: string, basedOn: number | undefined): number {
   if (basedOn !== undefined && state && state.uid !== basedOn)
     throw new ProtocolError("stale", "The path changed while preparing this write.");
@@ -1413,6 +1431,23 @@ export class Engine {
   }
 
   /**
+   * Whether settings sync started with `scope` would have anything for the
+   * first-time choice to decide: a setting the server holds there that this
+   * device has not synced as it is, or a deletion of one this device still
+   * has a record of. Without either, both answers do the same, since this
+   * device's settings simply upload (plan/settings-sync.md, section 4). As of
+   * what this device last heard from the server.
+   */
+  settingsToChoose(scope: SettingsScope): boolean {
+    for (const [path, state] of this.remote) {
+      if (state.folder || !isConfigPath(path) || outsideScope(path, scope)) continue;
+      const entry = this.entries.get(path);
+      if (state.deleted ? entry !== undefined : entry?.synchash !== state.hash) return true;
+    }
+    return false;
+  }
+
+  /**
    * Loads the index, opens the session, and drains the backlog.
    *
    * The cursor sent is this device's, from the index. Sending 0 instead would
@@ -1740,22 +1775,9 @@ export class Engine {
    * Pruned against the sets the index keeps, so a vault that churns through
    * names does not accumulate answers about paths nothing refers to any more.
    */
-  /**
-   * Whether a path is settings this device does not sync: a path in a profile
-   * root while settings sync is off, in another profile than the one this
-   * device runs, or one settings sync does not carry. Every other path, notes
-   * included, is in scope.
-   */
+  /** Whether a path is settings this device does not sync (`outsideScope`). */
   private outOfScope(path: string): boolean {
-    if (!isConfigPath(path)) return false;
-    const root = this.opts.settings?.root;
-    const own = this.opts.settings?.ownFolder;
-    return (
-      root === undefined ||
-      !path.startsWith(root + "/") ||
-      (own !== undefined && fold(path).startsWith(fold(own) + "/")) ||
-      configPathReason(path, this.opts.settings?.plugins === true) !== undefined
-    );
+    return outsideScope(path, this.opts.settings);
   }
 
   /** Whether a path never syncs on this device: the dot rule, less the settings it syncs. */
