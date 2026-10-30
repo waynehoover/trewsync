@@ -7901,10 +7901,24 @@ describe("settings sync", () => {
     app.vault.adapter.seed(".obsidian/app.json", '{\n  "theme": "dark"\n}');
     await startVault(plugin, "laptop");
     await synced(plugin);
-    const client = (plugin as unknown as { client: Client }).client;
-    const answer = client.settingsToChoose.bind(client);
-    /** Holds the server's answer to the next check, and only that one, until the returned function runs. */
+    /**
+     * Holds the server's answers to the checks from here on, each until its
+     * function in `gates` runs, on the client the plugin has now: each change
+     * of settings sync starts another.
+     */
+    const gates: (() => void)[] = [];
+    const holding = () => {
+      const client = (plugin as unknown as { client: Client }).client;
+      const answer = client.settingsToChoose.bind(client);
+      client.settingsToChoose = async (files) => {
+        await new Promise<void>((resolve) => gates.push(resolve));
+        return answer(files);
+      };
+    };
+    /** Holds the next check only, until the returned function runs. */
     const slow = () => {
+      const client = (plugin as unknown as { client: Client }).client;
+      const answer = client.settingsToChoose.bind(client);
       let release!: () => void;
       const held = new Promise<void>((resolve) => (release = resolve));
       client.settingsToChoose = async (files) => {
@@ -7947,22 +7961,57 @@ describe("settings sync", () => {
 
     // Looking at plugins' settings is not a choice: a group chosen while the
     // warning opened and closed unanswered still goes ahead.
-    release = slow();
-    built.length = 0;
-    plugin.commands.find((c) => c.id === "show-status")!.callback!();
-    const group = built.find((s) => s.name === "Sync settings")!.dropdowns[0]! as unknown as {
-      change(value: string): Promise<void>;
+    const panel = () => {
+      built.length = 0;
+      plugin.commands.find((c) => c.id === "show-status")!.callback!();
+      return {
+        pick: (value: string) =>
+          (
+            built.find((s) => s.name === "Sync settings")!.dropdowns[0]! as unknown as {
+              change(value: string): Promise<void>;
+            }
+          ).change(value),
+        plugins: () =>
+          built
+            .filter((s) => s.name === "Sync plugin settings")
+            .at(-1)!
+            .buttons.find((b) => b.label === "Turn on")!
+            .click(),
+      };
     };
-    const regrouping = group.change(".obsidian");
-    await built
-      .filter((s) => s.name === "Sync plugin settings")
-      .at(-1)!
-      .buttons.find((b) => b.label === "Turn on")!
-      .click();
+    holding();
+    let view = panel();
+    const regrouping = view.pick(".obsidian");
+    await until("the group's check to be out", () => gates.length === 1);
+    let opening = view.plugins();
+    await until("the warning's check to be out", () => gates.length === 2);
+    gates[1]!();
+    await opening;
     modals.at(-1)!.close();
-    release();
+    gates[0]!();
     await regrouping;
     expect(plugin.settingsGroup, "the group chosen before").toBe(".obsidian");
+    await synced(plugin);
+
+    // Two checks out, the earlier one answered first: the later choice, the
+    // warning's Turn on, stands, and the group picked before it is dropped.
+    gates.length = 0;
+    holding();
+    view = panel();
+    const picked = view.pick(".obsidian-desktop");
+    await until("the group's check to be out", () => gates.length === 1);
+    opening = view.plugins();
+    await until("the warning's check to be out", () => gates.length === 2);
+    gates[1]!();
+    await opening;
+    const confirming = buttonIn(modals.at(-1)!, "Turn on").click();
+    await until("the Turn on check to be out", () => gates.length === 3);
+    gates[0]!();
+    await picked;
+    gates[2]!();
+    await confirming;
+    expect(plugin.settingsGroup, "the earlier pick dropped").toBe(".obsidian");
+    expect(plugin.syncsPlugins, "the later Turn on stands").toBe(true);
   }, 300_000);
 
   it("asks the first-time question when it cannot ask the server now", async () => {

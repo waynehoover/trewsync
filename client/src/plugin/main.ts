@@ -6626,6 +6626,7 @@ class PluginSyncModal extends Modal {
           .setCta()
           .onClick(async () => {
             b.setDisabled(true);
+            this.plugin.choseSettingsSync();
             // Asked again: another device may have sent plugins' settings
             // since this opened.
             const ask = await this.plugin.needsFirstChoice(this.group, true);
