@@ -30,7 +30,13 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
+import {
+  cleanupBinary,
+  removeTree,
+  serverBinary,
+  TestServer,
+  serversRunning,
+} from "../core/test-server.ts";
 import { MAX_NAME_BYTES, ProtocolError, Transport, checkName } from "../core/transport.ts";
 import { base64urlDecode, base64urlEncode } from "../core/digest.ts";
 import { formatInviteString } from "../core/invite-string.ts";
@@ -68,6 +74,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupBinary();
+  expect(serversRunning(), "a test server still running after the tests").toBe(0);
 });
 
 /** Captures what the CLI printed, and what it exited with. */
@@ -107,6 +114,7 @@ async function vaultDir(name: string): Promise<string> {
 }
 
 async function fresh(): Promise<void> {
+  if (server) await server.cleanup();
   server = new TestServer();
   await server.start();
 }

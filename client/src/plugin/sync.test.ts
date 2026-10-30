@@ -15,7 +15,7 @@ import { receiveCommitted } from "../core/test-async.ts";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "../core/client.ts";
-import { TestServer, cleanupBinary, serverBinary } from "../core/test-server.ts";
+import { TestServer, cleanupBinary, serverBinary, serversRunning } from "../core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "../core/vault.ts";
 import { FakeAdapter, FakeVaultIndex, asVault } from "./fake.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
@@ -26,6 +26,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupBinary();
+  expect(serversRunning(), "a test server still running after the tests").toBe(0);
 });
 
 /** One device: a fake Obsidian vault, and the same Client both shells use. */
@@ -78,6 +79,7 @@ let server: TestServer;
 const devices: Device[] = [];
 
 async function fresh(): Promise<void> {
+  if (server) await server.cleanup();
   server = new TestServer();
   await server.start();
 }

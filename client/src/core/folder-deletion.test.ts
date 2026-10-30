@@ -24,7 +24,7 @@ import { Engine, type SyncReport } from "./engine.ts";
 import { engineOnFakeSocket, settleUntil } from "./fake-socket.ts";
 import type { SyncPreview } from "./preview.ts";
 import { receiveCommitted } from "./test-async.ts";
-import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
+import { TestServer, cleanupBinary, serverBinary, until, serversRunning } from "./test-server.ts";
 import { ProtocolError, Transport, type BatchEntry } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault, type FileStat } from "./vault.ts";
 
@@ -34,6 +34,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupBinary();
+  expect(serversRunning(), "a test server still running after the tests").toBe(0);
 });
 
 /**
@@ -144,6 +145,7 @@ afterEach(async () => {
 });
 
 async function fresh(): Promise<void> {
+  if (server) await server.cleanup();
   server = new TestServer();
   await server.start();
 }

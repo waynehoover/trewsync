@@ -21,7 +21,7 @@ import { readFileSync } from "node:fs";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { TestServer, cleanupBinary, serverBinary } from "../core/test-server.ts";
+import { TestServer, cleanupBinary, serverBinary, serversRunning } from "../core/test-server.ts";
 import { ConnectionError, PROTO, Transport } from "../core/transport.ts";
 import {
   App,
@@ -60,6 +60,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupBinary();
+  expect(serversRunning(), "a test server still running after the tests").toBe(0);
 });
 
 /**
@@ -180,6 +181,7 @@ afterEach(async () => {
 });
 
 async function fresh(): Promise<void> {
+  if (server) await server.cleanup();
   server = new TestServer();
   await server.start();
 }

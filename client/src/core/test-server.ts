@@ -121,6 +121,18 @@ function note(line: string): void {
 }
 
 /** One server, on its own port, with its own data directory. */
+/** The servers this process started that have not exited (`serversRunning`). */
+const live = new Set<ChildProcess>();
+
+/**
+ * How many servers this process started are still running. A test file
+ * checks there are none once its tests are done: a server nothing stopped
+ * outlives the run, and its data directory with it.
+ */
+export function serversRunning(): number {
+  return live.size;
+}
+
 export class TestServer {
   private proc: ChildProcess | undefined;
   dataDir = "";
@@ -218,6 +230,8 @@ export class TestServer {
     // instead of opening a health connection every 50 ms during startup.
     const listening = deferred();
     const proc = this.proc;
+    live.add(proc);
+    proc.once("exit", () => live.delete(proc));
     let banner = "";
     const output = (data: Buffer) => {
       banner += data.toString();

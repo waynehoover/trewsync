@@ -40,7 +40,7 @@ import { conflictCopyPath } from "./merge.ts";
 import { conflictOriginal, resolveConflict, reviewConflict } from "./conflicts.ts";
 import { firstFreeName, ignoredHereError, neverSync } from "./paths.ts";
 import type { IndexEntry } from "./index-state.ts";
-import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
+import { TestServer, cleanupBinary, serverBinary, until, serversRunning } from "./test-server.ts";
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,6 +51,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupBinary();
+  expect(serversRunning(), "a test server still running after the tests").toBe(0);
 });
 
 /** One device: an in-memory vault, an index, a transport and an engine. */
@@ -147,6 +148,7 @@ let server: TestServer;
 const devices: Device[] = [];
 
 async function fresh(): Promise<TestServer> {
+  if (server) await server.cleanup();
   server = new TestServer();
   await server.start();
   return server;
