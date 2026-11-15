@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ObsidianVault } from "./vault.ts";
-import { FakeAdapter, FakeVaultIndex, asVault } from "./fake.ts";
+import { FakeAdapter, FakeVaultIndex, asVault } from "../../test/plugin/fake.ts";
 
 const log = ".obsidian/plugins/trew-sync/displaced.log";
 const kept = "Notes/.trew-tmp-review/Note.md";

@@ -94,7 +94,7 @@ grep -qF "trewd mcp-token" "$work/mcp" || {
 }
 
 echo "==> pairing and syncing with the packed artifact under node"
-bun run "$root/client/src/node/artifact.run.ts" \
+bun run "$root/client/test/node/artifact.run.ts" \
   "$work/elsewhere/node_modules/trew-sync/dist/trew.mjs" "$(command -v node)"
 
 echo "==> the packed CLI installs and runs"

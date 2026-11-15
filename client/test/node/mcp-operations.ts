@@ -1,4 +1,4 @@
-import type { NodeVault } from "./vault.ts";
+import type { NodeVault } from "../../src/node/vault.ts";
 import {
   NoteError,
   NOTE_BYTES,

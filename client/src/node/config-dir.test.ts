@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parseArgs } from "./cli.ts";
 import { STATE_DIR } from "./config.ts";
 import { NodeVault, configFolderName } from "./vault.ts";
-import { removeTree } from "../core/test-server.ts";
+import { removeTree } from "../../test/core/test-server.ts";
 
 const made: string[] = [];
 

@@ -28,7 +28,7 @@ import {
   readFixtures,
   type Chunker,
   type Entry,
-} from "./chunk-fixtures.ts";
+} from "../../test/core/chunk-fixtures.ts";
 
 const text = readFileSync(FIXTURE_PATH, "utf8");
 const fixtures = readFixtures();

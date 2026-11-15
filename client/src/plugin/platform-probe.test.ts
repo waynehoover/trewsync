@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { FakeAdapter } from "./fake.ts";
+import { FakeAdapter } from "../../test/plugin/fake.ts";
 import { renderProbeReport, runPlatformProbe, type ProbeReport } from "./platform-probe.ts";
 
 const DIR = ".obsidian/plugins/trew-sync";

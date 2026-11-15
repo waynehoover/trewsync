@@ -26,7 +26,7 @@
 import { describe, expect, it } from "vitest";
 
 import { chunkName } from "./digest.ts";
-import { engineOnFakeSocket, settle } from "./fake-socket.ts";
+import { engineOnFakeSocket, settle } from "../../test/core/fake-socket.ts";
 import { deltaBetween } from "./index-journal.ts";
 import type { StoredState } from "./vault.ts";
 import type { WireEntry } from "./transport.ts";

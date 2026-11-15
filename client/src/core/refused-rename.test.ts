@@ -21,9 +21,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Engine, type SyncReport } from "./engine.ts";
 import { chunkName } from "./digest.ts";
-import { FakeSocket, engineOnFakeSocket, settle } from "./fake-socket.ts";
-import { receiveCommitted } from "./test-async.ts";
-import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
+import { FakeSocket, engineOnFakeSocket, settle } from "../../test/core/fake-socket.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
+import { TestServer, cleanupBinary, serverBinary, until } from "../../test/core/test-server.ts";
 import { Transport, type WireEntry } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 import { describeWindowsRefusal } from "./windows-names.ts";

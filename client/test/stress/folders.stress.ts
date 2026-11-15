@@ -38,7 +38,7 @@ import {
 import { dirname, join } from "node:path";
 
 import type { Client } from "../../src/core/client.ts";
-import { TestServer } from "../../src/core/test-server.ts";
+import { TestServer } from "../core/test-server.ts";
 import { device, reopen, settle, tidy, type Device } from "./harness.ts";
 
 let server: TestServer;

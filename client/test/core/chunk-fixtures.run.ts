@@ -2,7 +2,7 @@
  * Writes corpus A of chunk-fixtures.json: the cuts this side's chunkBytes
  * makes, for Go to check its own chunker against.
  *
- *     cd client && bun run src/core/chunk-fixtures.run.ts
+ *     cd client && bun run test/core/chunk-fixtures.run.ts
  *
  * Every other section of the file is left as it was. Corpus B is Go's to
  * write (`go test ./internal/notes -run TestChunkFixtures -update`), and the

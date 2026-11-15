@@ -28,8 +28,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { NodeVault } from "../node/vault.ts";
 import { plainDigest } from "./digest.ts";
 import { Engine, type SyncReport } from "./engine.ts";
-import { receiveCommitted } from "./test-async.ts";
-import { TestServer, cleanupBinary, removeTree, serverBinary, until } from "./test-server.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
+import {
+  TestServer,
+  cleanupBinary,
+  removeTree,
+  serverBinary,
+  until,
+} from "../../test/core/test-server.ts";
 import { Transport } from "./transport.ts";
 import {
   MemoryIndexStore,

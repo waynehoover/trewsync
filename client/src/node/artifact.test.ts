@@ -5,10 +5,10 @@ import { copyFile, mkdtemp, mkdir, readFile, readdir, symlink } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { removeTree } from "../core/test-server.ts";
-import { within } from "../core/test-async.ts";
+import { removeTree } from "../../test/core/test-server.ts";
+import { within } from "../../test/core/test-async.ts";
 import { build } from "esbuild";
-import { smokeArtifact } from "./artifact-test.ts";
+import { smokeArtifact } from "../../test/node/artifact-test.ts";
 
 /**
  * The release's own build configuration, run in a staging copy, and the file it
@@ -54,7 +54,7 @@ it("the actual production configuration builds a single-file client that syncs o
     const mcp =
       /modelcontextprotocol|McpServer|StdioServerTransport|"edit_note"|"search_notes"|mcp-token\.json|overlapping_edits|reserved_backup|scan_incomplete|same_destination/;
     const oracle = await build({
-      entryPoints: [fileURLToPath(new URL("./mcp-operations.ts", import.meta.url))],
+      entryPoints: [fileURLToPath(new URL("../../test/node/mcp-operations.ts", import.meta.url))],
       bundle: true,
       minify: true,
       platform: "node",

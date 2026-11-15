@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
-const GO_DIR = new URL("./..", import.meta.url).pathname;
+const GO_DIR = new URL("..", import.meta.url).pathname;
 
 let dir: string | undefined;
 

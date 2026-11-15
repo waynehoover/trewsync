@@ -38,7 +38,7 @@ import {
   textSizesFor,
   type Chunk,
   type ChunkSizes,
-} from "./chunk.ts";
+} from "../../src/core/chunk.ts";
 
 /** The fixture file, at the repository root beside `protocol-fixtures.json`. */
 export const FIXTURE_PATH = join(import.meta.dirname, "..", "..", "..", "chunk-fixtures.json");
@@ -670,7 +670,7 @@ export const CORPUS_A: CaseDefinition[] = [
 /** Who cut corpus A, how to cut it again, and who checks it. */
 export const CORPUS_A_HEADER = {
   producedBy: "TypeScript: chunkBytes in client/src/core/chunk.ts",
-  regenerate: "cd client && bun run src/core/chunk-fixtures.run.ts",
+  regenerate: "cd client && bun run test/core/chunk-fixtures.run.ts",
   checkedBy: "Go: go test ./internal/notes -run TestChunkFixtures",
 } as const;
 

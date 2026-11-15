@@ -12,7 +12,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { Client, type ClientOptions } from "./client.ts";
-import { FakeSocket, ready, settle } from "./fake-socket.ts";
+import { FakeSocket, ready, settle } from "../../test/core/fake-socket.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 /** A client on a socket that will say `ready` and never say `caught-up`. */

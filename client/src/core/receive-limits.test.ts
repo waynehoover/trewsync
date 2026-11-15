@@ -24,7 +24,7 @@ import { deflateSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
 import { chunkName } from "./digest.ts";
-import { FakeSocket, rawFrame, ready } from "./fake-socket.ts";
+import { FakeSocket, rawFrame, ready } from "../../test/core/fake-socket.ts";
 import { FrameError, MARKER_DEFLATE, decodeFrame, encodeFrame } from "./frame.ts";
 import {
   LOCAL_MAX_BATCH_BYTES,

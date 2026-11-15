@@ -1,4 +1,4 @@
-import { nextTurn } from "./test-async.ts";
+import { nextTurn } from "../../test/core/test-async.ts";
 /**
  * The long-running loop, and what a shell can rely on from it.
  *
@@ -12,7 +12,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client, runForever, type ClientOptions } from "./client.ts";
 import type { SyncReport } from "./engine.ts";
-import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
+import { TestServer, cleanupBinary, serverBinary, until } from "../../test/core/test-server.ts";
 import { ConnectionError } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault, type Times } from "./vault.ts";
 

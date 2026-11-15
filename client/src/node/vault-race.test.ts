@@ -17,7 +17,7 @@ import type { PathLike, StatOptions } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NodeVault } from "./vault.ts";
-import { removeTree } from "../core/test-server.ts";
+import { removeTree } from "../../test/core/test-server.ts";
 import { generateDeviceId, generateDeviceToken } from "../core/pairing.ts";
 import { plainDigest } from "../core/digest.ts";
 

@@ -20,7 +20,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client, type ClientOptions } from "./client.ts";
 import type { SyncReport } from "./engine.ts";
-import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
+import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 beforeAll(async () => {

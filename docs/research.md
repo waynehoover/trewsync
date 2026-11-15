@@ -147,7 +147,7 @@ registered in Obsidian and on disk for inspection, as the acceptance runs do.
 
 The server's MCP tools reuse the pure half of Basalt's TypeScript MCP, ported
 to `internal/notes`: paging, cursors, literal search, line comparison, tags
-and links. The TypeScript stays as the oracle. `client/src/node/mcp-oracle.run.ts`
+and links. The TypeScript stays as the oracle. `client/test/node/mcp-oracle.run.ts`
 feeds a corpus through it and writes `mcp-fixtures.json` (8,712 vectors), and
 `TestOracle` holds the Go functions to every one; `ORACLE_EXTRA=100000` builds
 a deeper corpus outside the tree (1,208,688 vectors), which also agrees.

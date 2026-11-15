@@ -72,7 +72,7 @@ import { dirname, join } from "node:path";
 import { Client, credentialsFor, pairWithInvite } from "../../src/core/client.ts";
 import { conflictOriginal } from "../../src/core/conflicts.ts";
 import { parseInvite, startPairing } from "../../src/core/pairing.ts";
-import { serverBinary } from "../../src/core/test-server.ts";
+import { serverBinary } from "../core/test-server.ts";
 import { configPath, indexPath, saveConfig } from "../../src/node/config.ts";
 import { JsonIndexStore, NodeVault } from "../../src/node/vault.ts";
 import { makeCorpus } from "../stress/corpus.ts";

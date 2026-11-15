@@ -25,8 +25,8 @@ import {
   midReplace,
   writeDurably,
 } from "./vault.ts";
-import { removeTree } from "../core/test-server.ts";
-import { deferred, within } from "../core/test-async.ts";
+import { removeTree } from "../../test/core/test-server.ts";
+import { deferred, within } from "../../test/core/test-async.ts";
 import { plainDigest } from "../core/digest.ts";
 
 let root: string;

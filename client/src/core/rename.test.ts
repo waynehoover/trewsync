@@ -8,9 +8,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client, type ClientOptions } from "./client.ts";
-import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
+import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
-import { deferred } from "./test-async.ts";
+import { deferred } from "../../test/core/test-async.ts";
 
 beforeAll(async () => {
   await serverBinary();

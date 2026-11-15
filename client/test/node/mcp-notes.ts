@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
-import { conflictCopyPath } from "../core/merge.ts";
-import { firstFreeName, splitName } from "../core/paths.ts";
-import { composite, seam } from "../core/seam.ts";
-import { CheckedPathError, PreservationError, type NodeVault } from "./vault.ts";
+import { conflictCopyPath } from "../../src/core/merge.ts";
+import { firstFreeName, splitName } from "../../src/core/paths.ts";
+import { composite, seam } from "../../src/core/seam.ts";
+import { CheckedPathError, PreservationError, type NodeVault } from "../../src/node/vault.ts";
 
 export const NOTE_BYTES = 1024 * 1024;
 export const EDIT_BYTES = 8 * 1024;

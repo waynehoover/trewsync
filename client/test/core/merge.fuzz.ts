@@ -1,4 +1,4 @@
-import type { MergeOutcome } from "./merge.ts";
+import type { MergeOutcome } from "../../src/core/merge.ts";
 
 /**
  * A fuzzer for the merge, aimed where the merge is known to be weak.

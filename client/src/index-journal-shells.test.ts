@@ -27,7 +27,7 @@ import { JsonIndexStore } from "./node/vault.ts";
 import { indexLogPath } from "./core/index-journal-store.ts";
 import { encodeRecord } from "./core/index-journal.ts";
 import type { StoredState } from "./core/vault.ts";
-import { FakeAdapter } from "./plugin/fake.ts";
+import { FakeAdapter } from "../test/plugin/fake.ts";
 import { ObsidianIndexStore } from "./plugin/vault.ts";
 
 /* ---------------------------------------------------------------- *

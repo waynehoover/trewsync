@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { Client } from "../core/client.ts";
+import type { Client } from "../../src/core/client.ts";
 import { compareText, deliveryStatus } from "./mcp-inspect.ts";
 import { deferred } from "../core/test-async.ts";
 

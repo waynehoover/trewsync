@@ -3,9 +3,9 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { Client } from "./client.ts";
-import { TestServer } from "./test-server.ts";
+import { TestServer } from "../../test/core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
-import { receiveCommitted } from "./test-async.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
 
 let server: TestServer;
 const clients: Client[] = [];

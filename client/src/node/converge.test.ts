@@ -28,7 +28,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
+import {
+  cleanupBinary,
+  removeTree,
+  serverBinary,
+  TestServer,
+} from "../../test/core/test-server.ts";
 import { run, type Console } from "./cli.ts";
 
 beforeAll(async () => {

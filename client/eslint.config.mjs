@@ -31,26 +31,17 @@ const here = import.meta.dirname;
 
 /**
  * Files under `src/plugin` and `src/core` that the plugin bundle never
- * imports, and why each exists. Tests (`*.test.ts`) are excluded by name.
+ * imports, and why each exists. Tests (`*.test.ts`) are excluded by name, and
+ * test helpers live under `test/`, which the community directory's scanner
+ * skips as well.
  *
  * Checked below against what `main.ts` actually reaches, so this cannot go
  * stale in the direction that matters: the day the plugin starts importing one
  * of these, linting refuses to run until it is taken off this list.
  */
 const notInTheBundle = {
-  "src/core/chunk-fixtures.ts": "builds and checks chunk-fixtures.json, for its test",
-  "src/core/chunk-fixtures.run.ts": "the command that writes chunk-fixtures.json",
-  "src/core/fake-socket.ts": "an in-memory socket the engine tests drive",
-  "src/core/latency.ts": "a slow link for slow-link.test.ts and bench-sync.ts",
-  "src/core/merge.fuzz.ts": "the merge fuzzer, for its test",
-  "src/core/merge.fuzz.run.ts": "the command that runs the merge fuzzer at length",
   "src/core/outcome.ts": "the headless client's exit outcomes (src/node only)",
   "src/core/seam.ts": "fault-injection seams for the Node vault and the stress suite",
-  "src/core/test-async.ts": "waiting helpers for tests",
-  "src/core/test-server.ts": "builds and runs a real trewd for tests",
-  "src/plugin/fake.ts": "an in-memory DataAdapter for tests",
-  "src/plugin/stub.ts": "the obsidian module at runtime, for tests",
-  "src/plugin/panel-shots.ts": "the panel walk behind panel-shots.test.ts",
   "src/plugin/platform-probe.ts": "the device filesystem probe, not wired into main.ts yet",
 };
 

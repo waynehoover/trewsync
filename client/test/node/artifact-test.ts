@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { TestServer, removeTree } from "../core/test-server.ts";
-import { run } from "./cli.ts";
+import { run } from "../../src/node/cli.ts";
 
 const exec = promisify(execFile);
 

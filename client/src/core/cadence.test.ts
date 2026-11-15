@@ -5,8 +5,8 @@ import { Client, type ClientOptions } from "./client.ts";
 import type { SyncReport } from "./engine.ts";
 import type { TransferActivity } from "./transfer.ts";
 import type { SocketLike } from "./transport.ts";
-import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
-import { deferred, receiveCommitted, within } from "./test-async.ts";
+import { TestServer, cleanupBinary, serverBinary, until } from "../../test/core/test-server.ts";
+import { deferred, receiveCommitted, within } from "../../test/core/test-async.ts";
 import { MemoryIndexStore, MemoryVault, type StoredState } from "./vault.ts";
 
 // Events are delivered explicitly so unrelated writes cannot accidentally wake

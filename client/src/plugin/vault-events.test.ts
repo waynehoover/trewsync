@@ -32,7 +32,7 @@
 import { describe, expect, it } from "vitest";
 
 import { isNeverSynced } from "../core/paths.ts";
-import { FakeAdapter, FakeVaultIndex, asVault, normalizePath } from "./fake.ts";
+import { FakeAdapter, FakeVaultIndex, asVault, normalizePath } from "../../test/plugin/fake.ts";
 import { ObsidianVault, type FsyncFs } from "./vault.ts";
 
 const enc = new TextEncoder();

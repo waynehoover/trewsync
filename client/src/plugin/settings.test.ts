@@ -8,8 +8,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { decodeConfig, encodeConfig, type DeviceConfig } from "../core/pairing.ts";
-import { FakeAdapter, FakeVaultIndex, asVault } from "./fake.ts";
-import { resetStub } from "./stub.ts";
+import { FakeAdapter, FakeVaultIndex, asVault } from "../../test/plugin/fake.ts";
+import { resetStub } from "../../test/plugin/stub.ts";
 import { backUpSettings, keepSettingsBeforeApply, settingsIn } from "./settings.ts";
 import { ObsidianVault } from "./vault.ts";
 

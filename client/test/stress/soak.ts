@@ -39,7 +39,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { removeTree, serverBinary, TestServer } from "../../src/core/test-server.ts";
+import { removeTree, serverBinary, TestServer } from "../core/test-server.ts";
 import { Agent, audit, mint, verifiedDeep, type AuditOp } from "./agent.ts";
 import { fingerprint } from "./harness.ts";
 import { Person, Rng, seedVault, sha256, type Edit, type SeedShape } from "./soak-vault.ts";

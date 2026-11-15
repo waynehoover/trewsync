@@ -21,7 +21,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { chunkBytes, looksLikeText, sizesFor } from "./chunk.ts";
 import { chunkName, chunkNames } from "./digest.ts";
-import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
+import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
 import { ProtocolError, Transport, type Batch, type BatchEntry, PROTO } from "./transport.ts";
 
 const enc = new TextEncoder();

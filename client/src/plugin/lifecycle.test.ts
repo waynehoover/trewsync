@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
 import TrewPlugin from "./main.ts";
-import { App, notices, resetStub } from "./stub.ts";
-import { TestServer } from "../core/test-server.ts";
-import { nextTurn, within } from "../core/test-async.ts";
+import { App, notices, resetStub } from "../../test/plugin/stub.ts";
+import { TestServer } from "../../test/core/test-server.ts";
+import { nextTurn, within } from "../../test/core/test-async.ts";
 
 let server: TestServer | undefined;
 let plugin: TrewPlugin | undefined;

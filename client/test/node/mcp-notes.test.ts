@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
-import { NodeVault } from "./vault.ts";
+import { NodeVault } from "../../src/node/vault.ts";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -82,8 +82,8 @@ it("preserves the unsent before-image through the note transaction and restart",
 import { readFile, readdir, utimes, writeFile } from "node:fs/promises";
 import { vi } from "vitest";
 import { backupOf, mutateNote, NOTE_BYTES, type NoteMutation } from "./mcp-notes.ts";
-import { midReplace } from "./vault.ts";
-import { releaseAllSeams } from "../core/seam.ts";
+import { midReplace } from "../../src/node/vault.ts";
+import { releaseAllSeams } from "../../src/core/seam.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -464,7 +464,7 @@ it("retains and identifies partial exclusive creation instead of retrying over i
 });
 
 it("reports the independent branch stranded by a failed preservation claim", async () => {
-  const { midPreserve } = await import("./vault.ts");
+  const { midPreserve } = await import("../../src/node/vault.ts");
   const { run, base } = await seeded("original unsent");
   midReplace.staged = async () => {
     await writeFile(join(root, "Daily.md"), "independent branch stranded");

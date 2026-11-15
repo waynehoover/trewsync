@@ -27,9 +27,9 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { TestServer, cleanupBinary, serverBinary } from "../core/test-server.ts";
-import { resetStub } from "./stub.ts";
-import { asHtml, asText, walkPanelStates, type Shot } from "./panel-shots.ts";
+import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
+import { resetStub } from "../../test/plugin/stub.ts";
+import { asHtml, asText, walkPanelStates, type Shot } from "../../test/plugin/panel-shots.ts";
 
 /** Where the artifact lands. CI uploads this directory; `.gitignore` has it. */
 const OUT = new URL("../../panel-shots/", import.meta.url).pathname;

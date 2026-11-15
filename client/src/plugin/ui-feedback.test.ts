@@ -1,8 +1,15 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
 import TrewPlugin, { type State } from "./main.ts";
-import { App, built, FakeEl, modals, resetStub, type Plugin as StubPlugin } from "./stub.ts";
-import { deferred, nextTurn } from "../core/test-async.ts";
+import {
+  App,
+  built,
+  FakeEl,
+  modals,
+  resetStub,
+  type Plugin as StubPlugin,
+} from "../../test/plugin/stub.ts";
+import { deferred, nextTurn } from "../../test/core/test-async.ts";
 import type { SyncPreview } from "../core/preview.ts";
 
 type Subject = TrewPlugin & StubPlugin;
@@ -173,7 +180,7 @@ it.each(["settings", "menu"])(
         tab.display();
         resume = button(tab.containerEl, "Resume sync").click();
       } else {
-        const { Menu } = await import("./stub.ts");
+        const { Menu } = await import("../../test/plugin/stub.ts");
         plugin.ribbonIcons[0]!.callback();
         const item = Menu.latest!.items.find((item) => item.label === "Resume sync")!;
         expect(item.disabled).toBe(false);

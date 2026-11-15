@@ -30,9 +30,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { NodeVault } from "./node/vault.ts";
-import { FakeAdapter, FakeVaultIndex, asVault } from "./plugin/fake.ts";
+import { FakeAdapter, FakeVaultIndex, asVault } from "../test/plugin/fake.ts";
 import { ObsidianVault } from "./plugin/vault.ts";
-import { removeTree } from "./core/test-server.ts";
+import { removeTree } from "../test/core/test-server.ts";
 
 const made: string[] = [];
 afterEach(async () => {

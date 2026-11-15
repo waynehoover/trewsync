@@ -1,4 +1,4 @@
-import { nextTurn } from "./test-async.ts";
+import { nextTurn } from "../../test/core/test-async.ts";
 /**
  * Putting a version back beside what is already there.
  *
@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { Client, restoredCopyPath } from "./client.ts";
 import { pathReason } from "./path-policy.ts";
 import { firstFreeName } from "./paths.ts";
-import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
+import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 beforeAll(async () => {

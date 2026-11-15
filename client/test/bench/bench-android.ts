@@ -51,7 +51,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { Client } from "../../src/core/client.ts";
-import { TestServer, serverBinary } from "../../src/core/test-server.ts";
+import { TestServer, serverBinary } from "../core/test-server.ts";
 import { JsonIndexStore, NodeVault } from "../../src/node/vault.ts";
 import { LOCAL_REFUSALS } from "./bench-refuse.ts";
 import { corpusPaths, noteBody, pathFor } from "./bench-corpus.ts";

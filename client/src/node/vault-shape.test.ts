@@ -22,7 +22,12 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "../core/client.ts";
-import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
+import {
+  cleanupBinary,
+  removeTree,
+  serverBinary,
+  TestServer,
+} from "../../test/core/test-server.ts";
 import { JsonIndexStore, NodeVault } from "./vault.ts";
 
 beforeAll(async () => {

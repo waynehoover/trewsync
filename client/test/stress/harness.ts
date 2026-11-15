@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 
 import { Client, credentialsFor, pairWithInvite } from "../../src/core/client.ts";
 import { parseInvite, startPairing, type DeviceConfig } from "../../src/core/pairing.ts";
-import { removeTree, TestServer } from "../../src/core/test-server.ts";
+import { removeTree, TestServer } from "../core/test-server.ts";
 import { configPath, indexPath, loadConfig, saveConfig } from "../../src/node/config.ts";
 import { JsonIndexStore, NodeVault } from "../../src/node/vault.ts";
 

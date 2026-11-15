@@ -24,7 +24,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { Client } from "./core/client.ts";
 import { MemoryIndexStore, MemoryVault } from "./core/vault.ts";
-import { TestServer, serverBinary } from "./core/test-server.ts";
+import { TestServer, serverBinary } from "../test/core/test-server.ts";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {

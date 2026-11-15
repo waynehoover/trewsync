@@ -2,7 +2,7 @@
  * --experimental-transform-types. Real server/fsync, in-memory client vaults. */
 import { Client } from "../../src/core/client.ts";
 import { MemoryVault, MemoryIndexStore } from "../../src/core/vault.ts";
-import { TestServer, cleanupBinary } from "../../src/core/test-server.ts";
+import { TestServer, cleanupBinary } from "../core/test-server.ts";
 import { PROTO } from "../../src/core/transport.ts";
 const count = Number(process.env["TREW_BENCH_HISTORY"] ?? 1000);
 if (!Number.isSafeInteger(count) || count < 1) throw new Error("Invalid history count");

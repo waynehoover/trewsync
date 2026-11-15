@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
 import TrewPlugin from "./main.ts";
-import { App, resetStub } from "./stub.ts";
+import { App, resetStub } from "../../test/plugin/stub.ts";
 
 let plugin: TrewPlugin | undefined;
 afterEach(async () => {

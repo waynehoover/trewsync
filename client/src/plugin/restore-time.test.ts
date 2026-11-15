@@ -8,7 +8,7 @@ import {
   resetStub,
   type ButtonComponent,
   type FakeEl,
-} from "./stub.ts";
+} from "../../test/plugin/stub.ts";
 import { RestoreTimeModal, fromLocalInput, localInputValue, summarise } from "./restore-time.ts";
 import { ProtocolError, type RestoreAsk, type RestoreResult } from "../core/transport.ts";
 import type { App as ObsidianApp } from "obsidian";

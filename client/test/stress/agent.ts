@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import { removeTree, until, type TestServer } from "../../src/core/test-server.ts";
+import { removeTree, until, type TestServer } from "../core/test-server.ts";
 import { fingerprint } from "./harness.ts";
 
 const run = promisify(execFile);

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "./cli.ts";
 import { DISPLACED_LOG } from "../core/displaced.ts";
-import { TestServer, removeTree } from "../core/test-server.ts";
+import { TestServer, removeTree } from "../../test/core/test-server.ts";
 
 let server: TestServer | undefined;
 let dir: string | undefined;

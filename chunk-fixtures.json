@@ -29,7 +29,7 @@
   },
   "corpusA": {
     "producedBy": "TypeScript: chunkBytes in client/src/core/chunk.ts",
-    "regenerate": "cd client && bun run src/core/chunk-fixtures.run.ts",
+    "regenerate": "cd client && bun run test/core/chunk-fixtures.run.ts",
     "checkedBy": "Go: go test ./internal/notes -run TestChunkFixtures",
     "entries": [
       {

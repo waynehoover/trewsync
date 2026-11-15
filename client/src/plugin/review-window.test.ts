@@ -21,7 +21,7 @@
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { TestServer, cleanupBinary, serverBinary } from "../core/test-server.ts";
+import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
 import {
   App,
   FakeSecretStorage,
@@ -31,7 +31,7 @@ import {
   modals,
   notices,
   resetStub,
-} from "./stub.ts";
+} from "../../test/plugin/stub.ts";
 import TrewPlugin from "./main.ts";
 import { SyncPreviewModal } from "./preview.ts";
 

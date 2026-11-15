@@ -3,7 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "./cli.ts";
-import { TestServer, removeTree } from "../core/test-server.ts";
+import { TestServer, removeTree } from "../../test/core/test-server.ts";
 let server: TestServer | undefined;
 let dir: string | undefined;
 afterEach(async () => {

@@ -16,7 +16,13 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { cleanupBinary, removeTree, serverBinary, TestServer, until } from "../core/test-server.ts";
+import {
+  cleanupBinary,
+  removeTree,
+  serverBinary,
+  TestServer,
+  until,
+} from "../../test/core/test-server.ts";
 import { isPendingPairing } from "../core/pairing.ts";
 import { run, type Console } from "./cli.ts";
 import { configPath, indexPath, loadConfig } from "./config.ts";

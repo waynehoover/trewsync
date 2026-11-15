@@ -3,8 +3,8 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTree } from "../core/test-server.ts";
-import { releaseAllSeams } from "../core/seam.ts";
-import { NodeVault, midTrash } from "./vault.ts";
+import { releaseAllSeams } from "../../src/core/seam.ts";
+import { NodeVault, midTrash } from "../../src/node/vault.ts";
 import { backupOf, mutateNote, noteDigest, type NoteMutation } from "./mcp-notes.ts";
 
 let root: string;

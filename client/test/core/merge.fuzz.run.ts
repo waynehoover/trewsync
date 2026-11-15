@@ -23,8 +23,8 @@
  * Usage, from client/:
  *
  * ```
- * bun run src/core/merge.fuzz.run.ts            # 20,000 cases per mode
- * bun run src/core/merge.fuzz.run.ts 300000     # the real run
+ * bun run test/core/merge.fuzz.run.ts            # 20,000 cases per mode
+ * bun run test/core/merge.fuzz.run.ts 300000     # the real run
  * ```
  *
  * Nothing here is a gate. It prints a table and exits zero; the properties are
@@ -33,7 +33,7 @@
  */
 
 import { cases, verdict, type Case, type Merge } from "./merge.fuzz.ts";
-import { mergeText, mergeTextCharacters } from "./merge.ts";
+import { mergeText, mergeTextCharacters } from "../../src/core/merge.ts";
 
 interface Tally {
   merged: number;

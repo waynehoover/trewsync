@@ -17,9 +17,9 @@ import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { cleanupBinary, removeTree, serverBinary, TestServer } from "./core/test-server.ts";
-import * as stub from "./plugin/stub.ts";
-import type { Plugin as StubPlugin } from "./plugin/stub.ts";
+import { cleanupBinary, removeTree, serverBinary, TestServer } from "../test/core/test-server.ts";
+import * as stub from "../test/plugin/stub.ts";
+import type { Plugin as StubPlugin } from "../test/plugin/stub.ts";
 
 const run = promisify(execFile);
 const CLI = "dist/trew.mjs";

@@ -36,7 +36,7 @@ import {
   serverBinary,
   TestServer,
   serversRunning,
-} from "../core/test-server.ts";
+} from "../../test/core/test-server.ts";
 import { MAX_NAME_BYTES, ProtocolError, Transport, checkName } from "../core/transport.ts";
 import { base64urlDecode, base64urlEncode } from "../core/digest.ts";
 import { formatInviteString } from "../core/invite-string.ts";

@@ -12,7 +12,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { deferred, receiveCommitted } from "./test-async.ts";
+import { deferred, receiveCommitted } from "../../test/core/test-async.ts";
 
 import {
   Engine,
@@ -34,13 +34,19 @@ import {
   type FakeSocket,
   engineOnFakeSocket,
   settleUntil,
-} from "./fake-socket.ts";
+} from "../../test/core/fake-socket.ts";
 import { MemoryIndexStore, MemoryVault, type FileStat, type Times } from "./vault.ts";
 import { conflictCopyPath } from "./merge.ts";
 import { conflictOriginal, resolveConflict, reviewConflict } from "./conflicts.ts";
 import { firstFreeName, ignoredHereError, neverSync } from "./paths.ts";
 import type { IndexEntry } from "./index-state.ts";
-import { TestServer, cleanupBinary, serverBinary, until, serversRunning } from "./test-server.ts";
+import {
+  TestServer,
+  cleanupBinary,
+  serverBinary,
+  until,
+  serversRunning,
+} from "../../test/core/test-server.ts";
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

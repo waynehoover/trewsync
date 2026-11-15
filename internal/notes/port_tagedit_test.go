@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// The cases of client/src/node/mcp-markdown.test.ts on the writing side:
+// The cases of client/test/node/mcp-markdown.test.ts on the writing side:
 // what ChangeTags does to each note, applied with ApplySourceEdits.
 // port_markdown_test.go has the reading side of the same cases.
 

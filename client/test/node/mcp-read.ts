@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { FileStat } from "../core/vault.ts";
+import type { FileStat } from "../../src/core/vault.ts";
 import {
   backupOf,
   inputText,
@@ -9,7 +9,7 @@ import {
   noteFormat,
   noteText,
 } from "./mcp-notes.ts";
-import type { NodeVault } from "./vault.ts";
+import type { NodeVault } from "../../src/node/vault.ts";
 import { matchesTag, tagOccurrences, validateTag } from "./mcp-markdown.ts";
 
 export const PAGE_TEXT_BYTES = 64 * 1024;

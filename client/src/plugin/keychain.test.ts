@@ -21,7 +21,7 @@ import {
   secretsForDevice,
   tokenInKeychain,
 } from "./keychain.ts";
-import { App, FakeSecretStorage, resetStub, setApiVersion } from "./stub.ts";
+import { App, FakeSecretStorage, resetStub, setApiVersion } from "../../test/plugin/stub.ts";
 
 afterEach(() => resetStub());
 

@@ -16,7 +16,7 @@ import { CHUNK_FLOOR } from "./chunk.ts";
 import { runForever } from "./client.ts";
 import { chunkName } from "./digest.ts";
 import { Engine } from "./engine.ts";
-import { FakeSocket, ready, settle, settleUntil } from "./fake-socket.ts";
+import { FakeSocket, ready, settle, settleUntil } from "../../test/core/fake-socket.ts";
 import { decodeFrame } from "./frame.ts";
 import { LOCAL_MAX_CHUNK_BYTES, ProtocolError, Transport } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";

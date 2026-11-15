@@ -1,4 +1,4 @@
-import { receiveCommitted } from "../core/test-async.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
 /**
  * Folder deletions between two Obsidian vaults, through a real server
  * (docs/design.md, "Folders").
@@ -15,8 +15,8 @@ import { receiveCommitted } from "../core/test-async.ts";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "../core/client.ts";
-import { TestServer, cleanupBinary, serverBinary } from "../core/test-server.ts";
-import { FakeAdapter, FakeVaultIndex, asVault } from "./fake.ts";
+import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
+import { FakeAdapter, FakeVaultIndex, asVault } from "../../test/plugin/fake.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
 
 beforeAll(async () => {

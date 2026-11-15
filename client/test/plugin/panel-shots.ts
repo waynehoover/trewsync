@@ -56,10 +56,10 @@
 
 import { App, type FakeEl, Plugin as StubPlugin, Setting, built, modals } from "./stub.ts";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
-import TrewPlugin, { type State } from "./main.ts";
+import TrewPlugin, { type State } from "../../src/plugin/main.ts";
 import type { TestServer } from "../core/test-server.ts";
-import { INVITE_PREFIX, formatInviteString } from "../core/invite-string.ts";
-import { encodeConfig, parseInvite, startPairing } from "../core/pairing.ts";
+import { INVITE_PREFIX, formatInviteString } from "../../src/core/invite-string.ts";
+import { encodeConfig, parseInvite, startPairing } from "../../src/core/pairing.ts";
 
 /** One panel state, captured. */
 export interface Shot {

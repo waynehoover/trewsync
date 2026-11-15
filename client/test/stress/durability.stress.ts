@@ -22,7 +22,7 @@ import { build as esbuild } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import type { Client } from "../../src/core/client.ts";
-import { cleanupBinary, serverBinary, TestServer } from "../../src/core/test-server.ts";
+import { cleanupBinary, serverBinary, TestServer } from "../core/test-server.ts";
 import {
   buildVault,
   device,

@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { watchDelivery } from "./delivery.ts";
-import { deferred } from "../core/test-async.ts";
+import { deferred } from "../../test/core/test-async.ts";
 import type { DeviceRow } from "../core/transport.ts";
 const stops: (() => void)[] = [];
 afterEach(() => {

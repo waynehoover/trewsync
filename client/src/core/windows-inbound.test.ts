@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { chunkName } from "./digest.ts";
-import { FakeSocket, engineOnFakeSocket, settle } from "./fake-socket.ts";
+import { FakeSocket, engineOnFakeSocket, settle } from "../../test/core/fake-socket.ts";
 import type { WireEntry } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault, type Times } from "./vault.ts";
 import { describeWindowsRefusal, windowsRefusal, type WindowsRefusal } from "./windows-names.ts";

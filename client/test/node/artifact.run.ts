@@ -3,7 +3,7 @@
  * paired, synced both ways, under the given Node, with the repository denied
  * on macOS.
  *
- *     bun run src/node/artifact.run.ts PATH/TO/trew.mjs "$(command -v node)"
+ *     bun run test/node/artifact.run.ts PATH/TO/trew.mjs "$(command -v node)"
  */
 
 import { smokeArtifact } from "./artifact-test.ts";

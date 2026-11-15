@@ -7,8 +7,8 @@ import { join } from "node:path";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { run } from "./cli.ts";
-import { TestServer, removeTree } from "../core/test-server.ts";
-import { within } from "../core/test-async.ts";
+import { TestServer, removeTree } from "../../test/core/test-server.ts";
+import { within } from "../../test/core/test-async.ts";
 
 /** The CLI bundled from source the way the release builds it, into `dir`. */
 async function buildCli(dir: string): Promise<string> {

@@ -21,7 +21,7 @@ import { describe, expect, it } from "vitest";
 
 import { chunkName } from "./digest.ts";
 import { conflictOriginal } from "./conflicts.ts";
-import { FakeSocket, engineOnFakeSocket, settle } from "./fake-socket.ts";
+import { FakeSocket, engineOnFakeSocket, settle } from "../../test/core/fake-socket.ts";
 import { pathReason } from "./path-policy.ts";
 import type { WireEntry } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";

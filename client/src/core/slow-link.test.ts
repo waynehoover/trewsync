@@ -16,8 +16,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "./client.ts";
-import { LatencyProxy } from "./latency.ts";
-import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
+import { LatencyProxy } from "../../test/core/latency.ts";
+import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 beforeAll(async () => {

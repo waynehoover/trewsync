@@ -14,8 +14,14 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { Engine, type SyncReport } from "../core/engine.ts";
-import { receiveCommitted } from "../core/test-async.ts";
-import { TestServer, cleanupBinary, removeTree, serverBinary, until } from "../core/test-server.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
+import {
+  TestServer,
+  cleanupBinary,
+  removeTree,
+  serverBinary,
+  until,
+} from "../../test/core/test-server.ts";
 import { Transport } from "../core/transport.ts";
 import { MemoryIndexStore } from "../core/vault.ts";
 import { NodeVault, midRemoveFolder } from "./vault.ts";

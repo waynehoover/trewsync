@@ -102,7 +102,7 @@ cd client && bunx vitest run --config vitest.stress.config.ts test/stress/mcp-cr
 **The oracle.** The headless client's own MCP server, `trew mcp` and `trew
 mcp-token`, is retired ([Retiring `trew mcp`](#retiring-trew-mcp-m2-task-10)).
 What stays of it in TypeScript is the oracle the Go port was held to (PLAN.md
-section 2.1): the pure note functions in `client/src/node/mcp-read.ts`,
+section 2.1): the pure note functions in `client/test/node/mcp-read.ts`,
 `mcp-inspect.ts`, `mcp-history.ts`, `mcp-markdown.ts`, `mcp-links.ts`,
 `mcp-notes.ts`, `mcp-operations.ts` and `mcp-batch.ts`, their unit tests, and
 `mcp-oracle.run.ts`, which feeds a corpus through them and writes
@@ -115,7 +115,7 @@ bundled alone, so the check cannot pass by matching nothing. A change to one
 of them, or to the runtime, must leave the fixtures byte for byte:
 
 ```bash
-cd client && bun run src/node/mcp-oracle.run.ts && cd .. && git diff --exit-code mcp-fixtures.json internal/notes/emoji_table.go
+cd client && bun run test/node/mcp-oracle.run.ts && cd .. && git diff --exit-code mcp-fixtures.json internal/notes/emoji_table.go
 ```
 
 **The shipped client.** `artifact.test.ts` runs the release's own build
@@ -247,11 +247,11 @@ and read what it finds before releasing on it.
 
 It reads the plugin bundle's source: the 46 files under `client/src/plugin`
 and `client/src/core` that `src/plugin/main.ts` reaches, type-only imports
-included. Tests are left out by name, and the fourteen other files of those
-folders are listed in [client/eslint.config.mjs](../client/eslint.config.mjs)
-with the reason each exists: test scaffolding, the fuzzers, the headless
-client's outcomes and fault seams, and the platform probe, which `main.ts` does
-not import yet. The config walks the imports from `main.ts` every run and
+included. Tests are left out by name, test helpers live under
+`client/test` (below), and the three other files of those folders are listed
+in [client/eslint.config.mjs](../client/eslint.config.mjs) with the reason
+each exists: the headless client's outcomes and fault seams, and the platform
+probe, which `main.ts` does not import yet. The config walks the imports from `main.ts` every run and
 refuses to lint when a listed file has joined the bundle, when a listed file
 is gone, or when a file of those folders is neither reached nor listed. The
 directory's own scanner is documented to choose its files differently; see
@@ -416,6 +416,19 @@ plugin-only one:
   not block a release. The benchmarks and the stress suite have since moved to
   `client/test/bench` and `client/test/stress`, under a name the list
   ignores, so the scanner no longer reads them.
+
+  **Test helpers moved on 2026-11-15.** Every file under `client/src` that
+  neither the plugin (`src/plugin/main.ts`) nor the headless client
+  (`src/node/bin.ts`) reaches, other than tests and the three files
+  `eslint.config.mjs` lists, moved to `client/test`, under the same
+  `core`, `plugin` and `node` folder names and at the same depth, so their
+  paths to the repository root are unchanged. That is the in-memory socket
+  and DataAdapter, the `obsidian` stub, `test-server.ts`, `test-async.ts`,
+  the slow link, the merge fuzzer, the chunk and MCP fixture generators and
+  the MCP oracle with its tests (`client/test/node/mcp-*.ts`), the panel walk,
+  and the packed-artifact smoke test. Of the scanner's warnings, what is left
+  is the plugin bundle's own (the accepted ones above) and the headless
+  client's, which is Node code by design.
 
   The other sections had no error either. **Releases** recommends a plugin
   release carry only the three files Obsidian downloads, and passes the
@@ -1231,7 +1244,7 @@ the pin union taken out of the survivor set, those and two more fail.
 
 M5 tasks 4 to 6 need the bytes each mutation writes before the store can
 commit them. Those are pure functions in `internal/notes`, ported from
-`client/src/node/mcp-notes.ts`, `mcp-markdown.ts`, `mcp-operations.ts` and
+`client/test/node/mcp-notes.ts`, `mcp-markdown.ts`, `mcp-operations.ts` and
 `mcp-batch.ts`; `mcp-links.ts` was ported whole in M4 (`ChangeLinks`), and the
 plans use it as it is.
 

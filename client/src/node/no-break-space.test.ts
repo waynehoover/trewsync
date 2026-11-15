@@ -24,9 +24,14 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { Client } from "../core/client.ts";
-import { receiveCommitted } from "../core/test-async.ts";
-import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
-import { FakeAdapter, FakeVaultIndex, asVault } from "../plugin/fake.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
+import {
+  cleanupBinary,
+  removeTree,
+  serverBinary,
+  TestServer,
+} from "../../test/core/test-server.ts";
+import { FakeAdapter, FakeVaultIndex, asVault } from "../../test/plugin/fake.ts";
 import { ObsidianIndexStore, ObsidianVault } from "../plugin/vault.ts";
 import { JsonIndexStore, NodeVault } from "./vault.ts";
 

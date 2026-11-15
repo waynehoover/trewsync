@@ -19,7 +19,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
+import {
+  cleanupBinary,
+  removeTree,
+  serverBinary,
+  TestServer,
+} from "../../test/core/test-server.ts";
 import { run, type Console } from "./cli.ts";
 import { Client } from "../core/client.ts";
 import { NodeVault } from "./vault.ts";

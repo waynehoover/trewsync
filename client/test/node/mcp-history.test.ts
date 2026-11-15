@@ -12,10 +12,10 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Client, type ClientOptions } from "../core/client.ts";
-import { MemoryIndexStore } from "../core/vault.ts";
+import { Client, type ClientOptions } from "../../src/core/client.ts";
+import { MemoryIndexStore } from "../../src/core/vault.ts";
 import { TestServer } from "../core/test-server.ts";
-import { NodeVault, STALE_TEMP_MS } from "./vault.ts";
+import { NodeVault, STALE_TEMP_MS } from "../../src/node/vault.ts";
 import { McpReader } from "./mcp-read.ts";
 import { McpHistory, HISTORY_LOOKUP_VERSIONS } from "./mcp-history.ts";
 

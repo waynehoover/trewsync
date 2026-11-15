@@ -304,7 +304,7 @@ server that holds the notes, that design is a second writer with weaker
 guarantees than the one above: no commit boundary, no audit, no undo, and a
 before-image a device could edit. It is removed (PLAN.md M2 task 10), once the
 server's tools passed the fixtures its note functions were ported against.
-Those functions stay in `client/src/node/mcp-*.ts` as the oracle
+Those functions stay in `client/test/node/mcp-*.ts` as the oracle
 (`mcp-oracle.run.ts` regenerates `mcp-fixtures.json`), reachable from neither
 bundle.
 

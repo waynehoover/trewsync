@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { Client, type ClientOptions } from "./client.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
-import { TestServer, serverBinary, cleanupBinary } from "./test-server.ts";
-import { deferred, nextTurn, within } from "./test-async.ts";
+import { TestServer, serverBinary, cleanupBinary } from "../../test/core/test-server.ts";
+import { deferred, nextTurn, within } from "../../test/core/test-async.ts";
 
 let server: TestServer;
 const clients: Client[] = [];

@@ -14,7 +14,7 @@
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 
 import { Client } from "./client.ts";
-import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
+import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
 import { MemoryIndexStore, MemoryVault, type FileStat } from "./vault.ts";
 
 /** Leaves `behind` out of every listing, except the names it is asked to read. */

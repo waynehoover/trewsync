@@ -17,10 +17,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { NodeVault } from "./vault.ts";
-import { FakeAdapter, FakeVaultIndex, asVault } from "../plugin/fake.ts";
+import { FakeAdapter, FakeVaultIndex, asVault } from "../../test/plugin/fake.ts";
 import { ObsidianVault } from "../plugin/vault.ts";
 import { DISPLACED_LOG } from "../core/displaced.ts";
-import { removeTree } from "../core/test-server.ts";
+import { removeTree } from "../../test/core/test-server.ts";
 
 const enc = new TextEncoder();
 const NOW = { mtime: 1_700_000_000_000, ctime: 1_700_000_000_000 };

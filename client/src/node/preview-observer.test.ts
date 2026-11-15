@@ -13,8 +13,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { Client } from "../core/client.ts";
-import { deferred, nextTurn, within } from "../core/test-async.ts";
-import { TestServer } from "../core/test-server.ts";
+import { deferred, nextTurn, within } from "../../test/core/test-async.ts";
+import { TestServer } from "../../test/core/test-server.ts";
 import { MemoryIndexStore } from "../core/vault.ts";
 import { NodeVault, STALE_TEMP_MS } from "./vault.ts";
 

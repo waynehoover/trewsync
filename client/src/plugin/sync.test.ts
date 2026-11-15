@@ -1,4 +1,4 @@
-import { receiveCommitted } from "../core/test-async.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
 /**
  * Two Obsidian vaults, through a real server.
  *
@@ -15,9 +15,14 @@ import { receiveCommitted } from "../core/test-async.ts";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "../core/client.ts";
-import { TestServer, cleanupBinary, serverBinary, serversRunning } from "../core/test-server.ts";
+import {
+  TestServer,
+  cleanupBinary,
+  serverBinary,
+  serversRunning,
+} from "../../test/core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "../core/vault.ts";
-import { FakeAdapter, FakeVaultIndex, asVault } from "./fake.ts";
+import { FakeAdapter, FakeVaultIndex, asVault } from "../../test/plugin/fake.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
 
 beforeAll(async () => {

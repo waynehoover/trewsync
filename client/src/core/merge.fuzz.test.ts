@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cases, check } from "./merge.fuzz.ts";
+import { cases, check } from "../../test/core/merge.fuzz.ts";
 import { mergeText } from "./merge.ts";
 
 /**

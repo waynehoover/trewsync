@@ -15,7 +15,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { chunkName } from "./digest.ts";
-import { CommittingServer, FakeSocket, engineOnFakeSocket, settle } from "./fake-socket.ts";
+import {
+  CommittingServer,
+  FakeSocket,
+  engineOnFakeSocket,
+  settle,
+} from "../../test/core/fake-socket.ts";
 import type { WireEntry } from "./transport.ts";
 import { MemoryVault } from "./vault.ts";
 
@@ -237,7 +242,7 @@ describe("a client connected only to look (F08)", () => {
   it("takes a batch and neither downloads it nor saves an index", async () => {
     const { Client } = await import("./client.ts");
     const { MemoryIndexStore } = await import("./vault.ts");
-    const { FakeSocket, ready } = await import("./fake-socket.ts");
+    const { FakeSocket, ready } = await import("../../test/core/fake-socket.ts");
 
     const socket = new FakeSocket();
     const bodies = new Map<string, Uint8Array>();
@@ -476,7 +481,7 @@ describe("a background pass that fails (F16)", () => {
   it("tells the shell, rather than logging it if anybody asked", async () => {
     const { Client } = await import("./client.ts");
     const { MemoryIndexStore } = await import("./vault.ts");
-    const { FakeSocket, ready } = await import("./fake-socket.ts");
+    const { FakeSocket, ready } = await import("../../test/core/fake-socket.ts");
 
     const socket = new FakeSocket();
     const failures: string[] = [];

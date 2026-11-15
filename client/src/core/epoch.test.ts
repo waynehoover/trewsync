@@ -28,9 +28,21 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { chunkName } from "./digest.ts";
 import { Engine, type SyncReport } from "./engine.ts";
-import { FakeSocket, engineOnFakeSocket, ready, settle, settleUntil } from "./fake-socket.ts";
-import { receiveCommitted } from "./test-async.ts";
-import { TestServer, cleanupBinary, removeTree, serverBinary, until } from "./test-server.ts";
+import {
+  FakeSocket,
+  engineOnFakeSocket,
+  ready,
+  settle,
+  settleUntil,
+} from "../../test/core/fake-socket.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
+import {
+  TestServer,
+  cleanupBinary,
+  removeTree,
+  serverBinary,
+  until,
+} from "../../test/core/test-server.ts";
 import { Transport, type ServerLimits, type SocketLike, type WireEntry } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 

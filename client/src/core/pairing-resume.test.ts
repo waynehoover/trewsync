@@ -16,7 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import { PairingInterrupted, pairWithInvite, type PairingStore } from "./client.ts";
-import { FakeSocket } from "./fake-socket.ts";
+import { FakeSocket } from "../../test/core/fake-socket.ts";
 import { generateDeviceId, generateDeviceToken, type DeviceConfig } from "./pairing.ts";
 import { ConnectionError, ProtocolError } from "./transport.ts";
 

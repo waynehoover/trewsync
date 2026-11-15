@@ -18,7 +18,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "../../src/core/client.ts";
 import { conflictOriginal } from "../../src/core/conflicts.ts";
-import { cleanupBinary, serverBinary, TestServer } from "../../src/core/test-server.ts";
+import { cleanupBinary, serverBinary, TestServer } from "../core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "../../src/core/vault.ts";
 import { makeCorpus } from "./corpus.ts";
 

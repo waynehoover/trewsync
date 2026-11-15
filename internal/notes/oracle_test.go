@@ -22,7 +22,7 @@ import (
 )
 
 // The oracle: mcp-fixtures.json holds what Basalt's TypeScript returned for a
-// corpus (client/src/node/mcp-oracle.run.ts wrote it), and every function here
+// corpus (client/test/node/mcp-oracle.run.ts wrote it), and every function here
 // must return the same. Each section has a check that compares one vector and
 // says how it differs; TestOracle runs every vector through its check, and
 // TestOracleDetectsCorruption proves each check can fail.
@@ -1105,7 +1105,7 @@ type oracleBug struct {
 // every range and destination it reports is one unit early. Hidden ranges
 // then miss their last character, and changeLinks reads the destination
 // "(Old.m" for "Old.md" and leaves the link unchanged
-// (client/src/node/mcp-markdown.ts:191 and client/src/node/mcp-links.ts:45).
+// (client/test/node/mcp-markdown.ts:191 and client/test/node/mcp-links.ts:45).
 const bomBody = "micromark does not count a leading byte-order mark in its offsets"
 
 var oracleBugs = []oracleBug{

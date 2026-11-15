@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { Client } from "./client.ts";
 import { MemoryVault, MemoryIndexStore } from "./vault.ts";
-import { TestServer } from "./test-server.ts";
+import { TestServer } from "../../test/core/test-server.ts";
 
 let server: TestServer;
 let client: Client;

@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Client } from "../../src/core/client.ts";
-import { TestServer } from "../../src/core/test-server.ts";
+import { TestServer } from "../core/test-server.ts";
 import { device, fingerprint, settle, tidy } from "./harness.ts";
 
 let server: TestServer;

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// The cases of client/src/node/mcp-notes.test.ts that are about the bytes an
+// The cases of client/test/node/mcp-notes.test.ts that are about the bytes an
 // edit produces, through EditNote, AppendNote and PrependNote. The rest of
 // that suite is about the before-image file, the replace, the flush and the
 // races around them on a filesystem; on the server a base is a version uid, a

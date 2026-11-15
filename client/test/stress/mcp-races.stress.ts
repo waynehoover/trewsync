@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import type { Client } from "../../src/core/client.ts";
-import { cleanupBinary, serverBinary, TestServer } from "../../src/core/test-server.ts";
+import { cleanupBinary, serverBinary, TestServer } from "../core/test-server.ts";
 import { audit, mint, notesIn, writeNotes, type Agent } from "./agent.ts";
 import { device, reopen, settle, tidy, type Device } from "./harness.ts";
 

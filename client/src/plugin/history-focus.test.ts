@@ -1,8 +1,8 @@
 import { afterEach, expect, it } from "vitest";
-import { deferred, nextTurn } from "../core/test-async.ts";
+import { deferred, nextTurn } from "../../test/core/test-async.ts";
 import type { Version } from "../core/client.ts";
 import { HistoryModal, type HistorySource } from "./history.ts";
-import { App, FakeEl, resetStub } from "./stub.ts";
+import { App, FakeEl, resetStub } from "../../test/plugin/stub.ts";
 const opened: HistoryModal[] = [];
 afterEach(() => {
   for (const modal of opened.splice(0)) modal.close();

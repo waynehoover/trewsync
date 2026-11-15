@@ -85,7 +85,7 @@ Copy Basalt wholesale into the new repository, rename, get every existing test g
 
 **Deleting a test file is a decision, not cleanup.** The reuse map's instruction to delete `keys_test.go`, `auth_test.go`, and `invite_test.go` wholesale would discard invariants that have nothing to do with encryption: `keys_test.go` alone carries invite redemption rollback (`basalt:server/internal/store/keys_test.go:530`) and a revoke-race case (`:557`). Before deleting any test file, list its assertions and classify each as *obsolete with the crypto* or *still a guarantee*. Rewrite the setup for the second kind and keep the assertion. Record the ledger in `docs/development.md`.
 
-The same rule applies to the TypeScript MCP suite. Its semantic fixtures are the only oracle for whether the Go port behaves like the thing that worked; keep `client/src/node/mcp-*.test.ts` and its vectors until the Go replacements pass against them. Do not erase the oracle in M2 and rebuild it from memory in M5.
+The same rule applies to the TypeScript MCP suite. Its semantic fixtures are the only oracle for whether the Go port behaves like the thing that worked; keep `client/test/node/mcp-*.test.ts` and its vectors until the Go replacements pass against them. Do not erase the oracle in M2 and rebuild it from memory in M5.
 
 ### 2.2 Chunks stay; names are over raw bytes; compression is wire-only
 

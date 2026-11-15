@@ -16,8 +16,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { JsonIndexStore, NodeVault, TEMP_MARK } from "./vault.ts";
 import { Client, didSomething } from "../core/client.ts";
 import { combinePasses, type SyncReport } from "../core/engine.ts";
-import { TestServer } from "../core/test-server.ts";
-import { deferred, receiveCommitted, within } from "../core/test-async.ts";
+import { TestServer } from "../../test/core/test-server.ts";
+import { deferred, receiveCommitted, within } from "../../test/core/test-async.ts";
 
 const watching = vi.hoisted(() => ({
   notify: undefined as ((event: string, filename: string | null) => void) | undefined,

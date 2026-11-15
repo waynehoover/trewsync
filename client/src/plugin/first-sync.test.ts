@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FakeAdapter } from "./fake.ts";
+import { FakeAdapter } from "../../test/plugin/fake.ts";
 import { checkFirstSync } from "./first-sync.ts";
 
 describe("first-sync file check", () => {

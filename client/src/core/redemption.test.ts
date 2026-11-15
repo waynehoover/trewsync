@@ -26,7 +26,7 @@ import {
   type PairingStore,
 } from "./client.ts";
 import { base64urlEncode, randomBytes } from "./digest.ts";
-import { FakeSocket, settle } from "./fake-socket.ts";
+import { FakeSocket, settle } from "../../test/core/fake-socket.ts";
 import type { InviteString } from "./invite-string.ts";
 import {
   finishedPairing,
@@ -36,7 +36,7 @@ import {
   type DeviceConfig,
   type PendingPairing,
 } from "./pairing.ts";
-import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
+import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
 import { ConnectionError, ProtocolError, type SocketLike } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 

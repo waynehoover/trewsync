@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
-import { App, FakeEl, built } from "./stub.ts";
+import { App, FakeEl, built } from "../../test/plugin/stub.ts";
 import { ConflictsModal, shown } from "./conflicts.ts";
-import { deferred, nextTurn } from "../core/test-async.ts";
+import { deferred, nextTurn } from "../../test/core/test-async.ts";
 import { MemoryVault } from "../core/vault.ts";
 import { reviewConflict, resolveConflict } from "../core/conflicts.ts";
 

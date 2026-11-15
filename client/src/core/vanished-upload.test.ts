@@ -15,7 +15,7 @@
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 
 import { Client } from "./client.ts";
-import { TestServer, cleanupBinary, serverBinary } from "./test-server.ts";
+import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 /** Removes a file the moment anything reads it, as a person deleting it mid-pass would. */

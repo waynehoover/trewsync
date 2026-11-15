@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { NodeVault } from "./vault.ts";
+import { NodeVault } from "../../src/node/vault.ts";
 import { McpReader, pageNote, PAGE_TEXT_BYTES } from "./mcp-read.ts";
 import { noteDigest } from "./mcp-notes.ts";
 import { deferred, nextTurn, within } from "../core/test-async.ts";

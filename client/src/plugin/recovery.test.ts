@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
 import TrewPlugin from "./main.ts";
-import { App, built, modals, notices, resetStub, type Plugin as StubPlugin } from "./stub.ts";
+import {
+  App,
+  built,
+  modals,
+  notices,
+  resetStub,
+  type Plugin as StubPlugin,
+} from "../../test/plugin/stub.ts";
 import { Client, type DeletedList } from "../core/client.ts";
-import { TestServer } from "../core/test-server.ts";
-import { nextTurn, receiveCommitted, within } from "../core/test-async.ts";
+import { TestServer } from "../../test/core/test-server.ts";
+import { nextTurn, receiveCommitted, within } from "../../test/core/test-async.ts";
 
 type TestPlugin = TrewPlugin & StubPlugin;
 const plugins: TestPlugin[] = [];

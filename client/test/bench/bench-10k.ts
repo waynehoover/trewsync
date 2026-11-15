@@ -47,7 +47,7 @@ import { cpus, homedir, tmpdir, totalmem } from "node:os";
 import { dirname, join } from "node:path";
 
 import { conflictOriginal } from "../../src/core/conflicts.ts";
-import { serverBinary } from "../../src/core/test-server.ts";
+import { serverBinary } from "../core/test-server.ts";
 import { makeCorpus } from "../stress/corpus.ts";
 import { LOCAL_REFUSALS } from "./bench-refuse.ts";
 import {

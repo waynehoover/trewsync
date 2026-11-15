@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// The cases of client/src/node/mcp-operations.test.ts and mcp-batch.test.ts
+// The cases of client/test/node/mcp-operations.test.ts and mcp-batch.test.ts
 // that are about the plan: which notes an operation changes, how, and when a
 // plan passed back is the plan computed now. Applying one is a single
 // CommitOperation in the store, which carries those suites' atomicity,

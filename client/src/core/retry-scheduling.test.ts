@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { engineOnFakeSocket } from "./fake-socket.ts";
+import { engineOnFakeSocket } from "../../test/core/fake-socket.ts";
 
 afterEach(() => vi.restoreAllMocks());
 

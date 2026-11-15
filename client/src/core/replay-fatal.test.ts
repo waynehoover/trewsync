@@ -16,7 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import { runForever } from "./client.ts";
-import { FakeSocket, ready } from "./fake-socket.ts";
+import { FakeSocket, ready } from "../../test/core/fake-socket.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 describe("a batch no reconnection can get past", () => {

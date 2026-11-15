@@ -9,7 +9,7 @@ import {
   type NoteMutation,
   type PreparedNote,
 } from "./mcp-notes.ts";
-import type { NodeVault } from "./vault.ts";
+import type { NodeVault } from "../../src/node/vault.ts";
 
 export const BATCH_FILES = 32;
 export const BATCH_PATH_BYTES = 16 * 1024;

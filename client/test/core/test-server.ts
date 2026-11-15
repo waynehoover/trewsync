@@ -18,10 +18,10 @@ import { createServer } from "node:net";
 import { promisify } from "node:util";
 
 import { deferred, within } from "./test-async.ts";
-import { base64urlEncode } from "./digest.ts";
-import { parseInviteString } from "./invite-string.ts";
-import { generateDeviceId, generateDeviceToken } from "./pairing.ts";
-import { Transport } from "./transport.ts";
+import { base64urlEncode } from "../../src/core/digest.ts";
+import { parseInviteString } from "../../src/core/invite-string.ts";
+import { generateDeviceId, generateDeviceToken } from "../../src/core/pairing.ts";
+import { Transport } from "../../src/core/transport.ts";
 
 const run = promisify(execFile);
 const GO_DIR = new URL("../../..", import.meta.url).pathname;

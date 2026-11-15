@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deferred } from "../core/test-async.ts";
+import { deferred } from "../../test/core/test-async.ts";
 import { pollWhileVisible } from "./visible-poll.ts";
 
 afterEach(() => {

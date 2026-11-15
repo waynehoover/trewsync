@@ -17,8 +17,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "./client.ts";
 import { Engine, type SyncReport } from "./engine.ts";
-import { receiveCommitted } from "./test-async.ts";
-import { TestServer, cleanupBinary, serverBinary, until } from "./test-server.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
+import { TestServer, cleanupBinary, serverBinary, until } from "../../test/core/test-server.ts";
 import { Transport } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 

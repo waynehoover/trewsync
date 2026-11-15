@@ -2,8 +2,8 @@ import { afterEach, expect, it } from "vitest";
 import { Client } from "./client.ts";
 import type { SocketLike } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
-import { TestServer } from "./test-server.ts";
-import { deferred, receiveCommitted, within } from "./test-async.ts";
+import { TestServer } from "../../test/core/test-server.ts";
+import { deferred, receiveCommitted, within } from "../../test/core/test-async.ts";
 
 const clients: Client[] = [];
 let server: TestServer;

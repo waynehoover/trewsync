@@ -28,8 +28,8 @@ import { cpus, totalmem } from "node:os";
 
 import { Client } from "../../src/core/client.ts";
 
-import { TestServer, serverBinary } from "../../src/core/test-server.ts";
-import { LatencyProxy, type Wire } from "../../src/core/latency.ts";
+import { TestServer, serverBinary } from "../core/test-server.ts";
+import { LatencyProxy, type Wire } from "../core/latency.ts";
 import { JsonIndexStore, NodeVault } from "../../src/node/vault.ts";
 import type { SyncReport } from "../../src/core/engine.ts";
 

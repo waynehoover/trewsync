@@ -15,7 +15,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deferred, nextTurn } from "./test-async.ts";
+import { deferred, nextTurn } from "../../test/core/test-async.ts";
 
 afterEach(() => vi.useRealTimers());
 
@@ -27,7 +27,7 @@ import {
   rawFrame,
   ready,
   settle,
-} from "./fake-socket.ts";
+} from "../../test/core/fake-socket.ts";
 import { MARKER_DEFLATE, MARKER_RAW, decodeFrame, encodeFrame } from "./frame.ts";
 import {
   Backoff,

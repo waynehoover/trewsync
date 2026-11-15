@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ActivityLog } from "./activity.ts";
-import { FakeAdapter } from "./fake.ts";
+import { FakeAdapter } from "../../test/plugin/fake.ts";
 
 const path = ".obsidian/plugins/trew/activity.json";
 describe("local activity log", () => {

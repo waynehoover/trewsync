@@ -42,7 +42,7 @@ import { cpus } from "node:os";
 
 import { Client } from "../../src/core/client.ts";
 import type { PassPhases, SyncReport } from "../../src/core/engine.ts";
-import { TestServer, serverBinary } from "../../src/core/test-server.ts";
+import { TestServer, serverBinary } from "../core/test-server.ts";
 import { noteBody, pathFor } from "./bench-corpus.ts";
 import { JsonIndexStore, NodeVault } from "../../src/node/vault.ts";
 import { timedVault } from "../../src/core/vault.ts";

@@ -1,4 +1,4 @@
-import { deferred, nextTurn, receiveCommitted, within } from "../core/test-async.ts";
+import { deferred, nextTurn, receiveCommitted, within } from "../../test/core/test-async.ts";
 /**
  * The plugin, run.
  *
@@ -21,7 +21,12 @@ import { readFileSync } from "node:fs";
 import type { App as ObsidianApp, PluginManifest } from "obsidian";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { TestServer, cleanupBinary, serverBinary, serversRunning } from "../core/test-server.ts";
+import {
+  TestServer,
+  cleanupBinary,
+  serverBinary,
+  serversRunning,
+} from "../../test/core/test-server.ts";
 import { ConnectionError, PROTO, Transport } from "../core/transport.ts";
 import {
   App,
@@ -36,7 +41,7 @@ import {
   notices,
   resetStub,
   setApiVersion,
-} from "./stub.ts";
+} from "../../test/plugin/stub.ts";
 import TrewPlugin, { connectionDetail, describeConnection, describeDeleted } from "./main.ts";
 import { describeRestore } from "./history.ts";
 import { SUPPORT_TABLE } from "./platform-notice.ts";
@@ -6731,7 +6736,7 @@ describe("compact sync menu", () => {
     const { plugin } = await load();
     await startVault(plugin, "laptop");
     await synced(plugin);
-    const { Menu } = await import("./stub.ts");
+    const { Menu } = await import("../../test/plugin/stub.ts");
     plugin.ribbonIcons[0]!.callback();
     expect(Menu.latest!.items.map((item) => item.label)).toContain("Sync activity");
     expect(Menu.latest!.items.map((item) => item.label)).toContain("Review conflicts");
@@ -7821,7 +7826,7 @@ describe("settings sync", () => {
     // The original kept: nothing Obsidian holds changes, so no reload.
     const first = await keptBoth("202610110930");
     // The ribbon menu counts it too, once the settings folder has been walked.
-    const { Menu } = await import("./stub.ts");
+    const { Menu } = await import("../../test/plugin/stub.ts");
     plugin.ribbonIcons[0]!.callback();
     await until("the menu to count the setting's copy", () =>
       Menu.latest!.items.some((item) => item.label === "Review conflicts (1)"),

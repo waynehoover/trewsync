@@ -11,17 +11,17 @@
  * shipped bundle.
  */
 
-import { chunkName } from "./digest.ts";
-import { Engine, type SettingsScope } from "./engine.ts";
-import { decodeFrame } from "./frame.ts";
+import { chunkName } from "../../src/core/digest.ts";
+import { Engine, type SettingsScope } from "../../src/core/engine.ts";
+import { decodeFrame } from "../../src/core/frame.ts";
 import {
   LOCAL_MAX_CHUNK_BYTES,
   PROTO,
   Transport,
   type SocketLike,
   type WireEntry,
-} from "./transport.ts";
-import { MemoryIndexStore, MemoryVault } from "./vault.ts";
+} from "../../src/core/transport.ts";
+import { MemoryIndexStore, MemoryVault } from "../../src/core/vault.ts";
 
 export class FakeSocket implements SocketLike {
   binaryType = "";

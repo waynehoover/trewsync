@@ -1,5 +1,5 @@
-import type { Client } from "../core/client.ts";
-import { receivedLatest } from "../core/delivery.ts";
+import type { Client } from "../../src/core/client.ts";
+import { receivedLatest } from "../../src/core/delivery.ts";
 import { McpHistory } from "./mcp-history.ts";
 import { McpReader } from "./mcp-read.ts";
 import { NOTE_BYTES, NoteError, noteDigest, noteText } from "./mcp-notes.ts";

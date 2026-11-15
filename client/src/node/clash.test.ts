@@ -1,4 +1,4 @@
-import { receiveCommitted } from "../core/test-async.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
 /**
  * A path that is a file on one device and a folder on another.
  *
@@ -15,7 +15,12 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Client } from "../core/client.ts";
-import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
+import {
+  cleanupBinary,
+  removeTree,
+  serverBinary,
+  TestServer,
+} from "../../test/core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "../core/vault.ts";
 import { JsonIndexStore, NodeVault } from "./vault.ts";
 

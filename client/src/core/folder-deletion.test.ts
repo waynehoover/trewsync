@@ -21,10 +21,16 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { chunkName } from "./digest.ts";
 import { Engine, type SyncReport } from "./engine.ts";
-import { engineOnFakeSocket, settleUntil } from "./fake-socket.ts";
+import { engineOnFakeSocket, settleUntil } from "../../test/core/fake-socket.ts";
 import type { SyncPreview } from "./preview.ts";
-import { receiveCommitted } from "./test-async.ts";
-import { TestServer, cleanupBinary, serverBinary, until, serversRunning } from "./test-server.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
+import {
+  TestServer,
+  cleanupBinary,
+  serverBinary,
+  until,
+  serversRunning,
+} from "../../test/core/test-server.ts";
 import { ProtocolError, Transport, type BatchEntry } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault, type FileStat } from "./vault.ts";
 

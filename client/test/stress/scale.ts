@@ -28,7 +28,7 @@ import { chunkNames } from "../../src/core/digest.ts";
 import { encodeFrame } from "../../src/core/frame.ts";
 import { chunkBytes, sizesFor } from "../../src/core/chunk.ts";
 import { encodedEntryBytes } from "../../src/core/transport.ts";
-import { removeTree, TestServer } from "../../src/core/test-server.ts";
+import { removeTree, TestServer } from "../core/test-server.ts";
 import { JsonIndexStore, NodeVault } from "../../src/node/vault.ts";
 
 const COUNT = Number(process.env["NOTES"] ?? 10000);

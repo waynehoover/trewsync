@@ -24,7 +24,12 @@
 import { describe, expect, it } from "vitest";
 
 import { chunkName } from "./digest.ts";
-import { FakeSocket, engineOnFakeSocket, settle, settleUntil } from "./fake-socket.ts";
+import {
+  FakeSocket,
+  engineOnFakeSocket,
+  settle,
+  settleUntil,
+} from "../../test/core/fake-socket.ts";
 import type { WireEntry } from "./transport.ts";
 
 const enc = new TextEncoder();

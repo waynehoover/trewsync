@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
 
 import { Client } from "./client.ts";
 import { chunkName } from "./digest.ts";
-import { FakeSocket, ready, settle } from "./fake-socket.ts";
+import { FakeSocket, ready, settle } from "../../test/core/fake-socket.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 const enc = new TextEncoder();

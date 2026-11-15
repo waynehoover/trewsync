@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
-import { cleanupBinary, removeTree, serverBinary } from "../../src/core/test-server.ts";
+import { cleanupBinary, removeTree, serverBinary } from "../core/test-server.ts";
 import { cleanupCliBundle, cliBundle, runSoak, SHORT } from "./soak.ts";
 
 beforeAll(async () => {

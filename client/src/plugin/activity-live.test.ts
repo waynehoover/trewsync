@@ -1,8 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { ActivityLog, ActivityModal } from "./activity.ts";
-import { App, built, FakeEl, resetStub } from "./stub.ts";
-import { FakeAdapter } from "./fake.ts";
-import { nextTurn } from "../core/test-async.ts";
+import { App, built, FakeEl, resetStub } from "../../test/plugin/stub.ts";
+import { FakeAdapter } from "../../test/plugin/fake.ts";
+import { nextTurn } from "../../test/core/test-async.ts";
 const opened: ActivityModal[] = [];
 afterEach(() => {
   for (const modal of opened.splice(0)) modal.close();

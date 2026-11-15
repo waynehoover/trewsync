@@ -27,7 +27,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { JsonIndexStore, NodeVault, midRespell } from "./vault.ts";
 import { Client } from "../core/client.ts";
-import { cleanupBinary, removeTree, serverBinary, TestServer } from "../core/test-server.ts";
+import {
+  cleanupBinary,
+  removeTree,
+  serverBinary,
+  TestServer,
+} from "../../test/core/test-server.ts";
 
 /** The disk's spelling of the name, and the one this vault reports. */
 const ON_DISK = "cafe~.md";

@@ -6,9 +6,9 @@ import { run } from "./cli.ts";
 import { lockVault } from "./lock.ts";
 import { NodeVault, TEMP_MARK } from "./vault.ts";
 import { DISPLACED_LOG } from "../core/displaced.ts";
-import { TestServer, removeTree } from "../core/test-server.ts";
+import { TestServer, removeTree } from "../../test/core/test-server.ts";
 import { Transport } from "../core/transport.ts";
-import { nextTurn, receiveCommitted } from "../core/test-async.ts";
+import { nextTurn, receiveCommitted } from "../../test/core/test-async.ts";
 
 let server: TestServer | undefined;
 const dirs: string[] = [];

@@ -3,9 +3,9 @@ import { readFile, writeFile, rename, rm, utimes, mkdtemp } from "node:fs/promis
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Client } from "../../src/core/client.ts";
-import { TestServer } from "../../src/core/test-server.ts";
+import { TestServer } from "../core/test-server.ts";
 import { ProtocolError } from "../../src/core/transport.ts";
-import { deferred, within, receiveCommitted } from "../../src/core/test-async.ts";
+import { deferred, within, receiveCommitted } from "../core/test-async.ts";
 import { device, reopen, fingerprint, differences, settle, tidy, type Device } from "./harness.ts";
 let server: TestServer;
 const open: Client[] = [];

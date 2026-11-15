@@ -7,7 +7,7 @@
 import { execFileSync } from "node:child_process";
 import { arch, cpus, platform } from "node:os";
 import { Client, SYNC_EVENT_DELAY_MS } from "../../src/core/client.ts";
-import { TestServer, cleanupBinary, until } from "../../src/core/test-server.ts";
+import { TestServer, cleanupBinary, until } from "../core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "../../src/core/vault.ts";
 
 class PluginEvents extends MemoryVault {

@@ -1,8 +1,8 @@
 import { afterEach, expect, it } from "vitest";
 import { Client } from "./client.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
-import { TestServer } from "./test-server.ts";
-import { receiveCommitted } from "./test-async.ts";
+import { TestServer } from "../../test/core/test-server.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
 
 let server: TestServer;
 let client: Client;

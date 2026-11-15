@@ -10,13 +10,13 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { deferred, nextTurn } from "../core/test-async.ts";
+import { deferred, nextTurn } from "../../test/core/test-async.ts";
 
 import { Client } from "../core/client.ts";
-import { TestServer, cleanupBinary, serverBinary, until } from "../core/test-server.ts";
-import { FakeAdapter, FakeVaultIndex, asVault } from "./fake.ts";
+import { TestServer, cleanupBinary, serverBinary, until } from "../../test/core/test-server.ts";
+import { FakeAdapter, FakeVaultIndex, asVault } from "../../test/plugin/fake.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
-import { App, notices } from "./stub.ts";
+import { App, notices } from "../../test/plugin/stub.ts";
 import type { Version } from "../core/client.ts";
 import { HistoryModal, PAGE, diffLines, type HistorySource } from "./history.ts";
 
@@ -664,9 +664,9 @@ describe("bounded, accessible previews", () => {
     const modal = new HistoryModal(new App() as never, source, "note.md");
     modal.open();
     await nextTurn();
-    const list = (modal.contentEl as unknown as import("./stub.ts").FakeEl).querySelectorAll(
-      '[data-version="1"]',
-    );
+    const list = (
+      modal.contentEl as unknown as import("../../test/plugin/stub.ts").FakeEl
+    ).querySelectorAll('[data-version="1"]');
     expect(list[0]?.tag).toBe("button");
     list[0]!.focus();
     list[0]!.fire("keydown", { key: "ArrowDown", preventDefault() {} });

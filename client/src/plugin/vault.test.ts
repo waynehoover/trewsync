@@ -13,8 +13,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { FakeAdapter, FakeVaultIndex, asVault, normalizePath } from "./fake.ts";
-import { resetStub, setApiVersion } from "./stub.ts";
+import { FakeAdapter, FakeVaultIndex, asVault, normalizePath } from "../../test/plugin/fake.ts";
+import { resetStub, setApiVersion } from "../../test/plugin/stub.ts";
 import { ObsidianIndexStore, ObsidianVault } from "./vault.ts";
 import { plainDigest } from "../core/digest.ts";
 

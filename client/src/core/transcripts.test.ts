@@ -40,7 +40,7 @@ import { deflateSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
 import { chunkName } from "./digest.ts";
-import { FakeSocket, rawFrame, settle } from "./fake-socket.ts";
+import { FakeSocket, rawFrame, settle } from "../../test/core/fake-socket.ts";
 import { MARKER_DEFLATE, decodeFrame, encodeFrame } from "./frame.ts";
 import {
   LOCAL_MAX_CHUNK_BYTES,

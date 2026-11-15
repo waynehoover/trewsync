@@ -1,4 +1,4 @@
-import type { Transport } from "./transport.ts";
+import type { Transport } from "../../src/core/transport.ts";
 
 /** Let queued microtasks run while an explicit test gate remains closed. */
 export const nextTurn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));

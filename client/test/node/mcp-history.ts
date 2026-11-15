@@ -1,5 +1,5 @@
-import type { Client, Version } from "../core/client.ts";
-import { previewCounts } from "../core/preview.ts";
+import type { Client, Version } from "../../src/core/client.ts";
+import { previewCounts } from "../../src/core/preview.ts";
 import { NOTE_BYTES, NoteError, noteFormat, noteText } from "./mcp-notes.ts";
 import { McpReader, pageNote, type ReadNoteInput } from "./mcp-read.ts";
 

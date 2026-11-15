@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// The cases of client/src/node/mcp-inspect.test.ts that exercise compareText.
+// The cases of client/test/node/mcp-inspect.test.ts that exercise compareText.
 // The delivery-status case tests the device client, which is not ported.
 
 func TestPortedCompareReconstructsTheLaterText(t *testing.T) {

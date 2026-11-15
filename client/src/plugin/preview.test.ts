@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { App, built } from "./stub.ts";
+import { App, built } from "../../test/plugin/stub.ts";
 import { SyncPreviewModal } from "./preview.ts";
 import type { SyncPreview } from "../core/preview.ts";
 
