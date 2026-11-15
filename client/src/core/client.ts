@@ -999,7 +999,7 @@ export class Client {
       try {
         checkEntryShape(e);
       } catch (err) {
-        throw new Error(`${(err as Error).message}, and it is not shown`);
+        throw new Error(`${(err as Error).message}, and it is not shown`, { cause: err });
       }
     }
   }
@@ -1928,7 +1928,7 @@ export async function pairWithInvite(
       throw new Error(
         `${error.message}; and the pairing saved before it was sent could not be removed: ` +
           (cause as Error).message,
-        { cause: error },
+        { cause },
       );
     }
     throw error;

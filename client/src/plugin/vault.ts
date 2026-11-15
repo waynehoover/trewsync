@@ -387,7 +387,9 @@ async function verify(adapter: Writer, path: string, bytes: Uint8Array): Promise
   try {
     back = new Uint8Array(await adapter.readBinary(path));
   } catch (err) {
-    throw new Error(`${path} cannot be read back after writing it: ${(err as Error).message}`);
+    throw new Error(`${path} cannot be read back after writing it: ${(err as Error).message}`, {
+      cause: err,
+    });
   }
   if (back.length !== bytes.length) {
     throw new Error(`${path} is ${back.length} bytes after writing ${bytes.length}`);
@@ -1700,15 +1702,18 @@ export class ObsidianVault implements Vault {
             ? `${why}. It was cut short and could not be put back yet, so it will not sync ` +
                 `until it is; what it held is at ${keepAt}`
             : `${why}. The previous content is at ${keepAt}`,
+          { cause: error },
         );
       }
       if (expect !== undefined && (await expect.idOf(before)) === expect.contentId) {
         // The note holds the version this was decided about, which the server
         // has, so the backup is a duplicate, as it is after a write that lands.
         await this.dropDuplicate(this.resolve(keepAt));
-        throw new Error(`${why}. What the note held was put back`);
+        throw new Error(`${why}. What the note held was put back`, { cause: error });
       }
-      throw new Error(`${why}. What the note held was put back, and is also at ${keepAt}`);
+      throw new Error(`${why}. What the note held was put back, and is also at ${keepAt}`, {
+        cause: error,
+      });
     }
 
     if (beforeIsServers) {
@@ -2325,6 +2330,7 @@ export class ObsidianVault implements Vault {
       throw new Error(
         `writing ${normalized} failed: ${(err as Error).message}. ` +
           `The complete new content is beside it at ${temp}`,
+        { cause: err },
       );
     }
     await this.discardStaging(temp);
@@ -2434,6 +2440,7 @@ export class ObsidianVault implements Vault {
     } catch (err) {
       throw new Error(
         `cannot check how ${normalized} is spelled on disk, so it was not written: ${(err as Error).message}`,
+        { cause: err },
       );
     }
     if (listed.files.includes(normalized)) return; // Already spelled this way.

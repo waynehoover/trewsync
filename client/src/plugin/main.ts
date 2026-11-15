@@ -845,6 +845,7 @@ export default class TrewPlugin extends Plugin {
         throw new Error(
           `This invite link is invalid: ${(err as Error).message}. Create a new invite on a ` +
             `paired device, or with trewd invite on the server.`,
+          { cause: err },
         );
       }
       new TrewModal(this, invite).open();
@@ -1960,6 +1961,7 @@ export default class TrewPlugin extends Plugin {
           `the device list now says ${said}, and this device could not write it down: ` +
             `${(err as Error).message}. Conflict copies made here will still say ` +
             `${config.device} until this is done again.`,
+          { cause: err },
         );
       }
       if (mine !== this.generation)
@@ -2438,6 +2440,7 @@ export default class TrewPlugin extends Plugin {
           this.start();
           throw new Error(
             `settings sync was not turned on: this device's settings could not be copied first (${(err as Error).message})`,
+            { cause: err },
           );
         }
       }
@@ -3064,6 +3067,7 @@ export default class TrewPlugin extends Plugin {
       throw new Error(
         `the index a previous pairing left in ${this.pluginDir()} could not be removed: ` +
           (err as Error).message,
+        { cause: err },
       );
     }
   }
@@ -3913,7 +3917,9 @@ export default class TrewPlugin extends Plugin {
     try {
       back = await this.readConfig();
     } catch (err) {
-      throw new Error(`${this.dataPath} could not be read back: ${(err as Error).message}`);
+      throw new Error(`${this.dataPath} could not be read back: ${(err as Error).message}`, {
+        cause: err,
+      });
     }
     // The token read back from wherever the record says it is, so this one
     // comparison covers both halves: the file, and the keychain it points at.
@@ -4012,7 +4018,9 @@ export default class TrewPlugin extends Plugin {
     try {
       back = await this.readConfig();
     } catch (err) {
-      throw new Error(`${this.dataPath} could not be read back: ${(err as Error).message}`);
+      throw new Error(`${this.dataPath} could not be read back: ${(err as Error).message}`, {
+        cause: err,
+      });
     }
     if (back !== undefined) throw new Error(`${this.dataPath} still holds a pairing`);
     this.forgetSecret();

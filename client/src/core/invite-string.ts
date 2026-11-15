@@ -102,7 +102,7 @@ export function parseInviteString(input: string): InviteString {
   try {
     raw = base64urlDecode(text.slice(INVITE_PREFIX.length));
   } catch (err) {
-    throw new Error(`this invite is damaged: ${(err as Error).message}`);
+    throw new Error(`this invite is damaged: ${(err as Error).message}`, { cause: err });
   }
   if (raw.length < 1 + INVITE_TOKEN_BYTES + 2 + 4)
     throw new Error("this invite is too short to be complete");

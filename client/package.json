@@ -53,26 +53,27 @@
   },
   "devDependencies": {
     "@types/diff-match-patch": "^1.0.36",
-    "@types/node": "^24.10.13",
+    "@types/node": "^26.6.6",
     "diff-match-patch": "1.0.5",
-    "esbuild": "^0.28.1",
-    "eslint": "9.39.5",
-    "eslint-plugin-obsidianmd": "0.4.2",
+    "esbuild": "^0.28.2",
+    "eslint": "10.15.0",
+    "eslint-plugin-obsidianmd": "0.6.0",
     "fflate": "0.8.3",
-    "mdast-util-from-markdown": "2.0.3",
-    "micromark": "4.0.2",
+    "mdast-util-from-markdown": "2.1.0",
+    "micromark": "4.0.3",
     "micromark-util-decode-string": "2.0.1",
-    "obsidian": "^1.13.1",
-    "prettier": "^3.6.2",
+    "obsidian": "^1.14.4",
+    "prettier": "^3.10.1",
     "qrcode-generator": "2.0.4",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.12",
+    "typescript": "~6.0.3",
+    "vitest": "^5.1.0",
     "yaml": "2.9.1"
   },
   "bin": {
     "trew": "dist/trew.mjs"
   },
   "overrides": {
+    "minimatch": "^11.0.8",
     "moment": "2.31.0",
     "source-map-js": "1.2.2"
   }

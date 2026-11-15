@@ -5550,6 +5550,7 @@ export class Engine {
               transport.isClosed
                 ? `the download ended: ${err.message}`
                 : `the server will not send even one chunk of this file in a fetch: ${err.message}`,
+              { cause: err },
             );
           }
           for (const b of bodies) out.push(b);

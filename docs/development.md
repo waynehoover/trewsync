@@ -240,10 +240,14 @@ release uninstallable; a warning passes with a written reason. `bun run lint`
 runs the same config, unchanged, and fails on any error. It is a step of
 `scripts/check.sh` and of CI's client job, both named `lint`.
 
-The versions are pinned: eslint 9.39.5 and eslint-plugin-obsidianmd 0.4.2, the
-newest release when the gate landed (2026-09-23) and still the newest on
-2026-10-08. A newer plugin release can add rules, so move the pin deliberately
-and read what it finds before releasing on it.
+The versions are pinned: eslint 10.15.0 and eslint-plugin-obsidianmd 0.6.0,
+the newest on 2026-11-15 (the gate landed on 9.39.5 and 0.4.2 on 2026-09-23).
+A newer plugin release can add rules, so move the pin deliberately and read
+what it finds before releasing on it. Moving to these found 18 errors, all
+eslint 10's `preserve-caught-error`: an error thrown from a `catch` now carries
+the caught one as its `cause`. TypeScript stays on 6.0 because
+typescript-eslint supports nothing newer, and the obsidianmd rules use the
+TypeScript API that 7.0 does not have.
 
 It reads the plugin bundle's source: the 46 files under `client/src/plugin`
 and `client/src/core` that `src/plugin/main.ts` reaches, type-only imports
@@ -286,7 +290,7 @@ added or removed, change this table in the same commit.
 | `obsidianmd/no-global-this` | 1 | `electronFs` in `plugin/vault.ts` | Node's `fs` for the durable fsync on desktop, through the `require` Electron provides as a global. Written as `require("fs")` the bundler would resolve it and the plugin would name a Node module, which the build test refuses. Only a desktop `FileSystemAdapter` asks for it, and a phone has no such global, so it gets none. That is the self-critique checklist's advice for a Node module in a plugin that also runs on mobile (gate it to desktop and `require()` it at run time), and why `isDesktopOnly` stays `false`. |
 | `no-restricted-globals` (`fetch`) | 2 | `readBlocks` and `readRange` in `plugin/vault.ts` | They fetch the vault's own resource URL, not the network, to read a large attachment as a stream and by range. `requestUrl` returns whole bodies and does not read resource URLs. |
 | `@typescript-eslint/no-deprecated` (`setWarning`) | 6 | `plugin/main.ts` (5), `plugin/restore-time.ts` (1) | Its replacement, `setDestructive`, arrived in 1.13.0 and the manifest admits 1.7.2, so using it would be a `no-unsupported-api` error. |
-| `obsidianmd/ui/sentence-case` | 18 | `plugin/main.ts` (17), `plugin/restore-time.ts` (1) | Fifteen are the product's name, TrewSync, whose capital S the rule reads as a second word to lowercase: the plugin's name on the ribbon and in the panel's title, "Which platforms TrewSync supports", the file menu's "TrewSync: version history" and "TrewSync: restore to an earlier time", and ten notices that name it. One is the literal invite prefix `trew1i_...`, and two are the example device name `laptop` in a placeholder, spelled as device names are everywhere else. The guideline itself capitalizes proper nouns, and the rule keeps the casing of the brands on its own list, GitHub and macOS among them; TrewSync is not on it. |
+| `obsidianmd/prefer-active-doc` | 6 | `plugin/main.ts` (2), `plugin/activity.ts`, `plugin/delivery.ts`, `plugin/resume.ts`, `plugin/visible-poll.ts` | Each listens to the main window's `document` on purpose: whether Obsidian is visible, the click that fetches an attachment, the panel's animation frames. `activeDocument` is whichever window has focus, a popout included, and a listener there would stop hearing the main window. Read by name behind a `typeof` guard for the tests, as above. |
 | `obsidianmd/hardcoded-config-path` | 1 | `EVERY_DEVICE` in `core/pairing.ts` | The name of the settings group every device can join, which is a folder on the server and on no device ([plan/settings-sync.md](../plan/settings-sync.md)). The folder a device runs is still read from `configDir`, and mapped onto its group's. |
 
 That was 56 warnings, and no errors, at the commit that added the gate. Writing
@@ -304,6 +308,9 @@ shared group instead, so it is still 62. Restoring to an earlier time added
 its Restore button's `setWarning`, the folder menu's entry and the notice that
 a restore is undone, which name TrewSync, so it is 65. The settings tab's `getSettingDefinitions`, which puts
 TrewSync in Obsidian 1.13's settings search, took one away, so it is 64.
+eslint-plugin-obsidianmd 0.6.0 no longer reads TrewSync as two words, which
+took away the 18 sentence-case warnings, and added the 6 of
+`prefer-active-doc`, so it is 52.
 
 ### Submitting to the community directory
 

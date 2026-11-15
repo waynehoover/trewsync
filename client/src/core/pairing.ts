@@ -462,7 +462,9 @@ function token(
   try {
     bytes = base64urlDecode(value);
   } catch (err) {
-    throw new Error(`${where} holds a ${field} that is not base64url: ${(err as Error).message}`);
+    throw new Error(`${where} holds a ${field} that is not base64url: ${(err as Error).message}`, {
+      cause: err,
+    });
   }
   if (bytes.length !== length) {
     throw new Error(

@@ -256,6 +256,7 @@ export class JournalIndexStore implements IndexStore {
       // plugin on a device.
       throw new Error(
         `the index snapshot is not valid JSON, so it cannot be trusted: ${(err as Error).message}`,
+        { cause: err },
       );
     }
 
