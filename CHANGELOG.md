@@ -11,6 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.16.4, plugin (2026-11-15)
+
+Works with trewd 0.15.0 or later, as 0.16.3 does. The server and `trew` are
+unchanged.
+
 ### Plugin
 
 - TrewSync shows up in Obsidian's settings search (Obsidian 1.13 and later):
