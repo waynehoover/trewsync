@@ -465,7 +465,7 @@ scope. These are scope decisions, not claims that alternatives cannot solve them
 |---|---|
 | Obsidian on macOS/Linux, local storage | Supported product scope; real-app acceptance remains necessary. |
 | Obsidian on Android, local storage | In use; foreground sync only, with mobile durability limits. |
-| CLI on macOS/Linux, local storage | Experimental; intended primarily for mirrors. |
+| CLI on macOS/Linux, local storage | Supported; intended primarily for mirrors. |
 | iOS | Untested. |
 | Windows | Unsupported. |
 | NFS, SMB, or other network filesystems | Unsupported. |

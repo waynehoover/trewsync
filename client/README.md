@@ -3,17 +3,24 @@
 **Self-hosted vault sync with full version history, on a server you run.**
 
 `trew` is TrewSync's headless client: a paired device that is a folder rather
-than an Obsidian vault. Keep a copy of your notes on a NAS or another machine
-without Obsidian, as a read-only mirror or a two-way peer, and read history and
-recover notes from the terminal. It runs the same sync engine as the
+than an Obsidian vault. It runs the same sync engine as the
 [Obsidian plugin](https://github.com/waynehoover/trewsync/blob/main/docs/plugin.md).
+
+- **Mirror your notes** to a NAS or another machine without Obsidian,
+  read-only or two-way.
+- **Search, read history and restore** from the terminal. Restore never
+  overwrites an existing file.
+- **Rewind a folder** to an earlier time, and undo it.
+- **Script it.** `--json` gives structured output; exit 0 is success, 1 a
+  failure or unresolved issue, 2 invalid arguments.
 
 The server it syncs through can read what it stores; see
 [Security and privacy](https://github.com/waynehoover/trewsync/blob/main/docs/security.md).
 
-**Experimental.** Use macOS or Linux, Node **22 or newer**, and a local
-filesystem. Run one TrewSync process that writes to each directory, and keep
-other sync tools and the Obsidian plugin off that same directory.
+Use macOS or Linux, Node **22 or newer**, and a local
+filesystem with hard links (not exFAT or FAT). Run one TrewSync process that
+writes to each directory, and keep other sync tools and the Obsidian plugin
+off that same directory.
 
 The package installs a command called `trew`. The server's command is `trewd`,
 so a machine can have both on its path.
@@ -34,13 +41,14 @@ trew sync --watch
 
 Replace `INVITE` with the string you created. It starts `trew1i_` and carries
 the server's address and the vault's name, so there is nothing else to type.
-An invite works once and expires after one hour by default. `--read-only` is
-saved during pairing, so later syncs keep local changes from being uploaded
-even without the flag. To keep the invite out of your shell history, use
-`trew pair --key-file /private/path/invite.txt` instead.
+An invite works once and expires after one hour by default.
 
-Keep the process running for continuous sync. For a scheduled job, use
-`trew sync --dir /path/to/trew-mirror` instead.
+- `--read-only` is saved during pairing, so later syncs keep local changes
+  from being uploaded even without the flag. Leave it off for a two-way peer.
+- To keep the invite out of your shell history, use
+  `trew pair --key-file /private/path/invite.txt` instead.
+- Keep the process running for continuous sync. For a scheduled job, use
+  `trew sync --dir /path/to/trew-mirror` instead.
 
 ## Everyday commands
 
@@ -53,9 +61,12 @@ Keep the process running for continuous sync. For a scheduled job, use
 | `trew invite` | Add another device with a single-use invite. |
 | `trew devices` | List devices and outstanding invites. |
 | `trew revoke ID` | Stop a device syncing. |
+| `trew search "text"` | Search the notes on the server for literal text, a tag or a file name. |
 | `trew history "Note.md"` | View a note's versions, newest first. |
 | `trew deleted` | List deleted notes and whether they can be restored. |
 | `trew restore "Note.md"` | Restore the newest version with content, never over an existing file. |
+| `trew rewind FOLDER --ago 6h` | Preview putting a folder back as it was; nothing changes until you apply it. |
+| `trew undo OPERATION` | Reverse a rewind, an undo, or an agent's edit. |
 | `trew unlink` | Remove local pairing and index while keeping notes. |
 
 ## Read more

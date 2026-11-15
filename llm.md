@@ -10,7 +10,7 @@ disk and its backups can read every note. Tell the user this before installing
 if they have not already chosen TrewSync knowing it. The plugin runs on macOS,
 Linux, and Android with local vault storage. iOS is untested; Windows is
 unsupported. Android sync requires Obsidian in the foreground. The CLI is
-experimental and optional. The server can also serve an MCP endpoint for an
+optional. The server can also serve an MCP endpoint for an
 agent; a token for it reads the whole vault and what the agent reads reaches
 its model provider, so set it up only when the user asks for it.
 
@@ -203,11 +203,13 @@ On each accessible device:
 
 1. Resolve the intended vault and configuration folder. Preserve an existing
    plugin directory before an upgrade, including its state and credentials.
-2. Disable a running TrewSync plugin before replacing its files. Copy the three
-   verified release assets into `<vault>/<config-folder>/plugins/trew-sync/`.
-   Update only `main.js`, `manifest.json`, and `styles.css`; keep all other files.
-3. Reload Obsidian's plugin discovery, enable **TrewSync**, and check the
-   installed version. Leave unrelated plugins and settings intact.
+2. Install **TrewSync** (id `trew-sync`) from Obsidian's community directory:
+   `plugin:install` below, or **Settings → Community plugins → Browse**. Only
+   when the user wants a release the directory does not offer yet, disable a
+   running TrewSync, copy the three verified release assets into
+   `<vault>/<config-folder>/plugins/trew-sync/`, and update only `main.js`,
+   `manifest.json`, and `styles.css`, keeping all other files.
+3. Enable **TrewSync** and check the installed version. Leave unrelated plugins and settings intact.
 4. Open TrewSync's panel and inspect its actual pairing or sync state.
 
 On desktop, check `obsidian help` for supported automation commands. When
@@ -215,6 +217,7 @@ available, these commands target a specific open vault:
 
 ```bash
 obsidian vault="My Vault" vault info=path
+obsidian vault="My Vault" plugin:install id=trew-sync
 obsidian vault="My Vault" plugin:enable id=trew-sync
 obsidian vault="My Vault" plugin id=trew-sync
 obsidian vault="My Vault" commands filter=trew-sync
@@ -224,8 +227,7 @@ Replace `My Vault` with the verified vault name and check the returned path.
 Use the listed command IDs to open the panel or trigger sync. New manually
 copied files may require an app reload before they are discoverable. Enable
 community plugins if needed, accounting for any existing disabled plugins.
-`plugin:install` searches the community directory; it is not a substitute for
-manual release installation while TrewSync is outside that directory.
+Check `obsidian help` for `plugin:install`'s exact arguments before using it.
 
 Use app automation when available. If Obsidian or Android is inaccessible,
 prepare the verified files and give the user just the remaining install/enable
@@ -257,10 +259,7 @@ separately; do not clear it automatically. Sync runs both ways after pairing.
 
 On Android, create a new vault in **App storage** (Obsidian asks for a vault
 location): **Device storage** is several times slower for TrewSync to write
-to. A file manager cannot reach App storage, so install the plugin there with
-the community plugin **BRAT** (add the beta plugin `waynehoover/trewsync`), as
-the [plugin guide](docs/plugin.md#install-with-brat) describes; or install it
-into a Device storage vault before moving the vault. Moving an existing Android vault is the user's decision; if they want it,
+to. Install the plugin there from **Settings → Community plugins**. Moving an existing Android vault is the user's decision; if they want it,
 pair a new App-storage vault with a new invite and keep the old vault until
 the new one has finished its first sync.
 

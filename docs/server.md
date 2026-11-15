@@ -2,20 +2,23 @@
 
 [Documentation](index.md) · [Maintenance](server-operations.md) · [Command reference](server-reference.md)
 
-Run one server for your personal vault, then connect your devices through the
-Obsidian plugin. The server stores your notes and their history, readable to
-anyone who can read its disk; you provide storage, a secure connection, and
-backups. Put the data directory on encrypted storage (LUKS, FileVault, ZFS
-native encryption) and see [Security and privacy](security.md) for what that
-does and does not cover.
+Run one server for your vault, then connect your devices with the Obsidian
+plugin. The server stores your notes and their history. You provide storage,
+a secure connection, and backups.
 
-**Put Tailscale Serve or an HTTPS reverse proxy in front of TrewSync.** Your devices
-connect to the proxy; TrewSync's own port stays private. For a personal homelab,
-we recommend [Tailscale Serve](#tailscale-recommended). If you already use a domain
-and an HTTPS proxy, [use that instead](#caddy).
+Before you start:
 
-You need a Linux or macOS machine with local storage. Docker is the simplest
-route. Keep the data directory off NFS, SMB, and other network filesystems.
+- **You need** a Linux or macOS machine with local storage. Docker is the
+  simplest route. Keep the data directory off NFS, SMB, and other network
+  filesystems.
+- **Notes are readable on the server's disk** to anyone who can read it. Put
+  the data directory on encrypted storage (LUKS, FileVault, ZFS native
+  encryption). [Security and privacy](security.md) says what that does and
+  does not cover.
+- **Put Tailscale Serve or an HTTPS reverse proxy in front of TrewSync.** Your
+  devices connect to the proxy; TrewSync's own port stays private. For a
+  homelab we recommend [Tailscale Serve](#tailscale-recommended). If you
+  already have a domain and an HTTPS proxy, [use that instead](#caddy).
 
 ## Install
 
@@ -31,7 +34,7 @@ docker compose logs trew
 ```
 
 The included [compose.yaml](../compose.yaml) runs the server release it pins,
-`ghcr.io/waynehoover/trewsync` by tag and digest. It preserves data in a named
+`ghcr.io/waynehoover/trewsync` by tag and digest. It keeps data in a named
 volume, serves sync and the MCP endpoint (`-mcp`) on the one port 3003, and
 exposes that port only on the host's loopback interface. The MCP endpoint
 answers nobody until you make a token for it ([Connect an agent](agent.md)).
@@ -48,20 +51,21 @@ docker logs trew
 Its commands are then `docker exec trew /trewd ...` rather than
 `docker compose exec trew /trewd ...`.
 
-Use the pinned Compose setup for a server you keep. Next, configure
+Use the pinned Compose setup for a server you keep. Next, set up
 [secure access](#secure-access) before pairing devices.
 
-Named volumes get the required ownership automatically. If you replace one
-with a bind mount, create a dedicated empty directory and make it writable by
-UID/GID `65532:65532`, the container's user. Keep that directory when upgrading;
-removing it removes the server's notes and history.
+Good to know:
 
-The image is Alpine with the server's binary and git, git-lfs and ssh beside
-it, for the optional [Git export](git-export.md); the server itself runs no
-shell and needs none of them unless the export is turned on. Settings such as
-the export's and the daily-note tools' live in `trewd.json` in the volume
-(`docker compose exec trew /trewd config show`), so the compose file needs no
-flags for them.
+- **Bind mounts.** Named volumes get the right ownership automatically. If
+  you use a bind mount instead, create a dedicated empty directory writable
+  by UID/GID `65532:65532`, the container's user. Keep it when upgrading:
+  removing it removes the server's notes and history.
+- **What is in the image.** Alpine, the server's binary, and git, git-lfs and
+  ssh for the optional [Git export](git-export.md). The server runs no shell
+  and needs none of them unless the export is on.
+- **Settings** such as the export's and the daily-note tools' live in
+  `trewd.json` in the volume (`docker compose exec trew /trewd config show`),
+  so the compose file needs no flags for them.
 
 ### A binary
 
@@ -82,17 +86,17 @@ chmod +x trewd-linux-amd64
 ./trewd-linux-amd64 serve -data ~/trew-data -addr 127.0.0.1:3003
 ```
 
-On macOS use `trewd-darwin-arm64` (or `-amd64`). macOS refuses to run a binary
-a browser downloaded until you clear its quarantine
-(`xattr -d com.apple.quarantine trewd-darwin-arm64`); `curl`, as above, sets
-none. If another program already holds port 3003, the server says
-`address already in use`: choose another port with `-addr 127.0.0.1:PORT`,
-and use that port in `tailscale serve` or your proxy, and in
-`trewd health -addr 127.0.0.1:PORT`.
-
-On another platform Go builds for, FreeBSD or Linux on riscv64 for example,
-build trewd from the release's tag with Go 1.27 or later, the way a release
-is built:
+- **macOS.** Use `trewd-darwin-arm64` (or `-amd64`). macOS refuses to run a
+  binary a browser downloaded until you clear its quarantine
+  (`xattr -d com.apple.quarantine trewd-darwin-arm64`); `curl`, as above, sets
+  none.
+- **Port in use.** If another program holds port 3003, the server says
+  `address already in use`. Choose another port with `-addr 127.0.0.1:PORT`,
+  and use that port in `tailscale serve` or your proxy, and in
+  `trewd health -addr 127.0.0.1:PORT`.
+- **Other platforms.** On anything else Go builds for (FreeBSD, or Linux on
+  riscv64, for example), build trewd from the release's tag with Go 1.27 or
+  later, the way a release is built:
 
 ```bash
 git clone --branch server/v$V https://github.com/waynehoover/trewsync && cd trewsync
@@ -100,25 +104,25 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$V" -o trewd ./
 ```
 
 The invite this trial writes to `first-invite` names `wss://127.0.0.1:3003`,
-which no device can use: make the first device's invite with `-url`, as
-[the first device](#the-first-device) shows, once secure access works. To try
+which no device can use. Once secure access works, make the first device's
+invite with `-url`, as [the first device](#the-first-device) shows. To try
 TrewSync on this one machine first, with no TLS, start it with `-localhost`
 instead: its invites name `ws://127.0.0.1:3003`, and
 `trewd invite -data ~/trew-data` makes one.
 
 For a persistent Linux service, install the binary as `/usr/local/bin/trewd`,
-create a dedicated `trew` account and writable `/var/lib/trew` directory, then
-run:
+create a dedicated `trew` account and a writable `/var/lib/trew` directory,
+then run:
 
 ```bash
 trewd service -data /var/lib/trew -addr 127.0.0.1:3003 \
   -user trew -binary /usr/local/bin/trewd
 ```
 
-This prints a systemd unit and installation commands; review and follow them.
-It does not install the service itself. The generated unit includes restart
-handling and a 30-second shutdown allowance. Add `-mcp` to have the unit serve
-the [MCP endpoint](agent.md) too.
+This prints a systemd unit and the commands to install it; review and follow
+them. It does not install the service itself. The unit includes restart
+handling and a 30-second shutdown allowance. Add `-mcp` to have it serve the
+[MCP endpoint](agent.md) too.
 
 ### Homebrew, mise or packslip
 
@@ -134,41 +138,47 @@ it, then check the download against it. `--pin` is this repository's signer
 fingerprint, so even a first install accepts only a release signed here.
 packslip puts `trewd` in `~/.local/bin`.
 
-`brew services start trewd` runs it as a service on `127.0.0.1:3003`, without
-the MCP endpoint, with its data in `$(brew --prefix)/var/trewd`. Give that
-directory to every command (`trewd invite -data "$(brew --prefix)/var/trewd" ...`),
-or set `TREW_DATA` to it, since the default is `~/.trew`.
+**Homebrew service.** `brew services start trewd` runs the server on
+`127.0.0.1:3003`, without the MCP endpoint, with its data in
+`$(brew --prefix)/var/trewd`. Give that directory to every command
+(`trewd invite -data "$(brew --prefix)/var/trewd" ...`), or set `TREW_DATA`
+to it, since the default is `~/.trew`.
 
 The Homebrew service cannot be given `-mcp`. To serve the
 [MCP endpoint](agent.md), stop it (`brew services stop trewd`) and run the
 server under a service of your own with the same data directory and `-mcp`:
 `trewd serve -data "$(brew --prefix)/var/trewd" -addr 127.0.0.1:3003 -mcp`.
-On Linux, `trewd service ... -mcp`, below, prints a systemd unit for it.
+On Linux, `trewd service ... -mcp`, above, prints a systemd unit for it.
 
-A binary downloaded by hand or installed by packslip is upgraded with
-`trewd update`, which verifies the release before replacing anything
-([reference](server-reference.md#update)); for a packslip install, running the
-same `packslip install` again works too. `trewd update` needs the
+**Upgrading.**
+
+| Installed with | Upgrade with |
+|---|---|
+| A download by hand | `trewd update` |
+| packslip | `trewd update`, or the same `packslip install` again |
+| Homebrew or mise | Their own tool |
+
+`trewd update` verifies the release before replacing anything
+([reference](server-reference.md#update)). It needs the
 [packslip](https://github.com/jdx/packslip) CLI on `PATH` (or given with
-`-packslip`) for that check, and refuses to run without it. Homebrew and mise
-installs are upgraded through their own tool instead.
+`-packslip`) for that check, and refuses to run without it.
 
 ## Secure access
 
 TrewSync does not provide HTTPS itself. Tailscale Serve or your reverse proxy
-provides the secure connection:
+does:
 
 **Your devices → Tailscale Serve or HTTPS proxy → TrewSync**
 
-Use the proxy's `wss://` address in the plugin. Keep the raw server port private:
-over plain `ws://`, your notes and device credentials cross the network
-readable to anyone on the path.
+Use the proxy's `wss://` address in the plugin. Keep the raw server port
+private: over plain `ws://`, your notes and device credentials cross the
+network readable to anyone on the path.
 
 ### Tailscale (recommended)
 
-This keeps TrewSync accessible only to devices allowed on your Tailscale network,
-without a public domain or router port forwarding. Install and connect Tailscale
-on the server and each device, including your phone.
+Only devices on your Tailscale network can reach TrewSync, with no public
+domain and no router port forwarding. Install and connect Tailscale on the
+server and on each device, your phone included.
 
 On the server, check for existing routes first:
 
@@ -183,20 +193,21 @@ tailscale serve --bg 3003
 tailscale serve status
 ```
 
-Follow any prompt to enable HTTPS. Use the address Tailscale reports, replacing
-`https://` with `wss://`, for example `wss://homelab.example.ts.net`. Leave Tailscale
-connected on every device when syncing. Use Serve, not Funnel, for tailnet-only
-access. See [Tailscale's Serve guide](https://tailscale.com/docs/reference/tailscale-cli/serve).
+Follow any prompt to enable HTTPS. Use the address Tailscale reports,
+replacing `https://` with `wss://`, for example
+`wss://homelab.example.ts.net`. Leave Tailscale connected on every device
+when syncing. Use Serve, not Funnel, for tailnet-only access. See
+[Tailscale's Serve guide](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
 If another app already uses that address, choose a free HTTPS port with
 `tailscale serve --bg --https=8443 3003`, and include `:8443` in the plugin's
-address. The final `3003` is TrewSync's internal port, not the port you necessarily
-enter on your phone.
+address. The final `3003` is TrewSync's internal port, not necessarily the
+port you enter on your phone.
 
 ### Caddy
 
-For an internet-accessible endpoint, point a domain to your server and let Caddy
-handle HTTPS. With Caddy running on the same host as TrewSync, use:
+For an endpoint reachable from the internet, point a domain at your server
+and let Caddy handle HTTPS. With Caddy on the same host as TrewSync:
 
 ```caddyfile
 sync.example.org {
@@ -204,28 +215,28 @@ sync.example.org {
 }
 ```
 
-Reload Caddy and use `wss://sync.example.org`. The usual Caddy setup needs ports
-80 and 443 reachable for certificates and HTTPS; keep port 3003 private.
-Caddy handles WebSockets automatically. See [Caddy's reverse-proxy guide](https://caddyserver.com/docs/quick-starts/reverse-proxy).
+Reload Caddy and use `wss://sync.example.org`. The usual Caddy setup needs
+ports 80 and 443 reachable for certificates and HTTPS; keep port 3003
+private. Caddy handles WebSockets automatically. See
+[Caddy's reverse-proxy guide](https://caddyserver.com/docs/quick-starts/reverse-proxy).
 
-An existing proxy is fine too: it must provide a trusted HTTPS certificate and
-support WebSockets. If the proxy runs in Docker, connect it to TrewSync over a
-private Docker network; `127.0.0.1` inside the proxy container refers to that
+An existing proxy works too: it must provide a trusted HTTPS certificate and
+support WebSockets. If the proxy runs in Docker, connect it to TrewSync over
+a private Docker network; `127.0.0.1` inside the proxy container is that
 container, not the host.
 
-For a test entirely on one machine, `trewd serve -localhost` binds to loopback
-and puts a `ws://127.0.0.1` address in its invites. The first device still
-pairs from an invite.
+For a test entirely on one machine, `trewd serve -localhost` binds to
+loopback and puts a `ws://127.0.0.1` address in its invites. The first device
+still pairs from an invite.
 
 ## The first device
 
 Every device joins with an invite, the first one included. An invite is a
 single-use `trew1i_` string that carries the server's address and the vault's
-name, so it has to name the address your devices use: the `wss://` address from
-[secure access](#secure-access), not the server's own port.
+name. So it has to name the address your devices use: the `wss://` address
+from [secure access](#secure-access), not the server's own port.
 
-Once secure access works, make the first invite on the server, naming that
-address:
+Once secure access works, make the first invite on the server:
 
 ```bash
 docker compose exec trew /trewd invite -url wss://homelab.example.ts.net
@@ -233,39 +244,43 @@ docker compose exec trew /trewd invite -url wss://homelab.example.ts.net
 
 For a binary installation, run
 `trewd invite -data /var/lib/trew -url wss://homelab.example.ts.net` as the
-account that runs the server. It prints the invite; `-out FILE` writes it to a
-file, mode 0600, instead. The command goes through the running server.
+account that runs the server. It prints the invite; `-out FILE` writes it to
+a file, mode 0600, instead. The command goes through the running server.
 
-When the vault has no devices yet, `trewd serve` also writes an invite for the
-first one to `first-invite` in its data directory, mode 0600, and logs that
-path and when it expires, never the invite itself. It names the right address
-only when `serve` was started with `-url wss://homelab.example.ts.net` (or
-`-localhost`, for a trial on one machine). Otherwise it names this machine's
-own addresses at the server's own port, one per line, as `wss://`, where
-nothing speaks TLS, so no device behind tailscale serve or a proxy can use it,
-and the startup message says so: make the first device's invite with
-`trewd invite -url` instead.
+Then pair:
 
 1. [Install the plugin](plugin.md#install) on your first device.
-2. Open TrewSync, paste the invite into **Invite**, check the server it names, and
-   press **Pair**.
+2. Open TrewSync, paste the invite into **Invite**, check the server it names,
+   and press **Pair**.
 3. Wait for sync to finish.
 4. Use **Add another device → Create invite** for each additional device.
 
-An invite works once and expires after one hour, so make it when you are ready
-to pair; `trewd invite -ttl 0` makes one that never expires, for when you mean
-it. There is no recovery key: the notes and their history are on the server,
-and `trewd invite` there pairs a new device whenever you need one, even when no
+An invite works once and expires after one hour, so make it when you are
+ready to pair. `trewd invite -ttl 0` makes one that never expires, for when
+you mean it.
+
+There is no recovery key. The notes and their history are on the server, and
+`trewd invite` there pairs a new device whenever you need one, even when no
 device is left.
 
+**The `first-invite` file.** When the vault has no devices yet, `trewd serve`
+also writes an invite to `first-invite` in its data directory, mode 0600. It
+logs that path and when the invite expires, never the invite itself. That
+invite names the right address only when `serve` was started with
+`-url wss://homelab.example.ts.net` (or `-localhost`, for a trial on one
+machine). Otherwise it names this machine's own addresses at the server's
+own port, one per line, as `wss://`, where nothing speaks TLS. No device
+behind `tailscale serve` or a proxy can use that, and the startup message
+says so: make the invite with `trewd invite -url` instead.
+
 Find the startup log with `docker compose logs trew`, `docker logs trew`,
-or `journalctl -u trew`, depending on how you installed it.
+or `journalctl -u trew`, depending on how you installed.
 
 ## Check your setup
 
-Create a small note on the first device, let it sync, and confirm it arrives on
-the second. Edit it there and check that the first device receives the edit.
-Open version history to confirm you can find the earlier version.
+Create a small note on the first device and confirm it arrives on the second.
+Edit it there and check the first device gets the edit. Then open version
+history and find the earlier version.
 
 For the server itself:
 
@@ -277,52 +292,53 @@ docker compose exec trew /trewd stats
 With a binary installation, use `trewd health` and
 `trewd stats -data /path/to/trew-data`.
 
-Before relying on the service, set up
+Before you rely on the server, set up
 [backups and a restore rehearsal](server-operations.md#backup). History grows
-until you explicitly purge it; there is no automatic retention policy.
+until you purge it yourself; there is no automatic retention policy.
 
 ## Let an agent in
 
-The server can also serve an MCP endpoint at `/mcp` on the same port, for an
-agent such as Claude Code to read and, with a write token, edit the notes. It
-is off until you start `serve` with `-mcp`, and it refuses every request until
-you make a token with `trewd mcp-token`. A token reads the whole vault, and
-what the agent reads reaches its model provider, so read
-[Connect an agent](agent.md) before making one.
+The server can also serve an MCP endpoint at `/mcp` on the same port, so an
+agent such as Claude Code can read the notes and, with a write token, edit
+them. It is off until you start `serve` with `-mcp`, and it refuses every
+request until you make a token with `trewd mcp-token`.
+
+A token reads the whole vault, and what the agent reads reaches its model
+provider. Read [Connect an agent](agent.md) before making one.
 
 ## Upgrade order
 
 Back up first. Upgrade the server, then the plugin and CLI on every device.
-Server, plugin, and CLI release numbers are separate; protocol compatibility
-determines whether they can connect. An incompatible client stops with a
-protocol error instead of syncing partially.
 
-This source tree's server speaks protocols 1 to 5. Its plugin and CLI speak
-protocol 5, which is protocol 4 with restoring a folder to an earlier time
-(protocol 4 added plugins' settings, protocol 3 settings sync, and protocol 2
-undo and search). A server of this tree keeps serving a plugin or CLI of
-protocol 1 to 4 exactly as before, which is what makes the server-first order
-work; a plugin or CLI of protocol 5 meeting an older server stops at the
-handshake and says to upgrade the server. Plugin 0.16 speaks protocol 5, so it
-needs `trewd` 0.15.0 or later, and so does `trew` 0.14.0. Plugin 0.15 and
-`trew` 0.13 speak protocol 4 and need `trewd` 0.14.0 or later; `trew` 0.12.0
-speaks protocol 2.
-Basalt Sync's releases speak protocol 7, and a Basalt client and a TrewSync
-server refuse each other at the handshake, naming both numbers; moving from
-Basalt is a fresh pairing, not an upgrade. For source builds, use the same
-revision for the server and clients.
+Server, plugin, and CLI release numbers are separate; the protocol decides
+whether they can connect. The server speaks protocols 1 to 5 and keeps
+serving older plugins and CLIs exactly as before, which is why server-first
+works. A client newer than its server stops at the handshake with a protocol
+error and says to upgrade the server. It never syncs partially.
 
-For Compose, take the `image:` line, tag and digest, from the repository's
+| Client | Protocol | Needs `trewd` |
+|---|---|---|
+| Plugin 0.16, `trew` 0.14.0 | 5 | 0.15.0 or later |
+| Plugin 0.15, `trew` 0.13 | 4 | 0.14.0 or later |
+
+`trew` 0.12.0 speaks protocol 2. For source builds, use the same revision for
+the server and clients.
+
+Moving from Basalt Sync is a fresh pairing, not an upgrade: its releases
+speak protocol 7, and a Basalt client and a TrewSync server refuse each other
+at the handshake, naming both numbers.
+
+**Compose.** Take the `image:` line, tag and digest, from the repository's
 `compose.yaml` on `main` (`git pull` in your clone brings it), then run
 `docker compose pull` and `docker compose up -d`. Do not take it from the
 `server/vX.Y.Z` tag: the pin for a release is committed after the tag, so the
-tag's own `compose.yaml` names the release before it.
-Preserve the data volume and any customized flags, especially the file-size
-limit. Never use `docker compose down -v` to upgrade.
+tag's own `compose.yaml` names the release before it. Keep the data volume
+and any customized flags, especially the file-size limit. Never use
+`docker compose down -v` to upgrade.
 
-Use `trewd version` to check the server build and the plugin panel to check
-what each device connected to. The [protocol reference](protocol.md) describes
-the version used by this source tree.
+Use `trewd version` to check the server build, and the plugin panel to check
+what each device connected to. The [protocol reference](protocol.md)
+describes the version this source tree uses.
 
 ## A vault that is not called `default`
 
@@ -345,5 +361,5 @@ to type; the plugin shows the name before you press **Pair**.
 | Stopped after the data directory was copied back | Follow [server restoration](server-operations.md#restore), then use **Rejoin this server**. A restore from a `trewd backup` snapshot needs nothing from the devices. |
 | File too large | Check the default 64 MiB limit and [how to change it](server-reference.md#serve). |
 
-Android needs Obsidian in the foreground. For note recovery and device-specific
-status messages, see the [plugin guide](plugin.md).
+Android needs Obsidian in the foreground. For note recovery and
+device-specific status messages, see the [plugin guide](plugin.md).

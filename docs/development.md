@@ -288,7 +288,6 @@ added or removed, change this table in the same commit.
 | `@typescript-eslint/no-deprecated` (`setWarning`) | 6 | `plugin/main.ts` (5), `plugin/restore-time.ts` (1) | Its replacement, `setDestructive`, arrived in 1.13.0 and the manifest admits 1.7.2, so using it would be a `no-unsupported-api` error. |
 | `obsidianmd/ui/sentence-case` | 18 | `plugin/main.ts` (17), `plugin/restore-time.ts` (1) | Fifteen are the product's name, TrewSync, whose capital S the rule reads as a second word to lowercase: the plugin's name on the ribbon and in the panel's title, "Which platforms TrewSync supports", the file menu's "TrewSync: version history" and "TrewSync: restore to an earlier time", and ten notices that name it. One is the literal invite prefix `trew1i_...`, and two are the example device name `laptop` in a placeholder, spelled as device names are everywhere else. The guideline itself capitalizes proper nouns, and the rule keeps the casing of the brands on its own list, GitHub and macOS among them; TrewSync is not on it. |
 | `obsidianmd/hardcoded-config-path` | 1 | `EVERY_DEVICE` in `core/pairing.ts` | The name of the settings group every device can join, which is a folder on the server and on no device ([plan/settings-sync.md](../plan/settings-sync.md)). The folder a device runs is still read from `configDir`, and mapped onto its group's. |
-| `obsidianmd/settings-tab/prefer-setting-definitions` | 1 | the settings tab in `plugin/main.ts` | `getSettingDefinitions` is the declarative settings API of 1.13.0. Until it is adopted, the tab's settings do not appear in Obsidian's settings search on 1.13 or later. The tab is the sync panel, drawn from live state (status, pairing, devices, invites), which a fixed list of setting definitions does not describe. |
 
 That was 56 warnings, and no errors, at the commit that added the gate. Writing
 the name TrewSync added nine of the sentence-case kind, so it was 65. The table
@@ -303,11 +302,12 @@ and its notice that nothing is waiting to apply, which names TrewSync, 62. The
 groups that replaced settings profiles took that message away and named the
 shared group instead, so it is still 62. Restoring to an earlier time added
 its Restore button's `setWarning`, the folder menu's entry and the notice that
-a restore is undone, which name TrewSync, so it is 65.
+a restore is undone, which name TrewSync, so it is 65. The settings tab's `getSettingDefinitions`, which puts
+TrewSync in Obsidian 1.13's settings search, took one away, so it is 64.
 
 ### Submitting to the community directory
 
-The plugin is installed by hand until it is listed. A plugin is added at
+TrewSync is listed at [community.obsidian.md/plugins/trew-sync](https://community.obsidian.md/plugins/trew-sync) since 2026-11-15. A plugin is added at
 [community.obsidian.md](https://community.obsidian.md), and the directory
 reviews it automatically from the repository (plan/research/obsyncian.md,
 section 5). `obsidianmd/obsidian-releases` takes no pull request for it: its

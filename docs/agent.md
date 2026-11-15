@@ -2,16 +2,26 @@
 
 [Documentation](index.md) · [Server setup](server.md) · [Security and privacy](security.md)
 
-TrewSync's server has an MCP endpoint built in. An agent such as Claude Code
-connects to it with a token and reads, searches and, if you allow it, edits
-the same notes your devices sync. An agent's edit is an ordinary new version:
-every device receives it, history keeps what it replaced, and you can undo it.
+Your notes are already on the server, so the server can hand them to an AI
+agent. Turn on its built-in MCP endpoint, give an agent such as Claude Code a
+token, and it searches, reads and, if you allow it, edits the same notes your
+devices sync. The agent needs no copy of the vault and no sync client, and
+Obsidian does not have to be open.
+
+- **An agent's edit is an ordinary new version.** Every device receives it,
+  and history keeps what it replaced.
+- **Every agent edit is recorded and can be undone**, by the agent, from a
+  device, or on the server.
+- **An agent cannot overwrite a whole note or remove history.** Every change
+  names the exact text it replaces.
+- **Read-only unless you say otherwise.** Writing takes a separate token.
 
 **A token reads the whole vault.** There is no per-note or per-folder access
 control. Every note the agent reads, and every search result, goes to the
 agent and from there to its model provider. Give a token only to an agent,
 and a provider, you would trust with every note. This is deliberate, and it is
-the reason the server can read your notes at all; see [Privacy](../README.md#privacy).
+the reason the server can read your notes at all; see
+[Privacy](../README.md#privacy).
 
 ## Turn the endpoint on
 
@@ -22,34 +32,39 @@ devices, so it sits behind the same Tailscale Serve or HTTPS proxy:
 trewd serve -mcp -data /var/lib/trew -addr 127.0.0.1:3003
 ```
 
-The repository's `compose.yaml` already has it, on its `command:` line. A
-compose file of your own needs that line, since the image's default command
-has no `-mcp` (with `docker run`, put `serve -addr 0.0.0.0:3003 -mcp` after
-the image's name); recreate the container with `docker compose up -d` after
-adding it:
+- **Compose.** The repository's `compose.yaml` already has it, on its
+  `command:` line. A compose file of your own needs that line, since the
+  image's default command has no `-mcp`. Add it, then recreate the container
+  with `docker compose up -d`:
 
-```yaml
-command: ["serve", "-addr", "0.0.0.0:3003", "-mcp"]
-```
+  ```yaml
+  command: ["serve", "-addr", "0.0.0.0:3003", "-mcp"]
+  ```
 
-Keep any flag the service already has on that line, `-max-file` in
-particular: a server refuses to start with a file limit below a file the vault
-already holds.
-
-For a systemd service, make the unit with `trewd service -mcp` and the flags
-you gave it before, install it in place of the old one, then
-`systemctl daemon-reload` and `systemctl restart trew`.
-
-Without `-mcp`, `/mcp` is refused like any other path that is not a WebSocket.
-With it and no token yet, the server logs a hint and refuses every request.
-When the server listens on every interface (`-addr 0.0.0.0:3003`, or the
-default `:3003`) it logs a warning that the endpoint is exposed there too. Inside a container that is expected; keep
-the published port on loopback, as the included `compose.yaml` does, and keep
-`/mcp` behind Tailscale or an identity-aware proxy.
+  Keep any flag the service already has on that line, `-max-file` in
+  particular: a server refuses to start with a file limit below a file the
+  vault already holds.
+- **`docker run`.** Put `serve -addr 0.0.0.0:3003 -mcp` after the image's
+  name.
+- **systemd.** Make the unit with `trewd service -mcp` and the flags you gave
+  it before, install it in place of the old one, then
+  `systemctl daemon-reload` and `systemctl restart trew`.
 
 With Tailscale Serve publishing the server as `https://homelab.example.ts.net`,
-the MCP address is `https://homelab.example.ts.net/mcp`. Note that it is
-`https://`, not the `wss://` the plugin uses.
+the MCP address is `https://homelab.example.ts.net/mcp`. It is `https://`, not
+the `wss://` the plugin uses.
+
+What to expect:
+
+- Without `-mcp`, `/mcp` is refused like any other path that is not a
+  WebSocket.
+- With `-mcp` and no token yet, the server logs a hint and refuses every
+  request.
+- When the server listens on every interface (`-addr 0.0.0.0:3003`, or the
+  default `:3003`), it logs a warning that the endpoint is exposed there too.
+  Inside a container that is expected. Keep the published port on loopback,
+  as the included `compose.yaml` does, and keep `/mcp` behind Tailscale or an
+  identity-aware proxy.
 
 ## Make a token
 
@@ -61,19 +76,21 @@ trewd mcp-token -data /var/lib/trew -label "Claude on Mac" -key-out /private/pat
 ```
 
 With Compose, run it inside the container and send the output to a private
-file; the token is the indented line among lines describing it, and
-`awk 'NF == 1 {print $1}' /private/path/claude-token.txt` prints it alone:
+file:
 
 ```bash
 (umask 077 && docker compose exec -T trew /trewd mcp-token -label "Claude on Mac" \
   > /private/path/claude-token.txt)
 ```
 
-The command goes through the running server. Without `-key-out` it prints the
-token once, with a line saying what it can do and when it expires; with
-`-key-out` it writes the token to a new file, mode 0600, and prints only where
-it went, the token's id and its fingerprint. The server keeps only a SHA-256
-of the token, so a lost token cannot be shown again: make a new one.
+The token is the indented line among lines describing it, and
+`awk 'NF == 1 {print $1}' /private/path/claude-token.txt` prints it alone.
+
+The server must be running: the command goes through it. Without `-key-out`
+it prints the token once, with what it can do and when it expires. With
+`-key-out` it writes the token to a new file, mode 0600, and prints only the
+file's path, the token's id and its fingerprint. The server keeps only a
+SHA-256 of the token, so a lost token cannot be shown again: make a new one.
 
 | Flag | Meaning |
 |---|---|
@@ -84,16 +101,17 @@ of the token, so a lost token cannot be shown again: make a new one.
 | `-list` | List the vault's tokens: id, fingerprint, scope, label, expiry, and how often and when each was last used. |
 | `-revoke ID` | Revoke one token. A request it has in flight is refused before it is answered. |
 
-Pick the label with care. It is the name devices see on the agent's versions
-in history and on the conflict copies that hold its words, such as
-`Meeting notes (Conflicted copy Claude on Mac 202609231130).md`, and it cannot
-be changed afterwards.
+**Pick the label with care.** It cannot be changed afterwards, and it is the
+name devices see on the agent's versions in history and on the conflict copies
+that hold its words, such as
+`Meeting notes (Conflicted copy Claude on Mac 202609231130).md`.
 
 **Start with a read token.** Make a write token deliberately and separately,
-for an agent you have watched work read-only first. To rotate a token, make a
-new one, update the client, then revoke the old one with `-revoke ID`. `-list`
-shows each token's use count, which is how an unexpected user of an old token
-shows up.
+for an agent you have watched work read-only first.
+
+**To rotate a token**, make a new one, update the client, then revoke the old
+one with `-revoke ID`. `-list` shows each token's use count, which is how an
+unexpected user of an old token shows up.
 
 ## Configure the client
 
@@ -111,8 +129,10 @@ claude mcp add --transport http trew https://homelab.example.ts.net/mcp \
 
 That stores the token in Claude Code's configuration, so protect that file as
 you would the key. Then ask Claude to call `vault_status` to check the
-connection. The same server can be given in a JSON configuration, such as a
-project's `.mcp.json`:
+connection.
+
+The same server can be given in a JSON configuration, such as a project's
+`.mcp.json`:
 
 ```json
 {
@@ -132,26 +152,26 @@ environment variable `TREW_MCP_TOKEN`.
 ### Other clients
 
 Any MCP client that supports streamable HTTP with a custom header works: give
-it the URL and the `Authorization` header. A client that only launches local
-stdio servers needs a stdio-to-HTTP bridge that can send a header, run on the
-same machine. A browser-based client sends an `Origin` header, which the
-server refuses unless it was started with `-allow-origin` naming exactly that
-origin; clients that are not browsers send none and need nothing.
+it the URL and the `Authorization` header.
+
+- A client that only launches local stdio servers needs a stdio-to-HTTP
+  bridge that can send a header, run on the same machine.
+- A browser-based client sends an `Origin` header, which the server refuses
+  unless it was started with `-allow-origin` naming exactly that origin.
+  Clients that are not browsers send none and need nothing.
 
 The client must be able to reach the address. Behind Tailscale, that means a
 machine on your tailnet: a hosted agent in someone else's cloud cannot reach
-it, and putting `/mcp` on the public internet means the token is the only
-thing between the internet and your vault.
+it. Putting `/mcp` on the public internet means the token is the only thing
+between the internet and your vault.
 
 ### Check it from a shell
 
 `curl` can make the same calls, which tells a token or address problem apart
 from a client one. Every request after `initialize` must carry the
-`MCP-Protocol-Version` header, which MCP clients send themselves; without it
-the answer is `the MCP-Protocol-Version header is required on every request
-after initialize`. There is no session to keep: each request stands alone.
-This reads the token from its file into the header, so it never appears on a
-command line:
+`MCP-Protocol-Version` header, which MCP clients send themselves. There is no
+session to keep: each request stands alone. This reads the token from its
+file into the header, so it never appears on a command line:
 
 ```bash
 mcp() {
@@ -209,18 +229,18 @@ and canvases are listed, not read. A note over 1 MiB cannot be changed.
 
 **What an agent cannot do**, whatever its token:
 
-- Overwrite a whole note. There is no whole-file writer: every change names
-  the exact text it replaces, so an edit cannot quietly reformat what it was
-  not asked to touch.
-- Reach anything outside the vault's notes: no path segment may start with a
-  dot, so `.obsidian`, its plugins and `.trash` are out of reach, including by
-  creating a note elsewhere and moving it there.
-- Create a note named like a conflict copy, or with the staging mark
+- **Overwrite a whole note.** There is no whole-file writer: every change
+  names the exact text it replaces, so an edit cannot quietly reformat what it
+  was not asked to touch.
+- **Reach anything outside the vault's notes.** No path segment may start with
+  a dot, so `.obsidian`, its plugins and `.trash` are out of reach, including
+  by creating a note elsewhere and moving it there.
+- **Create a note named like a conflict copy**, or with the staging mark
   `.trew-tmp-`.
-- Remove history. Nothing through the endpoint purges a version, and every
+- **Remove history.** Nothing through the endpoint purges a version, and every
   version an agent's write displaces is kept for at least 30 days whatever
   purge is asked to do.
-- Administer the server: no devices, invites or tokens, and no view of
+- **Administer the server.** No devices, invites or tokens, and no view of
   another token's writes. `lookup_operation` and `undo_operation` see only the
   calling token's own operations; `trewd audit` on the server shows everyone's.
 
@@ -229,34 +249,34 @@ and canvases are listed, not read. A note over 1 MiB cannot be changed.
 Each tool's description says this to the agent too.
 
 **Read, then write against what was read.** `read_note` returns the note's
-`uid`, the version its text came from, and every read result carries the
-store's `epoch`. An edit, append, prepend, move or deletion passes that `uid`
-as `base` and that `epoch`. If the note has changed since, the write is
-refused as `stale` with the note's current `uid`, and nothing is written. The
-agent reads the note again and reconsiders; retrying with the new uid unread
-would write over what it has not seen. The epoch changes only when the server
-is restored from a backup, after which every uid read before is refused.
+`uid` (the version its text came from) and the store's `epoch`. An edit,
+append, prepend, move or deletion passes that `uid` as `base`, with that
+`epoch`. If the note has changed since, the write is refused as `stale` with
+the note's current `uid`, and nothing is written. The agent must read the note
+again: retrying with the new uid unread would write over what it has not
+seen. The epoch changes only when the server is restored from a backup, after
+which every uid read before is refused.
 
-**Previews, then apply.** `delete_note`, `move_note` and the tag tools,
-called without `changes`, return a preview of every note they would change
-and write nothing. Called again with the preview's `changes`, `head` and
-`epoch`, unchanged, they commit exactly that plan, and only if no note in
-the vault has changed since the preview; otherwise the answer is
-`plan_changed` and the agent previews again. Binding the apply to every note
-in the vault is conservative: an unrelated edit on your phone between the two
-calls refuses the apply. It is what catches a new link to the moved note
-written meanwhile, which no per-note check could see. A device saving its
-settings is not a change to a note, and leaves the preview standing. A move over a vault of more than 512 notes
-answers `scan_incomplete` until the search index has caught up.
+**Preview, then apply.** `delete_note`, `move_note` and the tag tools, called
+without `changes`, return a preview of every note they would change and write
+nothing. Called again with the preview's `changes`, `head` and `epoch`,
+unchanged, they commit exactly that plan, and only if no note in the vault has
+changed since the preview. Otherwise the answer is `plan_changed` and the
+agent previews again.
+
+That is conservative on purpose. An unrelated edit on your phone between the
+two calls refuses the apply, and so does a new link to the moved note, which
+no per-note check could see. A device saving its settings does not. A move
+over a vault of more than 512 notes answers `scan_incomplete` until the search
+index has caught up.
 
 **All or nothing.** A write is one operation: every note it changes is
 written as one commit, or none of it is. A move that rewrites ten backlinks
 is one operation and undoes as one.
 
 **Committed is not delivered.** `committed: true` means the server holds the
-write durably. Devices receive it as they sync; a phone that is off receives
-it when it next opens Obsidian. `delivery_status` says which devices have
-applied it. An agent's write never waits for a device.
+write durably. Devices receive it as they sync, a phone that is off when it
+next opens Obsidian. `delivery_status` says which devices have applied it.
 
 **Retry with an idempotency key.** Every write takes an optional
 `idempotencyKey`, a name the agent chooses. Sending the same request again
@@ -267,20 +287,23 @@ token and remembered for seven days, after which a key is treated as new.
 **An unknown outcome is not a failure.** If the server cannot say whether a
 write committed (the connection dropped, or the server stopped at the wrong
 moment), the result is `committed: "unknown"` with the operation's `opId`.
-`lookup_operation` with that id says whether it committed and exactly which
-versions it wrote; resending the request with the same idempotency key does
-the same and commits it once if it had not. A refusal, by contrast, is
-`committed: false` and wrote nothing.
+`lookup_operation` with that id says whether it committed and which versions
+it wrote. Resending the request with the same idempotency key does the same,
+and commits it once if it had not. A refusal is `committed: false` and wrote
+nothing.
 
 **Undo.** `undo_operation` with a write's `opId` and `epoch` puts back what
 that write replaced, deleted or created, across every note it changed, as a
-new operation. It is refused as `stale`, writing nothing, if any of those
-notes has changed since, and the refusal names each note and who changed it.
-`toCopy: true` instead writes each earlier version beside its note, as
-`Note (restored 42).md`, changing nothing already there. An undo can itself be
-undone. An agent can undo only its own token's writes. You can undo any of
-them: from a device, with **Undo this change** in the note's
-[version history](plugin.md#version-history), or on the server:
+new operation. An undo can itself be undone.
+
+- If any of those notes has changed since, the undo is refused as `stale` and
+  writes nothing. The refusal names each note and who changed it.
+- `toCopy: true` instead writes each earlier version beside its note, as
+  `Note (restored 42).md`, changing nothing already there.
+- An agent can undo only its own token's writes.
+
+You can undo any of them: from a device, with **Undo this change** in the
+note's [version history](plugin.md#version-history), or on the server:
 
 ```bash
 trewd audit -since 24h       # every agent write, and every undo, with its operation id
@@ -317,30 +340,29 @@ would change:
 Each result gives the linking note's path and version, the line and column
 (1-based, the column in UTF-16 code units, as `search_notes` counts them) and
 the link as written. Every page is read at the vault's head when the first
-page was asked for; follow `nextCursor` to the end, and `complete` is true on
-the last page when nothing was skipped. A note whose links cannot be read
+page was asked for. Follow `nextCursor` to the end; `complete` is true on the
+last page when nothing was skipped. A note whose links cannot be read
 (frontmatter with no closing `---`, over 1 MiB, not UTF-8) is listed under
 `skipped` with the reason, and the pages are not complete.
 
-The server's link index lets these tools read only the notes that may hold a
-matching link (`scan.method` is `index`). It vouches for a note only as it
-indexed it, so a note written since its last update, or since a first page
-pinned its head, is read in full; the index never hides a link. Without a
-usable index, before the first one is built or when it is being rebuilt
-after a fault, every note is read, 512 notes or 8 MiB a page (`scan.method`
-is `vault`, with `scan.why`). `orphans` has to know every note's links at
-once, so on a vault of more than 512 notes it answers `scan_incomplete` when
-the index cannot rule out enough of them; on a first page, try again once
-`vault_status` reports the index fresh, and with a cursor, start again
-without it.
+With the server's link index, these tools read only the notes that may hold
+a matching link (`scan.method` is `index`), and never miss one: a note the
+index has not caught up with is read in full. Without a usable index (before
+the first one is built, or while it is rebuilt after a fault) every note is
+read, 512 notes or 8 MiB a page (`scan.method` is `vault`, with `scan.why`).
+
+`orphans` has to know every note's links at once, so on a vault of more than
+512 notes it answers `scan_incomplete` when the index cannot rule out enough
+of them. On a first page, try again once `vault_status` reports the index
+fresh; with a cursor, start again without it.
 
 ## Daily notes and templates
 
 `today_note`, `append_to_daily` and `create_from_template` follow Obsidian's
 Daily notes and Templates settings. Obsidian keeps those in `.obsidian/`,
-which never syncs, so the server is told them, in its
-[configuration file](server-reference.md#configuration-file), which a running
-server takes up at once:
+which never syncs, so you tell the server, in its
+[configuration file](server-reference.md#configuration-file). A running server
+takes the change up at once:
 
 ```bash
 trewd config set daily.folder Journal
@@ -402,9 +424,8 @@ talked into reading something it should not, calling another tool, or writing
 the instruction into more notes, where every device and the next session
 would receive it.
 
-The endpoint cannot stop an agent obeying text, but it keeps the boundary in
-the data so the agent and its client can see it. Every result has the same
-envelope:
+**The endpoint cannot stop an agent obeying text.** It marks the boundary in
+every result, so the agent and its client can see it:
 
 ```json
 {
@@ -475,15 +496,19 @@ passes through the endpoint, so a busy agent cannot slow it.
 ## Moving from `trew mcp`
 
 The headless client, `trew`, used to have an MCP server of its own, `trew mcp`,
-over a separately paired local directory, with its own credential from
-`trew mcp-token`. It came from Basalt Sync, where the server could not read
-notes, and it is gone: the server's `/mcp` is the only MCP TrewSync has. `trew
-mcp` and `trew mcp-token` now exit 2 and say where MCP went.
+with its own credential from `trew mcp-token`. It is gone: the server's `/mcp`
+is the only MCP TrewSync has, and both commands now exit 2 and say where MCP
+went.
 
-To move an agent over: start the server with `-mcp`, mint a token with `trewd
-mcp-token` (add `-scope write` if the agent edited notes), and point the agent
-at the server's `/mcp` with that token, as above. Remove the old `trew mcp`
-service, and delete the directory's `.trew/mcp-token.json`, which nothing reads
-any more. The before-image files the old server wrote beside notes are ordinary
-notes; the server keeps each displaced version in its history instead, where
+To move an agent over:
+
+1. Start the server with `-mcp`.
+2. Mint a token with `trewd mcp-token` (add `-scope write` if the agent edited
+   notes).
+3. Point the agent at the server's `/mcp` with that token, as above.
+4. Remove the old `trew mcp` service, and delete the directory's
+   `.trew/mcp-token.json`, which nothing reads any more.
+
+The before-image files the old server wrote beside notes are ordinary notes.
+The server keeps each displaced version in its history instead, where
 `read_note` with the `previousUid` of a write reads it back.

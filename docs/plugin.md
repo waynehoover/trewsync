@@ -2,57 +2,53 @@
 
 [Documentation](index.md) · [Server setup](server.md) · [Security and privacy](security.md)
 
-TrewSync syncs your notes and attachments, shows sync status, and lets you recover
-earlier versions from inside Obsidian. Start with a
+TrewSync syncs your notes and attachments, shows what it is doing, and lets
+you recover earlier versions, all from inside Obsidian. You need a
 [configured server](server.md) and Obsidian **1.7.2 or newer**.
 
-Use a local vault on macOS, Linux, or Android. iOS is untested; Windows is not
-supported. The plugin pairs on iOS and Windows too, and says so in its panel
-for as long as it runs; the [platform table](../README.md#platforms) says what that means.
-Back up an existing vault before pairing, and disable other sync
-services for that vault. Each device should have its own local copy.
+Before you pair:
+
+- Use a local vault on macOS, Linux or Android. iOS is untested and Windows
+  is not supported. The plugin still pairs there, and says so in its panel;
+  the [platform table](../README.md#platforms) says what that means.
+- Back up an existing vault.
+- Turn off other sync services for that vault. Each device keeps its own
+  local copy.
 
 ## Install
 
-1. Download `main.js`, `manifest.json`, and `styles.css` from the newest stable
-   [plugin release](https://github.com/waynehoover/trewsync/releases).
-   Plugin releases use a plain `X.Y.Z` version; skip `server/v…` and `cli/v…`.
-2. Create `<vault>/.obsidian/plugins/trew-sync/` and put the three files there.
-   If you use a custom Obsidian configuration folder, use that folder instead
-   of `.obsidian`.
-3. Reload Obsidian. Under **Settings → Community plugins**, turn community plugins on if they are
-   off, then enable **TrewSync**.
-4. Open the TrewSync ribbon icon and choose **Sync settings** at the bottom of
+1. In Obsidian, open **Settings → Community plugins**, turn community plugins
+   on if they are off, choose **Browse**, search for **TrewSync**, install it
+   and enable it. Or open its
+   [directory page](https://community.obsidian.md/plugins/trew-sync) and
+   choose **Add to Obsidian**.
+2. Open the TrewSync ribbon icon and choose **Sync settings** at the bottom of
    its menu, or run **TrewSync: Show status** from the command palette. Either
    opens the TrewSync panel, where you pair. (This is not
    [settings sync](#settings-sync), which is a choice inside the panel.)
 
-Manual installation is required while TrewSync is outside the community directory.
-To upgrade, replace the same three files and reload Obsidian. When a release
-changes the protocol, upgrade the server before its clients.
+Obsidian offers each new release under **Community plugins → Check for
+updates**. When a release changes the protocol, upgrade the server before its
+clients.
 
 **Server version.** Plugin 0.16 needs `trewd` 0.15.0 or later. It speaks
 protocol 5 only, and a 0.14 or older server refuses it at the handshake, for
 everything and not only restore. Upgrade the server first; see
 [upgrade order](server.md#upgrade-order).
 
-### Install with BRAT
+### Install by hand or with BRAT
 
-On a phone, and on Android whenever the vault is in **App storage**, a file
-manager cannot reach the vault's `.obsidian` folder. Install with the community
-plugin **BRAT** instead, which installs a plugin from its GitHub releases:
+To run a release before Obsidian offers it, download `main.js`,
+`manifest.json` and `styles.css` from the
+[plugin release](https://github.com/waynehoover/trewsync/releases) (plugin
+releases use a plain `X.Y.Z` version; skip `server/v…` and `cli/v…`) into
+`<vault>/.obsidian/plugins/trew-sync/`, using your configuration folder if it
+is not `.obsidian`, and reload Obsidian. Where a file manager cannot reach the
+vault, as on a phone, use the community plugin **BRAT**: install and enable
+it, choose **Add beta plugin** in its settings, and enter
+`waynehoover/trewsync`. BRAT then keeps TrewSync up to date.
 
-1. Under **Settings → Community plugins**, browse for **BRAT**, install it and
-   enable it.
-2. In BRAT's settings, choose **Add beta plugin** and enter
-   `waynehoover/trewsync`.
-3. Enable **TrewSync** under **Settings → Community plugins**.
-
-BRAT also updates TrewSync when a new plugin release appears. On Android you
-can instead create the vault in App storage, install TrewSync there with BRAT,
-and only then pair it; or install the plugin into a vault in Device storage
-first and move the vault afterwards. Settings sync never carries TrewSync
-itself, so each device needs it installed by one of these routes.
+Settings sync never carries TrewSync itself, so each device needs it installed.
 
 ## Pairing
 
@@ -77,13 +73,12 @@ field, **Invite**, and a **Pair** button.
    shows. The `first-invite` file in the server's data directory works only if
    the server was started with that address (`-url`), or as a trial on one
    machine (`-localhost`); otherwise it names a guessed address.
-2. Paste it into **Invite**. TrewSync reads it and says which server it points to,
-   and which vault if it is not `default`; check that address. **Pair** becomes
-   available once the invite can be read.
+2. Paste it into **Invite**. TrewSync shows which server it points to, and
+   which vault if it is not `default`. Check that address.
 3. Press **Pair**, then wait for sync to finish before adding another device.
 
-To name this device something other than the suggestion, or to skip a folder
-on this device, open **More options** first.
+To rename this device or skip a folder on it, open **More options** before
+you pair.
 
 There is no recovery key to write down. Your notes and their history live on
 the server, so losing every device loses no synced note: run `trewd invite` on
@@ -92,25 +87,24 @@ the server to pair a new one.
 ### Add another device
 
 1. On a paired device, open **Add another device → Create invite**.
-2. On your phone, install and enable TrewSync (on a phone, use
-   [BRAT](#install-with-brat)), then scan the QR code. Or copy the
-   pairing code and paste it into **Invite** on the new device.
+2. On the new device, [install](#install) and enable TrewSync, then scan the
+   QR code. Or copy the pairing code and paste it into **Invite**.
 3. Check the server (and vault) named under the field, then press **Pair**.
-4. If this vault already contains files, TrewSync asks you to confirm combining
-   them with your synced vault. An older copy can bring back files moved or
-   deleted elsewhere. **Cancel** leaves your files and invite untouched.
-5. If **Review your first sync** appears, review the counts and choose
-   **Continue sync**. An empty vault, or one whose files are all already the
-   server's, starts downloading immediately, and so does a first sync that was
-   interrupted before it finished.
-   Keep Obsidian open until it finishes. On desktop the review opens in the
-   main Obsidian window, even when you paired from a separate Settings window.
-   While it waits, the status bar says so; click it to bring the review back.
-   Closing the review pauses sync, and nothing syncs until you choose
-   **Continue sync**.
+4. If this vault already contains files, TrewSync asks you to confirm
+   combining them with your synced vault. An older copy can bring back files
+   moved or deleted elsewhere. **Cancel** leaves your files and invite
+   untouched.
+5. If **Review your first sync** appears, check the counts and choose
+   **Continue sync**. Nothing syncs until you do: closing the review pauses
+   sync, and clicking the status bar brings the review back. On desktop it
+   opens in the main Obsidian window, even if you paired from a separate
+   Settings window. An empty vault, one whose files already match the
+   server's, or a first sync that was interrupted skips the review and starts
+   downloading.
+6. Keep Obsidian open until the sync finishes.
 
-To download a fresh copy, create a new empty Obsidian vault and keep the old
-vault as a backup. TrewSync does not clear or move existing files during pairing.
+TrewSync never clears or moves existing files during pairing. For a fresh
+copy, pair a new empty vault and keep the old one as a backup.
 
 An invite works once and expires after one hour. If it expires, create a new
 one. If no paired device remains, run `trewd invite` on the server and paste
@@ -119,8 +113,8 @@ what it prints into the same field. There is no fixed device limit.
 If pairing is interrupted after the invite was sent, TrewSync keeps the pairing
 and finishes it on the next attempt, even after the invite has expired. A
 refused invite (unknown, already used, expired or cancelled) leaves nothing
-saved. An invite or recovery key from Basalt Sync does not pair with TrewSync; the
-field says so.
+saved. An invite or recovery key from Basalt Sync does not pair with TrewSync;
+the field says so.
 
 <details>
 <summary>See the QR code and pairing code</summary>
@@ -134,79 +128,73 @@ field says so.
 
 ### Where this device's token is kept
 
-A paired device connects with its own random token. On Obsidian 1.11.4 and
-later, TrewSync keeps that token in Obsidian's keychain (**Settings → Keychain**
-lists it as `trew-<vault>-<device>`), and the plugin's `data.json` keeps only
-the rest of the pairing. On an older Obsidian the token stays in `data.json`,
-as it always did; TrewSync still installs there.
+A paired device connects with its own random token.
 
-The keychain belongs to Obsidian on this device, not to the vault folder, so a
-backup, an iCloud or git copy, or a copy of `.obsidian` does not carry the
-token. A copy opened elsewhere cannot sync as this device: its panel says the
-token is not in this device's keychain and shows **Pair this device again**.
-Pairing it with a new invite adds it as a device of its own.
+- **Obsidian 1.11.4 and later:** the token lives in Obsidian's keychain
+  (**Settings → Keychain** lists it as `trew-<vault>-<device>`). The plugin's
+  `data.json` keeps only the rest of the pairing.
+- **Older Obsidian:** the token stays in `data.json`.
 
-The token leaves `data.json` in two steps, because Obsidian saves its keychain
-in the background and cannot say when that has finished. When a device pairs,
-or a vault paired on an older Obsidian is first loaded by a newer one, TrewSync
-writes the keychain and reads the token back, and `data.json` keeps the token
-too. The next time Obsidian starts and the keychain still holds it, TrewSync
-removes it from `data.json`. So until that restart a copy of `.obsidian` still
-carries the token, and Obsidian closing or crashing before its keychain was
-saved costs nothing. If the keychain does not read the token back, the token
-stays in `data.json`, sync carries on, and a notice says so.
+The keychain belongs to Obsidian on this device, not to the vault folder. So
+a backup, an iCloud or git copy, or a copy of `.obsidian` does not carry the
+token, and a copy opened elsewhere cannot sync as this device. Its panel
+shows **Pair this device again**; a new invite adds it as a device of its
+own.
 
-On a desktop each vault has a keychain of its own, so a vault renamed there
-finds its token under the old name, keeps it under the new one and removes the
-old entry. On a phone every vault shares one keychain, so a renamed vault
-cannot tell its own entry from a copy's: it stops, names the entry left under
-the old name and the device, and offers **Pair this device again**. After
-pairing, revoke that device under **Devices** and remove the entry in
-**Settings → Keychain**.
+One exception: after pairing, or after an older Obsidian is first upgraded,
+`data.json` still holds the token until the next time Obsidian starts. Until
+that restart, a copy of `.obsidian` carries it. If the keychain cannot store
+the token at all, it stays in `data.json`, sync carries on, and a notice
+says so.
 
-If the token cannot be found (the keychain was reset, or a renamed vault on a
-phone), TrewSync stops and offers **Pair this device again**. No note is lost:
-pair with a new invite, confirm combining the notes, and it syncs as a new
-device. Revoke the old row under **Devices** once you no longer need it.
+**Renaming a vault.** On a desktop the token follows the vault to its new
+name. On a phone every vault shares one keychain, so a renamed vault cannot
+tell its own entry from a copy's, and it stops, naming the old entry.
+
+**If the token cannot be found** (a reset keychain, or a vault renamed on a
+phone), TrewSync stops and offers **Pair this device again**. No note is
+lost: pair with a new invite, confirm combining the notes, and it syncs as a
+new device. Then revoke the old device under **Devices**, and after a rename
+on a phone also remove the old entry in **Settings → Keychain**.
 
 ## What it does
 
-TrewSync syncs shortly after edits and checks periodically while Obsidian is open.
-It reconnects after a dropped connection. Press **Sync now** to sync immediately,
-including retrying files after fixing a problem. Use **Reconnect** when offline
-or **Resume sync** when paused.
+TrewSync syncs shortly after each edit, checks periodically while Obsidian is
+open, and reconnects after a dropped connection. **Sync now** syncs
+immediately, and retries files after you fix a problem. Use **Reconnect**
+when offline and **Resume sync** when paused.
 
-Open the panel for the result and any files needing attention. It includes the
-server address and version, useful when diagnosing a connection problem.
-On desktop, the status bar shows a cloud with a check when synced. Hover for
-details or click it for quick actions and settings.
+The panel shows the result, any files needing attention, and the server's
+address and version (useful when diagnosing a connection problem). On
+desktop, the status bar shows a cloud with a check when synced: hover for
+details, or click for quick actions and settings.
 
-When a sync brings in several files, as a new device's first sync does, the
-panel counts them: "Downloading 1,280 of 3,000 files." During other longer
-transfers it shows which file is uploading or downloading and how much data has
+A sync that brings in several files counts them: "Downloading 1,280 of 3,000
+files." Other long transfers show the current file and how much data has
 moved. Keep Obsidian open until sync finishes.
 
-The delivery line reports which other devices have received the latest changes.
-It appears once this device has finished syncing, and is blank until then.
-If it is waiting for your phone, open Obsidian there. A disconnected device
-cannot confirm new changes until it reconnects.
+Once this device has finished syncing, the delivery line says which other
+devices have received the latest changes. If it is waiting for your phone,
+open Obsidian there: a disconnected device cannot confirm anything until it
+reconnects.
 
 | Status | What to do |
 |---|---|
 | Unpaired | Pair this vault. |
 | Paused | Choose **Resume sync** from the TrewSync menu. |
 | Connecting, loading history, or syncing | Keep Obsidian open until sync finishes. |
-| Synced | No outstanding work was reported. |
+| Synced | Nothing. No outstanding work was reported. |
 | Needs attention | Open the panel and follow the reason shown for each file. |
 | Failed or offline | Check the connection and the reported error; TrewSync retries temporary failures. |
-| Stopped | Follow the panel's instructions. Repeated attempts alone will not fix this condition. |
+| Stopped | Follow the panel's instructions. Retrying alone will not fix it. |
 
-For a protocol mismatch, update the server and plugin to compatible releases.
-After the server is restored from a backup, TrewSync catches up by itself; see
-[rejoining a restored server](#rejoining-a-restored-server) for the one case
-that stops. If the panel reports unreadable local state, preserve that state
-and your notes before attempting recovery; deleting the plugin's files is not a
-general troubleshooting step.
+- **Protocol mismatch:** update the server and plugin to compatible releases.
+- **Server restored from a backup:** TrewSync catches up by itself; see
+  [rejoining a restored server](#rejoining-a-restored-server) for the one
+  case that stops.
+- **Unreadable local state:** preserve that state and your notes before
+  attempting recovery. Deleting the plugin's files is not a general
+  troubleshooting step.
 
 ## Activity and quick actions
 
@@ -214,19 +202,19 @@ Click the TrewSync status icon or tap its ribbon icon for **Sync activity**,
 **Review conflicts**, **Preview sync**, history, and settings. **Pause sync**
 stops this device until you resume it or restart Obsidian.
 
-The activity log keeps the latest 300 events on this device across restarts.
-Search by filename or filter errors and conflicts. **Copy diagnostics** omits
-filenames; note contents and credentials are never recorded in this log.
-
-Before combining populated vaults, TrewSync shows upload, download, and preserved-copy
-counts. Deleting an entire folder containing several synced
-files also opens a review. Choose **Pause sync** if the changes are unexpected.
-**Preview sync** lets you inspect planned changes at other times without writing
-notes. A preview is an estimate: files are checked again when sync runs.
-
-If a file changed outside Obsidian but did not sync, run **TrewSync: Verify
-vault contents**. This reads every file again and can take longer than a normal
-sync.
+- **Sync activity** keeps the latest 300 events on this device across
+  restarts. Search by filename, or filter errors and conflicts. Note contents
+  and credentials are never recorded, and **Copy diagnostics** leaves out
+  filenames too.
+- **Preview sync** shows planned changes without writing notes. It is an
+  estimate: files are checked again when sync runs.
+- **A review opens by itself** before populated vaults are combined (with
+  upload, download and preserved-copy counts), and when you delete a whole
+  folder holding several synced files. Choose **Pause sync** if the changes
+  are unexpected.
+- **TrewSync: Verify vault contents** is for a file that changed outside
+  Obsidian but did not sync. It reads every file again, so it takes longer
+  than a normal sync.
 
 <details>
 <summary>See activity, conflict review, and first-sync previews</summary>
@@ -245,10 +233,10 @@ These phone layouts were captured in desktop Obsidian's mobile styles.
 ## Version history
 
 Run **TrewSync: Show version history** for the open note, or use the note's
-right-click menu. Choose a version to read it or compare it with the local copy.
-Use **Load more** to go further back. Tab or the arrow keys move between
-versions. Attachments and large notes show their details without loading a text
-preview; restore a copy to open the complete file.
+right-click menu. Choose a version to read it or compare it with the local
+copy; **Load more** goes further back. Tab or the arrow keys move between
+versions. Attachments and large notes show their details without a text
+preview: restore a copy to open the complete file.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/changes-dark.png">
@@ -257,20 +245,24 @@ preview; restore a copy to open the complete file.
 
 **Restore does not overwrite an existing file.** If the original path is
 occupied, the copy appears beside it, for example `Note (restored 42).md`.
-Restoring also tries to upload the copy to the server. Other devices receive
-it when they next sync.
+Restoring also tries to upload the copy to the server, and other devices
+receive it when they next sync.
 
 **Undo this change** appears on a version an agent wrote through the server's
-[MCP endpoint](agent.md), and on one an undo wrote. Unlike Restore, it replaces: it puts
-back what that operation changed, in every note it changed, as it was before,
-and every device receives the result. The panel names who wrote the version:
-the agent by its token's label, an undo on the server, or an undo from a
-device. This device's unsent changes are sent first. If any note the operation
-changed has been edited since, here or on a device that has synced the edit,
-nothing is changed; the panel says which note and who edited it, and offers **Keep both: write the earlier versions as
-copies**, which writes each earlier version beside its note, as
-`Note (restored 42).md`, and leaves everything else alone. An undo can itself
-be undone. A version already undone shows no undo button.
+[MCP endpoint](agent.md), and on one an undo wrote. The panel names who wrote
+it: the agent by its token's label, an undo on the server, or an undo from a
+device.
+
+- Unlike Restore, it replaces. It puts back what that operation changed, in
+  every note it changed, and every device receives the result. This device's
+  unsent changes are sent first.
+- If any of those notes has been edited since, here or on a device that has
+  synced the edit, nothing is changed. The panel says which note and who
+  edited it, and offers **Keep both: write the earlier versions as copies**,
+  which writes each earlier version beside its note, as
+  `Note (restored 42).md`, and leaves everything else alone.
+- An undo can itself be undone. A version already undone shows no undo
+  button.
 
 History remains available until the server operator
 [purges it](server-operations.md#purge). An agent's version keeps the note's
@@ -279,47 +271,50 @@ that, undoing it may be refused because the earlier version is gone.
 
 ## Restore a folder to an earlier time
 
-Right-click a folder and choose **TrewSync: restore to an earlier time**, or
-run **TrewSync: Restore a folder, or the vault, to an earlier time** and leave
-the folder empty for every note in the vault. Pick a date and time, in this
-device's time zone, and press **Preview**. Nothing changes yet: the preview
-says how many files would be put back and how many made since would be
-removed, and lists them. Press **Restore** to do exactly that, or close the
-window to do nothing.
+1. Right-click a folder and choose **TrewSync: restore to an earlier time**.
+   Or run **TrewSync: Restore a folder, or the vault, to an earlier time** and
+   leave the folder empty to cover every note in the vault.
+2. Pick a date and time, in this device's time zone, and press **Preview**.
+   Nothing changes yet: the preview counts and lists the files that would be
+   put back and the files made since that would be removed.
+3. Press **Restore** to do exactly that, or close the window to do nothing.
 
-The time means what the server had received by then. A note edited on a phone
-while it was offline belongs to the time the phone sent it, not the time on
-the phone's clock. The preview says the exact moment it found.
-
-Only the folder changes. A note moved into the folder since that time stays
-where it arrived, and the preview says how many. A note moved out of it since
-is put back in the folder, and the one where it went is left alone, so you
-then have both. Settings never change: a restore is of notes and
-attachments.
-
-Every device receives the restore as it syncs. **Undo** in the same window puts
-back everything the restore replaced, as one change; so does **Undo this
+Every device receives the restore as it syncs. **Undo** in the same window
+puts back everything the restore replaced, as one change; so does **Undo this
 change** in the version history of any note it touched. Nothing is lost
 either way: every version it replaced stays in the history.
 
-If a note is saved anywhere between the preview and Restore, Restore is
-refused and the window asks for a new preview, so what is restored is always
-what you saw. A restore of more than 10,000 files is refused; restore one
-folder at a time. The server needs version 0.15 or later; upgrade the server
-first. A time before the oldest history the server recorded a time for, or one
-whose history has been [purged](server-operations.md#purge), is refused rather
-than guessed.
+What to expect:
+
+- **The time is the server's.** It means what the server had received by
+  then. A note edited on an offline phone belongs to the time the phone sent
+  it, not the time on the phone's clock. The preview says the exact moment it
+  found.
+- **Only the folder changes.** A note moved into the folder since then stays
+  where it arrived, and the preview says how many. A note moved out since is
+  put back in the folder, and the one where it went is left alone, so you
+  then have both.
+- **Settings never change.** A restore is of notes and attachments.
+- **You restore what you previewed.** If a note is saved anywhere between
+  the preview and Restore, Restore is refused and the window asks for a new
+  preview.
+- **Limits.** A restore of more than 10,000 files is refused; restore one
+  folder at a time. A time before the oldest history the server recorded a
+  time for, or one whose history has been
+  [purged](server-operations.md#purge), is refused rather than guessed. The
+  server must be version 0.15 or later.
 
 ## Deleted notes
 
-Press **Browse deleted**, select the note, and restore it. A note whose
-content has been purged is listed without a restore button.
-Type in **Find a file** to filter the list by filename. **Show older** adds
-the next page of older deletions to the list; the filter searches only what is
-loaded. To restore several at once, press **Choose** on each note, or **Choose
-all shown**, then **Restore N**: they are restored together in one sync, into
-names nothing already occupies. If the connection fails, choose **Try again**
-after reconnecting.
+Press **Browse deleted**, select the note, and restore it.
+
+- **Find a file** filters the list by filename. It searches only what is
+  loaded; **Show older** loads the next page of older deletions.
+- To restore several at once, press **Choose** on each note, or **Choose all
+  shown**, then **Restore N**. They are restored together in one sync, into
+  names nothing already occupies.
+- A note whose content has been purged is listed without a restore button.
+- If the connection fails, reconnect and choose **Try again**.
 
 <details>
 <summary>See deleted notes</summary>
@@ -335,63 +330,72 @@ A deletion received from another device goes to the system trash, or the
 vault's `.trash` if necessary. If you edit a note while another device deletes
 it, TrewSync keeps the edit and sends it back as a new version.
 
-Deleting or renaming a folder removes it from your other devices too, once
-nothing is left in it there. The notes that were in it go to the trash on the
-other devices, as any deletion does; the emptied folder is removed, not
-trashed. A folder that still
-holds something on another device stays, and comes back on the device where
-you deleted it: a note written there while it was offline, a note edited
-there, or a file TrewSync never syncs, such as a name starting with a dot. The
-`.DS_Store` the macOS Finder leaves in folders it has opened does not keep a
-folder: it is removed with the folder when nothing else is inside.
-Deleted folders are not listed under **Browse deleted**; the notes that were
-in them are.
+**Folders.** Deleting or renaming a folder removes it from your other devices
+too, once nothing is left in it there. Its notes go to the trash on those
+devices, as any deletion does; the emptied folder itself is removed, not
+trashed.
 
-Folders deleted with an earlier version of TrewSync may still be on your
-other devices. The device a folder was deleted on removes it from the others
-on its first sync with this version, as long as that device still has its
-sync record of the folder. If an old folder stays, delete it again.
+- A folder that still holds something on another device stays there, and
+  comes back on the device where you deleted it. That something can be a
+  note written or edited there while it was offline, or a file TrewSync never
+  syncs, such as a name starting with a dot. (The `.DS_Store` the macOS
+  Finder leaves behind does not count: it is removed with the folder.)
+- Deleted folders are not listed under **Browse deleted**; the notes that
+  were in them are.
+- Folders deleted with an earlier version of TrewSync may still be on your
+  other devices. The device a folder was deleted on removes it from the
+  others on its first sync with this version, as long as it still has its
+  sync record of the folder. If an old folder stays, delete it again.
 
 ## Conflicts
 
-TrewSync tries to combine edits made on different devices. If its merge checks
-fail, it keeps both versions, for example:
+TrewSync tries to combine edits made on different devices. When it cannot do
+that safely, it keeps both versions:
 
 ```text
 Meeting notes.md
 Meeting notes (Conflicted copy laptop 202608311412).md
 ```
 
-The name in the copy says whose words are in it: here, the version the laptop
-wrote, kept beside the one you have. A copy of an agent's edit carries the
-name its access token was given, such as `Claude on Mac`. A copy with this
-device's own name holds something that was on this device, such as an edit
-saved while a newer version was arriving. Characters a file name cannot hold
-are replaced, and a long name is shortened.
+The name in the copy says whose words are in it:
 
-Choose **Review conflicts** from the TrewSync menu. Compare the original and
-preserved copy, then keep either one or edit a combined version. **Decide later**
-leaves both files in place. If a file changes while you review it, refresh the
-comparison before choosing. The result syncs to your other devices.
+- **Another device's name** (here, `laptop`): the version that device wrote,
+  kept beside the one you have.
+- **An agent's name**, such as `Claude on Mac`: an agent's edit, named by
+  the label its access token was given.
+- **This device's own name**: something that was on this device, such as an
+  edit saved while a newer version was arriving.
 
-Attachments and large notes can be opened separately for comparison. You can
-also combine files manually and delete the extra copy. Usually the incoming
-version gets the conflict name; an edit made during replacement can instead be
-preserved there.
+Characters a file name cannot hold are replaced, and a long name is
+shortened.
 
-Successful merges and ordinary downloads can update the original note. Keeping
-both versions on a conflict is not a promise that sync never changes an open file.
+To resolve one, choose **Review conflicts** from the TrewSync menu. Compare
+the original and the preserved copy, then keep either one or edit a combined
+version. **Decide later** leaves both files in place. If a file changes while
+you review it, refresh the comparison before choosing. The result syncs to
+your other devices.
+
+Attachments and large notes open separately for comparison. You can also
+combine files by hand and delete the extra copy.
+
+Keeping both versions on a conflict is not a promise that sync never changes
+an open file: successful merges and ordinary downloads do update the original
+note.
 
 ## Settings sync
 
-Off until you turn it on, on each device: in the TrewSync panel, **Manage this
-vault → Sync settings**. It syncs Obsidian's own settings, themes and CSS
-snippets from the settings folder this device runs. That includes core plugins and their
-settings, such as Daily notes and Templates. Community plugins' own settings
-sync only where you also turn on [plugin settings sync](#plugin-settings);
-plugins themselves and the workspace layout never do. Names you have told this device to skip are skipped in the
-settings folder too. Plugin 0.16 needs a server of 0.15.0 or later for
-everything, settings sync included; see [Install](#install).
+Settings sync is off until you turn it on, on each device: in the TrewSync
+panel, **Manage this vault → Sync settings**.
+
+| Synced? | What |
+|---|---|
+| Always | Obsidian's own settings, themes and CSS snippets, including core plugins and their settings (Daily notes, Templates and the rest). |
+| Only with [plugin settings sync](#plugin-settings) | Community plugins' own settings. |
+| Never | Community plugins themselves, and the workspace layout. |
+
+Names you have told this device to skip are skipped in the settings folder
+too. Plugin 0.16 needs a server of 0.15.0 or later for everything, settings
+sync included; see [Install](#install).
 
 **Whom a device shares its settings with.** **Sync settings** is one choice,
 made on each device:
@@ -403,49 +407,54 @@ made on each device:
 - **Mobile and desktop**: shared with every device set to Mobile and desktop.
 
 Every device keeps its own settings folder, `.obsidian` or whatever Obsidian
-runs there, and nothing needs renaming, overriding or relaunching: TrewSync
-keeps each group's settings in a folder of its own on the server, `.obsidian`
-for Mobile and desktop, `.obsidian-mobile` and `.obsidian-desktop` for the
-others, and maps it onto the folder each device runs. Changing the choice
-later is the same as turning settings sync on: TrewSync asks the first-time
-question again where there is one, and the group you leave keeps its settings
-on the server.
+runs there, and nothing needs renaming. The server keeps each group's
+settings in a folder of its own (`.obsidian` for Mobile and desktop,
+`.obsidian-mobile` and `.obsidian-desktop` for the others), and TrewSync maps
+it onto the folder each device runs. Changing the choice later works like
+turning settings sync on: the first-time question comes back where there is
+one, and the group you leave keeps its settings on the server.
 
-**The first time.** When you turn it on, TrewSync asks the server about each
-of this device's settings in the group. Where the server has a different
-version of one, or the group has deleted one, it asks which to use: the
-server's, or this device's. With the server's, a setting the group has
-deleted goes from this device too, after you apply it. The answer is for that
-first time only. Where there is no such setting, both answers do the same, so
-it does not ask: this device's settings go to the group, and the group's that
-this device does not have wait for you to apply them. The same values in
-another order count as the same. It asks anyway when it cannot ask the server
-now, offline or in the middle of a sync. One case it cannot see: a setting
-renamed on another device, such as a snippet, which goes back to the group
-under its old name from this device, as keeping this device's would send it.
-Either way TrewSync first keeps a copy of this device's settings as they
-were, in a `settings-before-sync-` folder inside the plugin's own folder, and
-says where. Uninstalling the plugin removes that folder with it.
+**The first time.** TrewSync first saves a copy of this device's settings as
+they were, in a `settings-before-sync-` folder inside the plugin's own
+folder, and says where. (Uninstalling the plugin removes that folder with
+it.) Then it compares this device's settings with the group's:
 
-**When two devices disagree.** Different settings changed on two devices
-are merged, even in the same file. The same setting changed two ways before
+- **Something differs, or the group has deleted a setting this device has:**
+  it asks which to use, the server's or this device's. With the server's, a
+  setting the group deleted goes from this device too, after you apply it.
+  The answer is for that first time only.
+- **Nothing differs:** it does not ask. This device's settings go to the
+  group, and the group's settings that this device lacks wait for you to
+  apply them. The same values in another order count as the same.
+- **It cannot reach the server** (offline, or in the middle of a sync): it
+  asks anyway.
+
+One case it cannot see: a setting renamed on another device, such as a
+snippet. This device sends it back to the group under its old name.
+
+**When two devices disagree.** Different settings changed on two devices are
+merged, even in the same file. The same setting changed two ways before
 either device synced keeps both, as a note does: the device that syncs second
 keeps its value, and the other is saved beside the file as a conflicted copy,
 which Obsidian ignores. **Review conflicts** lists it as an Obsidian setting.
 Keeping the original removes the copy. Keeping the copy, or a combined
-version, writes it and reloads Obsidian, as applying does; a combined version
-has to be valid JSON.
+version, writes it and reloads Obsidian; a combined version has to be valid
+JSON.
 
-**Applying a change.** Obsidian reads its settings when it starts and holds
-them in memory, so a setting changed on another device waits until you apply
-it. TrewSync says how many are waiting, in a notice and in its status. Tap the
-notice, or run **Apply synced settings and reload**, and confirm: it keeps a
-copy of this device's settings as they are (in `settings-before-apply` inside
-the plugin's folder, replaced each time), saves your open notes, canvases and
-drawings, writes the settings and reloads Obsidian. If Obsidian writes its old
-setting back as it reloads, TrewSync notices and offers the change again,
-rather than sending the old value to your other devices. A settings file that
-is not valid JSON is never sent or applied, and is listed as needing attention.
+**Applying a change.** Obsidian reads its settings when it starts, so a
+setting changed on another device waits until you apply it. TrewSync says how
+many are waiting, in a notice and in its status. Tap the notice, or run
+**Apply synced settings and reload**, and confirm. TrewSync then:
+
+1. Saves a copy of this device's settings as they are, in
+   `settings-before-apply` inside the plugin's folder (replaced each time).
+2. Saves your open notes, canvases and drawings.
+3. Writes the settings and reloads Obsidian.
+
+If Obsidian writes its old setting back as it reloads, TrewSync notices and
+offers the change again, rather than sending the old value to your other
+devices. A settings file that is not valid JSON is never sent or applied, and
+is listed as needing attention.
 
 The server keeps every version of a setting, as it does for a note. Agents
 connected over MCP never see settings, and the Git export leaves them out.
@@ -453,123 +462,141 @@ connected over MCP never see settings, and the Git export leaves them out.
 ### Plugin settings
 
 With settings sync on, **Manage this vault → Sync plugin settings** syncs
-each community plugin's settings, its `data.json`, with the same group. The
-plugins themselves never sync: install them and switch them on separately on
-each device, and their settings follow. Settings for a plugin that is not
-installed on a device wait in its folder until it is. It is off until you turn
-it on, on each device. Like the rest of plugin 0.16 it needs a server of
-0.15.0 or later, which speaks protocol 5.
+each community plugin's settings, its `data.json`, with the same group. It is
+off until you turn it on, on each device, and needs a server of 0.15.0 or
+later like the rest of plugin 0.16.
 
-A change from another device waits until you apply it, as other settings do,
-and **Apply synced settings** names each plugin whose settings it would
-change, and the device the change came from. Turning it on asks the
-first-time question again, for plugin settings and the rest together, where
-there is a choice to make, and keeps a copy of this device's settings first.
+The plugins themselves never sync: install and enable them on each device,
+and their settings follow. Settings for a plugin a device does not have wait
+in its folder until it does.
 
-- Plugins keep their settings in their own folders, sometimes with API keys or
-  passwords. With plugin settings sync on, those are stored on your server and
+A change from another device waits until you apply it, as other settings do.
+**Apply synced settings** names each plugin whose settings it would change,
+and the device the change came from. Turning plugin settings sync on asks the
+first-time question again where there is a choice to make, for plugin
+settings and the rest together, and saves a copy of this device's settings
+first.
+
+- **Secrets.** Plugins sometimes keep API keys or passwords in their
+  settings. With plugin settings sync on, those are stored on your server and
   in its backups as they are, as your notes are.
-- Never synced: the settings of TrewSync itself, and of Obsidian Git, Local
-  REST API, Self-hosted LiveSync, Remotely Save, Basalt Sync and SuperSync,
-  which sync or control the vault and hold credentials. They are recognised by
-  the id in each plugin's manifest, whatever its folder is called.
-- BRAT's settings sync like any plugin's, so every device where you install
-  and switch on BRAT tracks the same plugins, and installs them itself.
-- To keep one plugin's settings to one device, add its folder name to **Skip
-  these on this device**.
+- **Never synced:** the settings of TrewSync itself, and of Obsidian Git,
+  Local REST API, Self-hosted LiveSync, Remotely Save, Basalt Sync and
+  SuperSync, which sync or control the vault and hold credentials. They are
+  recognised by the id in each plugin's manifest, whatever its folder is
+  called.
+- **BRAT's settings sync** like any plugin's, so every device where you
+  install and enable BRAT tracks the same plugins, and installs them itself.
+- **To keep one plugin's settings to one device,** add its folder name to
+  **Skip these on this device**.
 
 ## What is not synced
 
-- Obsidian's configuration folder, unless settings sync is on; with it on, the
-  workspace layout and community plugins themselves still do not sync, and
-  plugins' settings sync only with [plugin settings sync](#plugin-settings) on
-  as well. The settings of TrewSync itself and of the plugins that sync or
-  control a vault never do.
-- Files or folders whose names start with a dot, at any depth, including
-  `.git`, `.trash`, and `.trew`. An `.attachments` folder is one of these, so
+- **Obsidian's configuration folder**, unless [settings sync](#settings-sync)
+  is on. Even then, the workspace layout and community plugins themselves do
+  not sync, and plugins' settings sync only with
+  [plugin settings sync](#plugin-settings) on as well. The settings of
+  TrewSync itself and of the plugins that sync or control a vault never do.
+- **Names starting with a dot**, files or folders, at any depth, including
+  `.git`, `.trash` and `.trew`. An `.attachments` folder is one of these, so
   attachments kept there stay on the device that has them.
-- Files above the server's limit, **64 MiB by default**. The server operator
+- **Files above the server's limit**, 64 MiB by default. The server operator
   can [adjust the limit](server-reference.md#serve).
-- Paths the server refuses because Obsidian could not hold them everywhere:
-  longer than 1,024 bytes, a file or folder name longer than 255 bytes, control
-  characters, backslashes, and a few more. A no-break space in a name is not
-  one of them: Obsidian reads it as an ordinary space, and so does TrewSync, so
-  the note syncs under that name and the file keeps its own.
-- A path that differs from another synced path only in letter case, such as
-  `Notes/a.md` beside `notes/a.md`, because a case-insensitive disk would hold
-  them as one.
+- **Paths Obsidian could not hold everywhere:** longer than 1,024 bytes, a
+  file or folder name longer than 255 bytes, control characters, backslashes,
+  and a few more. A no-break space in a name is fine: Obsidian reads it as an
+  ordinary space, and so does TrewSync, so the note syncs under that name and
+  the file keeps its own.
+- **A path that differs from another only in letter case**, such as
+  `Notes/a.md` beside `notes/a.md`, because a case-insensitive disk would
+  hold them as one.
 
 The panel lists each refused path with its reason, and the file stays on this
-device. Rename it and press **Sync now**. Other notes and attachments are
-included. Large attachments need more memory, particularly on phones.
+device. Rename it and press **Sync now**. Everything else syncs. Large
+attachments need more memory, particularly on phones.
 
 ## Phones
 
-Android sync runs while Obsidian is **open in the foreground**. There is no
-background service or push notification to wake it. Turning the screen off
-pauses Obsidian and drops its connection within seconds, so while a sync runs
-for more than a couple of seconds TrewSync keeps the screen on, and lets it
-sleep again when the sync finishes. Switching to another app or pressing the
-power button still pauses it; an interrupted sync carries on where it stopped
-when Obsidian is open again. Let changes finish before closing the app.
+**Android syncs only while Obsidian is open in the foreground.** There is no
+background service or push notification to wake it. Let changes finish before
+you close the app.
 
-On Android, keep the vault in **App storage**. Obsidian asks for a vault
-location when you create one, and **Device storage**, the one it marks
-recommended, is several times slower for TrewSync to write to: on a Pixel 9
-Pro XL a first sync of 3,000 notes took 2.4 times as long there as in App
-storage. Other apps cannot open App storage, and Android deletes it when
+Turning the screen off pauses Obsidian and drops its connection within
+seconds, so TrewSync keeps the screen on during a sync that runs for more
+than a couple of seconds, and lets it sleep again afterwards. Switching apps
+or pressing the power button still pauses it; an interrupted sync carries on
+where it stopped when Obsidian is open again.
+
+**Keep an Android vault in App storage.** Obsidian asks for a location when
+you create a vault, and **Device storage**, the one it marks recommended, is
+several times slower for TrewSync to write to: on a Pixel 9 Pro XL a first
+sync of 3,000 notes took 2.4 times as long there as in App storage. The
+trade-offs: other apps cannot open App storage, and Android deletes it when
 Obsidian is uninstalled, which with TrewSync loses only changes that have not
-synced yet. To move a vault you already have, create a new vault in App
-storage, install TrewSync there with [BRAT](#install-with-brat), pair it with
-a new invite, and let its first sync finish before you
-remove the old vault and its device. Obsidian's own settings come across only
-with [settings sync](#settings-sync) on.
+synced yet.
 
-### Attachments on demand
+To move a vault you already have:
 
-A phone does not need every PDF, photo and recording in the vault. With
-**Manage this vault → Attachments on demand** set to **Over 1 MB** (or **Over
-10 MB**, or **All attachments**), a new attachment at least that size stays on
-the server, and this device downloads it when you open a note that embeds or
-links it, or when you tap it. Notes, canvases and every other text file always
-download, whatever their size, and so do settings. The setting is this
-device's alone; the others keep downloading everything.
+1. Create a new vault in App storage and install TrewSync there.
+2. Pair it with a new invite and let its first sync finish.
+3. Remove the old vault and its device.
 
-The panel says how many attachments are on the server only and what they
-weigh. **TrewSync: Download a file kept on the server** fetches any one of
-them, and **TrewSync: Download the attachments this note needs** fetches what
-the open note uses. Without a connection, an attachment you open waits and
-downloads when TrewSync reconnects, even if Obsidian restarts in between. Once
-downloaded, an attachment stays and syncs like any other file. If another
-device renames it, it goes back to the server only here, under its new name,
-and downloads again when you open it.
+Obsidian's own settings come across only with
+[settings sync](#settings-sync) on.
 
-Attachments already on the device stay when you turn it on. **Free space** in
-the panel removes the ones the setting covers from this device, keeping each
-on the server and on every other device that has it: each one is first read
-in full and checked against the server's newest version, and the server's copy
-is read back and checked, before it is removed. A removed copy is deleted, not
-moved to the trash, since freeing the space is the point; a file that changed
-while it was being removed is kept under a new name instead. To free space, use
-Free space rather than deleting a file, which deletes it everywhere.
-
-A few things to know. An attachment that is on the server only is not in
-Obsidian's file list or search until it is downloaded, and an embed of one
-shows as not found until then. Renaming or deleting a folder here moves or
-removes only the files here: one that is on the server only stays at its old
-path on the server, and its folder comes back. Turning the setting off
-downloads everything that was waiting.
-
-iOS has not been tested. If a first connection is rejected because of its
+**iOS has not been tested.** If a first connection is rejected because of its
 browser origin, the panel shows an origin hint for the server operator; see
 [server connection troubleshooting](server.md#connection-troubleshooting).
 
+### Attachments on demand
+
+A phone does not need every PDF, photo and recording in the vault. Set
+**Manage this vault → Attachments on demand** to **Over 1 MB**, **Over
+10 MB** or **All attachments**, and a new attachment at least that size stays
+on the server. This device downloads it when you open a note that embeds or
+links it, or when you tap it.
+
+- Notes, canvases and every other text file always download, whatever their
+  size, and so do settings.
+- The setting is this device's alone. Your other devices keep downloading
+  everything.
+- The panel says how many attachments are on the server only, and their
+  total size.
+- **TrewSync: Download a file kept on the server** fetches any one of them.
+  **TrewSync: Download the attachments this note needs** fetches what the
+  open note uses.
+- Offline, an attachment you open waits and downloads when TrewSync
+  reconnects, even if Obsidian restarts in between.
+- Once downloaded, an attachment stays and syncs like any other file. If
+  another device renames it, it goes back to the server only here, under its
+  new name, and downloads again when you open it.
+- Turning the setting off downloads everything that was waiting.
+
+**Free space.** Attachments already on the device stay when you turn the
+setting on. **Free space** in the panel removes the ones the setting covers
+from this device only: each stays on the server and on every other device
+that has it. TrewSync first checks that the server holds the file's current
+content, by reading both copies in full. A removed copy is deleted, not moved
+to the trash, since freeing the space is the point; a file that changed while
+it was being removed is kept under a new name instead.
+
+**To free space, use Free space. Deleting a file deletes it everywhere.**
+
+Two limits to know:
+
+- An attachment that is on the server only is not in Obsidian's file list or
+  search until it is downloaded, and an embed of one shows as not found until
+  then.
+- Renaming or deleting a folder here moves or removes only the files here. A
+  file that is on the server only stays at its old path on the server, and
+  its folder comes back.
+
 ## Change the server address
 
-Open **Server → Server address**, enter the new address, and press **Save**.
-TrewSync checks the connection using this device's existing pairing before saving.
-Use this when the same server moves to a new hostname or port. Notes and sync
-history are kept. Update the address on each device.
+Use this when the same server moves to a new hostname or port. Open **Server
+→ Server address**, enter the new address, and press **Save**. TrewSync
+checks the connection with this device's existing pairing before saving.
+Notes and sync history are kept. Update the address on each device.
 
 <details>
 <summary>See server settings</summary>
@@ -586,16 +613,16 @@ history are kept. Update the address on each device.
 Under **Manage this vault**:
 
 - **This device's name → Rename** changes the label used for future activity.
-  Existing history and conflict filenames retain their old labels.
+  Existing history and conflict filenames keep their old labels.
 - **Devices → Show devices** lists paired devices and outstanding invites.
+  Devices with the same name show their IDs so you can tell them apart. A row
+  marked **Never connected** may be left by an interrupted pairing.
 - **Revoke** stops a device syncing; **Cancel** invalidates an unused invite.
   On the row for this device the same button reads **Unlink from the server**.
   It revokes this device on the server, unlike **Unlink this vault**, which is
   local only.
 
-When names match, the list shows device IDs to help you tell them apart.
-Rows marked **Never connected** may be left by an interrupted pairing. The
-server's host can do the same with `trewd devices`, `trewd revoke` and
+The server's host can do the same with `trewd devices`, `trewd revoke` and
 `trewd uninvite`; see the
 [server reference](server-reference.md#invite-devices-revoke-uninvite).
 
@@ -610,8 +637,8 @@ server's host can do the same with `trewd devices`, `trewd revoke` and
 </details>
 
 Revoking a device stops it receiving and sending changes at once, and cancels
-any invites it created. It cannot erase notes already on that device: they stay
-readable there. See
+any invites it created. **It cannot erase notes already on that device: they
+stay readable there.** See
 [what to do after losing a device](security.md#if-a-device-is-lost-or-stolen).
 You can revoke any device, including this one and the last one; `trewd invite`
 on the server pairs a device again afterwards.
@@ -619,9 +646,9 @@ on the server pairs a device again afterwards.
 On the revoked device, the panel says it was revoked and shows **Pair this
 device again** with an Invite field in place of its usual controls. Its notes
 stay where they are, on that device and on the server. Paste or scan a new
-invite and press **Pair**: TrewSync asks before combining the vault's notes, then
-replaces the old pairing and sync index, as unlinking would, and syncs as a new
-device under the same name, still skipping what it skipped.
+invite and press **Pair**: TrewSync asks before combining the vault's notes,
+then replaces the old pairing and sync index, as unlinking would. It syncs as
+a new device under the same name, still skipping what it skipped.
 
 <details>
 <summary>Recovery and server maintenance</summary>
@@ -630,53 +657,60 @@ device under the same name, still skipping what it skipped.
 
 When the operator restores the server from a `trewd backup` snapshot, the
 server starts a new history, and this device notices at its next connection.
-It then reads the restored history as a fresh listing, with nothing to press:
-files that match agree, files that differ are kept both ways as a conflict
-copy, files only this device holds are sent back, and nothing is deleted
-because the restored history lacks it. A note deleted after that backup was
-taken can come back; delete it again if you still want it gone.
+There is nothing to press. It reads the restored history as a fresh listing:
+
+- Files that match agree.
+- Files that differ are kept both ways, as a conflict copy.
+- Files only this device holds are sent back.
+- Nothing is deleted because the restored history lacks it.
+
+A note deleted after that backup was taken can come back; delete it again if
+you still want it gone.
 
 The one case that stops is a server data directory copied back by hand rather
-than restored from a backup. The panel then shows **Stopped** and offers
-**Rejoin this server**. First have the operator back up the server and
-preserve local notes. Press **Rejoin this server**, review the two positions
-shown, then confirm. TrewSync rejoins and sends versions held only on this device,
-keeping both copies where they disagree. Prefer this action to unlinking and
-pairing again.
+than restored from a backup. The panel shows **Stopped** and offers **Rejoin
+this server**:
 
-After either, the next edit made on two devices at once keeps both versions
-instead of merging them, because the last version the devices agreed on is
-gone.
+1. Have the operator back up the server, and preserve your local notes.
+2. Press **Rejoin this server**, review the two positions shown, and confirm.
+
+TrewSync rejoins and sends versions held only on this device, keeping both
+copies where they disagree. Prefer this to unlinking and pairing again.
+
+After either kind of rejoin, the next edit made on two devices at once keeps
+both versions instead of merging them, because the last version the devices
+agreed on is gone.
 
 ## Sending back what the server has lost
 
 If the operator confirms that the server is missing stored content, choose
 **Manage this vault → Send back what the server has lost** on a device that
-still has the notes. TrewSync resends missing content without creating new note
-versions.
+still has the notes. TrewSync resends the missing content without creating
+new note versions.
 
-Repeat on other devices that may have additional copies. The operator should
-then run `trewd verify`; a successful repair on one device cannot establish
-that all server history is recoverable.
+Repeat on other devices that may hold additional copies. The operator should
+then run `trewd verify`: a successful repair on one device does not show that
+all server history is recoverable.
 
 ## Durability
 
-TrewSync writes a new file or a changed attachment beside its destination,
-checks the written bytes, and only then puts it in place. An incoming edit to a
-note is written into the note itself, so an open editor keeps showing it: what
-the note held is first copied beside it as a conflict copy and checked, and
-once the new text has been read back the copy goes if the server already has
-what it holds. If that write is cut short, by a full disk for example, TrewSync
-puts back what the note held and fetches the edit again; a note it cannot put
-back yet is not sent anywhere until it can. Desktop and mobile provide
-different guarantees during a power loss; keep independent backups of your
-notes.
+**Keep independent backups of your notes.** TrewSync checks what it writes,
+but desktop and mobile give different guarantees during a power loss: on a
+phone, durability is best effort, whatever the platform gives.
 
-If the panel says **versions were kept somewhere Obsidian does not show**, keep
-the named files and the plugin's state folder. The notice gives their retained
-locations. Copy a retained version to a new visible note and check it before
-removing any recovery material. Do not clear hidden files as a general cleanup.
-The [technical design](design.md#file-replacement) explains these paths.
+A new file or a changed attachment is written beside its destination,
+checked, and only then put in place. An incoming edit is written into the
+note itself, so an open editor keeps showing it, after a checked copy of what
+the note held is saved beside it. If the write is cut short, by a full disk
+for example, TrewSync puts back what the note held and fetches the edit
+again; a note it cannot put back yet is not sent anywhere until it can.
+
+If the panel says **versions were kept somewhere Obsidian does not show**,
+keep the named files and the plugin's state folder. The notice says where
+they are. Copy a retained version to a new visible note and check it before
+removing any recovery material. Do not clear hidden files as a general
+cleanup. The [technical design](design.md#file-replacement) explains these
+paths.
 
 </details>
 
@@ -684,9 +718,10 @@ The [technical design](design.md#file-replacement) explains these paths.
 
 **Manage this vault → Unlink this vault** stops syncing here and removes the
 local pairing, its token in Obsidian's keychain and the sync index. Your notes
-remain on this device and the server.
-Pair again to resume. Unlinking locally does not revoke the server's device
-record; use **Devices** when you want to remove access.
+remain on this device and the server. Pair again to resume.
+
+Unlinking is local: it does not revoke the server's device record. Use
+**Devices** when you want to remove access.
 
 ## Commands
 
@@ -710,15 +745,15 @@ record; use **Devices** when you want to remove access.
 ### From the command line
 
 On Obsidian 1.12.2 and later, TrewSync adds two commands to Obsidian's
-command-line interface, `obsidian`, for scripts and agents working on a desktop
-vault. Both need the device paired and connected, and answer in text rather
-than failing.
+command-line interface, `obsidian`, for scripts and agents working on a
+desktop vault. Both need the device paired and connected, and answer in text
+rather than failing.
 
 - `obsidian trew:history path=<path>` lists the newest 50 versions of a note,
   one per line: the version's uid, its time, its size in bytes and the device
   that wrote it, separated by tabs.
 - `obsidian trew:restore path=<path> uid=<n>` restores that version (any of
-  the note's, not only the 50 listed) as **Restore** in version history does:
-  it never overwrites an existing file, so if something is at the path the
-  copy goes beside it, and it uploads the copy to the server. The answer says
+  the note's, not only the 50 listed) as **Restore** in version history does.
+  It never overwrites an existing file: if something is at the path, the copy
+  goes beside it. It uploads the copy to the server, and the answer says
   where the copy went and whether it was sent.

@@ -8,12 +8,15 @@ HTTPS. You get an offsite copy in a format every tool reads: `git log -p` for
 what changed, blame, diffs between any two days, and a copy that outlives
 TrewSync itself.
 
-It goes one way. The server writes the repository from the notes it stores and
-never reads anything back: nothing you commit, push or edit in a clone reaches
-your vault, and a change made to the repository or the remote behind the
-server's back stops the export and is reported, never "fixed". Keep editing in
-Obsidian. The server's store stays the vault's only source of truth, and the
-export can never delay or refuse a device's write or an agent's.
+**It goes one way.** The server writes the repository from the notes it
+stores and never reads anything back:
+
+- Nothing you commit, push or edit in a clone reaches your vault. Keep
+  editing in Obsidian.
+- A change made to the repository or the remote behind the server's back
+  stops the export and is reported, never "fixed".
+- The server's store stays the vault's only source of truth, and the export
+  can never delay or refuse a device's write or an agent's.
 
 ## Read this first: the history is plaintext, for good
 
@@ -45,25 +48,26 @@ of the server.
   an undo and a `trewd restore` are each one commit, authored by the token's
   label, with trailers naming it: `Trew-Operation`, `Trew-Tool`, `Trew-Actor`
   and `Trew-Actor-Kind`.
-- **A device's edits, coalesced.** Obsidian saves every couple of seconds
-  while you type; the export commits a device's versions together once that
-  device has been quiet for the window (5 minutes by default), and a minute
-  more for a save still landing, authored by the device's name, with a
+- **A device's edits, grouped.** Obsidian saves every couple of seconds while
+  you type. The export commits a device's versions together once that device
+  has been quiet for the window (5 minutes by default), and a minute more for
+  a save still landing. The commit is authored by the device's name, with a
   `Trew-Device` trailer.
-- **Dated by the server**, when it committed the versions, never by a device's
-  clock.
+- **Dated by the server**, when it committed the versions, never by a
+  device's clock.
 - **The files as they are.** A deleted note is absent from the next commit; a
   rename is a deletion and an addition that Git shows as a rename. Conflict
-  copies are included, like any other note. Empty folders are not, because Git
-  has no empty folders. Nothing whose name starts with a dot reaches the
-  repository: Obsidian's settings, which settings sync carries between
-  devices, are left out of the export, and nothing else in `.obsidian/` or
-  any other dot folder is synced at all. A settings save does not shape the
-  commits either: it neither splits a device's run nor moves its time.
-- **Large attachments in Git LFS.** A file over the threshold is an LFS pointer
-  in the tree and its bytes are uploaded to the remote's LFS store. The export
-  writes a `.gitattributes` at the root naming each one, so a clone with
-  git-lfs installed checks out the real files.
+  copies are included, like any other note. Empty folders are not, because
+  Git has no empty folders.
+- **Nothing whose name starts with a dot.** Obsidian's settings, which
+  settings sync carries between devices, are left out of the export, and
+  nothing else in `.obsidian/` or any other dot folder is synced at all. A
+  settings save does not shape the commits either: it neither splits a
+  device's run nor moves its time.
+- **Large attachments in Git LFS.** A file over the threshold is an LFS
+  pointer in the tree, and its bytes are uploaded to the remote's LFS store.
+  The export writes a `.gitattributes` at the root naming each one, so a
+  clone with git-lfs installed checks out the real files.
 
 Every commit also carries `Trew-Versions`, the server's version numbers it
 covers, which `trewd history` and `trewd cat -uid` understand.
@@ -79,9 +83,9 @@ as `docker compose exec trew /trewd ...` and keep the key inside the data
 volume, owned by the container's user (uid 65532), as step 2 shows.
 
 1. **Make an empty private repository**, with no README, licence or
-   `.gitignore` (the export refuses a branch it did not make; to continue a
+   `.gitignore`. The export refuses a branch it did not make. To continue a
    branch that already has your backups, such as the Obsidian Git plugin's,
-   see [Continue an existing backup branch](#continue-an-existing-backup-branch)):
+   see [Continue an existing backup branch](#continue-an-existing-backup-branch).
 
    ```bash
    gh repo create you/vault-history --private
@@ -99,17 +103,19 @@ volume, owned by the container's user (uid 65532), as step 2 shows.
    ```
 
    `~/.trew-keys` suits a server that runs as you, with its data in your home
-   (the default `~/.trew`). A server installed with `trewd service` whose data
-   is outside every home directory runs with `ProtectHome=true` and cannot
-   read anything under `/home`: keep the key in its data directory instead,
-   made and read as the server's account, and give that path to `-key` below:
+   (the default `~/.trew`).
+
+   **Installed with `trewd service`?** A server whose data is outside every
+   home directory runs with `ProtectHome=true` and cannot read anything under
+   `/home`. Keep the key in its data directory instead, made and read as the
+   server's account, and give that path to `-key` below:
 
    ```bash
    sudo install -d -m 700 -o trew -g trew /var/lib/trew/keys
    sudo -u trew ssh-keygen -t ed25519 -N '' -C 'trewsync git export' -f /var/lib/trew/keys/vault-history
    ```
 
-   For Docker, the data directory is the `trew-data` volume, and the server's
+   **Docker?** The data directory is the `trew-data` volume, and the server's
    account is 65532. Make the key on the host as above, then copy its private
    half into the volume as that account, and give `/data/keys/vault-history`
    to `-key`:
@@ -133,11 +139,11 @@ volume, owned by the container's user (uid 65532), as step 2 shows.
    paste `vault-history.pub`, and tick **Allow write access**.
 
 4. **LFS needs nothing switched on.** GitHub accepts LFS uploads for every
-   repository; check your quota under Settings, Billing and plans, if large
-   attachments are in the vault.
+   repository. If large attachments are in the vault, check your quota under
+   Settings, Billing and plans.
 
-5. **Point the server at it.** This works with the server running, which takes
-   the settings up at once:
+5. **Point the server at it.** This works with the server running, which
+   takes the settings up at once:
 
    ```bash
    trewd git-export set -remote git@github.com:you/vault-history.git \
@@ -165,8 +171,8 @@ volume, owned by the container's user (uid 65532), as step 2 shows.
 
 ## Or HTTPS with a fine-grained token
 
-If SSH out of the server is blocked, a fine-grained personal access token
-limited to the one repository works instead:
+If SSH out of the server is blocked, use a fine-grained personal access token
+limited to the one repository:
 
 1. On github.com: Settings, Developer settings, Personal access tokens,
    Fine-grained tokens, Generate new token. **Repository access: Only select
@@ -226,24 +232,23 @@ name wins over the file for as long as that server runs.
 | `-quiet` | `git_export.quiet` | `5m` | How long a device must stop writing before its versions are committed. |
 | `-local` | | | Clear the remote and its credential. |
 
-`trewd git-export disable` turns it off and keeps the settings;
-`trewd git-export set` with no flags turns it on again. `trewd git-export
-adopt` continues a branch that already has history
-([below](#continue-an-existing-backup-branch)); it writes
-`git_export.adopted`, which `trewd config set` does not.
-
-The server needs `git` 2.36 or later and, for a remote with files over the
-threshold, `git-lfs` 3.0 or later, with `ssh` for an SSH remote. The container
-image carries all three; Homebrew installs git-lfs; on
-another Linux install them from your distribution (Debian 12 and Ubuntu 24.04
-are new enough). Without them the server still serves every device and doctor
-says what is missing.
+- **Off and on.** `trewd git-export disable` turns it off and keeps the
+  settings; `trewd git-export set` with no flags turns it on again.
+- **Adopt.** `trewd git-export adopt` continues a branch that already has
+  history ([below](#continue-an-existing-backup-branch)). It writes
+  `git_export.adopted`, which `trewd config set` does not.
+- **What the server needs.** `git` 2.36 or later and, for a remote with files
+  over the threshold, `git-lfs` 3.0 or later, with `ssh` for an SSH remote.
+  The container image carries all three; Homebrew installs git-lfs; on
+  another Linux install them from your distribution (Debian 12 and Ubuntu
+  24.04 are new enough). Without them the server still serves every device,
+  and doctor says what is missing.
 
 ## Replacing the Obsidian Git plugin
 
-The export does what the Obsidian Git plugin did for backups, from the server,
-for every device at once, without a merge in your vault and without the risk of
-committing `.obsidian/`. To move over:
+The export does what the Obsidian Git plugin did for backups, from the
+server, for every device at once, without a merge in your vault and without
+the risk of committing `.obsidian/`. To move over:
 
 1. On every device, in Obsidian: Settings, Community plugins, turn **Obsidian
    Git** off and uninstall it. Leaving it on means two things committing the
@@ -256,37 +261,39 @@ committing `.obsidian/`. To move over:
    Wait for `trewd git-export status` to show the first push.
 3. The plugin's `.git` folder in the vault is not synced by TrewSync (nothing
    starting with a dot is, beyond the settings settings sync carries) and is
-   no longer needed. Its history stays on the
-   old remote. Delete the folder with your file manager once you no longer
-   want the local copy.
-4. From then on, read history in the export's branch, and change notes only in
-   Obsidian or through an agent.
+   no longer needed. Its history stays on the old remote. Delete the folder
+   with your file manager once you no longer want the local copy.
+4. From then on, read history in the export's branch, and change notes only
+   in Obsidian or through an agent.
 
 ## Continue an existing backup branch
 
 If the repository already has a branch whose history you want to keep, the
-export can continue it rather than start a history of its own. The usual case
-is the `main` branch the Obsidian Git plugin (obsidian-git) has been
-committing your vault to for years. This is **adoption**: an explicit step,
-done once, in which you name the exact commit the export continues from.
-Without it, the export refuses any branch it did not make, as before.
+export can continue it instead of starting its own. The usual case is the
+`main` branch the Obsidian Git plugin (obsidian-git) has been committing your
+vault to for years.
+
+This is **adoption**: an explicit step, done once, in which you name the
+exact commit the export continues from. Without it, the export refuses any
+branch it did not make.
 
 What adoption does, and does not do:
 
-- The export's first commit on the branch is a **child of the adopted
-  commit**, so every old commit stays in the branch's history beneath it, and
-  the first push is a plain fast-forward. Nothing is force-pushed, and nothing
-  in the old history is rewritten.
-- That first commit's tree is the vault as the export writes it, as every
-  commit's is. Anything the old commits held that the export leaves out, such
-  as `.obsidian/` and the plugin's own `.gitattributes`, is absent from it and
-  stays in the old commits, so `git diff` across the boundary shows it removed.
-  Its message starts `TrewSync continues the history from obsidian-git at
-  SHA` and ends with a `Trew-Continues: SHA` trailer.
-- The old history is left as it is: large files it committed stay ordinary Git
-  objects and are not moved to LFS. Only what the export commits from then on
-  follows the LFS threshold.
-- The adopted commit is recorded in the configuration file
+- **Old commits stay.** The export's first commit on the branch is a **child
+  of the adopted commit**, so every old commit stays in the branch's history
+  beneath it, and the first push is a plain fast-forward. Nothing is
+  force-pushed, and nothing in the old history is rewritten.
+- **The tree is the export's.** That first commit's tree is the vault as the
+  export writes it, as every commit's is. Anything the old commits held that
+  the export leaves out, such as `.obsidian/` and the plugin's own
+  `.gitattributes`, is absent from it and stays in the old commits, so
+  `git diff` across the boundary shows it removed. Its message starts
+  `TrewSync continues the history from obsidian-git at SHA` and ends with a
+  `Trew-Continues: SHA` trailer.
+- **Old large files are not moved to LFS.** Large files the old history
+  committed stay ordinary Git objects. Only what the export commits from then
+  on follows the LFS threshold.
+- **The adopted commit is recorded** in the configuration file
   (`git_export.adopted`) with the remote and branch it belongs to. An export
   rebuilt from scratch fetches that exact commit again and makes the same
   commits, never "whatever the branch is at now".
@@ -349,8 +356,8 @@ After adopting:
 - **Adoption belongs to that remote and branch.** `trewd git-export set
   -remote` or `-branch` naming another leaves it behind; setting them back
   brings it back.
-- A branch the export has already pushed to cannot be adopted again: there is
-  nothing to adopt.
+- **A branch the export has already pushed to cannot be adopted again:**
+  there is nothing to adopt.
 
 ## When something goes wrong
 
@@ -358,9 +365,9 @@ After adopting:
 the details. Sync is never affected by any of these.
 
 - **A push fails** (the network, an expired token, a removed deploy key, a
-  full LFS quota): the local repository keeps committing, the push is retried
-  every half minute at first and every half hour at most, and doctor shows the
-  last error. Fix the cause; nothing else is needed.
+  full LFS quota). The local repository keeps committing, the push is retried
+  every half minute at first and every half hour at most, and doctor shows
+  the last error. Fix the cause; nothing else is needed.
 - **"The remote's branch was changed outside the export."** Somebody pushed
   to, rewrote or deleted the branch. The export never pushes over a commit it
   did not make. If it was a mistake, put the branch back at the commit status
@@ -368,33 +375,34 @@ the details. Sync is never affected by any of these.
   branch with `trewd git-export set -branch NAME`. For a branch that already
   held your backups before the export, see
   [Continue an existing backup branch](#continue-an-existing-backup-branch).
-- **"The repository was changed outside the export."** The same for the
-  server's own copy in `git-export/repo.git`. Put the branch back, or stop the
-  server and move `git-export/` aside: the export starts again from the store.
-  The rebuilt history has the same commits, byte for byte, provided the store
-  has not been purged since and the settings are the same, so the remote
-  accepts it as the history it already has. One exception: servers up to
-  0.14.2 let a settings save split a commit or move its time, so a history
-  one of them exported, rebuilt by a later server, can differ where that
-  happened, and the remote refuses it. Push the rebuild to a new branch with
-  `trewd git-export set -branch NAME` then.
+- **"The repository was changed outside the export."** The same, for the
+  server's own copy in `git-export/repo.git`. Put the branch back, or stop
+  the server and move `git-export/` aside: the export starts again from the
+  store. The rebuilt history has the same commits, byte for byte, provided
+  the store has not been purged since and the settings are the same, so the
+  remote accepts it as the history it already has.
+
+  One exception: servers up to 0.14.2 let a settings save split a commit or
+  move its time, so a history one of them exported, rebuilt by a later
+  server, can differ where that happened, and the remote refuses it. Push the
+  rebuild to a new branch with `trewd git-export set -branch NAME` then.
 - **The store was restored from a backup.** The restored store is a different
   history. The export does not rewrite the branch: it adds one commit whose
   message starts `Restore:` and whose tree is the restored notes, and goes on
   from there. That needs the export's repository, which a backup does not
-  hold: copy `git-export/` across from the directory you restored over, with
-  the server stopped, before its first start ([Restore](server-operations.md#restore)).
-  The backup does carry the settings. Without the repository the export
-  starts a new one, and its first push is refused because the remote's branch
-  holds commits it did not make; copy the old one across then, or export to a
-  new branch with `trewd git-export set -branch NAME`.
+  hold (the backup does carry the settings). Copy `git-export/` across from
+  the directory you restored over, with the server stopped, before its first
+  start ([Restore](server-operations.md#restore)). Without the repository the
+  export starts a new one, and its first push is refused because the remote's
+  branch holds commits it did not make; copy the old one across then, or
+  export to a new branch with `trewd git-export set -branch NAME`.
 - **A path Git cannot hold.** `git~1`, Windows' short name for `.git`, is
   refused by Git everywhere; such a path is left out and listed in status.
 - **git or git-lfs missing or too old.** Doctor names which; install it.
 
-To stop for good: `trewd git-export disable`, then delete `git-export/` in the
-data directory and the remote repository (the only way to remove its LFS
-objects), and remove the deploy key or revoke the token.
+**To stop for good:** `trewd git-export disable`, then delete `git-export/`
+in the data directory and the remote repository (the only way to remove its
+LFS objects), and remove the deploy key or revoke the token.
 
 How it works, and how it is tested, is in the
 [developer documentation](development.md#the-git-export).

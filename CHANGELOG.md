@@ -11,7 +11,17 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Plugin
+
+- TrewSync shows up in Obsidian's settings search (Obsidian 1.13 and later):
+  searching for things like "invite", "server" or "settings sync" finds its
+  tab. The tab looks and works as before.
+
+### Documentation
+
+- TrewSync is in Obsidian's community directory, so the guides now install
+  the plugin from **Settings → Community plugins**; a manual or BRAT install
+  is still described for running a release early.
 
 ## 0.16.3, plugin (2026-10-29)
 

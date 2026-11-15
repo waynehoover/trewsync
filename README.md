@@ -1,54 +1,81 @@
 # <img src="docs/assets/logo.svg" width="40" height="40" align="top" alt=""> TrewSync
 
-**Self-hosted sync for Obsidian, with an MCP endpoint for your agents.**
-
-TrewSync syncs your vault through a server you run, keeps every earlier
-version of every note, and lets an agent such as Claude Code read and edit the
-same notes your devices sync, with every agent edit recorded and undoable.
+**Self-hosted sync for Obsidian that keeps every version and has MCP built in.**
 
 [![CI](https://github.com/waynehoover/trewsync/actions/workflows/ci.yml/badge.svg)](https://github.com/waynehoover/trewsync/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/trew-sync?logo=npm&label=trew-sync)](https://www.npmjs.com/package/trew-sync)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**[Quickstart](#quickstart)** · [Download](https://github.com/waynehoover/trewsync/releases) · [Docs](docs/index.md) · [Connect an agent](docs/agent.md) · [How it compares](docs/compared.md)
+**[Quickstart](#quickstart)** · [Features](#features) · [How it compares](#how-it-compares) · [Docs](docs/index.md)
+
+Sync your vault across desktop and mobile through a server you run yourself.
+Every version of every note is kept until you purge it, so you can always get
+an earlier version or a deleted note back. And your AI agents work on the
+same notes, through the server, with every edit they make recorded and
+undoable.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/panel-dark.png">
   <img src="docs/assets/screenshots/panel.png" alt="TrewSync's sync panel in Obsidian." width="700">
 </picture>
 
-## What's different
+## Features
 
-- **MCP built into the sync server.** An agent such as Claude Code reads,
-  searches and, with a write token, edits the same notes your devices sync,
-  with no second copy of the vault ([connect an agent](docs/agent.md)).
-- **Agent edits you can undo.** An agent changes notes only by exact edits,
-  never by overwriting a whole note. Every write is recorded and can be undone
-  from Obsidian, from the server, or by the agent.
+- **Your server, nothing else.** One small binary or container, with SQLite
+  inside and no database to manage. No account, no subscription, no
+  telemetry, no fixed device limit.
+- **Every version kept.** Browse a note's
+  [history](docs/plugin.md#version-history), compare versions, and restore an
+  older one or a [deleted note](docs/plugin.md#deleted-notes), all inside
+  Obsidian. History stays until you purge it.
 - **Go back in time.** Put a folder, or the whole vault, back as it was at a
-  date and time you pick: previewed first, then applied on every device as one
-  change that Undo reverses
+  date and time you pick. You see a preview first, every device gets the
+  result, and one Undo reverses it
   ([restore to an earlier time](docs/plugin.md#restore-a-folder-to-an-earlier-time)).
-- **History that never expires.** Every version of every note stays on your
-  server until you purge it. Browse a note's history, compare versions and
-  restore deleted notes inside Obsidian.
-- **A headless client.** [`trew`](docs/client.md) syncs a copy of the vault
-  without Obsidian, on a NAS or a server, read-only or two-way, and can rewind
-  or undo from a shell.
-- **Attachments on demand.** A phone can leave large attachments on the server
-  and download each one when you open a note that uses it.
-- **A Git history, if you want one.** The server can push the vault's history
-  to a private repository, with a commit for each agent change and for each
-  device's edits once it goes quiet ([Keep a Git history](docs/git-export.md)).
-- **Small to run.** One static binary or a small container, with SQLite inside
-  and no database service beside it.
+- **Conflicts never overwrite.** Edits from two devices are merged when they
+  can be. When they cannot, both versions are kept
+  [side by side](docs/plugin.md#conflicts) for you to review.
+- **MCP built into the server.** An agent such as Claude Code searches, reads
+  and edits the same notes your devices sync, with no second copy of the
+  vault and no extra plugin ([connect an agent](docs/agent.md)).
+- **Agent edits you can undo.** An agent changes a note only by exact edits,
+  never by overwriting it whole. Every write is recorded and can be undone
+  from Obsidian, from the server, or by the agent.
+- **Light on your phone.** [Attachments on demand](docs/plugin.md#attachments-on-demand)
+  leaves large files on the server until you open a note that uses them.
+- **Settings sync.** Obsidian's settings, themes, snippets and plugin
+  settings, shared among your phones, your desktops, or all of them
+  ([settings sync](docs/plugin.md#settings-sync)).
+- **Works without Obsidian.** A [command-line client](docs/client.md)
+  keeps a copy of the vault on a NAS or server, read-only or
+  two-way.
+- **A Git history, if you want one.** The server can push your vault's history
+  to a [private repository](docs/git-export.md), so no device needs a Git
+  plugin.
 
-[How it compares](docs/compared.md) sets TrewSync beside Obsidian Sync and
-Self-hosted LiveSync, including when one of them is the better fit.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/changes-dark.png">
+  <img src="docs/assets/screenshots/changes.png" alt="Version history: the changes between an earlier version of a note and the current one, with a Restore button." width="700">
+</picture>
+
+## How it compares
+
+| | TrewSync | Obsidian Sync | Self-hosted LiveSync |
+|---|---|---|---|
+| Runs on | Your server | Obsidian's servers | Your backend, such as CouchDB or S3-compatible storage |
+| Cost | Free (MIT); you pay for hosting | Subscription | Open source; you pay for hosting |
+| MCP for AI agents | **Built in**, with every edit recorded and undoable | Not built in | Not built in |
+| End-to-end encryption | **None.** The server reads your notes | Available | Available |
+
+Pick TrewSync for history on your own server and agents on the same notes.
+Pick one of the others if the server must not read your notes, if you would
+rather not run one, or if you need iOS or Windows, which Obsidian Sync
+supports. [Is TrewSync right for you?](docs/compared.md) has the longer
+answer.
 
 ## Quickstart
 
-You need a Linux or macOS machine with Docker and local storage, and
+You need a Linux or macOS machine with Docker, and
 [Tailscale](https://tailscale.com) on it and on each device. Back up an
 existing vault before its first sync, and turn off any other sync service for
 it.
@@ -65,51 +92,34 @@ it.
    and replace `https://` with `wss://`, for example
    `wss://homelab.example.ts.net`.
 
-3. **Make an invite for your first device**, naming that address:
+3. **Make an invite** for your first device. It works once and expires after
+   one hour.
 
    ```bash
    docker compose exec trew /trewd invite -url wss://homelab.example.ts.net
    ```
 
-   An invite works once and expires after one hour, so make it when you are
-   ready to pair.
-
-4. **Install the plugin and pair.** Download `main.js`, `manifest.json` and
-   `styles.css` from the newest plugin
-   [release](https://github.com/waynehoover/trewsync/releases/latest) (tagged
-   `X.Y.Z`; the `server/v…` releases are the server's) into
-   `<vault>/.obsidian/plugins/trew-sync/`, reload Obsidian and enable
-   **TrewSync** under **Settings → Community plugins**, turning community
-   plugins on first if they are off. Paste the invite, check the server it
-   names, and press **Pair**. Keep Obsidian open until the first sync
-   finishes; on Android it has to stay in the foreground.
-
-   On Android, create the vault in **App storage** rather than Device storage,
-   which is several times slower for TrewSync. A file manager cannot reach App
-   storage, so install the plugin there with the community plugin **BRAT**
-   ([install with BRAT](docs/plugin.md#install-with-brat)).
+4. **Install the plugin and pair.** In Obsidian, install **TrewSync** from
+   **Settings → Community plugins**, enable it, paste the invite and press
+   **Pair**. Keep Obsidian open until the first sync finishes.
 
 5. **Add your other devices.** On the paired device choose **Add another device
-   → Create invite**, then scan the QR code with the next one.
+   → Create invite**, and scan the QR code with the next one.
 
-To let an agent in, make a token with
-`docker compose exec trew /trewd mcp-token -label "Claude on Mac"` and give
-the client `https://homelab.example.ts.net/mcp` with that token as a bearer.
-The included `compose.yaml` already serves that endpoint (`-mcp`), which
-refuses every request until a token exists.
-[Connect an agent](docs/agent.md) has the details, and why to start read-only.
+Next: [connect an agent](docs/agent.md). No Tailscale or Docker?
+[Server setup](docs/server.md) covers Caddy and a plain binary. Or hand
+[llm.md](llm.md) to your agent and let it do the setup.
 
-Prefer to have your agent do the setup? Give it [llm.md](llm.md). The full
-walk-through, including Caddy instead of Tailscale and a binary instead of
-Docker, is [server setup](docs/server.md).
+## Requirements
 
-## Before you choose TrewSync
-
-TrewSync is an early project for one person's devices. The supported setup is
-Obsidian on **macOS, Linux, and Android**, with local storage. The plugin needs
-Obsidian **1.7.2 or newer** and is installed manually or with BRAT. Plugin
-0.16 needs the server `trewd` 0.15.0 or later. iOS is untested; Windows is
-not supported.
+- Obsidian 1.7.2 or newer. Plugin 0.16 needs the server `trewd` 0.15.0 or
+  later.
+- A vault on local storage, not a network filesystem, with no other sync
+  service on it.
+- A server you maintain and back up. TrewSync is an early project, built for
+  one person's devices.
+- Files up to 64 MiB each by default. Plugins themselves and other hidden
+  files do not sync ([what is not synced](docs/plugin.md#what-is-not-synced)).
 
 ### Platforms
 
@@ -117,76 +127,21 @@ not supported.
 |---|---|---|
 | macOS | Supported | The tests run here. |
 | Linux | Supported | The tests run here. |
-| Android | Supported | Sync runs while Obsidian is open in the foreground. Keep the vault in App storage, and install the plugin with BRAT. |
+| Android | Supported | Sync runs while Obsidian is open in the foreground. Keep the vault in App storage. |
 | iOS | Untested | The same code as on Android, but no test has run on an iPhone or iPad: background suspension, iCloud Drive vaults and the iOS file system are untested. The plugin pairs, and says so in its panel for as long as it runs. |
 | Windows | Not supported | No test runs on Windows. The plugin pairs, and says so in its panel and status bar for as long as it runs. A note whose name Windows cannot hold (a device name such as `CON` or `COM1`, one of the characters Windows forbids, or a name ending in a dot or a space) is listed as needing attention instead of syncing, and stays on your other devices. |
 
-Obsidian's own settings, themes and CSS snippets sync on the devices where you
-turn [settings sync](docs/plugin.md#settings-sync) on, shared among your phones
-and tablets, among your desktops, or by all of them, as each device chooses.
-Community plugins' settings sync too where you also turn
-[plugin settings sync](docs/plugin.md#plugin-settings) on; plugins themselves
-are installed on each device. Other hidden files do not sync: nothing else
-whose name starts with a dot does, so an `.attachments` folder stays on the
-device that has it. Attachments elsewhere are included, with a default limit of
-**64 MiB per file**.
-
-Use one sync service per local vault, and keep it off network filesystems.
-TrewSync needs you to maintain the server and keep backups. See
-**[How it compares](docs/compared.md)** if you prefer a hosted service or need
-end-to-end encryption.
-
 ## Privacy
 
-**The server reads your notes.** TrewSync has no end-to-end encryption. The
-server holds every note, every earlier version and every filename in
-plaintext, and that is what makes the MCP endpoint possible: it reads and
-edits the store directly. It also means:
+**The server reads your notes.** There is no end-to-end encryption: the server
+holds every note, version and filename in plaintext, which is what lets the
+MCP endpoint work. Keep its disk and backups on encrypted storage, keep the
+connection behind TLS, and give an MCP token only to an agent and model
+provider you would trust with every note. If you need a server that cannot
+read what it stores, choose an end-to-end encrypted service instead.
+[Security and privacy](docs/security.md) has the full picture.
 
-- **Anyone who can read the server's disk can read your vault.** Put the data
-  directory on encrypted storage (LUKS, FileVault, ZFS native encryption), and
-  write down where the key lives and how the machine unlocks after a restart.
-- **Every backup is a complete readable copy.** Keep backups on encrypted
-  storage too, including backups that stay on the same machine.
-- **An MCP token reads the whole vault.** There is no per-note access control,
-  and whatever the agent reads is sent to its model provider. Give a token only
-  to an agent and a provider you would trust with every note, and start with a
-  read-only one.
-- **Devices trust the server's word.** Nothing lets a device detect a note the
-  server altered, or check which device wrote a version.
-- **A Git export is plaintext history, for good.** If you turn on the
-  [Git export](docs/git-export.md), whoever hosts the remote reads every note
-  and every deleted version, and `trewd purge` cannot remove any of it from
-  Git history.
-
-Keep the connection behind TLS (Tailscale Serve or an HTTPS proxy): it is all
-that protects your notes and device credentials in transit. Encrypting the disk
-protects a disk that is taken or thrown away, not a running server. If you need
-a server that cannot read what it stores, choose an end-to-end encrypted
-service instead. [Security and privacy](docs/security.md) says what TrewSync
-does and does not protect.
-
-## Why this?
-
-TrewSync is a fork of [Basalt Sync](https://github.com/waynehoover/basalt-sync),
-an end-to-end encrypted sync for Obsidian built around one rule: do not lose a
-note. Basalt's agent support had to be a second paired copy of the vault on
-the agent's machine, with its own sync loop, lock and before-image files,
-because its server could not read anything.
-
-Dropping end-to-end encryption moves the agent into the server. An agent's edit
-is then an ordinary version in the same history the devices use, checked
-against the version the agent read, kept for undo, and delivered to every
-device like any other change. Search, history and undo all work from the one
-store. Everything else Basalt learned about keeping notes is kept: the same
-sync engine, conflict handling, recovery screens, and the
-[eleven durability rules](docs/design.md#the-durability-rules) its tests hold
-the code to.
-
-The price is the [Privacy](#privacy) section above. If that is the wrong trade
-for you, [How it compares](docs/compared.md) names better fits.
-
-## Find what you need
+## Documentation
 
 | I want to… | Guide |
 |---|---|
@@ -196,28 +151,14 @@ for you, [How it compares](docs/compared.md) names better fits.
 | Let an agent read or edit my notes | [Connect an agent](docs/agent.md) |
 | Keep a copy without Obsidian | [Command-line client](docs/client.md) |
 | Back up, restore, or free server space | [Server maintenance](docs/server-operations.md) |
-| Understand what the server can read | [Security and privacy](docs/security.md) |
+| Decide whether TrewSync fits | [How it compares](docs/compared.md) |
 | Build or contribute | [Developer documentation](docs/development.md) |
 
-## Development
-
-The server is Go (`cmd/trewd`, `internal/`); the plugin and the headless client
-are TypeScript sharing one sync engine (`client/src/core`). `scripts/check.sh`
-runs everything CI runs. [Developer documentation](docs/development.md) covers
-building, testing, the design and the protocol, and
-[CONTRIBUTING.md](CONTRIBUTING.md) says what a change needs before it is
-merged.
-
-## Community
-
-Questions, bugs and ideas go to
-[GitHub issues](https://github.com/waynehoover/trewsync/issues). Report a
-security problem privately, as [SECURITY.md](SECURITY.md) describes, not in an
-issue. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
-
-## License
-
-[MIT](LICENSE).
+Questions and bugs go to
+[GitHub issues](https://github.com/waynehoover/trewsync/issues); security
+problems go privately, as [SECURITY.md](SECURITY.md) describes. Changes are in
+[CHANGELOG.md](CHANGELOG.md). TrewSync is free and open source under the
+[MIT license](LICENSE).
 
 ## Disclosures
 
