@@ -286,9 +286,15 @@ jobs:
           # dependency that cannot be resolved.
           out=$(systemd-analyze verify /etc/systemd/system/trew.service 2>&1 || true)
           echo "$out"
-          # Grep out the two classes that are about this runner rather than
-          # about the unit.
+          # Grep out the classes that are about this runner rather than about
+          # the unit. systemd-analyze also loads the units the image ships
+          # under /usr/lib/systemd and warns about them: on 2026-11-15 a
+          # runner image's systemd dropped CPUAccounting= and every run failed
+          # on xfs_scrub_all.service and walinuxagent.service, with nothing
+          # wrong in ours. Ours is in /etc/systemd/system, so a line naming a
+          # unit file under /usr/lib or /lib is never about it.
           real=$(printf '%s\n' "$out" \
+            | grep -v -E '^/(usr/)?lib/systemd/' \
             | grep -v -e "Unit configuration has fatal error" \
             | grep -v -e "trew.service: Failed to create" \
             | grep -vi -e "user or group" -e "does not exist" -e "Cannot find user" \
