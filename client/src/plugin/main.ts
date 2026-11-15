@@ -42,6 +42,7 @@ import {
   type EventRef,
   type MarkdownView,
   type TAbstractFile,
+  type SettingDefinitionItem,
   type TextComponent,
 } from "obsidian";
 
@@ -6213,11 +6214,66 @@ class TrewSettingTab extends PluginSettingTab {
     this.panel.render();
   }
 
+  /**
+   * Obsidian 1.13 and later index a tab for Settings' search from this, and
+   * then draw the tab from it instead of calling `display`. One row that
+   * draws the whole panel keeps the tab what it was; the name, description
+   * and aliases are what a search finds it by. Older Obsidian never calls
+   * this and keeps calling `display`.
+   */
+  override getSettingDefinitions(): SettingDefinitionItem[] {
+    return [
+      {
+        name: "TrewSync",
+        desc: "Sync status, devices and invites, the server, settings sync, and recovering notes.",
+        aliases: SETTINGS_SEARCH_TERMS,
+        render: (setting) => {
+          this.panel?.teardown();
+          const host = setting.settingEl;
+          host.empty();
+          host.addClass("trew-tab-row");
+          // The card Obsidian draws behind a group of rows; marked here
+          // rather than found with `:has`, which the directory's CSS review
+          // warns against.
+          host.parentElement?.addClass("trew-tab-items");
+          const panel = new TrewPanel(this.plugin, host, () => {});
+          this.panel = panel;
+          panel.render();
+          return () => {
+            panel.teardown();
+            if (this.panel === panel) this.panel = undefined;
+          };
+        },
+      },
+    ];
+  }
+
   override hide(): void {
     this.panel?.teardown();
     this.panel = undefined;
   }
 }
+
+/** What someone might type into Settings' search to find TrewSync's tab. */
+const SETTINGS_SEARCH_TERMS = [
+  "sync",
+  "sync now",
+  "pair",
+  "invite",
+  "add another device",
+  "devices",
+  "server",
+  "server address",
+  "settings sync",
+  "plugin settings",
+  "attachments",
+  "deleted notes",
+  "version history",
+  "restore",
+  "conflicts",
+  "activity",
+  "unlink",
+];
 
 /**
  * What the server still has and this vault does not.

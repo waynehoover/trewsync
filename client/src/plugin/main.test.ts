@@ -26,9 +26,10 @@ import { ConnectionError, PROTO, Transport } from "../core/transport.ts";
 import {
   App,
   FakeSecretStorage,
-  type FakeEl,
+  FakeEl,
   Platform,
   Plugin as StubPlugin,
+  Setting,
   TextFileView,
   built,
   modals,
@@ -1898,6 +1899,51 @@ describe("the panel, which is a modal and a settings tab", () => {
     // that kept its state watcher would add one every time Settings opened.
     tab.hide();
     expect(tab.containerEl.children).toEqual([]);
+  }, 300_000);
+
+  /**
+   * Obsidian 1.13 and later search a tab's settings through
+   * `getSettingDefinitions`, and draw the tab from it instead of `display`
+   * once it returns anything. Without it TrewSync was missing from Settings'
+   * search (the community directory's review flagged it). The row has to draw
+   * the same panel `display` does, and take it down again.
+   */
+  it("is found by Settings' search on 1.13, and draws the same panel there", async () => {
+    const { plugin } = await load();
+    const tab = plugin.settingTabs[0]! as unknown as {
+      display(): void;
+      hide(): void;
+      getSettingDefinitions?(): {
+        name: string;
+        aliases?: string[];
+        render?(setting: Setting, group: unknown): void | (() => void);
+      }[];
+    };
+    const defs = tab.getSettingDefinitions?.() ?? [];
+    expect(
+      defs.map((d) => d.name),
+      "Settings' search has nothing to find",
+    ).toEqual(["TrewSync"]);
+    expect(defs[0]!.aliases).toEqual(expect.arrayContaining(["invite", "settings sync", "server"]));
+
+    built.length = 0;
+    tab.display();
+    const fromDisplay = built.map((s) => s.name);
+    tab.hide();
+
+    const items = new FakeEl("div", "setting-items");
+    built.length = 0;
+    const row = new Setting(items);
+    const cleanup = defs[0]!.render!(row, undefined);
+    const fromRow = built.slice(1).map((s) => s.name);
+    expect(fromRow, "the row drew nothing").not.toEqual([]);
+    expect(fromRow, "the row and display() are different panels").toEqual(fromDisplay);
+    expect(row.settingEl.hasClass("trew-tab-row")).toBe(true);
+    expect(items.hasClass("trew-tab-items")).toBe(true);
+
+    expect(typeof cleanup, "the row leaves its panel watching state").toBe("function");
+    (cleanup as () => void)();
+    expect(row.settingEl.children).toEqual([]);
   }, 300_000);
 
   /**

@@ -154,6 +154,22 @@
   width: min(640px, calc(100vw - 32px));
 }
 
+/* On Obsidian 1.13 and later the settings tab draws the panel inside one
+ * setting row (getSettingDefinitions in main.ts). Undo the row's flex layout
+ * and padding, and the card behind it, so the tab looks as it does when
+ * Obsidian draws it from display(). */
+.setting-items > .setting-item.trew-tab-row {
+  display: block;
+  padding: 0;
+  border: none;
+}
+
+.setting-items.trew-tab-items {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
 .trew-panel .setting-item-control {
   flex-wrap: wrap;
 }
