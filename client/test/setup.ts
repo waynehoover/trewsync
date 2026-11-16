@@ -10,9 +10,22 @@ import { installTimers } from "../src/core/timers.ts";
  * does nothing, as the absent window did; a test that cares replaces it.
  */
 if (typeof window === "undefined") {
-  (globalThis as { window?: unknown }).window = withTimers(
+  const win = withTimers(
     Object.assign(new EventTarget(), { location: { reload: () => undefined } }),
   );
+  // What else the plugin reads off `window`, which in Obsidian is the global
+  // object: whatever a test has put on the global (`vi.stubGlobal`) at the
+  // moment it is read, and nothing where the test has put nothing.
+  for (const name of [
+    "requestAnimationFrame",
+    "cancelAnimationFrame",
+    "require",
+    "activeWindow",
+    "activeDocument",
+  ]) {
+    globalOnWindow(win, name);
+  }
+  (globalThis as { window?: unknown }).window = win;
 }
 
 /**
@@ -42,3 +55,18 @@ installTimers({
   setInterval: (fn, ms) => setInterval(fn, ms),
   clearInterval: (handle) => clearInterval(handle as Parameters<typeof clearInterval>[0]),
 });
+
+/**
+ * Makes `win[name]` the global `name`, read and written, as every property of
+ * Obsidian's main window is: there the window is the global object.
+ */
+export function globalOnWindow(win: object, name: string): void {
+  const global = globalThis as Record<string, unknown>;
+  Object.defineProperty(win, name, {
+    get: () => global[name],
+    set: (value: unknown) => {
+      global[name] = value;
+    },
+    configurable: true,
+  });
+}

@@ -25,9 +25,9 @@ import type { Modal } from "obsidian";
  * windows, mobile and the tests that do not set any up, this is plain `open`.
  */
 interface Host {
-  window?: HostWindow;
-  activeWindow?: HostWindow;
-  activeDocument?: unknown;
+  readonly window: HostWindow | undefined;
+  activeWindow: HostWindow | undefined;
+  activeDocument: unknown;
 }
 
 interface HostWindow {
@@ -36,7 +36,31 @@ interface HostWindow {
   electronWindow?: { focus?(): void; isMinimized?(): boolean; restore?(): void };
 }
 
-const host = globalThis as unknown as Host;
+/**
+ * Obsidian's `window`, `activeWindow` and `activeDocument`. Each is read by
+ * name behind a `typeof` guard, so where one is missing (a phone has no
+ * popouts, and a test may set none up) it is `undefined`. The two Obsidian
+ * moves between windows are set where they live, on the main `window`.
+ */
+const host: Host = {
+  get window() {
+    return typeof window === "undefined" ? undefined : (window as unknown as HostWindow);
+  },
+  get activeWindow() {
+    return typeof activeWindow === "undefined"
+      ? undefined
+      : (activeWindow as unknown as HostWindow);
+  },
+  set activeWindow(win) {
+    (window as unknown as { activeWindow: unknown }).activeWindow = win;
+  },
+  get activeDocument() {
+    return typeof activeDocument === "undefined" ? undefined : activeDocument;
+  },
+  set activeDocument(doc) {
+    (window as unknown as { activeDocument: unknown }).activeDocument = doc;
+  },
+};
 
 /** Opens `modal` in the main window, and returns the window it was opened in. */
 export function openInMainWindow(modal: Modal): unknown {

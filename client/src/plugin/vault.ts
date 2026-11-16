@@ -419,14 +419,17 @@ export interface FsyncFs {
  * Node's `fs`, where Electron provides it, and nothing anywhere else.
  *
  * Obsidian's desktop renderer runs with Node integration, so `require` is a
- * global there and hands over the real module. On a phone there is no such
- * global, and the answer is undefined. Looked up through `globalThis` rather
+ * global there (on `window`) and hands over the real module. On a phone there
+ * is no such global, and the answer is undefined. Looked up on `window` rather
  * than written as `require("fs")`, because the bundler would try to resolve
  * that and the build test would rightly refuse a bundle that names a Node
  * module.
  */
 function electronFs(): FsyncFs | undefined {
-  const req = (globalThis as { require?: (name: string) => unknown }).require;
+  const req =
+    typeof window === "undefined"
+      ? undefined
+      : (window as unknown as { require?: (name: string) => unknown }).require;
   if (typeof req !== "function") return undefined;
   try {
     const mod = req("fs") as Partial<FsyncFs> | undefined;

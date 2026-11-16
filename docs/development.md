@@ -283,11 +283,9 @@ added or removed, change this table in the same commit.
 
 | Rule | Count | Where | Why it stays |
 |---|---|---|---|
-| `obsidianmd/no-global-this` | 2 | `plugin/activity.ts` (1), `plugin/main-window.ts` (1) | Each wants the global object itself, not a name on it. In `activity.ts` it stands in for the panel's window when the panel's element has none, which is where the test that counts animation frames supplies `requestAnimationFrame`; where an element is at hand the panel uses its `ownerDocument` and that document's window, which is what keeps it right in a popout. In `main-window.ts` it is where Obsidian keeps `activeWindow` and `activeDocument`, which it points at the main window for the length of a modal's `open`, so the first-sync review opens there and not in a Settings popout; Obsidian has no API for choosing a modal's window. The plugin reads `document`, `window`, `navigator` and `location` by name behind a `typeof` guard, so a missing one is `undefined` rather than a thrown error in the tests, which run in Node and supply them with `vi.stubGlobal`. |
-| `obsidianmd/no-global-this` | 1 | `electronFs` in `plugin/vault.ts` | Node's `fs` for the durable fsync on desktop, through the `require` Electron provides as a global. Written as `require("fs")` the bundler would resolve it and the plugin would name a Node module, which the build test refuses. Only a desktop `FileSystemAdapter` asks for it, and a phone has no such global, so it gets none. That is the self-critique checklist's advice for a Node module in a plugin that also runs on mobile (gate it to desktop and `require()` it at run time), and why `isDesktopOnly` stays `false`. |
 | `no-restricted-globals` (`fetch`) | 2 | `readBlocks` and `readRange` in `plugin/vault.ts` | They fetch the vault's own resource URL, not the network, to read a large attachment as a stream and by range. `requestUrl` returns whole bodies and does not read resource URLs. |
 | `@typescript-eslint/no-deprecated` (`setWarning`) | 6 | `plugin/main.ts` (5), `plugin/restore-time.ts` (1) | Its replacement, `setDestructive`, arrived in 1.13.0 and the manifest admits 1.7.2, so using it would be a `no-unsupported-api` error. |
-| `obsidianmd/prefer-active-doc` | 6 | `plugin/main.ts` (2), `plugin/activity.ts`, `plugin/delivery.ts`, `plugin/resume.ts`, `plugin/visible-poll.ts` | Each listens to the main window's `document` on purpose: whether Obsidian is visible, the click that fetches an attachment, the panel's animation frames. `activeDocument` is whichever window has focus, a popout included, and a listener there would stop hearing the main window. Read by name behind a `typeof` guard for the tests, as above. |
+| `obsidianmd/prefer-active-doc` | 6 | `plugin/main.ts` (2), `plugin/activity.ts`, `plugin/delivery.ts`, `plugin/resume.ts`, `plugin/visible-poll.ts` | Each listens to the main window's `document` on purpose: whether Obsidian is visible, the click that fetches an attachment, the panel's animation frames. `activeDocument` is whichever window has focus, a popout included, and a listener there would stop hearing the main window. Read by name behind a `typeof` guard, so in the tests, which run in Node, a missing one is `undefined` rather than a thrown error. |
 | `obsidianmd/hardcoded-config-path` | 1 | `EVERY_DEVICE` in `core/pairing.ts` | The name of the settings group every device can join, which is a folder on the server and on no device ([plan/settings-sync.md](../plan/settings-sync.md)). The folder a device runs is still read from `configDir`, and mapped onto its group's. |
 
 That was 56 warnings, and no errors, at the commit that added the gate. Writing
@@ -311,7 +309,12 @@ took away the 18 sentence-case warnings, and added the 6 of
 `core/timers.ts`, which each host fills in (the plugin with `window`'s, the
 headless client with Node's, the tests with the globals), the plugin's own
 call `window.setTimeout`, and `core` reads `crypto` and `WebSocket` by name
-rather than off `globalThis`, which took away 34, so it is 18.
+rather than off `globalThis`, which took away 34, so it is 18. The plugin's
+last three reads off `globalThis` now name what they want: Electron's
+`require` on `window`, the panel's fallback window as `window`, and Obsidian's
+`activeWindow` and `activeDocument` by name, set on `window`, where they live
+(in Obsidian `window` is the global object, which a run in the scratch vault
+confirmed). That took away 3, so it is 15.
 
 ### Submitting to the community directory
 

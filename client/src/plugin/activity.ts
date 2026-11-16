@@ -206,7 +206,7 @@ export class ActivityModal extends Modal {
         : typeof document === "undefined"
           ? undefined
           : document;
-    const view = doc?.defaultView ?? globalThis;
+    const view = doc?.defaultView ?? (typeof window === "undefined" ? undefined : window);
     const schedule = () => {
       dirty = true;
       if (closed || queued || doc?.visibilityState === "hidden") return;
@@ -218,7 +218,7 @@ export class ActivityModal extends Modal {
         dirty = false;
         draw();
       };
-      if (typeof view.requestAnimationFrame === "function")
+      if (typeof view?.requestAnimationFrame === "function")
         frame = view.requestAnimationFrame(paint);
       else queueMicrotask(paint);
     };
@@ -230,7 +230,7 @@ export class ActivityModal extends Modal {
       unwatch();
       unwatchUnload?.();
       doc?.removeEventListener("visibilitychange", schedule);
-      if (frame !== undefined) view.cancelAnimationFrame(frame);
+      if (frame !== undefined) view?.cancelAnimationFrame(frame);
       rows.clear();
     };
     new Setting(this.contentEl)

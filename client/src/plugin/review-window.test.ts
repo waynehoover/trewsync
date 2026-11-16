@@ -32,7 +32,7 @@ import {
   notices,
   resetStub,
 } from "../../test/plugin/stub.ts";
-import { withTimers } from "../../test/setup.ts";
+import { globalOnWindow, withTimers } from "../../test/setup.ts";
 import TrewPlugin from "./main.ts";
 import { SyncPreviewModal } from "./preview.ts";
 
@@ -74,6 +74,10 @@ function fakeWindow(name: string): FakeWindow {
       },
     },
   });
+  // The window that is made `window` is the global object in Obsidian, so its
+  // `activeWindow` and `activeDocument` are the globals of those names.
+  globalOnWindow(win, "activeWindow");
+  globalOnWindow(win, "activeDocument");
   return win;
 }
 
@@ -89,6 +93,10 @@ beforeEach(async () => {
     activeWindow: host.activeWindow,
     activeDocument: host.activeDocument,
   };
+  // Obsidian always has both, so the plugin sets them by name; a global that
+  // was never defined cannot be assigned that way.
+  host.activeWindow = saved.activeWindow;
+  host.activeDocument = saved.activeDocument;
   server = new TestServer();
   await server.start();
 });
