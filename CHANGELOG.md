@@ -15,6 +15,13 @@ client can talk; upgrade the server first.
 
 - An error that `trew` rewords now carries the error that caused it.
 
+## 0.16.6, plugin (2026-11-16)
+
+Works with trewd 0.15.0 or later, as 0.16.5 does. The plugin itself is
+unchanged from 0.16.5: this release lets Obsidian's community directory
+review the repository again, after the headless client stopped importing a
+Node module it did not need.
+
 ## 0.16.5, plugin (2026-11-16)
 
 Works with trewd 0.15.0 or later, as 0.16.4 does. The server is unchanged.
