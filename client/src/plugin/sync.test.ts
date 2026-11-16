@@ -950,11 +950,10 @@ describe("an incoming update cut short by a crash as it is written in place", ()
     expect(b.text("n.md")).toBe(lines);
 
     const next = `${lines}line 21 added on a\n`;
-    a.adapter.seed("n.md", next, 1_700_000_100_000);
-    await a.client.settle();
-    await receiveCommitted(b.client.transport);
     // Fifteen bytes land, and the process is gone: nothing after that reaches
-    // the disk, so nothing in memory can put the note back.
+    // the disk, so nothing in memory can put the note back. Armed before a
+    // sends, because b syncs by itself as soon as the update arrives, and on
+    // a slow machine that pass wrote the note before the fault was set.
     let dead = false;
     b.adapter.fault = (op, path) => {
       if (dead) return new Error("the process was killed");
@@ -964,6 +963,9 @@ describe("an incoming update cut short by a crash as it is written in place", ()
       }
       return undefined;
     };
+    a.adapter.seed("n.md", next, 1_700_000_100_000);
+    await a.client.settle();
+    await receiveCommitted(b.client.transport);
     await b.client.settle().catch(() => undefined);
     expect(dead, "the update was never written").toBe(true);
     b.close();
