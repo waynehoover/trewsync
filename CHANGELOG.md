@@ -11,7 +11,19 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
-Nothing yet.
+### Command-line client
+
+- An error that `trew` rewords now carries the error that caused it.
+
+## 0.16.5, plugin (2026-11-16)
+
+Works with trewd 0.15.0 or later, as 0.16.4 does. The server is unchanged.
+
+### Plugin
+
+- Every timer the plugin and its sync engine set now runs on Obsidian's
+  main window, as Obsidian's community directory asks, so closing a popout
+  window can never cancel one. Syncing works as before.
 
 ## 0.16.4, plugin (2026-11-15)
 
