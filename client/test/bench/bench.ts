@@ -32,6 +32,7 @@
  * each entry measured by the transport's own `encodedEntryBytes`.
  */
 
+import "../setup.ts";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {

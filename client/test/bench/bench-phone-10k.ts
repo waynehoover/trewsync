@@ -64,6 +64,7 @@
  * PHONE_OUT (report path), ANDROID_SERIAL (which device, as adb reads it).
  */
 
+import "../setup.ts";
 import { execFileSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { cpus, tmpdir } from "node:os";

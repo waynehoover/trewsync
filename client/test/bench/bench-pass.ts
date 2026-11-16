@@ -35,6 +35,7 @@
 
 // `rename` is imported under another name: the measurement below binds a const
 // called rename, and the callback would resolve to that one, uninitialised.
+import "../setup.ts";
 import { mkdtemp, mkdir, readFile, rename as movePath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

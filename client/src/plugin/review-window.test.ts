@@ -32,6 +32,7 @@ import {
   notices,
   resetStub,
 } from "../../test/plugin/stub.ts";
+import { withTimers } from "../../test/setup.ts";
 import TrewPlugin from "./main.ts";
 import { SyncPreviewModal } from "./preview.ts";
 
@@ -60,7 +61,7 @@ interface FakeWindow {
 }
 
 function fakeWindow(name: string): FakeWindow {
-  const win: FakeWindow = {
+  const win: FakeWindow = withTimers({
     name,
     document: {},
     closed: false,
@@ -72,7 +73,7 @@ function fakeWindow(name: string): FakeWindow {
         (globalThis as { activeWindow?: unknown }).activeWindow = win;
       },
     },
-  };
+  });
   return win;
 }
 

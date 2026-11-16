@@ -283,9 +283,6 @@ added or removed, change this table in the same commit.
 
 | Rule | Count | Where | Why it stays |
 |---|---|---|---|
-| `obsidianmd/prefer-window-timers` | 20 | `core/client.ts` (12), `core/transport.ts` (8) | `core` is also the headless client's engine, and Node has no `window`. |
-| `obsidianmd/prefer-window-timers` | 11 | `plugin/main.ts` (6), `plugin/visible-poll.ts` (3), `plugin/screen-awake.ts` (2) | The plugin's tests run in Node, where there is no `window`; they drive these timers with fake timers on the globals, and some replace `window` with a bare `EventTarget`. The plugin's code runs in Obsidian's main window, so a bare timer is already that window's, and closing a popout cancels none of them. `main.ts` records the choice where the save-to-sync timer is set. |
-| `obsidianmd/no-global-this` | 3 | `core/digest.ts` (2, `crypto`), `core/transport.ts` (1, `WebSocket`) | Shared with the headless client. The global object is the one place both runtimes keep WebCrypto and WebSocket. |
 | `obsidianmd/no-global-this` | 2 | `plugin/activity.ts` (1), `plugin/main-window.ts` (1) | Each wants the global object itself, not a name on it. In `activity.ts` it stands in for the panel's window when the panel's element has none, which is where the test that counts animation frames supplies `requestAnimationFrame`; where an element is at hand the panel uses its `ownerDocument` and that document's window, which is what keeps it right in a popout. In `main-window.ts` it is where Obsidian keeps `activeWindow` and `activeDocument`, which it points at the main window for the length of a modal's `open`, so the first-sync review opens there and not in a Settings popout; Obsidian has no API for choosing a modal's window. The plugin reads `document`, `window`, `navigator` and `location` by name behind a `typeof` guard, so a missing one is `undefined` rather than a thrown error in the tests, which run in Node and supply them with `vi.stubGlobal`. |
 | `obsidianmd/no-global-this` | 1 | `electronFs` in `plugin/vault.ts` | Node's `fs` for the durable fsync on desktop, through the `require` Electron provides as a global. Written as `require("fs")` the bundler would resolve it and the plugin would name a Node module, which the build test refuses. Only a desktop `FileSystemAdapter` asks for it, and a phone has no such global, so it gets none. That is the self-critique checklist's advice for a Node module in a plugin that also runs on mobile (gate it to desktop and `require()` it at run time), and why `isDesktopOnly` stays `false`. |
 | `no-restricted-globals` (`fetch`) | 2 | `readBlocks` and `readRange` in `plugin/vault.ts` | They fetch the vault's own resource URL, not the network, to read a large attachment as a stream and by range. `requestUrl` returns whole bodies and does not read resource URLs. |
@@ -310,7 +307,11 @@ a restore is undone, which name TrewSync, so it is 65. The settings tab's `getSe
 TrewSync in Obsidian 1.13's settings search, took one away, so it is 64.
 eslint-plugin-obsidianmd 0.6.0 no longer reads TrewSync as two words, which
 took away the 18 sentence-case warnings, and added the 6 of
-`prefer-active-doc`, so it is 52.
+`prefer-active-doc`, so it is 52. The sync engine's timers now come from
+`core/timers.ts`, which each host fills in (the plugin with `window`'s, the
+headless client with Node's, the tests with the globals), the plugin's own
+call `window.setTimeout`, and `core` reads `crypto` and `WebSocket` by name
+rather than off `globalThis`, which took away 34, so it is 18.
 
 ### Submitting to the community directory
 

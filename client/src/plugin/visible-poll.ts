@@ -10,7 +10,7 @@ export function pollWhileVisible(
   let stopped = false;
   let running = false;
   let again = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: number | undefined;
   const visible = () => !stopped && (isVisible ? isVisible() : doc?.visibilityState !== "hidden");
   const schedule = () => {
     running = false;
@@ -21,7 +21,7 @@ export function pollWhileVisible(
       return;
     }
     const interval = typeof intervalMs === "function" ? intervalMs() : intervalMs;
-    if (interval !== undefined) timer = setTimeout(run, interval);
+    if (interval !== undefined) timer = window.setTimeout(run, interval);
   };
   const run = () => {
     if (!visible()) return;
@@ -37,7 +37,7 @@ export function pollWhileVisible(
       .then(schedule, schedule);
   };
   const changed = () => {
-    clearTimeout(timer);
+    window.clearTimeout(timer);
     if (visible()) run();
   };
   if (!isVisible) doc?.addEventListener("visibilitychange", changed);
@@ -45,7 +45,7 @@ export function pollWhileVisible(
   return Object.assign(
     () => {
       stopped = true;
-      clearTimeout(timer);
+      window.clearTimeout(timer);
       if (!isVisible) doc?.removeEventListener("visibilitychange", changed);
     },
     { refresh: changed },

@@ -40,6 +40,7 @@
  * because that is the number somebody feels.
  */
 
+import "../setup.ts";
 import { cpus } from "node:os";
 
 import { mergeText, mergeTextCharacters } from "../../src/core/merge.ts";

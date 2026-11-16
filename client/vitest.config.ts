@@ -22,6 +22,7 @@ export default defineConfig({
   test: {
     globals: true,
     globalSetup: ["./vitest.global-setup.ts"],
+    setupFiles: ["./test/setup.ts"],
     /**
      * Most test files here start real Go servers and talk to them over real
      * sockets. Fifteen files at once means dozens of processes competing for

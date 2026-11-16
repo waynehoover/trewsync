@@ -43,6 +43,7 @@
  * only for the end-to-end figure.
  */
 
+import "../setup.ts";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -36,6 +36,7 @@
  * next frame is its reply will read a batch as an answer and hang.
  */
 
+import { clearTimeout, setTimeout } from "./timers.ts";
 import { notifyTransfer } from "./transfer.ts";
 import { base64urlDecode, chunkName, isChunkName } from "./digest.ts";
 import { FrameError, decodeFrame, encodeFrame } from "./frame.ts";
@@ -3045,11 +3046,10 @@ export class Backoff {
  * ---------------------------------------------------------------- */
 
 function defaultSocketFactory(url: string): SocketLike {
-  const ctor = (globalThis as { WebSocket?: new (url: string) => unknown }).WebSocket;
-  if (!ctor) {
+  if (typeof WebSocket === "undefined") {
     throw new Error("no WebSocket available in this environment");
   }
-  return new ctor(url) as SocketLike;
+  return new WebSocket(url) as unknown as SocketLike;
 }
 
 /**
@@ -3077,7 +3077,7 @@ const UPLOAD_HIGH_WATER = 4 * 1024 * 1024;
 const DRAIN_POLL_MS = 5;
 const DRAIN_POLL_MAX_MS = 50;
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(() => r(), ms));
 
 /** What a frame is replaced by once its chunk is decoded, so it can be freed. */
 const EMPTY = new Uint8Array(0);

@@ -21,6 +21,7 @@
  * with latency in it. docs/compared.md says what that means for comparisons.
  */
 
+import "../setup.ts";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

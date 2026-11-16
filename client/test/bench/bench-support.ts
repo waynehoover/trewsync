@@ -8,6 +8,7 @@
  * the disk, so a number it produces describes the product and not the harness.
  */
 
+import "../setup.ts";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";

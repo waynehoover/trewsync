@@ -16,7 +16,7 @@
  */
 export class ScreenAwake {
   private busy = false;
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  private timer: number | undefined;
   /** Set once the pass has run for `delayMs`, until it ends. */
   private long = false;
   private lock: WakeLockSentinel | undefined;
@@ -37,11 +37,11 @@ export class ScreenAwake {
   set(busy: boolean): void {
     if (busy === this.busy) return;
     this.busy = busy;
-    clearTimeout(this.timer);
+    window.clearTimeout(this.timer);
     this.timer = undefined;
     this.long = false;
     if (busy) {
-      this.timer = setTimeout(() => {
+      this.timer = window.setTimeout(() => {
         this.timer = undefined;
         this.long = true;
         void this.take();

@@ -31,6 +31,7 @@
  * BENCH_KEEP (1 keeps the temporary directories).
  */
 
+import "../setup.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import {

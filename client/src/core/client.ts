@@ -1,4 +1,5 @@
 import type { SyncPreview } from "./preview.ts";
+import { clearInterval, clearTimeout, setInterval, setTimeout } from "./timers.ts";
 import {
   reviewConflict,
   resolveConflict,

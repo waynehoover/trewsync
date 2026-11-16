@@ -1,5 +1,6 @@
 /** Metadata catch-up with many revisions of one path. Run with bun or Node's
  * --experimental-transform-types. Real server/fsync, in-memory client vaults. */
+import "../setup.ts";
 import { Client } from "../../src/core/client.ts";
 import { MemoryVault, MemoryIndexStore } from "../../src/core/vault.ts";
 import { TestServer, cleanupBinary } from "../core/test-server.ts";

@@ -22,6 +22,7 @@ export default defineConfig({
   test: {
     globals: true,
     globalSetup: ["./vitest.global-setup.ts"],
+    setupFiles: ["./test/setup.ts"],
     include: ["**/*.stress.ts"],
     maxWorkers: 1,
     minWorkers: 1,

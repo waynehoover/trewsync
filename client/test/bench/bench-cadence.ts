@@ -4,6 +4,7 @@
  * Real Go server; in-memory vaults, loopback, simulated plugin events.
  * This measures scheduling, not phone filesystem or official Sync performance.
  */
+import "../setup.ts";
 import { execFileSync } from "node:child_process";
 import { arch, cpus, platform } from "node:os";
 import { Client, SYNC_EVENT_DELAY_MS } from "../../src/core/client.ts";

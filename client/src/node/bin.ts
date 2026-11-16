@@ -1,6 +1,17 @@
 /** Connect the CLI to the process, allowing piped output to flush before exit. */
 
+import * as nodeTimers from "node:timers";
+
+import { installTimers } from "../core/timers.ts";
 import { interrupt, run } from "./cli.ts";
+
+// The sync engine runs on Node's timers here (src/core/timers.ts).
+installTimers({
+  setTimeout: (fn, ms) => nodeTimers.setTimeout(fn, ms),
+  clearTimeout: (handle) => nodeTimers.clearTimeout(handle as NodeJS.Timeout),
+  setInterval: (fn, ms) => nodeTimers.setInterval(fn, ms),
+  clearInterval: (handle) => nodeTimers.clearInterval(handle as NodeJS.Timeout),
+});
 
 // Ctrl-C and SIGTERM ask the command to stop rather than killing it where it
 // stands, so it releases the vault's lock on the way out (T21, `interrupt`).

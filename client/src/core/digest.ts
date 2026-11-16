@@ -12,7 +12,7 @@
  */
 
 function subtle(): SubtleCrypto {
-  const c = globalThis.crypto;
+  const c = typeof crypto === "undefined" ? undefined : crypto;
   if (!c?.subtle) {
     // Not a condition to work around. Without WebCrypto nothing can be named,
     // and a name made some other way would be one the server refuses.
@@ -23,7 +23,7 @@ function subtle(): SubtleCrypto {
 
 /** Random bytes from the platform, or a refusal. */
 export function randomBytes(n: number): Uint8Array {
-  const c = globalThis.crypto;
+  const c = typeof crypto === "undefined" ? undefined : crypto;
   if (!c?.getRandomValues) {
     // Not a condition to work around: a credential from a weak source is worse
     // than no credential, because it looks like one.

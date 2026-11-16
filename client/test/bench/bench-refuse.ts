@@ -6,6 +6,7 @@
  * Without it the lists still refuse every generic name, and the phone
  * benchmarks still refuse any path outside their own vault.
  */
+import "../setup.ts";
 import { readFileSync } from "node:fs";
 
 export const LOCAL_REFUSALS: readonly string[] = (() => {

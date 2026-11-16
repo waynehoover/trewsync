@@ -12,6 +12,7 @@
  * anything being copied.
  */
 
+import "../setup.ts";
 import { join } from "node:path";
 
 /**

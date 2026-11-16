@@ -1,4 +1,5 @@
 import { SyncPreviewModal } from "./preview.ts";
+import { installTimers } from "../core/timers.ts";
 import { focusMainWindow, isMainWindow, openInMainWindow } from "./main-window.ts";
 import type { SyncPreview } from "../core/preview.ts";
 import { ActivityLog, ActivityModal } from "./activity.ts";
@@ -135,6 +136,14 @@ import {
   secretsForDevice,
   tokenInKeychain,
 } from "./keychain.ts";
+
+// The sync engine runs on this window's timers (src/core/timers.ts).
+installTimers({
+  setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+  clearTimeout: (handle) => window.clearTimeout(handle as number),
+  setInterval: (fn, ms) => window.setInterval(fn, ms),
+  clearInterval: (handle) => window.clearInterval(handle as number),
+});
 
 /**
  * Where the plugin's running commentary goes: the developer console, at the
@@ -381,8 +390,8 @@ export default class TrewPlugin extends Plugin {
   /** An Apply is running, which ends in a reload an unlink must not straddle. */
   private applying = false;
   private unlinking: Promise<void> | undefined;
-  private nudgeTimer: ReturnType<typeof setTimeout> | undefined;
-  private workingTimer: ReturnType<typeof setTimeout> | undefined;
+  private nudgeTimer: number | undefined;
+  private workingTimer: number | undefined;
   private workingPath: string | undefined;
   private workingTransfer: TransferActivity | undefined;
   private workingSince: number | undefined;
@@ -1417,13 +1426,13 @@ export default class TrewPlugin extends Plugin {
    */
   private backoffWait(ms: number, mine: number): Promise<void> {
     return new Promise<void>((resolve) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timer: number | undefined;
       const wake = () => {
-        clearTimeout(timer);
+        window.clearTimeout(timer);
         if (this.wakeLoop === wake) this.wakeLoop = undefined;
         resolve();
       };
-      timer = setTimeout(wake, ms);
+      timer = window.setTimeout(wake, ms);
       if (mine === this.generation) this.wakeLoop = wake;
     });
   }
@@ -1580,7 +1589,7 @@ export default class TrewPlugin extends Plugin {
     if (path === undefined) {
       this.workingTransfer = undefined;
       this.inboundTotal = this.inboundLeft = 0;
-      clearTimeout(this.workingTimer);
+      window.clearTimeout(this.workingTimer);
       this.workingTimer = undefined;
       this.workingSince = undefined;
       return;
@@ -1591,7 +1600,7 @@ export default class TrewPlugin extends Plugin {
   private scheduleWorking(): void {
     this.workingSince ??= Date.now();
     if (this.workingTimer !== undefined) return;
-    this.workingTimer = setTimeout(() => {
+    this.workingTimer = window.setTimeout(() => {
       this.workingTimer = undefined;
       // The pass that asked is waiting on the answer, so it is not syncing,
       // whatever it said on its way to asking.
@@ -1627,7 +1636,7 @@ export default class TrewPlugin extends Plugin {
   }
 
   private clearTimers(): void {
-    if (this.nudgeTimer !== undefined) clearTimeout(this.nudgeTimer);
+    if (this.nudgeTimer !== undefined) window.clearTimeout(this.nudgeTimer);
     this.nudgeTimer = undefined;
     this.working(undefined);
   }
@@ -1883,7 +1892,7 @@ export default class TrewPlugin extends Plugin {
     // where both exist, and the plain one also exists everywhere this can be
     // tested, which is the difference between a tested nudge and an
     // untested one.
-    this.nudgeTimer = setTimeout(() => {
+    this.nudgeTimer = window.setTimeout(() => {
       this.nudgeTimer = undefined;
       if (mine !== this.generation) return;
       void this.client?.sync().then((report) => {

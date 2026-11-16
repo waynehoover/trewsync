@@ -6,6 +6,7 @@
  *     bun run test/node/artifact.run.ts PATH/TO/trew.mjs "$(command -v node)"
  */
 
+import "../setup.ts";
 import { smokeArtifact } from "./artifact-test.ts";
 import { cleanupBinary } from "../core/test-server.ts";
 import { fileURLToPath } from "node:url";

@@ -59,6 +59,7 @@ import { base64urlEncode, randomBytes } from "../core/digest.ts";
 import { formatInviteString } from "../core/invite-string.ts";
 import { INVITE_ACTION, inviteLink, inviteQrImage } from "./invite-qr.ts";
 import { secretIdFor } from "./keychain.ts";
+import { withTimers } from "../../test/setup.ts";
 
 beforeAll(async () => {
   await serverBinary();
@@ -776,7 +777,7 @@ describe("syncing while it runs", () => {
   it.each(["foreground", "keepalive"])(
     "keeps %s pings out of an upload's binary body exchange",
     async (trigger) => {
-      const win = new EventTarget();
+      const win = withTimers(new EventTarget());
       vi.stubGlobal("window", win);
       const gate = deferred();
       const entered = deferred();
@@ -830,7 +831,7 @@ describe("syncing while it runs", () => {
     const doc = new EventTarget();
     Object.defineProperty(doc, "visibilityState", { value: "visible" });
     vi.stubGlobal("document", doc);
-    vi.stubGlobal("window", new EventTarget());
+    vi.stubGlobal("window", withTimers(new EventTarget()));
     try {
       await fresh();
       const a = await load();
@@ -7426,7 +7427,7 @@ describe("settings sync", () => {
     ).toMatch(/1 setting to apply/);
 
     const reload = vi.fn();
-    vi.stubGlobal("window", { location: { reload } });
+    vi.stubGlobal("window", withTimers({ location: { reload } }));
     try {
       // Tapping the notice to dismiss it asks; it does not reload.
       notice.el.fire("click");
@@ -7524,7 +7525,7 @@ describe("settings sync", () => {
       dialog.contentEl.allText().includes("Change Dataview's settings, from laptop."),
     );
     const reload = vi.fn();
-    vi.stubGlobal("window", { location: { reload } });
+    vi.stubGlobal("window", withTimers({ location: { reload } }));
     try {
       await modalButton("Apply and reload").click();
       await until("the reload", () => reload.mock.calls.length === 1);
@@ -7551,7 +7552,7 @@ describe("settings sync", () => {
       throw new Error("the connection dropped");
     };
     const reload = vi.fn();
-    vi.stubGlobal("window", { location: { reload } });
+    vi.stubGlobal("window", withTimers({ location: { reload } }));
     try {
       await expect(phone.plugin.applySettings()).rejects.toThrow("the connection dropped");
     } finally {
@@ -7570,7 +7571,7 @@ describe("settings sync", () => {
       return (sync as (...a: unknown[]) => Promise<unknown>)(...args);
     };
     const reload = vi.fn();
-    vi.stubGlobal("window", { location: { reload } });
+    vi.stubGlobal("window", withTimers({ location: { reload } }));
     try {
       const applying = phone.plugin.applySettings();
       await until("the apply to reach its pass", () => release !== undefined);
@@ -7600,7 +7601,7 @@ describe("settings sync", () => {
 
     const fresh = await heldOnThePhone();
     const reload = vi.fn();
-    vi.stubGlobal("window", { location: { reload } });
+    vi.stubGlobal("window", withTimers({ location: { reload } }));
     try {
       await fresh.phone.plugin.applySettings();
     } finally {
@@ -7640,7 +7641,7 @@ describe("settings sync", () => {
     expect(laptop.plugin.settingsHeld, "a phone's setting reached a desktop").toBe(0);
 
     const reload = vi.fn();
-    vi.stubGlobal("window", { location: { reload } });
+    vi.stubGlobal("window", withTimers({ location: { reload } }));
     try {
       await tablet.plugin.applySettings();
     } finally {
@@ -7690,7 +7691,7 @@ describe("settings sync", () => {
       () => other.plugin.settingsHeld === 1,
     );
     const reload = vi.fn();
-    vi.stubGlobal("window", { location: { reload } });
+    vi.stubGlobal("window", withTimers({ location: { reload } }));
     try {
       await other.plugin.applySettings();
     } finally {
@@ -7839,7 +7840,7 @@ describe("settings sync", () => {
     // The copy kept: written, sent, and Obsidian reloads to read it.
     const second = await keptBoth("202610110945");
     await compare();
-    vi.stubGlobal("window", { location: { reload } });
+    vi.stubGlobal("window", withTimers({ location: { reload } }));
     try {
       await modalButton("Keep copy").click();
       await until("Obsidian to reload", () => reload.mock.calls.length > 0);
