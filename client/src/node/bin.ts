@@ -1,16 +1,14 @@
 /** Connect the CLI to the process, allowing piped output to flush before exit. */
 
-import * as nodeTimers from "node:timers";
-
 import { installTimers } from "../core/timers.ts";
 import { interrupt, run } from "./cli.ts";
 
-// The sync engine runs on Node's timers here (src/core/timers.ts).
+// The sync engine runs on Node's global timers here (src/core/timers.ts).
 installTimers({
-  setTimeout: (fn, ms) => nodeTimers.setTimeout(fn, ms),
-  clearTimeout: (handle) => nodeTimers.clearTimeout(handle as NodeJS.Timeout),
-  setInterval: (fn, ms) => nodeTimers.setInterval(fn, ms),
-  clearInterval: (handle) => nodeTimers.clearInterval(handle as NodeJS.Timeout),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
+  setInterval: (fn, ms) => setInterval(fn, ms),
+  clearInterval: (handle) => clearInterval(handle as NodeJS.Timeout),
 });
 
 // Ctrl-C and SIGTERM ask the command to stop rather than killing it where it
