@@ -817,6 +817,8 @@ export class NodeVault implements Vault {
         first ??= o.reason;
       }
     });
+    // The rejection as it came, so the caller sees the filesystem's own error.
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- a rejection reason, rethrown unchanged
     if (first !== undefined) throw first;
   }
 
@@ -827,6 +829,7 @@ export class NodeVault implements Vault {
    * one at a time, 1.7 s so.
    */
   private async syncFiles(): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- a rejection reason, rethrown unchanged
     if (this.fsyncFailed !== undefined) throw this.fsyncFailed;
     if (this.unsyncedFiles.size === 0) return;
     const handles = [...this.unsyncedFiles.values()];
@@ -844,6 +847,7 @@ export class NodeVault implements Vault {
       ),
     );
     for (const o of synced) if (o.status === "rejected") this.fsyncFailed ??= o.reason;
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- a rejection reason, rethrown unchanged
     if (this.fsyncFailed !== undefined) throw this.fsyncFailed;
   }
 
@@ -1781,7 +1785,7 @@ export class NodeVault implements Vault {
         // Rule 2: absent and unreadable are different states. A directory
         // that cannot be read is not an empty one, and treating it as
         // empty would report every file in it as deleted.
-        throw new Error(`cannot read ${dir}: ${(err as Error).message}`);
+        throw new Error(`cannot read ${dir}: ${(err as Error).message}`, { cause: err });
       }
       // A saved Dirent described a folder that had already become a link.
       // MCP then listed outside note titles through that stale type check.
@@ -2076,7 +2080,9 @@ export class NodeVault implements Vault {
       // has also been seen to answer EMLINK, which means nothing else here.
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ELOOP" || code === "EMLINK") {
-        throw new Error(`refusing a path that leaves the vault through a link: ${full}`);
+        throw new Error(`refusing a path that leaves the vault through a link: ${full}`, {
+          cause: err,
+        });
       }
       throw err;
     }
@@ -2484,6 +2490,7 @@ export class NodeVault implements Vault {
             throw new Error(
               `${path} could not be written (${(err as Error).message}) and its previous ` +
                 `version could not be put back; it is at ${relative(this.root, at)}`,
+              { cause: err },
             );
           }
           retained = undefined;
@@ -2553,6 +2560,7 @@ export class NodeVault implements Vault {
       } catch (error) {
         // The publication failure already names its retained version. A
         // second cleanup error must not replace that recovery information.
+        // eslint-disable-next-line no-unsafe-finally -- only when nothing above failed, so no error is replaced
         if (!failed) throw failure(error);
       } finally {
         // Cleanup failure must not hide a stranded version from the next scan.
@@ -3441,7 +3449,7 @@ async function read(path: string, what: string): Promise<string | undefined> {
     return await readFile(path, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw new Error(`cannot read ${what}: ${(err as Error).message}`);
+    throw new Error(`cannot read ${what}: ${(err as Error).message}`, { cause: err });
   }
 }
 
@@ -3795,6 +3803,7 @@ export async function copyVerifiedThenRemove(source: string, target: string): Pr
     await rm(target, { recursive: true, force: true }).catch(() => {});
     throw new Error(
       `refusing to remove ${source}: its copy at ${target} does not match: ${(err as Error).message}`,
+      { cause: err },
     );
   }
   // Durable before the original goes (F13).
@@ -3816,6 +3825,7 @@ export async function copyVerifiedThenRemove(source: string, target: string): Pr
     throw new Error(
       `refusing to remove ${source}: its copy at ${target} could not be made durable: ` +
         `${(err as Error).message}`,
+      { cause: err },
     );
   }
   await midTrash.pause(source);

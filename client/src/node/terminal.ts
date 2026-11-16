@@ -19,6 +19,7 @@
  * screen and can make a line read as another (the "Trojan Source" trick).
  */
 
+// eslint-disable-next-line no-control-regex -- control characters are what this spells out
 const UNSAFE = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu;
 
 /** `text` with every character a terminal would act on spelled out. */

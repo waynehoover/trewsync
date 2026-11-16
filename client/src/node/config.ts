@@ -46,7 +46,7 @@ export async function loadConfig(vault: string): Promise<Config | undefined> {
     text = await readFile(file, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw new Error(`cannot read ${file}: ${(err as Error).message}`);
+    throw new Error(`cannot read ${file}: ${(err as Error).message}`, { cause: err });
   }
 
   let raw: Record<string, unknown>;
@@ -55,6 +55,7 @@ export async function loadConfig(vault: string): Promise<Config | undefined> {
   } catch (err) {
     throw new Error(
       `${file} is not valid JSON, so it cannot be trusted: ${(err as Error).message}`,
+      { cause: err },
     );
   }
 
@@ -245,13 +246,13 @@ export async function loadAttention(vault: string): Promise<AttentionRecord | un
     text = await readFile(file, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw new Error(`cannot read ${file}: ${(err as Error).message}`);
+    throw new Error(`cannot read ${file}: ${(err as Error).message}`, { cause: err });
   }
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch (err) {
-    throw new Error(`${file} is not valid JSON: ${(err as Error).message}`);
+    throw new Error(`${file} is not valid JSON: ${(err as Error).message}`, { cause: err });
   }
   const record = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
   const { at, count, paths } = record;

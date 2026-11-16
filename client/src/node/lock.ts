@@ -702,7 +702,7 @@ async function lockState(path: string): Promise<LockState> {
 }
 
 async function readHolder(path: string): Promise<LockHolder | undefined> {
-  const at = await lockState(path).catch(() => ({ state: "unreadable" }) as LockState);
+  const at = await lockState(path).catch((): LockState => ({ state: "unreadable" }));
   return at.state === "held" ? at.holder : undefined;
 }
 

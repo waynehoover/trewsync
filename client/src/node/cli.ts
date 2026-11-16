@@ -581,6 +581,7 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
       `${(err as Error).message}. ` +
         adviseAfterPairing({ remains, surface: "cli", where: args.dir }) +
         flushed,
+      { cause: err },
     );
   }
 
@@ -596,6 +597,7 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
       `${args.dir} is paired as "${paired.device}" and holds its credential, and connecting as ` +
         `it afterwards failed: ${(err as Error).message}. Nothing needs undoing: trew sync ` +
         `connects again.`,
+      { cause: err },
     );
   }
 
@@ -881,6 +883,7 @@ async function cmdUninvite(args: Args, io: Console): Promise<number> {
       throw new Error(
         `this vault has no outstanding invite ${invite}: it may have expired, been cancelled, or ` +
           `been redeemed, in which case it is a device row now. trew devices shows both.`,
+        { cause: err },
       );
     }
     throw err;
@@ -984,6 +987,7 @@ async function cmdRevoke(args: Args, io: Console): Promise<number> {
       throw new Error(
         `this vault has no device with id ${deviceId}, so the list you were reading is stale. ` +
           `Run trew devices again.`,
+        { cause: err },
       );
     }
     throw err;
@@ -2334,6 +2338,7 @@ async function cmdRewind(args: Args, io: Console): Promise<number> {
         throw new Error(
           "a note was saved since that preview, so nothing was applied and nothing changed. " +
             "Preview it again, with --at or --ago, and use the command that prints",
+          { cause: err },
         );
       }
       throw err;
@@ -2449,6 +2454,7 @@ async function cmdUndo(args: Args, io: Console): Promise<number> {
         throw new Error(
           `${err.message}. Nothing was changed. To write the earlier versions beside the notes ` +
             `instead, leaving what is there now: trew undo --copy${dirFlag(args)} ${asTyped(opId)}`,
+          { cause: err },
         );
       }
       throw err;
