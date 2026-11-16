@@ -22,6 +22,7 @@ import { Client, type ClientOptions } from "./client.ts";
 import type { SyncReport } from "./engine.ts";
 import { TestServer, cleanupBinary, serverBinary } from "../../test/core/test-server.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
+import { receiveCommitted } from "../../test/core/test-async.ts";
 
 beforeAll(async () => {
   await serverBinary();
@@ -119,14 +120,14 @@ describe("a path refused as a collision", () => {
     // The obstacle goes on A, and nothing about B's file changes.
     await vaultA.remove("Note.md");
     await a.settle();
-    // B hears of the deletion, and its next pass tries NOTE.md again.
-    // Bounded on the outcome itself, not on the deletion arriving: the retry of
-    // NOTE.md can still be backing off for a pass after Note.md is gone, which
-    // a slow CI runner hit (3d80697).
-    let after = await b.settle();
-    for (let i = 0; i < 20 && (after.skipped > 0 || (await vaultB.exists("Note.md"))); i++) {
-      after = await b.settle();
-    }
+    // B hears of the deletion, and its next pass tries NOTE.md again. Waited
+    // for, not raced: a pass with nothing to do takes a millisecond, so a loop
+    // of them could end before the deletion reached B, and B rightly still
+    // held the write-off. Slow CI runners hit that three times (3d80697,
+    // bdf370b, c4aeb71).
+    await receiveCommitted(b.transport);
+    const after = await b.settle();
+    expect(await vaultB.exists("Note.md"), "the deletion reached B").toBe(false);
     expect(after.skipped, "the collision's cause is gone, so it is not stranded").toBe(0);
 
     // B's note is on the server now, byte for byte.
