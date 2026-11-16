@@ -8241,6 +8241,12 @@ describe("attachments on demand, in the plugin", () => {
     const saved = phone.plugin.savedData;
     phone.plugin.onunload();
     await phone.plugin.closing;
+    // A fetched file lands under a staged name and is renamed into place, so
+    // Obsidian's index learns of it from the filesystem watcher, as `create`,
+    // and that is where it leaves the list of what to fetch. Without the relay
+    // only a later pass noticed, and a check straight after the landing failed
+    // on slow runners.
+    phone.app.vault.relayAdapterEvents();
     const again = await load(saved, undefined, undefined, undefined, phone.app);
     await until(
       "the note's attachment and the one asked for to land",
@@ -8248,8 +8254,11 @@ describe("attachments on demand, in the plugin", () => {
         phone.app.vault.adapter.text("Projects/assets/photo.png") === "p".repeat(5_000) &&
         phone.app.vault.adapter.text("asked.png") === "q".repeat(5_000),
     );
-    await again.plugin.syncNow();
-    expect(phone.app.loadLocalStorage("trew-sync-wanted")).toBeNull();
+    await until(
+      "the landed files to leave the list of what to fetch",
+      () => phone.app.loadLocalStorage("trew-sync-wanted") === null,
+      5_000,
+    );
     expect(phone.app.vault.adapter.text("att/photo.png")).toBe("a".repeat(50));
 
     // Obsidian 1.14 renders an embed of a missing file with these classes,
