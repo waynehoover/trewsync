@@ -37,12 +37,41 @@ client can talk; upgrade the server first.
   places, and checks at most 4 at once, so a flood of wrong tokens can no
   longer crowd out agents with valid ones. A request with no token is
   answered 401 at once even when the endpoint is full.
+- The Git export leaves out every note path Git or `git fsck` refuses, not
+  only `git~1`: `.git`, `.gitmodules` and `.gitattributes` as a Mac or Windows
+  disk reads a name (an ignored invisible character, a short name such as
+  `gitmod~1`, a `:` stream suffix, any case). A path `git fast-import` still
+  refuses is now left out and reported instead of stopping the export at that
+  note for good. An LFS file whose path would make a `.gitattributes` line
+  longer than Git reads is left out too, so the pushed history passes
+  `git fsck`.
+- A new note whose name an HFS+ disk reads as starting with a dot, because
+  an invisible character (U+200C to U+200F, U+202A to U+202E, U+206A to
+  U+206F or U+FEFF) comes before the dot, is refused as `dotprefix`. A note
+  already stored under such a name is kept, and can still be edited, deleted
+  or renamed.
+
+### Plugin
+
+- A note from another device whose name a Mac's HFS+ disk would read as a
+  dot-prefixed folder such as `.obsidian` is not written; it is listed as
+  stranded with the reason. A note already on this device under such a name
+  is kept and keeps syncing.
+- On Windows, a note from another device named like an 8.3 short name
+  (`OBSIDI~1`, `draft~2.md`) is not written, since Windows may open it as a
+  different file or folder, `.obsidian` included; it is listed as stranded
+  with the reason.
+- A folder this device skips is skipped under any case on a disk that folds
+  case, as it already was in `trew`: a peer's `private/x.md` no longer lands
+  in a skipped `Private` folder on macOS or Windows.
 
 ### Command-line client
 
 - An error that `trew` rewords now carries the error that caused it.
 - The npm package no longer lists `end-to-end-encryption` among its
   keywords: TrewSync has none, and the server reads your notes.
+- The same refusals of a name HFS+ reads as dot-prefixed, and on Windows of
+  8.3 short names, as the plugin.
 
 ### Releases
 

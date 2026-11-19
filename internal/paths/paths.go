@@ -102,6 +102,34 @@ func IsConfig(p string) bool {
 	return configRoot.MatchString(first)
 }
 
+// HiddenOnHFS reports whether some segment of p does not begin with a dot and
+// does once the code points HFS+ leaves out of a name comparison are removed
+// (U+200C to U+200F, U+202A to U+202E, U+206A to U+206F, U+FEFF), so a Mac
+// with an HFS+ disk opens it as the dot-prefixed name: "\u200c.obsidian" is
+// .obsidian there. The fixture's hfs section.
+//
+// Not part of Check, which every write of a path is held to, deletions and a
+// rename's source included: the store refuses such a path only as a new name
+// (checkCollision), so a note stored under one before the rule can still be
+// changed, deleted or renamed away.
+func HiddenOnHFS(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if strings.HasPrefix(seg, ".") {
+			continue
+		}
+		bare := strings.TrimLeftFunc(seg, HFSIgnorable)
+		if strings.HasPrefix(bare, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// HFSIgnorable reports whether HFS+ leaves r out when it compares names.
+func HFSIgnorable(r rune) bool {
+	return (r >= 0x200c && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) || (r >= 0x206a && r <= 0x206f) || r == 0xfeff
+}
+
 // Check returns why the server refuses p as a note, or "" when it accepts it.
 // It is the rule for notes, for MCP, and for every session of protocol 1 or 2.
 //

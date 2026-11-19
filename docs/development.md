@@ -2105,7 +2105,13 @@ git-lfs's standalone file transfer, and no network):
 
 Beside them: the quiet window and dating (`TestAQuietWindowCoalescesADevicesRun`),
 the plan's rules alone (`TestThePlan`), a restore
-(`TestARestoreIsOneMarkedCommit`), `git~1` left out and reported, a missing
+(`TestARestoreIsOneMarkedCommit`), `git~1` left out and reported, the
+names Git and `git fsck --strict` refuse left out with the tree passing fsck
+(`TestPathsGitRefusesAreLeftOut`, and each name checked against real git in
+`TestGitSafeAgreesWithGit`), a path fast-import refuses learned and left
+out rather than retried for ever (`TestAPathFastImportRefusesIsLeftOut`), an LFS
+path too long for a `.gitattributes` line left out
+(`TestAnLFSPathTooLongForGitattributesIsLeftOut`), a missing
 git reported, the remote URL, branch and credential file checks, flags over the
 file, and the configuration file's round trip and its refusal of an unknown
 key (`internal/config`, `TestTheConfigFileAndItsFlags`,

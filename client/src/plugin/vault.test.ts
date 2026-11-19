@@ -764,6 +764,51 @@ describe("writing a name that differs only by case", () => {
 });
 
 /**
+ * A folder this device skips, met under another case (T17, L5). On a disk
+ * that folds case, `private/x.md` is a file inside the skipped `Private`, so
+ * a peer's write there lands in a folder this device was told to leave
+ * alone. Compared folded, it is refused as ignored, `exists` says the same so
+ * the engine reports it instead of reading the folder's files as deleted,
+ * and the listing leaves the folder out under either spelling. A disk that
+ * keeps case holds the two folders apart, and there the other one syncs.
+ */
+describe("a skipped folder under another case", () => {
+  const times = { mtime: 1000, ctime: 1000 };
+
+  it("is skipped on a disk that folds case", async () => {
+    const folding = foldingAdapter();
+    folding.seed("PRIVATE/diary.md", "mine");
+    folding.seed("Notes/a.md", "a");
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(folding)), ".obsidian", undefined, {
+      ignore: ["Private"],
+    });
+    expect((await vault.list()).map((s) => s.path)).toEqual(["Notes", "Notes/a.md"]);
+    await expect(vault.write("private/x.md", enc.encode("a peer's"), times)).rejects.toMatchObject({
+      code: "ignored",
+    });
+    await expect(vault.exists("PRIVATE/diary.md")).rejects.toMatchObject({ code: "ignored" });
+    expect(folding.text("PRIVATE/diary.md")).toBe("mine");
+    expect(folding.filePaths().filter((p) => p.toLowerCase().startsWith("private/"))).toEqual([
+      "PRIVATE/diary.md",
+    ]);
+  });
+
+  it("is another folder on a disk that keeps case", async () => {
+    const exact = new FakeAdapter();
+    exact.seed("Notes/a.md", "a");
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(exact)), ".obsidian", undefined, {
+      ignore: ["Private"],
+    });
+    await vault.list(); // asks the disk whether it folds case
+    await vault.write("private/x.md", enc.encode("kept apart"), times);
+    expect(exact.text("private/x.md")).toBe("kept apart");
+    await expect(vault.write("Private/x.md", enc.encode("no"), times)).rejects.toMatchObject({
+      code: "ignored",
+    });
+  });
+});
+
+/**
  * The adapter's own write truncates the destination and then
  * fills it, read out of the shipped bundle, so a note used to be able to end up
  * empty with no copy of the old bytes or the new. Every failure below is one a

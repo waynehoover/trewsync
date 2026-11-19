@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/waynehoover/trewsync/internal/paths"
 )
 
 // What the export writes into Git, apart from the notes' bytes: the quoting
@@ -145,12 +147,19 @@ func attributesFor(lfs []string) []byte {
 	var b bytes.Buffer
 	b.WriteString(attributesHeader)
 	for _, p := range sorted {
-		b.WriteString(cQuote("/" + globEscape(p)))
-		b.WriteString(lfsAttributes)
+		b.WriteString(attributesLine(p))
 		b.WriteByte('\n')
 	}
 	return b.Bytes()
 }
+
+func attributesLine(p string) string { return cQuote("/"+globEscape(p)) + lfsAttributes }
+
+// attributesFit reports whether p's .gitattributes line is one Git reads. Git
+// ignores a line of 2048 bytes or more and git fsck refuses the file
+// (gitattributesLineLength), so an LFS file whose escaped path is that long is
+// left out rather than named in a file that would break the push.
+func attributesFit(p string) bool { return len(attributesLine(p)) < 2048 }
 
 // parseAttributes reads the LFS paths back out of a .gitattributes the export
 // wrote. A line it did not write is an error: the file is the export's, and a
@@ -182,17 +191,38 @@ func lfsPointer(oid string, size int64) []byte {
 	return fmt.Appendf(nil, "version https://git-lfs.github.com/spec/v1\noid sha256:%s\nsize %d\n", oid, size)
 }
 
-// gitSafe reports whether Git can hold p as a path. The store's own rules
-// already refuse a segment starting with a dot outside a profile root, so .git
-// and every name derived from it never arrive, and the export skips the
-// profile roots themselves (paths.IsConfig) before asking; what is left is
-// git~1, the short name Windows gives .git, which git fsck refuses in any
-// tree and GitHub refuses on push.
+// gitSafe reports whether Git can hold p as a path: fast-import accepts it
+// (verify_path) and git fsck passes the tree, as a remote that checks what it
+// receives does. The store refuses a segment starting with a dot outside a
+// profile root, and the export skips the profile roots (paths.IsConfig)
+// before asking, but a note can still name .git or .gitmodules the way HFS+
+// or NTFS reads a name. Each segment, split on either slash as Git splits it,
+// is compared as those file systems compare it: the code points HFS+ ignores
+// left out, case folded, anything from an NTFS stream's colon on dropped, and
+// trailing dots and spaces trimmed. It is refused when it is .git or its short
+// name git~1, or .gitmodules or .gitattributes or a short name of either,
+// whose contents fsck checks. That is a little wider than Git (any number may
+// follow the tilde), which leaves out a note Git would hold rather than let in
+// one it would not.
 func gitSafe(p string) bool {
-	for _, seg := range strings.Split(p, "/") {
-		s := strings.ToLower(strings.TrimRight(seg, ". "))
-		if s == "git~1" {
+	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
+		s := strings.ToLower(strings.Map(func(r rune) rune {
+			if paths.HFSIgnorable(r) {
+				return -1
+			}
+			return r
+		}, seg))
+		s, _, _ = strings.Cut(s, ":")
+		s = strings.TrimRight(s, ". ")
+		switch s {
+		case ".git", "git~1", ".gitmodules", ".gitattributes":
 			return false
+		}
+		if stem, n, ok := strings.Cut(s, "~"); ok && n != "" && strings.Trim(n, "0123456789") == "" {
+			switch stem {
+			case "gitmod", "gi7eba", "gitatt", "gi7d29":
+				return false
+			}
 		}
 	}
 	return true

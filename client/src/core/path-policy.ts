@@ -215,6 +215,26 @@ function reason(path: string, config: boolean, plugins = false): PathReason | un
   return undefined;
 }
 
+/**
+ * Whether some segment of `path` does not begin with a dot and does once the
+ * code points HFS+ leaves out of a name comparison are removed (U+200C to
+ * U+200F, U+202A to U+202E, U+206A to U+206F, U+FEFF). A Mac with an HFS+
+ * disk opens such a segment as the dot-prefixed name, so a peer could write
+ * into `.obsidian` as an ordinary note. The `hfs` section of
+ * `protocol-fixtures.json`.
+ *
+ * Not part of `pathReason`: the server refuses such a path only as a new
+ * name, and keeps taking updates, deletions and renames away of one stored
+ * before the rule. A device refuses one on the way in (`refusedInboundPath`).
+ */
+export function hiddenOnHFS(path: string): boolean {
+  return path
+    .split("/")
+    .some((s) => !s.startsWith(".") && s.replace(HFS_IGNORABLE_PREFIX, "").startsWith("."));
+}
+
+const HFS_IGNORABLE_PREFIX = /^[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]+/u;
+
 /** One live entry, as the collision rule sees it. */
 export interface LiveEntry {
   readonly path: string;

@@ -1468,7 +1468,9 @@
       "Windows only, applied by the client to inbound paths (PLAN section 4.12); the server does not.",
       "reason: character (one of <>:\"|?* in a segment), trailing (a segment ends with a dot or space),",
       "reserved (a segment whose part before its first dot, trailing spaces removed, is a reserved device",
-      "name in ASCII case-insensitive comparison), checked per segment in that order. null: writable."
+      "name in ASCII case-insensitive comparison), shortname (that part is at most 8 characters of",
+      "printable ASCII ending in ~ and digits, which Windows may resolve as another name's 8.3 short name),",
+      "checked per segment in that order. null: writable."
     ],
     "reserved": [
       "CON",
@@ -1616,6 +1618,46 @@
       {
         "name": "a superscript digit elsewhere",
         "path": "E=mc\u00b2.md",
+        "reason": null
+      },
+      {
+        "name": "the short name of .obsidian",
+        "path": "OBSIDI~1/plugins/evil/main.js",
+        "reason": "shortname"
+      },
+      {
+        "name": "a short name in lower case, deeper down",
+        "path": "Notes/draft~2.md",
+        "reason": "shortname"
+      },
+      {
+        "name": "a short name of a folder",
+        "path": "Plugins/TREW-S~1/data.json",
+        "reason": "shortname"
+      },
+      {
+        "name": "a short name with a two-digit number",
+        "path": "AB~12.txt",
+        "reason": "shortname"
+      },
+      {
+        "name": "a tilde and digits in a stem too long to be a short name",
+        "path": "Version~2 final.md",
+        "reason": null
+      },
+      {
+        "name": "a tilde with no digits after it",
+        "path": "OBSIDI~.md",
+        "reason": null
+      },
+      {
+        "name": "a tilde and digits after the first dot",
+        "path": "a.b~1.md",
+        "reason": null
+      },
+      {
+        "name": "a non-ASCII stem is never a short name",
+        "path": "caf\u00e9~1.md",
         "reason": null
       }
     ]
@@ -2318,6 +2360,84 @@
         "notes": "slash",
         "config": "slash",
         "plugins": "slash"
+      }
+    ]
+  },
+  "hfs": {
+    "note": [
+      "HFS+ leaves U+200C to U+200F, U+202A to U+202E, U+206A to U+206F and U+FEFF out when it compares",
+      "names, so it opens a segment that begins with them and then a dot as the dot-prefixed name. hidden:",
+      "some segment does not begin with a dot and does once those code points are removed. The client",
+      "refuses such a path inbound as dotprefix. The server refuses it as dotprefix only as a new name, a",
+      "create or a rename's destination that is not live, and keeps accepting updates, deletions and",
+      "renames away of one already stored, so a note stored before the rule is never stranded. A segment",
+      "that already begins with a dot is the dot rule's (paths), not this one's."
+    ],
+    "cases": [
+      {
+        "name": "an ordinary note",
+        "path": "Folder/Note.md",
+        "hidden": false
+      },
+      {
+        "name": "a zero-width non-joiner before .obsidian",
+        "path": "\u200c.obsidian/plugins/evil/main.js",
+        "hidden": true
+      },
+      {
+        "name": "a zero-width joiner before .trash",
+        "path": "\u200d.trash/x.md",
+        "hidden": true
+      },
+      {
+        "name": "a left-to-right mark, deeper down",
+        "path": "Notes/\u200e.hidden.md",
+        "hidden": true
+      },
+      {
+        "name": "an embedding mark",
+        "path": "\u202a.git/config",
+        "hidden": true
+      },
+      {
+        "name": "a deprecated format character",
+        "path": "\u206a.obsidian/app.json",
+        "hidden": true
+      },
+      {
+        "name": "a byte order mark",
+        "path": "\ufeff.obsidian/app.json",
+        "hidden": true
+      },
+      {
+        "name": "several of them",
+        "path": "\u200c\u200d\ufeff.x/y.md",
+        "hidden": true
+      },
+      {
+        "name": "a joiner inside an emoji sequence",
+        "path": "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67 family.md",
+        "hidden": false
+      },
+      {
+        "name": "a non-joiner inside a word",
+        "path": "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.md",
+        "hidden": false
+      },
+      {
+        "name": "an ignorable before a name with a dot later in it",
+        "path": "\u200cnotes.md",
+        "hidden": false
+      },
+      {
+        "name": "an ignorable after a dot-prefixed name's dot",
+        "path": ".\u200cobsidian/x",
+        "hidden": false
+      },
+      {
+        "name": "a code point just outside the ranges",
+        "path": "\u200b.x/y.md",
+        "hidden": false
       }
     ]
   }

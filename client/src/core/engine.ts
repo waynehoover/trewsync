@@ -58,7 +58,13 @@ import { drawingGate, looksLikeExcalidraw } from "./excalidraw.ts";
 import { looksLikeMarkupPath, wellFormedMarkup } from "./markup.ts";
 import { chunkName, chunkNames, plainDigest } from "./digest.ts";
 import { fold } from "./fold.ts";
-import { configPathReason, isConfigPath, pathReason, type PathReason } from "./path-policy.ts";
+import {
+  configPathReason,
+  hiddenOnHFS,
+  isConfigPath,
+  pathReason,
+  type PathReason,
+} from "./path-policy.ts";
 import { describeWindowsRefusal, windowsRefusal } from "./windows-names.ts";
 import { conflictCopyPath, mergeText, sanitiseAuthor } from "./merge.ts";
 import {
@@ -7107,6 +7113,7 @@ export function refusedInboundPath(path: string, windows = false): string | unde
   // this device syncs it; the rest of a profile root never gets this far, a
   // plugin's file on a device that does not sync its plugins included.
   const reason = isConfigPath(path) ? configPathReason(path, true) : pathReason(path);
+  if (reason === undefined && hiddenOnHFS(path)) return HIDDEN_ON_HFS;
   if (reason === undefined) {
     const onWindows = windows ? windowsRefusal(path) : undefined;
     return onWindows === undefined ? undefined : describeWindowsRefusal(onWindows);
@@ -7122,6 +7129,10 @@ export function refusedInboundPath(path: string, windows = false): string | unde
   }
   return INBOUND_REFUSALS[reason];
 }
+
+/** What `refusedInboundPath` says of a name `hiddenOnHFS` refuses. */
+export const HIDDEN_ON_HFS =
+  "a path with an invisible character before a dot, which a Mac disk can read as a dot-prefixed name that never syncs";
 
 /** What `refusedInboundPath` says for each of the protocol's reasons. */
 const INBOUND_REFUSALS: Record<PathReason, string> = {

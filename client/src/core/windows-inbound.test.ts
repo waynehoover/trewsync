@@ -177,7 +177,7 @@ for (let at = 0; at < REFUSED.length; at += 5) FIVES.push(REFUSED.slice(at, at +
 describe("a name Windows cannot hold, on Windows", () => {
   it("covers every kind the rule refuses, and names that only look like one", () => {
     const kinds = new Set(REFUSED.map((c) => c.reason));
-    expect([...kinds].sort()).toEqual(["character", "reserved", "trailing"]);
+    expect([...kinds].sort()).toEqual(["character", "reserved", "shortname", "trailing"]);
     expect(WRITABLE.length).toBeGreaterThan(3);
     for (const name of fixtures.windows.reserved) {
       expect(REFUSED.some((c) => c.path === `reserved/${name}.txt`)).toBe(true);

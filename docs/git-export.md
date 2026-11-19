@@ -396,8 +396,12 @@ the details. Sync is never affected by any of these.
   export starts a new one, and its first push is refused because the remote's
   branch holds commits it did not make; copy the old one across then, or
   export to a new branch with `trewd git-export set -branch NAME`.
-- **A path Git cannot hold.** `git~1`, Windows' short name for `.git`, is
-  refused by Git everywhere; such a path is left out and listed in status.
+- **A path Git cannot hold.** A name Git or `git fsck` refuses, such as
+  `git~1` (Windows' short name for `.git`), `.git` behind an invisible
+  character a Mac disk ignores, or a short name of `.gitmodules`, is left out
+  and listed in status, and so is any other path `git fast-import` refuses.
+  So is a file over the LFS threshold whose path is too long for a
+  `.gitattributes` line (about a thousand bytes of `[`, `]`, `*`, `?` or `\`).
 - **git or git-lfs missing or too old.** Doctor names which; install it.
 
 **To stop for good:** `trewd git-export disable`, then delete `git-export/`
