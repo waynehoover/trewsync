@@ -29,7 +29,11 @@ import (
 func cmdService(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("service", flag.ContinueOnError)
 	dataDir := dataFlags(fs)
-	addr := fs.String("addr", ":3003", "listen address the unit should use")
+	// Loopback by default: the server speaks no TLS, so a unit listening on
+	// every interface sends tokens and notes across the LAN in the clear
+	// (security review L9). Devices reach it through Tailscale Serve or a
+	// proxy on this machine, as compose.yaml and the Homebrew service do.
+	addr := fs.String("addr", "127.0.0.1:3003", "listen address the unit should use")
 	vault := fs.String("vault", "default", "the one vault this server serves")
 	runAs := fs.String("user", "", "user to run as (default: whoever is running this)")
 	binary := fs.String("binary", "", "path to the trewd binary (default: this one)")

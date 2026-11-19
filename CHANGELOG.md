@@ -29,6 +29,10 @@ client can talk; upgrade the server first.
 - An HTTP connection left idle between requests is closed after two minutes,
   so connections that ask for `/health` and then sit open can no longer use
   up the server's file descriptors. Device sessions are not affected.
+- `trewd service` writes a unit that listens on `127.0.0.1:3003` unless given
+  `-addr`, rather than on every interface, since the server speaks no TLS of
+  its own. A unit made before keeps its address; pass `-addr :3003` to make
+  one that listens everywhere.
 
 ### Command-line client
 
