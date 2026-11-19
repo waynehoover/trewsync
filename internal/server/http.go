@@ -4,9 +4,11 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 
@@ -118,12 +120,19 @@ func HTTPHandler(srv *Server, log *slog.Logger, extraOrigins ...string) http.Han
 			// is how a client that cannot connect says why: the desktop plugin's
 			// origin was missing once and the only evidence was this line, and
 			// the mobile ones here have never been checked against a device.
+			//
+			// Nobody has authenticated yet, so what is logged is clipped and
+			// the origin is logged once: the library's error quotes the
+			// headers it refused, and a 1 MiB Origin was written three times
+			// over (security review L1).
 			if origin := r.Header.Get("Origin"); origin != "" {
+				why := strings.Replace(err.Error(), strconv.Quote(origin), "(origin)", 1)
 				log.Warn("websocket accept refused",
-					"remote", r.RemoteAddr, "origin", origin, "err", err,
-					"hint", "if this is your own client, restart with -allow-origin "+origin)
+					"remote", r.RemoteAddr, "origin", clip(origin, maxLoggedOrigin),
+					"err", clip(why, maxLoggedError),
+					"hint", "if this is your own client, restart with -allow-origin and that origin")
 			} else {
-				log.Warn("websocket accept", "remote", r.RemoteAddr, "err", err)
+				log.Warn("websocket accept", "remote", r.RemoteAddr, "err", clip(err.Error(), maxLoggedError))
 			}
 			return
 		}
@@ -177,4 +186,24 @@ func sharedHealth(srv *Server, log *slog.Logger) func() store.Health {
 		}
 		return last
 	}
+}
+
+// What a connection that has not authenticated may put in a log line or have
+// echoed back to it, in bytes (security review L1).
+const (
+	maxLoggedOrigin = 128
+	maxLoggedError  = 256
+	maxEchoedOp     = 32
+)
+
+// clip is s cut to at most n bytes, at a character boundary, with "..." to
+// say it was cut.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "..."
 }

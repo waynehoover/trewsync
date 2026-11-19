@@ -737,7 +737,7 @@ func (s *Session) run() error {
 		return s.fatal(wire.CodeProtoState, fmt.Errorf("hello parse: %w", err))
 	}
 	if m.Op != "hello" {
-		return s.fatal(wire.CodeProtoState, fmt.Errorf("first op must be hello, got %q", m.Op))
+		return s.fatal(wire.CodeProtoState, fmt.Errorf("first op must be hello, got %q", clip(m.Op, maxEchoedOp)))
 	}
 	if !s.enter() {
 		return s.fatalWith(wire.CodeBusy, errShuttingDown, ShutdownRetryAfter)

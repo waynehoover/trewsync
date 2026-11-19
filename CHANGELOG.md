@@ -18,6 +18,10 @@ client can talk; upgrade the server first.
   minutes. A note whose quotes and lists nest more than 200 deep is refused
   as `too_complex`: its tags and links are not indexed, and searches read it
   directly.
+- A connection that has not authenticated can no longer grow the log by
+  sending a long `Origin` header or first frame: the origin is logged once,
+  cut to 128 bytes, and an unexpected first `op` is echoed and logged cut to
+  32.
 
 ### Command-line client
 
