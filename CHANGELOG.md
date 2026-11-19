@@ -11,9 +11,30 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Server
+
+- A new note whose name an HFS+ disk reads as starting with a dot, because
+  an invisible character (U+200C to U+200F, U+202A to U+202E, U+206A to
+  U+206F or U+FEFF) comes before the dot, is refused as `dotprefix`. A note
+  already stored under such a name is kept, and can still be edited, deleted
+  or renamed.
+
+### Plugin
+
+- A note from another device whose name a Mac's HFS+ disk would read as a
+  dot-prefixed folder such as `.obsidian` is not written; it is listed as
+  stranded with the reason. A note already on this device under such a name
+  is kept and keeps syncing.
+- On Windows, a note from another device named like an 8.3 short name
+  (`OBSIDI~1`, `draft~2.md`) is not written, since Windows may open it as a
+  different file or folder, `.obsidian` included; it is listed as stranded
+  with the reason.
+
 ### Command-line client
 
 - An error that `trew` rewords now carries the error that caused it.
+- The same refusals of a name HFS+ reads as dot-prefixed, and on Windows of
+  8.3 short names, as the plugin.
 
 ## 0.15.2, server (2026-11-19)
 

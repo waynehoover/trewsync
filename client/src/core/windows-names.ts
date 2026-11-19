@@ -25,7 +25,7 @@ export const WINDOWS_RESERVED_NAMES: readonly string[] = [
 ];
 
 /** Why Windows cannot hold a path, in the order checked per segment. */
-export type WindowsRefusal = "character" | "trailing" | "reserved";
+export type WindowsRefusal = "character" | "trailing" | "reserved" | "shortname";
 
 const RESERVED = new Set(WINDOWS_RESERVED_NAMES);
 
@@ -41,6 +41,10 @@ export function windowsRefusal(path: string): WindowsRefusal | undefined {
     if (segment.endsWith(".") || segment.endsWith(" ")) return "trailing";
     const stem = segment.split(".", 1)[0]!.replace(/ +$/, "");
     if (RESERVED.has(asciiUpper(stem))) return "reserved";
+    // An 8.3 short name. Windows opens OBSIDI~1 as .obsidian when that is
+    // its short name, so writing one may write into another file or folder,
+    // a settings folder past the dot rule included.
+    if (stem.length <= 8 && /^[!-~]*~[0-9]+$/.test(stem)) return "shortname";
   }
   return undefined;
 }
@@ -54,5 +58,7 @@ export function describeWindowsRefusal(reason: WindowsRefusal): string {
       return "Windows does not allow a file or folder name to end with a dot or a space";
     case "reserved":
       return "Windows reserves this name for a device (CON, PRN, AUX, NUL, COM and LPT names)";
+    case "shortname":
+      return "Windows may read a name like ABCDEF~1 as the short name of another file or folder";
   }
 }

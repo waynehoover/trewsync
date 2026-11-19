@@ -130,6 +130,13 @@ func checkCollision(q querier, vaultID string, e Entry) error {
 	if !move && dest.live {
 		return nil // rule 2
 	}
+	// A new name an HFS+ disk opens as a dot-prefixed one (paths.HiddenOnHFS)
+	// is refused here, where the live set says whether it is new, rather than
+	// in Validate: refused there, a note stored under one before the rule
+	// could never be changed, deleted or renamed away.
+	if !dest.live && paths.HiddenOnHFS(e.Path) {
+		return pathError("path", e.Path, paths.ReasonDotPrefix)
+	}
 
 	// What the destination and a move's source contribute to the directory
 	// counts, subtracted before a spelling is judged live: the rule compares

@@ -29,7 +29,7 @@ describe("names Windows cannot hold", () => {
   });
 
   it("explains every reason in words a person can act on", () => {
-    for (const reason of ["character", "trailing", "reserved"] as const) {
+    for (const reason of ["character", "trailing", "reserved", "shortname"] as const) {
       expect(describeWindowsRefusal(reason).length).toBeGreaterThan(20);
     }
   });

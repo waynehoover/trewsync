@@ -48,6 +48,13 @@ type contract struct {
 	Collisions struct {
 		Scenarios []scenario `json:"scenarios"`
 	} `json:"collisions"`
+	HFS struct {
+		Cases []struct {
+			Name   string `json:"name"`
+			Path   string `json:"path"`
+			Hidden bool   `json:"hidden"`
+		} `json:"cases"`
+	} `json:"hfs"`
 	Formats struct {
 		TextExtensions []string `json:"textExtensions"`
 		Samples        []struct {
@@ -372,5 +379,30 @@ func TestConflictCopyNamesAreTheEnginesShape(t *testing.T) {
 		if got := ConflictCopy(p); got != want {
 			t.Errorf("ConflictCopy(%q) = %v, want %v", p, got, want)
 		}
+	}
+}
+
+// HiddenOnHFS against the fixture's hfs section: a segment HFS+ opens as a
+// dot-prefixed name. None of its cases is one Check refuses, which is why the
+// rule is the store's for a new name rather than Check's for every write.
+func TestHiddenOnHFSIsTheReferences(t *testing.T) {
+	cases := load(t).HFS.Cases
+	if len(cases) < 10 {
+		t.Fatalf("only %d hfs cases; regenerate with scripts/protocol-vectors.py", len(cases))
+	}
+	hidden := 0
+	for _, c := range cases {
+		if got := HiddenOnHFS(c.Path); got != c.Hidden {
+			t.Errorf("%s: HiddenOnHFS(%+q) = %v, the reference %v", c.Name, c.Path, got, c.Hidden)
+		}
+		if c.Hidden {
+			hidden++
+			if r := Check(c.Path); r != "" {
+				t.Errorf("%s: Check refuses it as %s, so the case tests that rule, not this one", c.Name, r)
+			}
+		}
+	}
+	if hidden == 0 || hidden == len(cases) {
+		t.Fatalf("%d of %d cases are hidden, which tests one side only", hidden, len(cases))
 	}
 }

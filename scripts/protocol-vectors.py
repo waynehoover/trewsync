@@ -91,7 +91,7 @@ MAX_SEGMENT_BYTES = 255
 MAX_NAME_BYTES = 64
 CHUNK_MAX = 1 << 20
 
-SECTIONS = ("constants", "invite", "frames", "fold", "paths", "config", "collisions", "formats", "windows")
+SECTIONS = ("constants", "invite", "frames", "fold", "paths", "config", "collisions", "formats", "windows", "hfs")
 
 
 # ---------------------------------------------------------------------------
@@ -869,6 +869,10 @@ def windows_reason(path: str) -> str | None:
         stem = segment.split(".", 1)[0].rstrip(" ")
         if ascii_upper(stem) in WINDOWS_RESERVED:
             return "reserved"
+        # An 8.3 short name: Windows opens OBSIDI~1 as .obsidian, so writing
+        # one may write into another file or folder under its long name.
+        if len(stem) <= 8 and re.fullmatch(r"[!-~]*~[0-9]+", stem):
+            return "shortname"
     return None
 
 
@@ -901,16 +905,76 @@ def windows_vectors() -> dict:
         ("COM10 is not reserved", "COM10.md"),
         ("a reserved word inside a longer name", "my NUL notes.md"),
         ("a superscript digit elsewhere", "E=mc\u00b2.md"),
+        ("the short name of .obsidian", "OBSIDI~1/plugins/evil/main.js"),
+        ("a short name in lower case, deeper down", "Notes/draft~2.md"),
+        ("a short name of a folder", "Plugins/TREW-S~1/data.json"),
+        ("a short name with a two-digit number", "AB~12.txt"),
+        ("a tilde and digits in a stem too long to be a short name", "Version~2 final.md"),
+        ("a tilde with no digits after it", "OBSIDI~.md"),
+        ("a tilde and digits after the first dot", "a.b~1.md"),
+        ("a non-ASCII stem is never a short name", "caf\u00e9~1.md"),
     ]
     return {
         "note": [
             "Windows only, applied by the client to inbound paths (PLAN section 4.12); the server does not.",
             "reason: character (one of <>:\"|?* in a segment), trailing (a segment ends with a dot or space),",
             "reserved (a segment whose part before its first dot, trailing spaces removed, is a reserved device",
-            "name in ASCII case-insensitive comparison), checked per segment in that order. null: writable.",
+            "name in ASCII case-insensitive comparison), shortname (that part is at most 8 characters of",
+            "printable ASCII ending in ~ and digits, which Windows may resolve as another name's 8.3 short name),",
+            "checked per segment in that order. null: writable.",
         ],
         "reserved": WINDOWS_RESERVED,
         "cases": [{"name": n, "path": p, "reason": windows_reason(p)} for n, p in cases],
+    }
+
+
+# ---------------------------------------------------------------------------
+# HFS+
+# ---------------------------------------------------------------------------
+
+# The code points HFS+ leaves out when it compares two names, as Git lists them
+# for core.protectHFS (utf8.c, next_hfs_char).
+HFS_IGNORABLE = (
+    set(range(0x200C, 0x2010)) | set(range(0x202A, 0x202F)) | set(range(0x206A, 0x2070)) | {0xFEFF}
+)
+
+
+def hidden_on_hfs(path: str) -> bool:
+    """Whether a segment reads as dot-prefixed to HFS+ and not to anything else."""
+    for segment in path.split("/"):
+        bare = "".join(c for c in segment if ord(c) not in HFS_IGNORABLE)
+        if not segment.startswith(".") and bare.startswith("."):
+            return True
+    return False
+
+
+def hfs_vectors() -> dict:
+    cases = [
+        ("an ordinary note", "Folder/Note.md"),
+        ("a zero-width non-joiner before .obsidian", "\u200c.obsidian/plugins/evil/main.js"),
+        ("a zero-width joiner before .trash", "\u200d.trash/x.md"),
+        ("a left-to-right mark, deeper down", "Notes/\u200e.hidden.md"),
+        ("an embedding mark", "\u202a.git/config"),
+        ("a deprecated format character", "\u206a.obsidian/app.json"),
+        ("a byte order mark", "\ufeff.obsidian/app.json"),
+        ("several of them", "\u200c\u200d\ufeff.x/y.md"),
+        ("a joiner inside an emoji sequence", "\U0001f468\u200d\U0001f469\u200d\U0001f467 family.md"),
+        ("a non-joiner inside a word", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.md"),
+        ("an ignorable before a name with a dot later in it", "\u200cnotes.md"),
+        ("an ignorable after a dot-prefixed name's dot", ".\u200cobsidian/x"),
+        ("a code point just outside the ranges", "\u200b.x/y.md"),
+    ]
+    return {
+        "note": [
+            "HFS+ leaves U+200C to U+200F, U+202A to U+202E, U+206A to U+206F and U+FEFF out when it compares",
+            "names, so it opens a segment that begins with them and then a dot as the dot-prefixed name. hidden:",
+            "some segment does not begin with a dot and does once those code points are removed. The client",
+            "refuses such a path inbound as dotprefix. The server refuses it as dotprefix only as a new name, a",
+            "create or a rename's destination that is not live, and keeps accepting updates, deletions and",
+            "renames away of one already stored, so a note stored before the rule is never stranded. A segment",
+            "that already begins with a dot is the dot rule's (paths), not this one's.",
+        ],
+        "cases": [{"name": n, "path": p, "hidden": hidden_on_hfs(p)} for n, p in cases],
     }
 
 
@@ -1003,6 +1067,7 @@ def main() -> None:
     }
     fixtures["formats"] = formats(table)
     fixtures["windows"] = windows_vectors()
+    fixtures["hfs"] = hfs_vectors()
     outputs[fixtures_path] = json.dumps(fixtures, indent=2, ensure_ascii=True) + "\n"
     if check:
         stale = [str(path.relative_to(ROOT)) for path, text in outputs.items()
