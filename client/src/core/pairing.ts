@@ -25,7 +25,13 @@
  */
 
 import { base64urlDecode, base64urlEncode, randomBytes } from "./digest.ts";
-import { parseInviteString, type InviteString } from "./invite-string.ts";
+import {
+  PLAINTEXT_WARNING,
+  addressHost,
+  parseInviteString,
+  plaintextOverNetwork,
+  type InviteString,
+} from "./invite-string.ts";
 
 /**
  * The vault every string means when it does not name one.
@@ -507,10 +513,38 @@ export function parseInvite(input: string): InviteString {
  * Throws for anything it cannot read, with the message that says why, so a
  * caller can put the reason on screen and leave the button disabled: no
  * address on screen, nothing to press.
+ *
+ * `host` is the host and port the socket would dial, to show on its own: the
+ * whole address is easier to misread, and the codec refusing user names is
+ * what makes this the only host in it (the security review's M3). `warnings`
+ * are sentences to show before Pair is pressed: an address with no TLS over a
+ * network (L4), and, when `configured` is the address this device was paired
+ * with, an invite for a different server (threat model D3).
  */
-export function joinDestination(input: string): { url: string; vaultId: string } {
+export function joinDestination(
+  input: string,
+  configured?: string,
+): { url: string; vaultId: string; host: string; warnings: string[] } {
   const invite = parseInvite(input);
-  return { url: invite.url, vaultId: invite.vault };
+  const host = addressHost(invite.url);
+  const warnings: string[] = [];
+  if (plaintextOverNetwork(invite.url)) warnings.push(PLAINTEXT_WARNING);
+  if (configured !== undefined) {
+    // An address saved before the codec refused user names may not parse;
+    // it is then shown whole, and differs from any host an invite can carry.
+    let was = configured;
+    try {
+      was = addressHost(configured);
+    } catch {
+      // shown whole
+    }
+    if (was.toLowerCase() !== host.toLowerCase()) {
+      warnings.push(
+        `This device was paired with ${was}, and this invite is for a different server.`,
+      );
+    }
+  }
+  return { url: invite.url, vaultId: invite.vault, host, warnings };
 }
 
 /**

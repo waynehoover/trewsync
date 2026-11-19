@@ -186,6 +186,12 @@
   margin-inline: var(--size-4-5);
 }
 
+/* The host an invite dials, on its own line before Pair. */
+.trew-panel .trew-pair-host {
+  margin: var(--size-4-2) var(--size-4-5) 0;
+  overflow-wrap: anywhere;
+}
+
 .trew-invite-qr {
   display: block;
   width: 288px;

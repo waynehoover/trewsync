@@ -56,7 +56,8 @@ import {
   startPairing,
 } from "../core/pairing.ts";
 import { base64urlEncode, randomBytes } from "../core/digest.ts";
-import { formatInviteString } from "../core/invite-string.ts";
+import { crc32Bytes } from "../core/crc32.ts";
+import { PLAINTEXT_WARNING, formatInviteString } from "../core/invite-string.ts";
 import { INVITE_ACTION, inviteLink, inviteQrImage } from "./invite-qr.ts";
 import { secretIdFor } from "./keychain.ts";
 import { withTimers } from "../../test/setup.ts";
@@ -5380,6 +5381,38 @@ describe("adding a device from the panel", () => {
     expect(notices.at(-1)!.message).toMatch(/invite link is invalid/);
   });
 
+  /**
+   * The security review's M3 and L4: before Pair, the host the invite dials
+   * on its own line, and a network ws:// address named as plaintext.
+   */
+  it("shows the host a scanned invite dials, and warns of plaintext, before Pair", async () => {
+    const { plugin } = await load();
+    built.length = 0;
+    const invite = formatInviteString({
+      token: randomBytes(16),
+      url: "ws://notes.example.com:3003/trew",
+      vault: "default",
+    });
+    plugin.protocolHandlers.get(INVITE_ACTION)!({ invite });
+    const said = modals.at(-1)!.contentEl.allText();
+    expect(said).toContain("Server: notes.example.com:3003");
+    expect(said).toContain("Joins ws://notes.example.com:3003/trew.");
+    expect(said).toContain(PLAINTEXT_WARNING);
+    // A first pairing has no server to compare with.
+    expect(said).not.toMatch(/different server/);
+    expect(plugin.savedData).toBe(null);
+
+    // A link carrying a user name before the host is refused outright, since
+    // what it reads as and what it dials are different hosts.
+    const before = modals.length;
+    const url = new TextEncoder().encode("wss://sync.my-tailnet.ts.net@evil.example");
+    const body = new Uint8Array([1, ...randomBytes(16), url.length, ...url, 1, 0x76]);
+    const spoofed = "trew1i_" + base64urlEncode(new Uint8Array([...body, ...crc32Bytes(body)]));
+    plugin.protocolHandlers.get(INVITE_ACTION)!({ invite: spoofed });
+    expect(modals).toHaveLength(before);
+    expect(notices.at(-1)!.message).toMatch(/invite link is invalid/);
+  });
+
   it("refuses an invite link in an already paired vault", async () => {
     await fresh();
     const { plugin } = await load();
@@ -5714,6 +5747,42 @@ describe("a device the server has revoked", () => {
     expect(phone.plugin.deviceName).toBe("phone");
     expect(phone.plugin.ignoredNames).toEqual(["Big"]);
     expect(adapter.text("Big/huge.md")).toBeUndefined();
+  }, 300_000);
+
+  /**
+   * Threat model D3, which the security review's L13 found claimed and not
+   * done: pairing again with an invite for a server other than this device's
+   * says so before Pair, and the host it would dial stands on its own line
+   * (M3), with the plaintext warning for a network ws:// address (L4).
+   */
+  it("warns before pairing again with an invite for a different server", async () => {
+    const { laptop, phone } = await laptopAndPhone();
+    await revoke(laptop, phone);
+    const elsewhere = formatInviteString({
+      token: randomBytes(16),
+      url: "ws://sync.elsewhere.example:3003",
+      vault: "default",
+    });
+    built.length = 0;
+    phone.plugin.protocolHandlers.get(INVITE_ACTION)!({ invite: elsewhere });
+    expect(inviteField()!.getValue()).toBe(elsewhere);
+    const ours = new URL(server.wsUrl).host;
+    let said = panelText();
+    expect(said).toContain("Server: sync.elsewhere.example:3003");
+    expect(said).toContain(
+      `This device was paired with ${ours}, and this invite is for a different server.`,
+    );
+    expect(said).toContain(PLAINTEXT_WARNING);
+    // Nothing was done by showing it.
+    expect(phone.plugin.currentState.kind).toBe("stopped");
+
+    // The laptop's own invite is for this device's server, which is no news.
+    inviteField()!.type((await laptop.plugin.createInvite()).invite);
+    said = panelText();
+    expect(said).toContain(`Server: ${ours}`);
+    expect(said).not.toMatch(/different server/);
+    // Loopback has no network for the notes to cross in the clear.
+    expect(said).not.toContain(PLAINTEXT_WARNING);
   }, 300_000);
 
   it("forgets an invite that came in on a link once it has been used", async () => {

@@ -11,9 +11,31 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Server
+
+- `trewd` refuses a `-url` with a user name, query or fragment in it, and
+  `trewd invite` makes no invite for one: an invite's address is now exactly
+  `ws://` or `wss://`, a host, an optional port and an optional path. Every
+  address `trewd` makes by itself, and every `-url` of that shape (with or
+  without a port or path), works as before.
+
+### Plugin
+
+- The plugin refuses an invite whose address has a user name, query or
+  fragment in it. An address like `wss://your-server@another.example` reads
+  as your server and connects to `another.example`.
+- Before you pair, the pairing screen shows the server the invite connects to
+  on a line of its own, warns when the address has no TLS and is not on this
+  device, and, when pairing a device again, warns when the invite is for a
+  different server from the one it was paired with.
+
 ### Command-line client
 
 - An error that `trew` rewords now carries the error that caused it.
+- `trew pair` refuses an invite whose address has a user name, query or
+  fragment in it, names the server it is about to connect to before it
+  connects, and warns first when the address has no TLS and is not on this
+  machine.
 
 ## 0.15.2, server (2026-11-19)
 
