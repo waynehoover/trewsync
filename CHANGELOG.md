@@ -22,6 +22,10 @@ client can talk; upgrade the server first.
   sending a long `Origin` header or first frame: the origin is logged once,
   cut to 128 bytes, and an unexpected first `op` is echoed and logged cut to
   32.
+- A refused hello gives its place among the connections waiting to
+  authenticate back at once, rather than up to two seconds later, so a few
+  peers that never read their refusal can no longer turn every new device
+  away as busy.
 
 ### Command-line client
 

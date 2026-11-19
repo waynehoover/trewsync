@@ -201,6 +201,12 @@ func (s *Server) Handle(ctx context.Context, conn *websocket.Conn, remote string
 	go sess.keepalive()
 
 	err = sess.run()
+	// A session whose run has ended reads nothing more, so a hello it was
+	// refused gives its pre-auth slot back now rather than after the drain.
+	// The drain can take two seconds against a peer that does not read, and
+	// a connection that has spoken is never closed to make room, so held
+	// slots refused every new device (security review L3).
+	s.uncount(sess)
 	if err != nil {
 		s.log.Info("session ended", "remote", remote, "vault", sess.vaultID, "err", err)
 	}
