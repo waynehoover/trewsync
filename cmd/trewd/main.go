@@ -385,19 +385,14 @@ func requireVault(st *store.Store, vault string) error {
  * serve
  * ---------------------------------------------------------------- */
 
-var afterListening func(addr string)
-
-// cmdServe blocks until the context is cancelled or a signal arrives.
-//
-// The context is how a test stops it. Before it existed, serving could only be
-// ended by signalling the process, which in a test means signalling the test
-// runner, so nothing here could be exercised at all.
 // afterListening is called with the bound address once the port is open and
 // Serve is running, and before the startup summary walks the store.
 //
 // A seam for one test, and it is here rather than in the test because the thing
 // under test is an ordering inside this function: that the socket answers while
 // the summary is still to come. Nil everywhere but that test.
+var afterListening func(addr string)
+
 // httpIdleTimeout is how long a keep-alive connection may sit between
 // requests. Without one, a GET /health that is read and then left open held
 // its descriptor for ever, and enough of them, which never upgrade and so
@@ -417,6 +412,11 @@ func newHTTPServer(addr string) *http.Server {
 	}
 }
 
+// cmdServe blocks until the context is cancelled or a signal arrives.
+//
+// The context is how a test stops it. Before it existed, serving could only be
+// ended by signalling the process, which in a test means signalling the test
+// runner, so nothing here could be exercised at all.
 func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	dataDir := dataFlags(fs)

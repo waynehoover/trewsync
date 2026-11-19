@@ -10,8 +10,10 @@ import (
 // complexityCeiling is how long one parser may take over one crafted note
 // of NoteBytes. The parsers once took minutes over some of these
 // (security review M1); linear ones take well under a second, and the
-// ceiling is generous so that a slow CI machine does not fail it.
-const complexityCeiling = 2 * time.Second
+// ceiling is generous so that a slow CI machine does not fail it. The race
+// detector, which the gate and CI run with, multiplies it by raceSlowdown:
+// still far below the minutes a quadratic parser takes.
+const complexityCeiling = 2 * time.Second * raceSlowdown
 
 // craftedNotes are 1 MiB notes built to make a quadratic parser slow.
 func craftedNotes() map[string]string {
