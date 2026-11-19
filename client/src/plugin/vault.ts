@@ -661,7 +661,7 @@ export class ObsidianVault implements Vault {
       path.startsWith(root + "/") &&
       configPathReason(path, this.syncsPlugins) === undefined &&
       !this.inOwnFolder(this.toDisk(path)) &&
-      isNeverSynced(path.slice(root.length + 1), this.skipHere)
+      this.skips(path.slice(root.length + 1), this.skipHere)
     );
   }
 
@@ -710,7 +710,7 @@ export class ObsidianVault implements Vault {
       path.startsWith(root + "/") &&
       configPathReason(path, this.syncsPlugins) === undefined &&
       !this.inOwnFolder(this.toDisk(path)) &&
-      !isNeverSynced(path.slice(root.length + 1), this.skipHere)
+      !this.skips(path.slice(root.length + 1), this.skipHere)
     );
   }
 
@@ -789,7 +789,7 @@ export class ObsidianVault implements Vault {
     if (segments.length === 1) return true;
     if (isDeviceLocalPlugin(segments[1]!)) return false;
     if (this.inOwnFolder(`${this.configRoot}/${rel}`)) return false;
-    return !isNeverSynced(segments.slice(1).join("/"), this.skipHere);
+    return !this.skips(segments.slice(1).join("/"), this.skipHere);
   }
 
   /** `pluginSettingsMove`'s answer for each plugin folder, once a session. */
@@ -1357,7 +1357,7 @@ export class ObsidianVault implements Vault {
       // folder is this device's configuration: a peer whose config folder is
       // named something else uploads paths under it, and this device saying
       // no to those is the arrangement working, not a fault.
-      throw ignoredHere(normalized, this.ignore) || this.skippedSetting(normalized)
+      throw ignoredHere(...this.asked(normalized, this.ignore)) || this.skippedSetting(normalized)
         ? ignoredHereError(`not writing under a name this device does not sync: ${path}`)
         : neverSync(`refusing to write inside a folder that is never synced: ${path}`);
     }
@@ -1373,8 +1373,34 @@ export class ObsidianVault implements Vault {
    * the rest, and a file written and never listed is reported deleted.
    */
   private ignored(path: string): boolean {
-    return !this.inSettings(path) && isNeverSynced(path, this.ignore);
+    return !this.inSettings(path) && this.skips(path, this.ignore);
   }
+
+  /** `isNeverSynced` against one of this device's lists, as this disk compares names. */
+  private skips(path: string, names: ReadonlySet<string>): boolean {
+    return isNeverSynced(...this.asked(path, names));
+  }
+
+  /**
+   * A path and one of this device's lists of names, case-folded both on a
+   * disk that folds case, as the headless client does (T17). Compared
+   * exactly, skipping `Private` let a peer's `private/x.md` in: on such a
+   * disk that is a file inside the skipped folder. Folded, the write is
+   * refused as ignored, and so is `exists`, so the engine reports the path
+   * rather than reading the folder's files as deleted. Before the probe has
+   * run the disk is taken to fold, which errs towards skipping.
+   */
+  private asked(path: string, names: ReadonlySet<string>): [string, ReadonlySet<string>] {
+    if (!this.foldsCase) return [path, names];
+    let folded = this.foldedNames.get(names);
+    if (folded === undefined) {
+      folded = new Set([...names].map(foldPath));
+      this.foldedNames.set(names, folded);
+    }
+    return [foldPath(path), folded];
+  }
+
+  private readonly foldedNames = new Map<ReadonlySet<string>, ReadonlySet<string>>();
 
   /**
    * `normalizePath`, remembered.

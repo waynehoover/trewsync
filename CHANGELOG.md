@@ -37,6 +37,9 @@ client can talk; upgrade the server first.
   (`OBSIDI~1`, `draft~2.md`) is not written, since Windows may open it as a
   different file or folder, `.obsidian` included; it is listed as stranded
   with the reason.
+- A folder this device skips is skipped under any case on a disk that folds
+  case, as it already was in `trew`: a peer's `private/x.md` no longer lands
+  in a skipped `Private` folder on macOS or Windows.
 
 ### Command-line client
 
