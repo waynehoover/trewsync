@@ -23,6 +23,7 @@ import {
   INVITE_PREFIX,
   INVITE_TOKEN_BYTES,
   MAX_VAULT_NAME_BYTES,
+  addressHost,
   formatInviteString,
   parseInviteString,
 } from "./invite-string.ts";
@@ -58,7 +59,7 @@ interface Contract {
     deviceLocalPlugins: string[];
   };
   invite: {
-    good: { string: string; token: string; url: string; vault: string }[];
+    good: { string: string; token: string; url: string; vault: string; host: string }[];
     bad: { why: string; string: string }[];
   };
   frames: {
@@ -246,6 +247,8 @@ describe("the protocol 1 contract", () => {
         expect(Buffer.from(inv.token).equals(Buffer.from(base64urlDecode(g.token)))).toBe(true);
         expect(inv.url).toBe(g.url);
         expect(inv.vault).toBe(g.vault);
+        // What a person is shown before pairing: the host the socket dials.
+        expect(addressHost(inv.url), g.url).toBe(g.host);
       }
     });
 

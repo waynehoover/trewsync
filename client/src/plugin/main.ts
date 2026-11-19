@@ -5931,7 +5931,11 @@ class TrewPanel {
         inviteField = t;
       });
 
-    // Where this invite goes, before it goes there (R083-05).
+    // Where this invite goes, before it goes there (R083-05): the host on a
+    // line of its own, since a whole address is the easier thing to misread
+    // (the security review's M3), then the sentence and any warnings.
+    const destinationHost = contentEl.createEl("p", { cls: "trew-pair-host" });
+    const hostName = destinationHost.createEl("strong");
     const destination = contentEl.createEl("p", { cls: "trew-advice" });
     destination.setAttribute("role", "status");
     let goButton: ButtonComponent | undefined;
@@ -5939,21 +5943,29 @@ class TrewPanel {
     const showDestination = () => {
       const value = inviteField?.getValue().trim() ?? "";
       let readable = false;
+      destinationHost.toggle(false);
       if (value === "") {
         destination.setText("Paste an invite to see which server and vault it joins.");
       } else {
         try {
-          const to = joinDestination(value);
+          // Pairing again compares with the server this device was paired
+          // with (threat model D3); a first pairing has nothing to compare.
+          const to = joinDestination(value, again ? this.plugin.connection()?.url : undefined);
           readable = true;
+          hostName.setText(`Server: ${to.host}`);
+          destinationHost.toggle(true);
           // The vault is named only when somebody named it. Almost every
           // invite carries "default", which is the value assumed when a
           // string carries none, so naming it back reads as a placeholder
           // that leaked rather than as the confirmation this line is for.
           const named = to.vaultId !== DEFAULT_VAULT;
           destination.setText(
-            named
-              ? `Joins vault "${to.vaultId}" at ${to.url}. Check that this is your server.`
-              : `Joins ${to.url}. Check that this is your server.`,
+            [
+              named
+                ? `Joins vault "${to.vaultId}" at ${to.url}. Check that this is your server.`
+                : `Joins ${to.url}. Check that this is your server.`,
+              ...to.warnings,
+            ].join(" "),
           );
         } catch (err) {
           // The codec's own reason, or `parseInvite`'s for a Basalt string:

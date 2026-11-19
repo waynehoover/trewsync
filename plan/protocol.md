@@ -82,7 +82,7 @@ Settled in M0.5, and pinned by the `invite` section of `protocol-fixtures.json` 
 - The CRC is IEEE CRC-32 over everything before it, the version byte included, stored big-endian.
 - base64url is unpadded and canonical: a character outside the alphabet (including `=`, CR and LF), a dangling sextet, or unused bits that are not zero are refused. Go's decoder skips CR and LF inside its input, so the alphabet is checked before decoding.
 - Nothing may follow the vault; trailing bytes inside the checksum are refused.
-- `url` is canonical: `ws://` or `wss://`, printable ASCII only, no trailing slash. Encoders write that form and decoders refuse any other, rather than normalising, so both implementations accept exactly the same strings.
+- `url` is canonical: `ws://` or `wss://`, printable ASCII only, no trailing slash, and exactly `scheme://host[:port][/path]`: no userinfo, query, fragment or backslash, a host of `[A-Za-z0-9._~-]` or a bracketed IPv6 literal, a port of up to five digits no higher than 65535, and a path of RFC 3986 path characters other than `@`. Encoders write that form and decoders refuse any other, rather than normalising, so both implementations accept exactly the same strings. The narrow shape is a security rule (the 2026-11 security review's M3): with userinfo, `wss://sync.example@evil.example` reads as one server and dials another, and clients show the parsed host on its own before pairing.
 - `vault` is a name: 1 to 64 bytes of UTF-8, no control characters.
 - A decoder trims ASCII space, tab, CR and LF at both ends, and nothing else.
 - The prefix is derived from the product name, which is not final (PLAN §10); it lives in one constant on each side and in the fixtures.

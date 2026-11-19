@@ -50,6 +50,11 @@ client can talk; upgrade the server first.
   U+206F or U+FEFF) comes before the dot, is refused as `dotprefix`. A note
   already stored under such a name is kept, and can still be edited, deleted
   or renamed.
+- `trewd` refuses a `-url` with a user name, query or fragment in it, and
+  `trewd invite` makes no invite for one: an invite's address is now exactly
+  `ws://` or `wss://`, a host, an optional port and an optional path. Every
+  address `trewd` makes by itself, and every `-url` of that shape (with or
+  without a port or path), works as before.
 
 ### Plugin
 
@@ -64,6 +69,13 @@ client can talk; upgrade the server first.
 - A folder this device skips is skipped under any case on a disk that folds
   case, as it already was in `trew`: a peer's `private/x.md` no longer lands
   in a skipped `Private` folder on macOS or Windows.
+- The plugin refuses an invite whose address has a user name, query or
+  fragment in it. An address like `wss://your-server@another.example` reads
+  as your server and connects to `another.example`.
+- Before you pair, the pairing screen shows the server the invite connects to
+  on a line of its own, warns when the address has no TLS and is not on this
+  device, and, when pairing a device again, warns when the invite is for a
+  different server from the one it was paired with.
 
 ### Command-line client
 
@@ -72,6 +84,10 @@ client can talk; upgrade the server first.
   keywords: TrewSync has none, and the server reads your notes.
 - The same refusals of a name HFS+ reads as dot-prefixed, and on Windows of
   8.3 short names, as the plugin.
+- `trew pair` refuses an invite whose address has a user name, query or
+  fragment in it, names the server it is about to connect to before it
+  connects, and warns first when the address has no TLS and is not on this
+  machine.
 
 ### Releases
 

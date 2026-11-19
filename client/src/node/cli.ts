@@ -42,7 +42,13 @@ import {
   type PairingStore,
 } from "../core/client.ts";
 import { REJOIN_ADVICE, type SyncReport } from "../core/engine.ts";
-import { INVITE_PREFIX, type InviteString } from "../core/invite-string.ts";
+import {
+  INVITE_PREFIX,
+  PLAINTEXT_WARNING,
+  addressHost,
+  plaintextOverNetwork,
+  type InviteString,
+} from "../core/invite-string.ts";
 import {
   NoCredential,
   encodeConfig,
@@ -554,6 +560,21 @@ async function cmdPair(args: Args, io: Console): Promise<number> {
       ...(args.readOnly ? { readOnly: true } : {}),
     });
   }
+
+  // Where this goes, said before it goes there: the host on its own, since
+  // the whole address is the easier thing to misread (the security review's
+  // M3), and the plaintext warning for a network ws:// address (L4). The
+  // warning goes to stderr even with --json, which keeps stdout to the JSON.
+  // A pairing started before the codec refused user names may hold an address
+  // with no single host to name; it is then named whole.
+  let host = pending.url;
+  try {
+    host = addressHost(pending.url);
+  } catch {
+    // named whole
+  }
+  if (!args.json) io.err(`Pairing with ${host} (${pending.url}).`);
+  if (plaintextOverNetwork(pending.url)) io.err(`Warning: ${PLAINTEXT_WARNING}`);
 
   let notDurable: string | undefined;
   let paired: Config;

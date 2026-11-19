@@ -283,7 +283,10 @@
       "body = version (1 byte, 1) || token (16 bytes) || len(url) (1 byte) || url (UTF-8)",
       "       || len(vault) (1 byte) || vault (UTF-8).",
       "crc32 is IEEE CRC-32 over body, big-endian. Nothing may follow the vault.",
-      "url is canonical: ws:// or wss://, printable ASCII only, no trailing slash.",
+      "url is canonical: ws:// or wss://, printable ASCII only, no trailing slash, and exactly",
+      "scheme://host[:port][/path]: host is [A-Za-z0-9._~-]+ or a bracketed IPv6 literal of",
+      "[0-9A-Fa-f:.], port is 1 to 5 digits up to 65535, path is / then [A-Za-z0-9._~!$&'()*+,;=:%/-].",
+      "No userinfo, query, fragment or backslash. host in a good vector is what a client shows.",
       "vault is a name: 1 to 64 bytes, no control characters.",
       "Decoders trim ASCII space, tab, CR and LF at both ends, and nothing else; every other character",
       "must be in the base64url alphabet (Go's decoder skips CR and LF inside the input, so check first).",
@@ -294,25 +297,50 @@
         "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS",
         "token": "AAECAwQFBgcICQoLDA0ODw",
         "url": "wss://homelab.example.ts.net:3003",
-        "vault": "default"
+        "vault": "default",
+        "host": "homelab.example.ts.net:3003"
       },
       {
         "string": "trew1i_Af____________________8Td3M6Ly8xMjcuMC4wLjE6MzExMwdzY3JhdGNo4F5n1Q",
         "token": "_____________________w",
         "url": "ws://127.0.0.1:3113",
-        "vault": "scratch"
+        "vault": "scratch",
+        "host": "127.0.0.1:3113"
       },
       {
         "string": "trew1i_AQEjRWeJq83v_ty6mHZUMhAbd3NzOi8veG4tLWJjaGVyLWt2YS5leGFtcGxlCndvcmsgbm90ZXNPUfgF",
         "token": "ASNFZ4mrze_-3LqYdlQyEA",
         "url": "wss://xn--bcher-kva.example",
-        "vault": "work notes"
+        "vault": "work notes",
+        "host": "xn--bcher-kva.example"
+      },
+      {
+        "string": "trew1i_ARAREhMUFRYXGBkaGxwdHh8cd3NzOi8vbm90ZXMuZXhhbXBsZS5jb20vdHJldwdkZWZhdWx0VYcpcQ",
+        "token": "EBESExQVFhcYGRobHB0eHw",
+        "url": "wss://notes.example.com/trew",
+        "vault": "default",
+        "host": "notes.example.com"
+      },
+      {
+        "string": "trew1i_ASAhIiMkJSYnKCkqKywtLi8gd3NzOi8vcHJveHkuZXhhbXBsZTo4NDQzL3N5bmMvdjEHZGVmYXVsdNdhtg0",
+        "token": "ICEiIyQlJicoKSorLC0uLw",
+        "url": "wss://proxy.example:8443/sync/v1",
+        "vault": "default",
+        "host": "proxy.example:8443"
+      },
+      {
+        "string": "trew1i_ATAxMjM0NTY3ODk6Ozw9Pj8Pd3M6Ly9bOjoxXTozMDAzB2RlZmF1bHSC4JN2",
+        "token": "MDEyMzQ1Njc4OTo7PD0-Pw",
+        "url": "ws://[::1]:3003",
+        "vault": "default",
+        "host": "[::1]:3003"
       },
       {
         "string": "\n  trew1i_AQABAgMEBQYHCAkKCwwNDg8hd3NzOi8vaG9tZWxhYi5leGFtcGxlLnRzLm5ldDozMDAzB2RlZmF1bHSeEGXS \t\r\n",
         "token": "AAECAwQFBgcICQoLDA0ODw",
         "url": "wss://homelab.example.ts.net:3003",
-        "vault": "default"
+        "vault": "default",
+        "host": "homelab.example.ts.net:3003"
       }
     ],
     "bad": [
@@ -375,6 +403,74 @@
       {
         "why": "a url outside printable ASCII",
         "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Vd3NzOi8vYsO8Y2hlci5leGFtcGxlB2RlZmF1bHRxGEE4"
+      },
+      {
+        "why": "a user name before the host",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8pd3NzOi8vc3luYy5teS10YWlsbmV0LnRzLm5ldEBldmlsLmV4YW1wbGUHZGVmYXVsdOJTnUs"
+      },
+      {
+        "why": "a user name and password",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Yd3NzOi8vbWU6cHdAc3luYy5leGFtcGxlB2RlZmF1bHTrPbYo"
+      },
+      {
+        "why": "an @ after the port",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8kd3NzOi8vc3luYy5leGFtcGxlOjMwMDNAZXZpbC5leGFtcGxlB2RlZmF1bHRswwVK"
+      },
+      {
+        "why": "an @ in the path",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8gd3NzOi8vc3luYy5leGFtcGxlL0BldmlsLmV4YW1wbGUHZGVmYXVsdDCQJCk"
+      },
+      {
+        "why": "a query",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8id3NzOi8vc3luYy5leGFtcGxlP3RvPWV2aWwuZXhhbXBsZQdkZWZhdWx0RTU2IQ"
+      },
+      {
+        "why": "a query after a path",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8bd3NzOi8vc3luYy5leGFtcGxlL3RyZXc_eD0xB2RlZmF1bHQWho5E"
+      },
+      {
+        "why": "a fragment",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8fd3NzOi8vc3luYy5leGFtcGxlI2V2aWwuZXhhbXBsZQdkZWZhdWx08hZDLw"
+      },
+      {
+        "why": "a backslash",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8gd3NzOi8vZXZpbC5leGFtcGxlXEBzeW5jLmV4YW1wbGUHZGVmYXVsdBeGqZ4"
+      },
+      {
+        "why": "a backslash in the path",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Wd3NzOi8vc3luYy5leGFtcGxlL2FcYgdkZWZhdWx0S_dpYA"
+      },
+      {
+        "why": "an empty host before a port",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Ld3NzOi8vOjMwMDMHZGVmYXVsdDJzbo4"
+      },
+      {
+        "why": "an empty port",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Td3NzOi8vc3luYy5leGFtcGxlOgdkZWZhdWx0uE7PtQ"
+      },
+      {
+        "why": "a port over 65535",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Yd3NzOi8vc3luYy5leGFtcGxlOjY1NTM2B2RlZmF1bHRRooTL"
+      },
+      {
+        "why": "a port of six digits",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Zd3NzOi8vc3luYy5leGFtcGxlOjAwMzAwMwdkZWZhdWx0ws6qww"
+      },
+      {
+        "why": "a percent in the host",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Ud3NzOi8vc3luYyUyZWV4YW1wbGUHZGVmYXVsdLXXJHg"
+      },
+      {
+        "why": "an IPv6 zone",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Zd3M6Ly9bZmU4MDo6MSUyNWVuMF06MzAwMwdkZWZhdWx01z6o6g"
+      },
+      {
+        "why": "an unclosed IPv6 literal",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Od3M6Ly9bOjoxOjMwMDMHZGVmYXVsdIeBCeI"
+      },
+      {
+        "why": "a second scheme",
+        "string": "trew1i_AQABAgMEBQYHCAkKCwwNDg8Yd3NzOi8vd3NzOi8vc3luYy5leGFtcGxlB2RlZmF1bHRaF0IZ"
       },
       {
         "why": "a vault name over 64 bytes",

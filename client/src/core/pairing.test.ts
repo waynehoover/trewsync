@@ -15,10 +15,12 @@
 
 import { describe, expect, it } from "vitest";
 
+import { crc32Bytes } from "./crc32.ts";
 import { base64urlDecode, base64urlEncode, randomBytes } from "./digest.ts";
 import {
   INVITE_PREFIX,
   INVITE_TOKEN_BYTES as CODEC_INVITE_TOKEN_BYTES,
+  PLAINTEXT_WARNING,
   formatInviteString,
   parseInviteString,
   type InviteString,
@@ -321,17 +323,67 @@ describe("server addresses that are long or not ASCII", () => {
  */
 describe("where a pasted invite points", () => {
   it("names the vault and the server a pasted invite would join", () => {
-    expect(joinDestination(formatInviteString(sample()))).toEqual({
-      url: sample().url,
-      vaultId: sample().vault,
+    const tls = sample({ url: "wss://laptop.tail1234.ts.net:8384" });
+    expect(joinDestination(formatInviteString(tls))).toEqual({
+      url: tls.url,
+      vaultId: tls.vault,
+      host: "laptop.tail1234.ts.net:8384",
+      warnings: [],
     });
-    expect(joinDestination(`  ${formatInviteString(sample({ vault: "work" }))}\n`)).toEqual({
-      url: sample().url,
+    expect(joinDestination(`  ${formatInviteString({ ...tls, vault: "work" })}\n`)).toEqual({
+      url: tls.url,
       vaultId: "work",
+      host: "laptop.tail1234.ts.net:8384",
+      warnings: [],
     });
     // And it refuses in the shape of the field it was typed into, so the
     // reason on screen tells somebody what they should have pasted.
     expect(() => joinDestination("not an invite at all")).toThrow(/should start with trew1i_/);
+  });
+
+  /**
+   * The security review's M3: an address with a user name in it reads as one
+   * server and dials another, so the codec refuses it rather than showing it.
+   */
+  it("refuses an invite whose address hides the host it dials behind a user name", () => {
+    const body = (url: string) => {
+      const u = new TextEncoder().encode(url);
+      const raw = new Uint8Array([1, ...sample().token, u.length, ...u, 1, 0x76]);
+      return INVITE_PREFIX + base64urlEncode(new Uint8Array([...raw, ...crc32Bytes(raw)]));
+    };
+    for (const url of [
+      "wss://sync.my-tailnet.ts.net@evil.example",
+      "wss://sync.example?x=1",
+      "wss://sync.example#x",
+      "wss://evil.example\\@sync.example",
+    ]) {
+      expect(() => joinDestination(body(url)), url).toThrow(/server address/);
+      expect(() => formatInviteString(sample({ url })), url).toThrow(/server address/);
+    }
+  });
+
+  // The security review's L4: the warning comes before Pair, not after.
+  it("warns before pairing with an address that has no TLS over a network", () => {
+    const plain = joinDestination(formatInviteString(sample()));
+    expect(plain.warnings).toEqual([PLAINTEXT_WARNING]);
+    for (const url of ["ws://127.0.0.1:3003", "ws://localhost:3003", "ws://[::1]:3003"]) {
+      expect(joinDestination(formatInviteString(sample({ url }))).warnings, url).toEqual([]);
+    }
+  });
+
+  // Threat model D3: pairing again with an invite for a different server says so.
+  it("warns when the invite is for a different server from the configured one", () => {
+    const tls = formatInviteString(sample({ url: "wss://notes.example.com/trew" }));
+    expect(joinDestination(tls, "wss://notes.example.com").warnings).toEqual([]);
+    expect(joinDestination(tls, "wss://NOTES.example.com/other").warnings).toEqual([]);
+    expect(joinDestination(tls, "wss://evil.example").warnings).toEqual([
+      "This device was paired with evil.example, and this invite is for a different server.",
+    ]);
+    expect(joinDestination(tls, "wss://notes.example.com:8443").warnings).toHaveLength(1);
+    // An address saved before user names were refused is named whole.
+    expect(joinDestination(tls, "wss://me@notes.example.com").warnings[0]).toContain(
+      "wss://me@notes.example.com",
+    );
   });
 });
 

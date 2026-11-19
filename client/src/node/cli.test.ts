@@ -39,7 +39,7 @@ import {
 } from "../../test/core/test-server.ts";
 import { MAX_NAME_BYTES, ProtocolError, Transport, checkName } from "../core/transport.ts";
 import { base64urlDecode, base64urlEncode } from "../core/digest.ts";
-import { formatInviteString } from "../core/invite-string.ts";
+import { PLAINTEXT_WARNING, formatInviteString } from "../core/invite-string.ts";
 import {
   generateDeviceId,
   generateDeviceToken,
@@ -382,6 +382,31 @@ describe("pairing a vault", () => {
     await expect(read(c, ".trew/config.json")).rejects.toThrow();
     // Nothing reached the server either: the invite still works.
     expect((await cli("pair", invite, "--dir", c)).code).toBe(0);
+  }, 240_000);
+
+  /**
+   * The security review's M3 and L4: before anything is sent, the host the
+   * invite dials on its own, and a network ws:// address named as plaintext.
+   */
+  it("names the host it pairs with, and warns of plaintext first", async () => {
+    await fresh();
+    const one = parseInvite(await server.firstInvite());
+    const a = await vaultDir("a");
+    const ok = await cli("pair", formatInviteString(one), "--dir", a);
+    expect(ok.code, ok.all).toBe(0);
+    expect(ok.stderr).toContain(`Pairing with ${new URL(server.wsUrl).host} (${server.wsUrl}).`);
+    // Loopback has no network for the notes to cross.
+    expect(ok.all).not.toContain(PLAINTEXT_WARNING);
+
+    const far = formatInviteString({ ...one, url: "ws://trew-test.invalid:3003/sync" });
+    const b = await vaultDir("b");
+    const r = await cli("pair", far, "--dir", b, "--timeout", "3000", "--json");
+    expect(r.code, r.all).toBe(1);
+    // Said even though the attempt then failed, so it came before it; and on
+    // stderr, which keeps --json's stdout to the JSON.
+    expect(r.stderr, r.all).toContain(`Warning: ${PLAINTEXT_WARNING}`);
+    expect(r.stdout).toMatch(/could not connect/);
+    expect(r.stdout).not.toContain(PLAINTEXT_WARNING);
   }, 240_000);
 
   /**

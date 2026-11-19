@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -129,9 +131,19 @@ func Parse(s string) (Invite, error) {
 	return inv, nil
 }
 
+// address is the one shape of address an invite carries:
+// scheme://host[:port][/path]. The host is a name of letters, digits, ".",
+// "-", "_" and "~", or an IPv6 literal in brackets; the path is RFC 3986 path
+// characters other than "@". No userinfo, query, fragment or backslash, since
+// each lets the text a person reads name one host while a socket dials
+// another: wss://sync.my-tailnet.ts.net@evil.example connects to evil.example
+// (the security review's M3). client/src/core/invite-string.ts holds the same
+// expression.
+var address = regexp.MustCompile(`^wss?://([A-Za-z0-9._~-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?(?:/[A-Za-z0-9._~!$&'()*+,;=:%/-]*)?$`)
+
 // checkURL enforces the canonical form: ws:// or wss://, printable ASCII, no
-// trailing slash. Canonical rather than lenient, so both implementations can
-// agree on exactly which strings are addresses.
+// trailing slash, and the shape above. Canonical rather than lenient, so both
+// implementations can agree on exactly which strings are addresses.
 func checkURL(u string) error {
 	rest, ok := strings.CutPrefix(u, "wss://")
 	if !ok {
@@ -147,6 +159,15 @@ func checkURL(u string) error {
 	}
 	if strings.HasSuffix(u, "/") || len(u) > 255 {
 		return fmt.Errorf("the server address %q is not in canonical form", u)
+	}
+	m := address.FindStringSubmatch(u)
+	if m == nil {
+		return fmt.Errorf("the server address %q is not ws://host[:port][/path], with no user name, query or fragment", u)
+	}
+	if m[2] != "" {
+		if port, _ := strconv.Atoi(m[2]); port > 65535 {
+			return fmt.Errorf("the server address %q has a port over 65535", u)
+		}
 	}
 	return nil
 }
