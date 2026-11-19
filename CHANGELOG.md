@@ -11,6 +11,14 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Server
+
+- Reading a note's tags and links takes time in proportion to the note, so a
+  crafted 1 MiB note can no longer hold the search index, or an MCP tool, for
+  minutes. A note whose quotes and lists nest more than 200 deep is refused
+  as `too_complex`: its tags and links are not indexed, and searches read it
+  directly.
+
 ### Command-line client
 
 - An error that `trew` rewords now carries the error that caused it.

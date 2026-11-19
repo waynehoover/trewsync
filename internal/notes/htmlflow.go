@@ -229,21 +229,40 @@ func keepLazy(node ast.Node, reader text.Reader, pc parser.Context) bool {
 	if last == nil || !ast.IsParagraph(last) {
 		return false
 	}
-	inside := false
-	for p := last.Parent(); p != nil; p = p.Parent() {
-		if p == node {
-			inside = true
-			break
-		}
-	}
 	line, _ := reader.PeekLine()
 	w, pos := util.IndentWidth(line, reader.LineOffset())
-	if !inside || w > 3 || pos >= len(line) || htmlFlowKind(line[pos:], false) != 7 {
+	if w > 3 || pos >= len(line) || htmlFlowKind(line[pos:], false) != 7 {
 		return false
 	}
 	n, _ := reader.Position()
+	if !lazyAncestors(last, n, pc)[node] {
+		return false
+	}
 	pc.Set(lazyKey, n)
 	return true
+}
+
+// lazyAncestorsKey holds the containers of the paragraph keepLazy last
+// looked at, so that each container a deeply nested line fails asks a map
+// rather than walking the chain again (security review M1).
+var lazyAncestorsKey = parser.NewContextKey()
+
+type ancestorSet struct {
+	last  ast.Node
+	line  int
+	nodes map[ast.Node]bool
+}
+
+func lazyAncestors(last ast.Node, line int, pc parser.Context) map[ast.Node]bool {
+	if s, ok := pc.Get(lazyAncestorsKey).(*ancestorSet); ok && s.last == last && s.line == line {
+		return s.nodes
+	}
+	s := &ancestorSet{last: last, line: line, nodes: map[ast.Node]bool{}}
+	for p := last.Parent(); p != nil; p = p.Parent() {
+		s.nodes[p] = true
+	}
+	pc.Set(lazyAncestorsKey, s)
+	return s.nodes
 }
 
 // lazyLine reports whether keepLazy marked the reader's line.
@@ -253,9 +272,48 @@ func lazyLine(reader text.Reader, pc parser.Context) bool {
 	return ok && marked == n
 }
 
+// maxNesting is how deep quotes, lists and list items may nest, counting
+// each: a list item in a list is two. goldmark's work on a line grows with
+// how many containers the line is in times how far into the line they reach,
+// so a note of nothing but "> > > ..." took minutes (security review M1). A
+// note that nests deeper is refused as too_complex. markdown-it stops at 100
+// levels by default; no note anyone writes comes near this.
+const maxNesting = 200
+
+// errTooDeep is the panic nest ends a parse with; parseMarkdown turns it into
+// the too_complex refusal.
+type errTooDeep struct{}
+
+var nestingKey = parser.NewContextKey()
+
+// nest records how deep a container just opened is, and ends the parse when
+// it is too deep. A container's parent is the document or another container,
+// so its depth is one more than its parent's, read from the map, with no
+// walk up the tree.
+func nest(parent, n ast.Node, pc parser.Context) {
+	depths, _ := pc.Get(nestingKey).(map[ast.Node]int)
+	if depths == nil {
+		depths = map[ast.Node]int{}
+		pc.Set(nestingKey, depths)
+	}
+	d := depths[parent] + 1
+	if d > maxNesting {
+		panic(errTooDeep{})
+	}
+	depths[n] = d
+}
+
 // quoteParser is goldmark's blockquote parser, kept open for a lazy line
-// that starts an HTML block.
+// that starts an HTML block, and held to maxNesting.
 type quoteParser struct{ parser.BlockParser }
+
+func (q quoteParser) Open(parent ast.Node, reader text.Reader, pc parser.Context) (ast.Node, parser.State) {
+	n, state := q.BlockParser.Open(parent, reader, pc)
+	if n != nil {
+		nest(parent, n, pc)
+	}
+	return n, state
+}
 
 func (q quoteParser) Continue(node ast.Node, reader text.Reader, pc parser.Context) parser.State {
 	state := q.BlockParser.Continue(node, reader, pc)
@@ -266,8 +324,16 @@ func (q quoteParser) Continue(node ast.Node, reader text.Reader, pc parser.Conte
 }
 
 // itemParser is goldmark's list item parser, kept open for a lazy line that
-// starts an HTML block.
+// starts an HTML block, and held to maxNesting.
 type itemParser struct{ parser.BlockParser }
+
+func (l itemParser) Open(parent ast.Node, reader text.Reader, pc parser.Context) (ast.Node, parser.State) {
+	n, state := l.BlockParser.Open(parent, reader, pc)
+	if n != nil {
+		nest(parent, n, pc)
+	}
+	return n, state
+}
 
 func (l itemParser) Continue(node ast.Node, reader text.Reader, pc parser.Context) parser.State {
 	state := l.BlockParser.Continue(node, reader, pc)
@@ -322,7 +388,11 @@ func (l listStartParser) Open(parent ast.Node, reader text.Reader, pc parser.Con
 			return nil, parser.NoChildren
 		}
 	}
-	return l.BlockParser.Open(parent, reader, pc)
+	n, state := l.BlockParser.Open(parent, reader, pc)
+	if n != nil {
+		nest(parent, n, pc)
+	}
+	return n, state
 }
 
 // interruptedFlow reports whether a block opening on this line interrupts,

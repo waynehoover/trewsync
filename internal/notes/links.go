@@ -1,6 +1,7 @@
 package notes
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -68,22 +69,12 @@ func linkSpans(source string) ([]linkSpan, error) {
 		return nil, err
 	}
 	body := f.body
-	hidden, err := markdownHidden(source, body, false)
-	if err != nil {
-		return nil, err
-	}
-	blocked := func(start, end int) bool {
-		for _, r := range hidden {
-			if start < r.end && end > r.start {
-				return true
-			}
-		}
-		return false
-	}
 	d, err := parseMarkdown(source, body)
 	if err != nil {
 		return nil, err
 	}
+	hidden := d.hiddenRanges(source, body, false)
+	blocked := func(start, end int) bool { return overlapsAny(hidden, start, end) }
 	var spans []linkSpan
 	records := append([]linkRecord(nil), d.record.links...)
 	sortLinkRecords(records)
@@ -103,20 +94,14 @@ func linkSpans(source string) ([]linkSpan, error) {
 			fragmentAt: fragmentAt(source, start, end),
 		})
 	}
-	markdown := spans
+	markdown := make([]byteRange, len(spans))
+	for i, s := range spans {
+		markdown[i] = byteRange{s.wholeStart, s.wholeEnd}
+	}
+	markdown = mergeRanges(markdown)
 	for _, w := range wikiMatches(source[body:]) {
 		at, end := body+w.start, body+w.end
-		if escaped(source, at) || blocked(at, end) {
-			continue
-		}
-		overlaps := false
-		for _, s := range markdown {
-			if at < s.wholeEnd && end > s.wholeStart {
-				overlaps = true
-				break
-			}
-		}
-		if overlaps {
+		if escaped(source, at) || blocked(at, end) || overlapsAny(markdown, at, end) {
 			continue
 		}
 		start := at + 2
@@ -145,11 +130,16 @@ func (d *markdownDocument) wholeOf(l linkRecord) byteRange {
 }
 
 func sortLinkRecords(r []linkRecord) {
-	for i := 1; i < len(r); i++ {
-		for j := i; j > 0 && r[j].dest.start < r[j-1].dest.start; j-- {
-			r[j], r[j-1] = r[j-1], r[j]
-		}
-	}
+	sort.SliceStable(r, func(i, j int) bool { return r[i].dest.start < r[j].dest.start })
+}
+
+// overlapsAny reports whether [start, end) overlaps any of ranges, which are
+// mergeRanges' output: in order, apart, so their ends ascend too. It is a
+// binary search, where a scan of every range for every link was quadratic
+// (security review M1).
+func overlapsAny(ranges []byteRange, start, end int) bool {
+	i := sort.Search(len(ranges), func(i int) bool { return ranges[i].end > start })
+	return i < len(ranges) && ranges[i].start < end
 }
 
 // escaped is Basalt's: whether an odd number of backslashes precedes s[at].
@@ -185,6 +175,11 @@ func wikiMatches(s string) []wikiMatch {
 				i = k + 2
 				continue
 			}
+			// Every start before k would scan to the same k and fail the
+			// same way, and none at k can match, so the search resumes at k.
+			// Retrying each start would make "[[[[..." quadratic.
+			i = k
+			continue
 		}
 		_, size := utf8.DecodeRuneInString(s[i:])
 		i += size

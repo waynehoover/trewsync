@@ -74,6 +74,9 @@ type yamlText struct {
 	lines    []int         // byte offset of each line's start in original
 	aliases  map[[2]int]bool
 	renamed  []int // where renameAnchors renamed a property: its "&" or "*"
+	// at caches offset's last answer, which the next call on the same line
+	// counts on from (security review M1).
+	at struct{ line, column, offset int }
 }
 
 // yamlSubstitute reports whether npm yaml reads the character r at text[i]
@@ -387,10 +390,18 @@ func (y *yamlText) offset(line, column int) int {
 	if line == 1 && y.bom {
 		at += len("\ufeff")
 	}
+	// Columns count characters, so finding one walks the line. Walking from
+	// the line's start for every node made a long flow sequence, all on one
+	// line, quadratic; nodes are asked for mostly in order, so the walk
+	// resumes from the last answer on the same line when it can.
+	if c := y.at; c.line == line && c.column >= 1 && c.column <= column {
+		at, skip = c.offset, column-c.column
+	}
 	for ; skip > 0 && at < len(y.original); skip-- {
 		_, size := utf8.DecodeRuneInString(y.original[at:])
 		at += size
 	}
+	y.at.line, y.at.column, y.at.offset = line, column, at
 	return at
 }
 
@@ -719,8 +730,18 @@ func (d *yamlDoc) scalar(n *yaml.Node) (yamlValue, bool) {
 // uniqueKeys is npm yaml's uniqueKeys check: no two scalar keys of a mapping
 // resolve to the same value. Collections and aliases as keys are compared by
 // identity, so never collide.
+//
+// Keys are compared as JavaScript's === compares them, through a map where
+// a list compared with each new key made a mapping of many keys quadratic
+// (security review M1). Go's == on a float64 key is ===: NaN matches nothing
+// and -0 matches 0.
 func (d *yamlDoc) uniqueKeys(m *yaml.Node) bool {
-	var seen []yamlValue
+	type keyOf struct {
+		kind string
+		str  string
+		num  float64
+	}
+	seen := make(map[keyOf]bool, len(m.Content)/2)
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		k := m.Content[i]
 		if k.Kind != yaml.ScalarNode || d.text.isAlias(k) {
@@ -730,28 +751,22 @@ func (d *yamlDoc) uniqueKeys(m *yaml.Node) bool {
 		if !ok {
 			return false
 		}
-		for _, s := range seen {
-			if yamlEqual(s, v) {
-				return false
-			}
+		key := keyOf{kind: v.kind}
+		switch v.kind {
+		case "other":
+			continue // equal to nothing, itself included
+		case "null":
+		case "number":
+			key.num = v.num
+		default:
+			key.str = v.str
 		}
-		seen = append(seen, v)
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
 	}
 	return true
-}
-
-// yamlEqual is JavaScript's === on two resolved scalars.
-func yamlEqual(a, b yamlValue) bool {
-	if a.kind != b.kind || a.kind == "other" {
-		return false
-	}
-	switch a.kind {
-	case "null":
-		return true
-	case "number":
-		return a.num == b.num
-	}
-	return a.str == b.str
 }
 
 // tagsProperty is the root mapping's tags property, its key and its value, or

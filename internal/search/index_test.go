@@ -377,6 +377,31 @@ func TestATagParseFailureIsReportedAndNeverRejectsTheNote(t *testing.T) {
 	}
 }
 
+// A 1 MiB note of nested quotes once held the index worker for minutes
+// (security review M1). It is now refused by the parsers as too_complex at
+// once: the worker passes it, counts a tag failure, and a tag search scans
+// it, while its text is still searchable.
+func TestANoteTooComplexToParseDoesNotStallTheIndex(t *testing.T) {
+	r := newRig(t)
+	r.write("deep.md", strings.Repeat("> ", notes.NoteBytes/2-8)+"\nneedle\n")
+	r.write("fine.md", "#tagged body")
+	start := time.Now()
+	s := r.caughtUp()
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("the index took %v to pass the note", took)
+	}
+	if s.TagFailures != 1 {
+		t.Fatalf("status %+v, want one tag failure", s)
+	}
+	if content := r.candidates(notes.Query{Text: "needle", Mode: notes.ModeContent}); !content["deep.md"] {
+		t.Fatalf("content candidates %v", content)
+	}
+	tags := r.candidates(notes.Query{Text: "tagged", Mode: notes.ModeTag, IncludeChildren: true})
+	if !tags["fine.md"] || !tags["deep.md"] {
+		t.Fatalf("tag candidates %v: the note whose tags failed must be scanned", tags)
+	}
+}
+
 // Corruption is caught whatever index_version says: rows taken out of the
 // tables under a matching version are noticed by the next query, which scans
 // instead, and the worker builds a generation that is right again.
