@@ -632,15 +632,36 @@ def invite_vectors() -> dict:
         (bytes(range(16)), "wss://homelab.example.ts.net:3003", "default"),
         (b"\xff" * 16, "ws://127.0.0.1:3113", "scratch"),
         (bytes.fromhex("0123456789abcdeffedcba9876543210"), "wss://xn--bcher-kva.example", "work notes"),
+        # Behind a reverse proxy, at a path of its own.
+        (bytes(range(16, 32)), "wss://notes.example.com/trew", "default"),
+        (bytes(range(32, 48)), "wss://proxy.example:8443/sync/v1", "default"),
+        (bytes(range(48, 64)), "ws://[::1]:3003", "default"),
     ]
+    # host is what a client shows a person before pairing: the host and port
+    # the socket dials, and nothing else of the address.
+    hosts = {
+        "wss://homelab.example.ts.net:3003": "homelab.example.ts.net:3003",
+        "ws://127.0.0.1:3113": "127.0.0.1:3113",
+        "wss://xn--bcher-kva.example": "xn--bcher-kva.example",
+        "wss://notes.example.com/trew": "notes.example.com",
+        "wss://proxy.example:8443/sync/v1": "proxy.example:8443",
+        "ws://[::1]:3003": "[::1]:3003",
+    }
     good_out = [
-        {"string": invite(t, u, v), "token": b64(t), "url": u, "vault": v} for t, u, v in good
+        {"string": invite(t, u, v), "token": b64(t), "url": u, "vault": v, "host": hosts[u]}
+        for t, u, v in good
     ]
     # Pasted text arrives with a newline or spaces around it. Decoders trim
     # ASCII space, tab, CR and LF at both ends, and nothing else.
     t0, u0, v0 = good[0]
     good_out.append(
-        {"string": "\n  " + invite(t0, u0, v0) + " \t\r\n", "token": b64(t0), "url": u0, "vault": v0}
+        {
+            "string": "\n  " + invite(t0, u0, v0) + " \t\r\n",
+            "token": b64(t0),
+            "url": u0,
+            "vault": v0,
+            "host": hosts[u0],
+        }
     )
     base = invite(*good[0])
     body0 = invite_body(t0, u0, v0)
@@ -662,6 +683,30 @@ def invite_vectors() -> dict:
         ("an http url", INVITE_PREFIX + b64(with_crc(invite_body(t0, "http://example.com", v0)))),
         ("a url with a trailing slash", INVITE_PREFIX + b64(with_crc(invite_body(t0, "wss://example.com/", v0)))),
         ("a url outside printable ASCII", INVITE_PREFIX + b64(with_crc(invite_body(t0, "wss://b\u00fccher.example", v0)))),
+        # Each of these lets the address a person reads name one host while the
+        # socket dials another, or carries something trewd never hands out.
+        *[
+            (why, INVITE_PREFIX + b64(with_crc(invite_body(t0, url, v0))))
+            for why, url in [
+                ("a user name before the host", "wss://sync.my-tailnet.ts.net@evil.example"),
+                ("a user name and password", "wss://me:pw@sync.example"),
+                ("an @ after the port", "wss://sync.example:3003@evil.example"),
+                ("an @ in the path", "wss://sync.example/@evil.example"),
+                ("a query", "wss://sync.example?to=evil.example"),
+                ("a query after a path", "wss://sync.example/trew?x=1"),
+                ("a fragment", "wss://sync.example#evil.example"),
+                ("a backslash", "wss://evil.example\\@sync.example"),
+                ("a backslash in the path", "wss://sync.example/a\\b"),
+                ("an empty host before a port", "wss://:3003"),
+                ("an empty port", "wss://sync.example:"),
+                ("a port over 65535", "wss://sync.example:65536"),
+                ("a port of six digits", "wss://sync.example:003003"),
+                ("a percent in the host", "wss://sync%2eexample"),
+                ("an IPv6 zone", "ws://[fe80::1%25en0]:3003"),
+                ("an unclosed IPv6 literal", "ws://[::1:3003"),
+                ("a second scheme", "wss://wss://sync.example"),
+            ]
+        ],
         ("a vault name over 64 bytes", INVITE_PREFIX + b64(with_crc(invite_body(t0, u0, "v" * 65)))),
         ("a vault name with a control character", INVITE_PREFIX + b64(with_crc(invite_body(t0, u0, "a\tb")))),
         (
@@ -678,7 +723,10 @@ def invite_vectors() -> dict:
             "body = version (1 byte, 1) || token (16 bytes) || len(url) (1 byte) || url (UTF-8)",
             "       || len(vault) (1 byte) || vault (UTF-8).",
             "crc32 is IEEE CRC-32 over body, big-endian. Nothing may follow the vault.",
-            "url is canonical: ws:// or wss://, printable ASCII only, no trailing slash.",
+            "url is canonical: ws:// or wss://, printable ASCII only, no trailing slash, and exactly",
+            "scheme://host[:port][/path]: host is [A-Za-z0-9._~-]+ or a bracketed IPv6 literal of",
+            "[0-9A-Fa-f:.], port is 1 to 5 digits up to 65535, path is / then [A-Za-z0-9._~!$&'()*+,;=:%/-].",
+            "No userinfo, query, fragment or backslash. host in a good vector is what a client shows.",
             "vault is a name: 1 to 64 bytes, no control characters.",
             "Decoders trim ASCII space, tab, CR and LF at both ends, and nothing else; every other character",
             "must be in the base64url alphabet (Go's decoder skips CR and LF inside the input, so check first).",

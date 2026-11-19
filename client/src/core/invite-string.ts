@@ -36,6 +36,19 @@ export interface InviteString {
 const enc = new TextEncoder();
 const dec = new TextDecoder("utf-8", { fatal: true });
 
+/**
+ * The one shape of address an invite carries: `scheme://host[:port][/path]`.
+ *
+ * The host is a name of letters, digits, `.`, `-`, `_` and `~`, or an IPv6
+ * literal in brackets; the path, if any, is RFC 3986 path characters other
+ * than `@`. There is no userinfo, query, fragment or backslash, because each
+ * lets the text a person reads name one host while a socket dials another:
+ * `wss://sync.my-tailnet.ts.net@evil.example` connects to evil.example (the
+ * security review's M3). `internal/invite` holds the same expression.
+ */
+const ADDRESS =
+  /^wss?:\/\/([A-Za-z0-9._~-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?(?:\/[A-Za-z0-9._~!$&'()*+,;=:%/-]*)?$/;
+
 /** Refuses an address that is not in the one form both implementations accept. */
 function checkUrl(url: string): void {
   const rest = url.startsWith("wss://")
@@ -52,7 +65,40 @@ function checkUrl(url: string): void {
   if (url.endsWith("/") || url.length > 255) {
     throw new Error(`the server address ${JSON.stringify(url)} is not in canonical form`);
   }
+  const m = ADDRESS.exec(url);
+  if (m === null || (m[2] !== undefined && Number(m[2]) > 65535)) {
+    throw new Error(
+      `the server address ${JSON.stringify(url)} is not ws://host[:port][/path], with no ` +
+        `user name, query or fragment`,
+    );
+  }
 }
+
+/**
+ * The host and port an address connects to, for a person to check before
+ * pairing. Only for an address the codec accepted, which has exactly one.
+ */
+export function addressHost(url: string): string {
+  const m = ADDRESS.exec(url);
+  if (m === null) throw new Error(`${url} is not an address an invite carries`);
+  return m[2] === undefined ? m[1]! : `${m[1]!}:${m[2]}`;
+}
+
+/**
+ * Whether an address sends notes in the clear over a network: `ws://` to
+ * anything but this machine. Loopback is left out because nothing else can
+ * see that hop, and `trewd serve -localhost` hands out exactly that.
+ */
+export function plaintextOverNetwork(url: string): boolean {
+  if (!url.startsWith("ws://")) return false;
+  const host = ADDRESS.exec(url)?.[1]?.toLowerCase() ?? "";
+  return !/^(localhost|127(\.[0-9]{1,3}){3}|\[::1\])$/.test(host);
+}
+
+/** What a person is told before pairing with an address that has no TLS. */
+export const PLAINTEXT_WARNING =
+  "This address has no TLS: your notes and this device's credential would cross the " +
+  "network in the clear.";
 
 function checkVault(vault: string): void {
   const bytes = enc.encode(vault).length;
