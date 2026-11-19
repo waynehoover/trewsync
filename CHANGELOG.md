@@ -11,6 +11,13 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+## 0.16.8, plugin, 0.15.3, server, and trew 0.14.2 (2026-11-19)
+
+Security fixes from a review of the whole project. The plugin and `trew` work
+with trewd 0.15.0 or later, and nothing changes in the protocol or the store.
+Check `trewd`'s `-url` before upgrading the server: it now refuses one with a
+user name, query or fragment (see below).
+
 ### Server
 
 - Reading a note's tags and links takes time in proportion to the note, so a
