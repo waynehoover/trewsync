@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -406,6 +408,177 @@ func TestAPathGitCannotHoldIsLeftOutAndSaid(t *testing.T) {
 	}
 	if files := git(t, repo(out), "ls-tree", "-r", "--name-only", "main"); files != "fine.md" {
 		t.Fatalf("the tree holds %q", files)
+	}
+}
+
+// TestPathsGitRefusesAreLeftOut: a note may name .git, .gitmodules or
+// .gitattributes the way NTFS reads a name (a short name, a stream, trailing
+// dots and spaces, any case). fast-import refuses some of them and git fsck
+// the rest, so a remote checking what it receives refuses the push. The export
+// leaves each out, says so, and the tree it writes passes fsck --strict. Names
+// merely like those are kept. The HFS+ forms, which the store now refuses as
+// new names, are TestGitSafeAgreesWithGit's.
+func TestPathsGitRefusesAreLeftOut(t *testing.T) {
+	r := newRig(t)
+	out := t.TempDir()
+	submodule := []byte("[submodule \"x\"]\n\tpath = x\n\turl = --upload-pack=evil\n")
+	bad := []string{
+		"git~1:x/y.md",
+		"a/GIT~1 ./y.md",
+		"git~1.:x",
+		"gitmod~1",
+		"Notes/GITMOD~4.",
+		"gi7eba~1",
+		"gitmod~1:x",
+		"gitatt~1",
+	}
+	for _, p := range bad {
+		r.put("Laptop", p, submodule)
+	}
+	kept := []string{"fine.md", "git~2/x.md", "my gitmodules.md", "gitmod~1x.md", "Notes/github~1.md"}
+	for _, p := range kept {
+		r.put("Laptop", p, []byte("y\n"))
+	}
+	r.clock.advance(10 * time.Minute)
+	x := r.exporter(out, settings(t, out, ""))
+	x.sync(t)
+	if got, err := gitErr(repo(out), "fsck", "--strict"); err != nil {
+		t.Fatalf("git fsck refuses the export: %v\n%s", err, got)
+	}
+	s := x.Status()
+	if s.Excluded != len(bad) {
+		t.Fatalf("%d of %d paths are reported:\n%s", s.Excluded, len(bad), statusJSON(s))
+	}
+	files := strings.Split(git(t, repo(out), "-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", "main"), "\n")
+	slices.Sort(files)
+	want := slices.Sorted(slices.Values(kept))
+	if !slices.Equal(files, want) {
+		t.Fatalf("the tree holds %q, want %q", files, want)
+	}
+}
+
+// TestGitSafeAgreesWithGit: each name gitSafe refuses is one real Git refuses,
+// by fast-import (verify_path, with core.protectHFS on as on a Mac) or by git
+// fsck --strict with core.protectHFS off as on Linux, where the HFS+ forms
+// import and fail fsck as hasDotgit. Each name it lets through, Git takes.
+// Run with the body of a hostile .gitmodules, which fsck reads in any file it
+// takes for one.
+func TestGitSafeAgreesWithGit(t *testing.T) {
+	needGit(t)
+	body := "[submodule \"x\"]\n\tpath = x\n\turl = --upload-pack=evil\n"
+	refused := []string{
+		"git~1:x/y.md", "a/GIT~1 ./y.md", "git~1.:x", `git~1\x.md`, "a/.GIT/x",
+		"\u200c.git/x.md", "a/\u200f.Git/x.md", "\ufeff.GIT/x.md", ".gi\u200dt/x.md",
+		"gitmod~1", "Notes/GITMOD~4.", "gi7eba~1", "gitmod~1:x", "\u200c.gitmodules", ".gitmodules",
+	}
+	taken := []string{"fine.md", "git~2/x.md", "my gitmodules.md", "gitmod~1x.md", "Notes/github~1.md",
+		"\u200cgit/x.md", "\U0001f468\u200d\U0001f469 family.md"}
+	// git refuses each of these, as gitSafe does, by the bytes of the files
+	// fsck checks; gitSafe leaves them out as well, as the export's own
+	// .gitattributes would otherwise have a twin on a Windows checkout.
+	alsoLeftOut := []string{"gitatt~1", "\u202a.gitattributes"}
+	gitTakes := func(p string) bool {
+		for _, protectHFS := range []string{"true", "false"} {
+			dir := t.TempDir()
+			git(t, dir, "init", "--bare", "-q")
+			stream := fmt.Sprintf("commit refs/heads/main\nauthor A <a@b.invalid> 1 +0000\n"+
+				"committer A <a@b.invalid> 1 +0000\ndata 2\nm\nM 100644 inline %s\ndata %d\n%s\n\ndone\n",
+				cQuote(p), len(body), body)
+			cmd := exec.Command("git", "-c", "core.protectHFS="+protectHFS, "fast-import", "--done", "--quiet", "--force")
+			cmd.Dir, cmd.Stdin = dir, strings.NewReader(stream)
+			cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "HOME="+dir)
+			if err := cmd.Run(); err != nil {
+				return false
+			}
+			if _, err := gitErr(dir, "fsck", "--strict"); err != nil {
+				return false
+			}
+		}
+		return true
+	}
+	for _, p := range refused {
+		if gitSafe(p) {
+			t.Errorf("gitSafe lets %+q through", p)
+		}
+		if gitTakes(p) {
+			t.Errorf("git takes %+q, so the case tests nothing", p)
+		}
+	}
+	for _, p := range taken {
+		if !gitSafe(p) {
+			t.Errorf("gitSafe refuses %+q", p)
+		}
+		if !gitTakes(p) {
+			t.Errorf("git refuses %+q", p)
+		}
+	}
+	for _, p := range alsoLeftOut {
+		if gitSafe(p) {
+			t.Errorf("gitSafe lets %+q through", p)
+		}
+	}
+}
+
+// TestAPathFastImportRefusesIsLeftOut: a path gitSafe lets through and
+// fast-import refuses stops the stream. The export learns the path from
+// fast-import's "invalid path", leaves it out and exports the rest, instead
+// of writing the same stream for ever and nothing after it. gitSafe is
+// stood in for by one that lets everything through, so a path it would have
+// caught plays a rule of Git's it does not know.
+func TestAPathFastImportRefusesIsLeftOut(t *testing.T) {
+	pathOK = func(string) bool { return true }
+	t.Cleanup(func() { pathOK = gitSafe })
+	r := newRig(t)
+	out := t.TempDir()
+	r.put("Laptop", "a/git~1:x/b.md", []byte("x\n"))
+	r.put("Laptop", "fine.md", []byte("y\n"))
+	r.clock.advance(10 * time.Minute)
+	x := r.exporter(out, settings(t, out, ""))
+	x.sync(t)
+	s := x.Status()
+	if s.Excluded != 1 || s.ExcludedPaths[0] != "a/git~1:x/b.md" {
+		t.Fatalf("the path is not reported:\n%s", statusJSON(s))
+	}
+	if files := git(t, repo(out), "ls-tree", "-r", "--name-only", "main"); files != "fine.md" {
+		t.Fatalf("the tree holds %q", files)
+	}
+	r.put("Laptop", "later.md", []byte("z\n"))
+	r.clock.advance(10 * time.Minute)
+	x.sync(t)
+	if files := git(t, repo(out), "ls-tree", "-r", "--name-only", "main"); files != "fine.md\nlater.md" {
+		t.Fatalf("a later note is not exported: the tree holds %q", files)
+	}
+}
+
+// TestAnLFSPathTooLongForGitattributesIsLeftOut: Git ignores a .gitattributes
+// line of 2048 bytes or more and fsck refuses the file, and escaping can
+// double a path. An LFS file whose line would be that long is left out; the
+// other LFS file is still tracked, and the tree passes fsck --strict.
+func TestAnLFSPathTooLongForGitattributesIsLeftOut(t *testing.T) {
+	r := newRig(t)
+	out := t.TempDir()
+	long := strings.Join([]string{strings.Repeat("[", 250), strings.Repeat("[", 250), strings.Repeat("[", 250),
+		strings.Repeat("[", 250)}, "/")
+	big := bytes.Repeat([]byte("0123456789abcdef"), 512) // over the test's 4096-byte threshold
+	r.put("Laptop", long, big)
+	r.put("Laptop", "small "+strings.Repeat("[", 200)+".md", []byte("y\n"))
+	r.put("Laptop", "big.bin", big)
+	r.clock.advance(10 * time.Minute)
+	x := r.exporter(out, settings(t, out, ""))
+	x.sync(t)
+	if got, err := gitErr(repo(out), "fsck", "--strict"); err != nil {
+		t.Fatalf("git fsck refuses the export: %v\n%s", err, got)
+	}
+	s := x.Status()
+	if s.Excluded != 1 || s.ExcludedPaths[0] != long {
+		t.Fatalf("the path is not reported:\n%s", statusJSON(s))
+	}
+	attrs := git(t, repo(out), "show", "main:"+attributesPath)
+	if !strings.Contains(attrs, `"/big.bin"`+lfsAttributes) || strings.Count(attrs, lfsAttributes) != 1 {
+		t.Fatalf("the attributes are\n%s", attrs)
+	}
+	if n := len(strings.Split(git(t, repo(out), "ls-tree", "-r", "--name-only", "main"), "\n")); n != 3 {
+		t.Fatalf("the tree holds %d files", n)
 	}
 }
 

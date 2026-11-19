@@ -125,6 +125,9 @@ type workerStatus struct {
 	refused      string
 	lastExportAt int64
 	excluded     map[string]bool
+	// gitRefused are the paths fast-import refused as invalid, which every
+	// later stream leaves out (refusedByGit).
+	gitRefused map[string]bool
 }
 
 // Open prepares the export for vault in dataDir with settings s, or with why
@@ -284,6 +287,13 @@ func (x *Exporter) cycle(ctx context.Context) (progressed bool, due time.Time, e
 		}
 	}
 	progressed, openUntil, err := x.exportStep(ctx, r, s)
+	var invalid *invalidPathError
+	if errors.As(err, &invalid) && x.learnRefusal(invalid.path) {
+		// One note Git will not hold never stalls the rest: the step is
+		// written again at once, without it.
+		x.log.Warn("git fast-import refused a path; the export leaves it out", "path", invalid.path)
+		return true, time.Time{}, nil
+	}
 	if err != nil {
 		return false, time.Time{}, err
 	}
@@ -754,7 +764,11 @@ func (x *Exporter) write(ctx context.Context, r *runner, s Settings, parent, ado
 	}
 	if werr := cmd.Wait(); werr != nil || cerr != nil {
 		x.forgetBlobs()
-		return "", nil, &gitError{args: "fast-import", err: errors.Join(werr, cerr), stderr: r.redact(stderr.String())}
+		gerr := &gitError{args: "fast-import", err: errors.Join(werr, cerr), stderr: r.redact(stderr.String())}
+		if p, ok := invalidPath(stderr.String()); ok {
+			return "", nil, &invalidPathError{path: p, err: gerr}
+		}
+		return "", nil, gerr
 	}
 	// What it wrote is in the repository now, named whatever happens to the
 	// branch, so later streams name it rather than write it again.
@@ -890,8 +904,7 @@ func (w *importer) group(g *group) error {
 		if paths.IsConfig(p) {
 			continue // a device's settings, never the vault's history (docs/git-export.md)
 		}
-		if !gitSafe(p) {
-			w.x.excludedPath(p)
+		if w.leftOut(p, f.remove, f.entry) {
 			continue
 		}
 		old, had := w.tree[p]
@@ -944,6 +957,26 @@ func (w *importer) group(g *group) error {
 	return w.commit(author, g.at, msg, dels, mods, writeAttrs, false)
 }
 
+// pathOK is gitSafe, and a test's stand-in for it when the test needs a path
+// past it that fast-import refuses.
+var pathOK = gitSafe
+
+func (w *importer) isLFS(e store.Entry) bool {
+	return w.s.LFSThreshold > 0 && e.Size > w.s.LFSThreshold
+}
+
+// leftOut reports whether the export leaves p out, and says so when it does:
+// Git cannot hold the path (gitSafe), fast-import refused it in an earlier
+// stream (refusedByGit), or e is an LFS file whose .gitattributes line Git
+// would not read (attributesFit). A removal is only asked about the path.
+func (w *importer) leftOut(p string, remove bool, e store.Entry) bool {
+	if pathOK(p) && !w.x.refusedByGit(p) && (remove || !w.isLFS(e) || attributesFit(p)) {
+		return false
+	}
+	w.x.excludedPath(p)
+	return true
+}
+
 // continues reports whether the next commit is the first on top of an
 // adopted commit.
 func (w *importer) continues() bool { return w.commits == 0 && w.parent == "" && w.adopt != "" }
@@ -954,7 +987,7 @@ func (w *importer) continues() bool { return w.commits == 0 && w.parent == "" &&
 // Bytes the repository already holds are not read again: the blob is named by
 // its sha, mark 0, or by its mark when this stream wrote it (blobs.go).
 func (w *importer) blob(e store.Entry) (blobRef, int, error) {
-	lfs := w.s.LFSThreshold > 0 && e.Size > w.s.LFSThreshold
+	lfs := w.isLFS(e)
 	if k, ok, err := w.knownFor(e, lfs); err != nil {
 		return blobRef{}, 0, err
 	} else if ok {
@@ -1052,16 +1085,15 @@ func (w *importer) restore(head int64, from, to string, now int64) error {
 		if e.Deleted || e.Folder || paths.IsConfig(e.Path) {
 			return true, nil
 		}
-		if !gitSafe(e.Path) {
-			w.x.excludedPath(e.Path)
-			return true, nil
-		}
 		full, ok, err := w.x.st.EntryByUID(w.x.vault, e.UID)
 		if err != nil {
 			return false, err
 		}
 		if !ok {
 			return false, fmt.Errorf("uid %d went while the export was reading it", e.UID)
+		}
+		if w.leftOut(e.Path, false, full) {
+			return true, nil
 		}
 		ref, mark, err := w.blob(full)
 		if err != nil {
@@ -1183,6 +1215,53 @@ func (x *Exporter) storeLFS(e store.Entry) (string, error) {
 		return "", err
 	}
 	return oid, fsync.Dir(dir)
+}
+
+// invalidPathError is a fast-import that stopped at a path its verify_path
+// refused.
+type invalidPathError struct {
+	path string
+	err  error
+}
+
+func (e *invalidPathError) Error() string { return e.err.Error() }
+func (e *invalidPathError) Unwrap() error { return e.err }
+
+// invalidPath is the path in fast-import's "fatal: invalid path '...'", which
+// it prints as the stream named it, unquoted.
+func invalidPath(stderr string) (string, bool) {
+	const prefix = "fatal: invalid path '"
+	for _, line := range strings.Split(stderr, "\n") {
+		if rest, ok := strings.CutPrefix(line, prefix); ok {
+			if p, ok := strings.CutSuffix(rest, "'"); ok && p != "" {
+				return p, true
+			}
+		}
+	}
+	return "", false
+}
+
+// learnRefusal records the path a fast-import refused, so the next stream
+// leaves it out instead of stopping at it for ever. It reports false for a
+// path refused already: leaving it out did not help, and the step's failure
+// is reported and retried as any other.
+func (x *Exporter) learnRefusal(p string) bool {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.status.gitRefused[p] {
+		return false
+	}
+	if x.status.gitRefused == nil {
+		x.status.gitRefused = map[string]bool{}
+	}
+	x.status.gitRefused[p] = true
+	return true
+}
+
+func (x *Exporter) refusedByGit(p string) bool {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.status.gitRefused[p]
 }
 
 // excludedPath records a path Git cannot hold, which the export leaves out.

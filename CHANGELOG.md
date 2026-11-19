@@ -13,6 +13,14 @@ client can talk; upgrade the server first.
 
 ### Server
 
+- The Git export leaves out every note path Git or `git fsck` refuses, not
+  only `git~1`: `.git`, `.gitmodules` and `.gitattributes` as a Mac or Windows
+  disk reads a name (an ignored invisible character, a short name such as
+  `gitmod~1`, a `:` stream suffix, any case). A path `git fast-import` still
+  refuses is now left out and reported instead of stopping the export at that
+  note for good. An LFS file whose path would make a `.gitattributes` line
+  longer than Git reads is left out too, so the pushed history passes
+  `git fsck`.
 - A new note whose name an HFS+ disk reads as starting with a dot, because
   an invisible character (U+200C to U+200F, U+202A to U+202E, U+206A to
   U+206F or U+FEFF) comes before the dot, is refused as `dotprefix`. A note
