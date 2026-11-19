@@ -103,7 +103,10 @@ jobs:
       - name: refuse to publish from an unchecked commit
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/ci-passed.sh "${{ github.repository }}" "${{ inputs.tag }}"
+          # From the environment, never spliced into the script: a dispatch
+          # input is text the dispatcher chose.
+          TAG: ${{ inputs.tag }}
+        run: ./scripts/ci-passed.sh "$GITHUB_REPOSITORY" "$TAG"
 
       # And that the release is still private, before anything touches an asset
       # (R39).
@@ -243,6 +246,15 @@ jobs:
 
       # Last, and only now (R16). Everything above has run against a draft:
       # nothing was downloadable, and a failure anywhere leaves it that way.
+      # Nothing else rides along: anything on the draft that this job did not
+      # rebuild and attest came from a laptop, and would go public beside the
+      # files that were checked.
+      - name: the release holds only what was attested
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: scripts/release-assets.sh "$TAG" main.js manifest.json styles.css SHA256SUMS
+
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -372,6 +384,15 @@ jobs:
           artifacts: attested/trewd-*
           bin: trewd
           attest: link
+
+      - name: the release holds only what was attested
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          binaries=()
+          for f in attested/trewd-*; do binaries+=("${f#attested/}"); done
+          scripts/release-assets.sh "$TAG" SHA256SUMS packslip.server.sigstore.json "${binaries[@]}"
 
       # Last, and only now (R16). See the plugin job.
       - name: publish

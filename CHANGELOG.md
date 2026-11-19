@@ -14,6 +14,15 @@ client can talk; upgrade the server first.
 ### Command-line client
 
 - An error that `trew` rewords now carries the error that caused it.
+- The npm package no longer lists `end-to-end-encryption` among its
+  keywords: TrewSync has none, and the server reads your notes.
+
+### Releases
+
+- The container image now carries a signed provenance attestation, as the
+  binaries do: `gh attestation verify oci://ghcr.io/waynehoover/trewsync:VERSION --repo waynehoover/trewsync`.
+- A release is published only if it holds exactly the files the attest
+  workflow rebuilt and signed, and the npm package only from a `cli/v` tag.
 
 ## 0.15.2, server (2026-11-19)
 

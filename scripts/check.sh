@@ -169,6 +169,8 @@ run "the pinned image is not behind the newest server release" "" \
 # ---- the publish gate ------------------------------------------------------
 run "the publish gate refuses an unchecked commit" "" \
   bash "$root/scripts/ci-passed.test.sh"
+run "a release holds only what was attested" "" \
+  bash "$root/scripts/release-assets.test.sh"
 run "the tags a release may move are the right ones" "" \
   bash "$root/scripts/release-tags.test.sh"
 run "the image release promotes in order" "" \
