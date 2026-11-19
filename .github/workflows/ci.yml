@@ -107,6 +107,11 @@ jobs:
       - name: the publish gate refuses an unchecked commit
         run: scripts/ci-passed.test.sh
 
+      # And the check that a release goes public holding only what was
+      # attested, for the same reason: it only runs for real during a release.
+      - name: a release holds only what was attested
+        run: scripts/release-assets.test.sh
+
       # And which tags a release is allowed to move. The cases it gets wrong
       # are the ones that happen once: the first backport, the first
       # prerelease, both of which used to take `latest` from the newest stable

@@ -19,8 +19,9 @@ on:
     # changed. The `v` is not required by npm the way Go requires it of the
     # server; it is here so the two prefixed tag lines look the same.
     tags: ["cli/v*"]
-  # So a version can be published without cutting a tag.
-  workflow_dispatch:
+  # No workflow_dispatch: npm trusts this file, so a dispatch from a branch
+  # would publish that branch's code as `trew-sync` with no tag and no review
+  # of the version. A release is a cli/v tag, which the ruleset protects.
 
 permissions:
   contents: read
@@ -88,8 +89,11 @@ jobs:
       # A tag that disagrees with the manifest publishes the wrong version under
       # the right name, and npm versions cannot be replaced once published.
       - name: the tag and the package agree
-        if: startsWith(github.ref, 'refs/tags/')
         run: |
+          case "$GITHUB_REF" in
+            refs/tags/cli/v*) ;;
+            *) echo "npm publishes only from a cli/v tag, not $GITHUB_REF" >&2; exit 1 ;;
+          esac
           tag="${GITHUB_REF_NAME#cli/v}"
           pkg=$(node -p "require('./client/package.json').version")
           if [ "$tag" != "$pkg" ]; then

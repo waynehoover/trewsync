@@ -22,7 +22,9 @@ ARG GO_VERSION=1.27
 # emulated. Go needs nothing but two environment variables to do this and
 # CGO_ENABLED=0 was already the rule, so an arm64 image builds on an amd64
 # runner at full speed instead of through QEMU.
-FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
+# Pinned by digest (golang:1.27.4-alpine), as the runtime stage is: the tag
+# moves, and the binaries are only as reproducible as the toolchain under them.
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS build
 WORKDIR /src
 
 # Dependencies first, so a change to the source does not re-download them.
