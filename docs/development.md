@@ -1006,11 +1006,13 @@ through the control socket to the running server, under the commit lock.
 
 **Authorization.** In order: the route (exactly `/mcp`, no query string), the
 method, the `Origin` (absent, or exactly an `-allow-origin` value; 403 before
-the credential is read), the endpoint's cap of 32 requests in flight, the
-bearer (`Authorization: Bearer` and 43 characters of canonical base64url,
-compared in constant time against every stored hash), the token's own
-budgets, and only then the body (8 MiB, declared or streamed, else 413).
-Failures are 401 with `WWW-Authenticate: Bearer realm="trew"` and the word
+the credential is read), the bearer (`Authorization: Bearer` and 43
+characters of canonical base64url, compared in constant time against every
+stored hash, at most 4 checks at once, each waiting up to a second for its
+turn), the endpoint's cap of 32 requests in flight, which only a valid
+token's request takes (security review L12), the token's own budgets, and
+only then the body (8 MiB, declared or streamed, else 413). Failures are
+401 with `WWW-Authenticate: Bearer realm="trew"` and the word
 `unauthorized`, nothing else; there is no OAuth metadata anywhere. Failed
 authentication has a budget per connection address (10 at once, 1 a second),
 past which refusals are 429 and stop being logged; a valid token from that

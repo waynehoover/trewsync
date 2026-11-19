@@ -101,9 +101,10 @@ type Handler struct {
 	// Hooks for tests, nil otherwise: beforeReply runs after a tool has
 	// produced its result and before the credential is checked again, which
 	// is the window a revoke must still win; duringTool runs inside a tool
-	// call, before the tool.
+	// call, before the tool; duringAuth runs while a token is checked.
 	beforeReply func()
 	duringTool  func(tool string)
+	duringAuth  func()
 }
 
 // New builds the endpoint and starts the minute flush of token use counts.
@@ -263,19 +264,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	release, ok := h.budgets.admit()
-	if !ok {
-		h.srv.Metrics().RateLimited()
-		tooMany(w, time.Second)
-		return
-	}
-	defer release()
-
-	cred, err := h.authenticate(r, start)
-	if err != nil {
-		h.log.Error("MCP authentication could not read the store", "err", err)
-		plain(w, http.StatusServiceUnavailable, "unavailable")
-		return
+	// The token is checked before the request takes one of the endpoint's
+	// slots, which are for requests a valid token made: a flood of wrong
+	// tokens once held them all while each was checked (security review
+	// L12). A request with no well-formed token reads nothing, and the store
+	// read for one that has is bounded by its own few slots. The failure
+	// budget is not consulted first: requests behind a proxy share one
+	// address, and a valid token is never locked out by another client's
+	// failures (TestFailedAuthenticationIsRateLimitedSeparately).
+	var cred *credential
+	if raw, ok := bearer(r); ok {
+		releaseAuth, ok := h.budgets.admitAuth(r.Context())
+		if !ok {
+			h.srv.Metrics().RateLimited()
+			tooMany(w, time.Second)
+			return
+		}
+		if h.duringAuth != nil {
+			h.duringAuth()
+		}
+		var err error
+		cred, err = h.authenticate(raw, start)
+		releaseAuth()
+		if err != nil {
+			h.log.Error("MCP authentication could not read the store", "err", err)
+			plain(w, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
 	}
 	if cred == nil {
 		host := remoteHost(r)
@@ -289,6 +304,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		unauthorized(w)
 		return
 	}
+	release, ok := h.budgets.admit()
+	if !ok {
+		h.srv.Metrics().RateLimited()
+		tooMany(w, time.Second)
+		return
+	}
+	defer release()
+
 	h.usage.note(cred.token.ID, start)
 	releaseToken, wait, ok := h.budgets.admitToken(cred.token.ID, start)
 	if !ok {

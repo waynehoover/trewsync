@@ -33,6 +33,10 @@ client can talk; upgrade the server first.
   `-addr`, rather than on every interface, since the server speaks no TLS of
   its own. A unit made before keeps its address; pass `-addr :3003` to make
   one that listens everywhere.
+- The MCP endpoint checks a token before the request takes one of its 32
+  places, and checks at most 4 at once, so a flood of wrong tokens can no
+  longer crowd out agents with valid ones. A request with no token is
+  answered 401 at once even when the endpoint is full.
 
 ### Command-line client
 
