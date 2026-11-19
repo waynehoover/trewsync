@@ -266,7 +266,7 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -300,7 +300,7 @@ jobs:
       # For the check below. The arm64 binary is the one no runner here can
       # start without an emulator, which is exactly why it would otherwise be
       # the one never started.
-      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: arm64
 
@@ -363,7 +363,7 @@ jobs:
       # files; the manifest links that provenance by digest instead of making a
       # second statement about the same bytes. The plugin and the npm package
       # are not in it: nothing that installs either reads packslip.
-      - uses: jdx/packslip@4920350c39c234c7a969f9775040bd02829f1923 # v1.3.0
+      - uses: jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564 # v1.11.4
         with:
           project: github.com/${{ github.repository }}/server
           tag: ${{ inputs.tag }}

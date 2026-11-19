@@ -15,6 +15,18 @@ client can talk; upgrade the server first.
 
 - An error that `trew` rewords now carries the error that caused it.
 
+## 0.15.2, server (2026-11-19)
+
+Upgrade if your server is reachable by anyone you do not trust. Clients
+are unaffected; the plugin and `trew` work with it as they do with 0.15.1.
+
+### Server
+
+- Built with Go 1.27.4, which fixes GO-2026-6859: a crafted HTTP/1 request
+  could crash the server through a race in Go's request body size limit,
+  which `trewd` uses on the MCP endpoint (`-mcp`).
+- The container image is on the current Alpine 3.24 (3.24.4).
+
 ## 0.16.7, plugin (2026-11-16)
 
 Works with trewd 0.15.0 or later, as 0.16.6 does. The server is unchanged.

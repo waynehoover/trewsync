@@ -46,7 +46,7 @@ RUN mkdir -p /data && chown 65532:65532 /data
 # Pinned by digest, so the image is rebuilt from the same base until someone
 # moves it: the versions the export relies on (git 2.36 or later for
 # core.fsync, git-lfs 3.0 or later) are this Alpine's git 2.54 and git-lfs 3.7.
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 RUN apk add --no-cache git git-lfs openssh-client-default ca-certificates \
  && addgroup -S -g 65532 trewd \
  && adduser -S -D -H -u 65532 -G trewd -h /data -s /sbin/nologin trewd
