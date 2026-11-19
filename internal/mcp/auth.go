@@ -37,11 +37,7 @@ func bearer(r *http.Request) ([]byte, bool) {
 // expired. It reads the store every time rather than a cache, because a
 // revoke has to be seen by the next request without anybody remembering to
 // invalidate anything.
-func (h *Handler) authenticate(r *http.Request, now time.Time) (*credential, error) {
-	raw, ok := bearer(r)
-	if !ok {
-		return nil, nil
-	}
+func (h *Handler) authenticate(raw []byte, now time.Time) (*credential, error) {
 	tok, ok, err := h.st.MatchMCPToken(h.vault, raw)
 	if err != nil || !ok {
 		return nil, err

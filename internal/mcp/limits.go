@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"math"
 	"sync"
 	"time"
@@ -16,8 +17,16 @@ import (
 // address, so garbage cannot use up what a valid token is owed. The zero
 // value of a field means its default.
 type Limits struct {
-	// InFlight is how many requests the endpoint works on at once: 32.
+	// InFlight is how many authenticated requests the endpoint works on at
+	// once: 32.
 	InFlight int
+	// AuthInFlight is how many requests may be having their token checked
+	// against the store at once: 4. Checking is all an unauthenticated
+	// request gets, and it never takes one of InFlight's slots, so a flood
+	// of wrong tokens cannot crowd out the requests of valid ones. A check
+	// is one read of a few rows, so a request waits up to authWait for its
+	// turn before it is told 429, and an honest burst only queues.
+	AuthInFlight int
 	// TokenInFlight is how many one token may have at once: 8.
 	TokenInFlight int
 	// TokenRate and TokenBurst are one token's sustained requests per second
@@ -49,6 +58,9 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.TokenInFlight <= 0 {
 		l.TokenInFlight = 8
+	}
+	if l.AuthInFlight <= 0 {
+		l.AuthInFlight = 4
 	}
 	def(&l.TokenRate, 5)
 	def(&l.TokenBurst, 30)
@@ -87,6 +99,7 @@ type budgets struct {
 	mu       sync.Mutex
 	limits   Limits
 	inFlight int
+	checks   chan struct{} // one per request in authenticate (AuthInFlight)
 	tokens   map[string]*tokenBudget
 	failures map[string]*budget.Bucket
 }
@@ -96,7 +109,8 @@ type budgets struct {
 const maxFailureHosts = 1024
 
 func newBudgets(l Limits) *budgets {
-	return &budgets{limits: l, tokens: map[string]*tokenBudget{}, failures: map[string]*budget.Bucket{}}
+	return &budgets{limits: l, tokens: map[string]*tokenBudget{}, failures: map[string]*budget.Bucket{},
+		checks: make(chan struct{}, l.AuthInFlight)}
 }
 
 // admit takes one of the endpoint's slots. The release function gives it back.
@@ -115,6 +129,25 @@ func (b *budgets) admit() (func(), bool) {
 			b.mu.Unlock()
 		})
 	}, true
+}
+
+// authWait is how long a request waits for a turn to have its token checked.
+const authWait = time.Second
+
+// admitAuth takes one of the slots for checking a token (AuthInFlight),
+// waiting up to authWait for one, or until ctx ends.
+func (b *budgets) admitAuth(ctx context.Context) (func(), bool) {
+	t := time.NewTimer(authWait)
+	defer t.Stop()
+	select {
+	case b.checks <- struct{}{}:
+	case <-t.C:
+		return nil, false
+	case <-ctx.Done():
+		return nil, false
+	}
+	var once sync.Once
+	return func() { once.Do(func() { <-b.checks }) }, true
 }
 
 // admitToken takes one of a token's slots and one of its requests, if it has

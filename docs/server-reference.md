@@ -574,7 +574,7 @@ use `health` to check whether the running server can accept writes.
 
 | Flag | Meaning |
 |---|---|
-| `-addr`, `-vault` | Listen address and vault in the generated unit. |
+| `-addr`, `-vault` | Listen address and vault in the generated unit. The address defaults to `127.0.0.1:3003`, loopback only, for a proxy or Tailscale Serve on the same machine; give `-addr :3003` to listen on every interface. |
 | `-max-file N` | File limit to preserve in the unit. |
 | `-user NAME` | Service account; default is the caller. |
 | `-binary PATH` | Installed binary path; default is the running executable. |

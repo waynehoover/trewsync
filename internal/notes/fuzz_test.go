@@ -50,6 +50,9 @@ func FuzzNotes(f *testing.F) {
 			t.Fatalf("pages rebuilt %q", joined.String())
 		}
 		total := units(s)
+		if _, err := MarkdownHidden(s, 0, false); codeOf(err) == "too_complex" {
+			t.Skip("nested past maxNesting, which every parse refuses")
+		}
 		for _, protect := range []bool{false, true} {
 			ranges, err := MarkdownHidden(s, 0, protect)
 			if err != nil {

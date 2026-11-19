@@ -38,6 +38,8 @@ package notes
 // SOFTWARE.
 
 import (
+	"sort"
+
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
@@ -52,6 +54,10 @@ type mdLinkLabelState struct {
 	Segment text.Segment
 
 	IsImage bool
+
+	// linksBefore is how many links the parse had made when this opener was
+	// read (see linksMade).
+	linksBefore int
 
 	Prev *mdLinkLabelState
 
@@ -181,7 +187,7 @@ func (s *mdLinkParser) Parse(parent ast.Node, block text.Reader, pc parser.Conte
 		return nil
 	}
 
-	if !last.IsImage && s.containsLink(last) { // a link in a link text is not allowed
+	if !last.IsImage && linksMade(pc) > last.linksBefore { // a link in a link text is not allowed
 		ast.MergeOrReplaceTextSegment(last.Parent(), last, last.Segment)
 		_ = popMDLinkBottom(pc)
 		return nil
@@ -211,10 +217,13 @@ func (s *mdLinkParser) Parse(parent ast.Node, block text.Reader, pc parser.Conte
 		// maybe shortcut reference link
 		block.SetPosition(l, pos)
 		ssegment := text.NewSegment(last.Segment.Stop, segment.Start)
-		maybeReference := block.Value(ssegment)
+		// goldmark's block.Value, read only as far as the limit: the whole
+		// label read at every "]" made nested brackets quadratic (security
+		// review M1).
+		maybeReference, short := segmentValue(block.Source(), parent.Lines(), ssegment, 999)
 		// CommonMark spec says:
 		//  > A link label can have at most 999 characters inside the square brackets.
-		if len(maybeReference) > 999 {
+		if !short {
 			ast.MergeOrReplaceTextSegment(last.Parent(), last, last.Segment)
 			_ = popMDLinkBottom(pc)
 			return nil
@@ -240,26 +249,30 @@ func (s *mdLinkParser) Parse(parent ast.Node, block text.Reader, pc parser.Conte
 		last.Parent().RemoveChild(last.Parent(), last)
 		n = link
 	}
+	if _, ok := n.(*ast.Link); ok {
+		countLink(pc)
+	}
 	n.(interface{ SetPos(int) }).SetPos(last.Segment.Start)
 	_, end := block.Position()
 	recordLink(pc, n, byteRange{last.Segment.Start, end.Start}, destination)
 	return n
 }
 
-func (s *mdLinkParser) containsLink(n ast.Node) bool {
-	if n == nil {
-		return false
-	}
-	for c := n; c != nil; c = c.NextSibling() {
-		if _, ok := c.(*ast.Link); ok {
-			return true
-		}
-		if s.containsLink(c.FirstChild()) {
-			return true
-		}
-	}
-	return false
+// linksMadeKey counts the links a parse has made. goldmark asks whether a
+// link's text holds a link by walking everything after its opener, which
+// made a note of nested brackets quadratic (security review M1). Any link
+// made after an opener was read is in that opener's text: openers read after
+// it are all closed or dropped before its "]" is, and a link is made only
+// from one of those. So the walk is the same as asking whether the count
+// has grown since the opener.
+var linksMadeKey = parser.NewContextKey()
+
+func linksMade(pc parser.Context) int {
+	n, _ := pc.Get(linksMadeKey).(int)
+	return n
 }
+
+func countLink(pc parser.Context) { pc.Set(linksMadeKey, linksMade(pc)+1) }
 
 func processMDLinkLabelOpen(block text.Reader, pos int, isImage bool, pc parser.Context) *mdLinkLabelState {
 	start := pos
@@ -267,6 +280,7 @@ func processMDLinkLabelOpen(block text.Reader, pos int, isImage bool, pc parser.
 		start--
 	}
 	state := newMDLinkLabelState(text.NewSegment(start, pos+1), isImage)
+	state.linksBefore = linksMade(pc)
 	pushMDLinkLabelState(pc, state)
 	block.Advance(1)
 	return state
@@ -561,12 +575,63 @@ func (s *mdLinkParser) CloseBlock(parent ast.Node, block text.Reader, pc parser.
 	}
 }
 
+// segmentReader is goldmark's block reader with a Value that finds the line a
+// segment starts on by binary search. goldmark's walks back from the
+// paragraph's last line on every call, so reading each label of a paragraph
+// of definitions was quadratic (security review M1). The result is the same:
+// the rest of Value is goldmark's (text/reader.go, blockReader.Value).
+type segmentReader struct {
+	text.BlockReader
+	source []byte
+	lines  *text.Segments
+}
+
+func (r segmentReader) Value(seg text.Segment) []byte {
+	v, _ := segmentValue(r.source, r.lines, seg, -1)
+	return v
+}
+
+// segmentValue is goldmark's blockReader.Value over a block's lines, with
+// the line found by binary search, and given up on, false, once it is longer
+// than limit bytes (when limit is not negative).
+func segmentValue(source []byte, lines *text.Segments, seg text.Segment, limit int) ([]byte, bool) {
+	n := lines.Len()
+	line := sort.Search(n, func(i int) bool { return lines.At(i).Start > seg.Start }) - 1
+	size := seg.Stop - seg.Start + 1
+	if limit >= 0 {
+		size = min(size, limit+1)
+	}
+	ret := make([]byte, 0, max(size, 0))
+	i := seg.Start
+	for ; line < n; line++ {
+		s := lines.At(line)
+		if i < 0 {
+			i = s.Start
+		}
+		ret = s.ConcatPadding(ret)
+		for ; i < seg.Stop && i < s.Stop; i++ {
+			if limit >= 0 && len(ret) > limit {
+				return nil, false
+			}
+			ret = append(ret, source[i])
+		}
+		i = -1
+		if s.Stop > seg.Stop {
+			break
+		}
+	}
+	if limit >= 0 && len(ret) > limit {
+		return nil, false
+	}
+	return ret, true
+}
+
 // mdDefinitionTransformer is goldmark's linkReferenceParagraphTransformer.
 type mdDefinitionTransformer struct{}
 
 func (p *mdDefinitionTransformer) Transform(node *ast.Paragraph, reader text.Reader, pc parser.Context) {
 	lines := node.Lines()
-	block := text.NewBlockReader(reader.Source(), lines)
+	block := segmentReader{text.NewBlockReader(reader.Source(), lines), reader.Source(), lines}
 	removes := [][2]int{}
 	for {
 		ref, start, end := parseMDLinkReferenceDefinition(block, pc)
@@ -589,6 +654,21 @@ func (p *mdDefinitionTransformer) Transform(node *ast.Paragraph, reader text.Rea
 		break
 	}
 
+	// Definitions are read one after another from the paragraph's first
+	// line, so the lines they take are one run from the start, and dropping
+	// them is one slice. goldmark copies the rest of the paragraph once per
+	// definition, which made a note of definitions quadratic (security
+	// review M1); its loop stays for any other shape.
+	contiguous := len(removes) > 0 && removes[0][0] == 0
+	for i := 1; contiguous && i < len(removes); i++ {
+		contiguous = removes[i][0] == removes[i-1][1]
+	}
+	if contiguous {
+		rest := lines.Sliced(min(removes[len(removes)-1][1], lines.Len()), lines.Len())
+		lines.SetSliced(0, 0)
+		lines.AppendAll(rest)
+		removes = nil
+	}
 	offset := 0
 	for _, remove := range removes {
 		if lines.Len() == 0 {

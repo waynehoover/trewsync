@@ -464,7 +464,8 @@ boundary by being written through the tools.
 
 | Limit | Value |
 |---|---|
-| Requests in flight, whole endpoint | 32 |
+| Requests in flight, whole endpoint | 32, for valid tokens |
+| Tokens being checked at once | 4; a request waits up to a second for its turn, then 429 |
 | Requests in flight, per token | 8 |
 | Request rate, per token | 5 a second sustained, bursts of 30 |
 | Reply bytes, per token | 4 MiB a second sustained, bursts of 16 MiB |

@@ -187,7 +187,10 @@ func newMarkdownParser() parser.Parser {
 		util.Prioritized(&mdLinkParser{}, 200),
 		util.Prioritized(spanParser{parser.NewAutoLinkParser()}, 300),
 		util.Prioritized(spanParser{rawHTMLParser{parser.NewRawHTMLParser()}}, 400),
-		util.Prioritized(parser.NewEmphasisParser(), 500),
+		// No emphasis parser. Emphasis never changes what is code, HTML or a
+		// link (CommonMark resolves it last, inside what those leave), and
+		// nothing here reads it; goldmark's delimiter processing was
+		// quadratic over a note of unmatched "*a_ " (security review M1).
 	}
 	return parser.NewParser(
 		parser.WithBlockParsers(blocks...),
@@ -203,16 +206,22 @@ type markdownDocument struct {
 	offset int    // where the body starts in the note, in bytes
 	root   ast.Node
 	record *markdownRecord
+	known  map[ast.Node]bool // present's answers so far
 }
 
 // parseMarkdown parses source[start:] as CommonMark. goldmark, and the
 // wrappers here that follow micromark, are not expected to panic on any
 // input; if one does, the note is refused as internal rather than taking
 // the server down with it, and the fuzz test in fuzz_test.go looks for such
-// inputs.
+// inputs. A note that nests containers deeper than maxNesting is refused as
+// too_complex.
 func parseMarkdown(source string, start int) (d *markdownDocument, err error) {
 	defer func() {
-		if recover() != nil {
+		switch p := recover(); p.(type) {
+		case nil:
+		case errTooDeep:
+			d, err = nil, refuse("too_complex", "the note's quotes and lists nest too deeply to read")
+		default:
 			d, err = nil, refuse("internal", "the note's Markdown could not be parsed")
 		}
 	}()
@@ -325,14 +334,26 @@ func (d *markdownDocument) whole(l linkRecord) byteRange {
 }
 
 // present reports whether a recorded node survived into the final tree;
-// goldmark can build a link and later drop it.
+// goldmark can build a link and later drop it. What each ancestor walked
+// through answered is remembered, so that many links deep in nested
+// containers do not each walk the whole chain (security review M1).
 func (d *markdownDocument) present(n ast.Node) bool {
-	for p := n; p != nil; p = p.Parent() {
-		if p == d.root {
-			return true
-		}
+	if d.known == nil {
+		d.known = map[ast.Node]bool{d.root: true}
 	}
-	return false
+	var path []ast.Node
+	answer := false
+	for p := n; p != nil; p = p.Parent() {
+		if v, ok := d.known[p]; ok {
+			answer = v
+			break
+		}
+		path = append(path, p)
+	}
+	for _, p := range path {
+		d.known[p] = answer
+	}
+	return answer
 }
 
 // linesRange is the extent of a block's lines, from the first line's first
@@ -354,6 +375,12 @@ func markdownHidden(source string, start int, protectLinks bool) ([]byteRange, e
 	if err != nil {
 		return nil, err
 	}
+	return d.hiddenRanges(source, start, protectLinks), nil
+}
+
+// hiddenRanges is markdownHidden over a parse already made of source from
+// start, for a caller that needs the parse as well.
+func (d *markdownDocument) hiddenRanges(source string, start int, protectLinks bool) []byteRange {
 	hidden := d.hidden(protectLinks)
 	protected := mergeRanges(hidden)
 	index := 0
@@ -372,7 +399,7 @@ func markdownHidden(source string, start int, protectLinks bool) ([]byteRange, e
 		hidden = append(hidden, byteRange{at, end})
 		at = indexFrom(source, "%%", end)
 	}
-	return mergeRanges(hidden), nil
+	return mergeRanges(hidden)
 }
 
 // indexFrom is String.prototype.indexOf(sub, from).

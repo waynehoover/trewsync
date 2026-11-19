@@ -426,9 +426,13 @@ func (s *Server) admit(sess *Session) (victim *Session, err error) {
 }
 
 // authenticated moves a session out of the pre-auth count. Called once, when
-// its hello has been accepted; a session that never gets there is released by
-// forget.
-func (s *Server) authenticated(sess *Session) {
+// its hello has been accepted; a session that never gets there is released
+// when its run ends (uncount), or by forget.
+func (s *Server) authenticated(sess *Session) { s.uncount(sess) }
+
+// uncount moves a session out of the pre-auth count, if it is in it. The
+// session stays in the set Shutdown waits for.
+func (s *Server) uncount(sess *Session) {
 	s.sessMu.Lock()
 	defer s.sessMu.Unlock()
 	if !sess.counted {

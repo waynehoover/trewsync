@@ -265,10 +265,15 @@ func TestBudgetsAnswer429WithoutStarvingAnotherToken(t *testing.T) {
 			done <- status
 		}()
 		<-entered
-		// Even a request with no credential is refused by capacity first, so a
-		// flood cannot make the endpoint check tokens without bound.
-		if status, h, _ := r.post(legacy("", toolCall("vault_status"))); status != http.StatusTooManyRequests || h.Get("Retry-After") != "1" {
+		// Another valid token is refused by capacity.
+		b, _ := r.token(store.ScopeRead)
+		if status, h, _ := r.post(legacy(b, toolCall("vault_status"))); status != http.StatusTooManyRequests || h.Get("Retry-After") != "1" {
 			t.Fatalf("over the endpoint's cap: %d %q", status, h.Get("Retry-After"))
+		}
+		// A request with no credential takes no slot and reads nothing: it is
+		// refused for what it is (security review L12).
+		if status, _, _ := r.post(legacy("", toolCall("vault_status"))); status != http.StatusUnauthorized {
+			t.Fatalf("no credential, endpoint full: %d", status)
 		}
 		close(release)
 		if s := <-done; s != http.StatusOK {

@@ -11,6 +11,33 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+### Server
+
+- Reading a note's tags and links takes time in proportion to the note, so a
+  crafted 1 MiB note can no longer hold the search index, or an MCP tool, for
+  minutes. A note whose quotes and lists nest more than 200 deep is refused
+  as `too_complex`: its tags and links are not indexed, and searches read it
+  directly.
+- A connection that has not authenticated can no longer grow the log by
+  sending a long `Origin` header or first frame: the origin is logged once,
+  cut to 128 bytes, and an unexpected first `op` is echoed and logged cut to
+  32.
+- A refused hello gives its place among the connections waiting to
+  authenticate back at once, rather than up to two seconds later, so a few
+  peers that never read their refusal can no longer turn every new device
+  away as busy.
+- An HTTP connection left idle between requests is closed after two minutes,
+  so connections that ask for `/health` and then sit open can no longer use
+  up the server's file descriptors. Device sessions are not affected.
+- `trewd service` writes a unit that listens on `127.0.0.1:3003` unless given
+  `-addr`, rather than on every interface, since the server speaks no TLS of
+  its own. A unit made before keeps its address; pass `-addr :3003` to make
+  one that listens everywhere.
+- The MCP endpoint checks a token before the request takes one of its 32
+  places, and checks at most 4 at once, so a flood of wrong tokens can no
+  longer crowd out agents with valid ones. A request with no token is
+  answered 401 at once even when the endpoint is full.
+
 ### Command-line client
 
 - An error that `trew` rewords now carries the error that caused it.
