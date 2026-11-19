@@ -398,6 +398,25 @@ var afterListening func(addr string)
 // A seam for one test, and it is here rather than in the test because the thing
 // under test is an ordering inside this function: that the socket answers while
 // the summary is still to come. Nil everywhere but that test.
+// httpIdleTimeout is how long a keep-alive connection may sit between
+// requests. Without one, a GET /health that is read and then left open held
+// its descriptor for ever, and enough of them, which never upgrade and so
+// never count against the pre-auth cap, ran the process out of descriptors
+// (security review L2). A websocket is hijacked from the server, which then
+// no longer tracks it, so this never closes a session.
+const httpIdleTimeout = 2 * time.Minute
+
+// newHTTPServer is the server serve listens with, before its handler is set.
+func newHTTPServer(addr string) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       httpIdleTimeout,
+		// No WriteTimeout: these are long-lived websockets. An MCP request
+		// bounds its own body and its tool's work.
+	}
+}
+
 func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	dataDir := dataFlags(fs)
@@ -633,12 +652,7 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	// and not here is the list of browser origins allowed to connect, which
 	// nothing caught until the plugin was loaded into a real vault.
 	handler := server.HTTPHandler(srv, log, allowOrigin...)
-	hs := &http.Server{
-		Addr:              *addr,
-		ReadHeaderTimeout: 10 * time.Second,
-		// No WriteTimeout: these are long-lived websockets. An MCP request
-		// bounds its own body and its tool's work.
-	}
+	hs := newHTTPServer(*addr)
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

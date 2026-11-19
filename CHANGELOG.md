@@ -26,6 +26,9 @@ client can talk; upgrade the server first.
   authenticate back at once, rather than up to two seconds later, so a few
   peers that never read their refusal can no longer turn every new device
   away as busy.
+- An HTTP connection left idle between requests is closed after two minutes,
+  so connections that ask for `/health` and then sit open can no longer use
+  up the server's file descriptors. Device sessions are not affected.
 
 ### Command-line client
 
