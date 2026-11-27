@@ -173,7 +173,7 @@
 
 import { diff_match_patch, type Diff } from "diff-match-patch";
 
-import { regions } from "./merge-regions.ts";
+import { WORK_BUDGET, bisectWork, regions } from "./merge-regions.ts";
 import { STAGING_MARK } from "./path-policy.ts";
 import { byteLength, clipped, nameBeside, roomBeside, splitName } from "./paths.ts";
 
@@ -1000,6 +1000,9 @@ function samePlacement(base: string, a: string, b: string): boolean {
   if (a === b) return true;
   const x = placements(base, a);
   const y = placements(base, b);
+  // Too tangled to compare within the budget the line merge keeps (Neon
+  // review #49), so the two directions are not shown to agree: keep both.
+  if (x === undefined || y === undefined) return false;
   if (x.length !== y.length) return false;
   for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
   return true;
@@ -1008,11 +1011,14 @@ function samePlacement(base: string, a: string, b: string): boolean {
 /**
  * Every line `result` adds to or removes from `base`, each tagged with the
  * ancestor line it happened at, sorted so that two lists compare as multisets.
+ * Undefined when the diff would cost more than WORK_BUDGET, which is the bound
+ * on this same unlimited line diff in merge-regions.ts.
  */
-function placements(base: string, result: string): string[] {
+function placements(base: string, result: string): string[] | undefined {
   const dmp = new diff_match_patch();
   dmp.Diff_Timeout = 0;
   const { chars1, chars2, lineArray } = dmp.diff_linesToChars_(base, result);
+  if (bisectWork(dmp, chars1, chars2) > WORK_BUDGET) return undefined;
   const diff = dmp.diff_main(chars1, chars2, false);
   dmp.diff_charsToLines_(diff, lineArray);
 

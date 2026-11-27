@@ -70,7 +70,7 @@ const EQUAL = 0;
  * a 50,000-line note with one changed paragraph has a product in the hundreds
  * and merges as it always did.
  */
-const WORK_BUDGET = 4_000_000;
+export const WORK_BUDGET = 4_000_000;
 
 /**
  * What `side` would cost, in the units the budget is denominated in.
@@ -79,7 +79,7 @@ const WORK_BUDGET = 4_000_000;
  * accuracy of the estimate: it is what diff-match-patch does before it
  * bisects, so the product of what is left is what it will actually work on.
  */
-function bisectWork(dmp: InstanceType<typeof diff_match_patch>, a: string, b: string): number {
+export function bisectWork(dmp: InstanceType<typeof diff_match_patch>, a: string, b: string): number {
   const prefix = dmp.diff_commonPrefix(a, b);
   const suffix = dmp.diff_commonSuffix(a.slice(prefix), b.slice(prefix));
   const m = a.length - prefix - suffix;

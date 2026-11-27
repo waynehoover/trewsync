@@ -100,6 +100,35 @@ describe("a merge that would cost too much", () => {
     // the line path cheap again is a deliberate one.
     expect(regions(base, mine, theirs)).toBeUndefined();
   });
+
+  /**
+   * Neon review #49. Past the budget the character merge runs instead, and
+   * its last check compares the two directions' results with a line diff of
+   * each against the ancestor. That diff had no bound of its own, so a note
+   * one device rewrote throughout while both appended at the end reached it
+   * with the whole tangle still in it: three seconds at twenty thousand
+   * lines on a laptop, on the UI thread, to arrive at a conflict.
+   */
+  it("bounds the check that compares the two directions as well", () => {
+    const base: string[] = [];
+    const mine: string[] = [];
+    for (let i = 0; i < 30_000; i++) {
+      const line = `Paragraph ${i}: a sentence with enough words to look like prose.`;
+      base.push(line);
+      mine.push(i >= 10 && i % 2 === 0 ? `${line} Mine.` : line);
+    }
+    const theirs = [...base, "Theirs at the end."];
+    mine.push("Mine at the end.");
+    const started = performance.now();
+    const outcome = mergeText(
+      base.join("\n") + "\n",
+      mine.join("\n") + "\n",
+      theirs.join("\n") + "\n",
+    );
+    const took = performance.now() - started;
+    expect(took, `the merge took ${took.toFixed(0)}ms`).toBeLessThan(2000);
+    expect(outcome.kind).toBe("conflict");
+  });
 });
 
 describe("what the bound must not break", () => {
