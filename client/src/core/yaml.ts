@@ -144,7 +144,8 @@ export function parsesAsYaml(text: string): boolean {
     if (opensBlockScalar(body)) scalarAt = indent;
     mayOpen = valueOf(body) === "";
   }
-  return true;
+  // A quote or a bracket still open at the end is a document nothing reads.
+  return flow === 0 && openQuote === "";
 }
 
 /**
@@ -164,8 +165,19 @@ function carryOver(
       else if (ch === quote) quote = "";
       continue;
     }
-    if (ch === '"' || ch === "'") quote = ch;
-    else if (ch === "[" || ch === "{") flow++;
+    if (ch === '"' || ch === "'") {
+      // Only where a scalar starts. `don't` is a plain scalar with an
+      // apostrophe in it, and reading that as a quote carried every line
+      // after it as the inside of a string, unchecked.
+      const before = text.slice(0, at).trimEnd();
+      if (
+        before === "" ||
+        /[[{,]$/.test(before) ||
+        (/[:-]$/.test(before) && /\s/.test(text[at - 1]!))
+      ) {
+        quote = ch;
+      }
+    } else if (ch === "[" || ch === "{") flow++;
     else if (ch === "]" || ch === "}") flow = Math.max(0, flow - 1);
     // A comment outside a flow collection runs to the end of the line, and
     // whatever is in it is not structure.
@@ -245,7 +257,9 @@ function keyOf(body: string): string | undefined {
  * ordinary commented base was refused on every merge.
  */
 function valueOf(body: string): string {
-  const at = body.indexOf(": ");
+  // Past a quoted key, which may hold `: ` of its own.
+  const q = body[0] === '"' || body[0] === "'" ? body.indexOf(body[0], 1) : -1;
+  const at = body.indexOf(": ", q + 1);
   const after = at >= 0 ? body.slice(at + 2) : body.endsWith(":") ? "" : body;
   let value = stripComment(after).trim();
   // An anchor and a tag are decoration on whatever comes next, in either

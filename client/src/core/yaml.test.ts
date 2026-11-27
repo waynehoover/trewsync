@@ -74,6 +74,19 @@ describe("parsesAsYaml", () => {
     expect(parsesAsYaml("a:\n\tb: 1\n")).toBe(false);
   });
 
+  it("reads quotes the way YAML does (Neon review, Low)", () => {
+    // An apostrophe inside a plain scalar is not a quote. Read as one, it
+    // carried every line after it as the inside of a string, and a duplicate
+    // key below it passed.
+    expect(parsesAsYaml("a: don't\nb: rock 'n' roll\n")).toBe(true);
+    expect(parsesAsYaml("note: don't\nviews:\n  name: A\n  name: B\n")).toBe(false);
+    // A quote or a bracket still open at the end is a document nothing reads.
+    expect(parsesAsYaml('a: "x\n')).toBe(false);
+    expect(parsesAsYaml("a: [1,\n  2\n")).toBe(false);
+    // A quoted key holding `: ` still opens the block under it.
+    expect(parsesAsYaml('"a: b":\n  c: 1\n')).toBe(true);
+  });
+
   it("says nothing about what it does not understand", () => {
     // A false refusal costs a conflict copy for a file that was fine, so
     // anything a merge does not produce is accepted rather than guessed at.
