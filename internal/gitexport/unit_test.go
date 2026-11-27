@@ -398,3 +398,26 @@ func TestAMissingGitIsReportedAndStopsNothing(t *testing.T) {
 	}
 	r.put("Laptop", "still.md", []byte("writes go on\n"))
 }
+
+// TestAKnownHostsPathThatWouldBreakItsQuotesIsRefused: ssh reads the
+// known_hosts path inside double quotes (Neon review #35), where a double
+// quote would end the value and a backslash escape what follows, so a path
+// holding either is refused when the settings are resolved rather than
+// handed to ssh as some other file.
+func TestAKnownHostsPathThatWouldBreakItsQuotesIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	key := filepath.Join(dir, "deploy key")
+	if err := os.WriteFile(key, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"known\"hosts", "known\\hosts"} {
+		kh := filepath.Join(dir, name)
+		if err := os.WriteFile(kh, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Resolve(dir, config.GitExport{Enabled: true, Remote: "git@example.test:o/r.git", Key: key, KnownHosts: kh}, Overrides{})
+		if err == nil || !strings.Contains(err.Error(), "double quote or a backslash") {
+			t.Errorf("a known_hosts path %q: %v, want it refused", kh, err)
+		}
+	}
+}
