@@ -121,7 +121,16 @@ func checkCollision(q querier, vaultID string, e Entry) error {
 	}
 	move := e.Prev != ""
 	if move && paths.Fold(e.Prev) == paths.Fold(e.Path) {
-		return nil // rule 1
+		// Rule 1 is allowed because it moves no folded key, which holds only
+		// when the source holds one: a move from a spelling that is not live
+		// is judged as the create it is (Neon review #15).
+		src, err := liveState(q, vaultID, e.Prev)
+		if err != nil {
+			return err
+		}
+		if src.live {
+			return nil // rule 1
+		}
 	}
 	dest, err := liveState(q, vaultID, e.Path)
 	if err != nil {
@@ -263,7 +272,17 @@ func checkEmptied(q querier, vaultID string, e Entry) error {
 			if paths.Fold(e.Prev) != paths.Fold(e.Path) {
 				return nil
 			}
-			folder = e.Prev
+			// The folder the move takes away is its source's, when the
+			// source is live; from a source that is not, nothing moves, and
+			// the write lands on its own path like an update (Neon review
+			// #15).
+			src, err := liveState(q, vaultID, e.Prev)
+			if err != nil {
+				return err
+			}
+			if src.live {
+				folder = e.Prev
+			}
 		}
 		was, err := liveState(q, vaultID, folder)
 		if err != nil {

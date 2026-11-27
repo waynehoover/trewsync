@@ -433,3 +433,28 @@ func TestAnUpgradeSaysWhichSchemaItCameFrom(t *testing.T) {
 		t.Fatalf("a store already current says it was upgraded from %d", got)
 	}
 }
+
+// A folder entry created since the point is removed only if nothing is in it
+// under any spelling that folds alike, which is how the commit judges it:
+// between the moves of a case-only folder rename the entry is notes while
+// Notes/a.md is still in it. The planner counted only paths spelled as the
+// entry, planned the folder's removal, and the restore it previewed was
+// refused at the commit as not_empty (Neon review #30).
+func TestARestoreKeepsAFolderThatHoldsANoteUnderAnotherSpelling(t *testing.T) {
+	h := newTestStore(t)
+	at := h.file(t, "Notes/a.md", "precious").UID
+	h.appendAs(t, Entry{Path: "Notes", Folder: true})
+	h.appendAs(t, Entry{Path: "notes", Prev: "Notes", Folder: true})
+	before := h.vaultAt(t, 0)
+
+	plan, _ := h.restore(t, at)
+	kept := false
+	for _, s := range plan.Steps {
+		kept = kept || (s.Action == UndoKeepFolder && s.Path == "notes")
+	}
+	if !kept {
+		t.Fatalf("the folder holding Notes/a.md was not kept: %+v", plan.Steps)
+	}
+	sameVault(t, "after the restore", h.vaultAt(t, 0), before)
+	h.verified(t)
+}

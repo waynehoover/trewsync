@@ -1371,7 +1371,7 @@ func TestValidateChecksThePathOnFoldersAndDeletions(t *testing.T) {
 	}{
 		{"a folder", Entry{Path: "notes", Folder: true}},
 		{"a deletion", Entry{Path: "gone.md", Deleted: true}},
-		{"a rename", Entry{Path: "new.md", Prev: "old.md", Deleted: true}},
+		{"a rename", Entry{Path: "new.md", Prev: "old.md"}},
 	} {
 		if err := k.entry.Validate(); err != nil {
 			t.Fatalf("%s with a legal path was refused: %v", k.what, err)
@@ -1803,5 +1803,30 @@ func TestAppendManyWithNoTempDirectory(t *testing.T) {
 		if err != nil || uid == 0 {
 			t.Errorf("batch-%02d.md did not commit: uid %d, err %v", i, uid, err)
 		}
+	}
+}
+
+// A deletion names no source. A deletion with prev retired that source from
+// the live set with no deletion of its own, so a live note vanished from
+// every device and from the deleted-notes list, which reads deletions at
+// their own paths (Neon review #27). No client sends one; the server
+// refuses it before anything is written.
+func TestADeletionThatNamesASourceIsRefused(t *testing.T) {
+	h := newTestStore(t)
+	important := h.file(t, "important.md", "the only copy")
+	_, err := h.AppendCurrent("v1", Entry{Path: "x.md", Prev: "important.md", Deleted: true, MTime: 1}, 0, important.UID)
+	if !errors.Is(err, ErrBadEntry) {
+		t.Fatalf("a deletion naming a live source was answered %v, want ErrBadEntry", err)
+	}
+	if got, _ := h.headBytes(t, "important.md"); got != "the only copy" {
+		t.Fatalf("important.md reads %q", got)
+	}
+	res, err := h.AppendMany("v1", []Entry{{Path: "x.md", Prev: "important.md", Deleted: true, MTime: 1}},
+		[]int64{0}, []int64{important.UID})
+	if err != nil || !errors.Is(res[0].Err, ErrBadEntry) {
+		t.Fatalf("batched, a deletion naming a live source was answered %v (%v), want ErrBadEntry", res[0].Err, err)
+	}
+	if diff, err := liveDifference(h.db, "v1"); err != nil || diff != "" {
+		t.Fatalf("the live tables disagree with the entries: %s %v", diff, err)
 	}
 }

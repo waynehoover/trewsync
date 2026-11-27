@@ -676,6 +676,13 @@ func (e Entry) Validate() error {
 		// row nothing can reconstruct a vault from.
 		return fmt.Errorf("%w: entry is both a folder and a deletion", ErrBadEntry)
 	}
+	if e.Deleted && e.Prev != "" {
+		// A rename retires its source; a deletion has none to retire. Taken,
+		// it retired a live path with no deletion at that path, so the note
+		// left every device and the deleted-notes list with it (Neon review
+		// #27).
+		return fmt.Errorf("%w: a deletion names a prev path", ErrBadEntry)
+	}
 	if e.Size < 0 || e.Size > PerFileMax {
 		return fmt.Errorf("%w: size %d outside [0, %d]", ErrBadEntry, e.Size, PerFileMax)
 	}

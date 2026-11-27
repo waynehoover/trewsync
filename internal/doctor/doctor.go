@@ -207,6 +207,9 @@ type run struct {
 	health *healthState
 	st     *store.Store
 	latest int64
+	// verified is what storeChecks' pass found, nil when it could not run.
+	// A deep run's chunk check reports from it instead of a sample.
+	verified *store.Verification
 }
 
 // healthState is what the running server's /health would answer.
@@ -628,6 +631,7 @@ func (r *run) storeChecks() {
 			"Stop the server, run `trewd verify -deep`, and restore from a backup if it fails.")
 		return
 	}
+	r.verified = &v
 	pass := "shallow"
 	if r.opt.Deep {
 		pass = "deep"
@@ -739,13 +743,30 @@ func (r *run) chunks() {
 			"Run `trewd verify -deep` with the server stopped.")
 		return
 	}
-	var missing, corrupt []string
+	var missing, corrupt int
 	for _, s := range sample {
 		if err := c.Check(s.vault, s.name); err != nil {
 			if errors.Is(err, chunks.ErrNotFound) {
-				missing = append(missing, s.name)
+				missing++
 			} else {
-				corrupt = append(corrupt, s.name)
+				corrupt++
+			}
+		}
+	}
+	if r.opt.Deep {
+		// Nothing was sampled: the deep pass read every body, and what it
+		// found is this check's answer, not "all sound" beside its fail.
+		if r.verified == nil {
+			r.bad(Fail, CheckChunks, "the deep pass above could not read the chunk references",
+				"Run `trewd verify -deep` with the server stopped.")
+			return
+		}
+		for _, f := range r.verified.Faults {
+			switch f.Reason {
+			case "missing":
+				missing++
+			case "corrupt":
+				corrupt++
 			}
 		}
 	}
@@ -758,8 +779,8 @@ func (r *run) chunks() {
 		checked = fmt.Sprintf("%d chunk references chosen at random read and hashed", len(sample))
 	}
 	switch {
-	case len(missing)+len(corrupt) > 0:
-		r.bad(Fail, CheckChunks, fmt.Sprintf("%s: %d missing, %d corrupt", checked, len(missing), len(corrupt)),
+	case missing+corrupt > 0:
+		r.bad(Fail, CheckChunks, fmt.Sprintf("%s: %d missing, %d corrupt", checked, missing, corrupt),
 			"Run `trewd verify -deep` for the whole list, then `trew repair` on a device that holds those notes, or "+
 				"restore the versions from a backup.")
 	case fp.Quarantined > 0:

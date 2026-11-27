@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -323,7 +324,7 @@ func ParseSize(v string) (int64, error) {
 		}
 	}
 	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil || n < 0 {
+	if err != nil || n < 0 || n > math.MaxInt64/mult {
 		return 0, fmt.Errorf("%q is not a size in bytes (or with KiB, MiB or GiB)", v)
 	}
 	return n * mult, nil
