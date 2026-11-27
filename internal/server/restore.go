@@ -166,7 +166,8 @@ func deviceRestoreDigest(folder string, toUID, head int64) string {
 func (s *Session) handleRestore(m wire.In) error {
 	if m.Folder != "" {
 		if len(m.Folder) > paths.MaxPathBytes {
-			return s.reject(wire.CodeBadPath, errors.New("the folder is longer than a path this vault can hold"))
+			return s.reject(wire.CodeBadPath, errors.New(string(paths.ReasonTooLong)+
+				": the folder is longer than a path this vault can hold"))
 		}
 		if r := paths.Check(m.Folder); r != "" {
 			return s.reject(wire.CodeBadPath, fmt.Errorf("%s: the folder is not a path this vault can hold", r))
