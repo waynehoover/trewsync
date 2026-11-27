@@ -739,8 +739,9 @@ describe("no merge of two drawings is markup a reader will refuse", () => {
     expect(svg!("<svg><g></svg>")).toBe(false);
 
     // Case-insensitively, and for the other markup extensions.
+    // Sides the scanner reads, since it abstains on sides it cannot.
     for (const path of ["A.SVG", "page.xhtml", "notes.xml", "index.html"]) {
-      expect(validityGateFor(path, "", "", ""), path).toBeDefined();
+      expect(validityGateFor(path, "<a/>", "<a/>", "<a/>"), path).toBeDefined();
     }
     // And prose has nothing to ask, which is why it is not gated.
     for (const path of ["note.md", "list.txt", "table.csv"]) {
@@ -751,6 +752,27 @@ describe("no merge of two drawings is markup a reader will refuse", () => {
     expect(canvas).toBeDefined();
     expect(canvas!('{"a":1}')).toBe(true);
     expect(canvas!('{"a":1')).toBe(false);
+  });
+
+  it("abstains on HTML the scanner cannot read, rather than refusing every merge of it", () => {
+    // Neon review, Low. The scanner is XML's, and ordinary HTML is not XML:
+    // `<meta charset>` and `<br>` never close. Every side failed it, so every
+    // concurrent edit of such a page was refused as a merge that broke the
+    // file, for as long as the file existed. The YAML gate abstains in the
+    // same position, for the same reason.
+    const base = [
+      "<html><head><meta charset=\"utf-8\"></head><body>",
+      "<p>First paragraph.<br>",
+      "<p>Second paragraph.",
+      "</body></html>",
+      "",
+    ].join("\n");
+    const mine = base.replace("First paragraph.", "First paragraph, edited here.");
+    const theirs = base.replace("Second paragraph.", "Second paragraph, edited there.");
+    const r = mergeText(base, mine, theirs, validityGateFor("page.html", base, mine, theirs));
+    expect(r.kind, r.kind === "conflict" ? r.why : "").toBe("merged");
+    // And a page that does pass keeps the gate.
+    expect(validityGateFor("page.html", "<a/>", "<a/>", "<a/>")).toBeDefined();
   });
 
   it("rejects a merge that unbalances the tags, rather than returning it", () => {

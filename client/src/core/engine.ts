@@ -7151,7 +7151,14 @@ export function validityGateFor(
 ): ((text: string) => boolean) | undefined {
   if (looksLikeJson(path)) return parsesAsJson;
   if (looksLikeExcalidraw(path)) return drawingGate(base, mine, theirs);
-  if (looksLikeMarkupPath(path)) return wellFormedMarkup;
+  // Abstaining where the sides already fail, as for YAML below: ordinary HTML
+  // (`<br>`, `<meta>`) is not XML, and refusing every merge of a page the
+  // scanner cannot read is not a check (Neon review, Low).
+  if (looksLikeMarkupPath(path)) {
+    return wellFormedMarkup(base) && wellFormedMarkup(mine) && wellFormedMarkup(theirs)
+      ? wellFormedMarkup
+      : undefined;
+  }
   if (looksLikeYaml(path)) {
     // Abstaining where the sides already fail, the way `drawingGate` does.
     // This gate reads a subset of YAML, so a document shape it gets wrong
