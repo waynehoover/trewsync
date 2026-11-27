@@ -1376,6 +1376,23 @@ describe("errors", () => {
  * platform cared to wait, and the CLI held the vault's lock for the whole of it.
  */
 describe("a connection that never opens", () => {
+  // Neon review #42. A transport closed before it connected still opened a
+  // socket, and nothing ever closed it, because die() had already run.
+  it("opens no socket once it has been closed", async () => {
+    const socket = new FakeSocket();
+    let made = 0;
+    const t = new Transport("ws://test", {
+      onBatch: () => {},
+      socketFactory: () => (made++, socket),
+      timeoutMs: 1000,
+    });
+    t.close();
+    const connecting = t.connect();
+    socket.open();
+    await expect(connecting).rejects.toThrow(/closed by this device/);
+    expect(made, "a socket was opened for a closed transport").toBe(0);
+  });
+
   it("gives up within the timeout and closes the socket", async () => {
     vi.useFakeTimers();
     try {

@@ -854,6 +854,9 @@ export class Transport {
    */
   async connect(): Promise<void> {
     if (this.socket) throw new Error("already connected");
+    // Closed before it opened: a socket opened now would outlive the die()
+    // that already ran, with nothing left to close it (Neon review #42).
+    if (this.closed) throw this.closeReason ?? new ConnectionError("not connected");
     const factory = this.opts.socketFactory ?? defaultSocketFactory;
     const socket = factory(this.url);
     // Bodies as bytes. Browsers default to Blob, which would mean an await
