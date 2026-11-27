@@ -458,3 +458,34 @@ func TestARestoreKeepsAFolderThatHoldsANoteUnderAnotherSpelling(t *testing.T) {
 	sameVault(t, "after the restore", h.vaultAt(t, 0), before)
 	h.verified(t)
 }
+
+// A folder restore that would put a note back beside one that folds like it
+// is refused at the preview, as the commit refuses it, naming the collision:
+// what a preview shows is exactly what the apply does. Here the note kept as
+// moved in holds the folded key. A name made since that the restore removes
+// first is no collision, at the preview or the apply (Neon review #30).
+func TestARestoreThatWouldCollideIsRefusedAtThePreview(t *testing.T) {
+	h := newTestStore(t)
+	h.file(t, "Projects/a.md", "held the name at the point")
+	h.file(t, "Outside/A.md", "arrives later")
+	at := h.latest(t)
+	h.appendAs(t, Entry{Path: "Projects/a.md", Deleted: true, MTime: 43})
+	h.move(t, "Outside/A.md", "Projects/A.md", "arrives later")
+
+	_, err := h.PlanRestore(RestoreRequest{Vault: "v1", ToUID: at, Now: 7000, Folder: "Projects", NotesOnly: true})
+	var oe *OpError
+	if !errors.As(err, &oe) || oe.Code != OpCodeCollision || oe.Path != "Projects/a.md" || !errors.Is(err, ErrCollision) {
+		t.Fatalf("the preview of a restore the commit refuses as a collision: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Projects/A.md") {
+		t.Errorf("the refusal does not name the path in the way: %v", err)
+	}
+
+	g := newTestStore(t)
+	at = g.file(t, "Notes/b.md", "the point").UID
+	g.appendAs(t, Entry{Path: "Notes/b.md", Deleted: true, MTime: 43})
+	g.file(t, "Notes/B.md", "made since")
+	g.restoreAsDevice(t, RestoreRequest{ToUID: at, Folder: "Notes"})
+	sameVault(t, "after the restore", g.vaultAt(t, 0), map[string]string{"Notes/b.md": "the point"})
+	g.verified(t)
+}
