@@ -2390,7 +2390,9 @@ export class Engine {
         this.log("written-off file is gone, and the server never had it", path);
       } else if (skip) {
         const here = onDisk.has(path);
-        if (fingerprintOf(this.entries.get(path), this.remote.get(path), here) === skip.fingerprint) {
+        if (
+          fingerprintOf(this.entries.get(path), this.remote.get(path), here) === skip.fingerprint
+        ) {
           noteSkipped(report, path);
           continue;
         }
@@ -3048,7 +3050,9 @@ export class Engine {
       action.kind === "upload" &&
       local !== undefined &&
       (chosen.sent ?? local.hash) === local.hash;
-    const holding = writesHere ? !this.applyingSettings || !shown : unreadByObsidian && !sendingChoice;
+    const holding = writesHere
+      ? !this.applyingSettings || !shown
+      : unreadByObsidian && !sendingChoice;
     if (holding && action.kind !== "nothing") {
       this.heldSettings.add(path);
       report.settingsHeld++;

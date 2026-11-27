@@ -177,7 +177,10 @@ describe("an incoming version over perFileMax", () => {
     });
     await accepted(engine, 1);
     const report = await engine.sync();
-    expect(socket.sentText.filter((m) => m["op"] === "fetch"), "fetched anyway").toHaveLength(0);
+    expect(
+      socket.sentText.filter((m) => m["op"] === "fetch"),
+      "fetched anyway",
+    ).toHaveLength(0);
     expect(report.retrying).toBe(0);
     expect(report.skipped).toBe(1);
     expect(vault.text("big.md")).toBeUndefined();

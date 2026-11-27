@@ -761,7 +761,7 @@ describe("no merge of two drawings is markup a reader will refuse", () => {
     // file, for as long as the file existed. The YAML gate abstains in the
     // same position, for the same reason.
     const base = [
-      "<html><head><meta charset=\"utf-8\"></head><body>",
+      '<html><head><meta charset="utf-8"></head><body>',
       "<p>First paragraph.<br>",
       "<p>Second paragraph.",
       "</body></html>",

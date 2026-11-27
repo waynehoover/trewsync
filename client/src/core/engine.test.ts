@@ -5169,7 +5169,9 @@ describe("settings", () => {
       // A failed pass is what is being simulated.
     }
     expect(desk.transport.putMany, "the failing put was never tried").toBe(put);
-    expect((await settleCounting(desk)).uploaded, "the choice was never retried").toBeGreaterThan(0);
+    expect((await settleCounting(desk)).uploaded, "the choice was never retried").toBeGreaterThan(
+      0,
+    );
     const [newest] = await desk.transport.history(app, { limit: 1 });
     expect(newest?.device).toBe("desk");
     expect(newest?.size).toBe(json({ tabSize: 2 }).length);
