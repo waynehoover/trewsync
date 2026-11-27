@@ -1344,6 +1344,13 @@ func (s *Store) measure(bodyBytes bool) (Footprint, error) {
 		var size int64
 		if bodyBytes || temp || quarantined {
 			info, err := d.Info()
+			if os.IsNotExist(err) {
+				// Gone since the listing: an upload's temp file renamed into
+				// place, the health probe removed, a body swept. Returned, it
+				// ended the walk and the check below read it as no store at
+				// all, an empty footprint with no error.
+				return nil
+			}
 			if err != nil {
 				return err
 			}

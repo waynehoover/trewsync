@@ -2,6 +2,7 @@ package chunks
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -892,5 +893,47 @@ func TestACorruptUploadLeavesNoNameWithheld(t *testing.T) {
 	s.unprovenMu.Unlock()
 	if n != 0 {
 		t.Fatalf("%d names are withheld after uploads that wrote nothing", n)
+	}
+}
+
+// Tally and Measure walk past a file that goes while they walk: an upload's
+// temp file renamed into place, or the health probe removed. Measure stats
+// the temp files it lists, and one gone by then ended the walk with ENOENT,
+// which the check for a missing chunk root then read as an empty store: no
+// bodies and none quarantined, so the alert loop missed a quarantined body
+// (Neon review #32).
+func TestMeasureWalksPastAFileThatGoesWhileItWalks(t *testing.T) {
+	s := newTestStore(t)
+	body := []byte("a real body")
+	if err := s.Put("v1", Name(body), body); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				// Many at once, as a batch's uploads are, so the walk lists
+				// them all and stats each one while they are being removed.
+				for i := 0; i < 200; i++ {
+					_ = os.WriteFile(filepath.Join(s.Root(), fmt.Sprintf("%s%d", tmpPrefix, i)), nil, 0o600)
+				}
+				for i := 0; i < 200; i++ {
+					_ = os.Remove(filepath.Join(s.Root(), fmt.Sprintf("%s%d", tmpPrefix, i)))
+				}
+			}
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	deadline := time.Now().Add(time.Second)
+	for i := 0; time.Now().Before(deadline); i++ {
+		f, err := s.Tally()
+		if err != nil || f.Bodies != 1 {
+			t.Fatalf("tally %d: %d bodies (%v), and the store holds 1", i, f.Bodies, err)
+		}
 	}
 }
