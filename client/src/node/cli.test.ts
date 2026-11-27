@@ -37,7 +37,13 @@ import {
   TestServer,
   serversRunning,
 } from "../../test/core/test-server.ts";
-import { MAX_NAME_BYTES, ProtocolError, Transport, checkName } from "../core/transport.ts";
+import {
+  ConnectionError,
+  MAX_NAME_BYTES,
+  ProtocolError,
+  Transport,
+  checkName,
+} from "../core/transport.ts";
 import { base64urlDecode, base64urlEncode } from "../core/digest.ts";
 import { PLAINTEXT_WARNING, formatInviteString } from "../core/invite-string.ts";
 import {
@@ -53,6 +59,7 @@ import { loadConfig, saveConfig } from "./config.ts";
 import {
   asTyped,
   deviceNameFor,
+  interrupt,
   run,
   exitCodeFor,
   normaliseUrl,
@@ -1216,6 +1223,43 @@ describe("renaming this device", () => {
     const done = await cli("rename", "laptop", "--dir", a, "--json");
     expect(done.json()["name"], done.all).toBe("laptop");
   }, 60_000);
+});
+
+describe("watching across reconnections", () => {
+  it("lets go of each connection it has closed (Neon review #50)", async () => {
+    await fresh();
+    const { a } = await twoDevices();
+    const closes = new Map<Client, number>();
+    const close = Client.prototype.close;
+    const closeSpy = vi.spyOn(Client.prototype, "close").mockImplementation(async function (
+      this: Client,
+    ) {
+      closes.set(this, (closes.get(this) ?? 0) + 1);
+      return close.apply(this);
+    });
+    let connections = 0;
+    const runUntilClosed = Client.prototype.runUntilClosed;
+    const runSpy = vi.spyOn(Client.prototype, "runUntilClosed").mockImplementation(async function (
+      this: Client,
+    ) {
+      if (++connections < 4) return new ConnectionError("dropped for the test");
+      return runUntilClosed.apply(this);
+    });
+    try {
+      const watching = cli("sync", "--watch", "--dir", a);
+      const deadline = Date.now() + 60_000;
+      while (connections < 4 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+      expect(connections).toBeGreaterThanOrEqual(4);
+      interrupt();
+      await watching;
+    } finally {
+      runSpy.mockRestore();
+      closeSpy.mockRestore();
+    }
+    // A stop closes the live connection; one closed before it is not held to be closed again.
+    const again = [...closes.values()].filter((n) => n > 1);
+    expect(again.length, "connections closed long ago were still held").toBeLessThanOrEqual(1);
+  }, 120_000);
 });
 
 describe("unlinking", () => {

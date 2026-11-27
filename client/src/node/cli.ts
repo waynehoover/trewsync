@@ -1206,6 +1206,7 @@ async function watchForever(config: Config, args: Args, io: Console): Promise<nu
   // records out of order and leave the older one on disk.
   let recorded: string | undefined;
   let recording = Promise.resolve();
+  let connecting: Client | undefined;
   const record = (report: SyncReport): void => {
     const now = JSON.stringify([needsAttention(report), report.needsAttention ?? []]);
     if (now === recorded) return;
@@ -1240,6 +1241,10 @@ async function watchForever(config: Config, args: Args, io: Console): Promise<nu
         stopping.wake = wake;
       },
       onConnecting: (client) => {
+        // The one before it has been closed by now (`runForever` awaits it),
+        // and holding it would keep every engine a long watch ever made.
+        if (connecting !== undefined) stopping.clients.delete(connecting);
+        connecting = client;
         stopping.clients.add(client);
         if (stopping.asked) void client.close().catch(() => undefined);
       },
