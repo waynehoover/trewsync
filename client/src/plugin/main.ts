@@ -3346,8 +3346,19 @@ export default class TrewPlugin extends Plugin {
    */
   private vaultForRecovery(): ObsidianVault {
     if (this.liveVault) return this.liveVault;
+    // Scoped as the run's is, so a settings file it displaced resolves too.
+    const config = this.config;
+    const settings = config ? this.settingsScope(config) : undefined;
     return new ObsidianVault(this.app.vault, this.app.vault.configDir, undefined, {
       displacedLog: `${this.pluginDir()}/${DISPLACED_LOG}`,
+      ...(config?.ignore?.length ? { ignore: config.ignore } : {}),
+      ...(settings !== undefined
+        ? {
+            settings: settings.root,
+            plugins: settings.plugins === true,
+            ownFolder: this.pluginDir(),
+          }
+        : {}),
     });
   }
 

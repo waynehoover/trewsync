@@ -2373,6 +2373,28 @@ describe("a version kept where Obsidian cannot see it", () => {
   });
 });
 
+describe("a settings version kept where Obsidian cannot see it, while not syncing", () => {
+  it("can be recovered under another group's name (Neon review #37)", async () => {
+    const { plugin, app } = await load();
+    (plugin as unknown as { config: unknown }).config = { settings: ".obsidian-desktop" };
+    const hidden = ".obsidian/.trew-tmp-review/app.json";
+    app.vault.adapter.seed(hidden, '{"theme":"dark"}\n');
+    app.vault.adapter.seed(".obsidian/app.json", '{"theme":"light"}\n');
+
+    const at = await plugin.recoverDisplaced({
+      at: hidden,
+      from: ".obsidian-desktop/app.json",
+      why: "a crash cut it short",
+      when: 1,
+    });
+    expect(at).not.toBe(".obsidian-desktop/app.json");
+    expect(app.vault.adapter.text(".obsidian/app.json")).toBe('{"theme":"light"}\n');
+    expect(app.vault.adapter.text(at.replace(".obsidian-desktop/", ".obsidian/"))).toBe(
+      '{"theme":"dark"}\n',
+    );
+  });
+});
+
 describe("on a device with no status bar", () => {
   it("shows a connected phone loading history before it can sync notes", async () => {
     await fresh();

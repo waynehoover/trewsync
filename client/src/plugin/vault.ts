@@ -1827,16 +1827,20 @@ export class ObsidianVault implements Vault {
   /** One record of `recoverInterruptedWrite`, put right or left on record. */
   private async putRight(record: InPlaceWrite): Promise<void> {
     const { path, keepAt, was } = record;
+    // The record holds the names on the disk. What resolves a name (a removal,
+    // the displaced log's recovery) takes the engine's, which differ for
+    // settings synced under another group's name (`fromDisk`).
+    const keptAs = this.fromDisk(keepAt);
     try {
       const here = await readRaw(this.adapter, path).catch(() => undefined);
       const digest = here === undefined ? undefined : await plainDigest(here);
       if (here === undefined || digest === record.before) {
-        if (here !== undefined) await this.dropIfStill(keepAt, record.before);
+        if (here !== undefined) await this.dropIfStill(keptAs, record.before);
         await this.writeDown(path, undefined);
         return;
       }
       if (digest === record.next) {
-        if (record.beforeIsServers) await this.dropIfStill(keepAt, record.before);
+        if (record.beforeIsServers) await this.dropIfStill(keptAs, record.before);
         await this.writeDown(path, undefined);
         return;
       }
@@ -1849,7 +1853,9 @@ export class ObsidianVault implements Vault {
       const folder = await freeRemovalFolder(this.adapter, path);
       const aside = `${folder}/${path.slice(path.lastIndexOf("/") + 1)}`;
       const why = `${path} was cut short by a crash while an update was written into it; this is what it held, and the note was put back`;
-      if (!(await this.ledger.record({ at: aside, from: path, why, when: Date.now() }))) {
+      if (
+        !(await this.ledger.record({ at: aside, from: this.fromDisk(path), why, when: Date.now() }))
+      ) {
         this.interrupted.add(path);
         return;
       }
@@ -1880,7 +1886,7 @@ export class ObsidianVault implements Vault {
       await verify(this.adapter, path, backup);
       // Durable before the backup and the record that stand for it go.
       await this.flush();
-      await this.dropIfStill(keepAt, record.before);
+      await this.dropIfStill(keptAs, record.before);
       await this.writeDown(path, undefined);
     } catch (err) {
       this.interrupted.add(path);

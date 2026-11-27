@@ -2934,6 +2934,46 @@ describe("an in-place update a crash interrupted, at the next start", () => {
     expect(a.filePaths().filter((p) => p.startsWith("note ("))).toEqual([]);
   });
 
+  it("puts right a settings file synced under another group's name (Neon review #37)", async () => {
+    const a = new FakeAdapter();
+    const opts = { settings: ".obsidian-desktop" };
+    a.seed(".obsidian/app.json", '{"theme":"dark"}\n', 1000);
+    const v = new ObsidianVault(asVault(new FakeVaultIndex(a)), ".obsidian", () => {}, opts);
+    let dead = false;
+    a.fault = (op, path) => {
+      if (dead) return new Error("the process was killed");
+      if (op === "write" && path === ".obsidian/app.json") {
+        dead = true;
+        return 4;
+      }
+      return undefined;
+    };
+    await v
+      .replace(
+        ".obsidian-desktop/app.json",
+        { contentId: await plainDigest(encode('{"theme":"dark"}\n')), idOf: plainDigest },
+        encode('{"theme":"light"}\n'),
+        { mtime: 2000, ctime: 1000 },
+        ".obsidian-desktop/app (kept).json",
+      )
+      .catch(() => undefined);
+    a.fault = undefined;
+    expect(a.text(".obsidian/app.json")).toHaveLength(4);
+    expect(a.text(".obsidian/app (kept).json")).toBe('{"theme":"dark"}\n');
+
+    const restarted = new ObsidianVault(
+      asVault(new FakeVaultIndex(a)),
+      ".obsidian",
+      () => {},
+      opts,
+    );
+    await restarted.list();
+    expect(a.text(".obsidian/app.json")).toBe('{"theme":"dark"}\n');
+    expect(a.text(".obsidian/app (kept).json"), "the backup was left behind").toBeUndefined();
+    expect(restarted.displaced.map((d) => d.from)).toEqual([".obsidian-desktop/app.json"]);
+    await expect(restarted.exists(restarted.displaced[0]!.from)).resolves.toBe(true);
+  });
+
   it("fails the listing rather than reading past a record it cannot read", async () => {
     const a = new FakeAdapter();
     await crashDuringUpdate(a);
