@@ -79,10 +79,10 @@ const replacement = '\ufffd'
 //     U+2066 to U+2069), which can make text read differently from how it
 //     is stored; the tag characters (U+E0000 to U+E007F), which render as
 //     nothing and can carry a whole invisible sentence, except inside an
-//     emoji tag sequence (a black flag, tag letters or digits, and a cancel
-//     tag, as in the flag of Scotland); and a variation selector directly
-//     after another, since a character takes at most one and runs of them
-//     can carry arbitrary bytes. The left-to-right and right-to-left marks,
+//     emoji tag sequence (a black flag, one to seven tag letters or digits,
+//     and a cancel tag, as in the flag of Scotland); and a variation
+//     selector directly after another, since a character takes at most one
+//     and runs of them can carry arbitrary bytes. The left-to-right and right-to-left marks,
 //     the zero-width joiners and a single variation selector stay: scripts
 //     and emoji need them.
 //  3. Imitations of the envelope's framing are defused: a reserved name
@@ -135,14 +135,15 @@ func variationSelector(r rune) bool {
 }
 
 // emojiTagSequence is the length in bytes of the tag characters that follow a
-// black flag at the start of s, when they form an emoji tag sequence: one or
-// more tag letters or digits and a cancel tag. It is 0 otherwise.
+// black flag at the start of s, when they form an emoji tag sequence: one to
+// seven tag letters or digits (a Unicode subdivision id is at most seven) and
+// a cancel tag. It is 0 otherwise, so a longer run is not a hiding place.
 func emojiTagSequence(s string) int {
 	n, i := 0, 0
 	for i < len(s) {
 		r, size := utf8.DecodeRuneInString(s[i:])
 		switch {
-		case 0xe0030 <= r && r <= 0xe0039, 0xe0061 <= r && r <= 0xe007a:
+		case n < 7 && (0xe0030 <= r && r <= 0xe0039 || 0xe0061 <= r && r <= 0xe007a):
 			n++
 		case r == 0xe007f && n > 0:
 			return i + size

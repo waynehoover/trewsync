@@ -333,3 +333,17 @@ func TestConventionsCheck(t *testing.T) {
 		}
 	}
 }
+
+// today_note's epoch is refused as stale when the store has another, whether
+// or not the call creates: the argument says so, and a preview, which writes
+// nothing either, is held to it too (Neon review, Low finding on mcp/daily.go).
+func TestTodayNoteRefusesAStaleEpochWithoutCreate(t *testing.T) {
+	r := newRig(t)
+	a := r.writer("agent")
+	for _, args := range []map[string]any{{"epoch": "another-epoch"}, {"epoch": "another-epoch", "create": true}} {
+		if code := refused(t, invoke(t, a.cs, "today_note", args)); code != "stale" {
+			t.Fatalf("%v: %s, want stale", args, code)
+		}
+	}
+	daily(t, invoke(t, a.cs, "today_note", map[string]any{"epoch": r.epoch()}))
+}

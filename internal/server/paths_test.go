@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/waynehoover/trewsync/internal/paths"
 	"github.com/waynehoover/trewsync/internal/wire"
 )
 
@@ -204,5 +205,18 @@ func TestTheBadpathMatrixThroughASession(t *testing.T) {
 	}
 	if after := r.mustStats().Versions; after != before {
 		t.Fatalf("%d versions committed from frames that are not text", after-before)
+	}
+}
+
+// A restore's folder over the path limit is refused with the reason first,
+// as every other path the rules refuse (plan/protocol.md, "Restore"; Neon
+// review, Low finding on restore.go).
+func TestARestoreFolderTooLongLeadsWithItsReason(t *testing.T) {
+	r := newRig(t)
+	c := r.dial("laptop")
+	c.hello(0)
+	c.sendJSON(wire.In{Op: "restore", Folder: strings.Repeat("a", paths.MaxPathBytes+1), At: 1})
+	if msg := c.expectErr(wire.CodeBadPath); !strings.HasPrefix(msg, string(paths.ReasonTooLong)+": ") {
+		t.Fatalf("refused as %q, want it to lead with toolong", msg)
 	}
 }

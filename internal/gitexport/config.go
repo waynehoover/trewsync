@@ -246,6 +246,11 @@ func (s *Settings) check(dataDir string) error {
 		if strings.ContainsAny(s.Key+s.KnownHosts, "\x00\n") {
 			return errors.New("the key and known_hosts paths cannot hold a newline")
 		}
+		// ssh reads the known_hosts path inside double quotes, where these
+		// two would end or escape it.
+		if strings.ContainsAny(s.KnownHosts, "\"\\") {
+			return errors.New("the known_hosts path cannot hold a double quote or a backslash")
+		}
 	case TransportHTTPS:
 		if s.Key != "" {
 			return errors.New("an HTTPS remote takes -token, a file holding an access token, not -key")

@@ -57,3 +57,50 @@ func TestResendIsBoundedByTheChunkCeilingNotTheFileCeiling(t *testing.T) {
 		t.Fatalf("repair changed history: latest %d, expected %d; %v", latest, uid, err)
 	}
 }
+
+// resent's Stored counts the bodies this exchange stored, out of the ones it
+// asked for. Worked out against every chunk the request named, a body that
+// was present when the server asked and lost meanwhile (quarantined by
+// another session's read, say) was subtracted from the bodies the device had
+// just sent, and Stored could fall to zero or below (Neon review, Low finding
+// on session.go handleResend).
+func TestResendCountsTheBodiesItStored(t *testing.T) {
+	r := newRig(t)
+	lost, kept := []byte("the body the device sends again"), []byte("a body that goes missing meanwhile")
+	names := []string{chunks.Name(lost), chunks.Name(kept)}
+	for i, b := range [][]byte{lost, kept} {
+		if err := r.st.Chunks().Put(testVault, names[i], b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.st.AppendEntry(testVault, store.Entry{Path: "note.md", Size: int64(len(lost) + len(kept)),
+		CTime: 1, MTime: 1, Chunks: names}); err != nil {
+		t.Fatal(err)
+	}
+	remove := func(name string) {
+		t.Helper()
+		path, err := r.st.Chunks().Path(testVault, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	remove(names[0])
+	cl := r.dial("repairing")
+	cl.hello(0)
+	cl.sendJSON(wire.In{Op: "resend", Chunks: names})
+	var want wire.Want
+	cl.recvInto("want", &want)
+	if len(want.Chunks) != 1 || want.Chunks[0] != names[0] {
+		t.Fatalf("asked for %v, want the lost body only", want.Chunks)
+	}
+	remove(names[1])
+	cl.sendBinary(lost)
+	var repaired wire.Resent
+	cl.recvInto("resent", &repaired)
+	if repaired.Stored != 1 {
+		t.Fatalf("stored the one body asked for and reported %+v", repaired)
+	}
+}

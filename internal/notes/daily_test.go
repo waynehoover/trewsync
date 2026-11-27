@@ -1,6 +1,7 @@
 package notes
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -93,6 +94,16 @@ func TestRenderTemplateFillsObsidiansPlaceholders(t *testing.T) {
 	}
 }
 
+func TestRenderTemplateStopsAtTheNoteLimit(t *testing.T) {
+	// Neon review #20: a template that expands past a note's limit is
+	// refused while it renders, not after the whole expansion is built.
+	tpl := Template{Variables: map[string]string{"a": strings.Repeat("x", 8192)}}
+	got, err := RenderTemplate(strings.Repeat("{{a}}", 200), tpl)
+	if refusalCode(err) != "input_too_large" || got != "" {
+		t.Fatalf("%d bytes, %v; want input_too_large", len(got), err)
+	}
+}
+
 func TestAppendUnderHeading(t *testing.T) {
 	cases := []struct {
 		name, note, heading, text, want string
@@ -115,6 +126,10 @@ func TestAppendUnderHeading(t *testing.T) {
 		{"a setext heading of a lower level does not", "# Day\nx\n\nSub\n---\ny\n# Next\n", "# Day", "- b",
 			"# Day\nx\n\nSub\n---\ny\n- b\n# Next\n"},
 		{"an empty heading ends the section", "## Tasks\n- a\n##\nx\n", "## Tasks", "- b", "## Tasks\n- a\n- b\n##\nx\n"},
+		// Neon review, Low finding on sectionHeadings: an empty heading in a
+		// list item is not where the empty top-level one after it is.
+		{"an empty heading after one in a list item", "## Tasks\n- a\n  ##\n\n#\nx\n", "## Tasks", "- b",
+			"## Tasks\n- a\n  ##\n- b\n\n#\nx\n"},
 		{"CRLF", "## Tasks\r\n- a\r\n## Notes\r\n", "## Tasks", "- b", "## Tasks\r\n- a\r\n- b\r\n## Notes\r\n"},
 		{"after frontmatter", "---\ntitle: x\n---\n## Tasks\n", "## Tasks", "- b", "---\ntitle: x\n---\n## Tasks\n- b"},
 		{"a closing sequence is part of the line", "## Tasks ##\n- a\n", "## Tasks ##", "- b", "## Tasks ##\n- a\n- b"},

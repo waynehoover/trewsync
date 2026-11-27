@@ -90,6 +90,12 @@ type Handler struct {
 	stopOnce sync.Once
 	flushed  sync.WaitGroup
 
+	// calls is every request past the route checks, which Close waits for;
+	// closing, under callsMu, refuses any that arrives once it has begun.
+	callsMu sync.Mutex
+	closing bool
+	calls   sync.WaitGroup
+
 	// seam is Config.Seam.
 	seam func(point string)
 
@@ -157,9 +163,23 @@ func New(cfg Config) *Handler {
 	return h
 }
 
-// Close stops the minute flush and writes the use counts still held. Call it
-// after the listener has stopped and before the store closes.
+// Close ends the calls in flight and waits for them, stops the minute flush
+// and writes the use counts still held. Call it after the listener has
+// stopped and before the store closes: the listener's own shutdown gives up
+// at its deadline without waiting for a call still running, and the store and
+// the index must not close under one (Neon review #25).
 func (h *Handler) Close() {
+	h.callsMu.Lock()
+	h.closing = true
+	h.callsMu.Unlock()
+	h.activeMu.Lock()
+	for _, m := range h.active {
+		for cancel := range m {
+			(*cancel)()
+		}
+	}
+	h.activeMu.Unlock()
+	h.calls.Wait()
 	h.stopOnce.Do(func() { close(h.stop) })
 	h.flushed.Wait()
 	h.usage.flush()
@@ -258,6 +278,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusMethodNotAllowed, "")
 		return
 	}
+	h.callsMu.Lock()
+	if h.closing {
+		h.callsMu.Unlock()
+		plain(w, http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	h.calls.Add(1)
+	h.callsMu.Unlock()
+	defer h.calls.Done()
 	if origins := r.Header.Values("Origin"); len(origins) > 0 {
 		if len(origins) != 1 || !h.origins[origins[0]] {
 			plain(w, http.StatusForbidden, "refused")

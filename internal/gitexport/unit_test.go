@@ -256,7 +256,9 @@ func TestSSHIsRunWithOnlyTheKeyAndTheKnownHosts(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
 	key := filepath.Join(dir, "deploy key's")
-	kh := filepath.Join(dir, "known_hosts")
+	// A space in the path, which OpenSSH splits UserKnownHostsFile on unless
+	// the value is double-quoted (Neon review #35).
+	kh := filepath.Join(dir, "known hosts")
 	for _, f := range []string{key, kh} {
 		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
@@ -283,7 +285,7 @@ func TestSSHIsRunWithOnlyTheKeyAndTheKnownHosts(t *testing.T) {
 	}
 	got := string(b)
 	for _, want := range []string{"-F\n/dev/null\n", "-i\n" + key + "\n", "IdentitiesOnly=yes", "IdentityAgent=none",
-		"ForwardAgent=no", "BatchMode=yes", "StrictHostKeyChecking=yes", "UserKnownHostsFile=" + kh + "\n",
+		"ForwardAgent=no", "BatchMode=yes", "StrictHostKeyChecking=yes", "UserKnownHostsFile=\"" + kh + "\"\n",
 		"GlobalKnownHostsFile=/dev/null", "git@example.test"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("ssh was not given %q:\n%s", want, got)
