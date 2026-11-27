@@ -307,11 +307,13 @@ type Op struct {
 // reference the store's indexed check is tested against, not the check the
 // store runs: this is quadratic in the number of live paths.
 //
-// A move whose source and destination fold alike is a case-only rename and
-// never collides, because it keeps every folded key where it was; that is also
-// what lets a case-only folder rename spread across several batches.
+// A move of a live source whose source and destination fold alike is a
+// case-only rename and never collides, because it keeps every folded key where
+// it was; that is also what lets a case-only folder rename spread across
+// several batches. From a source that is not live it moves no key, and is
+// judged as the create it is (Neon review #15).
 func Collides(live []Live, op Op) bool {
-	if op.Move && Fold(op.Prev) == Fold(op.Path) {
+	if op.Move && Fold(op.Prev) == Fold(op.Path) && isLive(live, op.Prev) {
 		return false
 	}
 	if !op.Move {
@@ -375,6 +377,16 @@ func Collides(live []Live, op Op) bool {
 	return false
 }
 
+// isLive is whether path is one of the live paths.
+func isLive(live []Live, path string) bool {
+	for _, e := range live {
+		if e.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
 // FolderNotEmpty reports whether op would make a live folder entry a file while
 // a live path is still in it, under any spelling that folds alike: by an
 // update of the folder's own path, which rule 2 lets past Collides, or by a
@@ -391,7 +403,12 @@ func FolderNotEmpty(live []Live, op Op) bool {
 		if Fold(op.Prev) != Fold(op.Path) {
 			return false
 		}
-		folder = op.Prev
+		// The folder a case-only move takes away is its source's, when the
+		// source is live; from one that is not, the write lands on its own
+		// path like an update.
+		if isLive(live, op.Prev) {
+			folder = op.Prev
+		}
 	}
 	isFolder := false
 	for _, e := range live {

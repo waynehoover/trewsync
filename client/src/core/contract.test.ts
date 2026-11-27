@@ -225,6 +225,11 @@ describe("the protocol 1 contract", () => {
 
   it("gives every collision scenario the reference's verdict", () => {
     for (const s of contract.collisions.scenarios) {
+      // A stale verdict is judged before the six rules, so the collision
+      // rule is not asked of it, as internal/paths asks it of none: a
+      // case-only move from a source that is not live over a folder with a
+      // note in it is stale, and would also collide (Neon review #15).
+      if (s.expect === "stale") continue;
       expect(collides(s.live, op(s.op)), s.name).toBe(s.expect === "collision");
     }
   });
