@@ -118,7 +118,7 @@ For sync and restore, the overall `outcome.kind` is one of:
 |---|---|
 | `synced` | No outstanding issue reported for this pass. |
 | `conflicted` | Both versions were preserved. |
-| `retrying` | Paths need another attempt. |
+| `retrying` | Paths need another attempt, or the pass stopped with work left (`unfinished`). |
 | `refused` | Paths need intervention. |
 | `recoveryUnknown` | The recovery inventory is incomplete or unreadable. |
 | `recoveryNeeded` | Preserved versions remain at hidden paths and need recovery. |

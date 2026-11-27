@@ -66,6 +66,22 @@ describe("what a pass came to", () => {
     expect(outcomeOf(both).kind).toBe("retrying");
   });
 
+  // A sync that stopped at its round cap with work left is not synced, and
+  // exits 1. An ordinary deferral is still synced: a repeat upload in its
+  // cooldown or a setting in its quiet period is waiting on a clock, not
+  // work the pass could not finish (Neon review, outcomeOf).
+  it("does not call a sync that stopped with work left synced", () => {
+    const cut = outcomeOf(report({ waiting: 1, unfinished: true }));
+    expect(cut.kind).toBe("retrying");
+    expect(exitCodeOf(cut)).toBe(1);
+    const deferred = outcomeOf(report({ waiting: 3 }));
+    expect(deferred.kind).toBe("synced");
+    expect(exitCodeOf(deferred)).toBe(0);
+    // The last pass of a settle has the last word, like `waiting`.
+    expect(combinePasses(report({ unfinished: true }), report()).unfinished).toBeFalsy();
+    expect(combinePasses(report(), report({ unfinished: true })).unfinished).toBe(true);
+  });
+
   it("gives a conflict a zero exit, because keeping both is the engine working", () => {
     expect(exitCodeOf(outcomeOf(report({ conflicted: 4 })))).toBe(0);
     expect(exitCodeOf(outcomeOf(report()))).toBe(0);
