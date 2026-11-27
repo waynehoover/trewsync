@@ -3061,10 +3061,20 @@ export class NodeVault implements Vault {
    * recognised and the part set aside.
    */
   async createDirect(path: string, bytes: Uint8Array, times: Times): Promise<boolean> {
-    // A bound on open files: past it, the batch so far is made durable now.
-    if (this.unsyncedFiles.size >= MAX_UNSYNCED_FILES) await this.syncFiles();
     this.invalidateListing();
     const full = await this.absolute(path);
+    // A bound on open files: past it, the batch so far is made durable now.
+    // So too before a second handle for one name, which would replace the
+    // first in the map open, and after an fsync failed, which every flush
+    // now refuses on, so a handle opened then would be neither synced nor
+    // closed: `syncFiles` throws that failure first.
+    if (
+      this.unsyncedFiles.size >= MAX_UNSYNCED_FILES ||
+      this.unsyncedFiles.has(full) ||
+      this.fsyncFailed !== undefined
+    ) {
+      await this.syncFiles();
+    }
     await this.insideForReal(full);
     await this.checkStaging();
     const had = await this.deepestExisting(full);

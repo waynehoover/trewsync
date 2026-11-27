@@ -1416,6 +1416,36 @@ describe("a file written straight to its name", () => {
     await expect(vault.flush()).rejects.toThrow("EIO");
     await expect(vault.flush()).rejects.toThrow("EIO");
   });
+
+  it("holds no handle it cannot sync or would lose track of (low finding, Neon review)", async () => {
+    const vault = new NodeVault(root);
+    const held = (vault as unknown as { unsyncedFiles: Map<string, unknown> }).unsyncedFiles;
+    // The same name made twice before a flush: the first handle was dropped
+    // from the map open.
+    await vault.createDirect("a.md", enc.encode("one"), times);
+    const first = [...held.values()][0] as { close(): Promise<void> };
+    let closed = false;
+    const close = first.close.bind(first);
+    first.close = async () => {
+      closed = true;
+      return close();
+    };
+    await rm(join(root, "a.md"));
+    await vault.createDirect("a.md", enc.encode("two"), times);
+    expect(closed, "the first handle was left open").toBe(true);
+    await vault.flush();
+
+    // After an fsync failed every flush fails, so a handle opened then is
+    // never synced or closed.
+    await vault.createDirect("b.md", enc.encode("b"), times);
+    const handle = [...held.values()][0] as { sync(): Promise<void> };
+    handle.sync = async () => {
+      throw new Error("EIO");
+    };
+    await expect(vault.flush()).rejects.toThrow("EIO");
+    await expect(vault.createDirect("c.md", enc.encode("c"), times)).rejects.toThrow("EIO");
+    expect(held.size, "a handle was opened after the failure").toBe(0);
+  });
 });
 
 describe("a note a crash left parked, between being moved aside and replaced", () => {
