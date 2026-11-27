@@ -363,6 +363,11 @@ func todayNote(c *call, a *args) outcome {
 		return c.failWrite(te)
 	}
 	if !create {
+		// Begun without a key, as a preview is, so a stale epoch is refused
+		// here too; nothing is recorded.
+		if _, o, done := c.begin(a, "", epoch); done {
+			return o
+		}
 		obs, err := c.observe()
 		if err != nil {
 			return c.failWrite(err)
