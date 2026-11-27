@@ -948,7 +948,9 @@ async function cmdRename(args: Args, io: Console): Promise<number> {
   const wanted = deviceNameFor({ ...args, device: name, deviceGiven: true });
 
   const config = await mustLoad(args.dir);
-  const client = await open(config, args, io);
+  // Inspecting, as the other device commands do: a rename runs no pass, so
+  // nothing a peer sends meanwhile is written here or anything sent from here.
+  const client = await open(config, args, io, { waitForBacklog: false, inspect: true });
   let said: string;
   try {
     said = await client.rename(wanted);

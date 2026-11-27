@@ -1161,6 +1161,51 @@ describe("renaming this device", () => {
     expect(empty.all).toMatch(/needs a name|cannot be empty/i);
   }, 60_000);
 
+  it("runs no pass and touches no note (Neon review #51)", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    await write(b, "arrived.md", "from the other device\n");
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    await write(a, "unsent.md", "not sent by a rename\n");
+    const here = (await loadConfig(a))!;
+    const writer = new Client(
+      await clientOptions((await loadConfig(b))!, parseArgs(["sync", "--dir", b])),
+    );
+    await writer.connect();
+    let passes = 0;
+    const sync = Client.prototype.sync;
+    const syncSpy = vi.spyOn(Client.prototype, "sync").mockImplementation(async function (
+      this: Client,
+      ...rest
+    ) {
+      if (this.deviceId === here.deviceId) passes++;
+      return sync.apply(this, rest);
+    });
+    const renameOnServer = Client.prototype.rename;
+    const renameSpy = vi.spyOn(Client.prototype, "rename").mockImplementation(async function (
+      this: Client,
+      ...rest
+    ) {
+      // A peer commits while the rename is connected, with time to start a
+      // pass here if anything would.
+      await write(b, "live.md", "arrived while renaming\n");
+      await writer.settle({ coalesceWrites: false });
+      await new Promise((r) => setTimeout(r, 1_000));
+      return renameOnServer.apply(this, rest);
+    });
+    try {
+      const done = await cli("rename", "quiet-laptop", "--dir", a, "--json");
+      expect(done.code, done.all).toBe(0);
+      expect(passes, "a pass ran under rename").toBe(0);
+    } finally {
+      renameSpy.mockRestore();
+      syncSpy.mockRestore();
+      await writer.close();
+    }
+    expect(await readdir(a)).not.toContain("arrived.md");
+    expect(await readdir(a)).not.toContain("live.md");
+  }, 120_000);
+
   it("uses the name as typed, without a random tail", async () => {
     // `deviceNameFor` appends four hex characters to a *derived* name, so that
     // two laptops with one hostname differ. A name somebody typed is theirs:
