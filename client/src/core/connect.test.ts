@@ -310,3 +310,47 @@ describe("the wait for the backlog", () => {
     }
   });
 });
+
+// Neon review (Low). Work that reached the client after close still ran: a
+// batch finishing its apply armed a pass timer, and repair and release ran
+// against a closed client, release from an inspection client too.
+describe("a client that has been closed", () => {
+  it("arms no pass for a batch it finishes applying after close", async () => {
+    const { socket, client } = clientOnFakeSocket();
+    const connecting = client.connect();
+    await sayReady(socket, 0);
+    socket.raw({ op: "caught-up", cursor: 0 });
+    await connecting;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const accept = client.engine.acceptBatch.bind(client.engine);
+    client.engine.acceptBatch = async (batch) => {
+      await gate;
+      await accept(batch);
+    };
+    const entry = { uid: 1, path: "F", size: 0, ctime: 1, mtime: 1, folder: true, deleted: false };
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [{ ...entry, chunks: [], device: "p" }] });
+    await settle();
+    const closing = client.close();
+    release();
+    await closing;
+    await client.transport.drainReceived().catch(() => undefined);
+    expect((client as unknown as { soonTimer?: unknown }).soonTimer).toBeUndefined();
+  });
+
+  it("refuses repair and release", async () => {
+    const { client } = clientOnFakeSocket();
+    await client.close();
+    await expect(client.repair()).rejects.toThrow(/closed/);
+    await expect(client.release(["a.md"])).rejects.toThrow(/closed/);
+  });
+
+  it("refuses release from an inspection client, which holds no lock", async () => {
+    const { client } = clientOnFakeSocket({ inspect: true });
+    try {
+      await expect(client.release(["a.md"])).rejects.toThrow(/not to sync/);
+    } finally {
+      await client.close();
+    }
+  });
+});

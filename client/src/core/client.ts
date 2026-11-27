@@ -789,7 +789,10 @@ export class Client {
   private soon(): void {
     // Initial sync belongs to the caller after connect finishes. A partial
     // backlog cannot safely decide which files exist only on this device.
-    if (!this.caughtUp || this.soonTimer !== undefined || this.opts.manual === true) return;
+    // Nor after close: a batch still being applied then would arm a timer
+    // for a pass that can never run.
+    if (this.closing || !this.caughtUp || this.soonTimer !== undefined || this.opts.manual === true)
+      return;
     this.soonTimer = setTimeout(() => {
       // Retain the scheduled marker until this snapshot finishes checking.
       // The engine may still be applying frames already on the socket;
@@ -1025,12 +1028,24 @@ export class Client {
    * through rewriting.
    */
   async repair(): Promise<RepairReport> {
-    return this.serial(() => this.engine.repair());
+    return this.serial(() => {
+      // As a pass is refused: close drains the queue, and this could be
+      // queued after it.
+      if (this.closing) throw new ConnectionError("this client has been closed");
+      return this.engine.repair();
+    });
   }
 
   /** Frees the space of files the server holds, never alongside a pass (`Engine.release`). */
   async release(paths: readonly string[]): Promise<ReleaseReport> {
-    return this.serial(() => this.engine.release(paths));
+    return this.serial(() => {
+      if (this.closing) throw new ConnectionError("this client has been closed");
+      // It removes local copies, and an inspection client holds no lock.
+      if (this.opts.inspect === true) {
+        throw new Error("this client is connected to read, not to sync, and release writes");
+      }
+      return this.engine.release(paths);
+    });
   }
 
   /**
