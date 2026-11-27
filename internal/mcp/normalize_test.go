@@ -55,6 +55,10 @@ func TestNormalize(t *testing.T) {
 			"\U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f", Changes{}},
 		{"a cancel tag alone", "\U000e007f", "\ufffd", Changes{Replaced: 1}},
 		{"a flag with an unfinished sequence", "\U0001f3f4\U000e0067\U000e0062", "\U0001f3f4\ufffd\ufffd", Changes{Replaced: 2}},
+		// Neon review #21: a subdivision is at most seven characters, so a
+		// longer run is hidden text behind a flag, not a flag.
+		{"a flag with a sequence too long to be one", "\U0001f3f4" + tags("abcdefgh") + "\U000e007f",
+			"\U0001f3f4" + strings.Repeat("\ufffd", 9), Changes{Replaced: 9}},
 		{"one variation selector stays", "\u2764\ufe0f and \u845b\U000e0100", "\u2764\ufe0f and \u845b\U000e0100", Changes{}},
 		{"stacked variation selectors", "a\ufe00\ufe01\ufe02", "a\ufe00\ufffd\ufffd", Changes{Replaced: 2}},
 		{"bytes smuggled in variation selectors", "x\U000e0100\U000e0141\U000e01a2\U000e0110\U000e0105",
