@@ -6897,6 +6897,70 @@ describe("undoing a change from the history panel", () => {
 });
 
 /**
+ * Neon review #52. A modal left open across an unload acted for the unloaded
+ * instance: its buttons wrote data.json and resolved conflicts beside the
+ * next one.
+ */
+describe("modals across an unload", () => {
+  it("are closed by it", async () => {
+    const { plugin } = await load();
+    (plugin as unknown as { client: unknown }).client = {
+      restoreTo: async () => ({ notes: [] }),
+      undo: async () => ({ notes: [] }),
+      history: async () => [],
+      close: async () => undefined,
+    };
+    plugin.openRestoreTime("");
+    plugin.openHistory("note.md");
+    (plugin as unknown as { openConflicts(): void }).openConflicts();
+    plugin.commands.find((c) => c.id === "recover-deleted")!.callback!();
+    const opened = modals.filter((m) => m.isOpen);
+    expect(opened.length).toBe(4);
+    plugin.onunload();
+    expect(opened.filter((m) => m.isOpen).map((m) => m.constructor.name)).toEqual([]);
+    (plugin as unknown as { client: unknown }).client = undefined;
+  });
+
+  it("refuses an unlink while a settings conflict's choice is sent before the reload", async () => {
+    const { plugin } = await load();
+    const held = deferred();
+    const entered = deferred();
+    (plugin as unknown as { client: unknown }).client = {
+      resolveConflict: async () => {
+        entered.resolve();
+        await held.promise;
+      },
+      sync: async () => ({}),
+      close: async () => undefined,
+    };
+    (plugin as unknown as { openConflicts(): void }).openConflicts();
+    const source = (
+      modals.at(-1) as unknown as {
+        source: { resolve(review: unknown, choice: string): Promise<void> };
+      }
+    ).source;
+    const reload = vi.fn();
+    vi.stubGlobal("window", withTimers({ location: { reload } }));
+    try {
+      const resolving = source.resolve(
+        {
+          original: ".obsidian/app.json",
+          copy: ".obsidian/app (Conflicted copy phone 202609101200).json",
+        },
+        "copy",
+      );
+      await entered.promise;
+      await expect(plugin.unlink()).rejects.toThrow("being applied");
+      held.resolve();
+      await resolving;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
  * Neon review #17. Forgetting the settings replay after a pass wrote the
  * config beside a settings change: the change then found the config changed
  * under it and stopped without starting sync again, and a rename's write could
