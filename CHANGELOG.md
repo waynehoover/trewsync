@@ -11,6 +11,96 @@ client can talk; upgrade the server first.
 
 ## Unreleased
 
+## 0.16.9, plugin, 0.15.4, server, and trew 0.14.3 (2026-11-27)
+
+Fixes from a second review of the whole project, most of them about keeping
+every edit through merges, crashes and restores. The plugin and `trew` work
+with trewd 0.15.0 or later, and nothing changes in the protocol or the store.
+This server release also carries 0.15.3's security fixes, for anyone who has
+not upgraded since 0.15.2.
+
+### Plugin and trew
+
+- A merge of two edits that left the note the same size, written in the same
+  millisecond as the local edit, could send the local text instead of the
+  merged one and erase the other device's edit. The merged text is sent.
+- Two devices adding the same last line, with no newline after it, gave one
+  line with the text twice; it is now kept as a conflict, both versions whole.
+- A case-only rename of a folder with more than 256 notes, or of the open
+  note, no longer takes notes off the disk until a later pass.
+- A settings conflict chosen in Review conflicts is sent again if its first
+  upload fails, rather than being forgotten for the rest of the session. A
+  setting saved while a large file uploads waits for the usual settings
+  checks. A setting that is not valid JSON is never written from a local copy.
+- A file whose last version was purged after a crash cut its write short no
+  longer retries for ever; it is kept and synced as the note it is.
+- A crash at the wrong moment can no longer make the saved index replay old
+  records over a newer one, and a record missing from the middle of the log
+  stops the replay rather than being skipped.
+- When one upload in a batch fails in a way that ends the session, the ones
+  the server had already committed are kept as sent.
+- A catch-up batch over 1 MiB that arrives with the server's first reply is
+  read rather than refused, undo and restore apply their own changes before
+  they return, and a burst of changes larger than this device can queue makes
+  it reconnect and catch up instead of stopping sync.
+- An incoming file over the server's size limit is skipped before it is
+  downloaded. Concurrent edits to an HTML file no longer always conflict, and
+  YAML front matter with an apostrophe in a value is checked properly.
+
+### Plugin
+
+- A note whose update a crash cut short, and which could not be put back at
+  the next start, is never written over or removed. A note put back after
+  such a crash is flushed before its backup is deleted.
+- A folder that a removal moved aside and could not put back is listed under
+  Versions kept out of sight, and Recover copies its notes to a visible
+  folder beside it. Recovering works while sync is paused or offline, and for
+  settings synced as Desktop only or Mobile only.
+- Restore to an earlier time saves open notes first and uses the connection
+  of the moment, so it works after a reconnect while the window is open.
+- Changing a setting while the plugin saves its first-time settings flag says
+  another settings change is in progress, rather than stopping sync, and a
+  rename made then is kept.
+- The plugin's windows close when it is disabled or reloaded, and an unlink
+  is refused while a settings conflict's choice is being applied.
+- Review conflicts opens a text file that is not UTF-8, with no preview, and
+  either version can be kept. A conflict copy's name can no longer contain
+  `.trew-tmp-`. Version history stops offering Load more for a renamed note
+  whose earlier history was purged.
+
+### trew
+
+- `trew sync` exits 1 rather than 0 when a sync stops with work left.
+- Reading a note, the lock file and the trash no longer follow a symbolic
+  link out of the vault. `trew sync --watch` no longer keeps every closed
+  connection in memory, and `trew rename` no longer syncs while it renames.
+
+### Server
+
+- Unpacking a backup writes `trew.db` only after the whole archive has been
+  verified and its chunk folders flushed.
+- A chunk uploaded just after a damaged copy of it was set aside is not
+  counted as stored until it is on disk.
+- A case-only rename from a name that is no longer live is checked as the
+  create it is, and a put that deletes a path while naming a former one is
+  refused as `badentry`.
+- A restore or undo whose preview succeeds is no longer refused when applied:
+  a collision is refused at the preview, a folder that holds a note under
+  another spelling is kept, and an undo can put a note back where it removes
+  a file. A restore of settings whose version at that time was purged is
+  refused rather than reported as kept.
+- A page of history is cut to size before its chunk lists are read, so one
+  request can no longer hold gigabytes.
+- MCP: a template that expands past the note size limit is refused, an
+  over-long emoji tag sequence is treated as invisible text, `today_note`
+  checks its `epoch` without `create`, and shutdown waits for calls in
+  flight before closing the store.
+- A search can no longer see an index generation half retired. The Git export
+  works when its data folder or known_hosts path contains a space.
+  `trewd rehearse` waits for a plaintext backup that `trewd backup` is
+  writing. `trewd doctor -deep` reports the chunk faults its deep pass found,
+  and a size too large for its unit is refused.
+
 ## 0.16.8, plugin, 0.15.3, server, and trew 0.14.2 (2026-11-19)
 
 Security fixes from a review of the whole project. The plugin and `trew` work
