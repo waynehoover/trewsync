@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/waynehoover/trewsync/internal/notes"
 	"github.com/waynehoover/trewsync/internal/store"
 )
@@ -930,4 +931,41 @@ func TestAWriteCommittedPastTheDeadlineSaysCommitted(t *testing.T) {
 	if w.OpID == "" || r.head("late.md") == 0 || r.bytesAt(r.head("late.md")) != "written after the deadline\n" {
 		t.Fatalf("the late write's reply %s, and late.md is at uid %d", e.raw, r.head("late.md"))
 	}
+}
+
+// Close waits for the calls in flight, so the caller can close the store and
+// the index after it without closing them under a running tool (Neon review
+// #25). http.Server.Shutdown gives up at its deadline without waiting for its
+// handlers, and serve closed the store as soon as it had.
+func TestCloseWaitsForTheCallsInFlight(t *testing.T) {
+	r := newRig(t)
+	a := r.writer("agent")
+	inside, release := make(chan struct{}), make(chan struct{})
+	r.h.seam = func(point string) {
+		if point == SeamBodies {
+			close(inside)
+			<-release
+		}
+	}
+	called := make(chan struct{})
+	go func() {
+		defer close(called)
+		_, _ = a.cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "create_note",
+			Arguments: map[string]any{"path": "n.md", "content": "x"}})
+	}()
+	<-inside
+	closed := make(chan struct{})
+	go func() {
+		r.h.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		close(release)
+		t.Fatal("Close returned while a call was still running")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	<-closed
+	<-called
 }
