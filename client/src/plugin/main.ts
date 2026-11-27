@@ -3380,7 +3380,9 @@ export default class TrewPlugin extends Plugin {
    * write through Obsidian, which is the part that matters.
    */
   private vaultForRecovery(): ObsidianVault {
-    if (this.liveVault) return this.liveVault;
+    // Only while a client runs: a paused or offline run's copy listed at its
+    // last pass, or never, and would answer with that.
+    if (this.liveVault && this.client) return this.liveVault;
     // Scoped as the run's is, so a settings file it displaced resolves too.
     const config = this.config;
     const settings = config ? this.settingsScope(config) : undefined;

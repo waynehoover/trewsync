@@ -2373,6 +2373,37 @@ describe("a version kept where Obsidian cannot see it", () => {
   });
 });
 
+describe("versions kept out of sight, asked for while sync is paused", () => {
+  it("lists what was written down since the last pass", async () => {
+    await fresh();
+    const { plugin, app } = await load();
+    app.vault.adapter.seed("note.md", "a note\n");
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    await (plugin as unknown as { togglePause(): Promise<void> }).togglePause();
+    expect(plugin.currentState.kind).toBe("paused");
+
+    // Written down after the paused run's last listing, as a crash record is.
+    app.vault.adapter.seed("Notes/.trew-tmp-late/Note.md", "kept after the last pass\n");
+    const recovery = (
+      plugin as unknown as {
+        vaultForRecovery(): { ledger: { record(d: unknown): Promise<boolean> } };
+      }
+    ).vaultForRecovery();
+    expect(
+      await recovery.ledger.record({
+        at: "Notes/.trew-tmp-late/Note.md",
+        from: "Notes/Note.md",
+        why: "a save raced the write",
+        when: Date.now(),
+      }),
+    ).toBe(true);
+
+    const inventory = await plugin.displacedVersions();
+    expect(inventory.waiting.map((d) => d.at)).toContain("Notes/.trew-tmp-late/Note.md");
+  }, 300_000);
+});
+
 describe("a folder a removal moved aside and could not put back", () => {
   it("is recovered as visible copies of what it holds, beside the name it had", async () => {
     const { plugin, app } = await load();
