@@ -4642,7 +4642,16 @@ export class Engine {
     if (size > creating.size) return false;
     const here = await this.opts.vault.read(path);
     if (here.length > creating.size) return false;
-    const want = await this.versionBytes(path, creating.hash, creating.size);
+    let want: Uint8Array;
+    try {
+      want = await this.versionBytes(path, creating.hash, creating.size);
+    } catch (err) {
+      // Purged since, so nothing can show the file is torn from it, and a
+      // file not shown to be torn is somebody's note (Neon review #6). As a
+      // failure, the intent stayed and the path retried for ever.
+      if (ancestorIsGone(err)) return false;
+      throw err;
+    }
     if (want.length !== creating.size) return false;
     for (let k = 0; k < here.length; k++) if (here[k] !== want[k] && here[k] !== 0) return false;
     return true;

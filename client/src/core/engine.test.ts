@@ -5600,6 +5600,53 @@ describe("what a crash left of a direct write, and what it did not", () => {
     expect(b.vault.snapshot()).toEqual({ "n.md": body });
   });
 
+  /**
+   * Neon review #6. Whether the file is torn is checked against the version
+   * the write was of, fetched by its chunks. Once a purge has taken those, the
+   * fetch fails with `nochunk`, which nothing caught: the intent was never
+   * cleared and the path retried on backoff for as long as the index lived.
+   */
+  it("decides the file as a note when the version it may be torn from is purged", async () => {
+    await fresh();
+    const a = await device("a");
+    const body = "a whole note, ".repeat(30);
+    await a.vault.write("n.md", enc(body), times);
+    await a.settle();
+    const vault = new MemoryVault();
+    vault.enableDirect();
+    const b = new Device("b", vault);
+    devices.push(b);
+    const revive = dieDuring(b, vault, 9);
+    await b.connect(server);
+    await b.engine.sync();
+    revive();
+    const torn = dec(await vault.read("n.md"));
+
+    const newer = "a different note entirely, ".repeat(30);
+    await a.vault.write("n.md", enc(newer), { mtime: 2_000, ctime: 2_000 });
+    await a.settle();
+    a.close();
+    await server.whileStopped(async () => {
+      await server.cli(
+        "purge",
+        "-vault",
+        "default",
+        "-confirm",
+        "default",
+        "-no-backup-check",
+        "-grace",
+        "0",
+      );
+    });
+    await a.connect(server);
+    await b.connect(server);
+    const r = await b.settle();
+    expect(r.retrying, "the path is stuck retrying a fetch that cannot succeed").toBe(0);
+    const here = Object.values(b.vault.snapshot());
+    expect(here).toContain(newer);
+    expect(here, "what was at the name was thrown away unverified").toContain(torn);
+  });
+
   it("decides a note a person made where a write never started as a note, and loses neither", async () => {
     await fresh();
     const a = await device("a");
