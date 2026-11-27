@@ -113,7 +113,13 @@ const openLock: Mechanism = {
     try {
       handle = await openFd(
         at,
-        constants.O_CREAT | constants.O_RDWR | O_EXLOCK | constants.O_NONBLOCK,
+        // O_NOFOLLOW: a link at the lock's name is refused, not followed out
+        // of the vault (`refuseOutsideVault` resolves only the folder).
+        constants.O_CREAT |
+          constants.O_RDWR |
+          O_EXLOCK |
+          constants.O_NONBLOCK |
+          constants.O_NOFOLLOW,
         0o600,
       );
     } catch (err) {
@@ -244,7 +250,15 @@ export async function selfTest(m: Mechanism, stateDir: string): Promise<boolean>
   }
   if (first === BUSY) return false;
   try {
-    const second = await m.take(vault, probe).catch(() => BUSY);
+    // Only BUSY is the refusal. Any other failure proves nothing, and a
+    // second exclusion handed out is released before the answer is given.
+    let second: Exclusion | typeof BUSY;
+    try {
+      second = await m.take(vault, probe);
+    } catch {
+      return false;
+    }
+    if (second !== BUSY) await second.release();
     return second === BUSY;
   } finally {
     await first.release();
