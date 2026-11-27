@@ -2822,6 +2822,39 @@ describe("writing over a file the pass did not decide about", () => {
   });
 });
 
+describe("a folder removal a kill interrupted, at the next start", () => {
+  it("still reports what it moved aside when it cannot be put back (Neon review #11)", async () => {
+    adapter.seed("Notes/keep.md", "synced\n");
+    let saved = false;
+    adapter.beforeRename = (from) => {
+      if (from === "Notes" && !saved) {
+        saved = true;
+        adapter.seed("Notes/draft.md", "typed in the window\n");
+      }
+    };
+    adapter.fault = (op, path) =>
+      saved && op === "list" && path.includes(".trew-tmp-") ? new Error("killed") : undefined;
+    await adapter.remove("Notes/keep.md");
+    await vault.removeFolder("Notes").catch(() => undefined);
+    expect(saved).toBe(true);
+    adapter.beforeRename = undefined;
+    adapter.fault = undefined;
+    const hidden = adapter
+      .everything()
+      .find((p) => p.endsWith("draft.md") && p.includes(".trew-tmp-"));
+    expect(hidden).toBeDefined();
+
+    // At the restart nothing can be moved out of the hidden folder.
+    adapter.fault = (op, path) =>
+      op === "rename" && path.includes(".trew-tmp-") ? new Error("EIO") : undefined;
+    const restarted = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian");
+    await restarted.list();
+    adapter.fault = undefined;
+    expect(adapter.text(hidden!)).toBe("typed in the window\n");
+    expect(restarted.stranded.length, "what the removal moved aside is hidden").toBeGreaterThan(0);
+  });
+});
+
 describe("an in-place update a crash interrupted, at the next start", () => {
   const encode = (s: string) => new TextEncoder().encode(s);
   /** Starts an in-place update of note.md and kills the process at the note's write. */

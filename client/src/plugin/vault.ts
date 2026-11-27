@@ -2748,6 +2748,8 @@ export class ObsidianVault implements Vault {
         }
         await this.putBackInto(hidden, home, d.from);
       } catch (err) {
+        // Still reported as the folder it is, rather than hidden (RR2).
+        looked.delete(d.at);
         this.log(`could not put back what ${d.at} holds: ${(err as Error).message}`);
       }
     }
