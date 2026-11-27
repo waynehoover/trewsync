@@ -871,7 +871,9 @@ export class Client {
     // (I05). Options are compared as a whole: a caller that has turned the
     // write debounce off is asking a different question from one that has not
     // and must not be given the other's answer.
-    const key = JSON.stringify(opts);
+    // A Map by its entries: as plain JSON every `applyOnly` is `{}`, and an
+    // Apply would be handed the pass of another listing other settings.
+    const key = JSON.stringify(opts, (_, v: unknown) => (v instanceof Map ? [...v] : v));
     if (this.queued !== undefined && this.queuedKey === key) return this.queued;
 
     const run = (async (): Promise<SyncReport | undefined> => {

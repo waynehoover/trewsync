@@ -354,3 +354,29 @@ describe("a client that has been closed", () => {
     }
   });
 });
+
+// Neon review (Low). Waiting syncs were joined when their options matched as
+// JSON, and a Map is `{}` as JSON, so an Apply listing other settings was
+// handed the pass of the Apply before it.
+describe("syncs that wait together", () => {
+  it("are not joined when they ask to apply different settings", async () => {
+    const { client } = clientOnFakeSocket();
+    const asked: unknown[] = [];
+    client.engine.sync = async (o) => {
+      asked.push(o?.applyOnly);
+      return {} as Awaited<ReturnType<typeof client.engine.sync>>;
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    client.engine.noteRename = () => gate as never;
+    const busy = client.noteRename("x", "y");
+    const one = new Map([["a.json", 1]]);
+    const two = new Map([["b.json", 2]]);
+    const first = client.sync({ applySettings: true, applyOnly: one });
+    const second = client.sync({ applySettings: true, applyOnly: two });
+    release();
+    await Promise.all([busy, first, second]);
+    expect(asked).toEqual([one, two]);
+    await client.close();
+  });
+});
