@@ -372,9 +372,7 @@ export class JournalIndexStore implements IndexStore {
     if (this.saved !== undefined && foreign === undefined) {
       const { delta, shape } = deltaFrom(this.saved, state);
       if (watch !== undefined) comparedAt = performance.now();
-      // Unless a snapshot is owed: a failed append or truncate can have left
-      // something on disk other than what was last saved.
-      if (delta === undefined && !this.mustSnapshot) {
+      if (delta === undefined) {
         tell("unchanged", 0);
         return;
       }
@@ -447,6 +445,10 @@ export class JournalIndexStore implements IndexStore {
       // and that save is a whole snapshot, which a record of unknown fate
       // cannot be appended beside.
       this.mustSnapshot = true;
+      // And no baseline to compare against: the disk may hold this record, so
+      // a later save of the state before it is not "unchanged" (Neon review
+      // #40), and has to be the snapshot.
+      this.saved = undefined;
       this.left = await this.files.stamps().catch(() => this.left);
       throw err;
     }
@@ -473,8 +475,11 @@ export class JournalIndexStore implements IndexStore {
     } catch (err) {
       // A snapshot that failed still owes a snapshot. Without this the next
       // pass would append a record beside a file that may be half written,
-      // which is a delta over a base that is not there.
+      // which is a delta over a base that is not there. Nor may it skip as
+      // unchanged a state that matches the last one saved, when the disk may
+      // now hold another (Neon review #40).
       this.mustSnapshot = true;
+      this.saved = undefined;
       throw err;
     } finally {
       // Whatever happened, what is on disk now is the baseline the next save
