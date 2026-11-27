@@ -3683,6 +3683,10 @@ describe("a timestamp from before 1970 (T03)", () => {
       ["a negative size", { size: -5 }],
       ["a folder flag that is a number", { folder: 1 }],
       ["a deletion flag that is missing", { deleted: undefined }],
+      // A former name goes into the index as a key too, and the index refuses
+      // a key holding a NUL at its next load (Neon review #41).
+      ["a former name holding a NUL", { prev: "a\0b.md" }],
+      ["a former name that is not a string", { prev: 7 }],
     ] as const) {
       expect(() => checkEntryShape({ ...entry, ...over } as unknown as typeof entry), what).toThrow(
         /version 3/,

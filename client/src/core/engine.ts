@@ -302,6 +302,11 @@ export function checkEntryShape(e: WireEntry): void {
   if (e.folder && e.deleted) {
     throw new Error(`version ${e.uid} is both a folder and a deletion`);
   }
+  // A former name becomes a key in the saved index, which refuses a NUL at
+  // its next load, so it is refused here like the path is (T03).
+  if (e.prev !== undefined && (typeof e.prev !== "string" || e.prev.includes("\0"))) {
+    throw new Error(`version ${e.uid} names a former path no file can have`);
+  }
   if (typeof e.size !== "number" || !Number.isSafeInteger(e.size) || e.size < 0) {
     throw new Error(
       `version ${e.uid} declares ${JSON.stringify(e.size)} bytes, and there is no such file`,
