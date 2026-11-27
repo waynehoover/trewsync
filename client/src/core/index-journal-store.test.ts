@@ -14,6 +14,7 @@ import {
   type JournalStamps,
   wantsSnapshot,
 } from "./index-journal-store.ts";
+import { encodeRecord } from "./index-journal.ts";
 import type { StoredState } from "./vault.ts";
 
 class FakeFiles implements JournalFiles {
@@ -295,6 +296,28 @@ describe("an append that landed and then failed (T05)", () => {
   }
 });
 
+/**
+ * Neon review #7. A log load() set aside still held records numbered above
+ * the sequence it kept, and the snapshot that replaced it was stamped with
+ * that sequence before the log was truncated. A crash between the two
+ * lined the set-aside records up behind the newer snapshot.
+ */
+describe("a log the load set aside, then a crash before it is truncated", () => {
+  const newest = state({ cursor: 50, entries: { "important.md": entry("important.md", 1) } });
+  const stale = encodeRecord(1, { cursor: 2, del: ["important.md"] });
+
+  it("does not replay it when the snapshot carried no sequence", async () => {
+    const files = new FakeFiles();
+    files.snapshot = JSON.stringify(state({ cursor: 1 }));
+    files.log = stale;
+    const store = new JournalIndexStore(files, { log: () => undefined });
+    await store.load();
+    files.crashBeforeTruncate = true;
+    await expect(store.save(newest)).rejects.toThrow(/power cut/);
+    expect(await new JournalIndexStore(files, { log: () => undefined }).load()).toEqual(newest);
+  });
+});
+
 describe("a crash between publishing a snapshot and truncating the log", () => {
   it("loads the snapshot and applies none of the records it already holds", async () => {
     const files = new FakeFiles();
@@ -312,6 +335,26 @@ describe("a crash between publishing a snapshot and truncating the log", () => {
 
     const reopened = new JournalIndexStore(files);
     expect((await reopened.load())!.cursor).toBe(3);
+  });
+});
+
+/**
+ * Neon review #40. A save that owed a snapshot returned without writing
+ * when the state matched the last one written, leaving the failed save's
+ * record on disk to be loaded on restart.
+ */
+describe("a save that owes a snapshot and has nothing new to say", () => {
+  it("still writes it, so a failed append's record is not what loads", async () => {
+    const files = new FakeFiles();
+    const store = new JournalIndexStore(files, { log: () => undefined });
+    await store.load();
+    const s0 = state({ cursor: 1, entries: { "a.md": entry("a.md", 10) } });
+    await store.save(s0);
+    files.throwAfterAppend = true;
+    await expect(store.save(state({ cursor: 2 }))).rejects.toThrow(/EIO/);
+    files.throwAfterAppend = false;
+    await store.save(s0);
+    expect(await new JournalIndexStore(files, { log: () => undefined }).load()).toEqual(s0);
   });
 });
 
