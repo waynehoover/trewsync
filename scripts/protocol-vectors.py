@@ -455,11 +455,15 @@ def path_vectors() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def is_live(live: list[dict], path: str) -> bool:
+    return any(e["path"] == path for e in live)
+
+
 def collision(live: list[dict], op: dict, table: dict[int, str]) -> str:
     """plan/protocol.md "Paths", the collision rule, as a reference."""
     target = op["path"]
-    if op["type"] == "move" and fold(op["prev"], table) == fold(target, table):
-        return "ok"  # a case-only rename keeps every folded key where it was
+    if op["type"] == "move" and fold(op["prev"], table) == fold(target, table) and is_live(live, op["prev"]):
+        return "ok"  # a case-only rename of a live source keeps every folded key where it was
     if op["type"] == "create" and any(e["path"] == target for e in live):
         return "ok"  # an update of a live path, not a create
     others = [
@@ -502,7 +506,8 @@ def folder_not_empty(live: list[dict], op: dict, table: dict[int, str]) -> bool:
     if op["type"] == "create":
         folder = op["path"]
     elif fold(op["prev"], table) == fold(op["path"], table):
-        folder = op["prev"]
+        # The live source's folder; from a source that is not live, the write lands on its own path.
+        folder = op["prev"] if is_live(live, op["prev"]) else op["path"]
     else:
         return False
     if not any(e["path"] == folder and e.get("folder") for e in live):
@@ -562,6 +567,18 @@ def collision_vectors(table: dict[int, str]) -> list[dict]:
             "a folder entry with a note in it, made a file by a case-only move",
             [d("x"), f("x/a.md")],
             {"type": "move", "prev": "x", "path": "X"},
+            "stale",
+        ),
+        (
+            "a case-only move from a source that is not live is checked like a create",
+            [f("Notes.md")],
+            {"type": "move", "prev": "NOTES.md", "path": "notes.md"},
+            "collision",
+        ),
+        (
+            "a case-only move from a source that is not live, onto a folder entry with a note in it",
+            [d("x"), f("x/a.md")],
+            {"type": "move", "prev": "X", "path": "x"},
             "stale",
         ),
         ("an empty folder entry, made a file", [d("x")], {"type": "create", "path": "x"}, "ok"),

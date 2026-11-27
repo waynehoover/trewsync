@@ -1337,6 +1337,38 @@
         "expect": "stale"
       },
       {
+        "name": "a case-only move from a source that is not live is checked like a create",
+        "live": [
+          {
+            "path": "Notes.md"
+          }
+        ],
+        "op": {
+          "type": "move",
+          "prev": "NOTES.md",
+          "path": "notes.md"
+        },
+        "expect": "collision"
+      },
+      {
+        "name": "a case-only move from a source that is not live, onto a folder entry with a note in it",
+        "live": [
+          {
+            "path": "x",
+            "folder": true
+          },
+          {
+            "path": "x/a.md"
+          }
+        ],
+        "op": {
+          "type": "move",
+          "prev": "X",
+          "path": "x"
+        },
+        "expect": "stale"
+      },
+      {
         "name": "an empty folder entry, made a file",
         "live": [
           {

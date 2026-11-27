@@ -1221,10 +1221,13 @@ export class Transport {
       // Ended rather than dropped. Dropping a batch would advance nothing and
       // leave a hole this device never asks about again, which is the silent
       // half of the failure; ending the session means the next connection
-      // starts from the cursor that was actually applied.
+      // starts from the cursor that was actually applied. Ended as a
+      // connection failure, which a loop retries: an honest server sends one
+      // batch per entry an undo or a restore commits, up to ten thousand, and
+      // a protostate here stopped syncing for good (Neon review #23). The
+      // next session catches up in batches of two hundred.
       this.die(
-        new ProtocolError(
-          "protostate",
+        new ConnectionError(
           `server sent more than ${Transport.MAX_BACKLOG} notifications faster than this device ` +
             "could apply them",
         ),

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/waynehoover/trewsync/internal/paths"
@@ -116,6 +117,14 @@ func dirsOf(path string, folder bool, into map[string]int) {
 // out of "every other", exactly as internal/paths.Collides, the quadratic
 // reference this is tested against, leaves them out.
 func checkCollision(q querier, vaultID string, e Entry) error {
+	return checkCollisionPast(q, vaultID, e, nil, nil)
+}
+
+// checkCollisionPast is checkCollision with the live paths in gone taken as
+// already gone, and goneDirs the directory counts they hold up (dirsOf): how
+// an operation's later entry meets the removals written before it, asked by
+// a planner that cannot write them (PlanRestore).
+func checkCollisionPast(q querier, vaultID string, e Entry, gone map[string]bool, goneDirs map[string]int) error {
 	if e.Deleted {
 		return nil
 	}
@@ -151,7 +160,10 @@ func checkCollision(q querier, vaultID string, e Entry) error {
 	// counts, subtracted before a spelling is judged live: the rule compares
 	// the new path with the other live paths, and a count they alone hold up
 	// is not one another path holds.
-	excluded := map[string]int{}
+	excluded := maps.Clone(goneDirs)
+	if excluded == nil {
+		excluded = map[string]int{}
+	}
 	if dest.live {
 		dirsOf(e.Path, dest.folder, excluded)
 	}
@@ -164,7 +176,7 @@ func checkCollision(q querier, vaultID string, e Entry) error {
 			dirsOf(e.Prev, src.folder, excluded)
 		}
 	}
-	other := func(p string) bool { return p != e.Path && !(move && p == e.Prev) }
+	other := func(p string) bool { return p != e.Path && !(move && p == e.Prev) && !gone[p] }
 
 	// Every key the rule asks about, read in one query per table rather than
 	// two per segment: the new path's own, and each of its folders'. The rule

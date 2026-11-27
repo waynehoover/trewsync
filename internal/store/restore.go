@@ -158,7 +158,8 @@ type restoreRow struct {
 //
 // Refusals are *OpError: not_found for a uid the vault has not reached,
 // plan_changed for a preview whose head has moved, gone for a path whose state
-// at the uid a purge has made unreadable or whose body is missing.
+// at the uid a purge has made unreadable or whose body is missing, collision
+// for a path put back beside a live one that folds like it.
 func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 	plan := RestorePlan{ToUID: r.ToUID}
 	latest, err := s.LatestUID(r.Vault)
@@ -354,6 +355,30 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 		e.Chunks = append([]string{}, row.then.Chunks...)
 		add(OpEntry{Entry: e, Base: row.headNow()},
 			UndoStep{Action: UndoRestore, Path: row.path, Before: row.then.UID, After: row.headNow()})
+	}
+	// A path put back that is not live now is a create, and the commit asks
+	// the collision rule of it against what is still live once the removals
+	// before it are written: a note kept as moved in, and every path outside
+	// the restore's scope. Asked here too, so a restore the commit would
+	// refuse is refused at its preview, in the same words (Neon review #30).
+	gone, goneDirs := map[string]bool{}, map[string]int{}
+	for _, step := range plan.Steps {
+		if step.Action == UndoRemove || step.Action == UndoRemoveFolder {
+			gone[step.Path] = true
+			dirsOf(step.Path, step.Action == UndoRemoveFolder, goneDirs)
+		}
+	}
+	for _, row := range append(append([]restoreRow{}, folderRestores...), fileRestores...) {
+		if row.nowLive {
+			continue
+		}
+		err := checkCollisionPast(s.db, r.Vault, Entry{Path: row.path, Folder: row.thenFolder}, gone, goneDirs)
+		if errors.Is(err, ErrCollision) {
+			return plan, refused("", OpCodeCollision, row.path, 0, err)
+		}
+		if err != nil {
+			return plan, failed("", err)
+		}
 	}
 	if r.MaxEntries > 0 && len(plan.Entries) > r.MaxEntries {
 		return plan, refused("", OpCodeResultTooLarge, "", 0, fmt.Errorf(

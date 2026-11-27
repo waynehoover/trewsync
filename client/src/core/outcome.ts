@@ -89,6 +89,9 @@ export function outcomeOf(
   // one a person should wait on rather than act on, and telling them to go and
   // fix something while the vault is about to fix itself is the worse mistake.
   if (report.retrying > 0) return { kind: "retrying", paths: report.retryingPaths };
+  // A sync cut off at its round cap with work left is retrying too: the next
+  // one carries on (Neon review, outcomeOf). An ordinary deferral is not this.
+  if (report.unfinished === true) return { kind: "retrying", paths: report.retryingPaths };
   // `blocked` belongs here rather than with retrying: a name that is a file on
   // one device and a folder on another never resolves itself.
   if (report.skipped > 0 || report.blocked > 0) {

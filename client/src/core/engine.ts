@@ -624,6 +624,13 @@ export interface SyncReport {
   nextUploadAt?: number;
   /** All server entries through this cursor were applied and the local pass saved. */
   appliedCursor?: number;
+  /**
+   * The sync stopped at its round cap with work it could not finish, so it
+   * applied nothing it can vouch for (`appliedCursor` is absent). Not set by
+   * an ordinary deferral, which `waiting` counts: a repeat upload in its
+   * cooldown or a setting in its quiet period is a clock, not unfinished work.
+   */
+  unfinished?: boolean;
   /** Files that failed and will be tried again. */
   retrying: number;
   /** Files that can never work and will not be tried again. */
@@ -1775,6 +1782,7 @@ export class Engine {
         // for as long as whatever set `again` keeps setting it.
         report.nextUploadAt = this.now() + AGAIN_FLOOR_MS;
         delete report.appliedCursor;
+        report.unfinished = true;
       }
       return report;
     } finally {
@@ -7082,6 +7090,7 @@ export function combinePasses(a: SyncReport, b: SyncReport): SyncReport {
     waiting: b.waiting,
     ...(b.nextUploadAt !== undefined ? { nextUploadAt: b.nextUploadAt } : {}),
     ...(b.appliedCursor !== undefined ? { appliedCursor: b.appliedCursor } : {}),
+    ...(b.unfinished === true ? { unfinished: true } : {}),
     retrying: b.retrying,
     skipped: b.skipped,
     skippedPaths: b.skippedPaths,

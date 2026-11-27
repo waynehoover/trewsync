@@ -257,12 +257,15 @@ export type PathOp =
  * against, and the rule the client uses to explain a `collision` refusal; it is
  * quadratic, so it is not what the server runs.
  *
- * A move whose source and destination fold alike is a case-only rename and
- * never collides: it keeps every folded key where it was, which is also what
- * lets a case-only folder rename spread over several batches.
+ * A move of a live source whose source and destination fold alike is a
+ * case-only rename and never collides: it keeps every folded key where it was,
+ * which is also what lets a case-only folder rename spread over several
+ * batches. From a source that is not live it moves no key, and is judged as
+ * the create it is (Neon review #15).
  */
 export function collides(live: readonly LiveEntry[], op: PathOp): boolean {
-  if (op.type === "move" && fold(op.prev) === fold(op.path)) return false;
+  if (op.type === "move" && fold(op.prev) === fold(op.path) && live.some((e) => e.path === op.prev))
+    return false;
   if (op.type === "create" && live.some((e) => e.path === op.path)) return false;
   const others = live.filter(
     (e) => e.path !== op.path && !(op.type === "move" && e.path === op.prev),

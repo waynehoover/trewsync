@@ -37,6 +37,7 @@ import {
 } from "../../test/core/fake-socket.ts";
 import { MemoryIndexStore, MemoryVault, type FileStat, type Times } from "./vault.ts";
 import { conflictCopyPath } from "./merge.ts";
+import { exitCodeOf, outcomeOf } from "./outcome.ts";
 import { conflictOriginal, resolveConflict, reviewConflict } from "./conflicts.ts";
 import { firstFreeName, ignoredHereError, neverSync } from "./paths.ts";
 import type { IndexEntry } from "./index-state.ts";
@@ -633,6 +634,11 @@ describe("an acknowledgement lost after the server committed the write", () => {
     expect(saves, "nothing kept the pass coming back, so this proves nothing").toBeGreaterThan(1);
     expect(report.nextUploadAt, "a sync that wants another round said nothing").toBeDefined();
     expect(report.nextUploadAt!, "a retry scheduled for now is a hot loop").toBe(now + 1000);
+    // And it says it did not finish, so `trew sync` exits 1 rather than
+    // "synced" with work left and no applied cursor.
+    expect(report.unfinished, "a sync stopped at its round cap read as finished").toBe(true);
+    expect(report.appliedCursor).toBeUndefined();
+    expect(exitCodeOf(outcomeOf(report))).toBe(1);
   }, 240_000);
 });
 
