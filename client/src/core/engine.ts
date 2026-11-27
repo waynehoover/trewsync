@@ -2925,7 +2925,14 @@ export class Engine {
       // device is one to apply, not one to answer by sending this copy back.
       if (remote?.deleted === true) {
         action = { kind: "deleteLocal", why: "deleted on another device, and only reordered here" };
-      } else if (action.kind === "upload") return undefined;
+      } else if (action.kind === "upload") {
+        // The server's bytes are still the base, perhaps under a newer uid a
+        // peer sent them again as: that uid is synced too, or the path stays
+        // pending and the cursor is never applied (Neon review #48).
+        if (remote !== undefined && remote.hash === entry.synchash) entry.syncuid = remote.uid;
+        this.pending.delete(path);
+        return undefined;
+      }
       if (action.kind === "merge" || action.kind === "conflict") {
         action = { kind: "download", why: "changed on another device, and only reordered here" };
       }

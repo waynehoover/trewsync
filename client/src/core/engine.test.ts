@@ -5863,6 +5863,41 @@ describe("a setting Apply deleted that was never synced, or synced in another or
   });
 });
 
+describe("a setting in another order when a peer sends the same bytes again", () => {
+  // Neon review #48. Held as the same values in another order, the setting
+  // reads as changed here and unchanged on the server when a peer commits
+  // the ancestor's bytes again under a new uid. That decision returned
+  // before the new uid was recorded or the path left `pending`, so the
+  // device never reported an applied cursor again.
+  it("records the new uid and settles", async () => {
+    await fresh();
+    const enc = (s: string) => new TextEncoder().encode(s);
+    const P = ".obsidian/app.json";
+    const times = { mtime: 1_000, ctime: 1_000 };
+    const mac = new Device("mac");
+    mac.settings = { root: ".obsidian" };
+    devices.push(mac);
+    await mac.connect(server);
+    await mac.vault.write(P, enc('{"a":1,"b":2}'), times);
+    await mac.settle();
+    const desk = new Device("desk");
+    desk.settings = { root: ".obsidian" };
+    devices.push(desk);
+    await desk.vault.write(P, enc('{"b":2,"a":1}'), times);
+    await desk.connect(server);
+    await desk.settle();
+
+    await mac.vault.write(P, enc('{"a":3}'), { mtime: 2_000, ctime: 2_000 });
+    await mac.settle();
+    await mac.vault.write(P, enc('{"a":1,"b":2}'), { mtime: 3_000, ctime: 3_000 });
+    await mac.settle();
+    const r = await desk.settle();
+    expect(r.uploaded).toBe(0);
+    expect(r.appliedCursor, "the device never settled").toBeDefined();
+    expect(desk.vault.snapshot()[P]).toBe('{"b":2,"a":1}');
+  });
+});
+
 describe("a setting saved a moment ago", () => {
   it("waits for ten quiet seconds before it is sent, unless the sync is Sync now", async () => {
     await fresh();
