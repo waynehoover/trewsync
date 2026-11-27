@@ -911,6 +911,33 @@ describe("put, against a server that answers oddly", () => {
     ]);
     t.close();
   });
+
+  // Neon review #9. The session was ended before the queued echoes were
+  // drained, and the drain then threw, so the uids the server had committed
+  // for the other entries never reached the caller.
+  it("returns the committed uids of a batch one of whose entries ends the session", async () => {
+    const applied: number[] = [];
+    const { t, socket } = await helloed(0, { onBatch: (b) => void applied.push(b.to) });
+    const meta = { size: 0, ctime: 1, mtime: 2 };
+    const putting = t.putMany(
+      [
+        { path: "a.md", meta, names: [], base: 0 },
+        { path: "b.md", meta, names: [], base: 0 },
+      ],
+      async () => new Uint8Array(0),
+    );
+    await settle();
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [] });
+    socket.reply({
+      res: "acks",
+      results: [{ uid: 1 }, { code: "nospace", msg: "disk full", retryable: true }],
+    });
+    const out = await putting;
+    expect(out.results[0]).toEqual({ uid: 1 });
+    expect(out.results[1]!.error?.code).toBe("nospace");
+    expect(applied, "the echo before the acks was not applied").toEqual([1]);
+    expect(t.isClosed, "a refusal that ends the session left it open").toBe(true);
+  });
 });
 
 /**

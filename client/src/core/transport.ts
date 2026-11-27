@@ -1774,11 +1774,13 @@ export class Transport {
 
     // A per-entry refusal is survivable; one that ends the session is not,
     // and the session has to end for the same reason it would on a single put.
+    // After the drain, not before it: ending first made the drain throw, and
+    // the uids the server committed for every other entry were lost with it
+    // while the echoes had already moved the cursor past them (Neon review #9).
+    await this.drainReceived();
     for (const r of results) {
       if (r.error?.endsSession) this.die(r.error);
     }
-
-    await this.drainReceived();
     return { results, uploaded, bytes };
   }
 
