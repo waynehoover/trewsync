@@ -351,13 +351,17 @@ func (x *Index) dropAll() error {
 	return nil
 }
 
-// retire drops a generation's tables and its row.
+// retire drops a generation's tables and its row, in one transaction: a
+// query that read the row and then found the tables gone would distrust the
+// generation that replaced it (Neon review #33).
 func (x *Index) retire(gen int64) error {
-	if err := tablesOf(gen).drop(x.db); err != nil {
+	return x.inTx(func(tx *sql.Tx) error {
+		if err := tablesOf(gen).drop(tx); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`DELETE FROM generations WHERE gen = ?`, gen)
 		return err
-	}
-	_, err := x.db.Exec(`DELETE FROM generations WHERE gen = ?`, gen)
-	return err
+	})
 }
 
 func (x *Index) generations() ([]*generation, error) {

@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -661,5 +662,60 @@ func TestIndexTextPreservesContainment(t *testing.T) {
 		if strings.ContainsRune(indexText(c.text), 0) {
 			t.Errorf("%q keeps a NUL", c.text)
 		}
+	}
+}
+
+// A generation is retired in one transaction, so a query reading it sees its
+// row and its tables or neither. Dropped table by table and then its row, a
+// query that read the row in between found the tables gone, and the check
+// that followed distrusted the healthy generation that had replaced it (Neon
+// review #33).
+func TestARetiredGenerationIsNeverHalfGone(t *testing.T) {
+	r := newRig(t)
+	x := r.x
+	const n = 100
+	var first int64 = 1000
+	for g := first; g < first+n; g++ {
+		err := x.inTx(func(tx *sql.Tx) error {
+			if err := tablesOf(g).create(tx); err != nil {
+				return err
+			}
+			_, err := tx.Exec(`INSERT INTO generations (gen, version, state, phase, built_head, created_at)
+			  VALUES (?, ?, 'retired', 'done', 0, 0)`, g, IndexVersion)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		for g := first; g < first+n; g++ {
+			if err := x.retire(g); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	var half string
+	for g := first; g < first+n && half == ""; {
+		tx, err := x.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		now, err := scanGeneration(tx.QueryRow(`SELECT `+genCols+` FROM generations WHERE gen = ?`, g))
+		if err != nil {
+			g++ // retired whole: on to the next
+		} else if why := cheapCheck(tx, tablesOf(g), now); why != "" {
+			half = fmt.Sprintf("generation %d: %s", g, why)
+		}
+		_ = tx.Rollback()
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if half != "" {
+		t.Fatalf("a query saw a generation's row without its tables: %s", half)
 	}
 }
