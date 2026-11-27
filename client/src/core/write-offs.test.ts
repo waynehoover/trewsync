@@ -98,6 +98,35 @@ describe("a path the server refused", () => {
   });
 });
 
+describe("a synced file written off as too large", () => {
+  // Neon review #47. The write-off is remembered by the index entry's stat
+  // and the server's uid, and a file deleted here changes neither: the
+  // listing no longer has it, so nothing updates the entry. The deletion
+  // was never sent, for as long as the process ran.
+  it("sends its deletion once the file is removed", async () => {
+    server = new TestServer();
+    server.extraArgs = ["-max-file", "64"];
+    await server.start();
+    const vault = new MemoryVault();
+    await vault.write("grows.md", enc.encode("small"), at);
+    const a = await connected("a", vault);
+    await a.settle();
+    expect(await a.history("grows.md")).toHaveLength(1);
+
+    await vault.write("grows.md", enc.encode("far too large now ".repeat(10)), {
+      mtime: 2_000,
+      ctime: 2_000,
+    });
+    expect((await a.settle()).skipped, "the grown file is written off").toBe(1);
+
+    await vault.remove("grows.md");
+    const after = await a.settle();
+    expect(after.skipped, "a file that is gone is still written off").toBe(0);
+    const [newest] = await a.history("grows.md");
+    expect(newest?.deleted, "the deletion never reached the server").toBe(true);
+  });
+});
+
 describe("a path refused as a collision", () => {
   it("is tried again once the path it collided with is deleted on another device", async () => {
     server = new TestServer();

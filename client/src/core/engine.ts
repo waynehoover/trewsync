@@ -2389,7 +2389,8 @@ export class Engine {
         this.skipped.delete(path);
         this.log("written-off file is gone, and the server never had it", path);
       } else if (skip) {
-        if (fingerprintOf(this.entries.get(path), this.remote.get(path)) === skip.fingerprint) {
+        const here = onDisk.has(path);
+        if (fingerprintOf(this.entries.get(path), this.remote.get(path), here) === skip.fingerprint) {
           noteSkipped(report, path);
           continue;
         }
@@ -3363,7 +3364,7 @@ export class Engine {
         // does.
         this.skipped.set(path, {
           why: `${action.why}. Rename one of them, and it will sync.`,
-          fingerprint: fingerprintOf(entry, remote),
+          fingerprint: fingerprintOf(entry, remote, local !== undefined),
         });
         noteSkipped(report, path);
         this.log("cannot be both", path, action.why);
@@ -6742,7 +6743,11 @@ export class Engine {
         // Two sentences, so the server's reason and the remedy do not run
         // into each other: "... a control character. Rename it ...".
         why: next === "" ? message : `${/[.!?]$/.test(message) ? message : `${message}.`} ${next}`,
-        fingerprint: fingerprintOf(this.entries.get(path), this.remote.get(path)),
+        fingerprint: fingerprintOf(
+          this.entries.get(path),
+          this.remote.get(path),
+          this.localByIdentity.get(this.identity(path)) === path,
+        ),
         code,
       });
       noteSkipped(report, path);
@@ -7243,9 +7248,16 @@ const INBOUND_REFUSALS: Record<PathReason, string> = {
  * half is the same for every version of it, and a download written off once
  * stayed written off for the session however many new versions arrived.
  */
-function fingerprintOf(entry: IndexEntry | undefined, remote: RemoteState | undefined): string {
+function fingerprintOf(
+  entry: IndexEntry | undefined,
+  remote: RemoteState | undefined,
+  // Whether the file is on disk. A file deleted here leaves the entry's stat
+  // as it was, so without this its deletion stayed written off (Neon review
+  // #47).
+  here: boolean,
+): string {
   const version = remote?.uid ?? 0;
-  return entry ? `${entry.mtime}:${entry.size}:${version}` : `gone:${version}`;
+  return entry ? `${entry.mtime}:${entry.size}:${version}:${here}` : `gone:${version}`;
 }
 
 /**
