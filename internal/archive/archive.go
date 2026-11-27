@@ -350,6 +350,13 @@ type Pruned struct {
 // Called only after a Pack has succeeded, under the staging directory's lock.
 func Prune(dir string) (Pruned, error) {
 	var rep Pruned
+	// Absolute, as the chunk store makes its own directory: the bodies to
+	// keep are named by its paths, and a relative walk matched none of them
+	// and removed every body (Neon review #26).
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return rep, err
+	}
 	dbPath, chunkDir := store.DataDir(dir)
 	bodies, err := referenced(dbPath, chunkDir)
 	if err != nil {

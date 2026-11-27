@@ -348,3 +348,20 @@ func TestAnUnpackToAPathWithATrailingSlashFlushesOnlyWhatItMade(t *testing.T) {
 	}
 }
 
+// Prune given a relative path keeps every body the database references. The
+// chunk store resolves its directory to an absolute one, so the bodies to keep
+// were named absolutely and the walk's relative paths matched none of them:
+// every body was removed, with no error (Neon review #26).
+func TestPruneOfARelativePathKeepsEveryReferencedBody(t *testing.T) {
+	dir, notes := staged(t)
+	t.Chdir(filepath.Dir(dir))
+	rep, err := Prune(filepath.Base(dir))
+	if err != nil || rep.Bodies != 0 {
+		t.Fatalf("prune removed %d bodies (%v), and every body is referenced", rep.Bodies, err)
+	}
+	for path, want := range notes {
+		if b := headBytes(t, dir, path); b != want {
+			t.Fatalf("%s reads %q after the prune, was %q", path, b, want)
+		}
+	}
+}
