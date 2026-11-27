@@ -2723,3 +2723,68 @@ describe("a history the server pages by bytes", () => {
     expect(socket.sentText.filter((f) => f["op"] === "history")).toHaveLength(1);
   });
 });
+
+/**
+ * Neon review #23. An undo or applied restore commits one broadcast batch per
+ * entry before its reply, and the caller's settle expects them applied when
+ * the call returns, as a put's caller does. Neither drained the queue.
+ */
+describe("the versions an undo or a restore wrote", () => {
+  for (const [what, call, answer] of [
+    [
+      "undo",
+      (t: Transport) => t.undo("op1"),
+      {
+        res: "undone",
+        opId: "op2",
+        undoes: "op1",
+        toCopy: false,
+        committedAt: 1,
+        steps: [],
+        entries: [],
+      },
+    ],
+    [
+      "restore",
+      (t: Transport) => t.restore({ uid: 1, head: 1 }),
+      {
+        res: "restored",
+        applied: true,
+        folder: "",
+        toUid: 1,
+        at: 1,
+        head: 1,
+        restore: 1,
+        remove: 0,
+        removeFolder: 0,
+        unchanged: 0,
+        more: 0,
+        steps: [],
+        keptMovedIn: [],
+        opId: "op3",
+        committedAt: 1,
+      },
+    ],
+  ] as const) {
+    it(`are applied before ${what} returns`, async () => {
+      const gate = deferred();
+      const applied: number[] = [];
+      const { t, socket } = await helloed(0, {
+        onBatch: async (b) => {
+          await gate.promise;
+          applied.push(b.to);
+        },
+      });
+      let returned = false;
+      const doing = call(t).then(() => (returned = true));
+      await settle();
+      socket.raw({ op: "batch", from: 1, to: 1, entries: [] });
+      socket.reply(answer);
+      await nextTurn();
+      expect(returned, "it returned with its own versions still queued").toBe(false);
+      gate.resolve();
+      await doing;
+      expect(applied).toEqual([1]);
+    });
+  }
+});

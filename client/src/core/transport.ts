@@ -2519,6 +2519,9 @@ export class Transport {
     if (reply["res"] !== "undone") {
       throw new ProtocolError("protostate", `expected undone, got ${JSON.stringify(reply)}`);
     }
+    // Its versions were broadcast before the reply, one batch each, and are
+    // applied before this resolves, as a put's are (Neon review #23).
+    await this.drainReceived();
     const own = reply["opId"];
     if (typeof own !== "string" || own === "" || reply["undoes"] !== opId) {
       throw this.malformed(
@@ -2622,6 +2625,8 @@ export class Transport {
       throw new ProtocolError("protostate", `expected restored, got ${JSON.stringify(reply)}`);
     }
     const applied = reply["applied"] === true;
+    // An apply's versions came before the reply; see `undo`.
+    if (applied) await this.drainReceived();
     // An apply of a preview that changes nothing commits nothing, and says
     // so: applied false, with every count zero.
     const nothing = ["restore", "remove", "removeFolder"].every((k) => reply[k] === 0);
