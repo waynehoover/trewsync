@@ -2001,8 +2001,9 @@ export class ObsidianVault implements Vault {
    */
   private async wholeBeforeTouching(normalized: string): Promise<void> {
     const held = this.cutShort.get(normalized);
-    if (held === undefined) return;
-    await this.putBack(normalized, held);
+    // One a crash left and the restart could not put back (`interrupted`)
+    // has nothing here to put it back with, and is refused all the same.
+    if (held !== undefined) await this.putBack(normalized, held);
     this.refuseCutShort(normalized);
   }
 

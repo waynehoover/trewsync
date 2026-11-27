@@ -2788,6 +2788,32 @@ describe("an in-place update a crash interrupted, at the next start", () => {
     expect(a.text("note (kept).md")).toBe("the synced text\nand a line typed into the copy\n");
   });
 
+  it("does not write over or remove a note it could not put back (Neon review #10)", async () => {
+    const a = new FakeAdapter();
+    await crashDuringUpdate(a);
+    // The backup is gone, so the restart cannot put the note back.
+    await a.remove("note (kept).md");
+    const restarted = new ObsidianVault(asVault(new FakeVaultIndex(a)), ".obsidian");
+    await restarted.list();
+    const cut = a.text("note.md");
+    expect(cut).toHaveLength(4);
+    const id = await plainDigest(encode("the synced text\n"));
+    await expect(
+      restarted.replace(
+        "note.md",
+        { contentId: id, idOf: plainDigest },
+        encode("a newer version\n"),
+        { mtime: 3000, ctime: 1000 },
+        "note (kept 2).md",
+      ),
+    ).rejects.toThrow("cut short");
+    await expect(
+      restarted.removeExpecting("note.md", { contentId: id, idOf: plainDigest }, "note (kept 3).md"),
+    ).rejects.toThrow("cut short");
+    expect(a.text("note.md")).toBe(cut);
+    expect(a.filePaths().filter((p) => p.startsWith("note ("))).toEqual([]);
+  });
+
   it("fails the listing rather than reading past a record it cannot read", async () => {
     const a = new FakeAdapter();
     await crashDuringUpdate(a);
