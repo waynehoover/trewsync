@@ -2379,9 +2379,23 @@ func (s *Session) handleResend(m wire.In) error {
 	if err != nil {
 		return s.reject(wire.CodeInternal, err)
 	}
+	// Stored is the bodies asked for that are now here, counted from the
+	// ones asked for: a body lost meanwhile (another session's read can
+	// quarantine one) is still missing but was never asked for, and
+	// subtracting it took it off the bodies this device had just stored.
+	absent := make(map[string]bool, len(stillMissing))
+	for _, n := range stillMissing {
+		absent[n] = true
+	}
+	stored := 0
+	for _, n := range missing {
+		if !absent[n] {
+			stored++
+		}
+	}
 	return s.writeJSON(wire.Resent{
 		Res: "resent", ID: s.reqID,
-		Stored:  len(missing) - len(stillMissing),
+		Stored:  stored,
 		Missing: len(stillMissing),
 	})
 }
