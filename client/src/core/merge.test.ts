@@ -1327,6 +1327,17 @@ describe("merging inside line regions", () => {
     expect(r.text).toContain("- theirs");
   });
 
+  it("does not run together the same line both devices added at the end without a newline", () => {
+    // Neon review #5. Keeping both copies concatenated the two region texts,
+    // which assumes each ends a line. At the end of a note with no trailing
+    // newline neither does, and the seam check only looks at pieces before
+    // the last, so the merge reported clean with `- milk- milk`, a line
+    // neither device wrote.
+    const r = mergeText("Title\n\n", "New Title\n\n- milk", "Title\n\n- milk");
+    expect(r.kind === "merged" && r.text).not.toContain("- milk- milk");
+    expect(r.kind).toBe("conflict");
+  });
+
   it("refuses a region whose merge would run into the next region", () => {
     // The region form of `fusedLine`, and the case that needs it: mine wrote
     // into a blank line, theirs deleted that blank line, and the region holding

@@ -897,6 +897,20 @@ export function mergeText(
       // among them, where the line diff read mine's copy as a line that had
       // moved. Pinned in merge.test.ts, "keeps both copies when both devices
       // added the same line".
+      //
+      // Both copies must end a line to stand apart. At the end of a note with
+      // no trailing newline they do not, and the seam check below never looks
+      // at the last piece, so `- milk` twice became `- milk- milk` (Neon
+      // review #5). Appending to an unterminated last line is a conflict in
+      // the character merge too, which is the precedent.
+      if (!region.mine.endsWith("\n")) {
+        return {
+          kind: "conflict",
+          why:
+            `both devices added the same last line with no newline after it, at character ` +
+            `${region.at} of the last synced version`,
+        };
+      }
       pieces.push(region.mine + region.theirs);
     } else {
       // The one place the character merge runs, and it sees this region and
