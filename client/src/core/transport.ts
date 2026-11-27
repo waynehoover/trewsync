@@ -802,8 +802,17 @@ export class Transport {
    * number the server's own read limit is.
    */
   private textFrameCeiling(): number {
-    return this.limits === undefined ? MAX_UNAGREED_FRAME_BYTES : 2 * LOCAL_MAX_BATCH_BYTES;
+    return this.limits === undefined && !this.readyArrived
+      ? MAX_UNAGREED_FRAME_BYTES
+      : 2 * LOCAL_MAX_BATCH_BYTES;
   }
+
+  /**
+   * Whether this session's `ready` has landed, set as it arrives rather than
+   * when `hello` returns: the catch-up batches behind it can be read in the
+   * same turn, before `limits` is set (Neon review #22).
+   */
+  private readyArrived = false;
 
   constructor(
     private readonly url: string,
@@ -1455,6 +1464,7 @@ export class Transport {
           // queued before the caller of `hello` hears back. A cursor that
           // belongs to another history would refuse the replay's first batch,
           // from 1, as a gap.
+          if (frame["res"] === "ready") this.readyArrived = true;
           const epoch = frame["epoch"];
           if (
             frame["res"] === "ready" &&

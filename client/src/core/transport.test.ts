@@ -690,6 +690,21 @@ describe("a ready in another epoch", () => {
     expect(t.appliedCursor).toBe(1);
   });
 
+  // Neon review #22. The ceiling for a text frame was raised only when hello
+  // returned, so a catch-up batch over a mebibyte that landed in the same
+  // turn as its ready ended the session with toolarge, which is fatal.
+  it("takes a catch-up batch over a mebibyte that lands with the ready", async () => {
+    const { t, socket, batches } = await connected();
+    const hello = t.hello({ vault: "v", deviceId: "dev", token: "tok", device: "d", cursor: 0 });
+    await settle();
+    socket.raw(ready({ id: socket.lastId, cursor: 1 }));
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [], pad: "x".repeat(1_200_000) });
+    await hello;
+    await t.drainReceived();
+    expect(t.isClosed, "a legal batch behind ready was refused as too large").toBe(false);
+    expect(batches.map((b) => b.from)).toEqual([1]);
+  });
+
   it("continues the cursor when the epoch is the one the hello carried", async () => {
     const { t, socket, batches } = await connected();
     const hello = helloIn(t, RIG_EPOCH);
