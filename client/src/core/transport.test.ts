@@ -1375,6 +1375,33 @@ describe("errors", () => {
  * or a firewall that swallowed it, left the client hanging for as long as the
  * platform cared to wait, and the CLI held the vault's lock for the whole of it.
  */
+/**
+ * Neon review #44. Only a body that could not be produced ended the session
+ * mid-upload; any other failure between the server's want and the last body
+ * left it waiting for frames that would never come, on an open connection.
+ */
+describe("an upload that fails between its bodies", () => {
+  it("ends the session rather than leave the server owed bodies", async () => {
+    const { t, socket } = await helloed(0);
+    const name = "a".repeat(64);
+    const put = t.put(
+      "p",
+      { size: 1, ctime: 0, mtime: 0 },
+      [name],
+      async () => new Uint8Array([1]),
+      noBase,
+      undefined,
+      async () => {
+        throw new Error("the interleaved edit failed");
+      },
+    );
+    await settle();
+    socket.reply({ res: "want", chunks: [name] });
+    await expect(put).rejects.toThrow(/interleaved edit failed/);
+    expect(t.isClosed, "the server was left owed a body on an open session").toBe(true);
+  });
+});
+
 describe("a connection that never opens", () => {
   // Neon review #42. A transport closed before it connected still opened a
   // socket, and nothing ever closed it, because die() had already run.

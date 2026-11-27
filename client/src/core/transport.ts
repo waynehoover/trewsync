@@ -1838,46 +1838,58 @@ export class Transport {
               notifyTransfer(onBytes, sent);
             }
           };
-    for (const name of wanted) {
-      await interleave?.();
-      if (!offered.has(name)) {
-        // Already checked when the reply was read; kept because this is
-        // the line that sends bytes, and it should not trust a list.
-        throw new ProtocolError(
-          "badchunk",
-          `server asked for ${name}, which this ${what} does not contain`,
-        );
+    try {
+      for (const name of wanted) {
+        await interleave?.();
+        if (!offered.has(name)) {
+          // Already checked when the reply was read; kept because this is
+          // the line that sends bytes, and it should not trust a list.
+          throw new ProtocolError(
+            "badchunk",
+            `server asked for ${name}, which this ${what} does not contain`,
+          );
+        }
+        let body: Uint8Array;
+        try {
+          body = await bodyOf(name);
+        } catch (err) {
+          // The server has sent `want` and is reading binary frames. It is owed
+          // N bodies and is about to get fewer, and there is no frame that says
+          // "never mind": the next text frame this client sends would arrive
+          // where a body was expected, and the server would end the session over
+          // a protocol violation whose real cause was a file that changed on
+          // this disk. So the connection is ended here, by the side that knows
+          // why, and the caller gets the reason rather than a `protostate` on
+          // whatever it asked for next.
+          this.die(
+            new ConnectionError(
+              `${what} could not produce ${name}, so the connection was ended ` +
+                `rather than left owing the server bodies: ${(err as Error).message}`,
+            ),
+          );
+          throw err;
+        }
+        await interleave?.();
+        const frame = encodeFrame(body);
+        this.send(frame);
+        bytes += frame.length;
+        await this.drained(interleave ? 256 * 1024 : UPLOAD_HIGH_WATER, progress, interleave);
       }
-      let body: Uint8Array;
-      try {
-        body = await bodyOf(name);
-      } catch (err) {
-        // The server has sent `want` and is reading binary frames. It is owed
-        // N bodies and is about to get fewer, and there is no frame that says
-        // "never mind": the next text frame this client sends would arrive
-        // where a body was expected, and the server would end the session over
-        // a protocol violation whose real cause was a file that changed on
-        // this disk. So the connection is ended here, by the side that knows
-        // why, and the caller gets the reason rather than a `protostate` on
-        // whatever it asked for next.
-        this.die(
-          new ConnectionError(
-            `${what} could not produce ${name}, so the connection was ended ` +
-              `rather than left owing the server bodies: ${(err as Error).message}`,
-          ),
-        );
-        throw err;
-      }
-      await interleave?.();
-      const frame = encodeFrame(body);
-      this.send(frame);
-      bytes += frame.length;
-      await this.drained(interleave ? 256 * 1024 : UPLOAD_HIGH_WATER, progress, interleave);
+      // Every body is with the socket before the clock on the ack starts. The
+      // ack follows the last body, so a timer armed while bodies were still
+      // queued measured the upload rather than the server.
+      await this.drained(0, progress, interleave);
+    } catch (err) {
+      // Whatever stopped it, the server is still owed the rest, for the
+      // reason given where a body cannot be produced (Neon review #44).
+      this.die(
+        new ConnectionError(
+          `${what} stopped part way through its bodies, so the connection was ended: ` +
+            (err as Error).message,
+        ),
+      );
+      throw err;
     }
-    // Every body is with the socket before the clock on the ack starts. The
-    // ack follows the last body, so a timer armed while bodies were still
-    // queued measured the upload rather than the server.
-    await this.drained(0, progress, interleave);
     return bytes;
   }
 
