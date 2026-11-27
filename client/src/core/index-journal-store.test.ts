@@ -316,6 +316,27 @@ describe("a log the load set aside, then a crash before it is truncated", () => 
     await expect(store.save(newest)).rejects.toThrow(/power cut/);
     expect(await new JournalIndexStore(files, { log: () => undefined }).load()).toEqual(newest);
   });
+
+  /**
+   * Fable review #2. Two writers on one index leave 6, 7, 6', 7', 8' over a
+   * snapshot at 5. Replay stops at 6' holding 7, and a snapshot stamped 7
+   * left 8' lined up behind it as 7 + 1.
+   */
+  it("does not replay it when the replay stopped short of the end", async () => {
+    const files = new FakeFiles();
+    files.snapshot = JSON.stringify({ ...state({ cursor: 5 }), seq: 5 });
+    files.log =
+      encodeRecord(6, { cursor: 6 }) +
+      encodeRecord(7, { cursor: 7 }) +
+      encodeRecord(6, { cursor: 60 }) +
+      encodeRecord(7, { cursor: 70 }) +
+      encodeRecord(8, { cursor: 2, del: ["important.md"] });
+    const store = new JournalIndexStore(files, { log: () => undefined });
+    expect((await store.load())!.cursor).toBe(7);
+    files.crashBeforeTruncate = true;
+    await expect(store.save(newest)).rejects.toThrow(/power cut/);
+    expect(await new JournalIndexStore(files, { log: () => undefined }).load()).toEqual(newest);
+  });
 });
 
 describe("a crash between publishing a snapshot and truncating the log", () => {

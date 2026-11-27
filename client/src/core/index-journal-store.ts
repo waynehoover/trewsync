@@ -327,7 +327,12 @@ export class JournalIndexStore implements IndexStore {
       return snapshotState;
     }
 
-    this.settle(out.state, out.seq, out.applied);
+    // Stamped like the fall-backs above when replay stopped short: records
+    // past the stop may number above out.seq, and a snapshot stamped lower
+    // would line them up behind itself if a crash beat the truncate (Fable
+    // review #2).
+    const top = out.stopped.why === "end" ? out.seq : Math.max(out.seq, highestSeq(logText));
+    this.settle(out.state, top, out.applied);
     // After `settle`, which clears the flag, and that ordering is the whole
     // of it (F09).
     //
