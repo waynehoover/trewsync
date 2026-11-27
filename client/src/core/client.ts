@@ -572,6 +572,10 @@ export class Client {
     await this.transport.connect();
     this.lastBatchAt = Date.now();
     this.limits = await this.engine.start();
+    // Again once the index has loaded and the hello is answered: the wait
+    // below measures the server's silence, and a slow load is not that
+    // (Neon review #43).
+    this.lastBatchAt = Date.now();
     if (opts.waitForBacklog === false) return this.limits;
     this.reportCatchUp();
 
@@ -604,7 +608,9 @@ export class Client {
         this.backlogWaiters.delete(changed);
         if (this.endedWith) reject(this.endedWith);
         else if (this.caughtUp) resolve();
-        else reject(new Error("the server never finished sending what it already had"));
+        // A connection that stopped answering, as a request timeout is, so
+        // runForever retries it rather than counting it toward a fatal stop.
+        else reject(new ConnectionError("the server never finished sending what it already had"));
       };
       this.backlogWaiters.add(changed);
       changed();
@@ -783,7 +789,10 @@ export class Client {
   private soon(): void {
     // Initial sync belongs to the caller after connect finishes. A partial
     // backlog cannot safely decide which files exist only on this device.
-    if (!this.caughtUp || this.soonTimer !== undefined || this.opts.manual === true) return;
+    // Nor after close: a batch still being applied then would arm a timer
+    // for a pass that can never run.
+    if (this.closing || !this.caughtUp || this.soonTimer !== undefined || this.opts.manual === true)
+      return;
     this.soonTimer = setTimeout(() => {
       // Retain the scheduled marker until this snapshot finishes checking.
       // The engine may still be applying frames already on the socket;
@@ -862,7 +871,9 @@ export class Client {
     // (I05). Options are compared as a whole: a caller that has turned the
     // write debounce off is asking a different question from one that has not
     // and must not be given the other's answer.
-    const key = JSON.stringify(opts);
+    // A Map by its entries: as plain JSON every `applyOnly` is `{}`, and an
+    // Apply would be handed the pass of another listing other settings.
+    const key = JSON.stringify(opts, (_, v: unknown) => (v instanceof Map ? [...v] : v));
     if (this.queued !== undefined && this.queuedKey === key) return this.queued;
 
     const run = (async (): Promise<SyncReport | undefined> => {
@@ -1019,12 +1030,24 @@ export class Client {
    * through rewriting.
    */
   async repair(): Promise<RepairReport> {
-    return this.serial(() => this.engine.repair());
+    return this.serial(() => {
+      // As a pass is refused: close drains the queue, and this could be
+      // queued after it.
+      if (this.closing) throw new ConnectionError("this client has been closed");
+      return this.engine.repair();
+    });
   }
 
   /** Frees the space of files the server holds, never alongside a pass (`Engine.release`). */
   async release(paths: readonly string[]): Promise<ReleaseReport> {
-    return this.serial(() => this.engine.release(paths));
+    return this.serial(() => {
+      if (this.closing) throw new ConnectionError("this client has been closed");
+      // It removes local copies, and an inspection client holds no lock.
+      if (this.opts.inspect === true) {
+        throw new Error("this client is connected to read, not to sync, and release writes");
+      }
+      return this.engine.release(paths);
+    });
   }
 
   /**
@@ -1763,6 +1786,9 @@ export function isFatal(cause: Error): boolean {
   return cause instanceof ProtocolError && cause.fatal;
 }
 
+/** The longest a server's retry hint is taken at, the backoff's ceiling. */
+const MAX_RETRY_HINT_MS = 300_000;
+
 /**
  * How long to wait before the next attempt: the backoff, or longer if the
  * server said so.
@@ -1785,7 +1811,13 @@ export function retryWait(
   backoffMs: number,
   random: () => number = Math.random,
 ): number {
-  const hint = cause instanceof ProtocolError ? (cause.retryAfterMs ?? 0) : 0;
+  // Held to the backoff's own ceiling: a server's hint past what a timer can
+  // hold (2^31 ms) overflowed into a 1 ms reconnect spin, and a merely large
+  // one slept for weeks.
+  const hint = Math.min(
+    cause instanceof ProtocolError ? (cause.retryAfterMs ?? 0) : 0,
+    MAX_RETRY_HINT_MS,
+  );
   if (backoffMs >= hint) return backoffMs;
   return Math.floor(hint * (1 + 0.5 * random()));
 }

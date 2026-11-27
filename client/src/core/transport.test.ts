@@ -435,6 +435,15 @@ describe("caught-up", () => {
     expect(t.isClosed).toBe(true);
   });
 
+  // Neon review #41. A missing cursor was read as zero, and agreed with a
+  // device that had applied nothing.
+  it("is refused when it names no cursor at all", async () => {
+    const { t, socket } = await helloed(0);
+    socket.reply({ op: "caught-up" });
+    await settle();
+    expect(t.isClosed).toBe(true);
+  });
+
   it("is reported when it agrees", async () => {
     const seen: number[] = [];
     const { t, socket } = await helloed(0, { onCaughtUp: (c) => seen.push(c) });
@@ -690,6 +699,21 @@ describe("a ready in another epoch", () => {
     expect(t.appliedCursor).toBe(1);
   });
 
+  // Neon review #22. The ceiling for a text frame was raised only when hello
+  // returned, so a catch-up batch over a mebibyte that landed in the same
+  // turn as its ready ended the session with toolarge, which is fatal.
+  it("takes a catch-up batch over a mebibyte that lands with the ready", async () => {
+    const { t, socket, batches } = await connected();
+    const hello = t.hello({ vault: "v", deviceId: "dev", token: "tok", device: "d", cursor: 0 });
+    await settle();
+    socket.raw(ready({ id: socket.lastId, cursor: 1 }));
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [], pad: "x".repeat(1_200_000) });
+    await hello;
+    await t.drainReceived();
+    expect(t.isClosed, "a legal batch behind ready was refused as too large").toBe(false);
+    expect(batches.map((b) => b.from)).toEqual([1]);
+  });
+
   it("continues the cursor when the epoch is the one the hello carried", async () => {
     const { t, socket, batches } = await connected();
     const hello = helloIn(t, RIG_EPOCH);
@@ -895,6 +919,33 @@ describe("put, against a server that answers oddly", () => {
       },
     ]);
     t.close();
+  });
+
+  // Neon review #9. The session was ended before the queued echoes were
+  // drained, and the drain then threw, so the uids the server had committed
+  // for the other entries never reached the caller.
+  it("returns the committed uids of a batch one of whose entries ends the session", async () => {
+    const applied: number[] = [];
+    const { t, socket } = await helloed(0, { onBatch: (b) => void applied.push(b.to) });
+    const meta = { size: 0, ctime: 1, mtime: 2 };
+    const putting = t.putMany(
+      [
+        { path: "a.md", meta, names: [], base: 0 },
+        { path: "b.md", meta, names: [], base: 0 },
+      ],
+      async () => new Uint8Array(0),
+    );
+    await settle();
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [] });
+    socket.reply({
+      res: "acks",
+      results: [{ uid: 1 }, { code: "nospace", msg: "disk full", retryable: true }],
+    });
+    const out = await putting;
+    expect(out.results[0]).toEqual({ uid: 1 });
+    expect(out.results[1]!.error?.code).toBe("nospace");
+    expect(applied, "the echo before the acks was not applied").toEqual([1]);
+    expect(t.isClosed, "a refusal that ends the session left it open").toBe(true);
   });
 });
 
@@ -1324,7 +1375,51 @@ describe("errors", () => {
  * or a firewall that swallowed it, left the client hanging for as long as the
  * platform cared to wait, and the CLI held the vault's lock for the whole of it.
  */
+/**
+ * Neon review #44. Only a body that could not be produced ended the session
+ * mid-upload; any other failure between the server's want and the last body
+ * left it waiting for frames that would never come, on an open connection.
+ */
+describe("an upload that fails between its bodies", () => {
+  it("ends the session rather than leave the server owed bodies", async () => {
+    const { t, socket } = await helloed(0);
+    const name = "a".repeat(64);
+    const put = t.put(
+      "p",
+      { size: 1, ctime: 0, mtime: 0 },
+      [name],
+      async () => new Uint8Array([1]),
+      noBase,
+      undefined,
+      async () => {
+        throw new Error("the interleaved edit failed");
+      },
+    );
+    await settle();
+    socket.reply({ res: "want", chunks: [name] });
+    await expect(put).rejects.toThrow(/interleaved edit failed/);
+    expect(t.isClosed, "the server was left owed a body on an open session").toBe(true);
+  });
+});
+
 describe("a connection that never opens", () => {
+  // Neon review #42. A transport closed before it connected still opened a
+  // socket, and nothing ever closed it, because die() had already run.
+  it("opens no socket once it has been closed", async () => {
+    const socket = new FakeSocket();
+    let made = 0;
+    const t = new Transport("ws://test", {
+      onBatch: () => {},
+      socketFactory: () => (made++, socket),
+      timeoutMs: 1000,
+    });
+    t.close();
+    const connecting = t.connect();
+    socket.open();
+    await expect(connecting).rejects.toThrow(/closed by this device/);
+    expect(made, "a socket was opened for a closed transport").toBe(0);
+  });
+
   it("gives up within the timeout and closes the socket", async () => {
     vi.useFakeTimers();
     try {
@@ -2009,6 +2104,16 @@ describe("a batch frame that cannot be trusted", () => {
       why: "an entry with no chunks array",
       frame: { op: "batch", from: 1, to: 3, entries: [{ uid: 2, path: "p" }] },
     },
+    // Neon review #41: saved into the index, a fraction is a cursor or a
+    // version number the next load refuses, and the device cannot start.
+    {
+      why: "a range that ends at a fraction",
+      frame: { op: "batch", from: 1, to: 1.5, entries: [] },
+    },
+    {
+      why: "an entry whose uid is a fraction",
+      frame: { op: "batch", from: 1, to: 3, entries: [{ uid: 1.5, path: "p", chunks: [] }] },
+    },
   ];
 
   for (const { why, frame } of badFrames) {
@@ -2680,4 +2785,69 @@ describe("a history the server pages by bytes", () => {
     expect(page.map((e) => e.uid)).toEqual([9, 8]);
     expect(socket.sentText.filter((f) => f["op"] === "history")).toHaveLength(1);
   });
+});
+
+/**
+ * Neon review #23. An undo or applied restore commits one broadcast batch per
+ * entry before its reply, and the caller's settle expects them applied when
+ * the call returns, as a put's caller does. Neither drained the queue.
+ */
+describe("the versions an undo or a restore wrote", () => {
+  for (const [what, call, answer] of [
+    [
+      "undo",
+      (t: Transport) => t.undo("op1"),
+      {
+        res: "undone",
+        opId: "op2",
+        undoes: "op1",
+        toCopy: false,
+        committedAt: 1,
+        steps: [],
+        entries: [],
+      },
+    ],
+    [
+      "restore",
+      (t: Transport) => t.restore({ uid: 1, head: 1 }),
+      {
+        res: "restored",
+        applied: true,
+        folder: "",
+        toUid: 1,
+        at: 1,
+        head: 1,
+        restore: 1,
+        remove: 0,
+        removeFolder: 0,
+        unchanged: 0,
+        more: 0,
+        steps: [],
+        keptMovedIn: [],
+        opId: "op3",
+        committedAt: 1,
+      },
+    ],
+  ] as const) {
+    it(`are applied before ${what} returns`, async () => {
+      const gate = deferred();
+      const applied: number[] = [];
+      const { t, socket } = await helloed(0, {
+        onBatch: async (b) => {
+          await gate.promise;
+          applied.push(b.to);
+        },
+      });
+      let returned = false;
+      const doing = call(t).then(() => (returned = true));
+      await settle();
+      socket.raw({ op: "batch", from: 1, to: 1, entries: [] });
+      socket.reply(answer);
+      await nextTurn();
+      expect(returned, "it returned with its own versions still queued").toBe(false);
+      gate.resolve();
+      await doing;
+      expect(applied).toEqual([1]);
+    });
+  }
 });

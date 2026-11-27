@@ -53,6 +53,7 @@ import {
   type JournalDelta,
   type SavedShape,
   type Snapshot,
+  decodeRecord,
   deltaFrom,
   encodeRecord,
   replay,
@@ -283,7 +284,7 @@ export class JournalIndexStore implements IndexStore {
           "so something other than this client wrote one of them. Using the snapshot alone, " +
           "which is older and consistent; the journal will be replaced on the next save.",
       );
-      this.settle(snapshotState, 0, 0);
+      this.settle(snapshotState, highestSeq(logText), 0);
       this.mustSnapshot = true;
       return snapshotState;
     }
@@ -299,7 +300,7 @@ export class JournalIndexStore implements IndexStore {
       this.say(
         `the index journal could not be replayed (${String(err)}); using the snapshot alone.`,
       );
-      this.settle(snapshotState, seq, 0);
+      this.settle(snapshotState, Math.max(seq, highestSeq(logText)), 0);
       this.mustSnapshot = true;
       return snapshotState;
     }
@@ -321,7 +322,7 @@ export class JournalIndexStore implements IndexStore {
         "the index journal replayed to a state that cannot be trusted; falling back to the " +
           "snapshot, which is older and consistent.",
       );
-      this.settle(snapshotState, seq, 0);
+      this.settle(snapshotState, Math.max(seq, highestSeq(logText)), 0);
       this.mustSnapshot = true;
       return snapshotState;
     }
@@ -444,6 +445,10 @@ export class JournalIndexStore implements IndexStore {
       // and that save is a whole snapshot, which a record of unknown fate
       // cannot be appended beside.
       this.mustSnapshot = true;
+      // And no baseline to compare against: the disk may hold this record, so
+      // a later save of the state before it is not "unchanged" (Neon review
+      // #40), and has to be the snapshot.
+      this.saved = undefined;
       this.left = await this.files.stamps().catch(() => this.left);
       throw err;
     }
@@ -470,8 +475,11 @@ export class JournalIndexStore implements IndexStore {
     } catch (err) {
       // A snapshot that failed still owes a snapshot. Without this the next
       // pass would append a record beside a file that may be half written,
-      // which is a delta over a base that is not there.
+      // which is a delta over a base that is not there. Nor may it skip as
+      // unchanged a state that matches the last one saved, when the disk may
+      // now hold another (Neon review #40).
       this.mustSnapshot = true;
+      this.saved = undefined;
       throw err;
     } finally {
       // Whatever happened, what is on disk now is the baseline the next save
@@ -507,6 +515,23 @@ function sequenceOf(parsed: unknown): number | undefined {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
   const seq = (parsed as SnapshotFile).seq;
   return typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0 ? seq : undefined;
+}
+
+/**
+ * The highest sequence of any readable record in a log being set aside.
+ *
+ * The snapshot that replaces the log is stamped with at least this, so a crash
+ * before the log is truncated finds every one of its records already held and
+ * replays none of them over the newer state (Neon review #7). A damaged record
+ * needs no number: replay stops at it whatever it says.
+ */
+function highestSeq(log: string): number {
+  let top = 0;
+  for (const line of log.split("\n")) {
+    const read = decodeRecord(line);
+    if ("seq" in read && read.seq > top) top = read.seq;
+  }
+  return top;
 }
 
 /** Whether a state would survive the check the engine makes of it. */

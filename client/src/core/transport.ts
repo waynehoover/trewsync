@@ -802,8 +802,17 @@ export class Transport {
    * number the server's own read limit is.
    */
   private textFrameCeiling(): number {
-    return this.limits === undefined ? MAX_UNAGREED_FRAME_BYTES : 2 * LOCAL_MAX_BATCH_BYTES;
+    return this.limits === undefined && !this.readyArrived
+      ? MAX_UNAGREED_FRAME_BYTES
+      : 2 * LOCAL_MAX_BATCH_BYTES;
   }
+
+  /**
+   * Whether this session's `ready` has landed, set as it arrives rather than
+   * when `hello` returns: the catch-up batches behind it can be read in the
+   * same turn, before `limits` is set (Neon review #22).
+   */
+  private readyArrived = false;
 
   constructor(
     private readonly url: string,
@@ -845,6 +854,9 @@ export class Transport {
    */
   async connect(): Promise<void> {
     if (this.socket) throw new Error("already connected");
+    // Closed before it opened: a socket opened now would outlive the die()
+    // that already ran, with nothing left to close it (Neon review #42).
+    if (this.closed) throw this.closeReason ?? new ConnectionError("not connected");
     const factory = this.opts.socketFactory ?? defaultSocketFactory;
     const socket = factory(this.url);
     // Bodies as bytes. Browsers default to Blob, which would mean an await
@@ -1266,7 +1278,7 @@ export class Transport {
       // Checked to be a number before it is compared. An entry with no
       // uid at all made both comparisons false and sailed through, which
       // is the range check passing by not being performed.
-      if (typeof e?.uid !== "number" || !Number.isFinite(e.uid)) {
+      if (typeof e?.uid !== "number" || !Number.isSafeInteger(e.uid)) {
         throw new ProtocolError("protostate", `batch ${from}..${to} contains an entry with no uid`);
       }
       if (typeof e.path !== "string" || e.path === "") {
@@ -1455,6 +1467,7 @@ export class Transport {
           // queued before the caller of `hello` hears back. A cursor that
           // belongs to another history would refuse the replay's first batch,
           // from 1, as a gap.
+          if (frame["res"] === "ready") this.readyArrived = true;
           const epoch = frame["epoch"];
           if (
             frame["res"] === "ready" &&
@@ -1764,11 +1777,13 @@ export class Transport {
 
     // A per-entry refusal is survivable; one that ends the session is not,
     // and the session has to end for the same reason it would on a single put.
+    // After the drain, not before it: ending first made the drain throw, and
+    // the uids the server committed for every other entry were lost with it
+    // while the echoes had already moved the cursor past them (Neon review #9).
+    await this.drainReceived();
     for (const r of results) {
       if (r.error?.endsSession) this.die(r.error);
     }
-
-    await this.drainReceived();
     return { results, uploaded, bytes };
   }
 
@@ -1823,46 +1838,58 @@ export class Transport {
               notifyTransfer(onBytes, sent);
             }
           };
-    for (const name of wanted) {
-      await interleave?.();
-      if (!offered.has(name)) {
-        // Already checked when the reply was read; kept because this is
-        // the line that sends bytes, and it should not trust a list.
-        throw new ProtocolError(
-          "badchunk",
-          `server asked for ${name}, which this ${what} does not contain`,
-        );
+    try {
+      for (const name of wanted) {
+        await interleave?.();
+        if (!offered.has(name)) {
+          // Already checked when the reply was read; kept because this is
+          // the line that sends bytes, and it should not trust a list.
+          throw new ProtocolError(
+            "badchunk",
+            `server asked for ${name}, which this ${what} does not contain`,
+          );
+        }
+        let body: Uint8Array;
+        try {
+          body = await bodyOf(name);
+        } catch (err) {
+          // The server has sent `want` and is reading binary frames. It is owed
+          // N bodies and is about to get fewer, and there is no frame that says
+          // "never mind": the next text frame this client sends would arrive
+          // where a body was expected, and the server would end the session over
+          // a protocol violation whose real cause was a file that changed on
+          // this disk. So the connection is ended here, by the side that knows
+          // why, and the caller gets the reason rather than a `protostate` on
+          // whatever it asked for next.
+          this.die(
+            new ConnectionError(
+              `${what} could not produce ${name}, so the connection was ended ` +
+                `rather than left owing the server bodies: ${(err as Error).message}`,
+            ),
+          );
+          throw err;
+        }
+        await interleave?.();
+        const frame = encodeFrame(body);
+        this.send(frame);
+        bytes += frame.length;
+        await this.drained(interleave ? 256 * 1024 : UPLOAD_HIGH_WATER, progress, interleave);
       }
-      let body: Uint8Array;
-      try {
-        body = await bodyOf(name);
-      } catch (err) {
-        // The server has sent `want` and is reading binary frames. It is owed
-        // N bodies and is about to get fewer, and there is no frame that says
-        // "never mind": the next text frame this client sends would arrive
-        // where a body was expected, and the server would end the session over
-        // a protocol violation whose real cause was a file that changed on
-        // this disk. So the connection is ended here, by the side that knows
-        // why, and the caller gets the reason rather than a `protostate` on
-        // whatever it asked for next.
-        this.die(
-          new ConnectionError(
-            `${what} could not produce ${name}, so the connection was ended ` +
-              `rather than left owing the server bodies: ${(err as Error).message}`,
-          ),
-        );
-        throw err;
-      }
-      await interleave?.();
-      const frame = encodeFrame(body);
-      this.send(frame);
-      bytes += frame.length;
-      await this.drained(interleave ? 256 * 1024 : UPLOAD_HIGH_WATER, progress, interleave);
+      // Every body is with the socket before the clock on the ack starts. The
+      // ack follows the last body, so a timer armed while bodies were still
+      // queued measured the upload rather than the server.
+      await this.drained(0, progress, interleave);
+    } catch (err) {
+      // Whatever stopped it, the server is still owed the rest, for the
+      // reason given where a body cannot be produced (Neon review #44).
+      this.die(
+        new ConnectionError(
+          `${what} stopped part way through its bodies, so the connection was ended: ` +
+            (err as Error).message,
+        ),
+      );
+      throw err;
     }
-    // Every body is with the socket before the clock on the ack starts. The
-    // ack follows the last body, so a timer armed while bodies were still
-    // queued measured the upload rather than the server.
-    await this.drained(0, progress, interleave);
     return bytes;
   }
 
@@ -2507,6 +2534,9 @@ export class Transport {
     if (reply["res"] !== "undone") {
       throw new ProtocolError("protostate", `expected undone, got ${JSON.stringify(reply)}`);
     }
+    // Its versions were broadcast before the reply, one batch each, and are
+    // applied before this resolves, as a put's are (Neon review #23).
+    await this.drainReceived();
     const own = reply["opId"];
     if (typeof own !== "string" || own === "" || reply["undoes"] !== opId) {
       throw this.malformed(
@@ -2610,6 +2640,8 @@ export class Transport {
       throw new ProtocolError("protostate", `expected restored, got ${JSON.stringify(reply)}`);
     }
     const applied = reply["applied"] === true;
+    // An apply's versions came before the reply; see `undo`.
+    if (applied) await this.drainReceived();
     // An apply of a preview that changes nothing commits nothing, and says
     // so: applied false, with every count zero.
     const nothing = ["restore", "remove", "removeFolder"].every((k) => reply[k] === 0);
@@ -3093,8 +3125,13 @@ function toBytes(data: unknown): Uint8Array | undefined {
   return undefined;
 }
 
+/**
+ * A cursor or a uid off the wire, or -1 when it is not a count, which every
+ * caller refuses: a fraction or a missing one was taken as given, saved into
+ * the index, and refused by its next load (Neon review #41).
+ */
 function numberOf(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : -1;
 }
 
 function describeClose(ev: { code?: number; reason?: string }): string {

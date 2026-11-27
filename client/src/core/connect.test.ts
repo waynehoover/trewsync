@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { Client, type ClientOptions } from "./client.ts";
 import { FakeSocket, ready, settle } from "../../test/core/fake-socket.ts";
+import { ConnectionError } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 /** A client on a socket that will say `ready` and never say `caught-up`. */
@@ -257,6 +258,125 @@ describe("connecting only as far as the handshake (R1)", () => {
 
     socket.raw({ op: "caught-up", cursor: 0 });
     expect((await connecting).cursor).toBe(0);
+    await client.close();
+  });
+});
+
+// Neon review #43. The inactivity clock started before the index loaded, so
+// a load that took the whole timeout left the wait for the backlog already
+// expired when it began, and a stalled backlog was a plain Error that three
+// reconnects in a row turned into a fatal stop.
+describe("the wait for the backlog", () => {
+  it("starts its clock after the index has loaded", async () => {
+    vi.useFakeTimers();
+    const store = new MemoryIndexStore();
+    const load = store.load.bind(store);
+    store.load = async () => {
+      await new Promise((r) => setTimeout(r, 2500));
+      return load();
+    };
+    const { socket, client } = clientOnFakeSocket({ store });
+    const connecting = client.connect();
+    const result = connecting.catch((error: Error) => error);
+    try {
+      socket.open();
+      await vi.advanceTimersByTimeAsync(2500);
+      await vi.waitFor(() => expect(socket.sentText.some((m) => m["op"] === "hello")).toBe(true));
+      socket.reply(ready({ cursor: 0 }));
+      await vi.advanceTimersByTimeAsync(10);
+      socket.raw({ op: "caught-up", cursor: 0 });
+      expect(await result).toMatchObject({ cursor: 0 });
+    } finally {
+      await client.close();
+      await result;
+      vi.useRealTimers();
+    }
+  });
+
+  it("is a connection that ended when the backlog stalls, which a loop retries", async () => {
+    vi.useFakeTimers();
+    const { socket, client } = clientOnFakeSocket();
+    const result = client.connect().catch((error: Error) => error);
+    try {
+      socket.open();
+      await vi.waitFor(() => expect(socket.sentText.some((m) => m["op"] === "hello")).toBe(true));
+      socket.reply(ready({ cursor: 1 }));
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(await result).toBeInstanceOf(ConnectionError);
+    } finally {
+      await client.close();
+      await result;
+      vi.useRealTimers();
+    }
+  });
+});
+
+// Neon review (Low). Work that reached the client after close still ran: a
+// batch finishing its apply armed a pass timer, and repair and release ran
+// against a closed client, release from an inspection client too.
+describe("a client that has been closed", () => {
+  it("arms no pass for a batch it finishes applying after close", async () => {
+    const { socket, client } = clientOnFakeSocket();
+    const connecting = client.connect();
+    await sayReady(socket, 0);
+    socket.raw({ op: "caught-up", cursor: 0 });
+    await connecting;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const accept = client.engine.acceptBatch.bind(client.engine);
+    client.engine.acceptBatch = async (batch) => {
+      await gate;
+      await accept(batch);
+    };
+    const entry = { uid: 1, path: "F", size: 0, ctime: 1, mtime: 1, folder: true, deleted: false };
+    socket.raw({ op: "batch", from: 1, to: 1, entries: [{ ...entry, chunks: [], device: "p" }] });
+    await settle();
+    const closing = client.close();
+    release();
+    await closing;
+    await client.transport.drainReceived().catch(() => undefined);
+    expect((client as unknown as { soonTimer?: unknown }).soonTimer).toBeUndefined();
+  });
+
+  it("refuses repair and release", async () => {
+    const { client } = clientOnFakeSocket();
+    await client.close();
+    await expect(client.repair()).rejects.toThrow(/closed/);
+    await expect(client.release(["a.md"])).rejects.toThrow(/closed/);
+  });
+
+  it("refuses release from an inspection client, which holds no lock", async () => {
+    const { client } = clientOnFakeSocket({ inspect: true });
+    try {
+      await expect(client.release(["a.md"])).rejects.toThrow(/not to sync/);
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+// Neon review (Low). Waiting syncs were joined when their options matched as
+// JSON, and a Map is `{}` as JSON, so an Apply listing other settings was
+// handed the pass of the Apply before it.
+describe("syncs that wait together", () => {
+  it("are not joined when they ask to apply different settings", async () => {
+    const { client } = clientOnFakeSocket();
+    const asked: unknown[] = [];
+    client.engine.sync = async (o) => {
+      asked.push(o?.applyOnly);
+      return {} as Awaited<ReturnType<typeof client.engine.sync>>;
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    client.engine.noteRename = () => gate as never;
+    const busy = client.noteRename("x", "y");
+    const one = new Map([["a.json", 1]]);
+    const two = new Map([["b.json", 2]]);
+    const first = client.sync({ applySettings: true, applyOnly: one });
+    const second = client.sync({ applySettings: true, applyOnly: two });
+    release();
+    await Promise.all([busy, first, second]);
+    expect(asked).toEqual([one, two]);
     await client.close();
   });
 });
