@@ -4424,6 +4424,10 @@ export class Engine {
   ): Promise<void> {
     const chunks = chunkNamesOf(remote.hash);
     this.checkChunkCount(remote.uid, chunks.length);
+    // `assemble` refuses it anyway, but only once every body is fetched and
+    // held, and then as an error retried by fetching it all again.
+    const perFileMax = this.limitOn("perFileMax");
+    if (remote.size > perFileMax) throw tooLarge(remote.size, perFileMax);
 
     // Where the version lands is, on some disks, a file already here under
     // another spelling; then that file is what the write has to recognise.

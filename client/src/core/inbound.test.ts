@@ -160,6 +160,31 @@ describe("a settings version that is not JSON", () => {
 });
 
 /**
+ * Neon review, Low: an incoming version larger than the server says it stores
+ * was refused only once every body had been fetched and held, and refused as
+ * a plain error, so each retry fetched the whole of it again.
+ */
+describe("an incoming version over perFileMax", () => {
+  it("is written off before anything is fetched", async () => {
+    const { engine, socket, vault } = await engineOnFakeSocket({ perFileMax: 64 });
+    const bodies = new Map<string, Uint8Array>();
+    serving(socket, bodies);
+    socket.raw({
+      op: "batch",
+      from: 1,
+      to: 1,
+      entries: [await entryFor(1, "big.md", "x".repeat(100), bodies)],
+    });
+    await accepted(engine, 1);
+    const report = await engine.sync();
+    expect(socket.sentText.filter((m) => m["op"] === "fetch"), "fetched anyway").toHaveLength(0);
+    expect(report.retrying).toBe(0);
+    expect(report.skipped).toBe(1);
+    expect(vault.text("big.md")).toBeUndefined();
+  });
+});
+
+/**
  * `a//b`, `a/./b` and `a/b/` are not the paths they look
  * like: a filesystem collapses them onto `a/b`, and the engine keyed its
  * whole idea of a file on the string as it arrived. Two spellings of one file
