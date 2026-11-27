@@ -179,7 +179,9 @@ func (r *runner) sshCommand() string {
 		"-o", "KbdInteractiveAuthentication=no",
 		"-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=yes",
-		"-o", "UserKnownHostsFile=" + shellQuote(r.s.KnownHosts),
+		// Double-quoted inside the value too: OpenSSH reads this option as a
+		// list of files split on whitespace (Neon review #35).
+		"-o", shellQuote("UserKnownHostsFile=\"" + r.s.KnownHosts + "\""),
 		"-o", "GlobalKnownHostsFile=/dev/null",
 		"-o", "UpdateHostKeys=no",
 		"-o", "ConnectTimeout=30",
