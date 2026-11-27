@@ -572,6 +572,10 @@ export class Client {
     await this.transport.connect();
     this.lastBatchAt = Date.now();
     this.limits = await this.engine.start();
+    // Again once the index has loaded and the hello is answered: the wait
+    // below measures the server's silence, and a slow load is not that
+    // (Neon review #43).
+    this.lastBatchAt = Date.now();
     if (opts.waitForBacklog === false) return this.limits;
     this.reportCatchUp();
 
@@ -604,7 +608,9 @@ export class Client {
         this.backlogWaiters.delete(changed);
         if (this.endedWith) reject(this.endedWith);
         else if (this.caughtUp) resolve();
-        else reject(new Error("the server never finished sending what it already had"));
+        // A connection that stopped answering, as a request timeout is, so
+        // runForever retries it rather than counting it toward a fatal stop.
+        else reject(new ConnectionError("the server never finished sending what it already had"));
       };
       this.backlogWaiters.add(changed);
       changed();

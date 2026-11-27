@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { Client, type ClientOptions } from "./client.ts";
 import { FakeSocket, ready, settle } from "../../test/core/fake-socket.ts";
+import { ConnectionError } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 
 /** A client on a socket that will say `ready` and never say `caught-up`. */
@@ -258,5 +259,54 @@ describe("connecting only as far as the handshake (R1)", () => {
     socket.raw({ op: "caught-up", cursor: 0 });
     expect((await connecting).cursor).toBe(0);
     await client.close();
+  });
+});
+
+// Neon review #43. The inactivity clock started before the index loaded, so
+// a load that took the whole timeout left the wait for the backlog already
+// expired when it began, and a stalled backlog was a plain Error that three
+// reconnects in a row turned into a fatal stop.
+describe("the wait for the backlog", () => {
+  it("starts its clock after the index has loaded", async () => {
+    vi.useFakeTimers();
+    const store = new MemoryIndexStore();
+    const load = store.load.bind(store);
+    store.load = async () => {
+      await new Promise((r) => setTimeout(r, 2500));
+      return load();
+    };
+    const { socket, client } = clientOnFakeSocket({ store });
+    const connecting = client.connect();
+    const result = connecting.catch((error: Error) => error);
+    try {
+      socket.open();
+      await vi.advanceTimersByTimeAsync(2500);
+      await vi.waitFor(() => expect(socket.sentText.some((m) => m["op"] === "hello")).toBe(true));
+      socket.reply(ready({ cursor: 0 }));
+      await vi.advanceTimersByTimeAsync(10);
+      socket.raw({ op: "caught-up", cursor: 0 });
+      expect(await result).toMatchObject({ cursor: 0 });
+    } finally {
+      await client.close();
+      await result;
+      vi.useRealTimers();
+    }
+  });
+
+  it("is a connection that ended when the backlog stalls, which a loop retries", async () => {
+    vi.useFakeTimers();
+    const { socket, client } = clientOnFakeSocket();
+    const result = client.connect().catch((error: Error) => error);
+    try {
+      socket.open();
+      await vi.waitFor(() => expect(socket.sentText.some((m) => m["op"] === "hello")).toBe(true));
+      socket.reply(ready({ cursor: 1 }));
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(await result).toBeInstanceOf(ConnectionError);
+    } finally {
+      await client.close();
+      await result;
+      vi.useRealTimers();
+    }
   });
 });
