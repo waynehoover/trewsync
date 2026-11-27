@@ -116,6 +116,31 @@ it("follows a rename back into the note's earlier history", async () => {
   modal.onClose();
 });
 
+it("stops offering more once the earlier name has nothing left (low finding, Neon review)", async () => {
+  // The server purged everything before the rename, so the earlier name
+  // answers with nothing, and Load more used to ask it again for ever.
+  const asked: string[] = [];
+  const source: HistorySource = {
+    history: async (path) => {
+      asked.push(path);
+      return path === "Now.md"
+        ? [version(30, "Now.md"), version(20, "Now.md", { previousPath: "Then.md" })]
+        : [];
+    },
+    contentAt: async () => "text\n",
+    restoreVersion: async () => ({ path: "Now.md", sent: true }),
+    currentText: async () => "text\n",
+  };
+  const modal = new HistoryModal(new App() as never, source, "Now.md");
+  const work = modal as unknown as { load(): Promise<void>; exhausted: boolean };
+  modal.onOpen();
+  await work.load();
+  await work.load();
+  expect(work.exhausted, "Load more is still offered with nothing left to load").toBe(true);
+  expect(asked).toEqual(["Now.md", "Then.md"]);
+  modal.onClose();
+});
+
 /** Writes a note and syncs, once per revision, so the server holds a history. */
 async function revisions(
   adapter: FakeAdapter,

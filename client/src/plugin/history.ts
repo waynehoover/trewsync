@@ -237,7 +237,14 @@ export class HistoryModal extends Modal {
       // everything older is what is asked for and everything newer is
       // refused.
       const oldest = this.versions.at(-1);
-      if (this.exhausted && oldest?.previousPath !== undefined) {
+      // Only onto a name not already asked: the earlier name answering with
+      // nothing (its history purged) leaves the same oldest version, and
+      // following it again offered Load more for ever.
+      if (
+        this.exhausted &&
+        oldest?.previousPath !== undefined &&
+        oldest.previousPath !== this.pagingName
+      ) {
         this.pagingName = oldest.previousPath;
         this.exhausted = false;
       }
