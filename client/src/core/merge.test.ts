@@ -469,6 +469,10 @@ describe("conflict copy names", () => {
     expect(sanitiseAuthor('bad/\\:*?"<>|chars')).toBe("bad-chars");
     expect(sanitiseAuthor("  two   spaces\tand\na line ")).toBe("two spaces and a line");
     expect(sanitiseAuthor("x.trew-tmp-y")).toBe("x-trew-tmp-y");
+    // Not made by collapsing hyphens either (Neon review #45).
+    expect(sanitiseAuthor("a.trew--tmp-b")).not.toContain(".trew-tmp-");
+    expect(sanitiseAuthor("a.trew//tmp-b")).not.toContain(".trew-tmp-");
+    expect(sanitiseAuthor("a-.trew-tmp-b")).toBe("a-trew-tmp-b");
     expect(sanitiseAuthor(".hidden")).toBe("hidden");
     // Nothing left is nothing, and the caller chooses what to use instead.
     expect(sanitiseAuthor("...")).toBe("");

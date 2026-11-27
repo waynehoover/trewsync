@@ -1204,6 +1204,9 @@ export function sanitiseAuthor(name: string): string {
     .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, "")
     .replace(/[\\/:*?"<>|]/gu, "-")
     .replace(/[\s\p{Cc}]+/gu, " ")
+    // After the hyphens collapse, which can make the mark (`.trew--tmp-`),
+    // and collapsed again where breaking it up made a run.
+    .replace(/-{2,}/gu, "-")
     .replaceAll(STAGING_MARK, "-trew-tmp-")
     .replaceAll(COPY_OPEN.trimStart(), "Conflicted copy ")
     .replace(/-{2,}/gu, "-")
