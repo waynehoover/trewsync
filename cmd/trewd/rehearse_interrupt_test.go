@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/waynehoover/trewsync/internal/dirlock"
 	"github.com/waynehoover/trewsync/internal/doctor"
 )
 
@@ -97,5 +100,23 @@ func TestARehearsalSweepsTheCopyAKilledOneLeft(t *testing.T) {
 	}
 	if _, err := os.Stat(kept); err != nil {
 		t.Fatalf("a work directory kept with -keep was removed: %v", err)
+	}
+}
+
+// A plaintext backup is copied under its shared data lock, as purge reads
+// one, so a backup still writing into it is refused rather than copied torn
+// and recorded as a failed rehearsal (Neon review #36).
+func TestARehearsalDoesNotCopyABackupBeingWritten(t *testing.T) {
+	backup := t.TempDir()
+	writing, err := dirlock.Exclusive(backup, dirlock.Data, "backup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writing.Release()
+	r := rehearsal{out: io.Discard, dir: filepath.Join(t.TempDir(), "restore")}
+	_, err = r.run(context.Background(), backup, false, "")
+	var held *dirlock.HeldError
+	if !errors.As(err, &held) {
+		t.Fatalf("rehearsing a backup being written: %v, want it refused as in use", err)
 	}
 }

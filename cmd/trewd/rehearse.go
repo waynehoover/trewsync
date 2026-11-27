@@ -245,7 +245,15 @@ func (r *rehearsal) run(ctx context.Context, backup string, encrypted bool, iden
 		if err := store.CheckDataDir(backup); err != nil {
 			return rec, fmt.Errorf("the backup at %s: %w", backup, err)
 		}
+		// Shared, as purge reads a backup: `trewd backup` writes into the
+		// directory under the exclusive lock, and a copy taken meanwhile is
+		// torn (Neon review #36).
+		lock, err := dirlock.Shared(backup, dirlock.Data)
+		if err != nil {
+			return rec, fmt.Errorf("the backup at %s is in use, so it cannot be copied while it changes: %w", backup, err)
+		}
 		n, err := copyDataDir(ctx, backup, r.dir)
+		lock.Release()
 		if err != nil {
 			return rec, fmt.Errorf("copying the backup: %w", err)
 		}
