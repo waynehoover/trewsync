@@ -371,6 +371,29 @@ func TestS19AHelloInProgressIsNotClosedToMakeRoom(t *testing.T) {
 	speaking.recvInto("ready", nil)
 }
 
+// A connection chosen to make room in the moment its hello arrived, before
+// it was marked as heard, does not go on to authenticate (Neon review #24).
+// It is already out of the count, which is what publishes its vault id, so
+// carrying on wrote that id while makeRoom's log line could read it, and the
+// connection authenticated while being closed. The choice is made here by
+// hand, as admit makes it, so the window is not left to the scheduler.
+func TestS19AConnectionChosenToMakeRoomDoesNotAuthenticate(t *testing.T) {
+	r := newRig(t)
+	r.device("laptop")
+	c := r.dial("laptop")
+	waitFor(t, "one pre-auth session", func() bool { return r.srv.PreAuth() == 1 })
+	r.srv.sessMu.Lock()
+	for sess := range r.srv.sessions {
+		sess.counted = false
+		r.srv.preAuth--
+	}
+	r.srv.sessMu.Unlock()
+	c.sendJSON(c.deviceHello(0))
+	if !c.closed() {
+		t.Fatal("a connection chosen to make room went on to authenticate")
+	}
+}
+
 // Connections that have not said hello are capped as a total, so a flood of
 // sockets that never authenticate cannot exhaust the server. Past the cap the
 // one that has been silent longest is closed for the newcomer (T61); a slot

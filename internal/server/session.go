@@ -729,8 +729,18 @@ func (s *Session) run() error {
 		return err
 	}
 	// Whatever it turns out to be, this connection has spoken, and is being
-	// answered rather than holding a slot in silence (T61).
+	// answered rather than holding a slot in silence (T61). Marked under the
+	// lock admit chooses under: a connection chosen just before this is out
+	// of the count, the guard publishedVaultID trusts, and makeRoom is closing
+	// it, so it stops here rather than write what it would publish (Neon
+	// review #24).
+	s.srv.sessMu.Lock()
 	s.heard.Store(true)
+	madeRoom := !s.counted
+	s.srv.sessMu.Unlock()
+	if madeRoom {
+		return errMadeRoom
+	}
 	if typ != websocket.MessageText {
 		return s.fatal(wire.CodeProtoState,
 			fmt.Errorf("first frame must be text hello, got %v", typ))
