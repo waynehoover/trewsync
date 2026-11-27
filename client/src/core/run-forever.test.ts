@@ -313,6 +313,10 @@ describe("what the loop does with a refusal (I2)", () => {
     expect(retryWait(busy(30_000), 5_000, () => 0.999)).toBeLessThan(45_000);
     expect(retryWait(busy(1_000), 5_000)).toBe(5_000);
     expect(retryWait(new Error("dropped"), 2_500)).toBe(2_500);
+    // A hint past what a timer can hold overflowed setTimeout into a 1 ms
+    // reconnect spin, and a merely huge one slept for weeks (Neon review).
+    expect(retryWait(busy(2 ** 31), 5_000, () => 0)).toBeLessThanOrEqual(300_000);
+    expect(retryWait(busy(1e12), 5_000, () => 0.999)).toBeLessThan(2 ** 31 - 1);
   });
 
   /**

@@ -1769,6 +1769,9 @@ export function isFatal(cause: Error): boolean {
   return cause instanceof ProtocolError && cause.fatal;
 }
 
+/** The longest a server's retry hint is taken at, the backoff's ceiling. */
+const MAX_RETRY_HINT_MS = 300_000;
+
 /**
  * How long to wait before the next attempt: the backoff, or longer if the
  * server said so.
@@ -1791,7 +1794,13 @@ export function retryWait(
   backoffMs: number,
   random: () => number = Math.random,
 ): number {
-  const hint = cause instanceof ProtocolError ? (cause.retryAfterMs ?? 0) : 0;
+  // Held to the backoff's own ceiling: a server's hint past what a timer can
+  // hold (2^31 ms) overflowed into a 1 ms reconnect spin, and a merely large
+  // one slept for weeks.
+  const hint = Math.min(
+    cause instanceof ProtocolError ? (cause.retryAfterMs ?? 0) : 0,
+    MAX_RETRY_HINT_MS,
+  );
   if (backoffMs >= hint) return backoffMs;
   return Math.floor(hint * (1 + 0.5 * random()));
 }
