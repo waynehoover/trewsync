@@ -1878,6 +1878,8 @@ export class ObsidianVault implements Vault {
       }
       this.wrote(path);
       await verify(this.adapter, path, backup);
+      // Durable before the backup and the record that stand for it go.
+      await this.flush();
       await this.dropIfStill(keepAt, record.before);
       await this.writeDown(path, undefined);
     } catch (err) {
@@ -1964,6 +1966,8 @@ export class ObsidianVault implements Vault {
       if (restoring) {
         this.wrote(normalized);
         await verify(this.adapter, normalized, held.before);
+        // Durable before the backup and the record that stand for it go.
+        await this.flush();
       }
       this.cutShort.delete(normalized);
       await this.writeDown(normalized, undefined).catch(() => undefined);

@@ -2346,6 +2346,89 @@ describe("writing over a file the pass did not decide about", () => {
     expect(checkpoints[1]).toContain("/home/me/vault/note.md");
   });
 
+  it("flushes a note a crash cut short and the restart put back before removing its backup (Neon review #12)", async () => {
+    const desktop = new DesktopAdapter();
+    desktop.seed("note.md", "unsent local text\n", 1000);
+    const first = new ObsidianVault(asVault(new FakeVaultIndex(desktop)), ".obsidian", () => {}, {
+      fs: recordingFs().fs,
+    });
+    let dead = false;
+    desktop.fault = (op, path) => {
+      if (dead) return new Error("the process was killed");
+      if (op === "write" && path === "note.md") {
+        dead = true;
+        return 4;
+      }
+      return undefined;
+    };
+    await first
+      .replace(
+        "note.md",
+        undefined,
+        enc.encode("incoming\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      )
+      .catch(() => undefined);
+    expect(desktop.text("note (kept).md")).toBe("unsent local text\n");
+
+    const { fs, synced } = recordingFs();
+    const checkpoints: string[][] = [];
+    desktop.fault = (op, path) => {
+      if ((op === "rename" || op === "remove") && path === "note (kept).md") {
+        checkpoints.push([...synced]);
+      }
+      return undefined;
+    };
+    const restarted = new ObsidianVault(
+      asVault(new FakeVaultIndex(desktop)),
+      ".obsidian",
+      () => {},
+      {
+        fs,
+      },
+    );
+    await restarted.list();
+    desktop.fault = undefined;
+    expect(desktop.text("note.md")).toBe("unsent local text\n");
+    expect(checkpoints.length).toBeGreaterThan(0);
+    expect(checkpoints[0]).toContain("/home/me/vault/note.md");
+  });
+
+  it("flushes a note a failed write put back before removing its backup (Neon review #12)", async () => {
+    const desktop = new DesktopAdapter();
+    const { fs, synced } = recordingFs();
+    const v = new ObsidianVault(asVault(new FakeVaultIndex(desktop)), ".obsidian", () => {}, {
+      fs,
+    });
+    desktop.seed("note.md", "original\n", 1000);
+    let failed = false;
+    const checkpoints: string[][] = [];
+    desktop.fault = (op, path) => {
+      if (op === "write" && path === "note.md" && !failed) {
+        failed = true;
+        return 4;
+      }
+      if ((op === "rename" || op === "remove") && path === "note (kept).md") {
+        checkpoints.push([...synced]);
+      }
+      return undefined;
+    };
+    await expect(
+      v.replace(
+        "note.md",
+        { contentId: await plainDigest(enc.encode("original\n")), idOf: plainDigest },
+        enc.encode("incoming\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow("put back");
+    desktop.fault = undefined;
+    expect(desktop.text("note.md")).toBe("original\n");
+    expect(checkpoints.length).toBeGreaterThan(0);
+    expect(checkpoints.at(-1)).toContain("/home/me/vault/note.md");
+  });
+
   it("keeps the original untouched if its backup cannot be flushed", async () => {
     const desktop = new DesktopAdapter();
     const v = new ObsidianVault(asVault(new FakeVaultIndex(desktop)), ".obsidian", () => {}, {
@@ -2808,7 +2891,11 @@ describe("an in-place update a crash interrupted, at the next start", () => {
       ),
     ).rejects.toThrow("cut short");
     await expect(
-      restarted.removeExpecting("note.md", { contentId: id, idOf: plainDigest }, "note (kept 3).md"),
+      restarted.removeExpecting(
+        "note.md",
+        { contentId: id, idOf: plainDigest },
+        "note (kept 3).md",
+      ),
     ).rejects.toThrow("cut short");
     expect(a.text("note.md")).toBe(cut);
     expect(a.filePaths().filter((p) => p.startsWith("note ("))).toEqual([]);
