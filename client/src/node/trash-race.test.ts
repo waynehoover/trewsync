@@ -23,6 +23,7 @@ import {
   readdir,
   rename as renameFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -43,6 +44,23 @@ async function scratch(): Promise<string> {
   dirs.push(dir);
   return dir;
 }
+
+describe("copying a link away and then removing it (Neon review #19)", () => {
+  it("does not follow a link to a folder outside the vault", async () => {
+    const dir = await scratch();
+    const outside = await scratch();
+    await mkdir(join(outside, "empty"), { recursive: true });
+    await writeFile(join(outside, "theirs.md"), "not the vault's\n");
+    await mkdir(join(dir, "trash"), { recursive: true });
+    const source = join(dir, "Attachments");
+    await symlink(outside, source);
+
+    await copyVerifiedThenRemove(source, join(dir, "trash", "Attachments")).catch(() => undefined);
+
+    expect((await readdir(outside)).sort()).toEqual(["empty", "theirs.md"]);
+    expect(await readFile(join(outside, "theirs.md"), "utf8")).toBe("not the vault's\n");
+  });
+});
 
 describe("copying a note away and then removing it", () => {
   it("removes a file whose copy matches", async () => {

@@ -134,6 +134,9 @@ describe("a note path that leaves the vault", () => {
     const v = new NodeVault(vault);
     await expect(v.read("leaf.md")).rejects.toThrow(/leaves the vault/);
     await expect(v.read("ancestor/secret.md")).rejects.toThrow(/leaves the vault/);
+    // Nor is either hashed through the link (Neon review #19).
+    await expect(v.contentDigest("leaf.md")).resolves.toBeUndefined();
+    await expect(v.contentDigest("ancestor/secret.md")).resolves.toBeUndefined();
   });
 
   it("still reads an ordinary note, and one under a real folder", async () => {

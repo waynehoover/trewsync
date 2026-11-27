@@ -496,6 +496,19 @@ describe("the copy kept before an Apply", () => {
     expect(await adapter.exists(`${dir}/settings-before-apply/snippets/wide.css`)).toBe(false);
   });
 
+  it("includes a snippet whose name holds a no-break space, as the vault syncs it (Neon review #38)", async () => {
+    const adapter = new FakeAdapter();
+    await configFolder(adapter);
+    const nbsp = ".obsidian/snippets/wide\u00a0table.css";
+    await write(adapter, nbsp, ".t {}");
+    const vault = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian", () => {}, {
+      settings: ".obsidian",
+    });
+    const listed = (await vault.list()).map((f) => f.path);
+    expect(listed).toContain(".obsidian/snippets/wide table.css");
+    expect(await settingsIn(adapter, ".obsidian", ".obsidian")).toContain(nbsp);
+  });
+
   it("includes a theme whose name the disk keeps in NFD", async () => {
     const adapter = new FakeAdapter();
     await configFolder(adapter);

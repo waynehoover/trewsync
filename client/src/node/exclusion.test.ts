@@ -15,7 +15,7 @@
  * write over a live holder's record.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -79,6 +79,43 @@ describe("proving the exclusion excludes", () => {
     // would replace every error message the CLI has with a stack.
     await expect(selfTest(alwaysThrows, await stateDir())).resolves.toBe(false);
   });
+
+  it("fails a mechanism whose second take fails for another reason (Neon review #39)", async () => {
+    // An EIO or EMFILE says nothing about whether a second taker is refused,
+    // and must not be read as the refusal.
+    let takes = 0;
+    const secondFails: Mechanism = {
+      how: "pretend",
+      take: async () => {
+        if (++takes === 1) return nothing;
+        throw new Error("EMFILE: too many open files");
+      },
+    };
+    expect(await selfTest(secondFails, await stateDir())).toBe(false);
+  });
+
+  it("releases a second exclusion it should not have been given (Neon review #39)", async () => {
+    let released = 0;
+    const leaky: Mechanism = {
+      how: "pretend",
+      take: async () => ({ how: "pretend", release: async () => void released++ }),
+    };
+    expect(await selfTest(leaky, await stateDir())).toBe(false);
+    expect(released, "the second exclusion was left held").toBe(2);
+  });
+
+  it.skipIf(process.platform !== "darwin")(
+    "does not follow a link at the lock file's name (Neon review #19)",
+    async () => {
+      const dir = await stateDir();
+      const outside = await stateDir();
+      const target = join(outside, "not-a-lock");
+      const at = join(dir, "lock.excl");
+      await symlink(target, at);
+      await expect(mechanismFor("darwin")!.take(dir, at)).rejects.toThrow();
+      await expect(access(target)).rejects.toThrow();
+    },
+  );
 
   it("passes one that really excludes", async () => {
     expect(await selfTest(honest(), await stateDir())).toBe(true);

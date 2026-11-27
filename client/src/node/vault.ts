@@ -2760,7 +2760,10 @@ export class NodeVault implements Vault {
    * 256 MiB attachment costs one pass and a few kilobytes.
    */
   contentDigest = async (path: string): Promise<string | undefined> =>
-    digestOf(await this.absolute(path)).catch(() => undefined);
+    // Through `openNote`, so a link is not hashed through either (F24, T25).
+    this.openNote(path)
+      .then(digestOfHandle)
+      .catch(() => undefined);
 
   async remove(path: string): Promise<void> {
     this.invalidateListing();
@@ -3058,10 +3061,20 @@ export class NodeVault implements Vault {
    * recognised and the part set aside.
    */
   async createDirect(path: string, bytes: Uint8Array, times: Times): Promise<boolean> {
-    // A bound on open files: past it, the batch so far is made durable now.
-    if (this.unsyncedFiles.size >= MAX_UNSYNCED_FILES) await this.syncFiles();
     this.invalidateListing();
     const full = await this.absolute(path);
+    // A bound on open files: past it, the batch so far is made durable now.
+    // So too before a second handle for one name, which would replace the
+    // first in the map open, and after an fsync failed, which every flush
+    // now refuses on, so a handle opened then would be neither synced nor
+    // closed: `syncFiles` throws that failure first.
+    if (
+      this.unsyncedFiles.size >= MAX_UNSYNCED_FILES ||
+      this.unsyncedFiles.has(full) ||
+      this.fsyncFailed !== undefined
+    ) {
+      await this.syncFiles();
+    }
     await this.insideForReal(full);
     await this.checkStaging();
     const had = await this.deepestExisting(full);
@@ -3866,7 +3879,9 @@ export async function copyVerifiedThenRemove(source: string, target: string): Pr
 async function removeMatching(source: string, target: string): Promise<string[]> {
   const left: string[] = [];
   const walk = async (from: string, to: string): Promise<void> => {
-    const info = await stat(from).catch(() => undefined);
+    // `lstat`: a link is not followed out of the vault, here or in the
+    // helpers below, and is left where it is like any other non-file.
+    const info = await lstat(from).catch(() => undefined);
     if (info === undefined) return; // already gone
     if (info.isDirectory()) {
       for (const name of await readdir(from)) await walk(join(from, name), join(to, name));
@@ -3941,7 +3956,7 @@ async function removeMatching(source: string, target: string): Promise<string[]>
 async function flushTree(path: string): Promise<void> {
   const dirs = new Set<string>();
   const walk = async (at: string): Promise<void> => {
-    const info = await stat(at);
+    const info = await lstat(at);
     if (info.isDirectory()) {
       dirs.add(at);
       for (const name of await readdir(at)) await walk(join(at, name));
@@ -3968,8 +3983,8 @@ async function flushTree(path: string): Promise<void> {
 }
 
 async function sameTree(source: string, target: string): Promise<void> {
-  const s = await stat(source);
-  const t = await stat(target).catch(() => undefined);
+  const s = await lstat(source);
+  const t = await lstat(target).catch(() => undefined);
   if (t === undefined) throw new Error(`${target} is missing`);
   if (s.isDirectory()) {
     if (!t.isDirectory()) throw new Error(`${target} is not a directory`);
@@ -3985,8 +4000,11 @@ async function sameTree(source: string, target: string): Promise<void> {
 }
 
 async function digestOf(path: string): Promise<string> {
+  return digestOfHandle(await open(path, "r"));
+}
+
+async function digestOfHandle(handle: Awaited<ReturnType<typeof open>>): Promise<string> {
   // No close here: createReadStream closes the handle itself.
-  const handle = await open(path, "r");
   const hash = createHash("sha256");
   for await (const chunk of handle.createReadStream()) hash.update(chunk as Buffer);
   return hash.digest("hex");

@@ -2346,6 +2346,89 @@ describe("writing over a file the pass did not decide about", () => {
     expect(checkpoints[1]).toContain("/home/me/vault/note.md");
   });
 
+  it("flushes a note a crash cut short and the restart put back before removing its backup (Neon review #12)", async () => {
+    const desktop = new DesktopAdapter();
+    desktop.seed("note.md", "unsent local text\n", 1000);
+    const first = new ObsidianVault(asVault(new FakeVaultIndex(desktop)), ".obsidian", () => {}, {
+      fs: recordingFs().fs,
+    });
+    let dead = false;
+    desktop.fault = (op, path) => {
+      if (dead) return new Error("the process was killed");
+      if (op === "write" && path === "note.md") {
+        dead = true;
+        return 4;
+      }
+      return undefined;
+    };
+    await first
+      .replace(
+        "note.md",
+        undefined,
+        enc.encode("incoming\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      )
+      .catch(() => undefined);
+    expect(desktop.text("note (kept).md")).toBe("unsent local text\n");
+
+    const { fs, synced } = recordingFs();
+    const checkpoints: string[][] = [];
+    desktop.fault = (op, path) => {
+      if ((op === "rename" || op === "remove") && path === "note (kept).md") {
+        checkpoints.push([...synced]);
+      }
+      return undefined;
+    };
+    const restarted = new ObsidianVault(
+      asVault(new FakeVaultIndex(desktop)),
+      ".obsidian",
+      () => {},
+      {
+        fs,
+      },
+    );
+    await restarted.list();
+    desktop.fault = undefined;
+    expect(desktop.text("note.md")).toBe("unsent local text\n");
+    expect(checkpoints.length).toBeGreaterThan(0);
+    expect(checkpoints[0]).toContain("/home/me/vault/note.md");
+  });
+
+  it("flushes a note a failed write put back before removing its backup (Neon review #12)", async () => {
+    const desktop = new DesktopAdapter();
+    const { fs, synced } = recordingFs();
+    const v = new ObsidianVault(asVault(new FakeVaultIndex(desktop)), ".obsidian", () => {}, {
+      fs,
+    });
+    desktop.seed("note.md", "original\n", 1000);
+    let failed = false;
+    const checkpoints: string[][] = [];
+    desktop.fault = (op, path) => {
+      if (op === "write" && path === "note.md" && !failed) {
+        failed = true;
+        return 4;
+      }
+      if ((op === "rename" || op === "remove") && path === "note (kept).md") {
+        checkpoints.push([...synced]);
+      }
+      return undefined;
+    };
+    await expect(
+      v.replace(
+        "note.md",
+        { contentId: await plainDigest(enc.encode("original\n")), idOf: plainDigest },
+        enc.encode("incoming\n"),
+        { mtime: 2000, ctime: 1000 },
+        "note (kept).md",
+      ),
+    ).rejects.toThrow("put back");
+    desktop.fault = undefined;
+    expect(desktop.text("note.md")).toBe("original\n");
+    expect(checkpoints.length).toBeGreaterThan(0);
+    expect(checkpoints.at(-1)).toContain("/home/me/vault/note.md");
+  });
+
   it("keeps the original untouched if its backup cannot be flushed", async () => {
     const desktop = new DesktopAdapter();
     const v = new ObsidianVault(asVault(new FakeVaultIndex(desktop)), ".obsidian", () => {}, {
@@ -2739,6 +2822,39 @@ describe("writing over a file the pass did not decide about", () => {
   });
 });
 
+describe("a folder removal a kill interrupted, at the next start", () => {
+  it("still reports what it moved aside when it cannot be put back (Neon review #11)", async () => {
+    adapter.seed("Notes/keep.md", "synced\n");
+    let saved = false;
+    adapter.beforeRename = (from) => {
+      if (from === "Notes" && !saved) {
+        saved = true;
+        adapter.seed("Notes/draft.md", "typed in the window\n");
+      }
+    };
+    adapter.fault = (op, path) =>
+      saved && op === "list" && path.includes(".trew-tmp-") ? new Error("killed") : undefined;
+    await adapter.remove("Notes/keep.md");
+    await vault.removeFolder("Notes").catch(() => undefined);
+    expect(saved).toBe(true);
+    adapter.beforeRename = undefined;
+    adapter.fault = undefined;
+    const hidden = adapter
+      .everything()
+      .find((p) => p.endsWith("draft.md") && p.includes(".trew-tmp-"));
+    expect(hidden).toBeDefined();
+
+    // At the restart nothing can be moved out of the hidden folder.
+    adapter.fault = (op, path) =>
+      op === "rename" && path.includes(".trew-tmp-") ? new Error("EIO") : undefined;
+    const restarted = new ObsidianVault(asVault(new FakeVaultIndex(adapter)), ".obsidian");
+    await restarted.list();
+    adapter.fault = undefined;
+    expect(adapter.text(hidden!)).toBe("typed in the window\n");
+    expect(restarted.stranded.length, "what the removal moved aside is hidden").toBeGreaterThan(0);
+  });
+});
+
 describe("an in-place update a crash interrupted, at the next start", () => {
   const encode = (s: string) => new TextEncoder().encode(s);
   /** Starts an in-place update of note.md and kills the process at the note's write. */
@@ -2786,6 +2902,76 @@ describe("an in-place update a crash interrupted, at the next start", () => {
     const restarted = new ObsidianVault(asVault(new FakeVaultIndex(a)), ".obsidian");
     await restarted.list();
     expect(a.text("note (kept).md")).toBe("the synced text\nand a line typed into the copy\n");
+  });
+
+  it("does not write over or remove a note it could not put back (Neon review #10)", async () => {
+    const a = new FakeAdapter();
+    await crashDuringUpdate(a);
+    // The backup is gone, so the restart cannot put the note back.
+    await a.remove("note (kept).md");
+    const restarted = new ObsidianVault(asVault(new FakeVaultIndex(a)), ".obsidian");
+    await restarted.list();
+    const cut = a.text("note.md");
+    expect(cut).toHaveLength(4);
+    const id = await plainDigest(encode("the synced text\n"));
+    await expect(
+      restarted.replace(
+        "note.md",
+        { contentId: id, idOf: plainDigest },
+        encode("a newer version\n"),
+        { mtime: 3000, ctime: 1000 },
+        "note (kept 2).md",
+      ),
+    ).rejects.toThrow("cut short");
+    await expect(
+      restarted.removeExpecting(
+        "note.md",
+        { contentId: id, idOf: plainDigest },
+        "note (kept 3).md",
+      ),
+    ).rejects.toThrow("cut short");
+    expect(a.text("note.md")).toBe(cut);
+    expect(a.filePaths().filter((p) => p.startsWith("note ("))).toEqual([]);
+  });
+
+  it("puts right a settings file synced under another group's name (Neon review #37)", async () => {
+    const a = new FakeAdapter();
+    const opts = { settings: ".obsidian-desktop" };
+    a.seed(".obsidian/app.json", '{"theme":"dark"}\n', 1000);
+    const v = new ObsidianVault(asVault(new FakeVaultIndex(a)), ".obsidian", () => {}, opts);
+    let dead = false;
+    a.fault = (op, path) => {
+      if (dead) return new Error("the process was killed");
+      if (op === "write" && path === ".obsidian/app.json") {
+        dead = true;
+        return 4;
+      }
+      return undefined;
+    };
+    await v
+      .replace(
+        ".obsidian-desktop/app.json",
+        { contentId: await plainDigest(encode('{"theme":"dark"}\n')), idOf: plainDigest },
+        encode('{"theme":"light"}\n'),
+        { mtime: 2000, ctime: 1000 },
+        ".obsidian-desktop/app (kept).json",
+      )
+      .catch(() => undefined);
+    a.fault = undefined;
+    expect(a.text(".obsidian/app.json")).toHaveLength(4);
+    expect(a.text(".obsidian/app (kept).json")).toBe('{"theme":"dark"}\n');
+
+    const restarted = new ObsidianVault(
+      asVault(new FakeVaultIndex(a)),
+      ".obsidian",
+      () => {},
+      opts,
+    );
+    await restarted.list();
+    expect(a.text(".obsidian/app.json")).toBe('{"theme":"dark"}\n');
+    expect(a.text(".obsidian/app (kept).json"), "the backup was left behind").toBeUndefined();
+    expect(restarted.displaced.map((d) => d.from)).toEqual([".obsidian-desktop/app.json"]);
+    await expect(restarted.exists(restarted.displaced[0]!.from)).resolves.toBe(true);
   });
 
   it("fails the listing rather than reading past a record it cannot read", async () => {

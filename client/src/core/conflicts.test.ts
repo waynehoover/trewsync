@@ -38,6 +38,18 @@ describe("reviewed conflicts", () => {
       expect(await vault.exists(pair.copy)).toBe(false);
     },
   );
+  it("reviews a text file that is not UTF-8, and keeps either version (Neon review #46)", async () => {
+    const vault = new MemoryVault();
+    const latin1 = new Uint8Array([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+    await vault.create(pair.original, latin1, { mtime: 1, ctime: 1 });
+    await vault.edit(pair.copy, "copy\n");
+    const review = await reviewConflict(vault, pair);
+    expect(review.current?.text).toBeUndefined();
+    expect(review.preserved.text).toBe("copy\n");
+    await resolveConflict(vault, "laptop", review, "original");
+    expect([...(await vault.read(pair.original))]).toEqual([...latin1]);
+    expect(await vault.exists(pair.copy)).toBe(false);
+  });
   it("refuses a combined version of a JSON file that does not parse, touching neither", async () => {
     const json = {
       original: ".obsidian-desktop/app.json",

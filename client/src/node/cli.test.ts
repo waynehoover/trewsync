@@ -37,7 +37,13 @@ import {
   TestServer,
   serversRunning,
 } from "../../test/core/test-server.ts";
-import { MAX_NAME_BYTES, ProtocolError, Transport, checkName } from "../core/transport.ts";
+import {
+  ConnectionError,
+  MAX_NAME_BYTES,
+  ProtocolError,
+  Transport,
+  checkName,
+} from "../core/transport.ts";
 import { base64urlDecode, base64urlEncode } from "../core/digest.ts";
 import { PLAINTEXT_WARNING, formatInviteString } from "../core/invite-string.ts";
 import {
@@ -53,6 +59,7 @@ import { loadConfig, saveConfig } from "./config.ts";
 import {
   asTyped,
   deviceNameFor,
+  interrupt,
   run,
   exitCodeFor,
   normaliseUrl,
@@ -1161,6 +1168,51 @@ describe("renaming this device", () => {
     expect(empty.all).toMatch(/needs a name|cannot be empty/i);
   }, 60_000);
 
+  it("runs no pass and touches no note (Neon review #51)", async () => {
+    await fresh();
+    const { a, b } = await twoDevices();
+    await write(b, "arrived.md", "from the other device\n");
+    expect((await cli("sync", "--dir", b)).code).toBe(0);
+    await write(a, "unsent.md", "not sent by a rename\n");
+    const here = (await loadConfig(a))!;
+    const writer = new Client(
+      await clientOptions((await loadConfig(b))!, parseArgs(["sync", "--dir", b])),
+    );
+    await writer.connect();
+    let passes = 0;
+    const sync = Client.prototype.sync;
+    const syncSpy = vi.spyOn(Client.prototype, "sync").mockImplementation(async function (
+      this: Client,
+      ...rest
+    ) {
+      if (this.deviceId === here.deviceId) passes++;
+      return sync.apply(this, rest);
+    });
+    const renameOnServer = Client.prototype.rename;
+    const renameSpy = vi.spyOn(Client.prototype, "rename").mockImplementation(async function (
+      this: Client,
+      ...rest
+    ) {
+      // A peer commits while the rename is connected, with time to start a
+      // pass here if anything would.
+      await write(b, "live.md", "arrived while renaming\n");
+      await writer.settle({ coalesceWrites: false });
+      await new Promise((r) => setTimeout(r, 1_000));
+      return renameOnServer.apply(this, rest);
+    });
+    try {
+      const done = await cli("rename", "quiet-laptop", "--dir", a, "--json");
+      expect(done.code, done.all).toBe(0);
+      expect(passes, "a pass ran under rename").toBe(0);
+    } finally {
+      renameSpy.mockRestore();
+      syncSpy.mockRestore();
+      await writer.close();
+    }
+    expect(await readdir(a)).not.toContain("arrived.md");
+    expect(await readdir(a)).not.toContain("live.md");
+  }, 120_000);
+
   it("uses the name as typed, without a random tail", async () => {
     // `deviceNameFor` appends four hex characters to a *derived* name, so that
     // two laptops with one hostname differ. A name somebody typed is theirs:
@@ -1171,6 +1223,43 @@ describe("renaming this device", () => {
     const done = await cli("rename", "laptop", "--dir", a, "--json");
     expect(done.json()["name"], done.all).toBe("laptop");
   }, 60_000);
+});
+
+describe("watching across reconnections", () => {
+  it("lets go of each connection it has closed (Neon review #50)", async () => {
+    await fresh();
+    const { a } = await twoDevices();
+    const closes = new Map<Client, number>();
+    const close = Client.prototype.close;
+    const closeSpy = vi.spyOn(Client.prototype, "close").mockImplementation(async function (
+      this: Client,
+    ) {
+      closes.set(this, (closes.get(this) ?? 0) + 1);
+      return close.apply(this);
+    });
+    let connections = 0;
+    const runUntilClosed = Client.prototype.runUntilClosed;
+    const runSpy = vi.spyOn(Client.prototype, "runUntilClosed").mockImplementation(async function (
+      this: Client,
+    ) {
+      if (++connections < 4) return new ConnectionError("dropped for the test");
+      return runUntilClosed.apply(this);
+    });
+    try {
+      const watching = cli("sync", "--watch", "--dir", a);
+      const deadline = Date.now() + 60_000;
+      while (connections < 4 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+      expect(connections).toBeGreaterThanOrEqual(4);
+      interrupt();
+      await watching;
+    } finally {
+      runSpy.mockRestore();
+      closeSpy.mockRestore();
+    }
+    // A stop closes the live connection; one closed before it is not held to be closed again.
+    const again = [...closes.values()].filter((n) => n > 1);
+    expect(again.length, "connections closed long ago were still held").toBeLessThanOrEqual(1);
+  }, 120_000);
 });
 
 describe("unlinking", () => {

@@ -497,6 +497,20 @@ export default class TrewPlugin extends Plugin {
     };
   }
 
+  /**
+   * Opens a modal that this instance's unload closes, so none of its buttons
+   * act for an instance that has gone (data.json, a conflict, a reload).
+   */
+  openUntilUnload(modal: Modal): void {
+    const detach = this.watchUnload(() => modal.close());
+    const onClose = modal.onClose.bind(modal);
+    modal.onClose = () => {
+      detach();
+      onClose();
+    };
+    modal.open();
+  }
+
   override async onload(): Promise<void> {
     // Nothing of this instance exists until an earlier one on this app has
     // finished closing: not a command, not a read of `data.json`, not a pass
@@ -576,7 +590,7 @@ export default class TrewPlugin extends Plugin {
     this.addCommand({
       id: "recover-deleted",
       name: "Recover a deleted note",
-      callback: () => new RecoverModal(this).open(),
+      callback: () => this.openUntilUnload(new RecoverModal(this)),
     });
     this.addCommand({
       id: "apply-settings",
@@ -1104,46 +1118,64 @@ export default class TrewPlugin extends Plugin {
   }
 
   private openConflicts(): void {
-    new ConflictsModal(this.app, {
-      pairs: () => this.conflictPairs(),
-      open: (path) => this.openExisting(path),
-      review: (pair) => {
-        if (!this.client) {
-          const vault = new ObsidianVault(this.app.vault, this.app.vault.configDir, undefined, {
-            ...(this.settingsGroup !== undefined
-              ? {
-                  settings: this.settingsGroup,
-                  plugins: this.syncsPlugins,
-                  ownFolder: this.pluginDir(),
-                }
-              : {}),
-          });
-          return reviewConflict(vault, pair);
-        }
-        return this.client.reviewConflict(pair);
-      },
-      resolve: async (review, choice, edited) => {
-        const client = this.client;
-        if (!client) throw new Error(this.whyNoClient());
-        await client.resolveConflict(review, choice, edited);
-        await this.activityLog?.flush();
-        // Obsidian holds the setting just replaced and reads the file only
-        // when it starts, so the choice is sent and Obsidian reloads, as Apply
-        // and reload does. Keeping the original changed nothing it holds.
-        if (choice !== "original" && isConfigPath(review.original)) {
-          await this.saveOpenEditors();
-          try {
-            await client.sync({ coalesceWrites: false });
-          } finally {
-            await this.quiet();
-            await this.saveOpenEditors();
-            reloadObsidian();
+    this.openUntilUnload(
+      new ConflictsModal(this.app, {
+        pairs: () => this.conflictPairs(),
+        open: (path) => this.openExisting(path),
+        review: (pair) => {
+          if (!this.client) {
+            const vault = new ObsidianVault(this.app.vault, this.app.vault.configDir, undefined, {
+              ...(this.settingsGroup !== undefined
+                ? {
+                    settings: this.settingsGroup,
+                    plugins: this.syncsPlugins,
+                    ownFolder: this.pluginDir(),
+                  }
+                : {}),
+            });
+            return reviewConflict(vault, pair);
           }
-          return;
-        }
-        await this.syncNow();
-      },
-    }).open();
+          return this.client.reviewConflict(pair);
+        },
+        resolve: async (review, choice, edited) => {
+          const client = this.client;
+          if (!client) throw new Error(this.whyNoClient());
+          // Obsidian holds the setting just replaced and reads the file only
+          // when it starts, so the choice is sent and Obsidian reloads, as Apply
+          // and reload does. Keeping the original changed nothing it holds.
+          const reloads = choice !== "original" && isConfigPath(review.original);
+          if (reloads) {
+            // Held to the reload, as Apply holds it, so an unlink or another
+            // settings change cannot start under it and be cut in half.
+            if (this.unlinking) throw new Error("This vault is being unlinked.");
+            if (this.editingConnection) throw new Error("Another settings change is in progress.");
+            this.editingConnection = true;
+            this.applying = true;
+          }
+          try {
+            await client.resolveConflict(review, choice, edited);
+            await this.activityLog?.flush();
+            if (reloads) {
+              await this.saveOpenEditors();
+              try {
+                await client.sync({ coalesceWrites: false });
+              } finally {
+                await this.quiet();
+                await this.saveOpenEditors();
+                reloadObsidian();
+              }
+              return;
+            }
+          } finally {
+            if (reloads) {
+              this.editingConnection = false;
+              this.applying = false;
+            }
+          }
+          await this.syncNow();
+        },
+      }),
+    );
   }
 
   private showMenu(event?: MouseEvent): void {
@@ -1202,7 +1234,7 @@ export default class TrewPlugin extends Plugin {
       item
         .setTitle("Browse deleted")
         .setIcon("trash-2")
-        .onClick(() => new RecoverModal(this).open()),
+        .onClick(() => this.openUntilUnload(new RecoverModal(this))),
     );
     menu.addSeparator();
     menu.addItem((item) =>
@@ -2100,15 +2132,24 @@ export default class TrewPlugin extends Plugin {
 
   /** The restore of a folder, or of every note, to a time (`RestoreTimeModal`). */
   openRestoreTime(folder: string): void {
-    const client = this.client;
-    if (!client) {
+    if (!this.client) {
       new Notice(`TrewSync: ${this.whyNoClient()}`);
       return;
     }
-    new RestoreTimeModal(this.app, folder, {
-      restore: (ask) => client.restoreTo(ask),
-      undo: (opId) => client.undo(opId),
-    }).open();
+    // Asked of the client connected at the click, not at the opening, after
+    // what is in an open editor is saved to be sent first, as an undo from
+    // the history panel does (T15).
+    const connected = async () => {
+      await this.saveOpenEditors();
+      if (!this.client) throw new Error(this.whyNoClient());
+      return this.client;
+    };
+    this.openUntilUnload(
+      new RestoreTimeModal(this.app, folder, {
+        restore: async (ask) => (await connected()).restoreTo(ask),
+        undo: async (opId) => (await connected()).undo(opId),
+      }),
+    );
   }
 
   /** What a note embeds or links that is on the server only, fetched as it opens. */
@@ -2485,18 +2526,26 @@ export default class TrewPlugin extends Plugin {
   private settledFirstTime(mine: number): void {
     const config = this.config;
     if (!config || mine !== this.generation) return;
+    // Not beside a settings change, which would find the config changed under
+    // it, or race this write with its own: the next pass forgets it instead.
+    if (this.editingConnection) return;
     const choiceDone =
       config.settingsFirstChoice !== undefined && this.client?.engine.firstChoiceDone === true;
     if (config.settingsReplay !== true && !choiceDone) return;
     const next: Record<string, unknown> = { ...config };
     delete next["settingsReplay"];
     if (choiceDone) delete next["settingsFirstChoice"];
-    void this.saveDuringRun(mine, next as unknown as DeviceConfig).then(
-      () => {
-        if (this.config === config) this.config = next as unknown as DeviceConfig;
-      },
-      (err: unknown) => log("settings sync could not forget its first time", err),
-    );
+    this.editingConnection = true;
+    void this.saveDuringRun(mine, next as unknown as DeviceConfig)
+      .then(
+        () => {
+          if (this.config === config) this.config = next as unknown as DeviceConfig;
+        },
+        (err: unknown) => log("settings sync could not forget its first time", err),
+      )
+      .finally(() => {
+        this.editingConnection = false;
+      });
   }
 
   /**
@@ -2591,7 +2640,7 @@ export default class TrewPlugin extends Plugin {
       new Notice("TrewSync: no settings are waiting to be applied.");
       return;
     }
-    new ApplySettingsModal(this).open();
+    this.openUntilUnload(new ApplySettingsModal(this));
   }
 
   /** Syncs on demand, and says so, because a command with no feedback is a guess. */
@@ -3331,8 +3380,19 @@ export default class TrewPlugin extends Plugin {
    */
   private vaultForRecovery(): ObsidianVault {
     if (this.liveVault) return this.liveVault;
+    // Scoped as the run's is, so a settings file it displaced resolves too.
+    const config = this.config;
+    const settings = config ? this.settingsScope(config) : undefined;
     return new ObsidianVault(this.app.vault, this.app.vault.configDir, undefined, {
       displacedLog: `${this.pluginDir()}/${DISPLACED_LOG}`,
+      ...(config?.ignore?.length ? { ignore: config.ignore } : {}),
+      ...(settings !== undefined
+        ? {
+            settings: settings.root,
+            plugins: settings.plugins === true,
+            ownFolder: this.pluginDir(),
+          }
+        : {}),
     });
   }
 
@@ -3550,7 +3610,7 @@ export default class TrewPlugin extends Plugin {
       new Notice(`TrewSync: ${this.whyNoClient()} There is no history to show.`, 8_000);
       return;
     }
-    new HistoryModal(this.app, this.historySource(), path).open();
+    this.openUntilUnload(new HistoryModal(this.app, this.historySource(), path));
   }
 
   /** What HistoryModal needs, which is five calls and no plugin internals. */
@@ -4995,7 +5055,7 @@ class TrewPanel {
           return;
         }
         this.dismiss();
-        new RecoverModal(this.plugin).open();
+        this.plugin.openUntilUnload(new RecoverModal(this.plugin));
       }),
     );
 
@@ -5576,7 +5636,9 @@ class TrewPanel {
             this.dismiss();
             // Drawn again once the question closes, answered or not, so the row
             // says what is saved: in the settings tab nothing else redraws it.
-            new SettingsSyncModal(this.plugin, chosen, () => this.render()).open();
+            this.plugin.openUntilUnload(
+              new SettingsSyncModal(this.plugin, chosen, () => this.render()),
+            );
             return;
           }
         }
@@ -5616,7 +5678,9 @@ class TrewPanel {
             return;
           }
           this.dismiss();
-          new PluginSyncModal(this.plugin, group, ask, () => this.render()).open();
+          this.plugin.openUntilUnload(
+            new PluginSyncModal(this.plugin, group, ask, () => this.render()),
+          );
           return;
         }
         b.setDisabled(true);
@@ -5778,7 +5842,7 @@ class TrewPanel {
     ).addButton((b) =>
       b.setButtonText("Look").onClick(() => {
         this.dismiss();
-        new StrandedModal(this.plugin).open();
+        this.plugin.openUntilUnload(new StrandedModal(this.plugin));
       }),
     );
   }

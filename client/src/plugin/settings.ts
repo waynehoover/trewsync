@@ -8,7 +8,7 @@
  * nobody checked is a hope.
  */
 
-import type { DataAdapter } from "obsidian";
+import { normalizePath, type DataAdapter } from "obsidian";
 
 import { configPathReason, isDeviceLocalPlugin } from "../core/path-policy.ts";
 
@@ -56,7 +56,9 @@ export async function settingsIn(
       if (rel === "themes" || rel === "snippets" || theme || plugin) folders.push(folder);
     }
     for (const file of here.files) {
-      const synced = `${group}${file.slice(root.length)}`.normalize("NFC");
+      // Normalized as the vault names it (`normalizePath`: NFC, and no-break
+      // spaces folded), so what is backed up is what syncs.
+      const synced = normalizePath(`${group}${file.slice(root.length)}`);
       if (configPathReason(synced, plugins) !== undefined) continue;
       out.push(file);
     }

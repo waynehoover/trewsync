@@ -44,6 +44,7 @@ import {
 } from "../../test/plugin/stub.ts";
 import TrewPlugin, { connectionDetail, describeConnection, describeDeleted } from "./main.ts";
 import { describeRestore } from "./history.ts";
+import type { RestoreTimeActions } from "./restore-time.ts";
 import { SUPPORT_TABLE } from "./platform-notice.ts";
 import { Engine, type SyncReport } from "../core/engine.ts";
 import { Client, pairWithInvite } from "../core/client.ts";
@@ -2369,6 +2370,28 @@ describe("a version kept where Obsidian cannot see it", () => {
     // And the hidden copy stays. Removing it is the one destructive step in a
     // recovery path and there is no "it worked" worth that risk.
     expect(app.vault.adapter.text(hidden)).toBe("the paragraph that was displaced\n");
+  });
+});
+
+describe("a settings version kept where Obsidian cannot see it, while not syncing", () => {
+  it("can be recovered under another group's name (Neon review #37)", async () => {
+    const { plugin, app } = await load();
+    (plugin as unknown as { config: unknown }).config = { settings: ".obsidian-desktop" };
+    const hidden = ".obsidian/.trew-tmp-review/app.json";
+    app.vault.adapter.seed(hidden, '{"theme":"dark"}\n');
+    app.vault.adapter.seed(".obsidian/app.json", '{"theme":"light"}\n');
+
+    const at = await plugin.recoverDisplaced({
+      at: hidden,
+      from: ".obsidian-desktop/app.json",
+      why: "a crash cut it short",
+      when: 1,
+    });
+    expect(at).not.toBe(".obsidian-desktop/app.json");
+    expect(app.vault.adapter.text(".obsidian/app.json")).toBe('{"theme":"light"}\n');
+    expect(app.vault.adapter.text(at.replace(".obsidian-desktop/", ".obsidian/"))).toBe(
+      '{"theme":"dark"}\n',
+    );
   });
 });
 
@@ -6870,6 +6893,199 @@ describe("undoing a change from the history panel", () => {
       }),
     ).rejects.toThrow(/editor disk full/);
     expect(undone).toBe(false);
+  });
+});
+
+/**
+ * Neon review #52. A modal left open across an unload acted for the unloaded
+ * instance: its buttons wrote data.json and resolved conflicts beside the
+ * next one.
+ */
+describe("modals across an unload", () => {
+  it("are closed by it", async () => {
+    const { plugin } = await load();
+    (plugin as unknown as { client: unknown }).client = {
+      restoreTo: async () => ({ notes: [] }),
+      undo: async () => ({ notes: [] }),
+      history: async () => [],
+      close: async () => undefined,
+    };
+    plugin.openRestoreTime("");
+    plugin.openHistory("note.md");
+    (plugin as unknown as { openConflicts(): void }).openConflicts();
+    plugin.commands.find((c) => c.id === "recover-deleted")!.callback!();
+    const opened = modals.filter((m) => m.isOpen);
+    expect(opened.length).toBe(4);
+    plugin.onunload();
+    expect(opened.filter((m) => m.isOpen).map((m) => m.constructor.name)).toEqual([]);
+    (plugin as unknown as { client: unknown }).client = undefined;
+  });
+
+  it("refuses an unlink while a settings conflict's choice is sent before the reload", async () => {
+    const { plugin } = await load();
+    const held = deferred();
+    const entered = deferred();
+    (plugin as unknown as { client: unknown }).client = {
+      resolveConflict: async () => {
+        entered.resolve();
+        await held.promise;
+      },
+      sync: async () => ({}),
+      close: async () => undefined,
+    };
+    (plugin as unknown as { openConflicts(): void }).openConflicts();
+    const source = (
+      modals.at(-1) as unknown as {
+        source: { resolve(review: unknown, choice: string): Promise<void> };
+      }
+    ).source;
+    const reload = vi.fn();
+    vi.stubGlobal("window", withTimers({ location: { reload } }));
+    try {
+      const resolving = source.resolve(
+        {
+          original: ".obsidian/app.json",
+          copy: ".obsidian/app (Conflicted copy phone 202609101200).json",
+        },
+        "copy",
+      );
+      await entered.promise;
+      await expect(plugin.unlink()).rejects.toThrow("being applied");
+      held.resolve();
+      await resolving;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Neon review #17. Forgetting the settings replay after a pass wrote the
+ * config beside a settings change: the change then found the config changed
+ * under it and stopped without starting sync again, and a rename's write could
+ * land under the forgetting one.
+ */
+describe("forgetting the first time beside a settings change", () => {
+  it("keeps sync running and the change written", async () => {
+    await fresh();
+    const { plugin } = await load();
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    const internals = plugin as unknown as {
+      generation: number;
+      running: boolean;
+      config: Record<string, unknown>;
+      settledFirstTime(mine: number): void;
+    };
+    const saving = deferred();
+    const release = deferred();
+    const save = plugin.saveData.bind(plugin);
+    let hold = true;
+    plugin.saveData = async (data: unknown) => {
+      if (hold) {
+        hold = false;
+        saving.resolve();
+        await release.promise;
+      }
+      return save(data);
+    };
+    internals.config = { ...internals.config, settingsReplay: true };
+    internals.settledFirstTime(internals.generation);
+    await saving.promise;
+    const changing = plugin.setOnDemand(1_000).then(
+      () => "saved",
+      (err: Error) => err.message,
+    );
+    release.resolve();
+    expect(await changing).not.toMatch(/pairing changed/);
+    await until("sync running again", () => internals.running);
+  }, 300_000);
+
+  it("does not write a rename over with the old name", async () => {
+    await fresh();
+    const { plugin } = await load();
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    const internals = plugin as unknown as {
+      generation: number;
+      config: Record<string, unknown>;
+      settledFirstTime(mine: number): void;
+    };
+    const saving = deferred();
+    const release = deferred();
+    const save = plugin.saveData.bind(plugin);
+    let hold = true;
+    let calls = 0;
+    const landed: unknown[] = [];
+    plugin.saveData = async (data: unknown) => {
+      calls++;
+      if (hold) {
+        hold = false;
+        saving.resolve();
+        await release.promise;
+      }
+      await save(data);
+      landed.push((data as Record<string, unknown>)["device"]);
+    };
+    internals.config = { ...internals.config, settingsReplay: true };
+    internals.settledFirstTime(internals.generation);
+    await saving.promise;
+    const renaming = plugin.renameDevice("laptop two").then(
+      () => "renamed",
+      (err: Error) => err.message,
+    );
+    // The rename's own write lands first; the held one after it.
+    let outcome: string | undefined;
+    void renaming.then((o) => (outcome = o));
+    await until("the rename to write or refuse", () => calls >= 2 || outcome !== undefined);
+    release.resolve();
+    outcome = await renaming;
+    for (let i = 0; i < 50; i++) await nextTurn();
+    if (outcome === "renamed") {
+      // Nothing written after the rename's own write names the old device.
+      expect(landed.slice(landed.indexOf("laptop two"))).not.toContain("laptop");
+    } else expect(outcome).toMatch(/in progress/);
+  }, 300_000);
+});
+
+/**
+ * Neon review #16. The restore of a folder or the vault to a time, and its
+ * Undo, wrote into notes an editor could be holding without saving it first,
+ * and kept the client it was opened with, closed by any reconnect since.
+ */
+describe("restoring to a time", () => {
+  it("saves open editors first and asks the client connected now", async () => {
+    const { plugin, app } = await load();
+    const order: string[] = [];
+    app.workspace.markdownLeaves.push({
+      view: { save: async () => void order.push("saved the editor") },
+    });
+    const clientNamed = (name: string) => ({
+      restoreTo: async () => {
+        order.push(`restore on ${name}`);
+        return { notes: [] };
+      },
+      undo: async (id: string) => {
+        order.push(`undo ${id} on ${name}`);
+        return { notes: [] };
+      },
+      close: async () => undefined,
+    });
+    const state = plugin as unknown as { client: unknown };
+    state.client = clientNamed("first");
+    plugin.openRestoreTime("");
+    const actions = (modals.at(-1) as unknown as { actions: RestoreTimeActions }).actions;
+    // A reconnect while the modal is open.
+    state.client = clientNamed("second");
+    await actions.restore({ uid: 7, head: 9 } as never);
+    await actions.undo("op-1");
+    expect(order).toEqual([
+      "saved the editor",
+      "restore on second",
+      "saved the editor",
+      "undo op-1 on second",
+    ]);
   });
 });
 

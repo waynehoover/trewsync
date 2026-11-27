@@ -1827,16 +1827,20 @@ export class ObsidianVault implements Vault {
   /** One record of `recoverInterruptedWrite`, put right or left on record. */
   private async putRight(record: InPlaceWrite): Promise<void> {
     const { path, keepAt, was } = record;
+    // The record holds the names on the disk. What resolves a name (a removal,
+    // the displaced log's recovery) takes the engine's, which differ for
+    // settings synced under another group's name (`fromDisk`).
+    const keptAs = this.fromDisk(keepAt);
     try {
       const here = await readRaw(this.adapter, path).catch(() => undefined);
       const digest = here === undefined ? undefined : await plainDigest(here);
       if (here === undefined || digest === record.before) {
-        if (here !== undefined) await this.dropIfStill(keepAt, record.before);
+        if (here !== undefined) await this.dropIfStill(keptAs, record.before);
         await this.writeDown(path, undefined);
         return;
       }
       if (digest === record.next) {
-        if (record.beforeIsServers) await this.dropIfStill(keepAt, record.before);
+        if (record.beforeIsServers) await this.dropIfStill(keptAs, record.before);
         await this.writeDown(path, undefined);
         return;
       }
@@ -1849,7 +1853,9 @@ export class ObsidianVault implements Vault {
       const folder = await freeRemovalFolder(this.adapter, path);
       const aside = `${folder}/${path.slice(path.lastIndexOf("/") + 1)}`;
       const why = `${path} was cut short by a crash while an update was written into it; this is what it held, and the note was put back`;
-      if (!(await this.ledger.record({ at: aside, from: path, why, when: Date.now() }))) {
+      if (
+        !(await this.ledger.record({ at: aside, from: this.fromDisk(path), why, when: Date.now() }))
+      ) {
         this.interrupted.add(path);
         return;
       }
@@ -1878,7 +1884,9 @@ export class ObsidianVault implements Vault {
       }
       this.wrote(path);
       await verify(this.adapter, path, backup);
-      await this.dropIfStill(keepAt, record.before);
+      // Durable before the backup and the record that stand for it go.
+      await this.flush();
+      await this.dropIfStill(keptAs, record.before);
       await this.writeDown(path, undefined);
     } catch (err) {
       this.interrupted.add(path);
@@ -1964,6 +1972,8 @@ export class ObsidianVault implements Vault {
       if (restoring) {
         this.wrote(normalized);
         await verify(this.adapter, normalized, held.before);
+        // Durable before the backup and the record that stand for it go.
+        await this.flush();
       }
       this.cutShort.delete(normalized);
       await this.writeDown(normalized, undefined).catch(() => undefined);
@@ -2001,8 +2011,9 @@ export class ObsidianVault implements Vault {
    */
   private async wholeBeforeTouching(normalized: string): Promise<void> {
     const held = this.cutShort.get(normalized);
-    if (held === undefined) return;
-    await this.putBack(normalized, held);
+    // One a crash left and the restart could not put back (`interrupted`)
+    // has nothing here to put it back with, and is refused all the same.
+    if (held !== undefined) await this.putBack(normalized, held);
     this.refuseCutShort(normalized);
   }
 
@@ -2743,6 +2754,8 @@ export class ObsidianVault implements Vault {
         }
         await this.putBackInto(hidden, home, d.from);
       } catch (err) {
+        // Still reported as the folder it is, rather than hidden (RR2).
+        looked.delete(d.at);
         this.log(`could not put back what ${d.at} holds: ${(err as Error).message}`);
       }
     }

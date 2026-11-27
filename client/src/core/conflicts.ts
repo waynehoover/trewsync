@@ -52,10 +52,17 @@ async function reviewFile(vault: Vault, path: string): Promise<ReviewedFile | un
     throw new Error("A conflict path is now a folder. Review it in the file explorer.");
   if (looksLikeText(path) && stat.size <= TEXT_LIMIT) {
     const bytes = await vault.read(path);
-    const text =
-      bytes.length <= TEXT_LIMIT
-        ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
-        : undefined;
+    let text: string | undefined;
+    try {
+      text =
+        bytes.length <= TEXT_LIMIT
+          ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
+          : undefined;
+    } catch {
+      // Not UTF-8, as merge keeps such a file both ways: no preview to show
+      // or combine, and either version can still be kept.
+      text = undefined;
+    }
     return {
       path,
       stat,
