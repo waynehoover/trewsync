@@ -245,19 +245,21 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 		if !row.changed() && !row.unseenAt(r.ToUID, marked) {
 			continue
 		}
-		if settingNotYetSynced(row) {
-			plan.SettingsKept++
-			continue
-		}
 		// Before anything is decided from the state at ToUID, including that
-		// the path already holds it: a guess that happens to match is still
-		// a guess.
+		// the path already holds it, or that a setting had not been synced
+		// yet: a guess that happens to match is still a guess, and a setting
+		// with no version at ToUID below the purge mark may have had one a
+		// purge took (Neon review #28).
 		if why := exactAt(row, r.ToUID, marked, gap); why != "" {
 			g := GonePath{Path: row.path, Why: why}
 			if row.hadThen {
 				g.Before = row.then.UID
 			}
 			plan.Gone = append(plan.Gone, g)
+			continue
+		}
+		if settingNotYetSynced(row) {
+			plan.SettingsKept++
 			continue
 		}
 		if row.sameContent() {

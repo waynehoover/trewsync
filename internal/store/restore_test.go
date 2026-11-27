@@ -454,3 +454,28 @@ func BenchmarkARestoreBelowThePurgeMark(b *testing.B) {
 		}
 	}
 }
+
+// A setting with no version at the point, below the purge mark, may be one
+// whose version there a purge took, and the store cannot tell that from one
+// first synced later. It was taken for the second before exactAt was asked,
+// so an operator's restore below the mark left the newer setting in place
+// and reported success (Neon review #28). It is refused as gone, naming the
+// setting, as a note in the same state is.
+func TestARestoreRefusesASettingWhoseVersionAtThePointWasPurged(t *testing.T) {
+	h := newTestStore(t)
+	h.file(t, ".obsidian/app.json", `{"then":true}`) // uid 1, purged
+	h.file(t, "note.md", "the words at the point")   // uid 2
+	h.file(t, ".obsidian/app.json", `{"now":true}`)  // uid 3, the head at the purge
+	if _, err := h.Purge("v1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := h.EntryByUID("v1", 1); err != nil || ok {
+		t.Fatalf("uid 1 survived the purge (%v), and the case this test is about is not reached", err)
+	}
+	plan, err := h.PlanRestore(RestoreRequest{Vault: "v1", ToUID: 2, Now: 7000})
+	var oe *OpError
+	if !errors.As(err, &oe) || oe.Code != OpCodeGone || oe.Path != ".obsidian/app.json" {
+		t.Fatalf("a restore past a purged setting planned %d entries and kept %d settings, or refused otherwise: %v",
+			len(plan.Entries), plan.SettingsKept, err)
+	}
+}
