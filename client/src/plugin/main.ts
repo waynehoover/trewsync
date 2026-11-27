@@ -37,6 +37,7 @@ import {
   Setting,
   SettingGroup,
   TextFileView,
+  normalizePath,
   requireApiVersion,
   setIcon,
   type ButtonComponent,
@@ -3413,6 +3414,30 @@ export default class TrewPlugin extends Plugin {
    */
   async recoverDisplaced(version: Displaced): Promise<string> {
     const vault = this.vaultForRecovery();
+    // A folder a removal moved aside and could not put back is listed too
+    // (RR2), and recovered as a folder of visible copies under a free name
+    // beside the one it had, the hidden one left where it is.
+    const adapter = this.app.vault.adapter;
+    if ((await adapter.stat(normalizePath(version.at)))?.type === "folder") {
+      const target = await firstFreeName(version.from, (path: string) => vault.exists(path));
+      const now = Date.now();
+      const queue = [normalizePath(version.at)];
+      while (queue.length > 0) {
+        const at = queue.pop()!;
+        const listed = await adapter.list(at);
+        queue.push(...listed.folders);
+        for (const file of listed.files) {
+          const to = `${target}${file.slice(normalizePath(version.at).length)}`;
+          const bytes = await vault.readDisplaced(file);
+          if (!(await vault.create(to, bytes, { mtime: now, ctime: now }))) {
+            throw new Error(`something is already at ${to}`);
+          }
+          this.nudge(to);
+        }
+      }
+      await vault.flush?.();
+      return target;
+    }
     const bytes = await vault.readDisplaced(version.at);
     const target = await firstFreeName(version.from, (path: string) => vault.exists(path));
     const now = Date.now();

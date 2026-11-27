@@ -2373,6 +2373,29 @@ describe("a version kept where Obsidian cannot see it", () => {
   });
 });
 
+describe("a folder a removal moved aside and could not put back", () => {
+  it("is recovered as visible copies of what it holds, beside the name it had", async () => {
+    const { plugin, app } = await load();
+    app.vault.adapter.seed(".trew-tmp-stranded/draft.md", "typed in the window\n");
+    app.vault.adapter.seed(".trew-tmp-stranded/sub/more.md", "and more\n");
+    app.vault.adapter.seed("Notes", "a plain file now holds the name\n");
+
+    const at = await plugin.recoverDisplaced({
+      at: ".trew-tmp-stranded",
+      from: "Notes",
+      why: "Notes is being moved aside to be removed",
+      when: 1,
+    });
+    expect(at).not.toBe("Notes");
+    expect(app.vault.adapter.text(`${at}/draft.md`)).toBe("typed in the window\n");
+    expect(app.vault.adapter.text(`${at}/sub/more.md`)).toBe("and more\n");
+    expect(app.vault.adapter.text("Notes")).toBe("a plain file now holds the name\n");
+    expect(app.vault.adapter.text(".trew-tmp-stranded/draft.md"), "the hidden copy stays").toBe(
+      "typed in the window\n",
+    );
+  });
+});
+
 describe("a settings version kept where Obsidian cannot see it, while not syncing", () => {
   it("can be recovered under another group's name (Neon review #37)", async () => {
     const { plugin, app } = await load();
