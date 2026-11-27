@@ -325,6 +325,11 @@ func RenderTemplate(text string, t Template) (string, error) {
 		b.WriteString(text[last:at[0]])
 		b.WriteString(value)
 		last = at[1]
+		// Checked as it grows, so a template of repeated placeholders cannot
+		// build a huge string before its caller refuses it (Neon review #20).
+		if b.Len() > NoteBytes {
+			return "", refuse("input_too_large", "the supplied text exceeds its byte limit")
+		}
 	}
 	b.WriteString(text[last:])
 	return b.String(), nil

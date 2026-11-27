@@ -1,6 +1,7 @@
 package notes
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,6 +91,16 @@ func TestRenderTemplateFillsObsidiansPlaceholders(t *testing.T) {
 	}
 	if Title("daily/2026-09-05.md") != "2026-09-05" || Title("a.b.txt") != "a.b" {
 		t.Error("Title")
+	}
+}
+
+func TestRenderTemplateStopsAtTheNoteLimit(t *testing.T) {
+	// Neon review #20: a template that expands past a note's limit is
+	// refused while it renders, not after the whole expansion is built.
+	tpl := Template{Variables: map[string]string{"a": strings.Repeat("x", 8192)}}
+	got, err := RenderTemplate(strings.Repeat("{{a}}", 200), tpl)
+	if refusalCode(err) != "input_too_large" || got != "" {
+		t.Fatalf("%d bytes, %v; want input_too_large", len(got), err)
 	}
 }
 
