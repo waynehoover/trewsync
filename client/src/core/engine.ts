@@ -6451,6 +6451,12 @@ export class Engine {
         // land as itself, so the ancestor must not move.
         return;
       }
+      // The names the scan cut are of `mine`, and `observe` below keeps them
+      // when the merged text has the same size and lands in the same
+      // millisecond. The upload would then send `mine` as the merge, and a
+      // server already holding those chunks would commit it (Neon review #1).
+      entry.hash = "";
+      entry.chunks = [];
     }
     // The local result now incorporates this remote version. Retain that
     // ancestor even if another writer wins the upload, so the next merge

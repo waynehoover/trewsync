@@ -871,6 +871,49 @@ describe("concurrent edits, which is where notes get lost", () => {
     );
   }, 240_000);
 
+  /**
+   * Neon review #1. A merge that writes text of the same length as the local
+   * note, in the same millisecond the local note was stamped, left the
+   * index's hash and chunk list describing the pre-merge note: `observe`
+   * only drops them when the stat moved, and here it did not. The upload
+   * that follows trusts that chunk list, so it sent the local side alone.
+   * The server already held those bytes from an earlier version, answered
+   * `have`, and committed them as the merge, erasing the other device's edit.
+   */
+  it("uploads the merged text, not the local side, when size and mtime repeat", async () => {
+    await fresh();
+    const a = await device("a");
+    const b = await device("b");
+    // Every note is 28 bytes, so the merge cannot change the size.
+    const brian = "Status: todo\n\nOwner: brian\n";
+    const base = "Status: todo\n\nOwner: alice\n";
+    await a.vault.edit("note.md", brian);
+    await convergeBoth(a, b);
+    await a.vault.edit("note.md", base);
+    await convergeBoth(a, b);
+    expect(b.vault.text("note.md")).toBe(base);
+
+    await a.vault.edit("note.md", "Status: done\n\nOwner: alice\n");
+    await a.settle();
+    // B's clock stands still and its edit is stamped with it, so the merge is
+    // written in the same millisecond as the note it read. B's edit is bytes
+    // the server holds from the first version.
+    b.step = 0;
+    await b.vault.edit("note.md", brian, b.clock);
+    await receiveCommitted(b.transport);
+    const report = await b.engine.sync();
+    expect(report.merged, "the pass under test did not merge").toBeGreaterThan(0);
+    expect(b.vault.text("note.md")).toBe("Status: done\n\nOwner: brian\n");
+    b.step = 60_000;
+
+    await convergeBoth(a, b, 6);
+    for (const d of [a, b]) {
+      const text = d.vault.text("note.md") ?? "";
+      expect(text, `${d.name} lost A's edit`).toContain("done");
+      expect(text, `${d.name} lost B's edit`).toContain("brian");
+    }
+  }, 240_000);
+
   it("merges edits to different parts of one note, keeping both", async () => {
     await fresh();
     const a = await device("a");
