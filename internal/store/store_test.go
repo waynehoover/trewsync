@@ -574,6 +574,38 @@ func TestRenameDeletionIsSuppressedInTheDeletedList(t *testing.T) {
 	}
 }
 
+// A page of history is cut by bytes before any chunk list is read, as a
+// catch-up batch is, so a page of a large file's versions never holds every
+// version's chunk names at once (Neon review #31).
+func TestHistoryPageIsCutByBytesBeforeItsChunksAreRead(t *testing.T) {
+	h := newTestStore(t)
+	for i := 0; i < 5; i++ {
+		h.file(t, "note.md", fmt.Sprintf("version %d", i))
+	}
+	all, more, err := h.HistoryPage("v1", "note.md", 0, 10, 0)
+	if err != nil || more || len(all) != 5 {
+		t.Fatalf("unbounded page = %v, more %v, err %v", uids(all), more, err)
+	}
+	budget := int64(batchFraming) + all[0].wireBytes() + all[1].wireBytes()
+	page, more, err := h.HistoryPage("v1", "note.md", 0, 10, budget)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if len(page) != 2 || page[0].UID != 5 || page[1].UID != 4 || !more {
+		t.Fatalf("page within %d bytes = %v, more %v; want [5 4] and more", budget, uids(page), more)
+	}
+	// Never below one entry, which is the only page that can carry it.
+	one, more, err := h.HistoryPage("v1", "note.md", 0, 10, 1)
+	if err != nil || len(one) != 1 || !more {
+		t.Fatalf("page within 1 byte = %v, more %v, err %v; want one entry and more", uids(one), more, err)
+	}
+	for _, e := range append(page, one...) {
+		if len(e.Chunks) == 0 {
+			t.Fatalf("history entry uid %d has no chunks", e.UID)
+		}
+	}
+}
+
 func TestHistoryForPathIsNewestFirstAndPaginates(t *testing.T) {
 	h := newTestStore(t)
 	for i := 0; i < 5; i++ {

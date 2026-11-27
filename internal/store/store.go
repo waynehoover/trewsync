@@ -1287,7 +1287,7 @@ func (s *Store) HistoryForPath(vaultID, path string, beforeUID int64, limit int)
 // HistoryPage is HistoryForPath, and whether the path has versions older than
 // the ones returned: one more is read than is returned, so the answer is exact
 // rather than inferred from a full page.
-func (s *Store) HistoryPage(vaultID, path string, beforeUID int64, limit int) ([]Entry, bool, error) {
+func (s *Store) HistoryPage(vaultID, path string, beforeUID int64, limit int, maxBytes int64) ([]Entry, bool, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -1299,11 +1299,42 @@ func (s *Store) HistoryPage(vaultID, path string, beforeUID int64, limit int) ([
 	}
 	q += ` ORDER BY uid DESC LIMIT ?`
 	args = append(args, limit+1)
-	entries, err := s.manyEntries(vaultID, q, args...)
-	if err != nil || len(entries) <= limit {
-		return entries, false, err
+
+	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, false, err
 	}
-	return entries[:limit], true, nil
+	defer tx.Rollback()
+	rows, err := tx.Query(q, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	entries, err := scanEntries(rows)
+	rows.Close()
+	if err != nil {
+		return nil, false, err
+	}
+	more := len(entries) > limit
+	if more {
+		entries = entries[:limit]
+	}
+	// Cut by bytes before any chunk list is read, as NextBatchWithin does
+	// (T57): a version may name 65,536 chunks, and a full page of them was
+	// gigabytes held here before the reply was cut. Never below one entry.
+	if maxBytes > 0 {
+		used := int64(batchFraming)
+		for i, e := range entries {
+			used += e.wireBytes()
+			if i > 0 && used > maxBytes {
+				entries, more = entries[:i], true
+				break
+			}
+		}
+	}
+	if err := attachChunks(tx, vaultID, entries); err != nil {
+		return nil, false, err
+	}
+	return entries, more, nil
 }
 
 // DeletedMax is the most deletions one call will return.

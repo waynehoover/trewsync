@@ -2208,7 +2208,7 @@ func (s *Session) handleHistory(m wire.In) error {
 	var more bool
 	var err error
 	if paged {
-		entries, more, err = s.srv.st.HistoryPage(s.vaultID, m.Path, m.Before, m.Limit)
+		entries, more, err = s.srv.st.HistoryPage(s.vaultID, m.Path, m.Before, m.Limit, s.srv.maxBatchBytes)
 	} else {
 		entries, err = s.srv.st.HistoryForPath(s.vaultID, m.Path, m.Before, m.Limit)
 	}
