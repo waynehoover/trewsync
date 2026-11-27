@@ -489,3 +489,38 @@ func TestARestoreThatWouldCollideIsRefusedAtThePreview(t *testing.T) {
 	sameVault(t, "after the restore", g.vaultAt(t, 0), map[string]string{"Notes/b.md": "the point"})
 	g.verified(t)
 }
+
+// A file written since where a folder entry stood at the point is put back
+// as that folder in place, and the notes it held after it: the folder is
+// written first, so nothing the restore puts back in it collides with the
+// file it replaces, at the preview or at the commit (Fable review #1). The
+// operator's restore and a device's both.
+func TestARestoreTurnsAFileBackIntoTheFolderItWas(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		for _, device := range []bool{false, true} {
+			h := newTestStore(t)
+			h.appendAs(t, Entry{Path: "x", Folder: true})
+			h.file(t, "x/a.md", "held at the point")
+			want := map[string]string{"x": "/", "x/a.md": "held at the point"}
+			if nested {
+				h.appendAs(t, Entry{Path: "x/y", Folder: true})
+				want["x/y"] = "/"
+			}
+			at := h.latest(t)
+			h.appendAs(t, Entry{Path: "x/a.md", Deleted: true, MTime: 43})
+			if nested {
+				h.appendAs(t, Entry{Path: "x/y", Deleted: true, MTime: 43})
+			}
+			h.file(t, "x", "a file since")
+			sameVault(t, "before the restore", h.vaultAt(t, 0), map[string]string{"x": "a file since"})
+
+			if device {
+				h.restoreAsDevice(t, RestoreRequest{ToUID: at})
+			} else {
+				h.restore(t, at)
+			}
+			sameVault(t, fmt.Sprintf("after the restore (nested %v, device %v)", nested, device), h.vaultAt(t, 0), want)
+			h.verified(t)
+		}
+	}
+}

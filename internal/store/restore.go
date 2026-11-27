@@ -368,6 +368,15 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 			dirsOf(step.Path, step.Action == UndoRemoveFolder, goneDirs)
 		}
 	}
+	// A live file put back as the folder it was is written in place, before
+	// anything deeper is put back in it, so the file is no longer there for
+	// what follows (Fable review #1). The folder that replaces it holds up
+	// the same folders above it, so the counts stay as they are.
+	for _, row := range folderRestores {
+		if row.nowLive && !row.nowFolder {
+			gone[row.path] = true
+		}
+	}
 	for _, row := range append(append([]restoreRow{}, folderRestores...), fileRestores...) {
 		if row.nowLive {
 			continue
