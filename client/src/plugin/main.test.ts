@@ -273,10 +273,23 @@ const pairButton = () =>
     .find((s) => s.buttons.some((b) => b.label === "Pair"))!
     .buttons.find((b) => b.label === "Pair")!;
 
-const synced = (p: Testable, ms?: number) =>
-  until("a sync", () => p.currentState.kind === "synced", ms).catch((err: Error) => {
-    throw new Error(`${err.message}; the state is ${JSON.stringify(p.currentState)}`);
-  });
+/**
+ * Synced, and no pass under way. The state says "synced" at the end of every
+ * pass, and a settle runs another straight after any pass that did work, so
+ * the state alone can be read between the two. A check made then is
+ * answered as one made during a sync is, which a test that goes on to act
+ * did not mean (Fable review #5).
+ */
+const synced = (p: Testable, ms?: number) => {
+  const passes = () => (p as unknown as { client?: { passes: number } }).client?.passes ?? 0;
+  return until("a sync", () => p.currentState.kind === "synced" && passes() === 0, ms).catch(
+    (err: Error) => {
+      throw new Error(
+        `${err.message}; the state is ${JSON.stringify(p.currentState)}, ${passes()} passes under way`,
+      );
+    },
+  );
+};
 /**
  * What the status bar says, which is now a tooltip rather than text: the item
  * itself is a glyph the size of its neighbours.
