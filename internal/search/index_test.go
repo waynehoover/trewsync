@@ -671,8 +671,23 @@ func TestIndexTextPreservesContainment(t *testing.T) {
 // that followed distrusted the healthy generation that had replaced it (Neon
 // review #33).
 func TestARetiredGenerationIsNeverHalfGone(t *testing.T) {
-	r := newRig(t)
-	x := r.x
+	dir := t.TempDir()
+	dbPath, chunkDir := store.DataDir(dir)
+	st, err := store.OpenWithSync(dbPath, chunkDir, store.SyncNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.EnsureVault(vault, 1); err != nil {
+		t.Fatal(err)
+	}
+	// Not started: retire runs on the worker, the index's one writer, and a
+	// worker of its own here would be a second.
+	x, err := Open(dir, st, vault, quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { x.Close() })
 	const n = 100
 	var first int64 = 1000
 	for g := first; g < first+n; g++ {
