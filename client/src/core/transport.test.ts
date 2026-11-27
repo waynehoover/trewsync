@@ -19,6 +19,7 @@ import { deferred, nextTurn } from "../../test/core/test-async.ts";
 
 afterEach(() => vi.useRealTimers());
 
+import { isFatal } from "./client.ts";
 import { chunkName } from "./digest.ts";
 import {
   FakeSocket,
@@ -2627,6 +2628,29 @@ describe("a server that sends faster than this device can apply", () => {
     }
     await settle();
     expect(t.isClosed, "the backlog grew without any bound at all").toBe(true);
+  });
+
+  // An honest server can get here too: it broadcasts one batch frame per
+  // entry an undo or a restore commits, up to ten thousand of them. Ended as
+  // a protostate, which no retry outlives, the loop stopped syncing for good
+  // (Neon review #23). It is a connection that ended: the next one starts
+  // from the cursor this device applied, and nothing past it was recorded.
+  it("ends it as a connection failure a loop retries, past nothing it applied", async () => {
+    const applied: Batch[] = [];
+    const { t, socket } = await helloed(0, { onBatch: (b) => void applied.push(b) });
+    for (let i = 0; i < 2000 && !t.isClosed; i++) {
+      socket.raw({ op: "batch", from: i + 1, to: i + 1, entries: [] });
+    }
+    await settle();
+    const cause = await t.devices().then(
+      () => undefined,
+      (err: unknown) => err as Error,
+    );
+    expect(cause).toBeInstanceOf(ConnectionError);
+    expect(isFatal(cause!), "the loop would stop for good").toBe(false);
+    expect(applied.length).toBeLessThan(2000);
+    expect(applied.map((b) => b.to)).toEqual(applied.map((_, i) => i + 1));
+    expect(t.appliedCursor).toBe(applied.length);
   });
 });
 
