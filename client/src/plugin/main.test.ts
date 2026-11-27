@@ -6875,6 +6875,95 @@ describe("undoing a change from the history panel", () => {
 });
 
 /**
+ * Neon review #17. Forgetting the settings replay after a pass wrote the
+ * config beside a settings change: the change then found the config changed
+ * under it and stopped without starting sync again, and a rename's write could
+ * land under the forgetting one.
+ */
+describe("forgetting the first time beside a settings change", () => {
+  it("keeps sync running and the change written", async () => {
+    await fresh();
+    const { plugin } = await load();
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    const internals = plugin as unknown as {
+      generation: number;
+      running: boolean;
+      config: Record<string, unknown>;
+      settledFirstTime(mine: number): void;
+    };
+    const saving = deferred();
+    const release = deferred();
+    const save = plugin.saveData.bind(plugin);
+    let hold = true;
+    plugin.saveData = async (data: unknown) => {
+      if (hold) {
+        hold = false;
+        saving.resolve();
+        await release.promise;
+      }
+      return save(data);
+    };
+    internals.config = { ...internals.config, settingsReplay: true };
+    internals.settledFirstTime(internals.generation);
+    await saving.promise;
+    const changing = plugin.setOnDemand(1_000).then(
+      () => "saved",
+      (err: Error) => err.message,
+    );
+    release.resolve();
+    expect(await changing).not.toMatch(/pairing changed/);
+    await until("sync running again", () => internals.running);
+  }, 300_000);
+
+  it("does not write a rename over with the old name", async () => {
+    await fresh();
+    const { plugin } = await load();
+    await startVault(plugin, "laptop");
+    await synced(plugin);
+    const internals = plugin as unknown as {
+      generation: number;
+      config: Record<string, unknown>;
+      settledFirstTime(mine: number): void;
+    };
+    const saving = deferred();
+    const release = deferred();
+    const save = plugin.saveData.bind(plugin);
+    let hold = true;
+    let calls = 0;
+    const landed: unknown[] = [];
+    plugin.saveData = async (data: unknown) => {
+      calls++;
+      if (hold) {
+        hold = false;
+        saving.resolve();
+        await release.promise;
+      }
+      await save(data);
+      landed.push((data as Record<string, unknown>)["device"]);
+    };
+    internals.config = { ...internals.config, settingsReplay: true };
+    internals.settledFirstTime(internals.generation);
+    await saving.promise;
+    const renaming = plugin.renameDevice("laptop two").then(
+      () => "renamed",
+      (err: Error) => err.message,
+    );
+    // The rename's own write lands first; the held one after it.
+    let outcome: string | undefined;
+    void renaming.then((o) => (outcome = o));
+    await until("the rename to write or refuse", () => calls >= 2 || outcome !== undefined);
+    release.resolve();
+    outcome = await renaming;
+    for (let i = 0; i < 50; i++) await nextTurn();
+    if (outcome === "renamed") {
+      // Nothing written after the rename's own write names the old device.
+      expect(landed.slice(landed.indexOf("laptop two"))).not.toContain("laptop");
+    } else expect(outcome).toMatch(/in progress/);
+  }, 300_000);
+});
+
+/**
  * Neon review #16. The restore of a folder or the vault to a time, and its
  * Undo, wrote into notes an editor could be holding without saving it first,
  * and kept the client it was opened with, closed by any reconnect since.

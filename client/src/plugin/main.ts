@@ -2492,18 +2492,26 @@ export default class TrewPlugin extends Plugin {
   private settledFirstTime(mine: number): void {
     const config = this.config;
     if (!config || mine !== this.generation) return;
+    // Not beside a settings change, which would find the config changed under
+    // it, or race this write with its own: the next pass forgets it instead.
+    if (this.editingConnection) return;
     const choiceDone =
       config.settingsFirstChoice !== undefined && this.client?.engine.firstChoiceDone === true;
     if (config.settingsReplay !== true && !choiceDone) return;
     const next: Record<string, unknown> = { ...config };
     delete next["settingsReplay"];
     if (choiceDone) delete next["settingsFirstChoice"];
-    void this.saveDuringRun(mine, next as unknown as DeviceConfig).then(
-      () => {
-        if (this.config === config) this.config = next as unknown as DeviceConfig;
-      },
-      (err: unknown) => log("settings sync could not forget its first time", err),
-    );
+    this.editingConnection = true;
+    void this.saveDuringRun(mine, next as unknown as DeviceConfig)
+      .then(
+        () => {
+          if (this.config === config) this.config = next as unknown as DeviceConfig;
+        },
+        (err: unknown) => log("settings sync could not forget its first time", err),
+      )
+      .finally(() => {
+        this.editingConnection = false;
+      });
   }
 
   /**
