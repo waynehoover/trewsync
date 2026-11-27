@@ -156,6 +156,29 @@ describe("a log that does not continue its snapshot", () => {
     expect(out.state.cursor).toBe(6);
     expect(out.stopped.why).toBe("out-of-order");
   });
+
+  // Neon review #8. Only the first kept record was checked for a gap, and a
+  // record at or below the snapshot's sequence was skipped wherever it sat.
+  it("stops at a gap between two records inside the log", () => {
+    const out = replay(base(), log(encodeRecord(1, { cursor: 6 }), encodeRecord(3, { cursor: 8 })));
+    expect(out.state.cursor, "a delta was folded over a missing one").toBe(6);
+    expect(out.applied).toBe(1);
+    expect(out.stopped).toMatchObject({ why: "gap", seq: 3, after: 1 });
+  });
+
+  it("stops when a record the snapshot holds follows a newer one", () => {
+    const at2 = { ...base(), seq: 2 };
+    const out = replay(
+      at2,
+      log(
+        encodeRecord(3, { cursor: 6 }),
+        encodeRecord(1, { cursor: 7 }),
+        encodeRecord(4, { cursor: 8 }),
+      ),
+    );
+    expect(out.state.cursor).toBe(6);
+    expect(out.stopped).toMatchObject({ why: "out-of-order", seq: 1 });
+  });
 });
 
 describe("a vault that has always used a snapshot and no log", () => {

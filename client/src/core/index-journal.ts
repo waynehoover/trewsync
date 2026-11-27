@@ -192,16 +192,19 @@ export function replay(snapshot: Snapshot, log: string): Replayed {
       stopped = { why: read.why, at: i };
       break;
     }
-    if (read.seq <= snapshot.seq) continue; // already in the snapshot
+    // Already in the snapshot, but only ahead of the first record kept: one
+    // after it has gone backwards inside the log.
+    if (firstKept && read.seq <= snapshot.seq) continue;
     if (read.seq <= seq) {
       stopped = { why: "out-of-order", at: i, seq: read.seq };
       break;
     }
-    // The first record kept must continue the snapshot. A jump means records
-    // between the two are gone, and a delta applied over a base it was not
-    // written against invents a state that never existed.
-    if (firstKept && read.seq !== snapshot.seq + 1) {
-      stopped = { why: "gap", at: i, seq: read.seq, after: snapshot.seq };
+    // Every record kept must continue the one before it, the first one the
+    // snapshot. A jump means records between the two are gone, and a delta
+    // applied over a base it was not written against invents a state that
+    // never existed.
+    if (read.seq !== seq + 1) {
+      stopped = { why: "gap", at: i, seq: read.seq, after: seq };
       break;
     }
     firstKept = false;
