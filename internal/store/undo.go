@@ -689,7 +689,10 @@ func (b *undoBuilder) parents(path string) error {
 			continue
 		}
 		dir := path[:i]
-		if b.made[dir] {
+		// A path this plan puts back, or one an earlier pass removes: a file
+		// the operation created there is gone before the note is written
+		// (Neon review #29).
+		if b.made[dir] || b.moved[dir] {
 			continue
 		}
 		e, state, _, err := b.s.EntryAsOf(b.r.Vault, dir, 0)

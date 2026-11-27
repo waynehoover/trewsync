@@ -740,3 +740,26 @@ func TestWrittenByNamesTheOperationBehindAVersion(t *testing.T) {
 		t.Fatalf("the undo's ref is %+v", r)
 	}
 }
+
+// An undo that removes a file the operation created, and puts back a note
+// that needs a folder at the same path, takes the file away first and then
+// writes the note. The check of the folders a restored note lands in looked
+// at the vault as it stands, found the file the undo's first pass removes,
+// and refused the undo as exists (Neon review #29).
+func TestAnUndoPutsANoteBackWhereItRemovesAFileInTheWay(t *testing.T) {
+	h := newTestStore(t)
+	h.file(t, "Notes", "a file called Notes") // uid 1
+	h.remove(t, "Notes")                      // uid 2
+	h.file(t, "Notes/a.md", "a note inside")  // uid 3
+	before := h.vaultAt(t, 0)
+
+	_, res := h.restore(t, 1)
+	if got, _ := h.headBytes(t, "Notes"); got != "a file called Notes" {
+		t.Fatalf("after the restore Notes reads %q", got)
+	}
+	if _, _, err := h.undo(t, res.OpID, false); err != nil {
+		t.Fatalf("undoing the restore: %v", err)
+	}
+	sameVault(t, "after the restore and its undo", h.vaultAt(t, 0), before)
+	h.verified(t)
+}
