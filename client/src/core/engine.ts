@@ -1168,7 +1168,7 @@ export class Engine {
   /** Settings JSON files given up on in this pass: named, owed nothing, never sent. */
   private settingsUnsendable = new Set<string>();
   /** Settings a person chose a version of, with the base each had (`settingResolved`). */
-  private readonly resolved = new Map<string, { hash: string; uid: number }>();
+  private readonly resolved = new Map<string, { hash: string; uid: number; sent?: string }>();
 
   /**
    * Paths a file is standing in the way of, as of the last pass.
@@ -3033,7 +3033,16 @@ export class Engine {
     // person was told about, and nothing that arrived after or changed since.
     const shown =
       this.applyOnly === undefined || this.applyOnly.get(path) === this.remote.get(path)?.uid;
-    const holding = writesHere ? !this.applyingSettings || !shown : unreadByObsidian;
+    // A version chosen in Review conflicts is sent until it commits: as long
+    // as the file still holds what the first attempt sent, a retry is that
+    // choice and not Obsidian's write-back (Neon review #3).
+    const chosen = this.resolved.get(path);
+    const sendingChoice =
+      chosen !== undefined &&
+      action.kind === "upload" &&
+      local !== undefined &&
+      (chosen.sent ?? local.hash) === local.hash;
+    const holding = writesHere ? !this.applyingSettings || !shown : unreadByObsidian && !sendingChoice;
     if (holding && action.kind !== "nothing") {
       this.heldSettings.add(path);
       report.settingsHeld++;
@@ -3046,11 +3055,11 @@ export class Engine {
       entry.unconfirmed ??= { hash: entry.synchash, uid: entry.syncuid, load: this.loadId };
     // A version chosen in Review conflicts goes out as it is, and from then on
     // waits for the reload as an applied setting does (`settingResolved`).
-    const chosen = this.resolved.get(path);
-    if (chosen !== undefined) {
+    if (sendingChoice) {
+      chosen.sent = local.hash;
+      entry.unconfirmed = { hash: chosen.hash, uid: chosen.uid, load: this.loadId };
+    } else if (chosen !== undefined) {
       this.resolved.delete(path);
-      if (action.kind === "upload")
-        entry.unconfirmed = { hash: chosen.hash, uid: chosen.uid, load: this.loadId };
     }
     return action;
   }

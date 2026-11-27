@@ -5123,6 +5123,58 @@ describe("settings", () => {
     }
   });
 
+  // Neon review #3. The choice was marked as waiting for the reload, and
+  // forgotten as a choice, before its upload had committed. An upload that
+  // failed was then held for the rest of the load as if Obsidian had written
+  // it back, and the choice reached no other device before the reload let
+  // Obsidian write its old value over it.
+  it("retries a setting chosen in Review conflicts whose first upload failed", async () => {
+    await fresh();
+    const at = (t: number) => ({ mtime: t, ctime: 1_000 });
+    const reload = async (d: Device) => {
+      d.close();
+      await d.connect(server);
+      return settleCounting(d);
+    };
+    const app = ".obsidian-desktop/app.json";
+    const mac = await deviceWith("mac", { root: ".obsidian-desktop", firstChoice: "device" });
+    await mac.vault.write(app, json({ tabSize: 4 }), times);
+    await mac.settle();
+    const desk = await deviceWith("desk", { root: ".obsidian-desktop", firstChoice: "server" });
+    await desk.settle();
+    await desk.engine.sync({ applySettings: true });
+    await reload(desk);
+    await mac.vault.write(app, json({ tabSize: 2 }), at(5_000));
+    await desk.vault.write(app, json({ tabSize: 8 }), at(5_000));
+    await mac.settle();
+    await settleCounting(desk);
+    await desk.engine.sync({ applySettings: true });
+    await reload(desk);
+    const copy = Object.keys(desk.vault.snapshot()).find((p) => conflictOriginal(p) === app);
+    if (copy === undefined) throw new Error("no conflict copy was kept");
+    const review = await reviewConflict(desk.vault, { original: app, copy });
+    await resolveConflict(desk.vault, "desk", review, "copy");
+    desk.engine.settingResolved(app);
+    desk.engine.noteChanged(copy);
+
+    // The first upload of the choice fails.
+    const put = desk.transport.putMany.bind(desk.transport);
+    desk.transport.putMany = async () => {
+      desk.transport.putMany = put;
+      throw new Error("the server refused the put, this once");
+    };
+    try {
+      await desk.engine.sync();
+    } catch {
+      // A failed pass is what is being simulated.
+    }
+    expect(desk.transport.putMany, "the failing put was never tried").toBe(put);
+    expect((await settleCounting(desk)).uploaded, "the choice was never retried").toBeGreaterThan(0);
+    const [newest] = await desk.transport.history(app, { limit: 1 });
+    expect(newest?.device).toBe("desk");
+    expect(newest?.size).toBe(json({ tabSize: 2 }).length);
+  });
+
   it("leaves the settings a device does not sync out of its first-sync review", async () => {
     await fresh();
     const mac = await deviceWith("mac", { root: ".obsidian" });
