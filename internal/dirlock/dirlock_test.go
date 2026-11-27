@@ -218,3 +218,65 @@ func TestReleaseClearsTheHolderRecord(t *testing.T) {
 		t.Fatalf("a shared holder was reported as %q", held.Holder)
 	}
 }
+
+// A plaintext backup on read-only media, a mount or a snapshot, is still read
+// under the shared lock: `trewd rehearse -backup` and purge read it, and only
+// reading needs nothing written (Fable review #3). A lock file that is there
+// is locked through a read-only descriptor, which still holds off an
+// exclusive holder; one that is not there, in a directory nobody can write,
+// has nothing that could be writing beside it. The exclusive lock, which
+// records its holder, still needs to write.
+func TestSharedWorksOnAReadOnlyDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes through any mode")
+	}
+	readOnly := func(t *testing.T, dir string) {
+		t.Helper()
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	}
+
+	withFile := t.TempDir()
+	writer, err := Exclusive(withFile, Data, "backup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(withFile, Data), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	readOnly(t, withFile)
+	if _, err := Shared(withFile, Data); !errors.Is(err, ErrHeld) {
+		t.Fatalf("a shared lock on a read-only directory taken while a writer holds it: err = %v, want ErrHeld", err)
+	}
+	writer.Release()
+	reader, err := Shared(withFile, Data)
+	if err != nil {
+		t.Fatalf("a shared lock on a read-only directory with its lock file: %v", err)
+	}
+	second, err := Shared(withFile, Data)
+	if err != nil {
+		t.Fatalf("a second shared lock beside it: %v", err)
+	}
+	second.Release()
+	if err := reader.Release(); err != nil {
+		t.Fatalf("releasing it: %v", err)
+	}
+	if _, err := Exclusive(withFile, Data, "purge"); err == nil {
+		t.Fatal("an exclusive lock was taken on a read-only lock file")
+	}
+
+	without := t.TempDir()
+	readOnly(t, without)
+	reader, err = Shared(without, Data)
+	if err != nil {
+		t.Fatalf("a shared lock on a read-only directory with no lock file: %v", err)
+	}
+	if err := reader.Release(); err != nil {
+		t.Fatalf("releasing it: %v", err)
+	}
+	if _, err := Exclusive(without, Data, "purge"); err == nil {
+		t.Fatal("an exclusive lock was taken in a read-only directory")
+	}
+}

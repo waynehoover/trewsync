@@ -15,6 +15,7 @@ package dirlock
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,6 +87,11 @@ func take(dir, name string, how int) (*Lock, error) {
 	}
 	path := filepath.Join(dir, name)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil && how&syscall.LOCK_SH != 0 && (errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EROFS)) {
+		if f, err = openReadOnly(dir, path, err); f == nil && err == nil {
+			return &Lock{}, nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +104,31 @@ func take(dir, name string, how int) (*Lock, error) {
 		return nil, err
 	}
 	return &Lock{f: f}, nil
+}
+
+// openReadOnly opens the lock file of a shared lock that could not be opened
+// for writing, as on a read-only mount or snapshot of a backup (Fable review
+// #3). A shared holder writes nothing, and flock takes a shared lock through
+// a read-only descriptor, which still holds off an exclusive holder. With no
+// lock file to open, it answers nil and no error, for no lock at all, only
+// when nothing can create one, and so nothing can be writing beside it: a
+// read-only file system, or a directory nobody has write permission on. In
+// any other case the refusal to open for writing stands.
+func openReadOnly(dir, path string, cause error) (*os.File, error) {
+	f, err := os.Open(path)
+	if err == nil {
+		return f, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, cause
+	}
+	if errors.Is(cause, syscall.EROFS) {
+		return nil, nil
+	}
+	if info, err := os.Stat(dir); err == nil && info.Mode().Perm()&0o222 == 0 {
+		return nil, nil
+	}
+	return nil, cause
 }
 
 // Holder reports who last took the named lock exclusively, without taking it.

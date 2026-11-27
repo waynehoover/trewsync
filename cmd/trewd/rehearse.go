@@ -249,8 +249,11 @@ func (r *rehearsal) run(ctx context.Context, backup string, encrypted bool, iden
 		// directory under the exclusive lock, and a copy taken meanwhile is
 		// torn (Neon review #36).
 		lock, err := dirlock.Shared(backup, dirlock.Data)
-		if err != nil {
+		if errors.Is(err, dirlock.ErrHeld) {
 			return rec, fmt.Errorf("the backup at %s is in use, so it cannot be copied while it changes: %w", backup, err)
+		}
+		if err != nil {
+			return rec, fmt.Errorf("the backup at %s cannot be locked for reading: %w", backup, err)
 		}
 		n, err := copyDataDir(ctx, backup, r.dir)
 		lock.Release()

@@ -1401,9 +1401,12 @@ func backupCovers(
 	// takes the destination exclusively, so a backup writing into this
 	// directory is refused while a purge is relying on it.
 	bkLock, err := dirlock.Shared(dir, dirlock.Data)
-	if err != nil {
+	if errors.Is(err, dirlock.ErrHeld) {
 		return 0, nil, fmt.Errorf(
 			"the backup at %s is in use, so it cannot be relied on while it changes: %w", dir, err)
+	}
+	if err != nil {
+		return 0, nil, fmt.Errorf("the backup at %s cannot be locked for reading: %w; nothing was purged", dir, err)
 	}
 	// Released by the caller, after the purge. Everything below is a statement
 	// about this directory, and a statement whose subject can be replaced

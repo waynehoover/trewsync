@@ -120,3 +120,33 @@ func TestARehearsalDoesNotCopyABackupBeingWritten(t *testing.T) {
 		t.Fatalf("rehearsing a backup being written: %v, want it refused as in use", err)
 	}
 }
+
+// A plaintext backup on read-only media, a mount or a snapshot, is rehearsed
+// as before the shared lock: reading it writes nothing, so neither a lock file
+// that cannot be opened for writing nor one that cannot be created refuses
+// it (Fable review #3).
+func TestARehearsalReadsABackupOnReadOnlyMedia(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes through any mode")
+	}
+	live := seeded(t)
+	for _, lockFile := range []bool{true, false} {
+		backup := filepath.Join(t.TempDir(), "backup")
+		mustRun(t, "backup", "-plaintext-ok", "-data", live, "-to", backup)
+		lock := filepath.Join(backup, dirlock.Data)
+		if lockFile {
+			if err := os.Chmod(lock, 0o400); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.Remove(lock); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(backup, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(backup, 0o700) })
+		if out, err := trew(t, "rehearse", "-data", live, "-backup", backup); err != nil {
+			t.Fatalf("rehearsing a read-only backup (lock file %v): %v\n%s", lockFile, err, out)
+		}
+	}
+}
