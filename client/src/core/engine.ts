@@ -3871,8 +3871,10 @@ export class Engine {
     const path =
       active && this.dirty.has(active)
         ? active
-        : [...this.dirty].find((candidate) => looksLikeText(candidate));
-    if (!path || !looksLikeText(path) || !this.opts.vault.stat) return;
+        : [...this.dirty].find((candidate) => looksLikeText(candidate) && !isConfigPath(candidate));
+    // Not a setting, which is text too: its parse check, quiet period and
+    // hold for Apply live in the ordinary pass (Neon review #4).
+    if (!path || !looksLikeText(path) || isConfigPath(path) || !this.opts.vault.stat) return;
     const entry = this.entries.get(path);
     const remote = this.remote.get(path);
     // Work already planned under either spelling must finish before revisiting it.

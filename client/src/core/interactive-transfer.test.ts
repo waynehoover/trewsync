@@ -1,5 +1,6 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { Client } from "./client.ts";
+import { Transport } from "./transport.ts";
 import { MemoryIndexStore, MemoryVault } from "./vault.ts";
 import { TestServer } from "../../test/core/test-server.ts";
 import { receiveCommitted } from "../../test/core/test-async.ts";
@@ -48,6 +49,59 @@ it("returns to an edited open note before preparing the remaining attachments", 
   expect(order.indexOf("note.md")).toBeGreaterThanOrEqual(0);
   expect(order.indexOf("note.md")).toBeLessThan(order.indexOf("z.bin"));
   expect(vault.text("note.md")).toBe("edited while transferring");
+});
+
+it("leaves a setting saved during a transfer to the settings rules", async () => {
+  // Neon review #4. The yield to a saved note picked any dirty text file,
+  // and `.json` is text, so a settings file Obsidian was half way through
+  // writing went up between two bodies of an attachment with none of the
+  // checks a setting gets: not parsed, no quiet period, no hold.
+  server = new TestServer();
+  await server.start();
+  const vault = new MemoryVault();
+  const P = ".obsidian/app.json";
+  client = new Client({
+    vault,
+    store: new MemoryIndexStore(),
+    url: server.wsUrl,
+    ...(await server.deviceCredentials()),
+    vaultId: "default",
+    device: "phone",
+    inspect: true,
+    settings: { root: ".obsidian" },
+    // An open note is what makes a large file go up with saves serviced
+    // between its bodies; this one is not the setting.
+    activePath: () => "note.md",
+  });
+  await client.connect();
+  await vault.edit(P, '{"a":1}', 1_000);
+  await client.engine.sync({ coalesceWrites: false });
+  expect(await client.history(P)).toHaveLength(1);
+  // Large enough to go up on its own connection, with saves serviced
+  // between its bodies.
+  const attachment = new Uint8Array(3 * 1024 * 1024);
+  for (let at = 0; at < attachment.length; at += 65536)
+    crypto.getRandomValues(attachment.subarray(at, at + 65536));
+  await vault.write("attachment.bin", attachment, { mtime: 1, ctime: 1 });
+  let changed = false;
+  const put = Transport.prototype.put;
+  vi.spyOn(Transport.prototype, "put").mockImplementation(function (this: Transport, ...args) {
+    const interleave = args[6];
+    if (interleave)
+      args[6] = async () => {
+        if (!changed) {
+          changed = true;
+          await vault.edit(P, '{"a":', 2_000);
+          client.noteChanged(P);
+        }
+        await interleave();
+      };
+    return put.apply(this, args);
+  });
+  await client.engine.sync({ coalesceWrites: false });
+  vi.restoreAllMocks();
+  expect(changed, "the test never reached the window it is about").toBe(true);
+  expect(await client.history(P), "a half-written setting was sent").toHaveLength(1);
 });
 
 it("does not restart the whole pass for every save to the open note", async () => {
