@@ -1275,7 +1275,7 @@ export class Transport {
       // Checked to be a number before it is compared. An entry with no
       // uid at all made both comparisons false and sailed through, which
       // is the range check passing by not being performed.
-      if (typeof e?.uid !== "number" || !Number.isFinite(e.uid)) {
+      if (typeof e?.uid !== "number" || !Number.isSafeInteger(e.uid)) {
         throw new ProtocolError("protostate", `batch ${from}..${to} contains an entry with no uid`);
       }
       if (typeof e.path !== "string" || e.path === "") {
@@ -3110,8 +3110,13 @@ function toBytes(data: unknown): Uint8Array | undefined {
   return undefined;
 }
 
+/**
+ * A cursor or a uid off the wire, or -1 when it is not a count, which every
+ * caller refuses: a fraction or a missing one was taken as given, saved into
+ * the index, and refused by its next load (Neon review #41).
+ */
 function numberOf(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : -1;
 }
 
 function describeClose(ev: { code?: number; reason?: string }): string {

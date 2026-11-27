@@ -435,6 +435,15 @@ describe("caught-up", () => {
     expect(t.isClosed).toBe(true);
   });
 
+  // Neon review #41. A missing cursor was read as zero, and agreed with a
+  // device that had applied nothing.
+  it("is refused when it names no cursor at all", async () => {
+    const { t, socket } = await helloed(0);
+    socket.reply({ op: "caught-up" });
+    await settle();
+    expect(t.isClosed).toBe(true);
+  });
+
   it("is reported when it agrees", async () => {
     const seen: number[] = [];
     const { t, socket } = await helloed(0, { onCaughtUp: (c) => seen.push(c) });
@@ -2050,6 +2059,16 @@ describe("a batch frame that cannot be trusted", () => {
     {
       why: "an entry with no chunks array",
       frame: { op: "batch", from: 1, to: 3, entries: [{ uid: 2, path: "p" }] },
+    },
+    // Neon review #41: saved into the index, a fraction is a cursor or a
+    // version number the next load refuses, and the device cannot start.
+    {
+      why: "a range that ends at a fraction",
+      frame: { op: "batch", from: 1, to: 1.5, entries: [] },
+    },
+    {
+      why: "an entry whose uid is a fraction",
+      frame: { op: "batch", from: 1, to: 3, entries: [{ uid: 1.5, path: "p", chunks: [] }] },
     },
   ];
 
