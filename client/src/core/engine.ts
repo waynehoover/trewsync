@@ -5734,6 +5734,9 @@ export class Engine {
     // the hardware with the least memory (R083-07).
     const names = await chunkNames(parts);
     if (contentId(names) !== contentId(d.chunks)) return "ask";
+    // A settings version that does not parse is refused by name in `land`,
+    // and finding its bytes on this disk does not make it any more readable.
+    if (isConfigPath(d.path) && looksLikeJson(d.path) && !decodesAsJson(bytes)) return "ask";
 
     // A move's destination is usually a name nothing held, and then one
     // exclusive create is the whole write, as in `land`.

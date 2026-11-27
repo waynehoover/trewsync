@@ -5915,6 +5915,39 @@ describe("a setting Apply deleted that was never synced, or synced in another or
   });
 });
 
+describe("a settings version that is not JSON, whose bytes this device already holds", () => {
+  // Neon review, Low: `land` refuses a settings JSON version that does not
+  // parse, and `landFromLocal`, which builds the same version from a copy
+  // already on this disk, did not ask. A note holding the same broken bytes
+  // was enough to write them over the setting.
+  it("is not applied from the local copy either", async () => {
+    await fresh();
+    const enc = (s: string) => new TextEncoder().encode(s);
+    const broken = enc('{\n  "theme": "obsidian", "th');
+    const P = ".obsidian/app.json";
+    const desk = new Device("desk");
+    desk.settings = { root: ".obsidian" };
+    devices.push(desk);
+    await desk.vault.write("backup.json", broken, { mtime: 1_000, ctime: 1_000 });
+    await desk.connect(server);
+    await desk.settle();
+    const mac = await device("mac");
+    const name = await chunkName(broken);
+    await mac.transport.put(
+      P,
+      { size: broken.length, ctime: 1_000, mtime: 1_000 },
+      [name],
+      async () => broken,
+      { base: 0 },
+    );
+    await receiveCommitted(desk.transport);
+    await desk.settle();
+    const applied = await desk.engine.sync({ applySettings: true });
+    expect(desk.vault.snapshot()[P], "a setting Obsidian cannot read was written").toBeUndefined();
+    expect(applied.needsAttention.map((n) => n.path)).toContain(P);
+  });
+});
+
 describe("a setting in another order when a peer sends the same bytes again", () => {
   // Neon review #48. Held as the same values in another order, the setting
   // reads as changed here and unchanged on the server when a peer commits
