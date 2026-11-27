@@ -490,7 +490,7 @@ func (s *Store) held(vaultID, name string) bool {
 // A body becomes *visible* when it is renamed into place and *durable* when
 // the directory it landed in is flushed, and those are two different moments.
 // placing records that a name is being written and cannot yet be treated as
-// held. Call it before the body can become visible.
+// held. place calls it just before the body can become visible.
 //
 // A name that is already held is left alone, and that is not an optimisation.
 // Withholding it would take a chunk somebody else has already made durable and
@@ -510,12 +510,12 @@ func (s *Store) Put(vaultID, name string, body []byte) error {
 	if int64(len(body)) > s.max {
 		return fmt.Errorf("%w: %d > %d", ErrTooLarge, len(body), s.max)
 	}
-	// Withheld across the write *and* the flush below, which is what makes
-	// `Has` mean "durable" rather than "renamed" (F05, R06). Not released on
-	// the way out: only a successful flush proves this name, and a failed one
-	// must leave it reading as absent so the next put writes it again.
-	s.placing(vaultID, name)
-
+	// place withholds the name across the write *and* the flush below, which
+	// is what makes `Has` mean "durable" rather than "renamed" (F05, R06). Not
+	// released on the way out: only a successful flush proves this name, and a
+	// failed one must leave it reading as absent so the next put writes it
+	// again.
+	//
 	// The name-against-body check is place's, so that it happens on whichever
 	// goroutine is about to do the write. Storing a body under a claimed name
 	// would corrupt the vault invisibly, and storing it under the computed name
@@ -603,7 +603,14 @@ func (s *Store) place(vaultID, name string, body []byte) ([]string, error) {
 	if err := tmp.Close(); err != nil {
 		return nil, err
 	}
+	// Withheld here, under the lock Quarantine takes, and not by the caller
+	// before the write: a look taken earlier could see a rotted body still on
+	// disk, leave the name alone as already durable, and have Quarantine move
+	// that body aside before this rename, so the new one read as held before
+	// its directory was flushed (Neon review #13). And only once the body is
+	// known to be its name, so a corrupt upload withholds nothing.
 	s.publicationMu.RLock()
+	s.placing(vaultID, name)
 	err = os.Rename(tmp.Name(), p)
 	s.publicationMu.RUnlock()
 	if err != nil {
@@ -756,16 +763,15 @@ func (w *Writer) run() {
 			continue
 		}
 
-		// Withheld before the write and proven by Close, after the flush: a
-		// batch's body becomes visible on `place` and durable pages later, so
-		// this is the widest window in the store (F05).
+		// Withheld by place before the rename and proven by Close, after the
+		// flush: a batch's body becomes visible on `place` and durable pages
+		// later, so this is the widest window in the store (F05).
 		//
 		// Nothing waits here. It used to: each name was claimed and every claim
 		// held until Close, so two batches wanting the same two chunks in
 		// opposite orders each held one and waited for the other for ever
 		// (R05). Two batches may now place the same body at once, which the
 		// content-addressed name and the atomic rename make harmless.
-		w.store.placing(w.vaultID, job.name)
 		dirs, err := w.store.place(w.vaultID, job.name, job.body)
 		w.mu.Lock()
 		if err != nil && w.err == nil {

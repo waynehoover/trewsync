@@ -833,3 +833,64 @@ func TestTheHealthProbeIsNotABody(t *testing.T) {
 		t.Error("CheckWritable left its probe behind")
 	}
 }
+
+// A body a quarantine moved aside between Put's first look and its write is
+// written again, and the new one is visible before its directory is flushed.
+// Put's early look saw the corrupt body on disk and did not withhold the
+// name, so the rewritten body read as held, and a commit could be admitted
+// on it, before it was durable (Neon review #13). The schedule is Put's own
+// steps with the race window collapsed: the look, the quarantine, the write.
+func TestABodyRewrittenAfterAQuarantineIsWithheldUntilFlushed(t *testing.T) {
+	s := newTestStore(t)
+	body := []byte("the real body")
+	name := Name(body)
+	p, _ := s.Path("v1", name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("rot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.placing("v1", name) // sees the rotted body on disk
+	if err := s.Quarantine("v1", name); err != nil {
+		t.Fatalf("quarantine: %v", err)
+	}
+	dirs, err := s.place("v1", name, body)
+	if err != nil || len(dirs) == 0 {
+		t.Fatalf("place wrote nothing: %v %v", dirs, err)
+	}
+	if s.Has("v1", name) {
+		t.Fatal("a body renamed into place and not yet flushed reads as held")
+	}
+	for _, d := range dirs {
+		if err := s.sync(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.proven("v1", name)
+	if !s.Has("v1", name) {
+		t.Fatal("the flushed body does not read as held")
+	}
+}
+
+// An upload whose bytes are not its name withholds nothing: the name never
+// reaches the disk, so nothing is waiting to be proven, and a paired device
+// sending bogus bodies cannot grow the map (Neon review #13).
+func TestACorruptUploadLeavesNoNameWithheld(t *testing.T) {
+	s := newTestStore(t)
+	claimed := Name([]byte("what the name says"))
+	if err := s.Put("v1", claimed, []byte("other bytes")); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("put: %v, want ErrCorrupt", err)
+	}
+	w := s.NewWriter("v1")
+	_ = w.Add(Name([]byte("another name")), []byte("still other bytes"))
+	if err := w.Close(); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("writer: %v, want ErrCorrupt", err)
+	}
+	s.unprovenMu.Lock()
+	n := len(s.unproven)
+	s.unprovenMu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d names are withheld after uploads that wrote nothing", n)
+	}
+}
