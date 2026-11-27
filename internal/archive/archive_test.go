@@ -245,6 +245,11 @@ func TestAnArchiveThatIsNotWhatItClaimsIsRefused(t *testing.T) {
 		"fewer bodies than the manifest": pack(entry{ManifestFile, man(2, int64(len(body)), hex.EncodeToString(dbSum[:]))},
 			good, entry{dbFileName, db}),
 		"no manifest": pack(good, entry{dbFileName, db}),
+		// The database is the manifest's, and something follows it: it was
+		// renamed into place before the entry after it was read (Neon
+		// review #14).
+		"an entry after the database": pack(entry{ManifestFile, man(1, int64(len(body)), hex.EncodeToString(dbSum[:]))},
+			good, entry{dbFileName, db}, good),
 	} {
 		parent := t.TempDir()
 		to := filepath.Join(parent, "restored")
@@ -312,3 +317,34 @@ func TestAFailedPackLeavesTheLastArchiveInPlace(t *testing.T) {
 		t.Fatalf("the failed pack left %d files beside the archive", len(entries))
 	}
 }
+
+// An unpack to a path with a trailing slash flushes only the directories it
+// made. The directory was remembered as given and its bodies' parents as
+// cleaned, so the walk up from each parent never met it and went on to the
+// root, opening every ancestor to flush it: an ancestor the account cannot
+// read failed the unpack (Neon review #14).
+func TestAnUnpackToAPathWithATrailingSlashFlushesOnlyWhatItMade(t *testing.T) {
+	dir, notes := staged(t)
+	id, rcpt := key(t)
+	out := filepath.Join(t.TempDir(), "trew.tar.age")
+	if _, err := Pack(dir, out, rcpt); err != nil {
+		t.Fatal(err)
+	}
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o300); err != nil { // writable and searchable, not readable
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	to := filepath.Join(parent, "restored")
+	f, _ := os.Open(out)
+	defer f.Close()
+	if _, err := Unpack(f, []age.Identity{id}, to+"/"); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	for path, want := range notes {
+		if b := headBytes(t, to, path); b != want {
+			t.Fatalf("%s reads %q after the round trip, was %q", path, b, want)
+		}
+	}
+}
+

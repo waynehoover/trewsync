@@ -473,6 +473,9 @@ func streamEntry(tw *tar.Writer, name, p string) (string, error) {
 // archive, left untouched, still holds.
 func Unpack(src io.Reader, identities []age.Identity, dir string) (Report, error) {
 	var rep Report
+	// Clean, as every parent writeFile remembers is, so the walk up from a
+	// body's directory stops here rather than at the root.
+	dir = filepath.Clean(dir)
 	if err := emptyOrAbsent(dir); err != nil {
 		return rep, err
 	}
@@ -488,6 +491,7 @@ func Unpack(src io.Reader, identities []age.Identity, dir string) (Report, error
 	tr := tar.NewReader(plain)
 	var man Manifest
 	first, dbDone := true, false
+	tmpDB := filepath.Join(dir, "."+dbFileName+".unpack")
 	bodies := 0
 	var bodyBytes int64
 	dirs := map[string]bool{dir: true}
@@ -536,17 +540,13 @@ func Unpack(src io.Reader, identities []age.Identity, dir string) (Report, error
 				return rep, fmt.Errorf("the archive holds %d bodies of %d bytes, and its manifest says %d of %d",
 					bodies, bodyBytes, man.Bodies, man.BodyBytes)
 			}
-			tmp := filepath.Join(dir, "."+dbFileName+".unpack")
-			got, err := streamFile(tmp, tr, h.Size)
+			got, err := streamFile(tmpDB, tr, h.Size)
 			if err != nil {
 				return rep, err
 			}
 			if got != man.Database {
-				os.Remove(tmp)
+				os.Remove(tmpDB)
 				return rep, errors.New("the archive's database is not the one its manifest names")
-			}
-			if err := os.Rename(tmp, filepath.Join(dir, dbFileName)); err != nil {
-				return rep, err
 			}
 			dbDone = true
 		default:
@@ -579,6 +579,17 @@ func Unpack(src io.Reader, identities []age.Identity, dir string) (Report, error
 		if err := fsync.Dir(d); err != nil {
 			return rep, err
 		}
+	}
+	// Only now, with the archive read to its authenticated end and every
+	// body's name durable, is the database put in place: renamed inside the
+	// loop, it stood live while an entry after it, a damaged tail or a crash
+	// before the flushes above still made the unpack a failure (Neon review
+	// #14).
+	if err := os.Rename(tmpDB, filepath.Join(dir, dbFileName)); err != nil {
+		return rep, err
+	}
+	if err := fsync.Dir(dir); err != nil {
+		return rep, err
 	}
 	rep.Manifest, rep.Bytes, rep.SHA256 = man, counted.n, hex.EncodeToString(sum.Sum(nil))
 	return rep, nil
