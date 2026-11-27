@@ -462,3 +462,40 @@ func TestRepairLiveRebuildsWhatDriftedAndNothingElse(t *testing.T) {
 		t.Fatalf("after repair the rule answered %v", err)
 	}
 }
+
+// A move whose source is not live moves no folded key, so it is no case-only
+// rename. Rule 1 and the T58 check both took the source to hold the key: a
+// move "from" a spelling that never existed made notes.md live beside
+// Notes.md, and a file foo over a folder still holding foo/a.md (Neon review
+// #15). Judged as the create it is, each is refused as one would be.
+func TestACaseOnlyMoveFromASourceThatIsNotLiveIsJudgedAsACreate(t *testing.T) {
+	h := newTestStore(t)
+	for _, p := range []struct {
+		path   string
+		folder bool
+	}{{"Notes.md", false}, {"foo", true}, {"foo/a.md", false}, {"bar/a.md", false}} {
+		if err := h.writeAt(t, p.path, "", p.folder); err != nil {
+			t.Fatalf("%s: %v", p.path, err)
+		}
+	}
+	before := liveNow(t, h)
+	if err := h.writeAt(t, "notes.md", "NOTES.md", false); !errors.Is(err, ErrCollision) {
+		t.Fatalf("a move from a source never live made a second spelling of Notes.md live: %v", err)
+	}
+	if err := h.writeAt(t, "foo", "FOO", false); !errors.Is(err, ErrFolderNotEmpty) {
+		t.Fatalf("a move from a source never live made folder foo a file with foo/a.md in it: %v", err)
+	}
+	if err := h.writeAt(t, "bar", "BAR", false); !errors.Is(err, ErrCollision) {
+		t.Fatalf("a move from a source never live put a file where bar/a.md needs a folder: %v", err)
+	}
+	if got := liveNow(t, h); fmt.Sprint(got) != fmt.Sprint(before) {
+		t.Fatalf("refused moves changed the live set from %v to %v", before, got)
+	}
+	// A case-only rename of a live path is still always allowed (rule 1).
+	if err := h.writeAt(t, "NOTES.md", "Notes.md", false); err != nil {
+		t.Fatalf("a case-only rename of a live note: %v", err)
+	}
+	if diff, err := liveDifference(h.db, "v1"); err != nil || diff != "" {
+		t.Fatalf("the live tables disagree with the entries: %s %v", diff, err)
+	}
+}
