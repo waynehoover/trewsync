@@ -2100,14 +2100,21 @@ export default class TrewPlugin extends Plugin {
 
   /** The restore of a folder, or of every note, to a time (`RestoreTimeModal`). */
   openRestoreTime(folder: string): void {
-    const client = this.client;
-    if (!client) {
+    if (!this.client) {
       new Notice(`TrewSync: ${this.whyNoClient()}`);
       return;
     }
+    // Asked of the client connected at the click, not at the opening, after
+    // what is in an open editor is saved to be sent first, as an undo from
+    // the history panel does (T15).
+    const connected = async () => {
+      await this.saveOpenEditors();
+      if (!this.client) throw new Error(this.whyNoClient());
+      return this.client;
+    };
     new RestoreTimeModal(this.app, folder, {
-      restore: (ask) => client.restoreTo(ask),
-      undo: (opId) => client.undo(opId),
+      restore: async (ask) => (await connected()).restoreTo(ask),
+      undo: async (opId) => (await connected()).undo(opId),
     }).open();
   }
 

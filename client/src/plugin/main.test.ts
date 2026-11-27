@@ -44,6 +44,7 @@ import {
 } from "../../test/plugin/stub.ts";
 import TrewPlugin, { connectionDetail, describeConnection, describeDeleted } from "./main.ts";
 import { describeRestore } from "./history.ts";
+import type { RestoreTimeActions } from "./restore-time.ts";
 import { SUPPORT_TABLE } from "./platform-notice.ts";
 import { Engine, type SyncReport } from "../core/engine.ts";
 import { Client, pairWithInvite } from "../core/client.ts";
@@ -6870,6 +6871,46 @@ describe("undoing a change from the history panel", () => {
       }),
     ).rejects.toThrow(/editor disk full/);
     expect(undone).toBe(false);
+  });
+});
+
+/**
+ * Neon review #16. The restore of a folder or the vault to a time, and its
+ * Undo, wrote into notes an editor could be holding without saving it first,
+ * and kept the client it was opened with, closed by any reconnect since.
+ */
+describe("restoring to a time", () => {
+  it("saves open editors first and asks the client connected now", async () => {
+    const { plugin, app } = await load();
+    const order: string[] = [];
+    app.workspace.markdownLeaves.push({
+      view: { save: async () => void order.push("saved the editor") },
+    });
+    const clientNamed = (name: string) => ({
+      restoreTo: async () => {
+        order.push(`restore on ${name}`);
+        return { notes: [] };
+      },
+      undo: async (id: string) => {
+        order.push(`undo ${id} on ${name}`);
+        return { notes: [] };
+      },
+      close: async () => undefined,
+    });
+    const state = plugin as unknown as { client: unknown };
+    state.client = clientNamed("first");
+    plugin.openRestoreTime("");
+    const actions = (modals.at(-1) as unknown as { actions: RestoreTimeActions }).actions;
+    // A reconnect while the modal is open.
+    state.client = clientNamed("second");
+    await actions.restore({ uid: 7, head: 9 } as never);
+    await actions.undo("op-1");
+    expect(order).toEqual([
+      "saved the editor",
+      "restore on second",
+      "saved the editor",
+      "undo op-1 on second",
+    ]);
   });
 });
 
