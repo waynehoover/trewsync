@@ -76,7 +76,9 @@ func TestEveryKeyHasItsOwnFlag(t *testing.T) {
 		}
 		seen[k.Flag] = true
 	}
-	for _, bad := range []string{"-1", "1 TB", "x"} {
+	// 2^33 GiB is 2^63 bytes, one past the largest int64: it wrapped to a
+	// negative size (Neon review, Low).
+	for _, bad := range []string{"-1", "1 TB", "x", "8589934592GiB", "9223372036854775807KiB"} {
 		if _, err := ParseSize(bad); err == nil {
 			t.Errorf("%q is a size", bad)
 		}
