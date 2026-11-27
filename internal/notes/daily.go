@@ -364,8 +364,9 @@ func CheckHeading(h string) error {
 // sectionHeadings is every top-level heading of source's body, in order: ATX
 // and setext, found by the Markdown parser, so a "#" line inside code, HTML,
 // a list or a quote is not one. The parser places a heading by its text; one
-// with no text ("##" alone) is placed at the first line after the block
-// before it that has that shape.
+// with no text ("##" alone) by the position the parser recorded for its
+// marker, or, failing that, at the first line after the block before it that
+// has that shape.
 func sectionHeadings(source string) ([]sectionHeading, error) {
 	f, err := findFrame(source)
 	if err != nil {
@@ -388,6 +389,11 @@ func sectionHeadings(source string) ([]sectionHeading, error) {
 		case ok && h.Lines().Len() > 0:
 			start := lineOf(h.Lines().At(0).Start + d.offset)
 			out = append(out, sectionHeading{level: h.Level, start: start, atx: atxLine.MatchString(lineText(source, start))})
+		case ok && h.Pos() >= 0:
+			// The parser records where an empty heading's marker is. The scan
+			// below guessed from the block before it, whose end does not count
+			// an empty heading nested inside it, and so could take that one.
+			out = append(out, sectionHeading{level: h.Level, start: lineOf(h.Pos() + d.offset), atx: true})
 		case ok:
 			for _, start := range lines {
 				text := lineText(source, start)
