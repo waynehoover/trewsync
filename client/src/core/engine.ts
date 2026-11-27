@@ -2116,6 +2116,7 @@ export class Engine {
       this.inbox = [];
       this.inboxBytes = 0;
     }
+    this.aliasHeld = [];
     this.landing = new Set();
     // The same for the folder work a pass defers to its end: nothing in it
     // was sent or removed, and this pass decides it again.
@@ -2228,6 +2229,8 @@ export class Engine {
     this.localByIdentity = new Map();
     for (const path of onDisk.keys()) this.localByIdentity.set(this.identity(path), path);
     this.deletingThisPass = new Set();
+    this.visitedThisPass = new Set();
+    this.aliasHeld = [];
 
     // 2. Every path either side knows about, plus the ones the vault could
     //    not name. A clash between two brand new files is in no index and on
@@ -2358,6 +2361,8 @@ export class Engine {
         into("transferMs");
       }
       previousPriority = priority;
+      // After the fill above, which runs before this path is decided.
+      this.visitedThisPass.add(path);
       if (omittedRefusals.has(path)) {
         this.recordFailure(path, omittedRefusals.get(path), report);
         continue;
@@ -2473,7 +2478,7 @@ export class Engine {
     // arriving in a pass with more than a batch of downloads deleted the file
     // it had just written. The reset after the deletes is the one that counts.
     into("decideMs");
-    await this.fill(report);
+    await this.fill(report, true);
     await this.applyDeletes(report);
     this.wroteThisPass = new Map();
     await this.flush(report);
@@ -4490,9 +4495,22 @@ export class Engine {
    * chunk cost one body, and a file whose chunks the server cannot serve
    * fails alone rather than taking the batch with it.
    */
-  private async fill(report: SyncReport): Promise<void> {
+  private async fill(report: SyncReport, final = false): Promise<void> {
+    if (final) {
+      // What `refuseAliases` held for the end of the pass, now that every
+      // path has been decided, in batches of the usual size.
+      const held = this.aliasHeld;
+      this.aliasHeld = [];
+      for (const d of held) {
+        this.inbox.push(d);
+        this.inboxBytes += d.remote.size;
+        if (this.inbox.length >= MAX_BATCH_ENTRIES || this.inboxBytes >= INBOX_BYTES) {
+          await this.fill(report, true);
+        }
+      }
+    }
     if (this.inbox.length === 0) return;
-    const batch = this.refuseAliases(this.inbox, report);
+    const batch = this.refuseAliases(this.inbox, report, final);
     this.inbox = [];
     this.inboxBytes = 0;
     if (batch.length === 0) return;
@@ -4800,6 +4818,10 @@ export class Engine {
   private localByIdentity = new Map<string, string>();
   /** Paths this pass has decided to delete locally, which cannot collide with a write. */
   private deletingThisPass = new Set<string>();
+  /** Paths this pass's walk has reached, so whatever it decides for them is decided. */
+  private visitedThisPass = new Set<string>();
+  /** Incoming versions held for the pass's last fill (`refuseAliases`). */
+  private aliasHeld: Incoming[] = [];
 
   /**
    * What the disk will file a path under. The vault knows; otherwise the safe
@@ -4849,7 +4871,7 @@ export class Engine {
    * is renamed on the device that has both. A path this pass is deleting is
    * not in the way: that is the rename case, and it goes through as before.
    */
-  private refuseAliases(batch: Incoming[], report: SyncReport): Incoming[] {
+  private refuseAliases(batch: Incoming[], report: SyncReport, final: boolean): Incoming[] {
     const byIdentity = new Map<string, Incoming[]>();
     for (const d of batch) {
       const key = this.identity(d.path);
@@ -4864,6 +4886,15 @@ export class Engine {
         local !== undefined &&
         !this.deletingThisPass.has(local) &&
         group.some((d) => d.path !== local);
+      // The file in the way not decided yet: a case-only rename whose new
+      // spelling sorts into an earlier batch than the old, which this pass
+      // may still delete. Held for the last fill rather than refused, or the
+      // old spelling's deletion lands with the new one never written (Neon
+      // review #2).
+      if (localInTheWay && !final && !this.visitedThisPass.has(local)) {
+        this.aliasHeld.push(...group);
+        continue;
+      }
       if (!localInTheWay && group.length === 1) {
         kept.push(group[0]!);
         continue;

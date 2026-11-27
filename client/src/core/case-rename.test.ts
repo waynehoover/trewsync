@@ -152,6 +152,7 @@ class Device {
   engine!: Engine;
   caughtUp = false;
   onDemand: ((path: string, size: number) => boolean) | undefined;
+  activePath: (() => string | undefined) | undefined;
   clock = 1_000_000;
   /** Every report this device's passes produced. */
   readonly reports: SyncReport[] = [];
@@ -176,6 +177,7 @@ class Device {
       transport: this.transport,
       device: this.name,
       ...(this.onDemand ? { onDemand: this.onDemand } : {}),
+      ...(this.activePath ? { activePath: this.activePath } : {}),
       vaultId: "default",
       ...(await server.deviceCredentials(this.name)),
       // A clock that moves a minute a reading, so the write debounce never
@@ -299,6 +301,36 @@ describe("a case-only rename, on a memory vault that folds case", () => {
     }
     expect((await newest(b, "NOTE.md"))?.prev).toBe("Note.md");
     expect(await server.cli("cat", "-path", "NOTE.md")).toBe(edited);
+  }, 240_000);
+});
+
+/**
+ * Neon review #2. The new spelling and the old are decided in different
+ * batches when the open note is the new one, or when the rename is of more
+ * files than one batch holds: the new spelling sorts first. Its batch found the
+ * old spelling in the way, not yet decided as this pass's deletion, and
+ * refused it; the old spelling was then deleted at the end of the pass, so the
+ * note left this disk until some later pass downloaded it back.
+ */
+describe("a case-only rename whose two spellings land in different batches", () => {
+  it("gives the open note its new spelling in one pass, with nothing removed", async () => {
+    const text = "the only copy of this text\n";
+    const [a, b] = await two(() => new CaseFoldingVault());
+    const av = a.vault as CaseFoldingVault;
+    const bv = b.vault as CaseFoldingVault;
+    await av.edit("note.md", text);
+    await syncBoth(a, b);
+    expect(bv.snapshot()).toEqual({ "note.md": text });
+
+    b.close();
+    b.activePath = () => "Note.md";
+    await b.connect(server);
+    await av.respell("Note.md");
+    a.engine.noteRename("note.md", "Note.md");
+    await a.sync();
+    await b.sync();
+    expect(bv.snapshot(), "the note left the disk").toEqual({ "Note.md": text });
+    expect(b.reports.at(-1)?.blocked, "the new spelling was refused").toBe(0);
   }, 240_000);
 });
 
