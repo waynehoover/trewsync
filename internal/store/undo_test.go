@@ -763,3 +763,33 @@ func TestAnUndoPutsANoteBackWhereItRemovesAFileInTheWay(t *testing.T) {
 	sameVault(t, "after the restore and its undo", h.vaultAt(t, 0), before)
 	h.verified(t)
 }
+
+// A folder the operation made is kept when a note is in it under another
+// spelling that folds alike, as the commit counts it: a person's note in it,
+// its folder since renamed case-only, is still inside. Counted by exact
+// spelling, the folder was planned for removal and the undo refused at the
+// commit as not_empty (Neon review #30).
+func TestUndoKeepsAFolderFilledUnderAnotherSpelling(t *testing.T) {
+	h := newTestStore(t)
+	a := h.writer(t, "agent")
+	create, err := h.CommitOperation(h.op(a, "create", folder(a, "notes"), h.change(t, a, "notes/agent.md", 0, "the agent's")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.file(t, "notes/mine.md", "a person's note")
+	h.move(t, "notes/mine.md", "Notes/mine.md", "a person's note")
+
+	plan, _, err := h.undo(t, create.OpID, false)
+	if err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	h.gone(t, "notes/agent.md")
+	if got, _ := h.headBytes(t, "Notes/mine.md"); got != "a person's note" {
+		t.Fatalf("the person's note reads %q", got)
+	}
+	last := plan.Steps[len(plan.Steps)-1]
+	if last.Action != UndoKeepFolder || last.Path != "notes" {
+		t.Fatalf("the last step is %+v", last)
+	}
+	h.verified(t)
+}

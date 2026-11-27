@@ -721,9 +721,13 @@ func (b *undoBuilder) leftInside(folder string) (int, error) {
 	}
 	defer tx.Rollback()
 	// Byte order, as the paths are stored: everything from "folder/" up to
-	// "folder0", '0' being the byte after '/'.
-	rows, err := tx.Query(`SELECT path FROM live_paths WHERE vault_id = ? AND path > ? AND path < ?`,
-		b.r.Vault, folder+"/", folder+"0")
+	// "folder0", '0' being the byte after '/'. And the same range of folded
+	// keys, as CommitOperation counts an EmptyFolder deletion: the folder is
+	// the same folder under any spelling that folds alike (Neon review #30).
+	fold := paths.Fold(folder)
+	rows, err := tx.Query(`SELECT path FROM live_paths WHERE vault_id = ? AND path > ? AND path < ?
+	  UNION SELECT path FROM live_paths WHERE vault_id = ? AND fold > ? AND fold < ?`,
+		b.r.Vault, folder+"/", folder+"0", b.r.Vault, fold+"/", fold+"0")
 	if err != nil {
 		return 0, failed("", err)
 	}
@@ -743,7 +747,8 @@ func (b *undoBuilder) leftInside(folder string) (int, error) {
 		delete(inside, p)
 	}
 	for _, oe := range b.plan.Entries {
-		if !oe.Entry.Deleted && strings.HasPrefix(oe.Entry.Path, folder+"/") {
+		if !oe.Entry.Deleted && (strings.HasPrefix(oe.Entry.Path, folder+"/") ||
+			strings.HasPrefix(paths.Fold(oe.Entry.Path), fold+"/")) {
 			inside[oe.Entry.Path] = true
 		}
 	}

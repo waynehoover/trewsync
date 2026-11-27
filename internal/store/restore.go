@@ -232,11 +232,12 @@ func (s *Store) PlanRestore(r RestoreRequest) (RestorePlan, error) {
 	}
 
 	// The paths that will be live once the restore is written, for whether a
-	// folder created since can go.
+	// folder created since can go, each with whether it is live now, before
+	// the restore writes anything.
 	final := map[string]bool{}
 	for _, row := range rows {
 		if (row.nowLive && !row.changed()) || row.thenLive || settingNotYetSynced(row) {
-			final[row.path] = true
+			final[row.path] = row.nowLive
 		}
 	}
 
@@ -592,11 +593,18 @@ func (s *Store) newestGap(vault string, toUID int64) (int64, error) {
 	return want, rows.Err()
 }
 
-// liveUnder is how many of the paths in final are inside folder.
+// liveUnder is how many of the paths in final are inside folder: spelled
+// under it, or live now under a spelling that folds like it, which is how
+// CommitOperation judges an EmptyFolder deletion. Between the moves of a
+// case-only folder rename the entry is `notes` and its files are still
+// under `Notes`, and the folder's deletion is refused while they are live
+// (Neon review #30). A path put back under the other spelling is written
+// after the deletion, so it does not hold the folder.
 func liveUnder(final map[string]bool, folder string) int {
 	n := 0
-	for p := range final {
-		if strings.HasPrefix(p, folder+"/") {
+	inside := paths.Fold(folder) + "/"
+	for p, liveNow := range final {
+		if strings.HasPrefix(p, folder+"/") || (liveNow && strings.HasPrefix(paths.Fold(p), inside)) {
 			n++
 		}
 	}
